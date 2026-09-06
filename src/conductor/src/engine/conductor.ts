@@ -63,7 +63,7 @@ import type {
 } from './provider-execution.js';
 import { formatProviderCapabilityGapMessages } from './provider-execution.js';
 import { createEngineStateStore } from './engine-state-store.js';
-import { createRepairObligationStore } from './repair-obligations.js';
+import { createRepairObligationStore, repairPlanIdentity } from './repair-obligations.js';
 import type { ParallelBranch } from '../types/config.js';
 import {
   runGroupBranch,
@@ -3721,6 +3721,28 @@ export class Conductor {
   }
 
   /** Read OVER_SCOPE verdict rows after incorporating an operator-cleared halt acceptance. */
+  /**
+   * True when the current prd-audit report still carries FIXABLE or PLAN_GAP
+   * findings, i.e. blockers the OVER_SCOPE acceptance route cannot close.
+   * Fails closed: an unreadable or unparseable report never lets an accepted
+   * scope decision swallow the rest of the round.
+   */
+  private async prdAuditHasNonScopeBlockingFindings(featureDesc?: string): Promise<boolean> {
+    const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
+    if (!reportPath) return false;
+    let reportText: string;
+    try {
+      reportText = await readFile(reportPath, 'utf8');
+    } catch {
+      return true;
+    }
+    const parsed = parsePrdAuditReport(reportText, await this.activePlanText(featureDesc));
+    if (!parsed.ok) return true;
+    return parsed.value.findings.some(
+      (finding) => finding.grade === 'FIXABLE' || finding.grade === 'PLAN_GAP',
+    );
+  }
+
   private async routeCurrentPrdAuditOverScope(featureDesc?: string): Promise<PrdAuditOverScopeRoute> {
     const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
     if (!reportPath) return { kind: 'none' };
@@ -3865,7 +3887,17 @@ export class Conductor {
     // creates a synthetic repair obligation from stale routing state.
     if (hintSource.evidence?.some((provenance) => provenance.gate === 'prd_audit')) {
       const overScopeRoute = await this.routeCurrentPrdAuditOverScope(state.feature_desc);
-      if (overScopeRoute.kind === 'record') return { kind: 'none' };
+      // Accepted-only scope closes the round. The scope router inspects only
+      // OVER_SCOPE rows, so a recorded acceptance may coexist with FIXABLE or
+      // PLAN_GAP findings, or with a sibling gate's findings on a validation-
+      // group round (S5.3). Those retain their independent remediation route.
+      if (
+        overScopeRoute.kind === 'record' &&
+        hintSource.evidence.every((provenance) => provenance.gate === 'prd_audit') &&
+        !(await this.prdAuditHasNonScopeBlockingFindings(state.feature_desc))
+      ) {
+        return { kind: 'none', reason: 'the recorded prd-audit scope acceptance closes the only blocking finding' };
+      }
       if (overScopeRoute.kind === 'halt') {
         return {
           kind: 'halt',
@@ -4184,32 +4216,31 @@ export class Conductor {
         if (!hintSource.consolidatedManualTestFail) {
           if (activePlanTaskIds === undefined) {
             if (!planPath) {
-              return {
-                kind: 'halt',
-                haltClass: 'needs-human',
-                detail: `existing-task remediation cannot resolve bound id '${gap.tasks[0]?.id ?? gap.id}': active plan is unavailable.`,
-              };
+              const detail =
+                `existing-task remediation for finding '${gap.id}' cannot resolve bound id ` +
+                `'${gap.tasks[0]?.id ?? gap.id}': active plan is unavailable.`;
+              await reportRefusal(detail);
+              return { kind: 'halt', haltClass: 'needs-human', detail };
             }
             try {
               activePlanText = activePlanText || await readFile(planPath, 'utf8');
               activePlanTaskIds = new Set(parsePlanTaskBodies(activePlanText).keys());
             } catch (error) {
-              return {
-                kind: 'halt',
-                haltClass: 'needs-human',
-                detail:
-                  `existing-task remediation cannot resolve bound id '${gap.tasks[0]?.id ?? gap.id}': ` +
-                  `active plan could not be read (${error instanceof Error ? error.message : String(error)}).`,
-              };
+              const detail =
+                `existing-task remediation for finding '${gap.id}' cannot resolve bound id ` +
+                `'${gap.tasks[0]?.id ?? gap.id}': ` +
+                `active plan could not be read (${error instanceof Error ? error.message : String(error)}).`;
+              await reportRefusal(detail);
+              return { kind: 'halt', haltClass: 'needs-human', detail };
             }
           }
           const bindings = resolveExistingTaskBindingsForAdmission(gap.tasks, activePlanTaskIds);
           if (bindings.kind === 'unresolvable') {
-            return {
-              kind: 'halt',
-              haltClass: 'needs-human',
-              detail: `existing-task remediation cannot resolve bound id '${bindings.id}' in the active plan.`,
-            };
+            const detail =
+              `existing-task remediation for finding '${gap.id}' cannot resolve bound id ` +
+              `'${bindings.id}' in the active plan.`;
+            await reportRefusal(detail);
+            return { kind: 'halt', haltClass: 'needs-human', detail };
           }
           resolvedExistingTaskIdsByGapId.set(gap.id, bindings.ids);
           // Existing-task gaps reopen the task that already owns the repair.
@@ -4678,6 +4709,14 @@ export class Conductor {
         }
       }
       const remediationEvidence = routedFixes.map((g) => `${g.id}→${g.disposition}`).join('; ');
+      // Single source for the actionable BUILD hint: the initial dispatch and
+      // the persisted repair obligation derive from this same value (AB-3).
+      const repairInstruction = buildRemediationHint(
+        routedFixes,
+        hintSource.source,
+        remediationEvidenceSources.map((provenance) => provenance.evidenceFile).join(' and '),
+      );
+      let buildPredicateDiagnostic = '';
       const disposition = await this.resolveDecideEntryDisposition({
         target,
         steps,
@@ -4732,14 +4771,22 @@ export class Conductor {
           this.projectRoot,
           join(this.projectRoot, '.pipeline', 'engine-state.json'),
         );
+        const boundFindingIds = [...resolvedExistingTaskIdsByGapId.keys()].sort().join(',');
+        // The refusal context every existing-task refusal below carries onto
+        // the spine (S7.2): source gate, finding ids, and bound task ids.
+        const refusalContext =
+          `[${hintSource.source}; findings ${boundFindingIds}; tasks ${boundTaskIds.join(',')}]`;
         const admission = await repairs.admitOrReplay(admissionKey, {
           id: `repair-${admissionKey.slice(0, 16)}`,
           planPath,
           taskIds: boundTaskIds,
           source: {
-            findingId: [...resolvedExistingTaskIdsByGapId.keys()].sort().join(','),
+            findingId: boundFindingIds,
             authority: hintSource.source,
-            instruction: 'existing-task remediation',
+            // The persisted instruction is the same actionable BUILD hint the
+            // initial dispatch receives, so restart recovery can replay the
+            // defect description rather than a generic label (AB-3).
+            instruction: repairInstruction,
           },
           baseline: {
             head: (await currentCommitSha(this.projectRoot)) ?? '',
@@ -4749,11 +4796,10 @@ export class Conductor {
           },
         });
         if (!admission.ok) {
-          return {
-            kind: 'halt',
-            haltClass: 'needs-human',
-            detail: `existing-task remediation could not persist admission: ${admission.message}`,
-          };
+          const detail =
+            `existing-task remediation ${refusalContext} could not persist admission: ${admission.message}`;
+          await reportRefusal(detail);
+          return { kind: 'halt', haltClass: 'needs-human', detail };
         }
         try {
           await settleRemediationRound(
@@ -4762,17 +4808,19 @@ export class Conductor {
             remediationEvidenceSources.map((provenance) => provenance.gate),
           );
         } catch (error) {
-          return {
-            kind: 'halt', haltClass: 'needs-human',
-            detail: `existing-task remediation could not settle its admitted round: ${error instanceof Error ? error.message : String(error)}`,
-          };
+          const detail =
+            `existing-task remediation ${refusalContext} could not settle its admitted round ` +
+            `${admission.obligation.id}: ${error instanceof Error ? error.message : String(error)}`;
+          await reportRefusal(detail);
+          return { kind: 'halt', haltClass: 'needs-human', detail };
         }
         const settled = await repairs.markSettled({ planPath, obligationId: admission.obligation.id });
         if (!settled.ok) {
-          return {
-            kind: 'halt', haltClass: 'needs-human',
-            detail: `existing-task remediation recorded its receipt but could not persist settlement: ${settled.message}`,
-          };
+          const detail =
+            `existing-task remediation ${refusalContext} recorded its receipt for ` +
+            `${admission.obligation.id} but could not persist settlement: ${settled.message}`;
+          await reportRefusal(detail);
+          return { kind: 'halt', haltClass: 'needs-human', detail };
         }
         // A replay must use the boundary captured before the original
         // re-stage, never the post-re-stage snapshot from this invocation.
@@ -4791,11 +4839,10 @@ export class Conductor {
         );
         if (restage.kind === 'failed') {
           this.pendingNoOpBaselines.clear();
-          return {
-            kind: 'halt',
-            haltClass: 'needs-human',
-            detail: `existing-task remediation could not re-stage task-status.json: ${restage.detail}`,
-          };
+          const detail =
+            `existing-task remediation ${refusalContext} could not re-stage task-status.json: ${restage.detail}`;
+          await reportRefusal(detail);
+          return { kind: 'halt', haltClass: 'needs-human', detail };
         }
       }
       // #647 D1: a remediation route into `build` can be a guaranteed no-op
@@ -4817,28 +4864,32 @@ export class Conductor {
         const ctx = await this.completionCtx(state);
         const result = await checkStepCompletion(this.projectRoot, 'build', ctx);
         if (result.done) {
+          const detail =
+            routedFixes.map((g) => `${g.id} (${g.disposition}: ${g.rationale})`).join('; ') +
+            ' — remediation produced no dispatchable build work; the implicated task(s) ' +
+            `are already evidence-complete — human needed${droppedSuffix}`;
+          await reportRefusal(detail);
           return {
             kind: 'halt',
-            detail:
-              routedFixes.map((g) => `${g.id} (${g.disposition}: ${g.rationale})`).join('; ') +
-              ' — remediation produced no dispatchable build work; the implicated task(s) ' +
-              `are already evidence-complete — human needed${droppedSuffix}`,
+            detail,
             // #647 D3: this HALT is specifically the D1 no-op guard (target
             // was already evidence-complete before build ever ran) — the
             // discriminator the audit trail surfaces via the 'kickback' event.
             kickbackOutcome: 'derived-already-complete',
           };
         }
+        // Unavailable current repair evidence is surfaced only by the build
+        // predicate's reason. Carry it on the same route evidence so the
+        // spine sees why the task is unresolved rather than a bare count.
+        if (result.reason && /unavailable/i.test(result.reason)) {
+          buildPredicateDiagnostic = `; build predicate: ${result.reason}`;
+        }
       }
       return {
         kind: 'route',
         target,
-        hint: buildRemediationHint(
-          routedFixes,
-          hintSource.source,
-          remediationEvidenceSources.map((provenance) => provenance.evidenceFile).join(' and '),
-        ),
-        evidence: remediationEvidence + droppedSuffix,
+        hint: repairInstruction,
+        evidence: remediationEvidence + droppedSuffix + buildPredicateDiagnostic,
       };
     }
     return { kind: 'none', reason: 'the planner produced no routable remediation work' };
@@ -6129,9 +6180,15 @@ export class Conductor {
         join(this.projectRoot, '.pipeline', 'engine-state.json'),
       );
       const restored = await repairs.read();
-      if (restored.ok) {
+      // Obligations are plan-scoped. A superseded plan's open obligation must
+      // not seed baselines or hints once another plan is active (AB-2).
+      const activePlanPath = await this.getActivePlanPath();
+      const activePlanIdentity =
+        activePlanPath === null ? null : repairPlanIdentity(this.projectRoot, activePlanPath);
+      if (restored.ok && activePlanIdentity !== null) {
         const ledger = await readKickbackLedger(this.projectRoot);
         for (const obligation of Object.values(restored.value.records)) {
+          if (obligation.planIdentity !== activePlanIdentity) continue;
           const isCurrent = obligation.taskIds.some(
             (taskId) => restored.value.currentByPlan[obligation.planIdentity]?.[taskId] === obligation.id,
           );

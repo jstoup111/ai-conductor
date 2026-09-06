@@ -23,6 +23,8 @@ import { readState, writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
+import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 
 let projectRoot: string;
 let stateFilePath: string;
@@ -189,6 +191,15 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
     expect(Object.values(engineState.repairObligations?.records ?? {}).map(
       (record) => record.baseline?.resolvedCount,
     )).toContain(2);
+    // AB-3: the durable record carries the same actionable instruction BUILD
+    // received, not a generic label, so restart recovery can replay it.
+    const persistedInstructions = Object.values(engineState.repairObligations?.records ?? {}).map(
+      (record) => (record as { source?: { instruction?: string; findingId?: string } }).source,
+    );
+    expect(persistedInstructions).toEqual([
+      expect.objectContaining({ findingId: 'ARCH-1', instruction: buildHints[0] }),
+    ]);
+    expect(buildHints[0]).toContain('Tasks 1 and 2 own the current finding.');
   });
 
   it('dispatches the bound authored task as pending without appending a replacement task', async () => {
@@ -325,12 +336,17 @@ const AS_BUILT_BLOCKED = (clause: string) => [
 
 const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
 
-function makeConductor(runner: StepRunner, config: Record<string, unknown>, fromStep: StepName): Conductor {
+function makeConductor(
+  runner: StepRunner,
+  config: Record<string, unknown>,
+  fromStep: StepName,
+  events: ConductorEventEmitter = new ConductorEventEmitter(),
+): Conductor {
   return new Conductor({
     projectRoot,
     stateFilePath,
     stepRunner: runner,
-    events: new ConductorEventEmitter(),
+    events,
     mode: 'auto',
     daemon: true,
     baseBranch: 'main',
@@ -536,5 +552,197 @@ describe('a mixed prd_audit/as-built existing-task lap keeps every gate armed fo
     expect(remediateCalls).toBe(1);
     await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8'))
       .resolves.toMatch(/as-built architecture review kickback-to-build no-op/);
+  });
+});
+
+describe('existing-task refusals carry the finding onto the spine (S1.4, S7.2)', () => {
+  it('names the finding and bound id when ownership cannot be resolved, and reports it as gate_blocked', async () => {
+    // Covers: S1.4, task:8, task:11
+    const events: ConductorEvent[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('gate_blocked', (event) => { events.push(event); });
+    const dispatched: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        dispatched.push(step);
+        if (step === 'architecture_review_as_built') {
+          await writeFile(
+            join(projectRoot, '.pipeline', 'architecture-review-as-built.md'),
+            AS_BUILT_BLOCKED('Task 1'),
+          );
+        } else if (step === 'remediate') {
+          await writeFile(
+            join(projectRoot, '.pipeline', 'remediation.json'),
+            JSON.stringify({
+              dispositions: [{
+                id: 'ARCH-1',
+                disposition: 'existing-task',
+                category: null,
+                rationale: 'Bound to a task the plan does not declare.',
+                tasks: [{ id: '99', title: 'No such task' }],
+              }],
+            }),
+          );
+        }
+        return { success: true };
+      }),
+    };
+
+    await makeConductor(
+      runner,
+      { architecture_review_as_built: { remediation: { enabled: true } } },
+      'architecture_review_as_built',
+      emitter,
+    ).run();
+
+    expect(dispatched).not.toContain('build');
+    const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain("finding 'ARCH-1'");
+    expect(halt).toContain("bound id '99'");
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'gate_blocked',
+        step: 'architecture_review_as_built',
+        reason: expect.stringContaining("finding 'ARCH-1'"),
+      }),
+    ]);
+    expect((events[0] as { reason: string }).reason).toContain("bound id '99'");
+  });
+
+  it('reports an admission persistence failure with source, finding and task context', async () => {
+    // Covers: S7.2, task:11 — incompatible present repair state cannot admit.
+    await writeFile(
+      join(projectRoot, '.pipeline', 'engine-state.json'),
+      JSON.stringify({
+        activePlanPath: '.docs/plans/plan-growth-existing-task-restage.md',
+        repairObligations: 'corrupt',
+      }),
+    );
+    const events: ConductorEvent[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('gate_blocked', (event) => { events.push(event); });
+    const dispatched: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        dispatched.push(step);
+        if (step === 'architecture_review_as_built') {
+          await writeFile(
+            join(projectRoot, '.pipeline', 'architecture-review-as-built.md'),
+            AS_BUILT_BLOCKED('Task 1'),
+          );
+        } else if (step === 'remediate') {
+          await writeFile(
+            join(projectRoot, '.pipeline', 'remediation.json'),
+            JSON.stringify({
+              dispositions: [{
+                id: 'ARCH-1',
+                disposition: 'existing-task',
+                category: null,
+                rationale: 'Task 1 already owns the approved guard.',
+                tasks: [{ id: '1', title: 'Add the approved guard' }],
+              }],
+            }),
+          );
+        }
+        return { success: true };
+      }),
+    };
+
+    await makeConductor(
+      runner,
+      { architecture_review_as_built: { remediation: { enabled: true } } },
+      'architecture_review_as_built',
+      emitter,
+    ).run();
+
+    expect(dispatched).not.toContain('build');
+    const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('could not persist admission');
+    expect(halt).toContain('findings ARCH-1');
+    expect(halt).toContain('tasks 1');
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'gate_blocked',
+        reason: expect.stringContaining('could not persist admission'),
+      }),
+    ]);
+    expect((events[0] as { reason: string }).reason).toContain('findings ARCH-1');
+    expect((events[0] as { reason: string }).reason).toContain('tasks 1');
+  });
+});
+
+describe('restart recovery is scoped to the active plan (AB-2, AB-3)', () => {
+  async function admitSettledRepair(planPath: string): Promise<void> {
+    const repairs = createRepairObligationStore(projectRoot, join(projectRoot, '.pipeline', 'engine-state.json'));
+    const admitted = await repairs.admit({
+      id: 'repair-durable',
+      planPath,
+      taskIds: ['1'],
+      source: {
+        findingId: 'ARCH-1',
+        authority: 'architecture_review_as_built',
+        instruction: 'Remediating blocking gaps:\n- ARCH-1 [existing-task]: Task 1 leaks the approved guard.',
+      },
+      baseline: { head: '', tree: 'tree', resolvedTaskIds: [], resolvedCount: 1 },
+    });
+    if (!admitted.ok) throw new Error(admitted.message);
+    const settled = await repairs.markSettled({ planPath, obligationId: 'repair-durable' });
+    if (!settled.ok) throw new Error(settled.message);
+  }
+
+  function buildObserver(hints: string[]): StepRunner {
+    return {
+      run: vi.fn(async (step: StepName, _state, opts) => {
+        if (step === 'build') {
+          hints.push(opts?.retryReason ?? '');
+          return { success: false, error: 'sentinel: stop after observing BUILD dispatch' };
+        }
+        return { success: true };
+      }),
+    };
+  }
+
+  it('replays the persisted finding instruction into the first BUILD retry of a new instance', async () => {
+    // Covers: S3.1, task:9 — the durable instruction, not a generic label.
+    await writeFile(
+      join(projectRoot, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+    );
+    await admitSettledRepair('.docs/plans/plan-growth-existing-task-restage.md');
+    const initial = await readState(stateFilePath);
+    await writeState(stateFilePath, { ...(initial.ok ? initial.value : {}), build: 'pending' } as ConductState);
+
+    const hints: string[] = [];
+    await makeConductor(buildObserver(hints), {}, 'build').run();
+
+    expect(hints).toHaveLength(1);
+    expect(hints[0]).toContain('Resume admitted repair repair-durable: ARCH-1');
+    expect(hints[0]).toContain('Task 1 leaks the approved guard.');
+  });
+
+  it('ignores an open obligation recorded under a superseded plan once another plan is active', async () => {
+    // Covers: S3.6, task:9 — a reused task id in a different active plan.
+    await writeFile(
+      join(projectRoot, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+    );
+    await admitSettledRepair('.docs/plans/plan-growth-existing-task-restage.md');
+    await writeFile(
+      join(projectRoot, '.docs', 'plans', 'successor-plan.md'),
+      '# Plan\n\n### Task 1: Unrelated successor work\n',
+    );
+    const rawState = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf8'));
+    await writeFile(
+      join(projectRoot, '.pipeline', 'engine-state.json'),
+      JSON.stringify({ ...rawState, activePlanPath: '.docs/plans/successor-plan.md' }),
+    );
+    const initial = await readState(stateFilePath);
+    await writeState(stateFilePath, { ...(initial.ok ? initial.value : {}), build: 'pending' } as ConductState);
+
+    const hints: string[] = [];
+    await makeConductor(buildObserver(hints), {}, 'build').run();
+
+    expect(hints).toHaveLength(1);
+    expect(hints[0]).not.toContain('Resume admitted repair');
   });
 });
