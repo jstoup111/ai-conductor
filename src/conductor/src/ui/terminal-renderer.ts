@@ -265,8 +265,11 @@ export class TerminalRenderer implements UIRenderer {
         break;
       }
       case 'gate_verdict':
-        // Only surface unsatisfied verdicts — satisfied ones are routine.
-        if (!event.satisfied) {
+        if (event.satisfied) {
+          this.region.log(
+            chalk.green(`  gate ${event.step}: satisfied${event.reason ? ` — ${event.reason}` : ''}`),
+          );
+        } else {
           this.region.log(
             chalk.dim(`  gate ${event.step}: unsatisfied${event.reason ? ` — ${event.reason}` : ''}`),
           );

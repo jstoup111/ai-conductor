@@ -1,3 +1,4 @@
+// Covers: task:4
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Writable } from 'node:stream';
 import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
@@ -122,6 +123,12 @@ describe('TerminalRenderer', () => {
     expect(stream.output()).toContain(
       '⚠ PROVIDER FALLBACK: plan — codex unavailable (executable not found); trying claude',
     );
+  });
+
+  it('renders satisfied gate verdicts without provider-completion glyphs', async () => {
+    await renderer.handle({ type: 'gate_verdict', step: 'plan', satisfied: true, reason: 'covered' });
+
+    expect(stream.output()).toBe('  gate plan: satisfied — covered\n');
   });
 
   it('renders typed credential-park progress without a lifecycle restart', async () => {
