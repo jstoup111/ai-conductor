@@ -404,8 +404,8 @@ describe('tmpdir-leak-guard: stale run root decision', () => {
     expect(decision).toEqual({
       reap: [],
       retain: [
-        { name: root('fresh-a'), reason: 'live' },
-        { name: root('fresh-b'), reason: 'live' },
+        { name: root('fresh-a'), reason: 'live', windowMs: staleAfterMs },
+        { name: root('fresh-b'), reason: 'live', windowMs: staleAfterMs },
       ],
     });
   });
@@ -426,7 +426,7 @@ describe('tmpdir-leak-guard: stale run root decision', () => {
         staleAfterMs,
         legacyStaleAfterMs,
       })
-    ).toEqual({ reap: [], retain: [{ name: root('own'), reason: 'own-root' }] });
+    ).toEqual({ reap: [], retain: [{ name: root('own'), reason: 'own-root', windowMs: staleAfterMs }] });
   });
 
   it('reaps only legacy unmarked directories older than the fallback window', () => {
@@ -453,7 +453,7 @@ describe('tmpdir-leak-guard: stale run root decision', () => {
 
     expect(decision).toEqual({
       reap: [root('legacy')],
-      retain: [{ name: root('recent'), reason: 'unmarked-recent' }],
+      retain: [{ name: root('recent'), reason: 'unmarked-recent', windowMs: legacyStaleAfterMs }],
     });
   });
 
@@ -482,8 +482,8 @@ describe('tmpdir-leak-guard: stale run root decision', () => {
     ).toEqual({
       reap: [],
       retain: [
-        { name: root('unreadable'), reason: 'marker-unreadable' },
-        { name: root('symlink'), reason: 'not-a-directory' },
+        { name: root('unreadable'), reason: 'marker-unreadable', windowMs: staleAfterMs },
+        { name: root('symlink'), reason: 'not-a-directory', windowMs: staleAfterMs },
       ],
     });
   });
@@ -517,7 +517,26 @@ describe('tmpdir-leak-guard: stale run root decision', () => {
       decideStaleRunRoots({ ...customInput, staleAfterMs })
     ).toEqual({
       reap: [],
-      retain: [{ name: root('custom-window'), reason: 'live' }],
+      retain: [{ name: root('custom-window'), reason: 'live', windowMs: staleAfterMs }],
+    });
+  });
+
+  it('reports the caller-supplied window in the retained entry it decided with', () => {
+    const entry = {
+      name: root('override'),
+      isDirectory: true,
+      dirMtimeMs: now,
+      marker: { kind: 'present' as const, mtimeMs: now - 50 },
+    };
+    const base = { entries: [entry], ownRoot: '/tmp/another-run-root', now, legacyStaleAfterMs };
+
+    expect(decideStaleRunRoots({ ...base, staleAfterMs: 40 })).toEqual({
+      reap: [root('override')],
+      retain: [],
+    });
+    expect(decideStaleRunRoots({ ...base, staleAfterMs: 60 })).toEqual({
+      reap: [],
+      retain: [{ name: root('override'), reason: 'live', windowMs: 60 }],
     });
   });
 });
@@ -563,7 +582,7 @@ describe('tmpdir-leak-guard: stale run root sweep', () => {
 
     expect(result).toEqual({
       reaped: [root('stale-one'), root('stale-two')],
-      retained: [{ name: root('live'), reason: 'live' }],
+      retained: [{ name: root('live'), reason: 'live', windowMs: staleAfterMs }],
       failures: [],
     });
     expect(existsSync(staleOne)).toBe(false);
@@ -605,7 +624,7 @@ describe('tmpdir-leak-guard: stale run root sweep', () => {
       })
     ).resolves.toEqual({
       reaped: [],
-      retained: [{ name: root('malformed'), reason: 'marker-unreadable' }],
+      retained: [{ name: root('malformed'), reason: 'marker-unreadable', windowMs: staleAfterMs }],
       failures: [],
     });
 
@@ -613,6 +632,37 @@ describe('tmpdir-leak-guard: stale run root sweep', () => {
     expect(logger).toHaveBeenCalledWith(
       expect.stringContaining(`owner marker unreadable for ${malformed}; retaining run root`)
     );
+  });
+
+  it('retains a prefixed symlink not-a-directory without following it to its target', async () => {
+    const external = await mkdtemp(join(tmpdir(), 'tmpdir-guard-external-'));
+    try {
+      await writeFile(join(external, RUN_TMP_ROOT_OWNER_MARKER), '{not-json');
+      await symlink(external, join(fakeRealTmpdir, root('symlink')));
+      const logger = vi.fn();
+      const remove = vi.fn();
+
+      await expect(
+        sweepStaleRunTmpRoots(fakeRealTmpdir, {
+          ownRoot: join(fakeRealTmpdir, root('own')),
+          now,
+          staleAfterMs,
+          legacyStaleAfterMs,
+          remove,
+          logger,
+        })
+      ).resolves.toEqual({
+        reaped: [],
+        retained: [{ name: root('symlink'), reason: 'not-a-directory', windowMs: staleAfterMs }],
+        failures: [],
+      });
+
+      expect(remove).not.toHaveBeenCalled();
+      expect(logger).not.toHaveBeenCalled();
+      expect(existsSync(join(external, RUN_TMP_ROOT_OWNER_MARKER))).toBe(true);
+    } finally {
+      await rm(external, { recursive: true, force: true });
+    }
   });
 
   it('continues after an injected removal failure and records it', async () => {

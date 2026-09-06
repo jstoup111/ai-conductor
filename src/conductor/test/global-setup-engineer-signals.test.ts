@@ -65,6 +65,31 @@ describe('applyRunRootSweepDecision', () => {
     ).not.toThrow();
   });
 
+  it('reports each retained root with its reason and deciding window', () => {
+    const logger = vi.fn();
+
+    applyRunRootSweepDecision(
+      {
+        reaped: [],
+        retained: [
+          { name: 'ai-conductor-vitest-run-own', reason: 'own-root', windowMs: 0 },
+          { name: 'ai-conductor-vitest-run-bad', reason: 'marker-unreadable', windowMs: 0 },
+        ],
+        failures: [],
+      },
+      '/tmp',
+      logger
+    );
+
+    expect(logger).toHaveBeenCalledTimes(2);
+    expect(logger).toHaveBeenCalledWith(
+      expect.stringContaining('retained run root /tmp/ai-conductor-vitest-run-own — own-root (staleness window 0ms)')
+    );
+    expect(logger).toHaveBeenCalledWith(
+      expect.stringContaining('retained run root /tmp/ai-conductor-vitest-run-bad — marker-unreadable (staleness window 0ms)')
+    );
+  });
+
   it('is silent for an empty sweep result', () => {
     const logger = vi.fn();
 

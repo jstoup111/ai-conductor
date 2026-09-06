@@ -20,6 +20,7 @@ import {
   RUN_TMP_ROOT_ENV,
   RUN_TMP_ROOT_LEGACY_STALE_AFTER_MS,
   RUN_TMP_ROOT_STALE_AFTER_MS,
+  RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX,
   type StaleRunTmpRootsResult,
   type TmpdirDiff,
 } from './tmpdir-leak-guard.js';
@@ -202,9 +203,16 @@ export function applyRunRootSweepDecision(
 
     for (const failure of result.failures) {
       logger(
-        `tmpdir-leak-guard: stale run root sweep failed for ${failure.name} — ${
+        `${RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX}${failure.name} — ${
           failure.error instanceof Error ? failure.error.message : String(failure.error)
         }`
+      );
+    }
+
+    for (const retained of result.retained) {
+      logger(
+        `tmpdir-leak-guard: retained run root ${join(realTmpdir, retained.name)} — ` +
+          `${retained.reason} (staleness window ${retained.windowMs}ms)`
       );
     }
   } catch {
@@ -297,11 +305,6 @@ export default async function setup() {
     ? await snapshotParkedMarkers(realParkedDir)
     : { exists: false, markers: {} };
 
-  // Tmpdir leak guard (#1112), part 2 of 2 — the GUARD. Baseline the REAL
-  // tmpdir's top-level entries here, before any test has run, so the teardown
-  // diff sees only what appeared during the run and escaped the redirect.
-  const tmpdirBefore = await snapshotTmpdirEntries(realTmpdir);
-
   // Signals leak guard (#861): snapshot the REAL engineer signals store
   // before the run so only test-project-tagged lines ADDED during this run
   // count as pollution leaked past the test-process env redirect.
@@ -331,9 +334,20 @@ export default async function setup() {
     now: Date.now(),
     staleAfterMs,
     legacyStaleAfterMs: RUN_TMP_ROOT_LEGACY_STALE_AFTER_MS,
-    logger: () => {},
+    // The sweep's own diagnostics (an unreadable owner marker, for one) reach
+    // the operator; its per-failure lines are dropped here because
+    // `applyRunRootSweepDecision` below is the sole failure reporter.
+    logger: (message) => {
+      if (!message.startsWith(RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX)) console.error(message);
+    },
   });
   applyRunRootSweepDecision(runRootSweep, realTmpdir);
+
+  // Tmpdir leak guard (#1112), part 2 of 2 — the GUARD. Baseline the REAL
+  // tmpdir's top-level entries AFTER the stale-root sweep above and still
+  // inside the real-tmpdir window, so a root the sweep reaped is not
+  // baselined as pre-existing and a root it retained is.
+  const tmpdirBefore = await snapshotTmpdirEntries(realTmpdir);
   const sweep = sweepStaleDaemonSessions();
   if (sweep.killed.length > 0) {
     console.error(

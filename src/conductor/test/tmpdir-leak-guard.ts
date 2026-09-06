@@ -88,6 +88,13 @@ export interface StaleRunRootDecision {
   retain: {
     name: string;
     reason: 'live' | 'own-root' | 'unmarked-recent' | 'marker-unreadable' | 'not-a-directory';
+    /**
+     * The staleness window that decided this retention: `staleAfterMs` for
+     * every marker-based reason, `legacyStaleAfterMs` for `unmarked-recent`.
+     * Lets a caller report which window (including an operator override)
+     * produced the decision.
+     */
+    windowMs: number;
   }[];
 }
 
@@ -126,21 +133,21 @@ export function decideStaleRunRoots({
     if (!entry.name.startsWith(RUN_TMP_ROOT_PREFIX)) continue;
 
     if (!entry.isDirectory) {
-      retain.push({ name: entry.name, reason: 'not-a-directory' });
+      retain.push({ name: entry.name, reason: 'not-a-directory', windowMs: staleAfterMs });
     } else if (entry.name === ownRootName) {
-      retain.push({ name: entry.name, reason: 'own-root' });
+      retain.push({ name: entry.name, reason: 'own-root', windowMs: staleAfterMs });
     } else if (entry.marker.kind === 'unreadable') {
-      retain.push({ name: entry.name, reason: 'marker-unreadable' });
+      retain.push({ name: entry.name, reason: 'marker-unreadable', windowMs: staleAfterMs });
     } else if (entry.marker.kind === 'present') {
       if (now - entry.marker.mtimeMs > staleAfterMs) {
         reap.push(entry.name);
       } else {
-        retain.push({ name: entry.name, reason: 'live' });
+        retain.push({ name: entry.name, reason: 'live', windowMs: staleAfterMs });
       }
     } else if (now - entry.dirMtimeMs > legacyStaleAfterMs) {
       reap.push(entry.name);
     } else {
-      retain.push({ name: entry.name, reason: 'unmarked-recent' });
+      retain.push({ name: entry.name, reason: 'unmarked-recent', windowMs: legacyStaleAfterMs });
     }
   }
 
@@ -346,10 +353,17 @@ function isMissing(error: unknown): boolean {
   return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
 }
 
+/**
+ * Prefix of every sweep-failure line. Exported so the setup wiring can
+ * recognise and drop these lines from the sweep's own logger, leaving
+ * `applyRunRootSweepDecision` as the sole reporter of failures.
+ */
+export const RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX = 'tmpdir-leak-guard: stale run root sweep failed for ';
+
 function logSweepFailure(logger: GuardLogger, name: string, error: unknown): void {
   try {
     logger(
-      `tmpdir-leak-guard: stale run root sweep failed for ${name} — ${
+      `${RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX}${name} — ${
         error instanceof Error ? error.message : String(error)
       }`
     );
@@ -421,6 +435,19 @@ export async function sweepStaleRunTmpRoots(
         isDirectory: false,
         dirMtimeMs: 0,
         marker: { kind: 'unreadable', error },
+      });
+      continue;
+    }
+
+    if (!rootStat.isDirectory()) {
+      // A prefixed symlink or plain file is retained `not-a-directory` by
+      // the decision helper; never look inside it, so a symlink pointing at
+      // an external directory is not followed even to read its `.owner`.
+      entries.push({
+        name: dirent.name,
+        isDirectory: false,
+        dirMtimeMs: rootStat.mtimeMs,
+        marker: { kind: 'absent' },
       });
       continue;
     }
