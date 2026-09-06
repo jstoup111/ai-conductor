@@ -63,6 +63,7 @@ import type {
 } from './provider-execution.js';
 import { formatProviderCapabilityGapMessages } from './provider-execution.js';
 import { createEngineStateStore } from './engine-state-store.js';
+import { createRepairObligationStore } from './repair-obligations.js';
 import type { ParallelBranch } from '../types/config.js';
 import {
   runGroupBranch,
@@ -4689,10 +4690,45 @@ export class Conductor {
       // Do this only after admission and budget checks have passed, but before
       // the caller rewinds to the repair target.
       if (resolvedExistingTaskIdsByGapId.size > 0 && planPath) {
+        const boundTaskIds = [...new Set([...resolvedExistingTaskIdsByGapId.values()].flat())];
+        // Replay identity is engine-owned route input: source, current evidence
+        // files, canonical gap ids, and canonical bindings. Planner rationale
+        // prose is intentionally excluded.
+        const admissionKey = createHash('sha256').update(JSON.stringify({
+          planPath,
+          source: hintSource.source,
+          evidence: remediationEvidenceSources.map(({ gate, evidenceFile }) => [gate, evidenceFile]),
+          bindings: [...resolvedExistingTaskIdsByGapId.entries()].sort(),
+        })).digest('hex');
         const baseline = {
           treeHash: await currentTreeHash(this.projectRoot),
           resolvedCount: await countResolvedTasks(this.projectRoot),
         };
+        const admission = await createRepairObligationStore(
+          this.projectRoot,
+          join(this.projectRoot, '.pipeline', 'engine-state.json'),
+        ).admitOrReplay(admissionKey, {
+          id: `repair-${admissionKey.slice(0, 16)}`,
+          planPath,
+          taskIds: boundTaskIds,
+          source: {
+            findingId: [...resolvedExistingTaskIdsByGapId.keys()].sort().join(','),
+            authority: hintSource.source,
+            instruction: 'existing-task remediation',
+          },
+          baseline: {
+            head: (await currentCommitSha(this.projectRoot)) ?? '',
+            tree: baseline.treeHash ?? '',
+            resolvedTaskIds: [],
+          },
+        });
+        if (!admission.ok) {
+          return {
+            kind: 'halt',
+            haltClass: 'needs-human',
+            detail: `existing-task remediation could not persist admission: ${admission.message}`,
+          };
+        }
         this.pendingNoOpBaselines.clear();
         for (const provenance of remediationEvidenceSources) {
           this.pendingNoOpBaselines.set(provenance.gate, baseline);
@@ -4700,7 +4736,7 @@ export class Conductor {
         const restage = await restageExistingRemediationTaskStatuses(
           this.projectRoot,
           planPath,
-          new Set([...resolvedExistingTaskIdsByGapId.values()].flat()),
+          new Set(boundTaskIds),
         );
         if (restage.kind === 'failed') {
           this.pendingNoOpBaselines.clear();

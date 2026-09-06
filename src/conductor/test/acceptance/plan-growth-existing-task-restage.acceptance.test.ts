@@ -22,6 +22,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 
 let projectRoot: string;
 let stateFilePath: string;
@@ -61,10 +62,14 @@ beforeEach(async () => {
     join(projectRoot, '.docs', 'plans', 'plan-growth-existing-task-restage.md'),
     '# Plan\n\n### Task 1: Add the approved guard\n',
   );
-  await writeFile(
-    join(projectRoot, '.pipeline', 'task-status.json'),
-    JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
-  );
+    await writeFile(
+      join(projectRoot, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
+    );
+    await writeFile(
+      join(projectRoot, '.pipeline', 'engine-state.json'),
+      JSON.stringify({ activePlanPath: '.docs/plans/plan-growth-existing-task-restage.md' }),
+    );
 });
 
 afterEach(async () => {
@@ -89,12 +94,16 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
     );
     await git('init', '-q', '-b', 'main');
     await writeFile(join(projectRoot, 'README.md'), 'baseline\n');
-    await git('add', 'README.md');
+    await git('add', 'README.md', '.docs/plans/plan-growth-existing-task-restage.md');
     await git('commit', '-q', '-m', 'chore: baseline');
     await git('update-ref', 'refs/remotes/origin/main', 'HEAD');
     await writeFile(join(projectRoot, 'completed-task.txt'), 'the original task work\n');
     await git('add', 'completed-task.txt');
     await git('commit', '-q', '-m', 'feat: complete original tasks\n\nTask: T1\nTask: task-2');
+    await createProtectedArtifactSeal({
+      projectRoot,
+      baselineCommit: await git('rev-parse', 'HEAD'),
+    });
 
     const buildHints: string[] = [];
     const taskStatusesAtBuildDispatch: string[] = [];
@@ -311,6 +320,7 @@ function makeConductor(runner: StepRunner, config: Record<string, unknown>, from
     events: new ConductorEventEmitter(),
     mode: 'auto',
     daemon: true,
+    baseBranch: 'main',
     verifyArtifacts: true,
     fromStep,
     maxRetries: 1,
