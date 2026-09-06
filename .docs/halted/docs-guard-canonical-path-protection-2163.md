@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-06T10:42:42.827Z
 Slug: docs-guard-canonical-path-protection-2163
 Class: needs-human
 Halting step: prd_audit
