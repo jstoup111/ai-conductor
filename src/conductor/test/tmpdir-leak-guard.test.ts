@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 // Unit tests for the tmpdir leak guard (#1112) — the redirect helpers, the
 // pure stray/ignored classification, and the throw-vs-warn teardown decision.
 // No vitest wiring involved: each seam is exercised directly, the same split
@@ -14,6 +14,7 @@ import {
   rm,
   stat,
   symlink,
+  utimes,
   writeFile,
 } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -29,6 +30,7 @@ import {
   snapshotTmpdirEntries,
   diffTmpdirEntries,
   decideStaleRunRoots,
+  sweepStaleRunTmpRoots,
   writeRunRootOwnerMarker,
   IGNORED_TMPDIR_PREFIXES,
   RUN_TMP_ROOT_PREFIX,
@@ -517,6 +519,144 @@ describe('tmpdir-leak-guard: stale run root decision', () => {
       reap: [],
       retain: [{ name: root('custom-window'), reason: 'live' }],
     });
+  });
+});
+
+describe('tmpdir-leak-guard: stale run root sweep', () => {
+  let fakeRealTmpdir: string;
+  const now = Date.parse('2026-09-05T12:00:00.000Z');
+  const staleAfterMs = 10_000;
+  const legacyStaleAfterMs = 86_400_000;
+  const root = (suffix: string) => `${RUN_TMP_ROOT_PREFIX}${suffix}`;
+
+  beforeEach(async () => {
+    fakeRealTmpdir = await mkdtemp(join(tmpdir(), 'tmpdir-guard-sweep-'));
+  });
+
+  afterEach(async () => {
+    await rm(fakeRealTmpdir, { recursive: true, force: true });
+  });
+
+  async function makeMarkedRoot(name: string, markerMtimeMs: number): Promise<string> {
+    const runRoot = join(fakeRealTmpdir, name);
+    await mkdir(runRoot);
+    await writeFile(join(runRoot, RUN_TMP_ROOT_OWNER_MARKER), JSON.stringify({ owner: 'test' }));
+    await utimes(join(runRoot, RUN_TMP_ROOT_OWNER_MARKER), markerMtimeMs / 1_000, markerMtimeMs / 1_000);
+    return runRoot;
+  }
+
+  it('reaps stale roots, including read-only nesting, and retains a live root', async () => {
+    const staleOne = await makeMarkedRoot(root('stale-one'), now - staleAfterMs - 1);
+    const staleTwo = await makeMarkedRoot(root('stale-two'), now - staleAfterMs - 1);
+    const protectedDir = join(staleTwo, 'nested', 'read-only');
+    await mkdir(protectedDir, { recursive: true });
+    await chmod(protectedDir, 0o555);
+    const live = await makeMarkedRoot(root('live'), now);
+
+    const result = await sweepStaleRunTmpRoots(fakeRealTmpdir, {
+      ownRoot: join(fakeRealTmpdir, root('own')),
+      now,
+      staleAfterMs,
+      legacyStaleAfterMs,
+      logger: vi.fn(),
+    });
+
+    expect(result).toEqual({
+      reaped: [root('stale-one'), root('stale-two')],
+      retained: [{ name: root('live'), reason: 'live' }],
+      failures: [],
+    });
+    expect(existsSync(staleOne)).toBe(false);
+    expect(existsSync(staleTwo)).toBe(false);
+    expect(existsSync(live)).toBe(true);
+  });
+
+  it('is silent and reports no work for an empty fixture', async () => {
+    const logger = vi.fn();
+
+    await expect(
+      sweepStaleRunTmpRoots(fakeRealTmpdir, {
+        ownRoot: join(fakeRealTmpdir, root('own')),
+        now,
+        staleAfterMs,
+        legacyStaleAfterMs,
+        logger,
+      })
+    ).resolves.toEqual({ reaped: [], retained: [], failures: [] });
+
+    expect(logger).not.toHaveBeenCalled();
+  });
+
+  it('retains and reports a malformed owner marker without attempting removal', async () => {
+    const malformed = join(fakeRealTmpdir, root('malformed'));
+    const logger = vi.fn();
+    await mkdir(malformed);
+    await writeFile(join(malformed, RUN_TMP_ROOT_OWNER_MARKER), '{not-json');
+    const remove = vi.fn();
+
+    await expect(
+      sweepStaleRunTmpRoots(fakeRealTmpdir, {
+        ownRoot: join(fakeRealTmpdir, root('own')),
+        now,
+        staleAfterMs,
+        legacyStaleAfterMs,
+        remove,
+        logger,
+      })
+    ).resolves.toEqual({
+      reaped: [],
+      retained: [{ name: root('malformed'), reason: 'marker-unreadable' }],
+      failures: [],
+    });
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(logger).toHaveBeenCalledWith(
+      expect.stringContaining(`owner marker unreadable for ${malformed}; retaining run root`)
+    );
+  });
+
+  it('continues after an injected removal failure and records it', async () => {
+    const failing = await makeMarkedRoot(root('failing'), now - staleAfterMs - 1);
+    const succeeding = await makeMarkedRoot(root('succeeding'), now - staleAfterMs - 1);
+    const removalError = new Error('simulated EBUSY');
+    const remove = vi.fn(async (path: string) => {
+      if (path === failing) throw removalError;
+      await rm(path, { recursive: true, force: true });
+    });
+
+    const result = await sweepStaleRunTmpRoots(fakeRealTmpdir, {
+      ownRoot: join(fakeRealTmpdir, root('own')),
+      now,
+      staleAfterMs,
+      legacyStaleAfterMs,
+      remove,
+      logger: vi.fn(),
+    });
+
+    expect(remove).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({
+      reaped: [root('succeeding')],
+      retained: [],
+      failures: [{ name: root('failing'), error: removalError }],
+    });
+    expect(existsSync(succeeding)).toBe(false);
+  });
+
+  it('retains everything and records the listing error when the fixture cannot be listed', async () => {
+    const missing = join(fakeRealTmpdir, 'does-not-exist');
+    const result = await sweepStaleRunTmpRoots(missing, {
+      ownRoot: join(fakeRealTmpdir, root('own')),
+      now,
+      staleAfterMs,
+      legacyStaleAfterMs,
+      logger: vi.fn(),
+    });
+
+    expect(result.reaped).toEqual([]);
+    expect(result.retained).toEqual([]);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]?.name).toBe(missing);
+    expect(result.failures[0]?.error).toBeInstanceOf(Error);
   });
 });
 

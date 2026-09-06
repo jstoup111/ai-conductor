@@ -4,9 +4,12 @@ import {
   mkdtempSync,
   readdirSync,
   realpathSync,
+  readFileSync,
+  statSync,
   utimesSync,
   writeFileSync,
 } from 'fs';
+import type { Dirent } from 'fs';
 import { mkdtemp, readdir, rm } from 'fs/promises';
 import { basename, join } from 'path';
 
@@ -86,6 +89,13 @@ export interface StaleRunRootDecision {
     name: string;
     reason: 'live' | 'own-root' | 'unmarked-recent' | 'marker-unreadable' | 'not-a-directory';
   }[];
+}
+
+/** Filesystem sweep result, including failures that were retained fail-open. */
+export interface StaleRunTmpRootsResult {
+  reaped: string[];
+  retained: StaleRunRootDecision['retain'];
+  failures: { name: string; error: unknown }[];
 }
 
 /**
@@ -330,6 +340,134 @@ export function ensureRunTmpRootSync(
 export async function removeRunTmpRoot(runRoot: string): Promise<void> {
   makeDirectoriesWritableSync(runRoot);
   await rm(runRoot, { recursive: true, force: true });
+}
+
+function isMissing(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT');
+}
+
+function logSweepFailure(logger: GuardLogger, name: string, error: unknown): void {
+  try {
+    logger(
+      `tmpdir-leak-guard: stale run root sweep failed for ${name} — ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  } catch {
+    // A best-effort diagnostic must not turn a fail-open sweep into a setup failure.
+  }
+}
+
+function logUnreadableOwnerMarker(logger: GuardLogger, name: string, error: unknown): void {
+  try {
+    logger(
+      `tmpdir-leak-guard: owner marker unreadable for ${name}; retaining run root — ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  } catch {
+    // A best-effort diagnostic must not turn a fail-open sweep into a setup failure.
+  }
+}
+
+/**
+ * Reap stale run roots from the real tmpdir while retaining any ambiguous entry.
+ *
+ * The root itself is always inspected with `lstatSync`, so a prefixed symlink
+ * is never followed or presented to the recursive remover as a directory.
+ */
+export async function sweepStaleRunTmpRoots(
+  realTmpdir: string,
+  {
+    ownRoot,
+    now,
+    staleAfterMs,
+    legacyStaleAfterMs,
+    remove = removeRunTmpRoot,
+    logger = console.error,
+  }: {
+    ownRoot: string;
+    now: number;
+    staleAfterMs: number;
+    legacyStaleAfterMs: number;
+    remove?: (runRoot: string) => Promise<void>;
+    logger?: GuardLogger;
+  }
+): Promise<StaleRunTmpRootsResult> {
+  const failures: StaleRunTmpRootsResult['failures'] = [];
+  let dirents: Dirent[];
+
+  try {
+    dirents = await readdir(realTmpdir, { withFileTypes: true });
+  } catch (error) {
+    failures.push({ name: realTmpdir, error });
+    logSweepFailure(logger, realTmpdir, error);
+    return { reaped: [], retained: [], failures };
+  }
+
+  const entries: RunRootEntry[] = [];
+  for (const dirent of dirents.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!dirent.name.startsWith(RUN_TMP_ROOT_PREFIX)) continue;
+
+    const rootPath = join(realTmpdir, dirent.name);
+    let rootStat: ReturnType<typeof lstatSync>;
+    try {
+      rootStat = lstatSync(rootPath);
+    } catch (error) {
+      failures.push({ name: dirent.name, error });
+      logSweepFailure(logger, rootPath, error);
+      entries.push({
+        name: dirent.name,
+        isDirectory: false,
+        dirMtimeMs: 0,
+        marker: { kind: 'unreadable', error },
+      });
+      continue;
+    }
+
+    let marker: RunRootEntry['marker'];
+    try {
+      const markerPath = join(rootPath, RUN_TMP_ROOT_OWNER_MARKER);
+      const markerStat = statSync(markerPath);
+      JSON.parse(readFileSync(markerPath, 'utf8'));
+      marker = { kind: 'present', mtimeMs: markerStat.mtimeMs };
+    } catch (error) {
+      if (isMissing(error)) {
+        marker = { kind: 'absent' };
+      } else {
+        marker = { kind: 'unreadable', error };
+        logUnreadableOwnerMarker(logger, rootPath, error);
+      }
+    }
+
+    entries.push({
+      name: dirent.name,
+      isDirectory: rootStat.isDirectory(),
+      dirMtimeMs: rootStat.mtimeMs,
+      marker,
+    });
+  }
+
+  const decision = decideStaleRunRoots({
+    entries,
+    ownRoot,
+    now,
+    staleAfterMs,
+    legacyStaleAfterMs,
+  });
+  const reaped: string[] = [];
+
+  for (const name of decision.reap) {
+    try {
+      await remove(join(realTmpdir, name));
+      reaped.push(name);
+    } catch (error) {
+      failures.push({ name, error });
+      logSweepFailure(logger, join(realTmpdir, name), error);
+    }
+  }
+
+  return { reaped, retained: decision.retain, failures };
 }
 
 /**
