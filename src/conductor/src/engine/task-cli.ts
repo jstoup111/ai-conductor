@@ -244,7 +244,14 @@ export async function runTaskDone(
   try {
     stampContent = await readFile(stampPath, 'utf-8');
   } catch (err) {
-    // Stamp file doesn't exist — this is idempotent success
+    // Legacy closes remain idempotent. An explicitly reopened task must still
+    // satisfy its current proof boundary rather than silently retaining an
+    // open durable repair because its marker was interrupted or removed.
+    const completion = await completeTaskDoneWhen(projectRoot, id, doneWhen);
+    if (completion.kind === 'refused') {
+      console.error(completion.message);
+      return 1;
+    }
     return 0;
   }
 
