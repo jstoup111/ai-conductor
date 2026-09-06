@@ -5,6 +5,7 @@
 import { isAbsolute, dirname, join } from 'node:path';
 import { stat, writeFile } from 'node:fs/promises';
 import { makeProductionGh, makeProductionGit } from './pr-labels.js';
+import { GhCapabilityError } from './tracker-client.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import { readState } from './state.js';
@@ -220,6 +221,12 @@ export async function dispatchFinishRecord(
         cmd.prUrl!,
       );
     } catch (err) {
+      if (err instanceof GhCapabilityError) {
+        console.error(
+          `${err.message} — finish-record: cannot verify PR ${cmd.prUrl} identity and head; refusing to record`,
+        );
+        return 1;
+      }
       console.error(
         `finish-record: gh pr view failed (${err instanceof Error ? err.message : String(err)}) — cannot verify PR ${cmd.prUrl} identity and head; refusing to record`,
       );

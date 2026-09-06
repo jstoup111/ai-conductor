@@ -13,6 +13,7 @@ import {
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import type { ConductStateStore } from '../../src/engine/conduct-state-store.js';
 import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
+import { GhCapabilityError } from '../../src/engine/tracker-client.js';
 import type { ConductState } from '../../src/types/index.js';
 
 const validEvidence = {
@@ -323,6 +324,62 @@ describe('engine/finish-record-cli', () => {
       expect(errSpy.mock.calls.flat().join(' ')).toMatch(/gh pr view failed/i);
       expect(errSpy.mock.calls.flat().join(' ')).toMatch(/ENOENT/i);
       await expect(snapshotDir(existingAbsDir)).resolves.toEqual(before);
+    });
+
+    it('leads with the gh capability problem when PR identity verification requests an unsupported JSON field', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const before = await snapshotDir(existingAbsDir);
+      const capability = new GhCapabilityError('headRefOid', new Error('unsupported'));
+      const runGh = vi.fn(async () => {
+        throw capability;
+      });
+      const runGit = vi.fn(async () => ({ stdout: '' }));
+
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        { runGh, runGit },
+      );
+
+      const stderr = errSpy.mock.calls.flat().join(' ');
+      expect(code).toBe(1);
+      expect(stderr.startsWith(capability.message)).toBe(true);
+      expect(stderr).toContain('gh');
+      expect(stderr).toContain('headRefOid');
+      expect(stderr.startsWith('cannot verify PR')).toBe(false);
+      await expect(snapshotDir(existingAbsDir)).resolves.toEqual(before);
+      await expect(readdir(existingAbsDir)).resolves.not.toContain('finish-choice');
+      await expect(readdir(existingAbsDir)).resolves.not.toContain('DONE');
+    });
+
+    it('keeps the missing-PR identity-verification refusal wording byte-identical', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const before = await snapshotDir(existingAbsDir);
+      const missingPr = new Error('pull request not found');
+      const runGh = vi.fn(async () => {
+        throw missingPr;
+      });
+      const runGit = vi.fn(async () => ({ stdout: '' }));
+      const prUrl = 'https://github.com/org/repo/pull/1';
+
+      const code = await dispatchFinishRecord(
+        { kind: 'record', choice: 'pr', prUrl, pipelineDir: existingAbsDir },
+        scratchParent,
+        { runGh, runGit },
+      );
+
+      expect(code).toBe(1);
+      expect(errSpy.mock.calls.flat().join(' ')).toBe(
+        `finish-record: gh pr view failed (${missingPr.message}) — cannot verify PR ${prUrl} identity and head; refusing to record`,
+      );
+      await expect(snapshotDir(existingAbsDir)).resolves.toEqual(before);
+      await expect(readdir(existingAbsDir)).resolves.not.toContain('finish-choice');
+      await expect(readdir(existingAbsDir)).resolves.not.toContain('DONE');
     });
 
     it('passes normalized ancestry evidence when gh succeeds with a URL and push-evidence confirms HEAD is pushed', async () => {
