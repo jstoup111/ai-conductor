@@ -39,3 +39,4 @@ Thumbs.db
 # Defense-in-depth: provider skill-discovery warmup bookkeeping must never
 # land in the git-tracked skills catalog (self-host isolation leak, #1042).
 skills/.system/
+__pycache__/

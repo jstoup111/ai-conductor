@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Covers: task:1
 # Parser-level contract for bin/migrate candidate ordering. This sources only
 # the helper region; no installation, migration execution, or external service
 # is involved.
@@ -8,6 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MIGRATE_SRC="$REPO_ROOT/bin/migrate"
+MIGRATION_FENCES_SRC="$REPO_ROOT/bin/lib/migration_fences.py"
 
 PASS=0
 FAIL=0
@@ -25,6 +27,117 @@ assert() {
 
 TMP_ROOT=$(mktemp -d)
 trap 'rm -rf "$TMP_ROOT"' EXIT
+
+FENCE_FIXTURE="$TMP_ROOT/fences.md"
+cat > "$FENCE_FIXTURE" <<'EOF'
+```bash migration
+outside-section
+```
+
+## Migration
+
+```bash migration<TRAILING>
+canonical
+```
+
+```bash migration<CRLF>
+crlf
+```
+
+```bash migration
+wider-opener
+`````
+
+````markdown
+## Migration
+
+```bash migration
+inside-backticks
+```
+````
+
+~~~~text
+## Migration
+
+```bash migration
+inside-tildes
+```
+~~~~
+
+## Migration
+
+```bash migration
+second-section
+```
+
+```bash migration
+unterminated
+EOF
+
+python3 - "$FENCE_FIXTURE" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+path.write_bytes(
+    path.read_bytes()
+    .replace(b"bash migration<TRAILING>\n", b"bash migration   \n")
+    .replace(b"bash migration<CRLF>\n", b"bash migration\r\n")
+)
+PY
+
+FENCE_REPORT=$(python3 - "$MIGRATION_FENCES_SRC" "$FENCE_FIXTURE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(sys.argv[1]).parent))
+import migration_fences
+text = Path(sys.argv[2]).read_text()
+print(json.dumps([
+    {
+        "script": candidate.script,
+        "in_migration_section": candidate.in_migration_section,
+        "closed": candidate.closed,
+        "span": (candidate.source_start, candidate.source_end),
+    }
+    for candidate in migration_fences.scan_migration_fences(text)
+]))
+PY
+)
+assert 'scanner preserves canonical, trailing-whitespace, and CRLF-info-string runnable candidates' \
+  "$(python3 - "$FENCE_REPORT" <<'PY'
+import json
+import sys
+
+candidates = json.loads(sys.argv[1])
+scripts = [candidate["script"] for candidate in candidates]
+print(0 if scripts[:4] == ["outside-section\n", "canonical\n", "crlf\n", "wider-opener\n"] else 1)
+PY
+)"
+assert 'scanner ignores Migration-looking fences enclosed by wider backtick and tilde fences' \
+  "$(python3 - "$FENCE_REPORT" <<'PY'
+import json
+import sys
+
+candidates = json.loads(sys.argv[1])
+scripts = "".join(candidate["script"] for candidate in candidates)
+print(0 if "inside-backticks" not in scripts and "inside-tildes" not in scripts else 1)
+PY
+)"
+assert 'scanner reports source spans, Migration membership, and an unterminated candidate without treating it as runnable' \
+  "$(python3 - "$FENCE_REPORT" <<'PY'
+import json
+import sys
+
+candidates = json.loads(sys.argv[1])
+last = candidates[-1]
+print(0 if not candidates[0]["in_migration_section"]
+      and all(candidate["in_migration_section"] for candidate in candidates[1:])
+      and all(candidate["span"][0] < candidate["span"][1] for candidate in candidates)
+      and last["script"] == "unterminated\n" and not last["closed"] else 1)
+PY
+)"
 
 # Source the parser helpers without invoking the migration runner.
 # shellcheck disable=SC1090

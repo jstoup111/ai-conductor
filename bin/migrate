@@ -339,9 +339,12 @@ PY
 # per line-group, separated by `---MIGRATION-BLOCK---` markers.
 extract_migration_blocks() {
   local from="$1" to="$2"
-  FROM_VER="$from" TO_VER="$to" python3 - "$CHANGELOG" <<'PY'
+  FROM_VER="$from" TO_VER="$to" MIGRATION_FENCES_DIR="${HARNESS_DIR}/bin/lib" python3 - "$CHANGELOG" <<'PY'
 import os, re, sys
 from pathlib import Path
+
+sys.path.insert(0, os.environ["MIGRATION_FENCES_DIR"])
+from migration_fences import runnable_migration_fences
 
 def norm(v):
     """Strip leading 'v' for comparison; return tuple for semver sort."""
@@ -362,39 +365,6 @@ from_ver = norm(os.environ.get("FROM_VER", ""))
 to_ver = norm(os.environ.get("TO_VER", ""))
 text = path.read_text()
 
-def migration_fences(body):
-    """Yield runnable Migration fences while respecting Markdown fence context."""
-    in_migration = False
-    fence = None
-    runnable_script = None
-
-    for line in body.splitlines(keepends=True):
-        if fence:
-            marker, width = fence
-            if re.match(rf"^{re.escape(marker)}{{{width},}}\s*$", line):
-                if runnable_script is not None:
-                    yield "".join(runnable_script)
-                    runnable_script = None
-                fence = None
-            elif runnable_script is not None:
-                runnable_script.append(line)
-            continue
-
-        if re.match(r"^#{2,3}\s+Migration\s*$", line):
-            in_migration = True
-            continue
-        if in_migration and re.match(r"^#{1,3}\s", line):
-            in_migration = False
-            continue
-
-        opening = re.match(r"^([`~])\1{2,}", line)
-        if opening:
-            marker = opening.group(1)
-            width = len(opening.group(0))
-            fence = (marker, width)
-            if in_migration and marker == "`" and width == 3 and line[width:].strip() == "bash migration":
-                runnable_script = []
-
 # Split into version sections: ## [X.Y.Z] - date ... until next ## [
 sections = re.split(r"(?m)^## \[", text)
 entries = []  # list of (version_tuple, version_str, body)
@@ -408,7 +378,7 @@ for sec in sections[1:]:
     body = sec[m.end():]
     nv = norm(ver_label)
     if not nv:
-        withheld = len(list(migration_fences(body)))
+        withheld = sum(1 for _ in runnable_migration_fences(body))
         if withheld:
             fence_label = "fence" if withheld == 1 else "fences"
             print(
@@ -429,8 +399,8 @@ applicable.sort(key=lambda e: e[0])
 # then pull ```bash migration``` fences from each section.
 out = []
 for nv, label, body in applicable:
-    for code in migration_fences(body):
-        out.append(f"---MIGRATION-BLOCK--- version={label}\n{code.rstrip()}\n")
+    for fence in runnable_migration_fences(body):
+        out.append(f"---MIGRATION-BLOCK--- version={label}\n{fence.script.rstrip()}\n")
 
 sys.stdout.write("".join(out))
 PY

@@ -140,6 +140,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
+    # The aggregate Vitest suite normally completes in a few minutes, but its
+    # filesystem-heavy local-Git fixtures can exceed the platform's short
+    # default execution budget on a contended hosted runner. Keep a finite,
+    # explicit ceiling rather than losing the test summary to that timeout.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
         with:
