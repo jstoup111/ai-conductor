@@ -1,20 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-06T13:41:46.863Z
+Status: halted
 Slug: sweep-stale-vitest-run-temp-roots-at-global-setup-
-Class: plan-gap
-Halting step: prd_audit
-Phase: SHIP
+Class: needs-human
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-sweep-stale-vitest-run-temp-roots-at-global-setup-
-Head SHA: c744dfe22ed25bd89d1e6a114c350d224cea0177
-Halted at: 2026-09-06T13:38:36.527Z
+Head SHA: d9db0ac7c0d6f9da5cb8766a1f7de3346375655e
+Halted at: 2026-09-06T15:34:32.640Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome
+build_review mechanical fault allowance exhausted: 3 of 3 shared faults consumed.
+Current lap lap-d9db0ac7c0d6f9da5cb8766a1f7de3346375655e: testQuality closed cause malformed-artifact (invalid-provider-result).
+1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap lap-d9db0ac7c0d6f9da5cb8766a1f7de3346375655e --rubric testQuality --rationale "<rationale>".
+2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.
 ```
