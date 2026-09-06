@@ -10,9 +10,11 @@
  * immediately after the observable dispatch boundary.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execFile as execFileCb } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
@@ -23,6 +25,16 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 let projectRoot: string;
 let stateFilePath: string;
+const execFile = promisify(execFileCb);
+
+async function git(...args: string[]): Promise<string> {
+  const { stdout } = await execFile(
+    'git',
+    ['-c', 'user.email=acceptance@test', '-c', 'user.name=Acceptance Test', ...args],
+    { cwd: projectRoot },
+  );
+  return stdout.trim();
+}
 
 beforeEach(async () => {
   projectRoot = await mkdtemp(join(tmpdir(), 'existing-task-restage-acceptance-'));
@@ -60,6 +72,103 @@ afterEach(async () => {
 });
 
 describe('existing-task remediation re-stages work across the BUILD rewind', () => {
+  it('dispatches an explicitly reopened owner even when an older commit already carries its Task trailer', async () => {
+    // Covers: S1.1, S1.2, S1.3, task:8
+    await writeFile(
+      join(projectRoot, '.docs', 'plans', 'plan-growth-existing-task-restage.md'),
+      '# Plan\n\n### Task 1: Repair the completed task\n\n### Task 2: Repair the sibling task\n',
+    );
+    await writeFile(
+      join(projectRoot, '.pipeline', 'task-status.json'),
+      JSON.stringify({
+        tasks: [
+          { id: '1', status: 'completed' },
+          { id: '2', status: 'completed' },
+        ],
+      }),
+    );
+    await git('init', '-q', '-b', 'main');
+    await writeFile(join(projectRoot, 'README.md'), 'baseline\n');
+    await git('add', 'README.md');
+    await git('commit', '-q', '-m', 'chore: baseline');
+    await git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    await writeFile(join(projectRoot, 'completed-task.txt'), 'the original task work\n');
+    await git('add', 'completed-task.txt');
+    await git('commit', '-q', '-m', 'feat: complete original tasks\n\nTask: T1\nTask: task-2');
+
+    const buildHints: string[] = [];
+    const taskStatusesAtBuildDispatch: string[] = [];
+    const dispatched: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName, _state, opts) => {
+        dispatched.push(step);
+        if (step === 'architecture_review_as_built') {
+          await writeFile(
+            join(projectRoot, '.pipeline', 'architecture-review-as-built.md'),
+            [
+              'Verdict: BLOCKED',
+              '',
+              '## Blocking Findings',
+              '| Finding | Class | Governing clause | Summary |',
+              '| --- | --- | --- | --- |',
+              '| ARCH-1 | REMEDIABLE | Task 1 | Repair the completed task |',
+            ].join('\n'),
+          );
+        } else if (step === 'remediate') {
+          await writeFile(
+            join(projectRoot, '.pipeline', 'remediation.json'),
+            JSON.stringify({
+              dispositions: [{
+                id: 'ARCH-1',
+                disposition: 'existing-task',
+                category: null,
+                rationale: 'Tasks 1 and 2 own the current finding.',
+                tasks: [
+                  { id: '1', title: 'Repair the completed task' },
+                  { id: '2', title: 'Repair the sibling task' },
+                  { id: '2', title: 'Repair the sibling task duplicate' },
+                ],
+              }],
+            }),
+          );
+        } else if (step === 'build') {
+          buildHints.push(opts?.retryReason ?? '');
+          taskStatusesAtBuildDispatch.push(await readFile(
+            join(projectRoot, '.pipeline', 'task-status.json'),
+            'utf8',
+          ));
+          return { success: false, error: 'sentinel: stop after observing reopened BUILD dispatch' };
+        }
+        return { success: true };
+      }),
+    };
+
+    await makeConductor(
+      runner,
+      { architecture_review_as_built: { remediation: { enabled: true } } },
+      'architecture_review_as_built',
+    ).run();
+
+    expect(dispatched).toContain('remediate');
+    expect(dispatched).toContain('build');
+    expect(buildHints[0]).toContain('ARCH-1');
+    expect(buildHints[0]).toContain('Repair the completed task');
+    expect(JSON.parse(taskStatusesAtBuildDispatch[0] ?? '{}')).toMatchObject({
+      tasks: [
+        { id: '1', status: 'pending' },
+        { id: '2', status: 'pending' },
+      ],
+    });
+    await expect(
+      readFile(join(projectRoot, '.docs', 'plans', 'plan-growth-existing-task-restage.md'), 'utf8'),
+    ).resolves.not.toContain('rem-');
+    const ledger = JSON.parse(
+      await readFile(join(projectRoot, '.pipeline', 'kickback-ledger.json'), 'utf8'),
+    ) as { gates: { architecture_review_as_built: { laps?: number } }; growthUsed?: number };
+    expect(ledger.gates.architecture_review_as_built.laps).toBe(1);
+    expect(ledger.growthUsed ?? 0).toBe(0);
+  });
+
   it('dispatches the bound authored task as pending without appending a replacement task', async () => {
     let pendingAtBuildDispatch = false;
     const dispatched: StepName[] = [];
