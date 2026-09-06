@@ -94,7 +94,7 @@ import {
   isNoOwnerKey,
   parseAdrDecisions,
   parsePrdAuditReport,
-  readRemediationPlan,
+  readRemediationPlanResult,
 } from '../../src/engine/artifacts.js';
 import type {
   CompletionResult,
@@ -139,15 +139,18 @@ describe('engine/artifacts', () => {
       'utf8',
     );
 
-    await expect(readRemediationPlan(dir, Date.now() - 60_000)).resolves.toEqual({
-      gaps: [{
-        id: 'build_review:legacy',
-        disposition: 'build',
-        category: null,
-        rationale: 'The existing direct remediation route remains unchanged.',
-        tasks: [{ id: 'rem-legacy-1', title: 'src/widget.ts:20 — preserve legacy routing.' }],
-      }],
-      invalidTasklessBuild: false,
+    await expect(readRemediationPlanResult(dir, Date.now() - 60_000)).resolves.toEqual({
+      plan: {
+        gaps: [{
+          id: 'build_review:legacy',
+          disposition: 'build',
+          category: null,
+          rationale: 'The existing direct remediation route remains unchanged.',
+          tasks: [{ id: 'rem-legacy-1', title: 'src/widget.ts:20 — preserve legacy routing.' }],
+        }],
+        rejected: [],
+        invalidTasklessBuild: false,
+      },
     });
   });
 
