@@ -752,6 +752,7 @@ async function recordRemediationGateAppend(
   projectRoot: string,
   budget: RemediationGateAppendBudget,
   events: PlanGrowthEventSink,
+  options: { recordLap?: boolean } = {},
 ): Promise<void> {
   const ledger = await readKickbackLedger(projectRoot);
   const existing = ledger.gates[budget.gate];
@@ -764,7 +765,7 @@ async function recordRemediationGateAppend(
       priorVerdict: true,
       resolvedBefore: 0,
     }),
-    laps: budget.priorLaps + (budget.taskCount > 0 ? 1 : 0),
+    laps: budget.priorLaps + (options.recordLap !== false && budget.taskCount > 0 ? 1 : 0),
   };
   await writeKickbackLedger(projectRoot, {
     ...ledger,
@@ -3845,7 +3846,8 @@ export class Conductor {
   > {
     // Refusals stay on the normal event spine. This is intentionally the
     // existing gate_blocked member: remediation has no independent telemetry
-    // file or side channel, and EventPersister already carries this detail.
+    // file or side channel, and the existing persistence subscriber already
+    // carries this detail.
     const reportRefusal = async (reason: string): Promise<void> => {
       try {
         await this.events.emit({
@@ -4559,24 +4561,27 @@ export class Conductor {
     // Both appends and existing-task rounds spend a gate lap only after the
     // route has successfully admitted its work. The latter has no append
     // attempt, but still needs this durable ledger update.
-    if (appendAttempted && resolvedExistingTaskIdsByGapId.size === 0) {
+    if (appendAttempted) {
+      const existingTaskRound = resolvedExistingTaskIdsByGapId.size > 0;
       if (prdAuditBudget) await recordRemediationGateAppend(
         this.projectRoot,
         prdAuditBudget,
         this.events,
+        { recordLap: !existingTaskRound },
       );
       if (asBuiltBudget) await recordRemediationGateAppend(
         this.projectRoot,
         asBuiltBudget,
         this.events,
+        { recordLap: !existingTaskRound },
       );
-      if (boundExistingAsBuiltFindings.size > 0) {
-        await this.reloadPendingAsBuiltRemediationFindings();
-        for (const finding of boundExistingAsBuiltFindings.values()) {
-          this.pendingAsBuiltRemediationFindings.set(finding.finding, finding);
-        }
-        await this.persistPendingAsBuiltRemediationFindings();
+    }
+    if (boundExistingAsBuiltFindings.size > 0) {
+      await this.reloadPendingAsBuiltRemediationFindings();
+      for (const finding of boundExistingAsBuiltFindings.values()) {
+        this.pendingAsBuiltRemediationFindings.set(finding.finding, finding);
       }
+      await this.persistPendingAsBuiltRemediationFindings();
     }
 
     const fixes = gaps.filter((g) => g.disposition !== 'halt');
