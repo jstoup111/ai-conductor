@@ -18,6 +18,17 @@ function renderedHeaderName(header: string): string {
   return header === '' ? "''" : JSON.stringify(header);
 }
 
+function unsupportedHeaderTransportError(headers: unknown, transport: string): string {
+  const firstHeader = isPlainObject(headers) ? Object.entries(headers)[0] : undefined;
+  if (!firstHeader) return `otel headers are unsupported with the ${transport}.`;
+
+  const [header, reference] = firstHeader;
+  const environmentVariable = isPlainObject(reference) && typeof reference.env === 'string'
+    ? reference.env
+    : undefined;
+  return `otel header ${renderedHeaderName(header)}${environmentVariable ? ` references environment variable '${environmentVariable}' and` : ''} is unsupported with the ${transport}.`;
+}
+
 /**
  * Resolved OTel config. A discriminated union:
  *   { enabled: false }            — exporter is off; error is set if config was invalid
@@ -86,11 +97,11 @@ export function resolveOtelConfig(
     if (hasHeaderEntries(headers) && protocol === 'grpc') {
       return {
         enabled: false,
-        error: 'otel headers are unsupported with the grpc protocol.',
+        error: unsupportedHeaderTransportError(headers, 'grpc protocol'),
       };
     }
 
-    const resolvedHeaders: Record<string, string> = {};
+    const resolvedHeaders: Record<string, string> = Object.create(null);
     if (headers && hasHeaderEntries(headers)) {
       for (const [header, reference] of Object.entries(headers)) {
         const headerName = renderedHeaderName(header);
@@ -140,7 +151,7 @@ export function resolveOtelConfig(
   if (hasHeaderEntries(headers)) {
     return {
       enabled: false,
-      error: 'otel headers are unsupported with the file exporter.',
+      error: unsupportedHeaderTransportError(headers, 'file exporter'),
     };
   }
   const resolvedFile = file ?? join(pipelineDir, DEFAULT_FILE);
