@@ -181,6 +181,9 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
     };
     expect(Object.values(engineState.repairObligations?.records ?? {}).map((record) => record.settlement))
       .toContain('settled');
+    expect(Object.values(engineState.repairObligations?.records ?? {}).map(
+      (record) => record.baseline?.resolvedCount,
+    )).toContain(2);
   });
 
   it('dispatches the bound authored task as pending without appending a replacement task', async () => {
