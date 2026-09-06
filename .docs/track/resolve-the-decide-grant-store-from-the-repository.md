@@ -1,0 +1,13 @@
+# Track: Resolve the decide-grant store from the repository root
+
+Track: technical
+
+Scope boundary: Small fix for #1621, approved by the operator on 2026-09-06 (delegated). Make `decide-grant` resolve the main repository root from its invocation directory before it composes the daemon grant store path, refuse to write when no repository can be resolved, and name the absolute file it wrote. Give the writer and the reader one spelling of that store path. Grant schema, grant scoping and single-use consumption, the ungrantable `plan` rule, park-marker provenance, and any change to how the entry policy decides whether a grant applies are outside this slice.
+
+This is an internal CLI and daemon-store correction with no product requirement behind it; acceptance criteria live in technical stories rather than a PRD.
+
+The operator approved repository-root resolution over the smaller "refuse to run inside a worktree" guard on 2026-09-06 (delegated). The narrow guard leaves every other non-root invocation directory silently broken, which is the same defect in a smaller window; resolving the root fixes the class.
+
+Scope check: A — consumer-facing (the deciding test is whether the mechanism exists outside this repository: `ai-conductor decide-grant` and the `.daemon/grants/` store ship in the engine and exist in every project that runs the daemon; no self-host, live-boundary, release-gate, or `isSelfBuild()` path is touched). B — n/a (no new skill). C — provider-agnostic (no provider path, environment variable, or host capability is involved). Registration: none beyond the canonical CLI reference page, which is documentation upkeep rather than a spec artifact.
+
+Verified foundation: `dispatchDecideGrantCommand` in `src/conductor/src/cli.ts` composes its store directory as `.daemon/grants` joined onto the invocation directory, so a worktree cwd writes a grant the engine never reads. `resolveGrantPath` in `src/conductor/src/engine/decide-entry-policy.ts` derives the read path from the main checkout that owns the feature worktree, so writer and reader compose the same relative subpath in two places. `resolveMainRepoRoot` in `src/conductor/src/engine/park-marker.ts` already resolves a main root through `git rev-parse --git-common-dir`, but it is memoized and falls back to its input directory instead of reporting failure, so it cannot serve a caller that must refuse to write; `src/conductor/src/engine/daemon-park-cli.ts` carries a second, non-memoized copy of the same probe that does report failure. Probing the real repository confirms `--git-common-dir` resolves to the same main root from the checkout root, from a nested subdirectory (returned relative to the invocation directory), and from inside a linked worktree.
