@@ -29,6 +29,25 @@ function refusingLease(message = 'lease held by a live owner'): ConductStateLeas
   return { acquire: async () => ({ ok: false, kind: 'timeout', message }) };
 }
 
+function leaseWithOwnerPublicationWindow(): ConductStateLease {
+  let publishingOwner = false;
+  return {
+    async acquire() {
+      if (publishingOwner) {
+        return {
+          ok: false,
+          kind: 'recovery_refused',
+          message: 'Unable to recover engine-state lease: owner metadata is unavailable',
+        };
+      }
+      publishingOwner = true;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      publishingOwner = false;
+      return { ok: true, handle: { release: async () => ({ ok: true }) } };
+    },
+  };
+}
+
 function filesystemWithFailure(
   failure: 'writeTemporary' | 'renameTemporary',
 ): EngineStateFilesystem {
@@ -51,6 +70,20 @@ function filesystemWithFailure(
 }
 
 describe('engine state store', () => {
+  it('serializes local lease acquisition before its owner publication completes', async () => {
+    const statePath = await createStatePath();
+    const lease = leaseWithOwnerPublicationWindow();
+    const first = createEngineStateStore(statePath, { lease });
+    const second = createEngineStateStore(statePath, { lease });
+
+    const results = await Promise.all([
+      first.update((state) => ({ ...state, activePlanPath: '.docs/plans/current.md' })),
+      second.update((state) => ({ ...state, appendedRemediationTaskIds: ['12'] })),
+    ]);
+
+    expect(results).toEqual([{ ok: true }, { ok: true }]);
+  });
+
   it('serializes concurrent updates and preserves unrelated durable fields', async () => {
     const statePath = await createStatePath();
     await writeFile(statePath, JSON.stringify({
