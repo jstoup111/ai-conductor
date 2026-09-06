@@ -4,7 +4,7 @@ export interface InterpreterSourceFinding {
   message: string;
 }
 
-type Word = { text: string; line: number; expandable: string[]; closed: boolean };
+type Word = { text: string; line: number; expandable: string[]; closed: boolean; openQuote?: "'" | '"' };
 const expansion = /(?<!\\)(?:\$\{|\$\(|\$[A-Za-z_][A-Za-z0-9_]*|`)/g;
 const interpreter = /^(?:\/[^\s/]+)*\/(?:python3?|node)$|^(?:python3?|node)$/;
 const findingsIn = (value: string): string[] => [...value.matchAll(expansion)].map((match) => match[0]);
@@ -25,7 +25,7 @@ function wordAt(text: string, start: number, line: number): Word {
     if (quote !== "'") expandable += char;
     index += 1;
   }
-  return { text: value, line, expandable: findingsIn(expandable), closed: !quote };
+  return { text: value, line, expandable: findingsIn(expandable), closed: !quote, openQuote: quote };
 }
 
 function commandWords(line: string, lineNumber: number): Word[] {
@@ -72,7 +72,7 @@ export function checkInterpreterSource(sourceName: string, text: string): Interp
     if (option >= 0) {
       const flag = args[option];
       const source = flag.text.startsWith('--eval=') ? { ...flag, text: flag.text.slice(7) } : args[option + 1];
-      if (source && !source.closed && source.expandable.length === 0) {
+      if (source && !source.closed && source.openQuote === "'" && source.expandable.length === 0) {
         // Multiline single-quoted fixed source (the normal generated-hook
         // shape) remains literal. Skip its body so it cannot become phantom
         // shell commands.
