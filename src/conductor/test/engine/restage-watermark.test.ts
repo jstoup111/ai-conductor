@@ -1,5 +1,5 @@
-// Covers: task:1, task:2
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+// Covers: task:1, task:2, task:3
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -111,5 +111,42 @@ describe('restage watermark store', () => {
     await readRestageWatermarks(worktreeRoot, 'stem-a');
 
     await expect(readFile(engineStatePath, 'utf8')).resolves.toBe(engineState);
+  });
+
+  it('returns corrupt with the file path when the watermark contains malformed JSON', async () => {
+    const watermarkPath = join(mainRoot, '.daemon', 'restage-watermarks', 'stem-a.json');
+    await mkdir(join(mainRoot, '.daemon', 'restage-watermarks'), { recursive: true });
+    await writeFile(watermarkPath, '{ not json', 'utf8');
+
+    await expect(readRestageWatermarks(mainRoot, 'stem-a')).resolves.toEqual({
+      kind: 'corrupt',
+      detail: expect.stringContaining(watermarkPath),
+    });
+  });
+
+  it('returns corrupt with the file path when the watermark has the wrong shape', async () => {
+    const watermarkPath = join(mainRoot, '.daemon', 'restage-watermarks', 'stem-a.json');
+    await mkdir(join(mainRoot, '.daemon', 'restage-watermarks'), { recursive: true });
+    await writeFile(watermarkPath, '{ "version": 1, "tasks": "nope" }', 'utf8');
+
+    await expect(readRestageWatermarks(mainRoot, 'stem-a')).resolves.toEqual({
+      kind: 'corrupt',
+      detail: expect.stringContaining(watermarkPath),
+    });
+  });
+
+  it('returns failed and writes no watermark when resolving the main root throws', async () => {
+    await expect(recordRestageWatermarks(mainRoot, 'stem-a', [{ id: '16', trailerCount: 3 }], {
+      resolveMainRepoRoot: async () => {
+        throw new Error('main root unavailable');
+      },
+    })).resolves.toEqual({
+      kind: 'failed',
+      detail: expect.stringContaining('main root unavailable'),
+    });
+
+    await expect(stat(join(mainRoot, '.daemon', 'restage-watermarks'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 });
