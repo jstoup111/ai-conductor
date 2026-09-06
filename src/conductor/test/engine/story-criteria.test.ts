@@ -81,4 +81,41 @@ describe('extractStoryCriterionIds', () => {
     expect(extractStoryCriterionIds('## Story: Untitled\n\n#### Happy Path\n\n- Given a, when b, then c\n'))
       .toEqual([]);
   });
+
+  it('counts a hard-wrapped row whose "then" sits on a continuation line', () => {
+    // Authors wrap rows at ~100 columns. Matching only the first line of the
+    // bullet dropped every row that wrapped before "then" and shifted the
+    // ordinals of every row after it.
+    const text = [
+      '## Story 1: Wrapped',
+      '',
+      '#### Happy Path',
+      '- Given the shared stack is up and databases exist in both engines,',
+      '  when the script is executed with no arguments,',
+      '  then both databases no longer exist.',
+      '- Given a namespace with odd characters, when',
+      '  the script runs, then it sanitizes them.',
+      '- Given `CI=true`, when it runs, then it does not prompt.',
+      '',
+      '#### Negative Paths',
+      '- Given the credentials are wrong, when the script runs,',
+      '  then it exits non-zero.',
+      '',
+    ].join('\n');
+    expect(extractStoryCriterionIds(text)).toEqual(['S1.1', 'S1.2', 'S1.3', 'S1.4']);
+  });
+
+  it('does not join a following bullet or unindented prose into the previous row', () => {
+    const text = [
+      '## Story 2: Boundaries',
+      '',
+      '#### Happy Path',
+      '- Given a, when b,',
+      '- then c is a separate bullet with no precondition',
+      'Prose that is not part of any bullet, then',
+      '- Given d, when e, then f',
+      '',
+    ].join('\n');
+    expect(extractStoryCriterionIds(text)).toEqual(['S2.1']);
+  });
 });

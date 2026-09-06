@@ -55,6 +55,30 @@ export function sectionBody(text: string, headingRegex: RegExp): string | null {
   return capturing ? body.join('\n') : null;
 }
 
+/**
+ * Yield each list item's full text with its indented continuation lines
+ * joined. Authors hard-wrap long Given/When/Then rows at ~100 columns, so
+ * "then" routinely lands on a continuation line; matching only the bullet's
+ * first line silently dropped those rows and shifted every later ordinal.
+ */
+export function listItems(body: string): string[] {
+  const items: string[] = [];
+  for (const line of body.split('\n')) {
+    const bullet = line.match(/^\s*(?:[-*+] |\d+[.)] )(.+?)\s*$/);
+    if (bullet) {
+      items.push(bullet[1]);
+    } else if (items.length > 0 && /^\s+\S/.test(line)) {
+      items[items.length - 1] += ' ' + line.trim();
+    } else if (line.trim() === '') {
+      continue;
+    } else {
+      // Unindented non-bullet prose ends the current item.
+      items.push('');
+    }
+  }
+  return items.filter((item) => item !== '');
+}
+
 /** Map each authoritative Given/When/Then row to its report-table criterion id. */
 export function extractStoryCriterionIds(storiesText: string): string[] {
   const ids: string[] = [];
@@ -72,9 +96,8 @@ export function extractStoryCriterionIds(storiesText: string): string[] {
         type === 'happy' ? /happy\s*path/i : /negative\s*paths?/i,
       );
       if (body === null) continue;
-      for (const line of body.split('\n')) {
-        const match = line.match(/^\s*(?:[-*+] |\d+[.)] )(.+?)\s*$/);
-        if (!match || !/\bgiven\b/i.test(match[1]) || !/\bthen\b/i.test(match[1])) continue;
+      for (const item of listItems(body)) {
+        if (!/\bgiven\b/i.test(item) || !/\bthen\b/i.test(item)) continue;
         ordinal += 1;
         ids.push(`S${story}.${ordinal}`);
       }
