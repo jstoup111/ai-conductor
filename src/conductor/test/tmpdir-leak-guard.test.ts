@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 // Unit tests for the tmpdir leak guard (#1112) — the redirect helpers, the
 // pure stray/ignored classification, and the throw-vs-warn teardown decision.
 // No vitest wiring involved: each seam is exercised directly, the same split
@@ -28,6 +28,7 @@ import {
   startRunRootHeartbeat,
   snapshotTmpdirEntries,
   diffTmpdirEntries,
+  decideStaleRunRoots,
   writeRunRootOwnerMarker,
   IGNORED_TMPDIR_PREFIXES,
   RUN_TMP_ROOT_PREFIX,
@@ -342,6 +343,180 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
 
   it('exempts the run root prefix by default so the guard never trips on its own root', () => {
     expect(IGNORED_TMPDIR_PREFIXES).toContain(RUN_TMP_ROOT_PREFIX);
+  });
+});
+
+describe('tmpdir-leak-guard: stale run root decision', () => {
+  const now = 1_000_000;
+  const staleAfterMs = 10_000;
+  const legacyStaleAfterMs = 86_400_000;
+  const root = (suffix: string) => `${RUN_TMP_ROOT_PREFIX}${suffix}`;
+
+  it('reaps a root whose owner marker heartbeat is stale and ignores unrelated entries', () => {
+    expect(
+      decideStaleRunRoots({
+        entries: [
+          {
+            name: root('stale-marker'),
+            isDirectory: true,
+            dirMtimeMs: now,
+            marker: { kind: 'present', mtimeMs: now - staleAfterMs - 1 },
+          },
+          {
+            name: 'unrelated-stale-entry',
+            isDirectory: true,
+            dirMtimeMs: now,
+            marker: { kind: 'present', mtimeMs: 0 },
+          },
+        ],
+        ownRoot: '/tmp/another-run-root',
+        now,
+        staleAfterMs,
+        legacyStaleAfterMs,
+      })
+    ).toEqual({ reap: [root('stale-marker')], retain: [] });
+  });
+
+  it('retains fresh markers, including two concurrent roots created within one second', () => {
+    const decision = decideStaleRunRoots({
+      entries: [
+        {
+          name: root('fresh-a'),
+          isDirectory: true,
+          dirMtimeMs: now,
+          marker: { kind: 'present', mtimeMs: now },
+        },
+        {
+          name: root('fresh-b'),
+          isDirectory: true,
+          dirMtimeMs: now,
+          marker: { kind: 'present', mtimeMs: now - 1_000 },
+        },
+      ],
+      ownRoot: '/tmp/another-run-root',
+      now,
+      staleAfterMs,
+      legacyStaleAfterMs,
+    });
+
+    expect(decision).toEqual({
+      reap: [],
+      retain: [
+        { name: root('fresh-a'), reason: 'live' },
+        { name: root('fresh-b'), reason: 'live' },
+      ],
+    });
+  });
+
+  it('retains its own root even when its owner marker is stale', () => {
+    expect(
+      decideStaleRunRoots({
+        entries: [
+          {
+            name: root('own'),
+            isDirectory: true,
+            dirMtimeMs: now - legacyStaleAfterMs - 1,
+            marker: { kind: 'present', mtimeMs: 0 },
+          },
+        ],
+        ownRoot: `/tmp/${root('own')}`,
+        now,
+        staleAfterMs,
+        legacyStaleAfterMs,
+      })
+    ).toEqual({ reap: [], retain: [{ name: root('own'), reason: 'own-root' }] });
+  });
+
+  it('reaps only legacy unmarked directories older than the fallback window', () => {
+    const decision = decideStaleRunRoots({
+      entries: [
+        {
+          name: root('legacy'),
+          isDirectory: true,
+          dirMtimeMs: now - legacyStaleAfterMs - 1,
+          marker: { kind: 'absent' },
+        },
+        {
+          name: root('recent'),
+          isDirectory: true,
+          dirMtimeMs: now - legacyStaleAfterMs + 1,
+          marker: { kind: 'absent' },
+        },
+      ],
+      ownRoot: '/tmp/another-run-root',
+      now,
+      staleAfterMs,
+      legacyStaleAfterMs,
+    });
+
+    expect(decision).toEqual({
+      reap: [root('legacy')],
+      retain: [{ name: root('recent'), reason: 'unmarked-recent' }],
+    });
+  });
+
+  it('retains unreadable markers and non-directory entries without following them', () => {
+    expect(
+      decideStaleRunRoots({
+        entries: [
+          {
+            name: root('unreadable'),
+            isDirectory: true,
+            dirMtimeMs: now - legacyStaleAfterMs - 1,
+            marker: { kind: 'unreadable', error: 'EACCES' },
+          },
+          {
+            name: root('symlink'),
+            isDirectory: false,
+            dirMtimeMs: now - legacyStaleAfterMs - 1,
+            marker: { kind: 'present', mtimeMs: 0 },
+          },
+        ],
+        ownRoot: '/tmp/another-run-root',
+        now,
+        staleAfterMs,
+        legacyStaleAfterMs,
+      })
+    ).toEqual({
+      reap: [],
+      retain: [
+        { name: root('unreadable'), reason: 'marker-unreadable' },
+        { name: root('symlink'), reason: 'not-a-directory' },
+      ],
+    });
+  });
+
+  it('honours a caller-provided staleness window and has no filesystem seam', () => {
+    const entry = {
+      name: root('custom-window'),
+      isDirectory: true,
+      dirMtimeMs: now,
+      marker: { kind: 'present' as const, mtimeMs: now - 101 },
+    };
+    const customInput = {
+      entries: [
+        entry,
+      ],
+      ownRoot: '/tmp/another-run-root',
+      now,
+      staleAfterMs: 100,
+      legacyStaleAfterMs,
+    };
+
+    const first = decideStaleRunRoots(customInput);
+    const second = decideStaleRunRoots(customInput);
+
+    expect(first).toEqual({
+      reap: [root('custom-window')],
+      retain: [],
+    });
+    expect(second).toEqual(first);
+    expect(
+      decideStaleRunRoots({ ...customInput, staleAfterMs })
+    ).toEqual({
+      reap: [],
+      retain: [{ name: root('custom-window'), reason: 'live' }],
+    });
   });
 });
 

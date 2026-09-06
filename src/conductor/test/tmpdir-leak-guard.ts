@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'fs';
 import { mkdtemp, readdir, rm } from 'fs/promises';
-import { join } from 'path';
+import { basename, join } from 'path';
 
 /**
  * Temp-directory leak containment for the vitest suite (two mechanisms).
@@ -66,6 +66,75 @@ export interface RunRootOwnerMarker {
   pid: number;
   hostname: string;
   startedAt: string;
+}
+
+/** A candidate run-root and its already-read owner marker state. */
+export interface RunRootEntry {
+  name: string;
+  isDirectory: boolean;
+  dirMtimeMs: number;
+  marker:
+    | { kind: 'present'; mtimeMs: number }
+    | { kind: 'absent' }
+    | { kind: 'unreadable'; error: unknown };
+}
+
+/** Pure stale-run-root sweep result, retaining any ambiguous candidate. */
+export interface StaleRunRootDecision {
+  reap: string[];
+  retain: {
+    name: string;
+    reason: 'live' | 'own-root' | 'unmarked-recent' | 'marker-unreadable' | 'not-a-directory';
+  }[];
+}
+
+/**
+ * Decide which enumerated run roots can safely be reaped.
+ *
+ * This deliberately consumes marker readings rather than reaching for the
+ * filesystem itself: callers own the I/O boundary, while this policy remains
+ * deterministic and conservative around incomplete observations.
+ */
+export function decideStaleRunRoots({
+  entries,
+  ownRoot,
+  now,
+  staleAfterMs,
+  legacyStaleAfterMs,
+}: {
+  entries: RunRootEntry[];
+  ownRoot: string;
+  now: number;
+  staleAfterMs: number;
+  legacyStaleAfterMs: number;
+}): StaleRunRootDecision {
+  const reap: string[] = [];
+  const retain: StaleRunRootDecision['retain'] = [];
+  const ownRootName = basename(ownRoot);
+
+  for (const entry of entries) {
+    if (!entry.name.startsWith(RUN_TMP_ROOT_PREFIX)) continue;
+
+    if (!entry.isDirectory) {
+      retain.push({ name: entry.name, reason: 'not-a-directory' });
+    } else if (entry.name === ownRootName) {
+      retain.push({ name: entry.name, reason: 'own-root' });
+    } else if (entry.marker.kind === 'unreadable') {
+      retain.push({ name: entry.name, reason: 'marker-unreadable' });
+    } else if (entry.marker.kind === 'present') {
+      if (now - entry.marker.mtimeMs > staleAfterMs) {
+        reap.push(entry.name);
+      } else {
+        retain.push({ name: entry.name, reason: 'live' });
+      }
+    } else if (now - entry.dirMtimeMs > legacyStaleAfterMs) {
+      reap.push(entry.name);
+    } else {
+      retain.push({ name: entry.name, reason: 'unmarked-recent' });
+    }
+  }
+
+  return { reap, retain };
 }
 
 type GuardLogger = (message: string) => void;
