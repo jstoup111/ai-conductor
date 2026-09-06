@@ -104,22 +104,22 @@ afterEach(async () => {
 // ── Task 1: duration bucket boundaries ──────────────────────────────────────
 
 describe('Task 1: duration bucket boundaries', () => {
-  it('are strictly increasing and span 10 ms through 30 minutes', () => {
+  it('are strictly increasing and span 10 ms through 8 hours', () => {
     expect(DURATION_BUCKET_BOUNDARIES_MS.every(
       (boundary, index) => index === 0 || boundary > DURATION_BUCKET_BOUNDARIES_MS[index - 1],
     )).toBe(true);
     expect(DURATION_BUCKET_BOUNDARIES_MS[0]).toBeLessThanOrEqual(10);
-    expect(DURATION_BUCKET_BOUNDARIES_MS.at(-1)).toBeGreaterThanOrEqual(1_800_000);
+    expect(DURATION_BUCKET_BOUNDARIES_MS.at(-1)).toBeGreaterThanOrEqual(28_800_000);
     expect(DURATION_BUCKET_BOUNDARIES_MS.some((boundary) => boundary >= 252_464)).toBe(true);
   });
 
-  it('resolves representative durations to four distinct buckets', () => {
-    const resolvedBoundaries = [240, 4_000, 90_000, 600_000].map((durationMs) =>
+  it('resolves representative durations to six distinct buckets', () => {
+    const resolvedBoundaries = [240, 4_000, 90_000, 600_000, 2_700_000, 20_000_000].map((durationMs) =>
       DURATION_BUCKET_BOUNDARIES_MS.find((boundary) => boundary >= durationMs),
     );
 
     expect(resolvedBoundaries).not.toContain(undefined);
-    expect(new Set(resolvedBoundaries).size).toBe(4);
+    expect(new Set(resolvedBoundaries).size).toBe(6);
   });
 });
 
@@ -143,6 +143,7 @@ describe('Task 2: step-duration histogram advice', () => {
       .toEqual([
         10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000,
         30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
+        3_600_000, 7_200_000, 14_400_000, 28_800_000,
       ]);
   });
 });
@@ -150,7 +151,7 @@ describe('Task 2: step-duration histogram advice', () => {
 // ── Task 3: closeout-duration histogram advice and descriptions ─────────────
 
 describe('Task 3: closeout-duration histogram advice and descriptions', () => {
-  it('shares duration advice and declares the 30-minute saturation bound for both duration instruments', () => {
+  it('shares duration advice and declares the 8-hour saturation bound for both duration instruments', () => {
     const createHistogram = vi.fn();
     const meter = {
       createHistogram,
@@ -172,8 +173,8 @@ describe('Task 3: closeout-duration histogram advice and descriptions', () => {
       closeoutDescription: durationOptions['conductor.pipeline.closeout.duration']?.description,
     }).toEqual({
       closeoutAdvice: DURATION_BUCKET_BOUNDARIES_MS,
-      stepDescription: expect.stringContaining('quantiles saturate above 30 min (largest finite bucket boundary)'),
-      closeoutDescription: expect.stringContaining('quantiles saturate above 30 min (largest finite bucket boundary)'),
+      stepDescription: expect.stringContaining('quantiles saturate above 8 h (largest finite bucket boundary)'),
+      closeoutDescription: expect.stringContaining('quantiles saturate above 8 h (largest finite bucket boundary)'),
     });
   });
 });
@@ -189,7 +190,7 @@ describe('Task 4: step-duration overflow and zero observations', () => {
 
     try {
       const recorder = new MetricsRecorder(provider.getMeter('task-4'));
-      recorder.onStepClose('overflow-and-zero', 2_000_000, 0);
+      recorder.onStepClose('overflow-and-zero', 30_000_000, 0);
       recorder.onStepClose('overflow-and-zero', 0, 0);
 
       await provider.forceFlush();
@@ -201,7 +202,7 @@ describe('Task 4: step-duration overflow and zero observations', () => {
 
       expect(point).toBeDefined();
       expect(point?.value.count).toBe(2);
-      expect(point?.value.sum).toBe(2_000_000);
+      expect(point?.value.sum).toBe(30_000_000);
       expect(point?.value.buckets.boundaries.at(-1)).toBe(DURATION_BUCKET_BOUNDARIES_MS.at(-1));
       expect(point?.value.buckets.counts.at(-1)).toBe(1);
       expect(point?.value.buckets.counts[0]).toBe(1);
@@ -226,8 +227,8 @@ describe('Task 5: closeout-duration overflow observation', () => {
         type: 'pipeline_closeout',
         obligation: 'summary',
         startedAt: 1_000,
-        endedAt: 2_001_000,
-        ts: 2_001_000,
+        endedAt: 30_001_000,
+        ts: 30_001_000,
       } as const;
 
       expect(() => recorder.onPipelineCloseout(closeout)).not.toThrow();
@@ -240,7 +241,7 @@ describe('Task 5: closeout-duration overflow observation', () => {
 
       expect(point).toBeDefined();
       expect(point?.value.count).toBe(1);
-      expect(point?.value.sum).toBe(2_000_000);
+      expect(point?.value.sum).toBe(30_000_000);
       expect(point?.value.buckets.boundaries.at(-1)).toBe(DURATION_BUCKET_BOUNDARIES_MS.at(-1));
       expect(point?.value.buckets.counts.at(-1)).toBe(1);
     } finally {

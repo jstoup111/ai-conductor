@@ -19,10 +19,11 @@ import type { ConductorEvent } from '../../types/events.js';
 import type { RunOutcome } from './span-manager.js';
 import { classifyMetering } from '../metering.js';
 
-/** Explicit duration histogram boundaries, from 10 ms through 30 minutes. */
+/** Explicit duration histogram boundaries, from 10 ms through 8 hours. */
 export const DURATION_BUCKET_BOUNDARIES_MS = [
   10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000,
   30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
+  3_600_000, 7_200_000, 14_400_000, 28_800_000,
 ];
 
 export class MetricsRecorder {
@@ -43,7 +44,7 @@ export class MetricsRecorder {
     },
   ) {
     this.durationHistogram = meter.createHistogram('conductor.step.duration', {
-      description: 'Duration of conductor steps in milliseconds; quantiles saturate above 30 min (largest finite bucket boundary)',
+      description: 'Duration of conductor steps in milliseconds; quantiles saturate above 8 h (largest finite bucket boundary)',
       unit: 'ms',
       advice: { explicitBucketBoundaries: DURATION_BUCKET_BOUNDARIES_MS },
     });
@@ -65,7 +66,7 @@ export class MetricsRecorder {
       description: 'Authoritative cumulative feature tokens by step and model',
     });
     this.closeoutDurationHistogram = meter.createHistogram('conductor.pipeline.closeout.duration', {
-      description: 'Duration of pipeline closeout obligations in milliseconds; quantiles saturate above 30 min (largest finite bucket boundary)',
+      description: 'Duration of pipeline closeout obligations in milliseconds; quantiles saturate above 8 h (largest finite bucket boundary)',
       unit: 'ms',
       advice: { explicitBucketBoundaries: DURATION_BUCKET_BOUNDARIES_MS },
     });

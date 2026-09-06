@@ -702,7 +702,7 @@ keeps only feature-stable identity: `service.name`, `service.instance.id` (`<pro
 a new dispatch does not create a new metric series for the same feature.
 
 The `conductor.step.duration` and `conductor.pipeline.closeout.duration` histograms use explicit
-duration buckets through 30 minutes; quantiles saturate above that largest finite bucket boundary.
+duration buckets through 8 hours; quantiles saturate above that largest finite bucket boundary.
 
 When a run opens a `conductor.run` root span, its terminal export carries
 `conductor.run.outcome`: `complete` after `feature_complete`, `halted` after `loop_halt`, or
