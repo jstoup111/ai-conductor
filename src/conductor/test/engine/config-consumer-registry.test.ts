@@ -24,6 +24,7 @@ describe('config consumer registry', () => {
       'steps.parallel',
       'steps.by_tier',
       'build_review',
+      'build_review.adjudication',
       'build_review.rubrics',
       'ci_watch',
       'kickback_escalation',

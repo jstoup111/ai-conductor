@@ -94,6 +94,7 @@ import {
   isNoOwnerKey,
   parseAdrDecisions,
   parsePrdAuditReport,
+  readRemediationPlanResult,
 } from '../../src/engine/artifacts.js';
 import type {
   CompletionResult,
@@ -120,6 +121,37 @@ describe('engine/artifacts', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it('keeps a no-mode remediation artifact on the legacy parser path', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/remediation.json'),
+      JSON.stringify({
+        dispositions: [{
+          id: 'build_review:legacy',
+          disposition: 'build',
+          category: null,
+          rationale: 'The existing direct remediation route remains unchanged.',
+          tasks: [{ id: 'rem-legacy-1', title: 'src/widget.ts:20 — preserve legacy routing.' }],
+        }],
+      }),
+      'utf8',
+    );
+
+    await expect(readRemediationPlanResult(dir, Date.now() - 60_000)).resolves.toEqual({
+      plan: {
+        gaps: [{
+          id: 'build_review:legacy',
+          disposition: 'build',
+          category: null,
+          rationale: 'The existing direct remediation route remains unchanged.',
+          tasks: [{ id: 'rem-legacy-1', title: 'src/widget.ts:20 — preserve legacy routing.' }],
+        }],
+        rejected: [],
+        invalidTasklessBuild: false,
+      },
+    });
   });
 
   // Covers: task:1
@@ -5493,6 +5525,7 @@ Task 1 → Task 2
             unresolvedFindingIds: [],
             skippedRubrics: [],
             infrastructureFailureRubrics: [],
+            uncoveredInfrastructureFailureRubrics: [],
           },
         }),
         git: async (args) => {

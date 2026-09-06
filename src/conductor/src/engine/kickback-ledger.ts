@@ -23,6 +23,8 @@ export interface KickbackGateEntry {
   cumulative: number;
   /** Remediation rounds authorized for this gate, independent of plan growth. */
   laps?: number;
+  /** Stable build-review work-order effects that already consumed this gate. */
+  chargedEffectIds?: string[];
   mechanicalFaults?: number;
   lastMechanicalFault?: KickbackLastMechanicalFault;
   treeHash: string | null;
@@ -104,6 +106,23 @@ export interface BumpKickbackGateResult {
   exhausted: boolean;
 }
 
+/** Result of applying a stable build-review effect to the kickback budget. */
+export type ChargeBuildReviewEffectResult =
+  | ({ status: 'charged' } & BumpKickbackGateResult)
+  | { status: 'already-charged'; entry: KickbackGateEntry }
+  | { status: 'unreadable'; reason: string };
+
+/** Typed read boundary for callers that must never spend from corrupt state. */
+export type KickbackLedgerReadResult =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'ok'; readonly ledger: KickbackLedger }
+  | { readonly kind: 'unreadable'; readonly reason: string };
+
+/** Typed mechanical-fault write for enforcement boundaries that fail closed. */
+export type BumpMechanicalFaultsInLedgerResult =
+  | { readonly kind: 'ok'; readonly entry: KickbackGateEntry }
+  | { readonly kind: 'unreadable'; readonly reason: string };
+
 const NON_LAP_COUNTING_GATE_ENTRY_FIELDS = new Set(['count', 'resolvedBefore']);
 
 function isLapCountingValue(value: unknown): value is number | Record<string, number> {
@@ -158,6 +177,7 @@ function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntr
     typeof entry.count === 'number' &&
     (entry.cumulative === undefined || typeof entry.cumulative === 'number') &&
     (entry.laps === undefined || isNonNegativeInteger(entry.laps)) &&
+    (entry.chargedEffectIds === undefined || isChargedEffectIds(entry.chargedEffectIds)) &&
     (entry.mechanicalFaults === undefined || (
       typeof entry.mechanicalFaults === 'number' &&
       Number.isInteger(entry.mechanicalFaults) &&
@@ -169,6 +189,12 @@ function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntr
     typeof entry.priorVerdict === 'boolean' &&
     typeof entry.resolvedBefore === 'number'
   );
+}
+
+function isChargedEffectIds(value: unknown): value is string[] {
+  return Array.isArray(value) &&
+    value.every((effectId) => typeof effectId === 'string' && effectId.trim().length > 0) &&
+    new Set(value).size === value.length;
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -233,7 +259,12 @@ function normalizeKickbackLedger(ledger: PersistedKickbackLedger): KickbackLedge
     gates: Object.fromEntries(
       Object.entries(ledger.gates).map(([gate, entry]) => [
         gate,
-        { ...entry, cumulative: entry.cumulative ?? 0, mechanicalFaults: entry.mechanicalFaults ?? 0 },
+        {
+          ...entry,
+          cumulative: entry.cumulative ?? 0,
+          mechanicalFaults: entry.mechanicalFaults ?? 0,
+          ...(gate === 'build_review' ? { chargedEffectIds: entry.chargedEffectIds ?? [] } : {}),
+        },
       ]),
     ),
   };
@@ -243,27 +274,40 @@ function normalizeKickbackLedger(ledger: PersistedKickbackLedger): KickbackLedge
  * Read the durable kickback state. Missing, malformed, and incompatible
  * ledgers deliberately fail open to an empty budget and never interrupt a run.
  */
-export async function readKickbackLedger(projectRoot: string): Promise<KickbackLedger> {
+export async function readKickbackLedgerResult(projectRoot: string): Promise<KickbackLedgerReadResult> {
   const ledgerPath = join(projectRoot, KICKBACK_LEDGER_PATH);
 
   try {
     const parsed: unknown = JSON.parse(await readFile(ledgerPath, 'utf-8'));
-    if (isKickbackLedger(parsed)) return normalizeKickbackLedger(parsed);
+    if (isKickbackLedger(parsed)) return { kind: 'ok', ledger: normalizeKickbackLedger(parsed) };
 
     if (typeof parsed === 'object' && parsed !== null && (parsed as { version?: unknown }).version !== 1) {
-      console.warn(`[kickback-ledger] unsupported ledger version at ${ledgerPath}; using empty ledger`);
-      return emptyLedger();
+      return { kind: 'unreadable', reason: 'kickback ledger has an unsupported version' };
     }
-
-    console.warn(`[kickback-ledger] corrupt ledger at ${ledgerPath}; using empty ledger`);
+    return { kind: 'unreadable', reason: 'kickback ledger is corrupt' };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.warn(
-        `[kickback-ledger] unable to read ledger at ${ledgerPath}; using empty ledger: ${error instanceof Error ? error.message : String(error)}`,
-      );
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
+    return { kind: 'unreadable', reason: `kickback ledger is unreadable: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+/**
+ * Legacy callers intentionally retain the historic fail-open behavior. New
+ * enforcement boundaries consume readKickbackLedgerResult instead.
+ */
+export async function readKickbackLedger(projectRoot: string): Promise<KickbackLedger> {
+  const ledgerPath = join(projectRoot, KICKBACK_LEDGER_PATH);
+  const result = await readKickbackLedgerResult(projectRoot);
+  if (result.kind === 'ok') return result.ledger;
+  if (result.kind === 'unreadable') {
+    if (result.reason === 'kickback ledger has an unsupported version') {
+      console.warn(`[kickback-ledger] unsupported ledger version at ${ledgerPath}; using empty ledger`);
+    } else if (result.reason === 'kickback ledger is corrupt') {
+      console.warn(`[kickback-ledger] corrupt ledger at ${ledgerPath}; using empty ledger`);
+    } else {
+      console.warn(`[kickback-ledger] unable to read ledger at ${ledgerPath}; using empty ledger: ${result.reason.slice('kickback ledger is unreadable: '.length)}`);
     }
   }
-
   return emptyLedger();
 }
 
@@ -435,6 +479,28 @@ export function bumpKickbackGate(
   };
 }
 
+/**
+ * Charge one stable build-review effect. Replaying an already charged id is a
+ * no-op, so an interrupted work-order route cannot spend the same lap twice.
+ */
+export function chargeBuildReviewEffect(
+  entry: KickbackGateEntry | undefined,
+  effectId: string,
+  input: BumpKickbackGateInput,
+): ChargeBuildReviewEffectResult {
+  const chargedEffectIds = entry?.chargedEffectIds ?? [];
+  if (chargedEffectIds.includes(effectId)) {
+    return { status: 'already-charged', entry: entry! };
+  }
+
+  const result = bumpKickbackGate(entry, input);
+  return {
+    status: 'charged',
+    ...result,
+    entry: { ...result.entry, chargedEffectIds: [...chargedEffectIds, effectId] },
+  };
+}
+
 /** Load, update, and atomically persist one gate's durable kickback budget. */
 export async function bumpKickbackGateInLedger(
   projectRoot: string,
@@ -448,6 +514,27 @@ export async function bumpKickbackGateInLedger(
     ...ledger,
     gates: { ...ledger.gates, [gate]: result.entry },
   });
+
+  return result;
+}
+
+/** Load, idempotently charge, and atomically persist one build-review effect. */
+export async function chargeBuildReviewEffectInLedger(
+  projectRoot: string,
+  effectId: string,
+  input: BumpKickbackGateInput,
+): Promise<ChargeBuildReviewEffectResult> {
+  const read = await readKickbackLedgerResult(projectRoot);
+  if (read.kind === 'unreadable') return { status: 'unreadable', reason: read.reason };
+  const ledger = read.kind === 'ok' ? read.ledger : emptyLedger();
+  const result = chargeBuildReviewEffect(ledger.gates.build_review, effectId, input);
+
+  if (result.status === 'charged') {
+    await writeKickbackLedger(projectRoot, {
+      ...ledger,
+      gates: { ...ledger.gates, build_review: result.entry },
+    });
+  }
 
   return result;
 }
@@ -471,22 +558,26 @@ export function bumpMechanicalFaults(
   };
 }
 
-/** Load, update, and atomically persist one gate's mechanical-fault allowance. */
-export async function bumpMechanicalFaultsInLedger(
-  projectRoot: string,
-  gate: string,
-  fault?: KickbackLastMechanicalFault,
-): Promise<KickbackGateEntry> {
-  const ledger = await readKickbackLedger(projectRoot);
-  const entry = ledger.gates[gate] ?? {
+function emptyKickbackGateEntry(gate: string): KickbackGateEntry {
+  return {
     count: 0,
     cumulative: 0,
+    ...(gate === 'build_review' ? { chargedEffectIds: [] } : {}),
     mechanicalFaults: 0,
     treeHash: null,
     lastReason: '',
     priorVerdict: true,
     resolvedBefore: 0,
   };
+}
+
+async function bumpMechanicalFaultsInLedgerFromLedger(
+  projectRoot: string,
+  ledger: KickbackLedger,
+  gate: string,
+  fault?: KickbackLastMechanicalFault,
+): Promise<KickbackGateEntry> {
+  const entry = ledger.gates[gate] ?? emptyKickbackGateEntry(gate);
 
   const nextEntry = bumpMechanicalFaults(entry, fault);
   await writeKickbackLedger(projectRoot, {
@@ -495,4 +586,33 @@ export async function bumpMechanicalFaultsInLedger(
   });
 
   return nextEntry;
+}
+
+/**
+ * Load, update, and atomically persist one mechanical-fault allowance without
+ * ever treating unreadable enforcement state as an empty budget.
+ */
+export async function bumpMechanicalFaultsInLedgerResult(
+  projectRoot: string,
+  gate: string,
+  fault?: KickbackLastMechanicalFault,
+): Promise<BumpMechanicalFaultsInLedgerResult> {
+  const result = await readKickbackLedgerResult(projectRoot);
+  if (result.kind === 'unreadable') return result;
+  const ledger = result.kind === 'ok' ? result.ledger : emptyLedger();
+  return { kind: 'ok', entry: await bumpMechanicalFaultsInLedgerFromLedger(projectRoot, ledger, gate, fault) };
+}
+
+/**
+ * Legacy callers intentionally retain the historical fail-open behavior.
+ * New enforcement boundaries use bumpMechanicalFaultsInLedgerResult instead.
+ */
+export async function bumpMechanicalFaultsInLedger(
+  projectRoot: string,
+  gate: string,
+  fault?: KickbackLastMechanicalFault,
+): Promise<KickbackGateEntry> {
+  const result = await bumpMechanicalFaultsInLedgerResult(projectRoot, gate, fault);
+  if (result.kind === 'ok') return result.entry;
+  return bumpMechanicalFaultsInLedgerFromLedger(projectRoot, await readKickbackLedger(projectRoot), gate, fault);
 }

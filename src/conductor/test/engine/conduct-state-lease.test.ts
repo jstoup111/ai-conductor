@@ -205,6 +205,48 @@ describe('conduct-state lease', () => {
     if (acquired.ok) await expect(acquired.handle.release()).resolves.toEqual({ ok: true });
   });
 
+  it('waits for a concurrent creator to publish owner metadata before recovering the lease', async () => {
+    const statePath = '/worktree/initializing/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    let allowOwnerWrite: (() => void) | undefined;
+    const ownerWriteAllowed = new Promise<void>((resolve) => { allowOwnerWrite = resolve; });
+    let ownerWriteStarted: (() => void) | undefined;
+    const ownerWriteHasStarted = new Promise<void>((resolve) => { ownerWriteStarted = resolve; });
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async writeOwner(path, contents): Promise<void> {
+        ownerWriteStarted?.();
+        await ownerWriteAllowed;
+        await shared.writeOwner(path, contents);
+      },
+    };
+    const first = createConductStateLease(statePath, {
+      filesystem,
+      pid: 101,
+      newToken: () => 'first-writer',
+    }).acquire();
+    await ownerWriteHasStarted;
+
+    let waited = false;
+    const second = createConductStateLease(statePath, {
+      filesystem,
+      pid: 202,
+      newToken: () => 'second-writer',
+      processIsLive: (pid) => pid === 101,
+      wait: async () => {
+        waited = true;
+        allowOwnerWrite?.();
+        const acquired = await first;
+        if (acquired.ok) await acquired.handle.release();
+      },
+    }).acquire();
+
+    await expect(second).resolves.toMatchObject({ ok: true });
+    expect(waited).toBe(true);
+    const acquired = await second;
+    if (acquired.ok) await expect(acquired.handle.release()).resolves.toEqual({ ok: true });
+  });
+
   it('names a labelled store in acquire failures and recovery diagnostics', async () => {
     const statePath = '/worktree/ledger/.pipeline/ledger.json';
     const filesystem = sharedLeaseFilesystem();
