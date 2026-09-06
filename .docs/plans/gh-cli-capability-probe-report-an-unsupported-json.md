@@ -8,7 +8,7 @@
 
 Declare a minimum supported `gh` version, gate dispatch on it at the machine level so an old CLI is
 never charged to a feature, and produce a typed capability error at the canonical `gh` seam.
-18 tasks.
+19 tasks.
 
 ## Technical Approach
 
@@ -461,6 +461,30 @@ pr-labels module.
 
 **Dependencies:** 3
 
+### Task 19: State the CLI capability problem on the finish-record surface
+
+**Story:** 5
+**Type:** happy-path
+
+**Steps:**
+1. Write failing test: the finish-record path receives a `GhCapabilityError` while verifying PR identity and its stderr line leads with the CLI capability problem, naming `gh` and the unsupported field, and does not open with "cannot verify PR".
+2. Write failing test: the same path receives a non-capability failure (a genuinely missing PR) and its stderr line is unchanged from before this feature.
+3. Verify tests fail (RED).
+4. In the finish-record identity-verification `catch`, branch the rendered message on `err instanceof GhCapabilityError`: a capability error renders the typed error's own message first, then the refusal; every other error keeps today's wording verbatim. Change no disposition: the path still returns 1 and writes nothing.
+5. Verify tests pass (GREEN) and commit.
+
+**Done when:**
+- With a `GhCapabilityError`, the finish-record stderr line begins with the CLI capability problem and names `gh` and the field, and the words `cannot verify PR` do not open the line.
+- With any other error, the finish-record stderr line is byte-identical to the pre-feature wording.
+- The finish-record path still returns 1 and writes no outcome or marker file in both cases.
+- No conditional other than the message selection in the identity-verification `catch` changes.
+
+**Files likely touched:**
+- `src/conductor/src/engine/finish-record-cli.ts` — message selection in the identity-verification `catch`
+- `src/conductor/src/engine/finish-record-cli.test.ts` — wording assertions
+
+**Dependencies:** 14, 16
+
 ## Task Dependency Graph
 
 ```text
@@ -476,11 +500,11 @@ pr-labels module.
 (5 also feeds 8 and 12)
 
 14 ── 15
- ├── 16
+ ├── 16 ── 19
  └── 17
 ```
 
-Tasks 1-13 and 18 form one chain rooted at the pure parser. Tasks 14-17 are independent of it and
+Tasks 1-13 and 18 form one chain rooted at the pure parser. Tasks 14-17 and 19 are independent of it and
 may proceed concurrently.
 
 ## Integration Points
@@ -488,6 +512,7 @@ may proceed concurrently.
 - After Task 8: the daemon dispatch cycle can be driven end-to-end with a below-floor probe.
 - After Task 12: both entry points enforce the same floor.
 - After Task 16: the seam's typed error is observable at its two opposite-disposition callers.
+- After Task 19: the finish-record surface states the capability problem instead of leading with PR verification.
 
 ## Architecture Obligation Coverage
 
