@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-06T16:19:46.210Z
 Slug: sweep-stale-vitest-run-temp-roots-at-global-setup-
 Class: needs-human
 Halting step: unknown
