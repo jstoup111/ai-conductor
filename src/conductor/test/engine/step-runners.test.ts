@@ -3799,7 +3799,7 @@ TIER: M`,
     it('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run', async () => {
       const repository = await mkdtemp(join(tmpdir(), 'build-review-checkout-dependencies-'));
       const featureRoot = join(repository, '.worktrees', 'feature');
-      const selector = 'src/conductor/spec/example_spec.mjs';
+      const selector = 'src/conductor/spec/example.test.mjs';
       const sourceDependencies = join(featureRoot, 'src/conductor/node_modules');
       const selectorMarker = join(repository, 'counterfactual-selector-ran');
       const selectorMarkerEnv = 'BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER';
@@ -3815,7 +3815,7 @@ TIER: M`,
         await mkdir(join(repository, 'src/conductor/src'), { recursive: true });
         await mkdir(join(repository, 'src/conductor/spec'), { recursive: true });
         await mkdir(join(repository, '.docs/plans'), { recursive: true });
-        await writeFile(join(repository, '.docs/plans/feature.md'), `### Task 1: distinguish the selector\n- Update ${selector}.\n`);
+        await writeFile(join(repository, '.docs/plans/feature.md'), `### Task 1: distinguish the selector\n**Files:** ${selector}\n`);
         await writeFile(join(repository, 'src/conductor/src/example.mjs'), 'export const answer = 1;\n');
         await writeFile(join(repository, selector), "import { v4 as uuidv4 } from 'uuid';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || answer !== 1) process.exit(1);\n");
         await execa('git', ['add', '.'], { cwd: repository });
@@ -3826,7 +3826,7 @@ TIER: M`,
         await mkdir(join(repository, '.worktrees'), { recursive: true });
         await execa('git', ['worktree', 'add', '-q', '-b', 'feature/proof', featureRoot], { cwd: repository });
         await writeFile(join(featureRoot, 'src/conductor/src/example.mjs'), 'export const answer = 2;\n');
-        await writeFile(join(featureRoot, selector), "// Covers: task:1\nimport { writeFile } from 'node:fs/promises';\nimport { v4 as uuidv4 } from 'uuid';\nimport { execa } from 'execa';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || !execa || answer !== 2) { await writeFile(process.env.BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER, 'selector-loaded-checkout-dependencies'); process.exit(1); }\n");
+        await writeFile(join(featureRoot, selector), "import { writeFile } from 'node:fs/promises';\nimport { v4 as uuidv4 } from 'uuid';\nimport { execa } from 'execa';\nimport { answer } from '../src/example.mjs';\nfunction it(_title, body) { body(); }\n// Covers: task:1\nit('loads checkout dependencies', () => { if (!uuidv4() || !execa || answer !== 2) { writeFile(process.env.BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER, 'selector-loaded-checkout-dependencies').then(() => process.exit(1)); } });\n");
         await execa('git', ['add', 'src/conductor'], { cwd: featureRoot });
         await execa('git', ['commit', '-q', '-m', 'change behavior and selector'], { cwd: featureRoot });
         await mkdir(join(sourceDependencies, 'uuid'), { recursive: true });
@@ -3840,9 +3840,18 @@ TIER: M`,
           invoke: vi.fn(async (options) => {
             const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!) as typeof observedProjections[number];
             observedProjections.push(projection);
+            const scopeContext = JSON.parse(options.prompt.match(/Candidate-resolution authority \(use only these ids, regions, and obligations\):\n(\{[\s\S]*?\})\n\nYour final/)![1]);
             return { success: true, exitCode: 0, output: JSON.stringify({
               kind: 'judged', rubric: 'testQuality', lapId: (projection as any).lapId,
-              snapshotDigest: (projection as any).snapshotDigest, contractVersion: (projection as any).contractVersion, findings: [],
+              snapshotDigest: (projection as any).snapshotDigest, contractVersion: (projection as any).contractVersion,
+              findings: [],
+              scopeResolutions: scopeContext.candidates.map((candidate: any) => ({
+                candidateId: candidate.candidateId,
+                status: 'resolved',
+                sourceRegion: candidate.sourceRegion,
+                obligationReferences: candidate.obligationReferences,
+                associationReason: 'The pinned declaration is a test target.',
+              })),
             }) };
           }),
         };
@@ -4072,12 +4081,16 @@ TIER: M`,
     it.each([
       {
         name: 'test-quality is enabled explicitly',
-        config: { build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,
+        config: {
+          test_suite: { scoped_command: 'true' },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+        } as HarnessConfig,
         expectedInvokeCalls: 2,
       },
       {
         name: 'test-quality uses its configured policy',
         config: {
+          test_suite: { scoped_command: 'true' },
           build_review: {
             enabled: true,
             rubrics: { testQuality: { enabled: true, model: 'opus' } },
@@ -4162,7 +4175,10 @@ TIER: M`,
         if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: 'head\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
+        if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: 'M\u0000x\u0000', stderr: '' };
         if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/x b/x\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === 'head:plan.md') return { exitCode: 0, stdout: '# Plan\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === 'head:x') return { exitCode: 0, stdout: 'export const x = true;\n', stderr: '' };
         return { exitCode: 1, stdout: '', stderr: '' };
       };
       return git;
@@ -4170,7 +4186,10 @@ TIER: M`,
 
     function testQualityOptIn() {
       return {
-        config: { build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } } } as HarnessConfig,
+        config: {
+          test_suite: { scoped_command: 'true' },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true } } },
+        } as HarnessConfig,
       };
     }
 
@@ -4194,10 +4213,26 @@ TIER: M`,
         if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: 'head\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
-        if (args[0] === 'diff') return { exitCode: 0, stdout: `diff --git a/${SCOPED_SELECTOR} b/${SCOPED_SELECTOR}\n`, stderr: '' };
-        if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_SELECTOR}`)) {
-          return { exitCode: 0, stdout: '// Covers: task:1\nexport const covered = true;\n', stderr: '' };
+        if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: `M\u0000${SCOPED_SELECTOR}\u0000M\u0000${SCOPED_TEST}\u0000`, stderr: '' };
+        if (args[0] === 'diff') return { exitCode: 0, stdout: `diff --git a/${SCOPED_SELECTOR} b/${SCOPED_SELECTOR}\ndiff --git a/${SCOPED_TEST} b/${SCOPED_TEST}\n`, stderr: '' };
+        if (args[0] === 'show' && args[1]?.startsWith('head:') && args[1].endsWith('.md')) {
+          return { exitCode: 0, stdout: `# Plan\n\n### Task 1: Cover the thing\n**Files:** ${SCOPED_SELECTOR}\n`, stderr: '' };
         }
+        if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_TEST}`)) {
+          return { exitCode: 0, stdout: args[1].startsWith('head:')
+            ? "// Covers: task:1\nit('covered', () => {});\n"
+            : "it('covered', () => {});\n", stderr: '' };
+        }
+        if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_SELECTOR}`)) {
+          return { exitCode: 0, stdout: args[1].startsWith('head:')
+            ? '// Covers: task:1\nexport const covered = true;\n'
+            : 'export const covered = false;\n', stderr: '' };
+        }
+        if (args[0] === 'worktree' && args[1] === 'add') {
+          await mkdir(join(args[3]!, 'test'), { recursive: true });
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (args[0] === 'worktree' && args[1] === 'remove') return { exitCode: 0, stdout: '', stderr: '' };
         return { exitCode: 1, stdout: '', stderr: '' };
       };
       return git;
@@ -4222,16 +4257,26 @@ TIER: M`,
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: 'head\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
         if (args[0] === 'diff') {
+          if (args.includes('--name-status')) {
+            return { exitCode: 0, stdout: `M\u0000${SCOPED_SELECTOR}\u0000M\u0000${SCOPED_TEST}\u0000`, stderr: '' };
+          }
           return { exitCode: 0, stdout: [
             `diff --git a/${SCOPED_SELECTOR} b/${SCOPED_SELECTOR}`,
             `diff --git a/${SCOPED_TEST} b/${SCOPED_TEST}`,
           ].join('\n') + '\n', stderr: '' };
         }
+        if (args[0] === 'show' && args[1]?.startsWith('head:') && args[1].endsWith('.md')) {
+          return { exitCode: 0, stdout: `# Plan\n\n### Task 1: Cover the thing\n**Files:** ${SCOPED_SELECTOR}\n`, stderr: '' };
+        }
         if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_TEST}`)) {
-          return { exitCode: 0, stdout: "// Covers: task:1\nit('covered', () => {});\n", stderr: '' };
+          return { exitCode: 0, stdout: args[1].startsWith('head:')
+            ? "// Covers: task:1\nit('covered', () => {});\n"
+            : "it('covered', () => {});\n", stderr: '' };
         }
         if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_SELECTOR}`)) {
-          return { exitCode: 0, stdout: 'export const covered = false;\n', stderr: '' };
+          return { exitCode: 0, stdout: args[1].startsWith('head:')
+            ? 'export const covered = false;\n'
+            : 'export const covered = true;\n', stderr: '' };
         }
         if (args[0] === 'worktree' && args[1] === 'add') {
           const checkout = args[3]!;
@@ -4743,7 +4788,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     await dispatch(runner);
 
     const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('top-level fields are `findings` and optional `counterfactualSensitivity`');
+    expect(prompt).toContain('top-level fields are `findings`, `scopeResolutions`, and optional `counterfactualSensitivity`');
     expect(prompt).not.toContain('`contractVersion` is "v3"');
     expect(prompt).not.toContain('`contractVersion` is "v2"');
     expect(prompt).not.toContain('every anchor value is a plain string');

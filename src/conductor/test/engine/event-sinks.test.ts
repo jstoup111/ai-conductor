@@ -134,6 +134,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'provider_stream_progress',
   'self_host_containment_verdict',
   'over_scope_decision',
+  'build_review_scope_incomplete',
 ] satisfies Array<ConductorEvent['type']>;
 
 const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
@@ -202,6 +203,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'rebase_conflict_halt',
   'ci_failed',
   'build_review_base',
+  'build_review_scope_incomplete',
   'build_review_stale_mirage_regrade',
   'auto_park_contradiction',
   'verdict_freshness',
