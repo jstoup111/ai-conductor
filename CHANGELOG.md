@@ -60,6 +60,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Remove redundant BUILD full-suite requirements and routine reviewer test reruns. ([implementation PR #2236](https://github.com/jstoup111/ai-conductor/pull/2236)).
 - Preserve routed BUILD gate verdicts before downstream gate selection. ([implementation PR #2244](https://github.com/jstoup111/ai-conductor/pull/2244)).
 - Halt-issue sweeps preserve precise UTC halt times and close issues only when newer shipping evidence exists. ([implementation PR #2245](https://github.com/jstoup111/ai-conductor/pull/2245)).
+- Rebase validation correctly preserves changes whose diff hunk content begins with file-header markers. ([implementation PR #2247](https://github.com/jstoup111/ai-conductor/pull/2247)).
 
 ## [1.0.0] - 2026-08-31
 
