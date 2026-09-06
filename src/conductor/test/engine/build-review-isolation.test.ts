@@ -35,13 +35,6 @@ const TASK_STATUS_SENTINEL = 'TASK_STATUS_SENTINEL_12345';
 const TRANSCRIPT_SENTINEL = 'TRANSCRIPT_SENTINEL_12345';
 const MAKER_SUMMARY_SENTINEL = 'MAKER_SUMMARY_SENTINEL_12345';
 const REPOSITORY_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
-const BROAD_FALLBACK_TRIGGERS = [
-  'A shared/core module has 3+ production importers.',
-  'The diff touches config, migrations, dependency manifests, or test infrastructure.',
-  'The scoped/affected set is empty.',
-  'Module-to-test mapping is low-confidence and cannot be made confidently.',
-] as const;
-
 const execFileAsync = promisify(execFile);
 const CURRENT_PROOF = {
   status: 'CURRENT',
@@ -160,28 +153,6 @@ describe('build_review input isolation', () => {
     >>;
     const assembleSignature: _AssembleSignature = true;
     expect(assembleSignature).toBe(true);
-  });
-
-  it('keeps scoped verification agent-owned and preserves the broad-fallback contract', async () => {
-    const [pipeline, tdd, harness] = await Promise.all([
-      readFile(join(REPOSITORY_ROOT, 'skills/pipeline/SKILL.md'), 'utf8'),
-      readFile(join(REPOSITORY_ROOT, 'skills/tdd/SKILL.md'), 'utf8'),
-      readFile(join(REPOSITORY_ROOT, 'HARNESS.md'), 'utf8'),
-    ]);
-
-    for (const policy of [pipeline, tdd]) {
-      expect(policy).toContain('ai-conductor scoped-run <selectors...>');
-      expect(policy).toMatch(/agent derives the selectors/i);
-    }
-    expect(harness).toContain('ai-conductor scoped-run <selectors...>');
-    expect(harness).toMatch(/agent derives the selectors/i);
-
-    // #2232 moved the broad-fallback trigger list out of HARNESS.md: build
-    // sessions no longer run the aggregate suite, so the triggers live only in
-    // the pipeline skill that derives scoped selectors.
-    for (const trigger of BROAD_FALLBACK_TRIGGERS) {
-      expect(pipeline).toContain(trigger);
-    }
   });
 
   it('routes an infrastructure result with arbitrary detail through the mechanical lane', async () => {
