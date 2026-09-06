@@ -271,7 +271,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const ledgerBefore = JSON.stringify({ version: 1, gates: {} });
     await writeFile(ledgerPath, ledgerBefore, 'utf8');
     const resolutions = [new Set<string>(), new Set<string>(), new Set<string>(), new Set([findingId])];
-    const resolveOperatorResolvedFindingIds = vi.fn(async () => resolutions.shift()!);
+    const resolveOperatorResolvedFindingIds = vi.fn(async () => resolutions.shift() ?? new Set([findingId]));
     const chargeEffect = vi.fn(chargeBuildReviewEffectInLedger);
     const events: RemediationCaseLifecycleEvent[] = [];
 
@@ -281,7 +281,9 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
 
     expect(result).toMatchObject({ ok: true });
-    expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(4);
+    // Three pre-action reads, the acceptance read, then the exit re-reads
+    // that follow the awaited settlement and its emissions.
+    expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(6);
     expect(chargeEffect).not.toHaveBeenCalled();
     await expect(readFile(ledgerPath, 'utf8')).resolves.toBe(ledgerBefore);
     await expect(access(join(root, '.pipeline/build-review-work-order.json'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -651,7 +653,9 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
 
     expect(result).toMatchObject({ ok: true, route: 'pass' });
-    expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(5);
+    // Four unresolved reads, the acceptance read at the exit, then the two
+    // re-reads adjacent to the settled state that the route derives from.
+    expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(7);
     const settled = await new RemediationCaseStore(root, feature).read();
     expect(settled).toMatchObject({
       ok: true,

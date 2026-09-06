@@ -65,6 +65,17 @@ export function reduceBuildReviewAdjudication(input: {
       reason: input.mechanical === 'healthy' ? 'applied action effect' : 'applied action effect with retained infrastructure blocker',
     };
   }
+  // An open applied action that covers no current source is not benign
+  // history: attempted history is resolved by reconciliation before it gets
+  // here, so what remains is a published work order BUILD never attempted.
+  // PASS would stamp the gate done around durable unfinished work.
+  if (input.cases.some(isBuildEligibleActionCase)) {
+    return {
+      route: 'halt',
+      remainingMechanical: input.mechanical !== 'healthy',
+      reason: 'applied action effect awaits its BUILD attempt outside the current sources',
+    };
+  }
   if (input.mechanical === 'halt') {
     return { route: 'halt', remainingMechanical: true, reason: 'uncovered build-review infrastructure failure' };
   }
