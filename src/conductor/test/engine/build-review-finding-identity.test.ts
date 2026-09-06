@@ -1,9 +1,11 @@
+// Covers: task:11
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
   normalizeBuildReviewFindingVocabularyMember,
+  type BuildReviewFindingReferenceContext,
 } from '../../src/engine/build-review-domain.js';
 import {
   canonicalBuildReviewFindingJson,
@@ -80,13 +82,23 @@ describe('build-review finding identity', () => {
     expect(new Set([base.id, ...variants.map((variant) => variant!.id)]).size).toBe(variants.length + 1);
   });
 
-  it('refuses formatted or rephrased path references before minting an identity', () => {
+  it('refuses formatted and traversal path references before minting an identity', () => {
     const refused = [
-      ' test/widget.test.ts ', '`test/widget.test.ts`', 'The affected test is test/widget.test.ts.',
+      ' test/widget.test.ts ', '`test/widget.test.ts`',
       '/test/widget.test.ts', '../test/widget.test.ts', './test/widget.test.ts', 'test/../widget.test.ts',
     ].map((path) => canonicalizeBuildReviewFindingIdentity(finding({ path })));
 
-    expect(refused).toEqual(Array(7).fill(undefined));
+    expect(refused).toEqual(Array(6).fill(undefined));
+  });
+
+  it('refuses a sibling finding when a scoped reference context authorizes only the resolved candidate', () => {
+    const first = { path: 'test/widget.test.ts', contentHash: HASH_A, display: 'first assertion' };
+    const sibling = { ...first, occurrence: 1, display: 'unrelated sibling assertion' };
+    const references: BuildReviewFindingReferenceContext = {
+      changedTests: ['test/widget.test.ts'], changedTestRegions: [first], changedPaths: ['test/widget.test.ts'], planTasks: [],
+    };
+
+    expect(canonicalizeBuildReviewFindingIdentity(finding(sibling), references)).toBeUndefined();
   });
 
   it('refuses malformed grader anchors and unknown concern kinds', () => {

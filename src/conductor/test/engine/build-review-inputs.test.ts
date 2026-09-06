@@ -1,3 +1,4 @@
+// Covers: task:3, task:8
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -17,6 +18,7 @@ import { buildReviewFindingReferenceContext, parseBuildReviewLapId } from '../..
 import { deriveBuildReviewRubricProjections } from '../../src/engine/build-review-projections.js';
 import type { BuildReviewRubricProjection } from '../../src/engine/build-review-projections.js';
 import { makeGitRunner, type GitRunner, type GitResult } from '../../src/engine/rebase.js';
+import { BuildReviewSourceReadError } from '../../src/engine/build-review-scope-source.js';
 import { recordTestSuiteRemediation } from '../../src/engine/test-suite-remediation.js';
 import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
@@ -46,13 +48,31 @@ function fakeGit(
   const git: GitRunner = async (args) => {
     calls.push(args);
     for (const entry of script) {
-      if (entry.match.every((tok, i) => args[i] === tok)) {
+      if (entry.match.every((tok, i) =>
+        args[i] === tok
+        || (tok === 'HEAD' && i > 0)
+        || (tok.endsWith('..HEAD') && args[i]?.startsWith(tok.slice(0, -4)))
+        || (tok.startsWith('HEAD:') && args[i]?.endsWith(tok.slice(4)))
+      )) {
         return {
           exitCode: entry.result.exitCode ?? 0,
           stdout: entry.result.stdout ?? '',
           stderr: entry.result.stderr ?? '',
         };
       }
+    }
+    if (args[0] === 'show' && args[1]?.endsWith('.md')) {
+      return { exitCode: 0, stdout: '# Plan body\n\nSome plan content.\n', stderr: '' };
+    }
+    if (args[0] === 'show') {
+      // Incidental legacy fixtures still model a pinned Git blob; focused
+      // missing-blob cases script a nonzero response explicitly.
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }
+    if (args[0] === 'diff' && args.includes('--name-status')) {
+      const humanDiff = script.find((entry) => entry.match[0] === 'diff' && !entry.match.includes('--name-status'))?.result.stdout ?? '';
+      const paths = [...humanDiff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((match) => match[2]!);
+      return { exitCode: 0, stdout: paths.flatMap((path) => ['M', path]).join('\0') + (paths.length ? '\0' : ''), stderr: '' };
     }
     return { exitCode: 1, stdout: '', stderr: '' };
   };
@@ -118,9 +138,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(inputs.sourceSnapshot.headSha).toBe('live456');
       // The proof's own provenance stays what the evidence attests.
       expect(inputs.testSuiteProof.provenanceHeadSha).toBe('head123');
-      expect(inputs.sourceSnapshot.changedTestTitles).toEqual([
-        { selector: 'test/widget.test.ts', titleText: 'widget > persists state', staticExtractionFallback: false },
-      ]);
+      expect(inputs.sourceSnapshot.changedTestTitles).toEqual([]);
     });
 
     it('fails input assembly when live HEAD cannot be resolved', async () => {
@@ -132,6 +150,19 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       ]);
 
       await expect(assembleBuildReviewInputs(git, planPath)).rejects.toThrow(MergeBaseError);
+    });
+
+    it('rejects a missing pinned plan blob instead of reading the live plan file', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: '' } },
+        { match: ['show', 'head123:plan.md'], result: { exitCode: 128, stderr: 'pinned blob missing' } },
+      ]);
+
+      await expect(assembleBuildReviewInputs(git, planPath)).rejects.toMatchObject({
+        name: 'BuildReviewSourceReadError', kind: 'required-read-failed', path: 'plan.md',
+      } satisfies Partial<BuildReviewSourceReadError>);
     });
 
     it('freezes one source snapshot and admits only an injected CURRENT test-suite proof', async () => {
@@ -154,7 +185,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(inputs).not.toHaveProperty('acceptedDispositions');
     });
 
-    it('captures declared changed-test title chains from the graded HEAD with an explicit static fallback', async () => {
+    it('retains a declaration uncertainty rather than falling back to every title in a changed file', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
         { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
@@ -172,11 +203,160 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       expect(inputs.sourceSnapshot.changedTestTitles).toEqual([
         { selector: 'test/dynamic.test.ts', titleText: '', staticExtractionFallback: true },
-        { selector: 'test/widget.test.ts', titleText: 'widget > persists state', staticExtractionFallback: false },
       ]);
     });
 
-    it('captures one nested declared title chain per executable test', async () => {
+    it('freezes the typed scope target for a changed bound declaration without admitting its unchanged sibling', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+          'diff --git a/test/widget.test.ts b/test/widget.test.ts',
+          '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+changed assertion',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: Typed frozen scope\n' } },
+        { match: ['show', 'base123:test/widget.test.ts'], result: { stdout: [
+          '// Covers: task:8',
+          "it('changed assertion', () => { expect(true).toBe(true); });",
+          "it('unchanged sibling', () => { expect(true).toBe(true); });",
+        ].join('\n') } },
+        { match: ['show', 'head123:test/widget.test.ts'], result: { stdout: [
+          '// Covers: task:8',
+          "it('changed assertion', () => { expect(true).toBe(false); });",
+          "it('unchanged sibling', () => { expect(true).toBe(true); });",
+        ].join('\n') } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+      const testScope = (inputs.sourceSnapshot as typeof inputs.sourceSnapshot & {
+        testScope?: {
+          changedDeclarations: readonly { titleChain: readonly string[] }[];
+          targets: readonly { declaration: { titleChain: readonly string[] } }[];
+          candidates: readonly unknown[];
+        };
+      }).testScope;
+
+      expect({
+        recursivelyFrozen: Object.isFrozen(testScope) && Object.isFrozen(testScope?.targets[0]),
+        changedDeclarations: testScope?.changedDeclarations.map(({ titleChain }) => titleChain),
+        targets: testScope?.targets.map(({ declaration }) => declaration.titleChain),
+        candidates: testScope?.candidates,
+      }).toEqual({
+        recursivelyFrozen: true,
+        changedDeclarations: [['changed assertion']],
+        targets: [['changed assertion']],
+        candidates: [],
+      });
+      const evidence = inputs.sourceSnapshot.testScopeEvidence?.find((entry) => entry.source.fileName === 'test/widget.test.ts' && entry.source.side === 'head' && entry.content.includes('changed assertion'));
+      expect(evidence).toMatchObject({ startLine: 2, endLine: 2 });
+    });
+
+    it('memoizes frozen side-effect source and preserves an injected analyzer failure as a marked candidate', async () => {
+      const sideEffect = '__buildReviewConsumerSideEffect';
+      delete (globalThis as Record<string, unknown>)[sideEffect];
+      const sourceText = [
+        '// Covers: task:8',
+        `globalThis.${sideEffect} = true;`,
+        "it('parser-bound candidate', () => { expect(true).toBe(true); });",
+      ].join('\n');
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+          'diff --git a/test/side-effect.test.ts b/test/side-effect.test.ts',
+          '--- a/test/side-effect.test.ts', '+++ b/test/side-effect.test.ts', '+candidate',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
+        { match: ['show', 'base123:test/side-effect.test.ts'], result: { stdout: sourceText.replace('true);', 'false);') } },
+        { match: ['show', 'head123:test/side-effect.test.ts'], result: { stdout: sourceText } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath, {
+        analyzeTestScope: () => { throw new Error('injected parser unavailable'); },
+      });
+
+      expect({
+        sideEffect: (globalThis as Record<string, unknown>)[sideEffect],
+        headReads: calls.filter((args) => args[0] === 'show' && args[1] === 'head123:test/side-effect.test.ts').length,
+        targets: inputs.sourceSnapshot.testScope?.targets,
+        candidates: inputs.sourceSnapshot.testScope?.candidates.map((candidate) => ({
+          reason: candidate.reasons,
+          marker: candidate.markers[0]?.reference.id,
+          diagnostic: candidate.diagnostic?.message,
+        })),
+      }).toEqual({
+        sideEffect: undefined,
+        headReads: 1,
+        targets: [],
+        candidates: [{
+          reason: ['unsupported-declaration'],
+          marker: '8',
+          diagnostic: 'test declaration analysis failed: injected parser unavailable',
+        }],
+      });
+      expect(inputs.sourceSnapshot.testQuality).toMatchObject({
+        inScopeTests: [],
+        counterfactualFileSelectors: ['test/side-effect.test.ts'],
+      });
+    });
+
+    it('freezes one changed setup group with its opted-in unchanged bodies', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+          'diff --git a/test/group.test.ts b/test/group.test.ts',
+          '--- a/test/group.test.ts', '+++ b/test/group.test.ts', '+setup',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
+        { match: ['show', 'base123:test/group.test.ts'], result: { stdout: [
+          '// Covers: task:8',
+          "describe('group', () => { beforeEach(() => seed('base')); it('one', () => {}); it('two', () => {}); });",
+        ].join('\n') } },
+        { match: ['show', 'head123:test/group.test.ts'], result: { stdout: [
+          '// Covers: task:8',
+          "describe('group', () => { beforeEach(() => seed('head')); it('one', () => {}); it('two', () => {}); });",
+        ].join('\n') } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(inputs.sourceSnapshot.testScope).toMatchObject({
+        changedDeclarations: [],
+        targets: [],
+        candidates: [{
+          declaration: { titleChain: ['group'] },
+          reasons: ['affected-opted-in-group'],
+          affectedGroup: {
+            setup: { kind: 'hook', source: { fileName: 'test/group.test.ts', side: 'head' } },
+            unchangedDescendantBodies: [{}, {}],
+          },
+        }],
+        affectedGroups: [{ suite: { titleChain: ['group'] } }],
+      });
+      expect(inputs.sourceSnapshot.testQuality).toMatchObject({
+        inScopeTests: [],
+        counterfactualFileSelectors: ['test/group.test.ts'],
+      });
+    });
+
+    it('refuses a missing pinned HEAD blob for a changed test instead of silently emptying scope', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+          'diff --git a/test/missing.test.ts b/test/missing.test.ts',
+          '--- a/test/missing.test.ts', '+++ b/test/missing.test.ts', '+missing',
+        ].join('\n') } },
+        { match: ['show', 'head123:test/missing.test.ts'], result: { exitCode: 128, stderr: 'missing pinned blob' } },
+      ]);
+
+      await expect(assembleBuildReviewInputs(git, planPath)).rejects.toMatchObject({
+        name: 'BuildReviewSourceReadError', kind: 'required-read-failed', path: 'test/missing.test.ts',
+      } satisfies Partial<BuildReviewSourceReadError>);
+    });
+
+    it('does not enumerate sibling titles without typed changed-declaration evidence', async () => {
       const diff = [
         'diff --git a/test/widget.test.ts b/test/widget.test.ts',
         '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+change',
@@ -196,21 +376,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       ]);
       const baselineInputs = await assembleBuildReviewInputs(baseline.git, planPath);
 
-      expect(baselineInputs.sourceSnapshot.changedTestTitles).toEqual([
-        {
-          selector: 'test/widget.test.ts',
-          titleText: 'workspace > alpha branch > keeps the selected assertion',
-          staticExtractionFallback: false,
-        },
-        {
-          selector: 'test/widget.test.ts',
-          titleText: 'workspace > beta branch > unrelated sibling assertion',
-          staticExtractionFallback: false,
-        },
-      ]);
+      expect(baselineInputs.sourceSnapshot.changedTestTitles).toEqual([]);
     });
 
-    it('ignores declaration-shaped text in comments and literals when capturing title chains', async () => {
+    it('does not turn declaration-shaped source text into typed title evidence', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
         { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
@@ -229,13 +398,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       const inputs = await assembleBuildReviewInputs(git, planPath);
 
-      expect(inputs.sourceSnapshot.changedTestTitles).toEqual([
-        {
-          selector: 'test/widget.test.ts',
-          titleText: 'actual suite > actual test',
-          staticExtractionFallback: false,
-        },
-      ]);
+      expect(inputs.sourceSnapshot.changedTestTitles).toEqual([]);
     });
 
     it('captures nested title chains declared through function suite callbacks', async () => {
@@ -260,7 +423,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       ]);
     });
 
-    it('keeps an executable test title content-region identity stable when its sibling is reworded', async () => {
+    it('does not construct legacy title regions for declarations outside typed scope', async () => {
       const diff = [
         'diff --git a/test/widget.test.ts b/test/widget.test.ts',
         '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+change',
@@ -290,25 +453,12 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           readonly display: string;
           }[];
         }).changedTestRegions;
-      const hashTitle = (title: string) =>
-        `sha256:${createHash('sha256').update(title.replaceAll(/\s+/g, ' ').trim()).digest('hex')}`;
-      const alpha = 'workspace > alpha branch > keeps the selected assertion';
-      const beta = 'workspace > beta branch > unrelated sibling assertion';
-
       const [baseline, siblingReworded] = await Promise.all([
         inputsFor(source),
         inputsFor(source.replace('unrelated sibling assertion', 'renamed unrelated sibling assertion')),
       ]);
-      const baselineAlpha = titleRegions(baseline).find((region) => region.display === alpha);
-      const siblingRewordedAlpha = titleRegions(siblingReworded).find((region) => region.display === alpha);
-
-      expect(titleRegions(baseline)).toContainEqual({
-        path: 'test/widget.test.ts', contentHash: hashTitle(alpha), display: alpha,
-      });
-      expect(titleRegions(baseline)).toContainEqual({
-        path: 'test/widget.test.ts', contentHash: hashTitle(beta), display: beta,
-      });
-      expect(siblingRewordedAlpha).toEqual(baselineAlpha);
+      expect(titleRegions(baseline)).toEqual([]);
+      expect(titleRegions(siblingReworded)).toEqual([]);
     });
 
     it('derives content identity from review content rather than git provenance or operator reseals', async () => {
@@ -371,7 +521,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         provenanceIsExcluded: true,
         blobIdentityIsExcluded: true,
         diffIsIncluded: true,
-        planIsIncluded: true,
+        planIsIncluded: false,
         resealIsExcluded: true,
       });
     });
@@ -444,7 +594,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(diffCall).toBeDefined();
       expect(diffCall).toEqual([
         'diff',
-        'abc1234..HEAD',
+        'abc1234..head123',
         '--',
         '.',
         ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
@@ -491,7 +641,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       expect(calls.find((c) => c[0] === 'diff')).toEqual([
         'diff',
-        'abc1234..HEAD',
+        'abc1234..head123',
         '--',
         '.',
         ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
@@ -519,7 +669,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       expect(calls.find((c) => c[0] === 'diff')).toEqual([
         'diff',
-        'abc1234..HEAD',
+        'abc1234..head123',
         '--',
         '.',
         ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
@@ -537,7 +687,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       expect(calls.find((c) => c[0] === 'diff')).toEqual([
         'diff',
-        'abc1234..HEAD',
+        'abc1234..head123',
         '--',
         '.',
         ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
@@ -648,6 +798,11 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       // real remote to talk to, then set refs/remotes/origin/HEAD to point
       // at refs/heads/main so default-branch discovery resolves it.
       await writeFile(join(dir, 'base.txt'), 'base\n');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await Promise.all([
+        writeFile(join(dir, '.docs/plans/fixture.md'), '# Pinned fixture plan\n'),
+        writeFile(join(dir, '.docs/plans/semantic-repair.md'), '# Pinned semantic plan\n'),
+      ]);
       await git('add', '.');
       await git('commit', '-m', 'initial commit on base');
       await git('remote', 'add', 'origin', dir);
@@ -681,6 +836,71 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.diff).toContain('feature.txt');
       expect(result.diff).toContain('feature change');
       expect(result.planBody).toContain('Fixture plan.');
+    });
+
+    it('excludes tests introduced only by a newer base branch from feature-owned declaration evidence', async () => {
+      await git('checkout', 'feature/foo');
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(join(dir, 'test/feature-owned.test.ts'), "it('feature-owned test', () => {});\n");
+      await git('add', 'test/feature-owned.test.ts');
+      await git('commit', '-m', 'add feature-owned test');
+
+      await git('checkout', 'main');
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(join(dir, 'test/base-only.test.ts'), "it('base-only test', () => {});\n");
+      await git('add', 'test/base-only.test.ts');
+      await git('commit', '-m', 'add merged base test');
+      await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+      await git('checkout', 'feature/foo');
+
+      const result = await assembleInputs(realGit(), planPath, {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' },
+        } as Extract<FullSuiteInspectionResult, { status: 'CURRENT' }>),
+      });
+
+      expect(result.sourceSnapshot.changedTestTitles).toEqual([
+        { selector: 'test/feature-owned.test.ts', titleText: 'feature-owned test', staticExtractionFallback: false },
+      ]);
+    });
+
+    it('keeps pinned plan, stories, test bytes and a space-containing rename pair after live worktree mutation', async () => {
+      const frozenPlan = join(dir, '.docs/plans/frozen.md');
+      const frozenStories = join(dir, '.docs/stories/frozen.md');
+      await git('checkout', 'main');
+      await mkdir(join(dir, '.docs/stories'), { recursive: true });
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(frozenPlan, '**Stories:** .docs/stories/frozen.md\n\n### Task 1: frozen\n');
+      await writeFile(frozenStories, '# Frozen stories\n\n## Story 1: frozen\n\n#### Happy Path\n- Given frozen bytes, when assembled, then they remain pinned\n');
+      await writeFile(join(dir, 'test/old name.test.ts'), '// Covers: S1.1\nit(\'pinned test\', () => {});\n');
+      await git('add', '.docs', 'test/old name.test.ts');
+      await git('commit', '-m', 'add frozen source artifacts');
+      await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+
+      await git('checkout', '-b', 'feature/frozen-source');
+      await git('mv', 'test/old name.test.ts', 'test/new name.test.ts');
+      await git('commit', '-m', 'rename test with spaces');
+
+      const result = await assembleInputs(realGit(), frozenPlan, {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' },
+        } as Extract<FullSuiteInspectionResult, { status: 'CURRENT' }>),
+      });
+
+      await Promise.all([
+        writeFile(frozenPlan, '# MUTATED LIVE PLAN\n'),
+        writeFile(frozenStories, '# MUTATED LIVE STORIES\n'),
+        writeFile(join(dir, 'test/new name.test.ts'), 'it(\'mutated live test\', () => {});\n'),
+      ]);
+
+      expect(result.planBody).toContain('### Task 1: frozen');
+      expect(result.sourceSnapshot.testQuality).toEqual({
+        inScopeTests: [], counterfactualFileSelectors: [], unresolvedMarkers: [],
+      });
+      expect(result.sourceSnapshot.changedTestTitles).toEqual([]);
+      expect(result.sourceSnapshot.sourceChanges).toContainEqual({
+        kind: 'R', oldPath: 'test/old name.test.ts', path: 'test/new name.test.ts',
+      });
     });
 
     it('projects only changed tests whose Covers markers bind to this plan or its referenced stories', async () => {
@@ -750,7 +970,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const beforeRebase = await assembleProjection();
 
       expect(beforeRebase.sourceSnapshot.testQuality).toEqual({
-        inScopeTests: ['src/technical-coverage.ts', 'test/criterion.test.ts', 'test/task.test.ts'],
+        inScopeTests: ['test/criterion.test.ts', 'test/task.test.ts'],
+        counterfactualFileSelectors: ['test/criterion.test.ts', 'test/task.test.ts'],
         unresolvedMarkers: [
           { selector: 'test/beyond.test.ts', reference: 'S3.2' },
           { selector: 'test/malformed.test.ts', reference: 'FR-' },
@@ -1057,6 +1278,9 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
     it('grades only the feat branch commits, not merged-PR-only content that arrived after the tracking ref went stale', async () => {
       const fixture = await setupStaleTrackingRefFixture(dir);
+      await writeFile(join(fixture.repo, 'plan.md'), '# Pinned plan\n');
+      await execFileAsync('git', ['-C', fixture.repo, 'add', 'plan.md']);
+      await execFileAsync('git', ['-C', fixture.repo, 'commit', '-m', 'add pinned plan']);
       const git = makeGitRunner(fixture.repo);
 
       const result = await assembleBuildReviewInputs(git, planPath);

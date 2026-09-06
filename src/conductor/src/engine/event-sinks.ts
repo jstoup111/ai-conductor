@@ -26,6 +26,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   // ledger, and the audit trail by rubric and cause.
   build_review_cache_discarded: { render: true, persist: true, audit: true, otel: false },
   build_review_rubric_infrastructure_failure: { render: false, persist: true, audit: false, otel: false },
+  build_review_scope_incomplete: { render: true, persist: true, audit: false, otel: false },
   build_review_mechanical_allowance_exhausted: { render: false, persist: true, audit: false, otel: false },
   // These are written by the external build-review CLI to the pipeline-owned
   // ledger, then tailed onto the live bus. Re-persisting them would duplicate

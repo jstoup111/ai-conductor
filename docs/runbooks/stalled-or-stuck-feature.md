@@ -1124,6 +1124,32 @@ A non-zero exit, or the restriction enabled while the daemon already runs inside
 means Codex has no way to spawn a shell there. Until the host grants it, route the affected steps
 to another provider; clearing the halt alone re-runs into the same denial.
 
+### build_review has a scope-incomplete candidate
+
+**Symptom:** `build_review` reports a mechanical fault whose cause is `scope-incomplete`; after the
+shared mechanical-fault allowance is exhausted, `.pipeline/HALT` names `testQuality` and
+`scope-incomplete`. The diagnostic identifies the concrete candidate, its available marker/obligation
+evidence, and the evidence that remains missing.
+
+**Diagnosis:** this is not an instruction to add a test merely because a test path appears in the plan,
+and it is not a test-insensitive finding. The engine already formed a frozen, feature-local candidate
+from a changed declaration with an ambiguous `Covers` association or from identified changed
+setup/helper evidence affecting an opted-in test or group. The reviewer returned a valid
+`indeterminate` scope resolution. Any valid findings from the same review remain in
+`.pipeline/build-review.json`; a scope fault does not discard them.
+
+**Recovery:** resolve the named ambiguity with source evidence where possible. The operator may supply
+a scope clarification, authorize a binding or evidence correction within the approved work, or authorize
+separately scoped analyzer work. Do not create speculative plan tasks, add a marker solely to silence the
+fault, or retry unchanged indeterminacy indefinitely. If the shared allowance is exhausted and the
+operator explicitly accepts reduced test-quality coverage, use the reduced-coverage procedure below for
+the named `testQuality` rubric and lap, then clear the halt. That acceptance suppresses only the derived
+scope fault: address any retained test-quality finding through its normal disposition or repair path.
+
+**Verification:** the next review either contains a complete candidate resolution or renders the
+operator's reduced-coverage decision. A valid finding from the original result is still listed and still
+blocks unless independently repaired or accepted.
+
 ### build_review halted on an exhausted mechanical fault allowance
 
 **Symptom:** `.pipeline/HALT` reads:
@@ -1149,14 +1175,13 @@ same: record reduced coverage for the named rubric and lap, then clear the halt.
 Both forms carry class `needs-human` — deliberately, so the daemon's automatic re-kick sweep does
 not clear it on its own.
 
-**Diagnosis:** a `build_review` rubric kept reporting an infrastructure failure (a tool crash,
-a `git diff` that could not run, a provider outage — never a genuine semantic FAIL) across
-repeated laps. Mechanical faults draw from a bounded allowance shared across `build_review`
-kickbacks (3 faults), tracked separately from the ordinary semantic kickback budget so an
-infrastructure blip never burns it. The allowance resets only on demonstrated progress (a
-rebase or base-branch advance), not on a bare retry — once it is exhausted the run halts
-instead of laundering the same infrastructure failure into a hollow PASS or an endless kickback
-loop.
+**Diagnosis:** a `build_review` rubric repeatedly produced either an infrastructure failure (a tool
+crash, a `git diff` that could not run, or a provider outage) or a valid `scope-incomplete` outcome
+from an indeterminate concrete candidate. Mechanical faults draw from a bounded allowance shared across
+`build_review` kickbacks (3 faults), tracked separately from the ordinary semantic kickback budget so an
+infrastructure blip or unresolved scope cannot be laundered into a hollow PASS or an endless kickback
+loop. The allowance resets only on demonstrated progress (a rebase or base-branch advance), not on a
+bare retry.
 
 **Recovery:** the halt body names both required steps.
 
@@ -1172,20 +1197,17 @@ loop.
    This only writes the decision — it does not touch the halt marker.
 2. Clear the halt using [the resume procedure](#clear-a-halt-and-let-the-feature-resume).
 
-**Verification:** the next `build_review` run treats the rubric as reduced coverage rather than
-halting on the same infrastructure failure, the feature reaches PASS, and the shipped record at
-`.docs/shipped/<slug>.md` carries a reduced-coverage section for that rubric. A genuine semantic
-FAIL on the same rubric still blocks exactly as before — recording reduced coverage does not
-suppress a real finding.
+**Verification:** the next `build_review` run treats the named fault as reduced coverage rather than
+halting on the same infrastructure failure or `scope-incomplete` outcome, the feature can reach PASS,
+and the shipped record at `.docs/shipped/<slug>.md` carries a reduced-coverage section for that rubric.
+A genuine semantic FAIL on the same rubric still blocks exactly as before — recording reduced coverage
+does not suppress a real finding.
 
 **The record stops the halt, not the dispatch.** An excused rubric is still dispatched on every
-later lap and still reports the same infrastructure failure each time; what changes is that the
-failure no longer halts the run. Expect to keep seeing
-`build_review_rubric_infrastructure_failure` events for it in `.pipeline/events.jsonl` — on
-2026-08-23 a `completeness` record accepted at 12:16:42Z was followed by three more identical
-dispatches at 12:20:39Z, 13:07:12Z and 16:46:00Z. That is the documented behavior, not a sign the
-record failed to take; confirm the record itself in `.pipeline/build-review-dispositions.json`.
-Issue #1832 tracks suppressing the redundant dispatches.
+later lap and can still report the same infrastructure failure or scope-incomplete outcome; what
+changes is that the named fault no longer halts the run. Expect to keep seeing the corresponding
+build-review fault events in `.pipeline/events.jsonl`. That is not a sign the record failed to take;
+confirm the record itself in `.pipeline/build-review-dispositions.json`.
 
 ### Remediation supplied no recognized disposition
 

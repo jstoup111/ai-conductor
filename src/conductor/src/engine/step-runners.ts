@@ -74,6 +74,7 @@ import {
   type BuildReviewCoordinationEngineIdentity,
   type BuildReviewRubricSkillDigest,
   describeBuildReviewDispatchedResultRejection,
+  buildReviewCandidateScopeResolutionContext,
   stampBuildReviewDispatchedCandidate,
   validateBuildReviewDispatchedResult,
   type BuildReviewDispatchableRubric,
@@ -91,6 +92,7 @@ import {
 
 import {
   deriveBuildReviewInfrastructureFailureReason,
+  deriveBuildReviewScopeIncompleteFault,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
@@ -2092,9 +2094,31 @@ export class DefaultStepRunner implements StepRunner {
     // Do not publish it as a fresh FAIL aggregate: completion deliberately
     // classifies a missing verdict as `absent`, which re-dispatches this
     // rubric without consuming the build_review kickback budget.
+    const scopeIncompleteFault = Object.values(validResults).flatMap((result) =>
+      result.kind === 'judged' ? [deriveBuildReviewScopeIncompleteFault(result)] : [],
+    ).find((fault): fault is NonNullable<typeof fault> => fault !== undefined);
     const infrastructureFailure = Object.values(validResults).find((result): result is Extract<BuildReviewRubricResult, { kind: 'infrastructure-failure' }> =>
       result.kind === 'infrastructure-failure',
     );
+    // A semantically valid indeterminate candidate is a non-judgment fault,
+    // not a malformed result. It consumes the existing durable allowance but
+    // never gets an in-session repair turn, and its judged findings remain in
+    // the branch artifact for the terminal aggregate.
+    if (scopeIncompleteFault) {
+      const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review', {
+        rubric: scopeIncompleteFault.rubric,
+        reason: scopeIncompleteFault.reason,
+        detail: scopeIncompleteFault.detail,
+        lapId,
+      });
+      if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
+        return {
+          success: false,
+          output: `build_review mechanical fault in ${scopeIncompleteFault.rubric} (${scopeIncompleteFault.reason}): ${scopeIncompleteFault.detail}`,
+          currentLapMechanicalFault: true,
+        };
+      }
+    }
     if (infrastructureFailure) {
       const hasJudgedFinding = Object.values(validResults).some(
         (result) => result.kind === 'judged' && result.findings.length > 0,
@@ -2182,10 +2206,12 @@ export class DefaultStepRunner implements StepRunner {
   ): Promise<unknown> {
     const label: Record<BuildReviewDispatchableRubric['rubric'], string> = { testQuality: 'Test Quality' };
     const contractShape = renderBuildReviewJudgedResultShape(branch.rubric);
+    const scopeResolutionContext = buildReviewCandidateScopeResolutionContext(projection);
     const rubricPrompt = [
         `Build Review ${label[branch.rubric]} rubric.`,
         'You are running inside the feature worktree. The closed projection below identifies the implementation diff BY REFERENCE instead of embedding it: changedFiles lists each changed file\'s path, change kind, and hunk line ranges (oldStart,oldCount -> newStart,newCount) from the graded diff. Read the working-tree files and run git yourself for any content you need — for example `git diff <mergeBase>..HEAD -- <path>` for one file\'s diff, or `git show <mergeBase>:<path>` for its pre-change form — using the mergeBase and headSha fields of the projection. Judge only the referenced changes; treat the projection as the complete list of what changed.',
-        `Return exactly one JSON object whose top-level fields are \`findings\` and optional \`counterfactualSensitivity\` (one of \`supports\`, \`indeterminate\`, or \`not-applicable\`); \`findings\` is an array. The engine owns the judged envelope. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
+        `Return exactly one JSON object whose top-level fields are \`findings\`, \`scopeResolutions\`, and optional \`counterfactualSensitivity\` (one of \`supports\`, \`indeterminate\`, or \`not-applicable\`). \`findings\` is an array. \`scopeResolutions\` has exactly one entry per supplied candidate (or [] when no candidates): each entry has candidateId and exactly one status: resolved with exact sourceRegion, allowed non-empty obligationReferences, and associationReason; out-of-scope with exclusionReason; or indeterminate with missingEvidenceReason. The engine owns the judged envelope. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
+        `Candidate-resolution authority (use only these ids, regions, and obligations):\n${JSON.stringify(scopeResolutionContext)}`,
         `Your final message MUST end with a JSON object of exactly this shape (an empty findings array means no concern; anchor values follow the schema below exactly — content-region fields (\`changedTest\`, \`locus\`) are structured \`{path, contentHash, display}\` objects and every other anchor value is a plain string, all nested under \`anchor\` — never flattened to the finding's top level and never renamed):\n${contractShape}`,
         JSON.stringify(projection),
       ].join('\n\n');
@@ -2337,12 +2363,15 @@ export class DefaultStepRunner implements StepRunner {
       classified.tests,
       inputs.sourceSnapshot.removalContext,
     );
+    const counterfactualFileSelectors = inputs.sourceSnapshot.testQuality?.counterfactualFileSelectors
+      ?? classified.tests;
     return await materializeTautologyPreflight({
       scopedWorkingDirectory: this.projectDir,
       mergeBase: inputs.sourceSnapshot.mergeBase,
       headSha: inputs.sourceSnapshot.headSha,
       diff: inputs.diff,
       scopedCommand: this.config?.test_suite?.scoped_command ?? null,
+      counterfactualFileSelectors,
       currentGreenProofIdentity: `${inputs.testSuiteProof.provenanceHeadSha}:${inputs.testSuiteProof.fingerprint}`,
       ...(removalMaintenanceSelectors.length > 0
         ? { approvedException: 'removal-maintenance' as const, removalMaintenanceSelectors }
@@ -2582,6 +2611,13 @@ export class DefaultStepRunner implements StepRunner {
       modelCliOverride: this.modelOverride,
       effortCliOverride: this.effortOverride,
     });
+    // A whole-gate opt-out is terminal for review work.  In particular it
+    // must precede plan discovery and frozen-input assembly, both of which
+    // can otherwise reach review-specific Git/proof seams before the gate
+    // reports its disabled result.
+    if (!buildReviewConfig.enabled) {
+      return { success: true, output: 'build_review disabled' };
+    }
     let planPath = this.planPathOverride;
     if (!planPath) {
       planPath = await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined);
@@ -2709,13 +2745,6 @@ export class DefaultStepRunner implements StepRunner {
     // The deterministic floor and declared-copy checks deliberately precede
     // this dispatch: they are gate-owned preconditions, and must remain
     // observable even when configuration activates the rubric fan-out.
-    // An explicit whole-gate opt-out is the only route that avoids the
-    // coordinator. The resolved config defaults an absent raw block to
-    // enabled, so raw config shape can never select the retired scalar grader.
-    if (!buildReviewConfig.enabled) {
-      return withBaseFreshness({ success: true, output: 'build_review disabled' });
-    }
-
     // The lifecycle still exposes one public build_review step. Its
     // coordinator owns the bounded auxiliary fan-out and receives the one
     // frozen snapshot. The injectable coordinator remains a narrow test seam.

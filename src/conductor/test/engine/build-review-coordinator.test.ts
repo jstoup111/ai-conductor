@@ -3,17 +3,20 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   classifyBuildReviewRubricBranches,
+  buildReviewCandidateScopeResolutionContext,
   coordinateBuildReviewRubrics,
   stampBuildReviewDispatchedCandidate,
   type BuildReviewCoordinationInput,
   validateBuildReviewDispatchedResult,
 } from "../../src/engine/build-review-coordinator.js";
 import {
+  deriveBuildReviewScopeIncompleteFault,
   mapBuildReviewCoordinatorFailureReason,
   parseBuildReviewInfrastructureFailure,
   parseBuildReviewLapId,
   type BuildReviewInfrastructureFailureReason,
 } from "../../src/engine/build-review-domain.js";
+import { fingerprintBuildReviewRubricPolicy } from "../../src/engine/build-review-registry.js";
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import type {
   ResolvedBuildReviewConfig,
@@ -65,7 +68,7 @@ function inputs(): BuildReviewFrozenInputs {
       mergeBase: "base",
       headSha: "head",
       ...sourceContent,
-      testQuality: { inScopeTests: ["test/a.test.ts"], unresolvedMarkers: [] },
+      testQuality: { inScopeTests: ["test/a.test.ts"], counterfactualFileSelectors: ["test/a.test.ts"], unresolvedMarkers: [] },
     },
   };
 }
@@ -123,16 +126,33 @@ describe("build-review coordinator: registered dispatch", () => {
     });
   });
 
-  it("passes test-quality's empty frozen scope without preflight or grader dispatch", async () => {
+  it.each([
+    ['a production-only refactor'],
+    ['a pure test relocation'],
+    ['a plan without test paths'],
+  ])("passes typed empty scope for %s without preflight or grader dispatch", async () => {
     const frozenInputs = inputs();
+    const emit = vi.fn(async () => undefined);
     const input = coordinationInput(true, {
       inputs: {
         ...frozenInputs,
         sourceSnapshot: {
           ...frozenInputs.sourceSnapshot,
-          testQuality: { inScopeTests: [], unresolvedMarkers: [] },
+          // The old compatibility selector is deliberately non-empty: typed
+          // scope, not a file-level selector, decides empty-scope eligibility.
+          testQuality: {
+            inScopeTests: ['test/legacy-selector.test.ts'],
+            counterfactualFileSelectors: [],
+            unresolvedMarkers: [{ selector: 'test/legacy-selector.test.ts', reference: 'S99.1' }],
+          },
+          testScope: {
+            targets: [], candidates: [],
+            notes: [{ kind: 'unresolved-reference' }],
+            changedDeclarations: [], affectedGroups: [], sharedSources: [],
+          } as never,
         },
       },
+      emit,
     });
 
     const result = await coordinateBuildReviewRubrics(input);
@@ -145,6 +165,11 @@ describe("build-review coordinator: registered dispatch", () => {
     expect(input.preflight).toHaveBeenCalledTimes(0);
     expect(input.dispatchModel).not.toHaveBeenCalled();
     expect(input.readCache).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledWith({
+      type: 'build_review_outer_verdict', lapId: 'lap-current', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+      reason: 'test_quality_empty_scope',
+      unresolvedMarkers: [{ selector: 'test/legacy-selector.test.ts', reference: 'S99.1' }],
+    });
   });
 
   it("excludes a relocated refactor-preserving test from the grader and rejects a finding anchored there", async () => {
@@ -177,7 +202,7 @@ describe("build-review coordinator: registered dispatch", () => {
             { selector: inScopeTest, titleText: inScopeTitle, staticExtractionFallback: false },
             { selector: relocatedTest, titleText: relocatedTitle, staticExtractionFallback: false },
           ],
-          testQuality: { inScopeTests: [inScopeTest], unresolvedMarkers: [] },
+          testQuality: { inScopeTests: [inScopeTest], counterfactualFileSelectors: [inScopeTest], unresolvedMarkers: [] },
         },
       },
       preflight: vi.fn(async () => ({
@@ -204,6 +229,43 @@ describe("build-review coordinator: registered dispatch", () => {
       kind: "ready",
       branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result" }],
     });
+  });
+
+  it('keeps conservative preflight file execution separate from established quality targets', async () => {
+    const established = 'test/established.test.ts';
+    const candidate = 'test/candidate-group.test.ts';
+    const frozenInputs = inputs();
+    const dispatchModel = vi.fn(async () => ({ findings: [] }));
+
+    await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: {
+        ...frozenInputs,
+        sourceSnapshot: {
+          ...frozenInputs.sourceSnapshot,
+          testQuality: {
+            inScopeTests: [established],
+            counterfactualFileSelectors: [candidate, established],
+            unresolvedMarkers: [],
+          },
+        },
+      },
+      preflight: vi.fn(async () => ({
+        classification: 'stayed-green' as const, cacheable: true as const, cacheProvenance: 'miss' as const,
+        changedPaths: ['src/a.ts', established], changedTestSelectors: [established],
+        counterfactualFileSelectors: [candidate, established], revertedProductionManifest: [],
+        sourceIdentities: { mergeBase: 'base', headSha: 'head' },
+        scopedRun: { exitCode: 0 as const, runKind: 'passed' as const, ranSelectors: [candidate, established], failureExcerpt: '' },
+      })),
+      dispatchModel,
+    }));
+
+    expect(dispatchModel).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric: 'testQuality' }),
+      expect.objectContaining({
+        runnerSelectors: [candidate, established],
+        changedTestSelectors: [established],
+      }),
+    );
   });
 
   it("dispatches exactly the enabled registered test-quality rubric", async () => {
@@ -269,6 +331,57 @@ function testQualityBranch(result: Awaited<ReturnType<typeof coordinateBuildRevi
 }
 
 describe("build-review coordinator: frozen fan-out", () => {
+  it('keeps a valid indeterminate scope judgement, its independent finding, and named event evidence without a repair dispatch', async () => {
+    const frozenInputs = titledInputs();
+    const candidateHash = `sha256:${'b'.repeat(64)}`;
+    const emit = vi.fn(async () => undefined);
+    const dispatchModel = vi.fn(async () => ({
+      findings: [testQualityFinding()],
+      scopeResolutions: [{
+        candidateId: 'candidate:setup', status: 'indeterminate',
+        missingEvidenceReason: 'the changed setup cannot be associated with one marker',
+      }],
+    }));
+
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: {
+        ...frozenInputs,
+        sourceSnapshot: {
+          ...frozenInputs.sourceSnapshot,
+          testScope: {
+            targets: [],
+            candidates: [{
+              candidateId: 'candidate:setup',
+              sourceRegion: { path: IN_SCOPE_TEST, startLine: 2, endLine: 4, contentHash: candidateHash, display: 'changed setup' },
+              obligationReferences: ['story:S6.1'],
+            }],
+            notes: [], changedDeclarations: [], affectedGroups: [], sharedSources: [],
+          } as never,
+        },
+      },
+      dispatchModel,
+      emit,
+    }));
+
+    expect(dispatchModel).toHaveBeenCalledTimes(1);
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: 'dispatched',
+      result: {
+        findings: [testQualityFinding()],
+        scopeResolutions: [{
+          candidateId: 'candidate:setup', status: 'indeterminate',
+          sourceRegion: { path: IN_SCOPE_TEST, contentHash: candidateHash },
+          obligationReferences: ['story:S6.1'],
+          missingEvidenceReason: 'the changed setup cannot be associated with one marker',
+        }],
+      },
+    });
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'build_review_scope_incomplete', rubric: 'testQuality', lapId: 'lap-current',
+      candidates: [expect.objectContaining({ candidateId: 'candidate:setup', obligationReferences: ['story:S6.1'] })],
+    }));
+  });
+
   it("emits each rubric occurrence exactly once in branch settlement order", async () => {
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
 
@@ -491,6 +604,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
       "preflight-failed": true,
       "artifact-read-failed": true,
       "artifact-write-failed": true,
+      "scope-incomplete": true,
     };
     // The parser admits exactly the reasons the coordinator mapping can produce;
     // the three union members outside that mapping are carried by other
@@ -553,6 +667,193 @@ describe("build-review coordinator: findings-only provider payloads", () => {
         kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
         verdict, findings: [...findings],
       },
+    });
+  });
+});
+
+describe("build-review coordinator: candidate scope resolutions", () => {
+  const scopeRegion = {
+    path: "test/widget.test.ts", startLine: 1, endLine: 1,
+    contentHash: `sha256:${"a".repeat(64)}`, display: "widget persists state",
+  };
+  const scopeCandidate = {
+    candidateId: "candidate-widget", sourceRegion: scopeRegion,
+    obligationReferences: ["criterion:S5.1"],
+  };
+  const candidateProjection = {
+    rubric: "testQuality", contractVersion: "v3", projectionVersion: "v3", lapId: parseBuildReviewLapId("lap-current")!,
+    snapshotDigest: "sha256:snapshot", contentDigest: "sha256:content", digest: "sha256:projection", mergeBase: "base", headSha: "head",
+    changedFiles: [], changedTestSelectors: [], runnerSelectors: [], unresolvedMarkers: [], changedTestTitles: [],
+    testScope: { candidates: [scopeCandidate] }, testSuiteProof: {}, revertedProductionManifest: [], preflight: { classification: "approved-exception", exception: "empty-test-set" },
+  } as unknown as import('../../src/engine/build-review-projections.js').TestQualityProjection;
+
+  it("revalidates a cache hit against current candidate and finding authority before reuse", async () => {
+    const currentResolution = {
+      candidateId: "candidate-widget", status: "resolved", sourceRegion: scopeRegion,
+      obligationReferences: ["criterion:S5.1"], associationReason: "The current source binds this candidate.",
+    };
+    const staleScopeRegion = {
+      ...scopeRegion,
+      contentHash: `sha256:${"c".repeat(64)}`,
+      display: "unchanged sibling test",
+    };
+    const staleResult = {
+      kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: parseBuildReviewLapId("lap-old")!,
+      snapshotDigest: "sha256:old", findings: [{
+        ...testQualityFinding("A coarse sibling anchor was cached."),
+        anchor: { rubric: "testQuality", locus: { path: staleScopeRegion.path, contentHash: staleScopeRegion.contentHash, display: staleScopeRegion.display } },
+      }],
+      scopeResolutions: [{ ...currentResolution, sourceRegion: staleScopeRegion }], verdict: "FAIL",
+    };
+    const dispatchModel = vi.fn(async () => ({ findings: [], scopeResolutions: [currentResolution] }));
+    const input = coordinationInput(true, {
+      projections: { testQuality: candidateProjection },
+      readCache: vi.fn(async () => ({
+        version: 1, rubric: "testQuality", contractVersion: "v3", projectionVersion: "v3",
+        projectionDigest: candidateProjection.digest, policyFingerprint: fingerprintBuildReviewRubricPolicy(policy),
+        engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:skill-a" }, result: staleResult,
+      }) as never),
+      dispatchModel,
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(dispatchModel).toHaveBeenCalledOnce();
+    expect(input.writeArtifact).toHaveBeenCalledOnce();
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: "dispatched", result: { findings: [], scopeResolutions: [currentResolution], verdict: "PASS" },
+    });
+  });
+
+  it("derives candidate authority only from the frozen v3 testScope candidate and pinned evidence", () => {
+    const projection = {
+      ...candidateProjection,
+      testScope: {
+        candidates: [{
+          declaration: { span: { start: 9, end: 29 }, titleChain: ["widget persists state"] },
+          markers: [{ reference: { kind: "criterion", id: "S5.1" } }],
+        }],
+        evidence: [{
+          id: "source:head:test/widget.test.ts:9:29", source: { side: "head", fileName: "test/widget.test.ts" },
+          region: { start: 9, end: 29 }, startLine: 12, endLine: 12, content: "expect(saved).toBe(1)", contentHash: scopeRegion.contentHash,
+        }],
+      },
+    } as never;
+
+    expect(buildReviewCandidateScopeResolutionContext(projection)).toEqual({ candidates: [{
+      candidateId: "source:head:test/widget.test.ts:9:29", sourceRegion: { ...scopeRegion, startLine: 12, endLine: 12 },
+      obligationReferences: ["criterion:S5.1"],
+    }] });
+  });
+
+  it("settles one source-grounded fallback resolution and its finding in one provider dispatch", async () => {
+    const resolution = {
+      candidateId: "candidate-widget", status: "resolved", sourceRegion: scopeRegion,
+      obligationReferences: ["criterion:S5.1"], associationReason: "The changed fallback assertion covers the criterion.",
+    };
+    const finding = {
+      concernKind: "test-insensitive", summary: "The fallback assertion can pass without persistence.", evidenceLocations: ["test/widget.test.ts:1"],
+      anchor: { rubric: "testQuality", locus: { path: scopeRegion.path, contentHash: scopeRegion.contentHash, display: scopeRegion.display } },
+    };
+    const dispatchModel = vi.fn(async () => ({ findings: [finding], scopeResolutions: [resolution], lapId: "provider-lap" }));
+    const input = coordinationInput(true, { projections: { testQuality: candidateProjection }, dispatchModel });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(dispatchModel).toHaveBeenCalledTimes(1);
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: "dispatched", result: {
+        contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot", findings: [finding], scopeResolutions: [resolution], verdict: "FAIL",
+      },
+    });
+  });
+
+  it("retains an out-of-scope exclusion without inventing a quality finding", async () => {
+    const exclusion = { candidateId: "candidate-widget", status: "out-of-scope", exclusionReason: "Pinned candidate is unrelated to the changed behavior." };
+    const input = coordinationInput(true, {
+      projections: { testQuality: candidateProjection },
+      dispatchModel: vi.fn(async () => ({ findings: [], scopeResolutions: [exclusion] })),
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: "dispatched", result: { findings: [], scopeResolutions: [exclusion], verdict: "PASS" },
+    });
+  });
+
+  it('re-runs scope coordination against corrected pinned binding evidence instead of retaining an old indeterminacy', async () => {
+    const initial = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      projections: { testQuality: candidateProjection },
+      dispatchModel: vi.fn(async () => ({
+        findings: [], scopeResolutions: [{ candidateId: 'candidate-widget', status: 'indeterminate', missingEvidenceReason: 'the pinned binding is incomplete' }],
+      })),
+    }));
+    const initialBranch = testQualityBranch(initial);
+    expect(initialBranch).toMatchObject({ kind: 'dispatched' });
+    if (!initialBranch || initialBranch.kind !== 'dispatched') throw new Error('fixture must dispatch testQuality');
+    const initialResult = initialBranch.result;
+    if (initialResult.kind !== 'judged') throw new Error('fixture must settle a judged result');
+    expect(deriveBuildReviewScopeIncompleteFault(initialResult)).toMatchObject({
+      candidates: [{ candidateId: 'candidate-widget', missingEvidenceReason: 'the pinned binding is incomplete' }],
+    });
+
+    const correctedRegion = { ...scopeRegion, contentHash: `sha256:${'c'.repeat(64)}`, display: 'corrected setup binding' };
+    const correctedProjection = {
+      ...candidateProjection,
+      digest: 'sha256:corrected-projection',
+      testScope: { candidates: [{ ...scopeCandidate, sourceRegion: correctedRegion }] },
+    };
+    const recovered = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      projections: { testQuality: correctedProjection },
+      dispatchModel: vi.fn(async () => ({
+        findings: [], scopeResolutions: [{
+          candidateId: 'candidate-widget', status: 'resolved', sourceRegion: correctedRegion,
+          obligationReferences: ['criterion:S5.1'], associationReason: 'Corrected pinned binding proves this candidate.',
+        }],
+      })),
+    }));
+    const recoveredBranch = testQualityBranch(recovered);
+    expect(recoveredBranch).toMatchObject({ kind: 'dispatched' });
+    if (!recoveredBranch || recoveredBranch.kind !== 'dispatched') throw new Error('fixture must dispatch testQuality');
+    const recoveredResult = recoveredBranch.result;
+    if (recoveredResult.kind !== 'judged') throw new Error('fixture must settle a judged result');
+    expect(recoveredResult.scopeResolutions).toMatchObject([{ status: 'resolved', sourceRegion: correctedRegion }]);
+    expect(deriveBuildReviewScopeIncompleteFault(recoveredResult)).toBeUndefined();
+  });
+
+  it('does not empty-pass a concrete candidate, and permits its resolved indeterminate no-findings result', async () => {
+    const resolution = {
+      candidateId: 'candidate-widget', status: 'resolved', sourceRegion: scopeRegion,
+      obligationReferences: ['criterion:S5.1'], associationReason: 'The affected group remains relevant after inspection.',
+    };
+    const frozenInputs = inputs();
+    const dispatchModel = vi.fn(async () => ({
+      findings: [], scopeResolutions: [resolution], counterfactualSensitivity: 'indeterminate',
+    }));
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: {
+        ...frozenInputs,
+        sourceSnapshot: {
+          ...frozenInputs.sourceSnapshot,
+          testQuality: { inScopeTests: [], counterfactualFileSelectors: ['test/widget.test.ts'], unresolvedMarkers: [] },
+          testScope: { candidates: [scopeCandidate] } as never,
+        },
+      },
+      projections: { testQuality: candidateProjection },
+      preflight: vi.fn(async () => ({
+        classification: 'approved-exception' as const, exception: 'empty-test-set' as const,
+        cacheable: true as const, cacheProvenance: 'miss' as const, changedPaths: [], changedTestSelectors: [],
+        counterfactualFileSelectors: ['test/widget.test.ts'], revertedProductionManifest: [],
+        sourceIdentities: { mergeBase: 'base', headSha: 'head' },
+      })),
+      dispatchModel,
+    }));
+
+    expect(dispatchModel).toHaveBeenCalledOnce();
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: 'dispatched',
+      result: { verdict: 'PASS', findings: [], counterfactualSensitivity: 'indeterminate', scopeResolutions: [resolution] },
     });
   });
 });

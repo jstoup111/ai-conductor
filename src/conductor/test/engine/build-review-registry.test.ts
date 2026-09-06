@@ -1,3 +1,4 @@
+// Covers: task:10
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -16,7 +17,7 @@ describe('engine/build-review-registry', () => {
       testQuality: {
         skillName: 'build-review-test-quality',
         contractVersion: 'v3',
-        projectionVersion: 'v2',
+        projectionVersion: 'v3',
         cachePolicy: 'content-addressed',
         prerequisite: 'none',
       },

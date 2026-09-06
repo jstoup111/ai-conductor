@@ -30,7 +30,7 @@ export interface BuildReviewCacheEntry {
   version: typeof CACHE_VERSION;
   rubric: BuildReviewRubricId;
   contractVersion: "v3";
-  projectionVersion: "v2";
+  projectionVersion: "v3";
   projectionDigest: string;
   policyFingerprint: string;
   engineIdentity: BuildReviewEngineIdentity;
@@ -49,7 +49,7 @@ export interface BuildReviewCacheFilesystem {
 export interface BuildReviewCacheLookup {
   rubric: BuildReviewRubricId;
   contractVersion: "v3";
-  projectionVersion: "v2";
+  projectionVersion: "v3";
   projectionDigest: string;
   policyFingerprint: string;
   engineIdentity: BuildReviewEngineIdentity;
@@ -60,7 +60,7 @@ export interface BuildReviewCacheLookup {
 /** Safely parsed persisted state, including legacy entries that must miss closed. */
 export interface BuildReviewCacheEntryCandidate extends Omit<BuildReviewCacheEntry, "contractVersion" | "projectionVersion" | "engineIdentity"> {
   contractVersion: BuildReviewRubricContractVersion;
-  projectionVersion: "v1" | "v2";
+  projectionVersion: "v1" | "v2" | "v3";
   /**
    * Staged legacy parse (adr-2026-08-21 D4): pre-engine-identity entries carry
    * no field and classify as `engine-version-mismatch`, never `invalid-entry`.
@@ -143,7 +143,7 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
   if (candidate.engineIdentity !== undefined && !engineIdentity) return undefined;
   const contractVersion = parseBuildReviewRubricContractVersion(candidate.contractVersion);
   if (candidate.version !== CACHE_VERSION || !isRubric(candidate.rubric) || !contractVersion ||
-    (candidate.projectionVersion !== "v1" && candidate.projectionVersion !== "v2") ||
+    (candidate.projectionVersion !== "v1" && candidate.projectionVersion !== "v2" && candidate.projectionVersion !== "v3") ||
     !isNonEmptyString(candidate.projectionDigest) || !isNonEmptyString(candidate.policyFingerprint)) {
     return undefined;
   }
@@ -166,8 +166,8 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
 /** Strictly parses entries current code may persist or reuse. */
 export function parseBuildReviewCacheEntry(value: unknown): BuildReviewCacheEntry | undefined {
   const entry = parseBuildReviewCacheEntryCandidate(value);
-  return entry?.contractVersion === "v3" && entry.projectionVersion === "v2" && entry.engineIdentity !== undefined
-    ? { ...entry, contractVersion: "v3", projectionVersion: "v2", engineIdentity: entry.engineIdentity }
+  return entry?.contractVersion === "v3" && entry.projectionVersion === "v3" && entry.engineIdentity !== undefined
+    ? { ...entry, contractVersion: "v3", projectionVersion: "v3", engineIdentity: entry.engineIdentity }
     : undefined;
 }
 

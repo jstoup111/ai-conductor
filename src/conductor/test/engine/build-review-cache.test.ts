@@ -18,7 +18,7 @@ function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
     version: 1,
     rubric: "testQuality",
     contractVersion: "v3",
-    projectionVersion: "v2",
+    projectionVersion: "v3",
     projectionDigest: "sha256:projection-a",
     policyFingerprint: "sha256:policy-a",
     engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:skill-a" },
@@ -63,15 +63,15 @@ function memoryFilesystem(files: Record<string, string> = {}): BuildReviewCacheF
 }
 
 describe("build-review semantic cache", () => {
-  it("rejects v1 entries at the current public parse boundary", () => {
-    expect(parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v1" })).toBeUndefined();
+  it("rejects v2 entries at the current public parse boundary", () => {
+    expect(parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v2" })).toBeUndefined();
   });
 
-  it("parses stored v1 contract entries through the read seam, then misses against the current v3 identity", async () => {
+  it("parses legacy projection candidates through the read seam, then misses against the current v3 identity", async () => {
     const currentLookup = {
       rubric: "testQuality",
       contractVersion: "v3",
-      projectionVersion: "v2",
+      projectionVersion: "v3",
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:skill-a" },
@@ -83,16 +83,15 @@ describe("build-review semantic cache", () => {
     const fs = memoryFilesystem({
       [path]: JSON.stringify({
         ...entry(),
-        contractVersion: "v1",
-        result: { ...entry().result, contractVersion: "v1" },
+        projectionVersion: "v2",
       }),
     });
 
     expect([
       classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "testQuality", fs), currentLookup),
-      classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v2", projectionDigest: "sha256:changed-input" }, currentLookup),
+      classifyBuildReviewCacheLookup({ ...entry(), projectionVersion: "v3", projectionDigest: "sha256:changed-input" }, currentLookup),
     ]).toEqual([
-      { kind: "miss", reason: "contract-version-mismatch" },
+      { kind: "miss", reason: "projection-version-mismatch" },
       { kind: "miss", reason: "projection-digest-mismatch" },
     ]);
   });
@@ -136,7 +135,7 @@ describe("build-review semantic cache", () => {
       lookup: classifyBuildReviewCacheLookup(foreignCandidate, {
         rubric: "testQuality",
         contractVersion: "v3",
-        projectionVersion: "v2",
+        projectionVersion: "v3",
         projectionDigest: freshEntry.projectionDigest,
         policyFingerprint: freshEntry.policyFingerprint,
         engineIdentity: freshEntry.engineIdentity,
@@ -189,7 +188,7 @@ describe("build-review semantic cache", () => {
     const request = {
       rubric: "testQuality" as const,
       contractVersion: "v3" as const,
-      projectionVersion: "v2" as const,
+      projectionVersion: "v3" as const,
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:skill-a" },
@@ -270,7 +269,7 @@ describe("build-review semantic cache", () => {
     const request = {
       rubric: "testQuality" as const,
       contractVersion: "v3" as const,
-      projectionVersion: "v2" as const,
+      projectionVersion: "v3" as const,
       projectionDigest: "sha256:projection-a",
       policyFingerprint: "sha256:policy-a",
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:skill-a" },
@@ -312,7 +311,7 @@ describe("engine identity in the cache key (adr-2026-08-21)", () => {
   const request = {
     rubric: "testQuality" as const,
     contractVersion: "v3" as const,
-    projectionVersion: "v2" as const,
+      projectionVersion: "v3" as const,
     projectionDigest: "sha256:projection-a",
     policyFingerprint: "sha256:policy-a",
     engineIdentity,

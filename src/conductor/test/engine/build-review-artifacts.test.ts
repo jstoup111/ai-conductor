@@ -67,6 +67,23 @@ const persistedV2Artifact = {
     provenance: { kind: 'fresh' },
 } as const;
 
+const persistedV3Artifact = {
+  version: 1,
+  rubric: 'testQuality',
+  lapId,
+  snapshotDigest: 'sha256:snapshot',
+  result: {
+    kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3',
+    findings: [{
+      concernKind: 'test-insensitive', summary: 'A legacy v3 finding identity remains readable.',
+      evidenceLocations: ['src/conductor/src/engine/build-review-artifacts.ts:1'],
+      anchor: { rubric: 'testQuality', locus: { path: 'src/conductor/test/engine/build-review-artifacts.test.ts', contentHash: 'sha256:fixture', display: 'fixture test' } },
+    }],
+    verdict: 'FAIL',
+  },
+  provenance: { kind: 'fresh' },
+} as const;
+
 describe('build-review current-lap branch artifacts', () => {
   it('uses a write-disjoint path for every lap', () => {
     expect([
@@ -115,6 +132,26 @@ describe('build-review current-lap branch artifacts', () => {
     expect(Object.keys(absent)).toEqual(['kind', 'rubric', 'contractVersion', 'lapId', 'snapshotDigest', 'findings']);
   });
 
+  it('round-trips engine-validated scope resolutions through the branch artifact reader', async () => {
+    const scopeRegion = { path: 'test/widget.test.ts', startLine: 1, endLine: 1, contentHash: `sha256:${'a'.repeat(64)}`, display: 'widget persists state' };
+    const projection = {
+      rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v3', lapId, snapshotDigest: 'sha256:snapshot',
+      contentDigest: 'sha256:content', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [], changedTestSelectors: [], runnerSelectors: [], unresolvedMarkers: [], changedTestTitles: [],
+      testScope: { candidates: [{ candidateId: 'candidate-widget', sourceRegion: scopeRegion, obligationReferences: ['criterion:S5.1'] }] }, testSuiteProof: {}, revertedProductionManifest: [], preflight: { classification: 'approved-exception', exception: 'empty-test-set' },
+    } as never;
+    const resolution = { candidateId: 'candidate-widget', status: 'out-of-scope', exclusionReason: 'Pinned candidate is unrelated.' };
+    const result = validateBuildReviewDispatchedResult(stampBuildReviewDispatchedCandidate({ findings: [], scopeResolutions: [resolution] }, 'testQuality', projection), 'testQuality', projection)!;
+    const fs = filesystem();
+    await writeBuildReviewBranchArtifact('/feature', { rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', result, provenance: { kind: 'fresh' } }, fs);
+
+    await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
+      result: { scopeResolutions: [resolution], verdict: 'PASS' },
+    });
+    const reread = await readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs);
+    expect(joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: { testQuality: reread!.result } }))
+      .toMatchObject({ results: { testQuality: { scopeResolutions: [resolution] } } });
+  });
+
   async function exerciseLiveV3StampBoundary(fs: BuildReviewArtifactFilesystem): Promise<void> {
     const projection = {
       rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v2', lapId, snapshotDigest: 'sha256:snapshot',
@@ -148,6 +185,16 @@ describe('build-review current-lap branch artifacts', () => {
     await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
       result: { contractVersion: 'v2', findings: [{ anchor: { rubric: 'testQuality' } }] },
     });
+  });
+
+  it('keeps a legacy result-v3 finding identity readable without migrating its persisted shape', async () => {
+    const path = buildReviewBranchArtifactPath('/feature', lapId, 'testQuality');
+    const fs = filesystem({ [path]: JSON.stringify(persistedV3Artifact) });
+
+    await expect(readBuildReviewBranchArtifact('/feature', 'testQuality', lapId, 'sha256:snapshot', fs)).resolves.toMatchObject({
+      result: { contractVersion: 'v3', findings: [{ anchor: { rubric: 'testQuality', locus: { contentHash: 'sha256:fixture' } } }] },
+    });
+    expect(fs.writeFile).not.toHaveBeenCalled();
   });
 
   it.each([
