@@ -123,7 +123,7 @@ describe('engine/worktree-prepare', () => {
       expect(changedMode).not.toBe(changedBytes);
     });
 
-    it('skips setup only for a marker matching the script and resolved base', async () => {
+    it('skips setup only for a marker matching the script and dispatched base pin', async () => {
       await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
       const scriptHash = await hashSetupScript(dir);
       await writeSetupMarker(dir, {
@@ -136,6 +136,20 @@ describe('engine/worktree-prepare', () => {
       await prepareWorktree(dir, undefined, { baseSha: 'base-a' });
 
       await expect(access(join(dir, 'setup-count'))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('reruns setup when a marker belongs to a different dispatched base pin', async () => {
+      await writeSetup('#!/usr/bin/env bash\necho ran >> setup-count\n');
+      await writeSetupMarker(dir, {
+        version: 1,
+        setupScriptHash: (await hashSetupScript(dir))!,
+        baseSha: 'earlier-dispatch-pin',
+        preparedAtCommit: 'provenance-only',
+      });
+
+      await prepareWorktree(dir, undefined, { baseSha: 'current-dispatch-pin' });
+
+      expect(await readFile(join(dir, 'setup-count'), 'utf-8')).toContain('ran');
     });
 
     it.each([

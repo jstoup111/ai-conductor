@@ -36,6 +36,7 @@ import {
   type ScanInheritedStateDeps,
 } from '../../src/engine/daemon-dashboard.js';
 import { pickEligible, type PickEligibleCtx, type BacklogItem } from '../../src/engine/daemon.js';
+import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 
 /**
  * Daemon-cli boot handshake (Task 10: wired path verification).
@@ -109,9 +110,7 @@ async function bootAndRender(
   const dashboard = renderDashboard(state);
 
   const ctx: PickEligibleCtx = {
-    inFlight: { has: () => false },
-    parked: new Set(),
-    started: new Set(),
+    claims: new InMemoryWorkClaims(),
   };
   const picked = await pickEligible({ items: await discover()() }, ctx);
   return { dashboard, picked };

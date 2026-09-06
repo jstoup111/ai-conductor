@@ -79,8 +79,9 @@ describe('integration/session-hooks-provisioning (Task 15)', () => {
       expect(s.mode & 0o111).not.toBe(0);
     }
 
-    // 3. Config-dir independence: no CLAUDE_CONFIG_DIR, home-dir reference,
-    // or absolute path outside the worktree anywhere in the wiring.
+    // 3. Config-dir independence: no CLAUDE_CONFIG_DIR or shell home-dir
+    // reference anywhere in the wiring. Command containment is asserted
+    // below; the worktree itself may legitimately live under /home.
     expect(raw).not.toContain('CLAUDE_CONFIG_DIR');
     expect(raw).not.toContain('$HOME');
     expect(raw).not.toMatch(/(?<![A-Za-z0-9_./-])~(?=[/"\s]|$)/);

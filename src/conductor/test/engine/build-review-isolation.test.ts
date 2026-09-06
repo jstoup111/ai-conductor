@@ -176,8 +176,10 @@ describe('build_review input isolation', () => {
     expect(harness).toContain('ai-conductor scoped-run <selectors...>');
     expect(harness).toMatch(/agent derives the selectors/i);
 
+    // #2232 moved the broad-fallback trigger list out of HARNESS.md: build
+    // sessions no longer run the aggregate suite, so the triggers live only in
+    // the pipeline skill that derives scoped selectors.
     for (const trigger of BROAD_FALLBACK_TRIGGERS) {
-      expect(harness).toContain(trigger);
       expect(pipeline).toContain(trigger);
     }
   });

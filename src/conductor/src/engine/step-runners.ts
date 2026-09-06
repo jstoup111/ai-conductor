@@ -11,6 +11,7 @@ import type {
   ProviderStreamObservation,
 } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
+import type { WorktreeLifecycleQueue } from './worktree.js';
 import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
 import type { HarnessConfig, EffortLevel, BuildReviewRubricId } from '../types/config.js';
 import { prdAuditScopeProjection } from './conductor.js';
@@ -489,6 +490,13 @@ export interface StepRunnerOptions {
    */
   gitRunner?: GitRunner;
   planPath?: string;
+  /**
+   * Dispatcher-owned worktree lifecycle queue. The `build_review` test-quality
+   * preflight materializes a detached checkout with `git worktree add/remove`
+   * against the shared `.git`; the daemon injects its single queue so those
+   * mutations never overlap another slug's lifecycle operations.
+   */
+  worktreeLifecycle?: WorktreeLifecycleQueue;
   /** Process-free test-suite-proof seam retained by the public build_review step. */
   buildReviewInputOptions?: BuildReviewInputOptions;
   /**
@@ -630,7 +638,13 @@ export class DefaultStepRunner implements StepRunner {
   private providerLifecycleAttempt = 0;
   /** Bounded per-run evidence cache; failed preflights never enter it. */
   private readonly tautologyPreflightCache = new Map<string, import('./build-review-test-quality-preflight.js').TautologyCompletedPreflight>();
+  private readonly worktreeLifecycle: WorktreeLifecycleQueue | undefined;
   callCount = 0;
+
+  /** Route a shared-`.git` worktree mutation through the dispatcher queue when one is injected. */
+  private mutateWorktree<T>(work: () => Promise<T>): Promise<T> {
+    return this.worktreeLifecycle ? this.worktreeLifecycle.run(work) : work();
+  }
 
   constructor(
     private provider: LLMProvider,
@@ -658,6 +672,7 @@ export class DefaultStepRunner implements StepRunner {
       this.log,
     );
     this.gitRunner = options?.gitRunner ?? makeGitRunner(this.projectDir);
+    this.worktreeLifecycle = options?.worktreeLifecycle;
     this.planPathOverride = options?.planPath;
     this.buildReviewInputOptions = options?.buildReviewInputOptions;
     this.buildReviewCoordinator = options?.buildReviewCoordinator;
@@ -2333,7 +2348,7 @@ export class DefaultStepRunner implements StepRunner {
         ? { approvedException: 'removal-maintenance' as const, removalMaintenanceSelectors }
         : {}),
       createCheckout: async (path, headSha) => {
-        const result = await this.gitRunner(['worktree', 'add', '--detach', path, headSha]);
+        const result = await this.mutateWorktree(() => this.gitRunner(['worktree', 'add', '--detach', path, headSha]));
         if (result.exitCode !== 0) throw new Error(result.stderr);
         // A detached worktree contains tracked files only.  The source
         // worktree's dependency installation is deliberately ignored by git,
@@ -2362,7 +2377,7 @@ export class DefaultStepRunner implements StepRunner {
       removeFile: async (path) => { await rm(path, { force: true }); },
       runScoped: async (cwd, selectors, signal) => this.runScopedTautologyCommand(cwd, selectors, signal),
       removeCheckout: async (path) => {
-        await this.gitRunner(['worktree', 'remove', '--force', path]);
+        await this.mutateWorktree(() => this.gitRunner(['worktree', 'remove', '--force', path]));
       },
       abortSignal: controller.signal,
       readCache: async (key) => this.tautologyPreflightCache.get(key),

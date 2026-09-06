@@ -134,8 +134,9 @@ SHIP validators.
 lines advancing through step names. `ai-conductor daemon status` reports the running pid and the
 current slug.
 
-Only one feature builds at a time. `--concurrency` is accepted, but any value above 1 is clamped
-to 1.
+By default, one feature builds at a time. Set `--concurrency <n>` (or configure
+[`daemon_concurrency`](../reference/configuration.md#daemon_concurrency)) to run up to `n` eligible
+features concurrently; each gets its own worktree and branch.
 
 If the backlog stays empty, the log says why once per slug — an unapproved stories artifact, a plan
 with no dependency tree, a shipped-record dedup hit, or an unresolved daemon identity. If a build

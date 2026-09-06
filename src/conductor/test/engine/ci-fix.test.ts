@@ -11,6 +11,8 @@ import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -823,6 +825,72 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       const afterHead = execSync(`git rev-parse HEAD`, { cwd: repoPath }).toString().trim();
       expect(afterBranch).toBe(beforeBranch);
       expect(afterHead).toBe(beforeHead);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('AB-2 (Task 20): routes the transient worktree add/remove through the injected dispatcher lifecycle queue', async () => {
+    const { repoPath, cleanup } = await createFixtureRepo();
+    try {
+      let queueDepth = 0;
+      let queuedOperations = 0;
+      const observed: string[] = [];
+      const worktreeLifecycle = new WorktreeLifecycleQueue();
+      const originalRun = worktreeLifecycle.run.bind(worktreeLifecycle);
+      worktreeLifecycle.run = (operation) => originalRun(async () => {
+        queueDepth += 1;
+        queuedOperations += 1;
+        try { return await operation(); } finally { queueDepth -= 1; }
+      });
+      const worktreePath = join(repoPath, '.worktrees', `resolve-${SLUG}`);
+      const fixRunner = {
+        run: async () => {
+          // The worktree exists while the callback runs, and it was created
+          // by a queued mutation (the queue drained before fn ran).
+          observed.push(existsSync(worktreePath) ? 'worktree-present' : 'worktree-missing');
+          return { kind: 'noop' as const };
+        },
+      };
+      const entry = { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 };
+
+      const result = await runCiFix(entry, 'feat/fix', 'hint', { fixRunner, liveness: { worktreeLifecycle } }, () => {});
+
+      expect(result.kind).toBe('noop');
+      expect(observed).toEqual(['worktree-present']);
+      expect(queueDepth).toBe(0);
+      expect(existsSync(worktreePath)).toBe(false);
+      // Exactly the add and the remove went through the queue.
+      expect(queuedOperations).toBe(2);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('AB-3 (Task 21): refuses transient worktree removal while the slug holds an active work claim, naming the slug', async () => {
+    const { repoPath, cleanup } = await createFixtureRepo();
+    try {
+      const logs: string[] = [];
+      let claimed = false;
+      const worktreePath = join(repoPath, '.worktrees', `resolve-${SLUG}`);
+      const fixRunner = {
+        run: async () => {
+          // The daemon claims the slug while the fix-runner is mid-flight.
+          claimed = true;
+          return { kind: 'noop' as const };
+        },
+      };
+      const entry = { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 };
+
+      const result = await runCiFix(entry, 'feat/fix', 'hint', {
+        fixRunner,
+        liveness: { isFeatureInFlight: async () => claimed, log: (m) => logs.push(m) },
+      }, () => {});
+
+      expect(result.kind).toBe('noop');
+      expect(existsSync(worktreePath)).toBe(true);
+      expect(logs.some((line) => line.includes('worktree removal refused') && line.includes(SLUG) && line.includes('active work claim'))).toBe(true);
+      execSync(`git worktree remove --force "${worktreePath}"`, { cwd: repoPath });
     } finally {
       await cleanup();
     }

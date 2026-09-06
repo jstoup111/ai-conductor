@@ -5,7 +5,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { dispatchEngineer, detectEngineerCommand } from '../../../src/engine/engineer-cli.js';
-import { mkdir, rm, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 import { createFileQueue } from '../../../src/engine/engineer/intake/queue.js';
@@ -49,7 +50,7 @@ describe('detectEngineerCommand: requeue --stale', () => {
 
 describe('engineer requeue --stale: happy path (Task 11)', () => {
   it('requeues only entries older than the window, leaves newer ones untouched', async () => {
-    const testDir = `/tmp/requeue-test-${Date.now()}-${Math.random()}`;
+    const testDir = await mkdtemp(join(tmpdir(), 'requeue-test-'));
     try {
       const { engDir, ledgerPath, ledger } = await makeLedger(testDir);
 
@@ -102,7 +103,7 @@ describe('engineer requeue --stale: happy path (Task 11)', () => {
   });
 
   it('rejects a malformed --older-than duration instead of applying the default window', async () => {
-    const testDir = `/tmp/requeue-invalid-duration-${Date.now()}-${Math.random()}`;
+    const testDir = await mkdtemp(join(tmpdir(), 'requeue-invalid-duration-'));
     try {
       const { engDir, ledgerPath, ledger } = await makeLedger(testDir);
       await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef: 'o/a#3' });

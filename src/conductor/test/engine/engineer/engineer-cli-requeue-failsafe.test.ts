@@ -5,7 +5,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { dispatchEngineer } from '../../../src/engine/engineer-cli.js';
-import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 
@@ -31,7 +32,7 @@ async function makeLedger(testDir: string) {
 
 describe('engineer requeue --stale: fail-safe liveness (Task 13)', () => {
   it('gh error for an entry never forgets it, error surfaced, batch continues', async () => {
-    const testDir = `/tmp/requeue-failsafe-test-${Date.now()}-${Math.random()}`;
+    const testDir = await mkdtemp(join(tmpdir(), 'requeue-failsafe-test-'));
     try {
       const { engDir, ledgerPath, ledger } = await makeLedger(testDir);
 
@@ -82,7 +83,7 @@ describe('engineer requeue --stale: fail-safe liveness (Task 13)', () => {
   });
 
   it('unparseable sourceRef never forgets, surfaces error, run continues', async () => {
-    const testDir = `/tmp/requeue-failsafe-unparse-${Date.now()}-${Math.random()}`;
+    const testDir = await mkdtemp(join(tmpdir(), 'requeue-failsafe-unparse-'));
     try {
       const { engDir, ledgerPath, ledger } = await makeLedger(testDir);
 
