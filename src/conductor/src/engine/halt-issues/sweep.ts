@@ -231,8 +231,6 @@ export async function sweep(config: SweepConfig): Promise<SweepResult> {
 
   // Step 5: Write ledger atomically (unless dryRun)
   if (!config.dryRun) {
-    // Re-create ledger and write (preserves atomic write pattern)
-    const ledgerWriter = new Ledger(config.ledgerPath, config.fs, config.clock);
     // Write the full ledger schema
     const tmpFilename = `.ledger.json.tmp-${Math.random().toString(36).substring(7)}`;
     const tmpPath = config.ledgerPath.replace(/ledger\.json$/, tmpFilename);
