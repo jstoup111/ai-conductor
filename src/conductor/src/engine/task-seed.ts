@@ -11,6 +11,7 @@ import {
 } from './autoheal.js';
 import { createTaskEvidence } from './task-evidence.js';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
+import { createRepairObligationStore, repairPlanIdentity } from './repair-obligations.js';
 interface TaskStatusRecord {
   id: string;
   name?: string;
@@ -224,6 +225,18 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
 
     const planTasks = parsePlanTasks(planText);
     const planTaskPaths = parsePlanTaskPaths(planText);
+    const repairs = await createRepairObligationStore(projectRoot, engineStatePath).read();
+    if (!repairs.ok) {
+      throw new Error(`Unable to seed task status from repair state (${repairs.kind}): ${repairs.message}`);
+    }
+    const planIdentity = repairPlanIdentity(projectRoot, resolvedPlanPath);
+    const openRepairTaskIds = new Set(
+      Object.entries(repairs.value.currentByPlan[planIdentity] ?? {})
+        .flatMap(([taskId, obligationId]) =>
+          repairs.value.records[obligationId]?.tasks[taskId]?.status === 'open'
+            ? [canonicalTaskId(taskId)]
+            : []),
+    );
 
     // Load existing task-status.json.
     //
@@ -379,6 +392,15 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
         }
         taskMap.set(canonicalId, newTask);
       }
+    }
+
+    // An explicit current repair is newer authority than a terminal row or a
+    // trailer restored during reconstruction. Keep row metadata for recovery,
+    // but force the current obligation back through BUILD until it is durably
+    // closed.
+    for (const taskId of openRepairTaskIds) {
+      const task = taskMap.get(taskId);
+      if (task) task.status = 'pending';
     }
 
     // Rebuild tasks array in consistent order. Sort by the canonical numeric id
