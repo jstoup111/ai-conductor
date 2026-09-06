@@ -14,6 +14,7 @@ import {
   type TestDeclarationDiagnostic,
   type TestDeclarationSpan,
 } from './build-review-test-declarations.js';
+import type { BuildReviewScopeDependencyEffect } from './build-review-scope-dependencies.js';
 import ts from 'typescript';
 
 export interface BuildReviewTestScopeInput {
@@ -21,6 +22,8 @@ export interface BuildReviewTestScopeInput {
   readonly head: BuildReviewTestBindingsInput;
   /** Supplied by later setup/dependency analysis; marker evidence remains mandatory. */
   readonly affectedOptedInGroups?: readonly BuildReviewConcreteAffectedGroup[];
+  /** Dependency traversal may seed evidence, but this analyzer retains local Covers authority. */
+  readonly dependencyEffects?: readonly BuildReviewScopeDependencyEffect[];
 }
 
 export interface BuildReviewConcreteAffectedGroup {
@@ -57,7 +60,8 @@ export type BuildReviewTestScopeCandidateReason =
   | 'conflicting-associations'
   | 'declaration-group'
   | 'unsupported-declaration'
-  | 'affected-opted-in-group';
+  | 'affected-opted-in-group'
+  | 'affected-dependency';
 
 export interface UncertainBuildReviewTestScopeCandidate {
   /** Present for parsed declarations/groups; absent for a source-bound parser diagnostic. */
@@ -67,6 +71,7 @@ export interface UncertainBuildReviewTestScopeCandidate {
   readonly associationChanges: readonly CoversMarkerAssociationChange[];
   readonly reasons: readonly BuildReviewTestScopeCandidateReason[];
   readonly affectedGroup?: BuildReviewAffectedOptedInGroup;
+  readonly affectedDependency?: BuildReviewScopeDependencyEffect;
 }
 
 export type BuildReviewTestScopeNote =
@@ -181,11 +186,13 @@ function candidate(
   reasons: readonly BuildReviewTestScopeCandidateReason[],
   diagnostic?: TestDeclarationDiagnostic,
   affectedGroup?: BuildReviewAffectedOptedInGroup,
+  affectedDependency?: BuildReviewScopeDependencyEffect,
 ): UncertainBuildReviewTestScopeCandidate {
   return Object.freeze({
     ...(declaration ? { declaration } : {}),
     ...(diagnostic ? { diagnostic } : {}),
     ...(affectedGroup ? { affectedGroup } : {}),
+    ...(affectedDependency ? { affectedDependency } : {}),
     markers: uniqueMarkers(markers),
     associationChanges: Object.freeze([...associationChanges]),
     reasons: Object.freeze([...new Set(reasons)]),
@@ -490,6 +497,36 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
   for (const group of input.affectedOptedInGroups ?? []) {
     if (group.markers.length === 0) continue;
     candidates.push(candidate(group.declaration, group.markers, [], ['affected-opted-in-group']));
+  }
+
+  // Dependencies discover bounded source evidence only. A plan path never
+  // becomes authority: every emitted candidate is attached to this source's
+  // already-established local Covers binding.
+  for (const effect of input.dependencyEffects ?? []) {
+    if (effect.seed.source.side !== 'head' || effect.seed.source.fileName !== input.head.source.fileName) continue;
+    if (effect.changedSources.length === 0) continue;
+    const byOwner = new Map<string, BoundCoversMarker[]>();
+    for (const binding of associations.head.bindings.filter((entry): entry is BoundCoversMarker => entry.kind === 'bound')) {
+      const key = JSON.stringify([
+        declarationKey(binding.owner.declaration),
+        binding.owner.association,
+      ]);
+      const bindings = byOwner.get(key) ?? [];
+      bindings.push(binding);
+      byOwner.set(key, bindings);
+    }
+    for (const bindings of byOwner.values()) {
+      const first = bindings[0]!;
+      candidates.push(candidate(
+        first.owner.declaration,
+        bindings.map((binding) => binding.marker),
+        [],
+        ['affected-dependency'],
+        undefined,
+        undefined,
+        effect,
+      ));
+    }
   }
 
   for (const group of affectedGroups) {
