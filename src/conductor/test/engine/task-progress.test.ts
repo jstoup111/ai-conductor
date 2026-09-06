@@ -377,9 +377,7 @@ describe('task-progress', () => {
       await commitTaskTrailer(dir, 'first.txt', '1');
       await commitTaskTrailer(dir, 'second.txt', '2');
 
-      const withoutWatermark = await resolveTaskIds(dir, ['1', '2']);
-
-      await expect(resolveTaskIds(dir, ['1', '2'])).resolves.toEqual(withoutWatermark);
+      await expect(resolveTaskIds(dir, ['1', '2'])).resolves.toEqual(new Set(['1', '2']));
     });
 
     it('does not read restage watermarks without an activePlanPath', async () => {
