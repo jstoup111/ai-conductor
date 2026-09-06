@@ -30,6 +30,7 @@ import { isOperatorParked, __resetResolveCacheForTests, reconcileStrandedParkMar
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
@@ -2079,6 +2080,63 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
       res: 'rebased',
       reverified: expect.arrayContaining([{ step: 'test_suite', skippedDispatch: true }]),
     });
+  });
+
+  it('emits every judged gate decision and mechanical re-verification on resume', async () => {
+    await initFeatureRepo(['1'], ['1']);
+    await advanceBaseWithCode();
+    const invalidated: Extract<ConductorEvent, { type: 'rebase_gate_invalidated' }>[] = [];
+    const preserved: Extract<ConductorEvent, { type: 'rebase_gate_preserved' }>[] = [];
+    const reverified: Extract<ConductorEvent, { type: 'rebase_gate_reverified' }>[] = [];
+    events.on('rebase_gate_invalidated', (event) => {
+      if (event.type === 'rebase_gate_invalidated') invalidated.push(event);
+    });
+    events.on('rebase_gate_preserved', (event) => {
+      if (event.type === 'rebase_gate_preserved') preserved.push(event);
+    });
+    events.on('rebase_gate_reverified', (event) => {
+      if (event.type === 'rebase_gate_reverified') reverified.push(event);
+    });
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: true,
+      preVerify: async (step) => step === 'build' ? { done: true } : { done: false },
+    });
+
+    expect(res).toBe('rebased');
+    expect(invalidated).toEqual([
+      { type: 'rebase_gate_invalidated', gate: 'test_suite', matchedPaths: ['src/sibling.ts'] },
+      { type: 'rebase_gate_invalidated', gate: 'manual_test', matchedPaths: ['src/sibling.ts'] },
+    ]);
+    expect(preserved.map(({ gate, surface, deltaConsidered, basis }) => ({
+      gate, surface, deltaConsidered, basis,
+    }))).toEqual([
+      {
+        gate: 'coverage_binding',
+        surface: ['<all runtime source>'],
+        deltaConsidered: ['src/sibling.ts'],
+        basis: undefined,
+      },
+      { gate: 'build_review', surface: ['src/task-1.ts'], deltaConsidered: [], basis: undefined },
+      {
+        gate: 'prd_audit',
+        surface: ['<all runtime source>'],
+        deltaConsidered: ['src/sibling.ts'],
+        basis: undefined,
+      },
+      { gate: 'architecture_review_as_built', surface: ['src/task-1.ts'], deltaConsidered: [], basis: undefined },
+    ]);
+    expect(reverified).toEqual([
+      expect.objectContaining({ type: 'rebase_gate_reverified', step: 'build', skippedDispatch: true }),
+    ]);
+    const judgedGates = new Set([...invalidated, ...preserved].map(({ gate }) => gate));
+    expect(judgedGates.has('build')).toBe(false);
+    expect(judgedGates.size).toBe(invalidated.length + preserved.length);
+    expect(new Set(invalidated.map(({ gate }) => gate)).size).toBe(invalidated.length);
+    expect(new Set(preserved.map(({ gate }) => gate)).size).toBe(preserved.length);
   });
 
   it('inspects a budget-preserved test suite once and carries its basis into the preserved event', async () => {
