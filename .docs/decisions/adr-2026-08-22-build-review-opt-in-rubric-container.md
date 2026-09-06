@@ -42,6 +42,8 @@ fails ~often on refactors and relocations because its revert-preflight classific
    non-empty, and its classification is **evidence in the projection, never a finding**; the judge
    must cite a concrete stub-passable assertion to raise `test-insensitive`. Findings never append
    plan tasks; a FAIL kicks back to BUILD under the existing cumulative bound.
+> **Amended 2026-09-06 by #2231:** decision 3's changed-test intersection is refined by adr-2026-09-06-engine-owned-test-quality-scope decisions 2–7. Concrete shared setup/helper effects on opted-in tests can be uncertain candidates even when test bodies are unchanged. Production-only refactors without such evidence remain empty-scope PASS with no reviewer or preflight. A concrete unresolved candidate is not an established empty set: the existing reviewer may resolve its scope, and indeterminacy follows the cause-specific bounded recovery path. Missing tests/markers alone never require new tests or a waiver. Candidate-bearing review may use conservative file selectors for counterfactual evidence, distinct from final review targets.
+
 4. **Contracts preserved:** the engine-stamped `judged` envelope, the three-kind content-anchored
    reference schema (test-quality anchors are `content-region` references), stable finding identity
    and dispositions, the mechanical-fault lane, the fresh-base disposition, the cache key (now
