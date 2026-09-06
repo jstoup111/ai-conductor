@@ -407,11 +407,11 @@ configure_permissions() {
   printf '%s\n' "${HARNESS_PERMISSIONS[@]}" > "$perms_file"
 
   local output
-  output=$(python3 << PYEOF
+  if output=$(python3 - "$settings_file" "$perms_file" <<'PYEOF'
 import json, os
+import sys
 
-settings_path = "$settings_file"
-perms_path = "$perms_file"
+settings_path, perms_path = sys.argv[1:3]
 
 # Read desired permissions
 with open(perms_path) as f:
@@ -442,8 +442,11 @@ with open(settings_path, "w") as f:
 
 print(f"{added} added, {len(harness_perms) - added} already set")
 PYEOF
-  )
-  local permission_write_status=$?
+  ); then
+    permission_write_status=0
+  else
+    permission_write_status=$?
+  fi
   rm -f "$perms_file"
 
   if [ "$permission_write_status" -eq 0 ]; then
@@ -467,11 +470,11 @@ configure_hooks() {
   fi
 
   local output
-  output=$(python3 << PYEOF
+  if output=$(python3 - "$settings_file" "$hooks_dir" <<'PYEOF'
 import json, os
+import sys
 
-settings_path = "$settings_file"
-hooks_dir = "$hooks_dir"
+settings_path, hooks_dir = sys.argv[1:3]
 
 # Read existing settings
 if os.path.exists(settings_path):
@@ -617,13 +620,18 @@ with open(settings_path, "w") as f:
 
 print(f"{added} added, {skipped} already set")
 PYEOF
-  )
+  ); then
+    hooks_write_status=0
+  else
+    hooks_write_status=$?
+  fi
 
-  if [ $? -eq 0 ]; then
+  if [ "$hooks_write_status" -eq 0 ]; then
     ok "Hooks: ${output}"
   else
     warn "Could not configure hooks automatically"
     info "Manually add hooks to ${settings_file}"
+    return 1
   fi
 }
 
