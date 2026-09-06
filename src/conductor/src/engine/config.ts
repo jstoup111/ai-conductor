@@ -1314,7 +1314,7 @@ export function validateConfig(
     }
   }
 
-  // coverage_binding — default-off pre-BUILD criterion-to-Done-when judge.
+  // coverage_binding — default-on pre-BUILD criterion-to-Done-when judge.
   {
     const err = validateCoverageBindingBlock(obj.coverage_binding);
     if (err) return { ok: false, error: err };
@@ -2195,7 +2195,7 @@ function validateCoverageBindingBlock(raw: unknown): ConfigError | null {
 function resolveCoverageBindingBlock(raw: unknown): { judge: { enabled: boolean } } {
   const block = isPlainObject(raw) ? raw as Record<string, unknown> : {};
   const judge = isPlainObject(block.judge) ? block.judge as Record<string, unknown> : {};
-  return { judge: { enabled: typeof judge.enabled === 'boolean' ? judge.enabled : false } };
+  return { judge: { enabled: typeof judge.enabled === 'boolean' ? judge.enabled : true } };
 }
 
 function validateMergeableAutoresolveBlock(raw: unknown): ConfigError | null {

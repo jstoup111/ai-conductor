@@ -3027,8 +3027,15 @@ steps:
   });
 
   describe('coverage_binding config field (Task 8)', () => {
-    it('resolves the omitted judge to disabled', () => {
+    it('resolves the omitted judge to enabled', () => {
       const result = validateConfig({});
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.coverage_binding?.judge?.enabled).toBe(true);
+    });
+
+    it('preserves an explicitly disabled judge', () => {
+      const result = validateConfig({ coverage_binding: { judge: { enabled: false } } });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.config.coverage_binding?.judge?.enabled).toBe(false);
