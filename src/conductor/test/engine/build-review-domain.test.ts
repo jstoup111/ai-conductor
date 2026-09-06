@@ -423,7 +423,16 @@ describe('build-review domain', () => {
         obligationReferences: ['S5.4'], associationReason: 'Pinned source proves the candidate.',
       }, {
         candidateId: 'candidate-excluded', status: 'out-of-scope', exclusionReason: 'Pinned source is unrelated.',
+      }, {
+        candidateId: 'candidate-unresolved', status: 'indeterminate', sourceRegion: candidateRegion,
+        obligationReferences: ['S5.4'], missingEvidenceReason: 'Pinned source cannot establish the marker association.',
       }]).changedTestRegions).toContainEqual({
+        path: candidateRegion.path, contentHash: HASH, display: candidateRegion.display,
+      });
+      expect(buildReviewFindingReferenceContext(projection, [{
+        candidateId: 'candidate-unresolved', status: 'indeterminate', sourceRegion: candidateRegion,
+        obligationReferences: ['S5.4'], missingEvidenceReason: 'Pinned source cannot establish the marker association.',
+      }]).changedTestRegions).not.toContainEqual({
         path: candidateRegion.path, contentHash: HASH, display: candidateRegion.display,
       });
     });
