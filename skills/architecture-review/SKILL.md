@@ -508,7 +508,11 @@ UNEXERCISED entries carry their observation signature)
 ```
 
 For a `BLOCKED` verdict, `## Blocking Findings` is required exactly once and contains one row per
-finding. `Class` is a closed set: exactly `REMEDIABLE` or `DESIGN`. A `REMEDIABLE` row's
+finding. The header row is **copy-exact** — write literally
+`| Finding | Class | Governing clause | Summary |` with those four names in that order. Do not
+rename columns (`ID`, `Description`, `Finding` in the last slot, etc.): the SHIP gate parses this
+table mechanically and any other header halts the feature as unparseable, wasting the whole review
+lap. `Class` is a closed set: exactly `REMEDIABLE` or `DESIGN`. A `REMEDIABLE` row's
 `Governing clause` must name either an ADR filename stem plus its decision number, or a task id from
 this feature's own plan; a REMEDIABLE row without a governing clause is malformed. Write the clause
 as **bare text** — no backticks, no bold — and cite **exactly one** clause per row: the resolver
@@ -570,9 +574,9 @@ echo "verdict: BLOCKED, violated adr-2026-06-29-rate-limit-strategy" > .pipeline
       `.docs/intake/` capture; no as-built finding sends unplanned work back to BUILD
 - [ ] **As-built mode:** BLOCKED on any enabled APPROVED-ADR violation; resolved by code fix or
       human-approved superseding ADR (never silent downgrade)
-- [ ] **As-built mode:** every BLOCKED verdict contains exactly one `## Blocking Findings` table,
-      with `Finding`, `Class`, `Governing clause`, and `Summary` columns; Class is exactly
-      `REMEDIABLE` or `DESIGN`
+- [ ] **As-built mode:** every BLOCKED verdict contains exactly one `## Blocking Findings` table
+      whose header row is literally `| Finding | Class | Governing clause | Summary |` (no renamed
+      columns such as `ID`); Class is exactly `REMEDIABLE` or `DESIGN`
 - [ ] **As-built mode:** every REMEDIABLE blocking finding cites its governing ADR filename stem
       plus decision number, or its task id from this feature's plan; a missing clause is malformed
 - [ ] **As-built mode:** every `Governing clause` cell is bare text (no backticks or bold) naming
