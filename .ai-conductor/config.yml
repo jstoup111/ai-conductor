@@ -10,7 +10,7 @@ reconcile_parked_auto_cleanup: true
 
 # Feature-executor pool width. Above 1 the daemon warns at startup: more rebase
 # kickbacks as siblings land first, and provider spend scales with the width.
-daemon_concurrency: 2
+daemon_concurrency: 3
 
 # Self-host guardrails: declared version freeze (PR #262).
 #
