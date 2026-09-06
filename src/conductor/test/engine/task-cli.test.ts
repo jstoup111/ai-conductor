@@ -697,8 +697,21 @@ describe('runTaskDone', () => {
     });
 
     it('is a no-op when stamp file does not exist', async () => {
-      // Setup: pipeline dir exists, no stamp
+      // Setup: pipeline dir exists, no stamp. The engine state records an
+      // active plan whose task 7 declares Done when checks but carries NO
+      // repair obligation (S2.3): a never-reopened task keeps the documented
+      // idempotent exit 0 and never rewrites task-status.json.
+      await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+        '### Task 7: Legacy task',
+        '**Done when:**',
+        '- Evidence is recorded.',
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
       const tasks = Array.from({ length: 12 }, (_, i) => ({
         id: String(i + 1),
         name: `Task ${i + 1}`,
@@ -709,12 +722,72 @@ describe('runTaskDone', () => {
 
       const originalContent = await fsPromises.readFile(statusPath, 'utf-8');
 
-      // Call runTaskDone for task 7 (no stamp)
-      await runTaskDone(dir, '7');
+      // Call runTaskDone for task 7 (no stamp, no evidence, no obligation)
+      const exitCode = await runTaskDone(dir, '7');
+      expect(exitCode).toBe(0);
 
       // Verify task-status.json is unchanged
       const currentContent = await fsPromises.readFile(statusPath, 'utf-8');
       expect(currentContent).toBe(originalContent);
+    });
+
+    it('still validates an explicitly reopened task whose stamp is missing', async () => {
+      // S2.3 negative: an open repair obligation must not be silently skipped
+      // by the missing-stamp idempotence path.
+      await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+        '### Task 7: Repair current evidence',
+        '**Done when:**',
+        '- Current evidence is recorded.',
+        '',
+      ].join('\n'));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '7', status: 'pending' }],
+      }));
+      const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+      const admitted = await repairs.admit({
+        id: 'round-7', planPath: '.docs/plans/feature.md', taskIds: ['7'],
+        source: { findingId: 'finding', authority: 'build_review', instruction: 'repair' },
+        baseline: { head: 'unavailable', tree: 'tree', resolvedTaskIds: [] },
+      });
+      if (!admitted.ok) throw new Error(admitted.message);
+
+      await expect(runTaskDone(dir, '7')).resolves.toBe(1);
+      expect(await resolveTaskIds(dir, ['7'])).toEqual(new Set());
+      await expect(runTaskDone(dir, '7', [{ index: 1, evidence: 'fresh proof' }])).resolves.toBe(0);
+      expect(await resolveTaskIds(dir, ['7'])).toEqual(new Set(['7']));
+    });
+  });
+
+  describe('malformed present engine state refuses the close (AB-1)', () => {
+    it('exits 1, names the cause, and leaves the current-task stamp in place', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '7', status: 'in_progress' }],
+      }));
+      await fsPromises.writeFile(join(dir, '.pipeline', 'current-task'), '7');
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), '{ not json');
+
+      await expect(runTaskDone(dir, '7')).resolves.toBe(1);
+      expect(stdErr.join('\n')).toMatch(/cannot close task 7/);
+      expect(stdErr.join('\n')).toMatch(/invalid JSON/);
+      await expect(fsPromises.readFile(join(dir, '.pipeline', 'current-task'), 'utf-8')).resolves.toBe('7');
+    });
+
+    it('refuses a missing-stamp close on incompatible repair state instead of treating it as legacy', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+        repairObligations: 'corrupt',
+      }));
+
+      await expect(runTaskDone(dir, '7')).resolves.toBe(1);
+      expect(stdErr.join('\n')).toMatch(/cannot close task 7/);
+      expect(stdErr.join('\n')).toMatch(/incompatible/);
     });
   });
 
