@@ -1,0 +1,15 @@
+# Track: Recoverable gate verdicts
+
+Track: technical
+
+Scope boundary: Small fix for #2067, approved by the operator on 2026-09-06 (delegated). Persist the existing `gate_verdict` event to the run's event ledger, emit that event for the SHIP validation group's members so `prd_audit` is no longer silent, and render a satisfied verdict in the daemon log and the interactive renderer so an operator never has to infer a pass from the absence of a kickback. Two of the issue's desired-outcome bullets are deliberately outside this slice, on the filer's own hypothesis that they belong elsewhere: the wording of a gate report's own summary line (skill text, not engine) and renaming `prd_audit` (a step-name change reaching config keys, skill wiring, and existing state files, which needs its own feature and a migration block). No new event variant, no new ledger, no schema change, no audit-trail change, no OpenTelemetry change.
+
+This is engine observability for the harness's own gate loop; acceptance criteria live in technical stories rather than a PRD.
+
+Approach decision, approved by the operator on 2026-09-06 (delegated): flip the existing sink declaration rather than introduce a verdict artifact reader, and keep the render decision independent of the persistence decision, as the issue's second hypothesis suggests. The rendered line states the verdict in words and carries no provider-completion glyph, so a gate verdict and a provider-completion marker cannot be confused for one another.
+
+Event spine: no new channel. A gate's verdict is an occurrence in time that the `ConductorEvent` union already carries; this change turns on an existing sink and adds a missing emission site on the group-join path. No exception under the event-spine skill is claimed, because no separate write location is introduced.
+
+Scope check: A — consumer-facing (the conductor engine and its renderers ship to every repository that installs the harness; no self-host, release-gate, or repository-local convention is touched); B — n/a (no new skill); C — provider-agnostic (no provider-specific code path). No catalog registration is required.
+
+Verified foundation: `EVENT_SINKS.gate_verdict` in `src/conductor/src/engine/event-sinks.ts` declares `persist: false`, so `EventPersister.start()` never subscribes the type and the run ledger has no record of any verdict. `EventPersister.persist()` computes intervals only for step/group open-and-close types, so a persisted `gate_verdict` changes no interval bookkeeping. Both renderers suppress a satisfied verdict today. The conductor emits `gate_verdict` at two sites — the finish validation fence and the post-run verdict tail — while the SHIP validation-group join computes each member's objective verdict into a local map and emits nothing, which is why `manual_test`, `prd_audit`, and `architecture_review_as_built` have no verdict record on the group path. The existing parallel-validation acceptance fixture already drives a real auto-mode group dispatch with a fake step runner, so the join is reachable without any third-party call.
