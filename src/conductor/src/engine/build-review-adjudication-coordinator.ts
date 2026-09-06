@@ -212,13 +212,20 @@ export async function coordinateBuildReviewAdjudication(input: {
     let exitResolved: ReadonlySet<string>;
     try { exitResolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
     if (options.resolvedAtEntry) exitResolved = new Set([...options.resolvedAtEntry, ...exitResolved]);
+    // Each additional round requires a strictly larger accepted set (`grew`),
+    // and that set is a subset of the finite source list — itself bounded at
+    // 512 by the aggregate projection — so one round per source plus the
+    // initial round is the real settlement bound. The previous hard-coded 3
+    // was unrelated to it: a lap that was still growing hit the cap, took the
+    // terminal branch anyway, and routed from an exit set that predated the
+    // acceptance it had just observed.
+    const maxSettleRounds = sources.length + 1;
     let settleRounds = 0;
     let completedEmitted = false;
     const settledCases: RemediationCaseRecord[] = [];
     const settledRetirements: OperatorRetirementTransition[] = [];
     for (;;) {
     settleRounds += 1;
-    const exitSourceIds = [...liveSourceIdsFor(exitResolved)];
     const acceptedSourceIds = new Set(sources
       .filter((source) => exitResolved.has(source.findingId))
       .map(buildReviewAdjudicationSourceId));
@@ -300,7 +307,11 @@ export async function coordinateBuildReviewAdjudication(input: {
     let latest: ReadonlySet<string>;
     try { latest = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
     const grew = [...latest].some((findingId) => !exitResolved.has(findingId));
-    if (!grew || settleRounds >= 3) {
+    if (!grew || settleRounds >= maxSettleRounds) {
+      // Derive the exit set HERE rather than at the top of the round: this is
+      // the read the route is taken from, so it can never predate the
+      // authority the round just settled under.
+      const exitSourceIds = [...liveSourceIdsFor(exitResolved)];
       const transition = reduceBuildReviewAdjudication({ currentSourceIds: exitSourceIds, cases: settledCases, mechanical: input.mechanical });
       if (!completedEmitted) {
         completedEmitted = true;
@@ -317,7 +328,7 @@ export async function coordinateBuildReviewAdjudication(input: {
       // one more round (the emission is not repeated); the cap still bounds it.
       let atExit: ReadonlySet<string>;
       try { atExit = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
-      if ([...atExit].some((findingId) => !exitResolved.has(findingId)) && settleRounds < 3) {
+      if ([...atExit].some((findingId) => !exitResolved.has(findingId)) && settleRounds < maxSettleRounds) {
         exitResolved = new Set([...exitResolved, ...atExit]);
         continue;
       }
@@ -347,7 +358,19 @@ export async function coordinateBuildReviewAdjudication(input: {
     if (allOperatorResolved(latest)) {
       return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: latest, settleAbsentAttempted: options.settleAbsentAttempted });
     }
-    return fail(detail);
+    // `fail` AWAITS the failure emission, so delivery is one more window in
+    // which an exact acceptance can land — and the caller writes its
+    // needs-human HALT straight from this result with no read of its own.
+    // Read authority once more after that await. The emitted failure stands
+    // (the content failure did occur, exactly as a retired reserved effect
+    // still emits its durable transition); only the obsolete HALT is avoided.
+    const failed = await fail(detail);
+    let afterDelivery: ReadonlySet<string>;
+    try { afterDelivery = await operatorResolvedFindingIds(); } catch { return failed; }
+    if (allOperatorResolved(afterDelivery)) {
+      return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: afterDelivery, settleAbsentAttempted: options.settleAbsentAttempted });
+    }
+    return failed;
   };
   let resolved: ReadonlySet<string>;
   try { resolved = await operatorResolvedFindingIds(); } catch { return { ok: false, detail: 'operator disposition state is unavailable' }; }
