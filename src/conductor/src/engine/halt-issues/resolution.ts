@@ -10,7 +10,7 @@
  */
 
 import path from 'path';
-import { parseCanonicalUtcTimestamp } from './verdict-parser';
+import { parseCanonicalUtcTimestamp } from './verdict-parser.js';
 
 /**
  * File system abstraction for dependency injection
