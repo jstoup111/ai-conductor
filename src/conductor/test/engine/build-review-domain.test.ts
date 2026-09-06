@@ -286,7 +286,7 @@ describe('build-review domain', () => {
   it('maps every coordinator failure reason into the closed infrastructure vocabulary', () => {
     const closed: readonly BuildReviewInfrastructureFailureReason[] = [
       'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact',
-      'identity-mismatch', 'preflight-failed', 'artifact-read-failed', 'artifact-write-failed',
+      'identity-mismatch', 'preflight-failed', 'artifact-read-failed', 'artifact-write-failed', 'scope-incomplete',
     ];
 
     expect(mapBuildReviewCoordinatorFailureReason).toMatchObject({
