@@ -107,6 +107,48 @@ function mixedJudgement(): RemediationCaseJudgement {
   };
 }
 
+// Twelve sources, so the settlement bound must come from the source list
+// rather than a literal round count: acceptances that trickle in one per
+// authority read need more rounds than the retired hard-coded three, which
+// exited on an exit set that predated the acceptances it had just read.
+const staggeredAggregate = joinBuildReviewRubricOutcomes({
+  lapId: 'lap-3' as never,
+  snapshotDigest: 'snapshot-3',
+  results: {
+    testQuality: {
+      kind: 'judged', rubric: 'testQuality', lapId: 'lap-3' as never, snapshotDigest: 'snapshot-3', contractVersion: 'v3', verdict: 'FAIL',
+      findings: [
+        'one', 'two', 'three', 'four', 'five', 'six',
+        'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve',
+      ].map((name) => ({
+        concernKind: 'test-insensitive' as const,
+        summary: `The ${name} changed test is insensitive.`,
+        evidenceLocations: [`test/${name}.test.ts:1`],
+        anchor: {
+          rubric: 'testQuality' as const,
+          locus: { path: `test/${name}.test.ts`, contentHash: `sha256:${name}`, display: `${name} test` },
+        },
+      })),
+    },
+  },
+});
+const staggeredSources = projectBuildReviewAggregateSources(staggeredAggregate)!;
+
+/** One case per source, so each late acceptance retires exactly its own. */
+function staggeredJudgement(): RemediationCaseJudgement {
+  return {
+    mode: 'case-v1', domain: 'build_review',
+    sourceOutcomes: staggeredSources.map((source, index) => ({
+      sourceId: buildReviewAdjudicationSourceId(source), outcome: 'acted' as const, caseRef: `case-${index + 1}`,
+    })),
+    cases: staggeredSources.map((_, index) => ({
+      caseRef: `case-${index + 1}`, disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+      rationale: `Test ${index + 1} needs a focused assertion.`,
+      effect: { kind: 'action' as const, route: 'build' as const, tasks: [{ title: `Repair test ${index + 1}` }] },
+    })),
+  };
+}
+
 function sequentialIds(prefix: string): () => string {
   let next = 0;
   return () => `${prefix}-${(next += 1)}`;
@@ -486,6 +528,93 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(events.some((event) => event.type === 'remediation_semantic_repeat_halt' && event.caseId === 'case-accepted')).toBe(false);
     expect(events.filter((event) => event.type === 'remediation_adjudication_started')).toHaveLength(1);
     expect(events.filter((event) => event.type === 'remediation_adjudication_completed' || event.type === 'remediation_adjudication_failed')).toHaveLength(1);
+  });
+
+  it('settles acceptances that arrive over more rounds than the retired three-round cap', async () => {
+    const root = await projectRoot();
+    const events: ConductorEvent[] = [];
+    // The operator accepts one more finding per authority read once settlement
+    // has begun. Four sources need more settle rounds than the hard-coded three
+    // allowed, and the bound now comes from the source list, so every
+    // acceptance is settled before the route is taken.
+    let settling = false;
+    let accepted = 0;
+    const resolveOperatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> => {
+      if (settling && accepted < staggeredSources.length) accepted += 1;
+      return new Set(staggeredSources.slice(0, accepted).map((source) => source.findingId));
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => staggeredJudgement()), aggregate: staggeredAggregate,
+      resolveOperatorResolvedFindingIds, generateId: sequentialIds('staggered'),
+      emit: async (event) => {
+        events.push(event as ConductorEvent);
+        if (event.type === 'remediation_effect_reserved') settling = true;
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    const settled = await new RemediationCaseStore(root, feature).read();
+    expect(settled.ok).toBe(true);
+    if (!settled.ok) throw new Error(`unexpected case-store failure: ${settled.reason}`);
+    expect(settled.state.cases.map((record) => record.resolution))
+      .toEqual(staggeredSources.map(() => 'resolved'));
+    // One settled lap: the extra rounds must not republish a second completion.
+    expect(events.filter((event) => event.type === 'remediation_adjudication_completed')).toHaveLength(1);
+  });
+
+  it('re-reads authority after the failure emission is delivered and drops the obsolete halt', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [
+        {
+          id: 'case-accepted', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The first test needs a focused assertion.', resolution: 'open',
+          sources: [{ sourceId: buildReviewAdjudicationSourceId(acceptedSource), outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+          effect: { id: 'effect-accepted', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+        },
+        {
+          id: 'case-live', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+          rationale: 'The second test needs a focused assertion.', resolution: 'open',
+          sources: [{ sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+          effect: { id: 'effect-live', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+        },
+      ],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-accepted',
+      cases: [
+        { caseId: 'case-accepted', priority: 'high', tasks: [{ title: 'Repair the first test' }] },
+        { caseId: 'case-live', priority: 'high', tasks: [{ title: 'Repair the second test' }] },
+      ],
+    });
+    await markBuildReviewWorkOrderAttempted(root, feature);
+    const events: RemediationCaseLifecycleEvent[] = [];
+    // Nothing is accepted while the failure is decided; the operator's
+    // acceptance lands during the awaited delivery of the failure occurrence,
+    // which is the last window before the caller writes its needs-human HALT.
+    let failureDelivered = false;
+    const acceptedAtDelivery = new Set([acceptedSource.findingId, liveSource.findingId]);
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => mixedJudgement()), aggregate: mixedAggregate,
+      resolveOperatorResolvedFindingIds: async () => failureDelivered ? acceptedAtDelivery : new Set<string>(),
+      generateId: sequentialIds('post-delivery'), emit: async (event) => {
+        events.push(event);
+        if (event.type === 'remediation_adjudication_failed') failureDelivered = true;
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    // The content failure did occur, so its occurrence stands on the spine —
+    // only the obsolete HALT it would have caused is dropped.
+    expect(events.filter((event) => event.type === 'remediation_adjudication_failed')).toHaveLength(1);
+    const settled = await new RemediationCaseStore(root, feature).read();
+    expect(settled.ok).toBe(true);
+    if (!settled.ok) throw new Error(`unexpected case-store failure: ${settled.reason}`);
+    expect(settled.state.cases.map((record) => record.resolution)).toEqual(['resolved', 'resolved']);
   });
 
   it('retires an accepted action-effect failure but halts for an unaccepted sibling', async () => {
