@@ -44,6 +44,7 @@ const evaluateShipmentEvidenceSpy = vi.fn(async (input: {
   hash: 'test-hash',
   commit: input.candidateCommit,
 }));
+const seedTaskStatusSpy = vi.hoisted(() => vi.fn());
 vi.mock('../../src/engine/halt-pr-rehabilitation.js', () => ({
   readStaleHaltTitle: (...args: Parameters<typeof realReadStaleHaltTitle>) =>
     readStaleHaltTitleSpy(...args),
@@ -56,6 +57,14 @@ vi.mock('../../src/engine/shipment-evidence.js', () => ({
   evaluateShipmentEvidence: (...args: Parameters<typeof evaluateShipmentEvidenceSpy>) =>
     evaluateShipmentEvidenceSpy(...args),
 }));
+vi.mock('../../src/engine/task-seed.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/task-seed.js')>();
+  seedTaskStatusSpy.mockImplementation(actual.seedTaskStatus);
+  return {
+    ...actual,
+    seedTaskStatus: (...args: Parameters<typeof actual.seedTaskStatus>) => seedTaskStatusSpy(...args),
+  };
+});
 
 import {
   STEP_ARTIFACT_CONTRACTS,
@@ -105,6 +114,7 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { verdictProducedByRun } from '../../src/engine/gate-code-validity.js';
+import * as restageWatermark from '../../src/engine/restage-watermark.js';
 
 describe('engine/artifacts', () => {
   let dir: string;
@@ -3506,13 +3516,28 @@ describe('engine/artifacts', () => {
       // its introduction.
       describe('Task 6: fail-closed guards precede the resolveTaskIds union call', () => {
         it('fails with the existing missing-status-file reason before the watermark-aware fold can run', async () => {
-          // A plan exists but projectRoot/planPath are omitted from ctx, so
-          // seeding never runs and no task-status.json is created — the
-          // read guard must reject before ever reaching the resolver.
+          // Suppress this test fixture's seeding so the context-aware branch
+          // reaches the missing-status guard. The active plan enables a
+          // watermark lookup if execution reaches resolveTaskIds.
           await writePlan('### Task 1: Task one\n**Story:** 1\n');
-          const result = await checkStepCompletion(dir, 'build', {});
-          expect(result.done).toBe(false);
-          expect(result.reason).toMatch(/missing .pipeline\/task-status\.json/);
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(
+            join(dir, '.pipeline/engine-state.json'),
+            JSON.stringify({ activePlanPath: '.docs/plans/phase-1.md' }),
+          );
+          seedTaskStatusSpy.mockImplementationOnce(async () => undefined);
+          const readWatermarks = vi.spyOn(restageWatermark, 'readRestageWatermarks');
+          try {
+            const result = await checkStepCompletion(dir, 'build', {
+              projectRoot: dir,
+              planPath: join(dir, '.docs/plans/phase-1.md'),
+            });
+            expect(result.done).toBe(false);
+            expect(result.reason).toMatch(/missing .pipeline\/task-status\.json/);
+            expect(readWatermarks).not.toHaveBeenCalled();
+          } finally {
+            readWatermarks.mockRestore();
+          }
         });
 
         it('fails with the invalid-JSON reason when task-status.json cannot be parsed and re-seeding is bypassed', async () => {
