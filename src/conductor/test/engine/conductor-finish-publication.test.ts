@@ -782,6 +782,10 @@ describe('Conductor FINISH publication routing', () => {
         : { stdout: '' },
       gh: async (args) => {
         if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify(pullRequest) };
+        if (args[0] === 'pr' && args[1] === 'edit') {
+          pullRequest = { ...pullRequest, body: args[args.indexOf('--body') + 1]! };
+          return { stdout: '' };
+        }
         if (args[0] === 'pr' && args[1] === 'ready') {
           pullRequest.isDraft = false;
           return { stdout: '' };
@@ -871,6 +875,10 @@ describe('Conductor FINISH publication routing', () => {
         : { stdout: '' },
       gh: async (args) => {
         if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify(pullRequest) };
+        if (args[0] === 'pr' && args[1] === 'edit') {
+          pullRequest = { ...pullRequest, body: args[args.indexOf('--body') + 1]! };
+          return { stdout: '' };
+        }
         if (args[0] === 'pr' && args[1] === 'ready') {
           pullRequest.isDraft = false;
           return { stdout: '' };

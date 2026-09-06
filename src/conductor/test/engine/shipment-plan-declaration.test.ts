@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   extractShipmentPlanDeclarations,
   upsertShipmentPlanDeclaration,
+  withoutShipmentPlanDeclarations,
 } from '../../src/engine/shipment-plan-declaration.js';
 
 describe('shipment plan declarations', () => {
@@ -78,6 +79,21 @@ describe('shipment plan declarations', () => {
     expect(upsertShipmentPlanDeclaration('Plan: .docs/plans/feature.md\n', 'feature')).toBe(
       'Plan: .docs/plans/feature.md\n',
     );
+  });
+
+  it('removes only recognized declarations when comparing reader-facing prose', () => {
+    const body = [
+      'Overview',
+      'Plan: .docs/plans/feature.md',
+      '> Plan: .docs/plans/quoted-example.md',
+      'Closing note',
+    ].join('\n');
+
+    expect(withoutShipmentPlanDeclarations(body)).toBe([
+      'Overview',
+      '> Plan: .docs/plans/quoted-example.md',
+      'Closing note',
+    ].join('\n'));
   });
 
   it('consolidates distinct declarations once and is idempotent on the repeated result', () => {
