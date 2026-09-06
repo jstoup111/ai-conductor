@@ -32,6 +32,13 @@ multi-worker claim). 9.3b must not build that now, but must not foreclose it eit
 2. **github-issues adapter**: polls `gh issue list --assignee @me --state open` across all
    9.2-registry repos, producing Envelopes with `source="github-issues"`,
    `sourceRef="<owner>/<repo>#<n>"`, `text=title+body`, `hintRepo=<repo>`.
+
+   > **Amended 2026-09-06 by #1479:** `text` is the **inbound-sanitized projection** of
+   > `title+body` — the same join, passed through the inbound trust-boundary seam
+   > (`intake/sanitize-inbound.ts`) before it becomes `Envelope.text`, so tracker-sourced
+   > text is delimited as untrusted and directive-shaped prose outside code fences is
+   > neutralized in place. Dedup, routing, and the claim surface still key on `sourceRef`,
+   > never on `text` (adr-2026-09-06-inbound-intake-trust-boundary).
 3. **Introduce an `IntakeQueue` interface** (`enqueue/claim/ack/release`) with a **file-backed
    implementation now** (`.engineer/inbox/`). A distributed-pool backend is a future drop-in
    implementation of the same interface — **zero** adapter/loop changes when it lands.
