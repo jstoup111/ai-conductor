@@ -20,7 +20,7 @@
  */
 
 import { parseVerdicts } from './verdict-parser.js';
-import { Ledger, LedgerFs, Clock } from './ledger.js';
+import { Ledger, LedgerFs, Clock, mergeVerdicts } from './ledger.js';
 import { stampIssue, closeIssue } from './closer.js';
 import { resolveEntry, FsAbstraction } from './resolution.js';
 import { TrackerClient } from '../tracker-client.js';
@@ -112,26 +112,7 @@ export async function sweep(config: SweepConfig): Promise<SweepResult> {
 
   // Step 3: Load/rebuild ledger
   const ledger = new Ledger(config.ledgerPath, config.fs, config.clock);
-  const ledgerSchema = await ledger.read();
-
-  // Upsert all parsed verdicts into ledger (creates pending entries)
-  // In dryRun mode, don't write yet
-  if (!config.dryRun) {
-    await ledger.upsert(parseResult.entries);
-  } else {
-    // Still merge entries into schema for processing
-    for (const entry of parseResult.entries) {
-      if (!ledgerSchema.entries[entry.issue]) {
-        ledgerSchema.entries[entry.issue] = {
-          issue: entry.issue,
-          repo: entry.repo || config.repo,
-          slug: entry.slug,
-          haltAt: entry.haltAt || config.clock.now().toISOString(),
-          status: 'pending'
-        };
-      }
-    }
-  }
+  const ledgerSchema = mergeVerdicts(await ledger.read(), parseResult.entries);
 
   // Step 4: Process each verdict entry
   const plannedActions: string[] = [];
@@ -140,16 +121,9 @@ export async function sweep(config: SweepConfig): Promise<SweepResult> {
     const issue = verdict.issue;
 
     // Get the ledger entry
-    let entry = ledgerSchema.entries[issue];
+    const entry = ledgerSchema.entries[issue];
     if (!entry) {
-      // Create entry if it doesn't exist
-      entry = {
-        issue,
-        repo: config.repo,
-        slug: verdict.slug,
-        haltAt: verdict.haltAt || config.clock.now().toISOString(),
-        status: 'pending'
-      };
+      continue;
     }
 
     // Quota discipline (C1): resolution is derived entirely from local fs state,
@@ -257,8 +231,6 @@ export async function sweep(config: SweepConfig): Promise<SweepResult> {
 
   // Step 5: Write ledger atomically (unless dryRun)
   if (!config.dryRun) {
-    // Re-create ledger and write (preserves atomic write pattern)
-    const ledgerWriter = new Ledger(config.ledgerPath, config.fs, config.clock);
     // Write the full ledger schema
     const tmpFilename = `.ledger.json.tmp-${Math.random().toString(36).substring(7)}`;
     const tmpPath = config.ledgerPath.replace(/ledger\.json$/, tmpFilename);

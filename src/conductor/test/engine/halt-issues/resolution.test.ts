@@ -1,3 +1,4 @@
+// Covers: task:2
 import { describe, it, expect } from 'vitest';
 import { resolveEntry, Resolution, FsAbstraction } from '../../../src/engine/halt-issues/resolution';
 import { LedgerEntry } from '../../../src/engine/halt-issues/ledger';
@@ -40,6 +41,58 @@ describe('resolution', () => {
     };
 
     const haltAtMs = new Date('2026-07-04T11:58:38.984Z').getTime();
+
+    it.each([
+      '',
+      '2026-07-04T11:58:38',
+      '2026-07-04T11:58:38Z',
+      '2026-07-04T11:58:38.984',
+      '2026-07-04T11:58:38.984+00:00',
+      '2026-02-30T11:58:38.984Z'
+    ])('refuses imprecise halt time %j before accessing evidence', async (haltAt) => {
+      const fs: FsAbstraction = {
+        readFile: async () => {
+          throw new Error('evidence must not be read');
+        },
+        fileExists: async () => {
+          throw new Error('evidence must not be checked');
+        },
+        getFileStats: async () => {
+          throw new Error('evidence must not be statted');
+        }
+      };
+
+      const result = await resolveEntry({ ...baseEntry, haltAt }, '/test-repo', fs);
+
+      expect(result).toEqual({ resolvable: false, reason: 'imprecise-halt-time' });
+    });
+
+    it.each([
+      {
+        evidence: 'processed',
+        path: '/test-repo/.daemon/processed/test-slug.json',
+        content: JSON.stringify({ status: 'shipped', prUrl: 'https://github.com/test-repo/pull/123' })
+      },
+      {
+        evidence: 'shipped-record',
+        path: '/test-repo/.docs/shipped/test-slug.md',
+        content: '---\npr: https://github.com/test-repo/pull/456\n---\n## Shipped'
+      }
+    ])('requires %s evidence to be strictly newer than the precise halt time', async ({ evidence, path, content }) => {
+      for (const [offset, resolvable] of [[-1, false], [0, false], [1, true]] as const) {
+        const fs = new MockFs();
+        fs.setFile(path, content, haltAtMs + offset);
+
+        const result = await resolveEntry(baseEntry, '/test-repo', fs);
+
+        expect(result.resolvable, `${evidence} at halt${offset >= 0 ? '+' : ''}${offset}ms`).toBe(resolvable);
+        if (resolvable) {
+          expect(result.evidence).toBe(evidence);
+        } else {
+          expect(result.reason).toBe('mtime-not-gt-halt');
+        }
+      }
+    });
 
     it('resolves with processed marker when mtime > haltAt', async () => {
       const fs = new MockFs();

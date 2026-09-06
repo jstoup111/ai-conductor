@@ -10,6 +10,7 @@
  */
 
 import path from 'path';
+import { parseCanonicalUtcTimestamp } from './verdict-parser.js';
 
 /**
  * File system abstraction for dependency injection
@@ -97,7 +98,14 @@ export async function resolveEntry(
   repoDir: string,
   fs: FsAbstraction
 ): Promise<Resolution> {
-  const haltAtMs = new Date(entry.haltAt).getTime();
+  const haltAtMs = parseCanonicalUtcTimestamp(entry.haltAt);
+  if (haltAtMs === undefined) {
+    return {
+      resolvable: false,
+      reason: 'imprecise-halt-time'
+    };
+  }
+
   const slug = entry.slug;
 
   // Track if we found evidence but it was guarded by mtime check

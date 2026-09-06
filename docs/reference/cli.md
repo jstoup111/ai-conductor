@@ -845,6 +845,13 @@ ai-conductor halt-issues sweep --repo-dir <dir> --gh-repo <owner/name>
 Parses the halt monitor log, loads or rebuilds the ledger, stamps, resolves, or closes each entry
 against the issue tracker, writes the ledger atomically, and prints a summary.
 
+Automatic closure requires a canonical millisecond UTC halt timestamp (`YYYY-MM-DDTHH:mm:ss.sssZ`)
+and shipping evidence whose modification time is strictly later than that instant. An older, equal,
+missing, or imprecise legacy timestamp remains open and is counted as guarded; the sweep never
+guesses a time or timezone. When the current monitor log supplies a precise timestamp, it replaces a
+legacy truncated ledger value before that same sweep evaluates evidence. Dry runs use the same
+comparison but write neither the ledger nor the issue tracker.
+
 | Flag | Type | Required | Default |
 | --- | --- | --- | --- |
 | `--repo-dir <dir>` | path | yes | — |

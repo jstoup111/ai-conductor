@@ -47,6 +47,31 @@ export interface LedgerSchema {
 }
 
 /**
+ * Merge parsed verdicts into a ledger without discarding lifecycle state.
+ *
+ * Parsed halt evidence is authoritative when present. Missing halt evidence
+ * leaves an existing value intact, while a new entry records the absence as
+ * an empty string so resolution remains safely guarded.
+ */
+export function mergeVerdicts(ledger: LedgerSchema, verdicts: VerdictEntry[]): LedgerSchema {
+  const entries = { ...ledger.entries };
+
+  for (const verdict of verdicts) {
+    const existing = entries[verdict.issue];
+    entries[verdict.issue] = {
+      ...existing,
+      issue: verdict.issue,
+      repo: verdict.repo || existing?.repo || '',
+      slug: verdict.slug,
+      haltAt: verdict.haltAt || existing?.haltAt || '',
+      status: existing?.status || 'pending'
+    };
+  }
+
+  return { ...ledger, entries };
+}
+
+/**
  * Abstraction for file system operations (supports dependency injection for testing)
  */
 export interface LedgerFs {
@@ -155,27 +180,10 @@ export class Ledger {
     // Load existing ledger (or initialize empty)
     const ledger = await this.read();
 
-    // Merge entries by issue number
-    for (const entry of entries) {
-      const issue = entry.issue;
-      const existing = ledger.entries[issue];
-
-      // Preserve existing fields, merge in new ones
-      ledger.entries[issue] = {
-        // Existing entry (if any)
-        ...existing,
-        // New entry data (overwrites matching fields)
-        issue: entry.issue,
-        repo: entry.repo || existing?.repo || '',
-        slug: entry.slug,
-        haltAt: entry.haltAt || existing?.haltAt || '',
-        // Set default status to "pending" if new entry
-        status: existing?.status || 'pending'
-      };
-    }
+    const mergedLedger = mergeVerdicts(ledger, entries);
 
     // Write atomically: tmp file then rename
-    await this.writeAtomic(ledger);
+    await this.writeAtomic(mergedLedger);
   }
 
   /**
