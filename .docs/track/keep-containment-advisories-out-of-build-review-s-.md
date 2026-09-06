@@ -1,0 +1,13 @@
+# Track: Keep containment advisories out of build_review's failure reason
+
+Track: technical
+
+Scope boundary: Small fix for #1651, approved by the operator on 2026-09-06 (delegated). The slice covers where the containment floor's advisory lines are placed inside the `build_review` step result, so a failing lap's own reason opens the output an operator and the retry ladder read. Advisory recording itself, the containment floor's checks, the retry ladder's own budget policy, a future enforcing containment mode, and per-lap deduplication of the advisory recording are outside this slice.
+
+This is internal engine diagnostic behavior; acceptance criteria live in technical stories rather than a PRD.
+
+The operator approved appending the advisory after a failed result's own reason over dropping it entirely on 2026-09-06 (delegated). Appending keeps the advisory in the persisted step record and in the retry hint while freeing the first line for the real cause; dropping it would lose the only place a violation is narrated to a human on a failing lap.
+
+Scope check: A — harness-repo-only (the containment floor is a self-host-era gate this repository enables through its own `.ai-conductor/config.yml`, and no consumer repository runs it); B — n/a (no new skill); C — provider-agnostic (no provider path, variable, or capability is involved). No catalog registration is required. Event spine: no channel is added — the change reorders text inside the existing step result the spine already carries.
+
+Verified foundation: `src/conductor/src/engine/step-runners.ts:2641-2735` runs the containment floor under `scopeContainmentEnforced`, logs each rendered line as a warning, and then applies a `withContainmentAdvisory` closure that unconditionally prepends those lines to any string `output`, passing or failing. `src/conductor/src/engine/per-task-commit-floor.ts:291-302` renders the `Advisory: …` lines and `:139-147` produces a skip-note advisory whenever the floor cannot run. `src/conductor/src/engine/conductor.ts:9021-9042` assigns the whole runner output to `lastError` and to the retry hint, and `src/conductor/src/daemon-cli.ts:2565,2581` renders that text — raw for the failure line, and through `formatRetryReason`'s 120-character single-line collapse in `src/conductor/src/engine/format-retry-line.ts` for the retry line. The reported "consumed retry budget" is therefore a misattribution: the advisory block is fail-soft and never sets `success`, so it cannot cause a retry, but it does occupy the entire visible reason of every retry and of the terminal failure line. The graded aggregate is read back from `.pipeline/build-review.json`, not from this output, so the placement change cannot affect any verdict.
