@@ -176,6 +176,35 @@ describe('resolveOtelConfig', () => {
       }
     });
 
+    it('retains __proto__ as an own resolved header without changing the header record prototype', () => {
+      const previous = process.env.OTEL_TEST_PROTO_HEADER;
+      try {
+        process.env.OTEL_TEST_PROTO_HEADER = 'proto-token';
+        const headers = JSON.parse('{"__proto__":{"env":"OTEL_TEST_PROTO_HEADER"}}');
+        const result = resolveOtelConfig(
+          {
+            otel: {
+              exporter: 'otlp',
+              endpoint: 'http://localhost:4318',
+              headers,
+            },
+          } as never,
+          PIPELINE_DIR,
+        );
+
+        expect(result).toMatchObject({ enabled: true });
+        const resolvedHeaders = (result as { headers: Record<string, string> }).headers;
+        expect(Object.getPrototypeOf(resolvedHeaders)).toBeNull();
+        expect(Object.hasOwn(resolvedHeaders, '__proto__')).toBe(true);
+        expect(Object.getOwnPropertyDescriptor(resolvedHeaders, '__proto__')).toMatchObject({
+          value: 'proto-token',
+        });
+      } finally {
+        if (previous === undefined) delete process.env.OTEL_TEST_PROTO_HEADER;
+        else process.env.OTEL_TEST_PROTO_HEADER = previous;
+      }
+    });
+
     it.each([
       ['a literal credential', { Authorization: 'literal-credential' }, /Authorization.*literal credential/i],
       ['an unknown reference key', { Authorization: { env: 'OTEL_TEST_AUTHORIZATION', secret: true } }, /Authorization.*\{ env:/i],
@@ -201,13 +230,24 @@ describe('resolveOtelConfig', () => {
     });
 
     it.each([
-      ['grpc protocol', { exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc', headers: headerConfig.otel.headers }, /grpc.*headers|headers.*grpc/i],
-      ['file exporter', { exporter: 'file', headers: headerConfig.otel.headers }, /file.*headers|headers.*file/i],
-    ] as const)('refuses headers with the %s', (_caseName, otel, errorPattern) => {
-      const result = resolveOtelConfig({ otel }, PIPELINE_DIR);
-
-      expect(result).toMatchObject({ enabled: false });
-      expect((result as { error?: string }).error).toMatch(errorPattern);
+      ['grpc protocol', { exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc', headers: headerConfig.otel.headers }],
+      ['file exporter', { exporter: 'file', headers: headerConfig.otel.headers }],
+    ] as const)('refuses headers with the %s without exposing their resolved value', (_caseName, otel) => {
+      const previous = process.env.OTEL_TEST_AUTHORIZATION;
+      const sentinel = 'unsupported-transport-sentinel';
+      try {
+        process.env.OTEL_TEST_AUTHORIZATION = sentinel;
+        const result = resolveOtelConfig({ otel }, PIPELINE_DIR);
+        const error = (result as { error?: string }).error ?? '';
+        expect(result).toMatchObject({ enabled: false });
+        expect(error).toMatch(/grpc|file/i);
+        expect(error).toContain('Authorization');
+        expect(error).toContain('OTEL_TEST_AUTHORIZATION');
+        expect(error).not.toContain(sentinel);
+      } finally {
+        if (previous === undefined) delete process.env.OTEL_TEST_AUTHORIZATION;
+        else process.env.OTEL_TEST_AUTHORIZATION = previous;
+      }
     });
 
     it('never includes an environment value in a header-related error', () => {
