@@ -519,14 +519,23 @@ export async function coordinateBuildReviewRubrics(
         currentEngineStamp: input.engineIdentity.engineStamp,
       });
     }
-    if (cache.kind === "hit") {
+    // A semantic cache identity proves only that the frozen input projection
+    // matches.  Re-run the same source-bound result predicate used for a
+    // fresh provider response before reusing the cached judgement: persisted
+    // candidate resolutions and finding anchors are evidence, never cache
+    // authority.  An invalid cached result is an ordinary miss so a fresh
+    // judgement can settle the current frozen scope.
+    const cachedResult = cache.kind === "hit"
+      ? validateBuildReviewDispatchedResult(cache.hit.result, branch.rubric, projection)
+      : undefined;
+    if (cache.kind === "hit" && cachedResult) {
       let result: BuildReviewJudgedResult | undefined;
       try {
         result = validWrittenArtifact(await input.writeArtifact({
           rubric: branch.rubric,
           lapId: projection.lapId,
           snapshotDigest: projection.snapshotDigest,
-          result: cache.hit.result,
+          result: cachedResult,
           provenance: cache.hit.provenance,
         }), branch.rubric, projection);
         resolved.set(branch.rubric, result
