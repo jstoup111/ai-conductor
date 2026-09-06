@@ -43,7 +43,11 @@ import {
   recordedShipmentFindings,
 } from './shipment-association.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
-import { upsertShipmentPlanDeclaration } from './shipment-plan-declaration.js';
+import {
+  extractShipmentPlanDeclarations,
+  upsertShipmentPlanDeclaration,
+  withoutShipmentPlanDeclarations,
+} from './shipment-plan-declaration.js';
 
 export interface ProductionFinishPublicationCoordinator {
   advance(input: {
@@ -430,7 +434,16 @@ export function createProductionFinishPublicationCoordinator(
                 };
                 if (typeof pr.url === 'string') {
                   const halted = prHaltState(pr.title, pr.body, pr.labels);
-                  const revision = `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`;
+                  // The declaration is mechanically maintained shipment
+                  // metadata, not reader-facing prose. Its append/replacement
+                  // must not invalidate the verdict for an otherwise identical
+                  // title/body revision and trigger another provider judgment.
+                  const proseBody = typeof pr.body === 'string'
+                    ? extractShipmentPlanDeclarations(pr.body).length === 0
+                      ? pr.body
+                      : withoutShipmentPlanDeclarations(pr.body).trimEnd()
+                    : pr.body ?? '';
+                  const revision = `${pr.url}\u0000${JSON.stringify([pr.title ?? '', proseBody])}`;
                   proseRevisionByPr.set(pr.url, revision);
                   await seedJudgmentStore();
                   if (authoredPlaceholderProsePendingByPr.delete(pr.url) && !halted) {

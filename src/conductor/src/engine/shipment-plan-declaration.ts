@@ -15,6 +15,22 @@ export function extractShipmentPlanDeclarations(body: string): string[] {
 }
 
 /**
+ * Removes only recognized top-level declarations. Consumers that fingerprint
+ * reader-facing PR prose use this so engine-maintained shipment metadata does
+ * not create a spurious prose revision.
+ */
+export function withoutShipmentPlanDeclarations(body: string): string {
+  const declarations = declarationSpans(body);
+  let result = '';
+  let cursor = 0;
+  for (const declaration of declarations) {
+    result += body.slice(cursor, declaration.start);
+    cursor = declaration.end;
+  }
+  return result + body.slice(cursor);
+}
+
+/**
  * Replaces recognized declarations with one canonical declaration, or appends
  * one when the body has none. Content outside recognized declaration spans is
  * copied byte-for-byte.

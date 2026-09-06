@@ -497,6 +497,8 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
     conductorRoot = await mkdtemp(join(tmpdir(), 'finish-publication-no-merge-'));
     const pipeline = join(conductorRoot, '.pipeline');
     await mkdir(pipeline, { recursive: true });
+    await mkdir(join(conductorRoot, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(conductorRoot, '.docs', 'plans', 'feature.md'), 'plan\n');
     const prUrl = 'https://github.com/acme/widget/pull/1172';
     const githubCalls: string[][] = [];
     let pullRequest: { url: string; title: string; body: string; isDraft: boolean } | undefined;
@@ -531,6 +533,10 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
       }
       if (args[0] === 'pr' && args[1] === 'view' && args[2] === prUrl && pullRequest) {
         return { stdout: JSON.stringify(pullRequest) };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && args[2] === prUrl && pullRequest) {
+        pullRequest.body = args[args.indexOf('--body') + 1]!;
+        return { stdout: '' };
       }
       if (args[0] === 'pr' && args[1] === 'ready' && args[2] === prUrl && pullRequest) {
         pullRequest.isDraft = false;
@@ -747,6 +753,8 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
     await writeState(stateFilePath, state as ConductState);
     await mkdir(join(conductorRoot, '.docs', 'shipped'), { recursive: true });
     await writeFile(join(conductorRoot, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+    await mkdir(join(conductorRoot, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(conductorRoot, '.docs', 'plans', 'feature.md'), 'plan\n');
     const asBuiltReport = join(pipeline, 'architecture-review-as-built.md');
     await writeFile(asBuiltReport, 'Verdict: APPROVED\n');
     // The publication fence evaluates this pre-seeded result in the session
@@ -767,6 +775,10 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
       }
       if (args[0] === 'pr' && args[1] === 'ready' && pullRequest) {
         pullRequest.isDraft = false;
+        return { stdout: '' };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && pullRequest) {
+        pullRequest.body = args[args.indexOf('--body') + 1]!;
         return { stdout: '' };
       }
       throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
