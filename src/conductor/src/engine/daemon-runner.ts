@@ -31,7 +31,7 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { writeHaltMarker } from './halt-marker.js';
-import { writeAutoPark } from './park-marker.js';
+import { deferredAutoParkHaltPresentation } from './auto-park-halt.js';
 import type { OperatorParkedTermination } from './conductor.js';
 
 /**
@@ -94,7 +94,12 @@ export interface FeatureRunnerDeps {
    * aborts the feature (worktree kept) rather than building against a
    * half-prepared environment.
    */
-  prepareWorktree?: (worktree: FeatureWorktree, log?: (message: string) => void, events?: ConductorEventEmitter) => Promise<void>;
+  prepareWorktree?: (
+    worktree: FeatureWorktree,
+    log?: (message: string) => void,
+    events?: ConductorEventEmitter,
+    order?: import('./work-order.js').WorkOrder,
+  ) => Promise<void>;
   /** Run the conductor's gate loop in the worktree to DONE/HALT (finish=open PR). */
   runConductor: (
     worktree: FeatureWorktree,
@@ -155,7 +160,7 @@ export interface FeatureRunnerDeps {
    */
   runGh?: GhRunner;
   /** Clear halt presentation after a verified ship. Injected in tests. */
-  cleanupHaltPresentation?: typeof cleanupHaltPresentation;
+  cleanupHaltPresentation?: typeof import('./pr-labels.js').cleanupHaltPresentation;
   /**
    * FR-9: enroll a shipped PR in the mergeable watch registry.
    * Defaults to the real enrollWatch; injected in tests to assert call order and
@@ -168,6 +173,8 @@ export interface FeatureRunnerDeps {
    * and verify throw-isolation (feature result unaffected by sweep errors).
    */
   sweepMergeableLabels?: (opts: SweepOpts) => Promise<void>;
+  /** WorkOrder executors defer root/.daemon terminal effects to collection. */
+  deferTerminalEffects?: boolean;
   /**
    * Escalate a false-ship outcome by pushing the worktree branch and opening a
    * draft `needs-remediation` PR, preserving the work on origin. Called when an
@@ -315,20 +322,54 @@ export function makeRunFeature(
   const enroll = deps.enrollWatch ?? enrollWatchImpl;
   const sweep = deps.sweepMergeableLabels ?? sweepMergeableLabelsImpl;
   const cleanup = deps.cleanupHaltPresentation ?? cleanupHaltPresentation;
-
-  /** FR-14: best-effort sweep; never throws, never disrupts feature processing. */
-  const maybeSweep = async (): Promise<void> => {
-    if (!deps.projectRoot) return;
-    try {
-      await sweep({
-        projectRoot: deps.projectRoot,
-        log,
-        runGh: deps.runGh,
-        teardownWorktree: deps.teardownWorktree,
+  const runTerminalEffects = async (
+    effects: import('./feature-executor.js').FeatureTerminalEffects,
+    item: BacklogItem,
+    featureLog: (message: string) => void,
+  ): Promise<import('./feature-executor.js').FeatureTerminalEffects | undefined> => {
+    if (deps.deferTerminalEffects) return effects;
+    if (effects.engineerSignal) {
+      // Non-deferred (legacy composition) path: perform the engineer-store
+      // signal here. Best-effort inside emitEngineerSignal — never throws.
+      await emitEngineerSignal({
+        engineerDir: resolveEngineerDir(),
+        eventsContent: effects.engineerSignal.eventsContent,
+        outcome: effects.engineerSignal.outcome,
+        project: deps.project,
+        feature: item.slug,
+        runId: `${Date.now()}-${randomUUID().slice(0, 8)}`,
+        provider: deps.provider,
+        log: featureLog,
       });
-    } catch (err) {
-      log(`[daemon-runner] sweep error: ${err instanceof Error ? err.message : String(err)}`);
     }
+    if (effects.cleanupHaltPresentation && deps.projectRoot) {
+      try {
+        const result = await cleanup(gh, deps.projectRoot, effects.cleanupHaltPresentation.prUrl, featureLog);
+        featureLog(`[daemon-runner] cleanup result: ${result}`);
+      } catch (err) {
+        featureLog(`[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (effects.enrollWatch && deps.projectRoot) {
+      try {
+        await enroll(deps.projectRoot, {
+          prUrl: effects.enrollWatch.prUrl,
+          slug: item.slug,
+          repoCwd: deps.projectRoot,
+        });
+      } catch (err) {
+        featureLog(`[daemon-runner] enrollWatch error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (effects.markProcessed) await deps.markProcessed(item.slug, effects.markProcessed.prUrl);
+    if (effects.sweep && deps.projectRoot) {
+      try {
+        await sweep({ projectRoot: deps.projectRoot, log, runGh: deps.runGh, teardownWorktree: deps.teardownWorktree });
+      } catch (err) {
+        log(`[daemon-runner] sweep error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return undefined;
   };
 
   return async (item: BacklogItem): Promise<FeatureOutcome> => {
@@ -381,9 +422,9 @@ export function makeRunFeature(
               );
               await terminateFeature({
                 worktreePath: worktree.path,
-                projectRoot: deps.projectRoot,
                 reason: triageOutcome.outputTail,
                 park: true,
+                deferAutoPark: true,
                 log: featureLog,
                 triageEvidence: triageOutcome,
                 slug: item.slug,
@@ -394,6 +435,7 @@ export function makeRunFeature(
                 slug: item.slug,
                 status: 'error',
                 reason: triageOutcome.outputTail || 'parked after setup triage',
+                terminalEffects: { autoPark: { reason: triageOutcome.outputTail } },
               };
             }
             // Other triage outcomes (pass, quarantined-pass, fixed-pass) → continue to runConductor
@@ -433,14 +475,15 @@ export function makeRunFeature(
       }
       const outcome = await deps.readOutcome(worktree);
 
-      // Phase 9.1: on daemon completion, emit a structured signal to the
-      // cross-project engineer store. Runs AFTER readOutcome and BEFORE any
-      // teardown. Manual runs (daemon=false) emit nothing.
-      // Best-effort inside emitEngineerSignal — never throws, so it cannot affect
-      // the feature outcome or teardown discipline below.
-      if (deps.daemon) {
-        await emitDaemonSignal(deps, worktree, item, outcome, featureLog);
-      }
+      // Phase 9.1: on daemon completion, request a structured signal to the
+      // cross-project engineer store. The store lives OUTSIDE the feature
+      // worktree, so the write itself crosses the dispatcher-executor seam as
+      // a declarative terminal effect (adr-2026-08-27 decision 1); the
+      // worktree's events.jsonl content is captured here — AFTER readOutcome
+      // and BEFORE any teardown. Manual runs (daemon=false) emit nothing.
+      const engineerSignal = deps.daemon
+        ? await captureEngineerSignal(worktree, item, outcome)
+        : undefined;
 
       if (outcome.done) {
         const shipmentFailure = await shipmentFailureReason(
@@ -453,45 +496,7 @@ export function makeRunFeature(
         );
         if (shipmentFailure === null) {
           // Happy path: outcome is a verified ship (done=true, finishChoice='pr', prUrl != null).
-          // Run the existing ship side effects.
-
-          // FR-16: clear-on-success — verify-after-write cleanup of halt presentation
-          // markers (label, draft status, body marker). Returns 'confirmed' on success,
-          // 'partial' on any residual markers. Best-effort: logged and swallowed so
-          // enroll + teardown still run regardless.
-          if (outcome.prUrl && deps.projectRoot) {
-            try {
-              const cleanupResult = await cleanup(
-                gh,
-                deps.projectRoot,
-                outcome.prUrl,
-                featureLog,
-              );
-              featureLog(`[daemon-runner] cleanup result: ${cleanupResult}`);
-            } catch (err) {
-              featureLog(
-                `[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            }
-          }
-
-          // FR-9: enroll the shipped PR in the mergeable watch registry BEFORE
-          // teardown (worktree path still valid for context). Best-effort: enroll
-          // internally swallows; the outer wrap logs any re-throw so teardown still
-          // runs.
-          if (outcome.prUrl && deps.projectRoot) {
-            try {
-              await enroll(deps.projectRoot, {
-                prUrl: outcome.prUrl,
-                slug: item.slug,
-                repoCwd: deps.projectRoot,
-              });
-            } catch (err) {
-              featureLog(`[daemon-runner] enrollWatch error: ${err instanceof Error ? err.message : String(err)}`);
-            }
-          }
-
-          await deps.markProcessed(item.slug, outcome.prUrl);
+          // Root/.daemon writes are intentionally returned to the dispatcher.
           featureLog(`[daemon-runner] worktree retained at ${worktree.path}`);
           featureLog(`[daemon-runner] retained ${item.slug} — reason: pr-open-awaiting-main`);
 
@@ -504,13 +509,21 @@ export function makeRunFeature(
           // `.daemon/processed/` ledger marker written above.
 
           featureLog(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
-          // FR-14: sweep mergeable labels after feature completes.
-          await maybeSweep();
+          const terminalEffects = await runTerminalEffects({
+            ...(outcome.prUrl ? {
+              cleanupHaltPresentation: { prUrl: outcome.prUrl },
+              enrollWatch: { prUrl: outcome.prUrl },
+            } : {}),
+            markProcessed: { prUrl: outcome.prUrl },
+            sweep: true,
+            ...(engineerSignal ? { engineerSignal } : {}),
+          }, item, featureLog);
           return {
             slug: item.slug,
             status: 'done',
             prUrl: outcome.prUrl,
             costTokens: outcome.costTokens,
+            ...(terminalEffects ? { terminalEffects } : {}),
           };
         }
 
@@ -553,26 +566,26 @@ export function makeRunFeature(
 
         await deps.teardownWorktree(worktree, true);
         featureLog(`✋ ${item.slug} false-ship halted — worktree kept (${reason})`);
-        // FR-14: sweep mergeable labels after feature completes (failed-ship).
-        await maybeSweep();
+        const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog);
         return {
           slug: item.slug,
           status: 'halted',
           reason,
           costTokens: outcome.costTokens,
+          ...(terminalEffects ? { terminalEffects } : {}),
         };
       }
 
       if (outcome.halted) {
         await deps.teardownWorktree(worktree, true); // keep for the human
         featureLog(`✋ ${item.slug} halted — worktree kept (${outcome.reason ?? 'see .pipeline/HALT'})`);
-        // FR-14: sweep mergeable labels after feature completes (halted).
-        await maybeSweep();
+        const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog);
         return {
           slug: item.slug,
           status: 'halted',
           reason: outcome.reason,
           costTokens: outcome.costTokens,
+          ...(terminalEffects ? { terminalEffects } : {}),
         };
       }
 
@@ -594,13 +607,13 @@ export function makeRunFeature(
       events: featureRun?.events,
               });
       await deps.teardownWorktree(worktree, true);
-      // FR-14: sweep mergeable labels after feature completes (error/no-marker).
-      await maybeSweep();
+      const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog);
       return {
         slug: item.slug,
         status: 'error',
         reason: noMarkerReason,
         costTokens: outcome.costTokens,
+        ...(terminalEffects ? { terminalEffects } : {}),
       };
     } catch (err) {
       // Any thrown error (a step crash, or worktree-prep / bin/setup failing) —
@@ -640,6 +653,8 @@ export interface TerminateFeatureOptions {
   worktreePath: string;
   reason: string;
   park: boolean;
+  /** The dispatcher will write the root marker after executor settlement. */
+  deferAutoPark?: boolean;
   log?: (msg: string) => void;
   triageEvidence?: unknown;
   slug?: string;
@@ -647,7 +662,7 @@ export interface TerminateFeatureOptions {
   events?: ConductorEventEmitter;
 }
 
-type AutoParkWriteOutcome = 'not-requested' | 'written' | 'failed';
+type AutoParkWriteOutcome = 'not-requested' | 'deferred';
 
 /**
  * Record an errored feature's diagnostic HALT. A non-parked termination leaves
@@ -657,31 +672,22 @@ export async function terminateFeature({
   worktreePath,
   reason,
   park,
+  deferAutoPark,
   log,
   triageEvidence,
   slug,
-  projectRoot,
   events,
 }: TerminateFeatureOptions): Promise<void> {
-  let autoParkWriteError: string | undefined;
-  const autoParkWriteOutcome: AutoParkWriteOutcome = park && slug
-    ? await writeAutoPark(projectRoot ?? worktreePath, slug, reason)
-      .then(() => 'written' as const)
-      .catch((err) => {
-        autoParkWriteError = err instanceof Error ? err.message : String(err);
-        log?.(`[daemon-runner] auto-park write failed for ${slug}: ${autoParkWriteError}`);
-        return 'failed' as const;
-      })
+  const autoParkWriteOutcome: AutoParkWriteOutcome = park && slug && deferAutoPark
+    ? 'deferred'
     : 'not-requested';
-  const haltReason = autoParkWriteOutcome === 'failed'
-    ? `${reason}\n\nAutomatic park marker write failed: ${autoParkWriteError}\nRun: ai-conductor daemon park ${slug}`
-    : reason;
+  const haltReason = reason;
 
-  const heading = autoParkWriteOutcome === 'written'
-    ? 'feature parked — will not re-dispatch on the next scan'
-    : autoParkWriteOutcome === 'not-requested'
-      ? 'feature errored — will re-dispatch on the next scan'
-      : `feature errored — automatic park failed: ${autoParkWriteError}; run ai-conductor daemon park ${slug}`;
+  const deferredAutoParkPresentation = autoParkWriteOutcome === 'deferred'
+    ? deferredAutoParkHaltPresentation(slug!, 'pending')
+    : undefined;
+  const heading = deferredAutoParkPresentation?.heading
+    ?? 'feature errored — will re-dispatch on the next scan';
   let note = `${heading}\n${haltReason}\n`;
 
   const triage = triageEvidence as any;
@@ -706,12 +712,8 @@ export async function terminateFeature({
     }
   }
 
-  const resumeProcedure = autoParkWriteOutcome === 'written'
-    ?
-      `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
-      `  2. rm .pipeline/HALT\n` +
-      `  3. ai-conductor daemon unpark ${slug}\n` +
-      `  4. Re-queue the feature (restart the daemon if it was excluded this run).\n`
+  const resumeProcedure = deferredAutoParkPresentation
+    ? deferredAutoParkPresentation.resumeProcedure
     :
       `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
       `  2. rm .pipeline/HALT\n` +
@@ -757,35 +759,32 @@ export async function terminateFeature({
 }
 
 /**
- * Emit one engineer signal for a completed daemon feature. Maps the worktree
- * outcome to a `FeatureOutcome`, resolves the engineer dir from the environment
- * (`$AI_CONDUCTOR_ENGINEER_DIR`), reads the worktree's `.pipeline/events.jsonl`,
- * and derives a fresh runId.
- * Best-effort: `emitEngineerSignal` swallows all errors, so this never throws.
+ * Capture the engineer-signal terminal effect for a completed daemon feature.
+ * Maps the worktree outcome to the signal's `FeatureOutcome` shape and reads
+ * the worktree's `.pipeline/events.jsonl` content BEFORE any teardown, so the
+ * dispatcher can perform the cross-project engineer-store write after
+ * collection (adr-2026-08-27 decision 1). Read failures degrade to empty
+ * content — the signal assembles from the outcome alone; this never throws.
  */
-async function emitDaemonSignal(
-  deps: FeatureRunnerDeps,
+async function captureEngineerSignal(
   worktree: FeatureWorktree,
   item: BacklogItem,
   outcome: WorktreeOutcome,
-  log?: (message: string) => void,
-): Promise<void> {
-  const featureOutcome: FeatureOutcome = {
-    slug: item.slug,
-    status: outcome.done ? 'done' : outcome.halted ? 'halted' : 'error',
-    reason: outcome.reason,
-    prUrl: outcome.prUrl,
-    costTokens: outcome.costTokens,
+): Promise<NonNullable<import('./feature-executor.js').FeatureTerminalEffects['engineerSignal']>> {
+  let eventsContent = '';
+  try {
+    eventsContent = await readFile(join(worktree.path, '.pipeline', 'events.jsonl'), 'utf-8');
+  } catch {
+    // Missing/unreadable log → the signal assembles from the outcome alone.
+  }
+  return {
+    outcome: {
+      slug: item.slug,
+      status: outcome.done ? 'done' : outcome.halted ? 'halted' : 'error',
+      reason: outcome.reason,
+      prUrl: outcome.prUrl,
+      costTokens: outcome.costTokens,
+    },
+    eventsContent,
   };
-  const eventsPath = join(worktree.path, '.pipeline', 'events.jsonl');
-  await emitEngineerSignal({
-    engineerDir: resolveEngineerDir(),
-    eventsPath,
-    outcome: featureOutcome,
-    project: deps.project,
-    feature: item.slug,
-    runId: `${Date.now()}-${randomUUID().slice(0, 8)}`,
-    provider: deps.provider,
-    log,
-  });
 }

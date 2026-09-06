@@ -5,7 +5,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { dispatchEngineer } from '../../../src/engine/engineer-cli.js';
-import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 
@@ -31,7 +32,7 @@ async function makeLedger(testDir: string) {
 
 describe('engineer requeue --stale: liveness (Task 12)', () => {
   it('closed-issue stale entry is dropped (forgotten), open one is requeued', async () => {
-    const testDir = `/tmp/requeue-liveness-test-${Date.now()}-${Math.random()}`;
+    const testDir = await mkdtemp(join(tmpdir(), 'requeue-liveness-test-'));
     try {
       const { engDir, ledgerPath, ledger } = await makeLedger(testDir);
 

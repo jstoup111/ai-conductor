@@ -282,6 +282,7 @@ import {
   resolveStepConfig,
   resolveRebaseResolutionAttempts,
   resolveSelfHostConfig,
+  resolveDaemonConcurrency,
   resolveBuildReviewConfig,
   phaseForStep,
 } from './resolved-config.js';
@@ -300,6 +301,7 @@ import {
   snapshotReleaseMetadataBlock,
 } from './release-metadata.js';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
+import { LiveBoundaryCoordinator } from './self-host/live-boundary-coordinator.js';
 import {
   deriveBindSet,
   probeContainment,
@@ -1516,6 +1518,12 @@ export interface ConductorOptions {
   modelPolicy?: ProviderModelPolicy;
   /** Shared provider routing state owned by this conductor run. */
   providerExecution?: ProviderExecutionContext;
+  /**
+   * Resolved daemon executor-pool width. The daemon command layer supplies the
+   * CLI-or-config result; direct callers fall back to the validated config
+   * value. This fences compatibility dispatches that mutate process.env.
+   */
+  effectiveDaemonConcurrency?: number;
   projectRoot: string;
   /** Feature-scoped daemon logger; defaults to console warnings outside a feature run. */
   log?: (message: string) => void;
@@ -1563,6 +1571,8 @@ export interface ConductorOptions {
    * real primitives (`defaultSelfHostGuardrails`).
    */
   selfHostGuardrails?: SelfHostGuardrails;
+  /** Shared daemon owner for root mutations and per-dispatch boundary windows. */
+  liveBoundaryCoordinator?: LiveBoundaryCoordinator;
   /**
    * Maximum auto-retries before a failing step (including artifact miss)
    * escalates to the recovery menu.
@@ -2169,6 +2179,7 @@ export class Conductor {
   private config: HarnessConfig;
   private readonly legacyModelPolicy?: ProviderModelPolicy;
   private readonly providerExecution?: ProviderExecutionContext;
+  private readonly effectiveDaemonConcurrency: number;
   private validationConcurrency: number;
   private projectRoot: string;
   private log?: (message: string) => void;
@@ -2215,6 +2226,7 @@ export class Conductor {
   private selfHost: boolean;
   private baseBranch?: string;
   private guardrails: SelfHostGuardrails;
+  private readonly liveBoundaryCoordinator?: LiveBoundaryCoordinator;
   /** Reusable safety verdicts are valid only within one exact attempt identity. */
   private readonly safetyAttemptCache = new SafetyAttemptCache();
   /**
@@ -3190,6 +3202,8 @@ export class Conductor {
     this.config = opts.config ?? {};
     this.legacyModelPolicy = opts.modelPolicy;
     this.providerExecution = opts.providerExecution;
+    this.effectiveDaemonConcurrency =
+      opts.effectiveDaemonConcurrency ?? resolveDaemonConcurrency(this.config);
     if (!opts.projectRoot) throw new Error('Conductor requires an explicit projectRoot — refusing to default to process.cwd()');
     this.projectRoot = opts.projectRoot;
     this.log = opts.log;
@@ -3203,6 +3217,7 @@ export class Conductor {
     this.selfHost = opts.selfHost ?? false;
     this.baseBranch = opts.baseBranch;
     this.guardrails = opts.selfHostGuardrails ?? defaultSelfHostGuardrails;
+    this.liveBoundaryCoordinator = opts.liveBoundaryCoordinator;
     this.acceptanceRedExec =
       opts.acceptanceRedExec ??
       (async () => {
@@ -5015,6 +5030,23 @@ export class Conductor {
     const preferredBuildProvider = normalizeProviderSelection(stepSelection)[0];
     const sh = selfHostConfig;
 
+    // Compatibility runners do not have ProviderExecutionContext and therefore
+    // still scope provider configuration by mutating process.env below. That
+    // operation is safe only while the daemon is serial. Modern dispatches use
+    // candidate-local invocation env instead and remain eligible for a pool.
+    if (
+      !this.providerExecution &&
+      preferredBuildProvider !== 'codex' &&
+      this.effectiveDaemonConcurrency > 1
+    ) {
+      return {
+        success: false,
+        output:
+          'LEGACY_NO_PROVIDER_EXECUTION_CONCURRENCY_REFUSAL: legacy no-providerExecution dispatch mutates process-global provider environment and cannot run with effective daemon concurrency ' +
+          `${this.effectiveDaemonConcurrency} (requires 1).`,
+      };
+    }
+
     if (!sh.sandboxBuildEnv) {
       return {
         success: false,
@@ -5143,6 +5175,13 @@ export class Conductor {
             },
           )
           : { contained: false as const, reason: 'containment disabled by configuration' };
+        // The daemon owns root mutations. Register the complete fingerprint →
+        // verify lifetime before provisioning the provider so a concurrent
+        // mutation either finishes first or waits for this exact snapshot to
+        // verify. Outside daemon concurrency this seam is intentionally inert.
+        const boundaryWindow = this.liveBoundaryCoordinator
+          ? await this.liveBoundaryCoordinator.openWindow(containment)
+          : undefined;
         const prepareInvocation = (invocation: SelfHostInvocation): SelfHostInvocation => {
           if (!containment.contained) return invocation;
           return { ...invocation, ...wrapForContainment(invocation, bindSet) };
@@ -5155,28 +5194,32 @@ export class Conductor {
         // recorded reason is consumed at the next dispatch boundary, which is
         // where the HALT marker is written and the run stops.
         const verify = async () => {
-          const result = await verifyLiveBoundary(boundary, containment)
-            .catch(() => ({
-              ok: false,
-              reason: 'Live boundary could not be verified.',
-              containedDrift: undefined,
-            }));
-          await this.events.emit(
-            containment.contained
-              ? { type: 'self_host_containment_verdict', contained: true, evidence: containment.evidence }
-              : { type: 'self_host_containment_verdict', contained: false, reason: containment.reason },
-          );
-          if (result.containedDrift) {
-            await this.events.emit({
-              type: 'contained_live_checkout_drift',
-              evidence: result.containedDrift.evidence,
-              attribution: 'concurrent-operator',
-              summary: result.containedDrift.summary,
-            });
-          }
-          if (!result.ok) {
-            this.pendingLiveBoundaryHalt =
-              result.reason ?? 'Live boundary could not be verified.';
+          try {
+            const result = await verifyLiveBoundary(boundary, containment)
+              .catch(() => ({
+                ok: false,
+                reason: 'Live boundary could not be verified.',
+                containedDrift: undefined,
+              }));
+            await this.events.emit(
+              containment.contained
+                ? { type: 'self_host_containment_verdict', contained: true, evidence: containment.evidence }
+                : { type: 'self_host_containment_verdict', contained: false, reason: containment.reason },
+            );
+            if (result.containedDrift) {
+              await this.events.emit({
+                type: 'contained_live_checkout_drift',
+                evidence: result.containedDrift.evidence,
+                attribution: 'concurrent-operator',
+                summary: result.containedDrift.summary,
+              });
+            }
+            if (!result.ok) {
+              this.pendingLiveBoundaryHalt =
+                result.reason ?? 'Live boundary could not be verified.';
+            }
+          } finally {
+            boundaryWindow?.close();
           }
         };
         const featureSlug = this.featureSlug ?? state.feature_desc;

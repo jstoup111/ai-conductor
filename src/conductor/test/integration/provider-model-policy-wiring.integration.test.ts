@@ -264,7 +264,7 @@ it('composes isolated provider execution state for every daemon feature after on
   const compact = daemonSource.replace(/\s+/g, ' ');
   const featureBody = runnerSource.slice(
     runnerSource.indexOf('return async (item: BacklogItem)'),
-    runnerSource.indexOf('async function emitDaemonSignal'),
+    runnerSource.indexOf('async function captureEngineerSignal'),
   );
   const mainRunBody = daemonSource.slice(
     daemonSource.indexOf('const runConductorInWorktree'),

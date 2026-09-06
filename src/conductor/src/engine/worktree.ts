@@ -6,6 +6,23 @@ import { promisify } from 'util';
 const execFile = promisify(execFileCb);
 
 /**
+ * Serializes git worktree lifecycle mutations for one dispatcher. Git stores
+ * every linked worktree's bookkeeping under the primary checkout's shared
+ * `.git`, so concurrent add/remove/prune requests must not overlap.
+ */
+export class WorktreeLifecycleQueue {
+  private tail: Promise<void> = Promise.resolve();
+
+  run<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(operation);
+    // A rejected operation is reported to its caller but cannot poison later
+    // lifecycle requests.
+    this.tail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+}
+
+/**
  * Run a git command in the given directory, returning stdout.
  */
 async function git(cwd: string, ...args: string[]): Promise<string> {
@@ -83,8 +100,10 @@ export class WorktreeManager {
       // If worktree remove fails (e.g., already removed), clean up manually
       const { rm } = await import('fs/promises');
       await rm(worktreePath, { recursive: true, force: true });
-      // Prune stale worktree entries
-      await git(this.projectRoot, 'worktree', 'prune');
+      // Reap only this failed cleanup's registration. `git worktree prune`
+      // scans the entire shared git dir and is therefore unsafe here: another
+      // slug may be racing through its own lifecycle.
+      await removeStaleWorktreeRegistration(this.projectRoot, worktreePath);
     }
 
     // Delete the branch
@@ -161,6 +180,19 @@ export class WorktreeManager {
     }
 
     return results;
+  }
+}
+
+/**
+ * Best-effort targeted cleanup for a worktree whose directory was already
+ * removed. Unlike `git worktree prune`, this command names the one requested
+ * worktree and cannot inspect or reap sibling registrations.
+ */
+async function removeStaleWorktreeRegistration(projectRoot: string, worktreePath: string): Promise<void> {
+  try {
+    await git(projectRoot, 'worktree', 'remove', '--force', worktreePath);
+  } catch {
+    // The entry may already have been removed by an earlier failed cleanup.
   }
 }
 

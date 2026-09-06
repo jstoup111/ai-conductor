@@ -216,7 +216,7 @@ describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
     expect({ dispatched, logs, activePredicateCalls, inactivePredicateCalls }).toEqual({
       dispatched: [expect.objectContaining({ slug: 'widget' })],
       logs: [
-        'outcome: pr=https://github.com/acme/widget/pull/1 stage=eligibility result=skipped(active feature run for widget; resolution deferred)',
+        'outcome: pr=https://github.com/acme/widget/pull/1 stage=eligibility result=skipped(active work claim for widget; resolution worktree deferred)',
       ],
       activePredicateCalls: ['widget'],
       inactivePredicateCalls: ['widget'],

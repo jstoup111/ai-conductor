@@ -38,7 +38,9 @@ import { discoverBacklog } from '../../src/engine/daemon-backlog.js';
 import {
   getProvenanceType,
   removeOperatorPark,
+  writeAutoPark,
 } from '../../src/engine/park-marker.js';
+import { amendDeferredAutoParkHaltAtWorktree } from '../../src/engine/auto-park-halt.js';
 import { reconcileParkedFeatures } from '../../src/engine/park-reconciliation.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
@@ -172,7 +174,11 @@ describe('automatic park termination — real runner to durable daemon consumers
     };
   }
 
-  async function runTriagePark(reason: string, record = freshRecord()) {
+  async function runTriagePark(
+    reason: string,
+    record = freshRecord(),
+    applyTerminalEffects = true,
+  ) {
     const run = makeRunFeature(depsFor({
       record,
       prepareError: new SetupFailureError('setup failed', reason),
@@ -183,7 +189,15 @@ describe('automatic park termination — real runner to durable daemon consumers
         preservedPaths: ['tmp/setup-debug.log'],
       },
     }));
-    return { result: await run(ITEM), record };
+    const result = await run(ITEM);
+    if (applyTerminalEffects && result.terminalEffects?.autoPark) {
+      try {
+        await writeAutoPark(projectRoot, result.slug, result.terminalEffects.autoPark.reason);
+      } catch (err) {
+        record.logs.push(`[daemon-runner] auto-park write failed for ${result.slug}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return { result, record };
   }
 
   beforeEach(async () => {
@@ -261,18 +275,22 @@ describe('automatic park termination — real runner to durable daemon consumers
     await mkdir(parkedDir, { recursive: true });
     await chmod(parkedDir, 0o555);
 
-    const { result, record } = await runTriagePark('setup still broken');
+    const { result, record } = await runTriagePark('setup still broken', freshRecord(), false);
+    await amendDeferredAutoParkHaltAtWorktree(
+      worktreePath,
+      SLUG,
+      new Error('EACCES: permission denied writing auto-park marker'),
+    );
 
     expect(result.status).toBe('error');
     expect(await exists(markerPath())).toBe(false);
     const halt = await readFile(haltPath(), 'utf8');
     expect(halt).toMatch(/^feature errored — automatic park failed/i);
-    expect(halt).toMatch(/EACCES|permission denied/i);
+    expect(halt).toContain('permission denied');
     expect(halt).toContain(`ai-conductor daemon park ${SLUG}`);
-    expect(halt).not.toContain('parked for human inspection');
-    expect(record.logs.some((line) =>
-      line.includes(SLUG) && /park.*write.*fail/i.test(line),
-    )).toBe(true);
+    expect(record.logs).toEqual([
+      '[daemon-runner] triage outcome: park, erroring feature — setup still broken',
+    ]);
 
     await chmod(parkedDir, 0o755);
     expect(await discoverSlugs()).toContain(SLUG);

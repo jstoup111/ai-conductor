@@ -18,6 +18,7 @@ import {
   runAcceptanceGuards,
   runSuiteGate,
   pushRefreshedBranch,
+  type ResolveWorktreeLiveness,
 } from './autoresolve.js';
 import { makeGitRunner } from './rebase.js';
 import { execa } from 'execa';
@@ -418,6 +419,11 @@ export const productionCiFixRunner: CiFixRunner = {
  * @param deps.fixRunner The injected {@link CiFixRunner} seam
  * @param deps.suiteCommand Optional suite command forwarded to {@link runSuiteGate}.
  *                           Undefined/empty → suite gate is a noop pass.
+ * @param deps.liveness Optional dispatcher-owned liveness seam forwarded to
+ *                      {@link withResolveWorktree}: `worktreeLifecycle`
+ *                      single-flights the transient worktree add/remove through
+ *                      the one lifecycle queue, and `isFeatureInFlight` refuses
+ *                      removal while the slug holds an active work claim.
  * @param logger Optional logging function for abort/error messages
  * @returns CiFixOutcome describing the result
  */
@@ -428,6 +434,7 @@ export async function runCiFix(
   deps: {
     fixRunner: CiFixRunner;
     suiteCommand?: string;
+    liveness?: ResolveWorktreeLiveness;
   },
   logger?: (msg: string) => void,
 ): Promise<CiFixOutcome> {
@@ -523,7 +530,7 @@ export async function runCiFix(
 
       logOutcome(log, prUrl, 'ci-fix-lease-push', 'refreshed');
       return fixOutcome;
-    });
+    }, undefined, deps.liveness ?? {});
 
     return outcome;
   } catch (err) {

@@ -179,10 +179,10 @@ async function probeBehindOrigin(
  * from a possibly-stale working tree (which diverged whenever local lagged
  * origin), the daemon keeps its local default branch current and builds from it.
  *
- * Called on the daemon's idle poll ONLY (`refresh === true`) — never while
- * features are in flight — so an in-flight build is never advanced mid-run. It
- * also never touches worktree checkouts: those are separate working trees, so a
- * fast-forward of the main checkout cannot disturb a running feature.
+ * Called through the dispatcher maintenance policy when `refresh === true`,
+ * including a free slot while other executors run. In-flight orders pin their
+ * base SHA and this operation never touches worktree checkouts, so advancing
+ * the main checkout cannot re-base or otherwise disturb a running feature.
  *
  * SAFE by construction — side-effecting but it never clobbers operator state and
  * NEVER throws:
@@ -383,6 +383,22 @@ export async function fastForwardRoot(
 
         // Emit full WARN if fingerprint changed or if this is the first call
         if (shouldEmitFull) {
+          if (plan.reason === 'no common candidate branch explains all files') {
+            const dirtyEntries = plan.classifications?.map(({ path }) => path).sort() ?? [];
+            const candidateBranches = [
+              ...new Set(
+                plan.classifications?.flatMap(({ allExplainedBy, explainedBy }) =>
+                  allExplainedBy?.length ? allExplainedBy : explainedBy ? [explainedBy] : [],
+                ) ?? [],
+              ),
+            ].sort();
+            log(
+              `WARN FAST_FORWARD_REFUSED_MULTI_BRANCH_LEAK: all-or-nothing heal refused; ` +
+                `dirty entries: ${dirtyEntries.join(', ')}; ` +
+                `candidate branches: ${candidateBranches.join(', ')}; ` +
+                `no files restored or deleted; skipping fast-forward.`,
+            );
+          }
           const warnMsg = renderLeakSuspectWarn(status.stdout, plan);
           log(warnMsg);
         } else {
@@ -1135,7 +1151,14 @@ export async function discoverBacklog(
     // A fresh worktree is cut from the (now fast-forwarded) default branch, so the
     // vetted stories/plan physically exist in it already — the item only needs to
     // carry the slug (+ tier + sourceRef + track); no working-tree paths to copy.
-    items.push({ slug, tier, ...(sourceRef ? { sourceRef } : {}), ...(track ? { track } : {}) });
+    items.push({
+      slug,
+      planPath: planRel,
+      storiesPath: storiesRel,
+      tier,
+      ...(sourceRef ? { sourceRef } : {}),
+      ...(track ? { track } : {}),
+    });
   }
 
   // Dependency gate — the final gauntlet step, run AFTER content eligibility and

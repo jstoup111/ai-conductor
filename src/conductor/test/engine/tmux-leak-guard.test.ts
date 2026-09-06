@@ -17,9 +17,36 @@ import {
   snapshotDaemonSessions,
   isTmpdirRooted,
   sessionPaneCwd,
+  makeTmuxRunner,
+  TMUX_COMMAND_TIMEOUT_MS,
   type TmuxRunner,
 } from '../tmux-leak-guard.js';
 import { applyTeardownDecision } from '../global-setup.js';
+
+describe('makeTmuxRunner — bounded invocation (2026-08-30 unresponsive-server wedge)', () => {
+  it('kills a client that never answers and classifies it as spawnError (fail closed)', () => {
+    // Stand-in for a tmux client waiting forever on a wedged server: a child
+    // that sleeps far past the timeout. Without the timeout this spawnSync
+    // blocks the whole globalSetup — the exact 0-CPU test-suite hang.
+    const runner = makeTmuxRunner({ command: 'sleep', timeoutMs: 500 });
+
+    const started = Date.now();
+    const result = runner(['30']);
+
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(result).toEqual({ code: 1, stdout: '', stderr: '', spawnError: true });
+  });
+
+  it('a timed-out listing degrades the snapshot to failed:true, never a trusted empty', () => {
+    const runner = makeTmuxRunner({ command: 'sleep', timeoutMs: 500 });
+    expect(snapshotDaemonSessions(() => runner(['1']))).toEqual({ sessions: [], failed: true });
+  });
+
+  it('still returns clean results for a fast, well-behaved command', () => {
+    const runner = makeTmuxRunner({ command: 'true', timeoutMs: TMUX_COMMAND_TIMEOUT_MS });
+    expect(runner([])).toEqual({ code: 0, stdout: '', stderr: '' });
+  });
+});
 
 describe('isTmpdirRooted (#437) — TR-2 tmpdir cwd corroboration', () => {
   it('is true for os.tmpdir() itself', () => {

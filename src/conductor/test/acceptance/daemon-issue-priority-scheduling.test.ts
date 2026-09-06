@@ -37,6 +37,7 @@ import { discoverBacklog, type BacklogTreeSource, type DiscoverBacklogOpts } fro
 import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daemon-work-source.js';
 import { scanInheritedState, renderDashboard, type ScanInheritedStateDeps } from '../../src/engine/daemon-dashboard.js';
 import { pickEligible, type PickEligibleCtx, type BacklogItem } from '../../src/engine/daemon.js';
+import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 
 // `backlog-priority.ts` does not exist yet (pre-implementation). It is loaded
 // via a per-test dynamic import (mirrors the pattern already used in
@@ -504,9 +505,11 @@ describe('Flow D — priority never overrides eligibility, park, or dedup', () =
     const ordered = orderBacklog([highItem, lowItem], resolution); // high sorts first
 
     const ctx: PickEligibleCtx = {
-      inFlight: { has: () => false },
-      parked: new Set(['high-slug']), // previously halted by a human
-      started: new Set(),
+      claims: (() => {
+        const claims = new InMemoryWorkClaims();
+        claims.park('high-slug');
+        return claims;
+      })(),
       isHalted: async (slug) => slug === 'high-slug', // still parked
     };
 
@@ -554,11 +557,11 @@ describe('Flow D — priority never overrides eligibility, park, or dedup', () =
     const ordered = orderBacklog([highItem, lowItem], resolution); // high sorts first
 
     const ctx: PickEligibleCtx = {
-      inFlight: {
-        has: (slug) => slug === 'high-in-flight', // high item is currently in-flight
-      },
-      parked: new Set(),
-      started: new Set(),
+      claims: (() => {
+        const claims = new InMemoryWorkClaims();
+        claims.claim('high-in-flight');
+        return claims;
+      })(),
     };
 
     const picked = await pickEligible({ items: ordered }, ctx);

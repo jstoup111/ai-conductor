@@ -193,7 +193,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
     if (ts.isCallExpression(node)) {
       const callee = node.expression.getText(runnerFile);
       if (
-        ['deps.runSetupTriage', 'deps.runConductor', 'emitDaemonSignal'].includes(
+        ['deps.runSetupTriage', 'deps.runConductor', 'captureEngineerSignal'].includes(
           callee,
         )
       ) {
@@ -254,7 +254,9 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
     contextFlow: [
       'deps.runSetupTriage:featureLog',
       'deps.runConductor:providerExecution',
-      'emitDaemonSignal:featureLog',
+      // The engineer signal is captured in the executor (no provider context)
+      // and emitted on the dispatcher side of the seam with the feature log.
+      'captureEngineerSignal:outcome',
     ],
   });
 });

@@ -12,6 +12,7 @@ import { parseIntakeSourceRef } from './artifacts.js';
 import { runProjectTeardown } from './worktree-prepare.js';
 import { loadConfig } from './config.js';
 import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
+import type { WorktreeLifecycleQueue } from './worktree.js';
 
 export interface ReconcileMergedParkOptions {
   projectRoot: string;
@@ -27,6 +28,7 @@ export interface ReconcileMergedParkOptions {
   teardownTimeoutSeconds?: number;
   /** Whether project teardown output should be logged. */
   verbose?: boolean;
+  worktreeLifecycle?: WorktreeLifecycleQueue;
 }
 
 export interface ReconcileMergedParkOutcome {
@@ -98,6 +100,7 @@ export interface ReconcileParkedFeaturesOptions {
   teardownTimeoutSeconds?: number;
   /** Whether project teardown output should be logged. */
   verbose?: boolean;
+  worktreeLifecycle?: WorktreeLifecycleQueue;
 }
 
 const SINGLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -480,6 +483,7 @@ export async function reconcileParkedFeatures(
         disposeHaltWatcher: opts.disposeHaltWatcher,
         teardownTimeoutSeconds: opts.teardownTimeoutSeconds,
         verbose: opts.verbose,
+        worktreeLifecycle: opts.worktreeLifecycle,
       });
       if (outcome.refusal === undefined) {
         counts.reconciled++;
@@ -657,7 +661,13 @@ export async function reconcileMergedPark(
     );
     await runProjectTeardown(worktreePath, opts.teardownLog ?? opts.log, { timeoutSeconds, verbose: opts.verbose });
     try {
-      await runGit(['worktree', 'remove', '--force', worktreePath], { cwd: opts.projectRoot });
+      if (opts.worktreeLifecycle) {
+        await opts.worktreeLifecycle.run(() =>
+          runGit(['worktree', 'remove', '--force', worktreePath], { cwd: opts.projectRoot }),
+        );
+      } else {
+        await runGit(['worktree', 'remove', '--force', worktreePath], { cwd: opts.projectRoot });
+      }
     } catch {
       // A removal failure on a path git actually owns is a real failure. A path
       // git never registered is a plain leftover directory, safe to delete once

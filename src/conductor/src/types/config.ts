@@ -567,6 +567,12 @@ export interface HarnessConfig {
    */
   validation_concurrency?: number;
   /**
+   * Maximum number of feature executors the daemon may run concurrently.
+   * Absent → one executor. Values must be positive integers; validation rejects
+   * invalid values rather than silently clamping them.
+   */
+  daemon_concurrency?: number;
+  /**
    * Harness self-host guardrails (adr-2026-06-30-self-host-detection-seam):
    * activation override + per-gate toggles. Absent → auto-detect, all gates on
    * (the safe default). Scoped to harness self-builds; no effect on other repos.

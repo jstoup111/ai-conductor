@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { execa } from 'execa';
+import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import type { ConductState, ProviderAttemptEvent, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -3845,7 +3846,21 @@ TIER: M`,
             }) };
           }),
         };
+        // AB-1 (Task 20): every shared-`.git` worktree mutation the preflight
+        // issues must flow through the dispatcher-owned lifecycle queue, so a
+        // concurrent slug's add/remove/prune can never overlap it.
+        let queueDepth = 0;
+        const queuedMutations: string[] = [];
+        const worktreeLifecycle = new WorktreeLifecycleQueue();
+        const originalRun = worktreeLifecycle.run.bind(worktreeLifecycle);
+        worktreeLifecycle.run = (operation) => originalRun(async () => {
+          queueDepth += 1;
+          try { return await operation(); } finally { queueDepth -= 1; }
+        });
         const gitRunner = async (args: string[]) => {
+          if (args[0] === 'worktree' && (args[1] === 'add' || args[1] === 'remove')) {
+            queuedMutations.push(queueDepth > 0 ? `${args[1]}:queued` : `${args[1]}:unqueued`);
+          }
           if (args[0] === 'worktree' && args[1] === 'add') checkoutRoot = args[3];
           if (args[0] === 'worktree' && args[1] === 'remove') return { exitCode: 0, stdout: '', stderr: '' };
           const result = await execa('git', args, { cwd: featureRoot, reject: false });
@@ -3855,6 +3870,7 @@ TIER: M`,
         process.env[selectorMarkerEnv] = selectorMarker;
         const runner = new DefaultStepRunner(provider, 'checkout-proof', featureRoot, {
           gitRunner,
+          worktreeLifecycle,
           planPath: join(featureRoot, '.docs/plans/feature.md'),
           pipelineDir: join(featureRoot, '.pipeline'),
           config: { test_suite: { scoped_command: 'node {selectors}' }, build_review: {
@@ -3877,6 +3893,7 @@ TIER: M`,
         // classification plus a bounded excerpt, never a verdict.
         expect(observedProjections[0]).toMatchObject({ preflight: { classification: 'nonzero-exit' } });
         expect(typeof observedProjections[0].preflight.excerpt).toBe('string');
+        expect(queuedMutations).toEqual(['add:queued', 'remove:queued']);
       } finally {
         if (priorSelectorMarker === undefined) delete process.env[selectorMarkerEnv];
         else process.env[selectorMarkerEnv] = priorSelectorMarker;
