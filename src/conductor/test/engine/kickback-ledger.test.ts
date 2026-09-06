@@ -17,6 +17,7 @@ import {
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   recordGrowth,
+  settleRemediationRound,
   readGrowth,
   readKickbackLedger,
   writeKickbackLedger,
@@ -33,6 +34,22 @@ describe('kickback-ledger', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it('settles a round receipt once while preserving sibling gate state', async () => {
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: { sibling: { count: 2, cumulative: 2, treeHash: null, lastReason: 'keep', priorVerdict: true, resolvedBefore: 4 } },
+      growth: { authored: 3, added: 1, byGate: { prd_audit: 1 } },
+    });
+    await expect(settleRemediationRound(dir, 'round-1', ['prd_audit', 'architecture_review_as_built']))
+      .resolves.toEqual({ settled: true });
+    await expect(settleRemediationRound(dir, 'round-1', ['prd_audit', 'architecture_review_as_built']))
+      .resolves.toEqual({ settled: false });
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { sibling: { count: 2 }, prd_audit: { laps: 1 }, architecture_review_as_built: { laps: 1 } },
+      growth: { added: 1 }, settlementReceipts: { 'round-1': { gates: ['prd_audit', 'architecture_review_as_built'] } },
+    });
   });
 
   it('returns an empty ledger when the ledger file is absent', async () => {

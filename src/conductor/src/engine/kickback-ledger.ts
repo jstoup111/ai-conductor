@@ -63,6 +63,7 @@ export interface KickbackLedger {
   gates: Record<string, KickbackGateEntry>;
   growth?: PlanGrowthRecord;
   pendingAsBuiltRemediationFindings?: PendingAsBuiltRemediationFinding[];
+  settlementReceipts?: Record<string, { gates: string[] }>;
 }
 
 type PersistedKickbackGateEntry = Omit<KickbackGateEntry, 'cumulative' | 'mechanicalFaults'> & {
@@ -75,6 +76,7 @@ interface PersistedKickbackLedger {
   gates: Record<string, PersistedKickbackGateEntry>;
   growth?: PlanGrowthRecord;
   pendingAsBuiltRemediationFindings?: PendingAsBuiltRemediationFinding[];
+  settlementReceipts?: Record<string, { gates: string[] }>;
 }
 
 export const KICKBACK_LEDGER_PATH = '.pipeline/kickback-ledger.json';
@@ -224,7 +226,34 @@ function isKickbackLedger(value: unknown): value is PersistedKickbackLedger {
     (
       ledger.pendingAsBuiltRemediationFindings === undefined ||
       isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
-    );
+    ) && (ledger.settlementReceipts === undefined ||
+      (typeof ledger.settlementReceipts === 'object' && ledger.settlementReceipts !== null &&
+        !Array.isArray(ledger.settlementReceipts) && Object.entries(ledger.settlementReceipts).every(([key, receipt]) =>
+          key.trim().length > 0 && typeof receipt === 'object' && receipt !== null &&
+          Array.isArray((receipt as { gates?: unknown }).gates) &&
+          (receipt as { gates: unknown[] }).gates.every((gate) => typeof gate === 'string' && gate.trim().length > 0))));
+}
+
+/** Atomically record one admitted round's gate charges; replay is a no-op. */
+export async function settleRemediationRound(
+  projectRoot: string,
+  receiptId: string,
+  gates: readonly string[],
+): Promise<{ settled: boolean }> {
+  const ledger = await readKickbackLedger(projectRoot);
+  if (ledger.settlementReceipts?.[receiptId]) return { settled: false };
+  const uniqueGates = [...new Set(gates)];
+  const nextGates = { ...ledger.gates };
+  for (const gate of uniqueGates) {
+    const current = nextGates[gate] ?? { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 };
+    nextGates[gate] = { ...current, laps: (current.laps ?? 0) + 1 };
+  }
+  await writeKickbackLedger(projectRoot, {
+    ...ledger,
+    gates: nextGates,
+    settlementReceipts: { ...ledger.settlementReceipts, [receiptId]: { gates: uniqueGates } },
+  });
+  return { settled: true };
 }
 
 function normalizeKickbackLedger(ledger: PersistedKickbackLedger): KickbackLedger {

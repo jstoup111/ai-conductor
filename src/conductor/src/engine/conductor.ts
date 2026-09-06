@@ -254,6 +254,7 @@ import {
   readGrowth,
   readKickbackLedger,
   recordGrowth,
+  settleRemediationRound,
   writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
@@ -4540,7 +4541,7 @@ export class Conductor {
     // Both appends and existing-task rounds spend a gate lap only after the
     // route has successfully admitted its work. The latter has no append
     // attempt, but still needs this durable ledger update.
-    if (appendAttempted) {
+    if (appendAttempted && resolvedExistingTaskIdsByGapId.size === 0) {
       if (prdAuditBudget) await recordRemediationGateAppend(
         this.projectRoot,
         prdAuditBudget,
@@ -4727,6 +4728,18 @@ export class Conductor {
             kind: 'halt',
             haltClass: 'needs-human',
             detail: `existing-task remediation could not persist admission: ${admission.message}`,
+          };
+        }
+        try {
+          await settleRemediationRound(
+            this.projectRoot,
+            admission.obligation.id,
+            remediationEvidenceSources.map((provenance) => provenance.gate),
+          );
+        } catch (error) {
+          return {
+            kind: 'halt', haltClass: 'needs-human',
+            detail: `existing-task remediation could not settle its admitted round: ${error instanceof Error ? error.message : String(error)}`,
           };
         }
         this.pendingNoOpBaselines.clear();
