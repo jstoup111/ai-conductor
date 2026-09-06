@@ -80,6 +80,15 @@ describe('renderDaemonEvent', () => {
     })).toEqual(['· ⚠ pipeline tail malformed-line: .pipeline/pipeline-events.jsonl at byte 42']);
   });
 
+  it('renders inbound intake sanitization with its source and category counts', () => {
+    expect(lines({
+      type: 'intake_inbound_sanitized',
+      sourceRef: 'owner/repo#12',
+      neutralizations: [{ category: 'agent-directive', count: 2 }],
+      digest: 'a'.repeat(64),
+    })).toEqual(['· intake sanitized: owner/repo#12 — agent-directive: 2']);
+  });
+
   it('renders exact operator park boundaries without lifecycle semantics', () => {
     expect([
       lines({
