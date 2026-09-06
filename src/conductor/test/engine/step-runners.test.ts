@@ -4131,6 +4131,28 @@ TIER: M`,
       expect(provider.invoke).not.toHaveBeenCalled();
     });
 
+    it('stops a disabled review before plan resolution or frozen-input assembly', async () => {
+      const provider = createMockProvider();
+      const gitRunner = vi.fn(async () => {
+        throw new Error('disabled review must not read review inputs');
+      });
+      const coordinate = vi.fn(async () => ({ success: true, output: 'unexpected coordinator dispatch' }));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner,
+        planPath,
+        config: { build_review: { enabled: false } } as HarnessConfig,
+        buildReviewCoordinator: coordinate,
+      });
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true,
+        output: 'build_review disabled',
+      });
+      expect(gitRunner).not.toHaveBeenCalled();
+      expect(coordinate).not.toHaveBeenCalled();
+      expect(provider.invoke).not.toHaveBeenCalled();
+    });
+
     afterEach(async () => {
       await rm(dir, { recursive: true, force: true });
     });
