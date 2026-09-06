@@ -1,4 +1,4 @@
-// Covers: task:3, task:6
+// Covers: task:3, task:4, task:6
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import chalk from 'chalk';
 import { readFileSync } from 'node:fs';
@@ -340,8 +340,17 @@ describe('renderDaemonEvent', () => {
     ]);
   });
 
-  it('shows only UNSATISFIED gate verdicts (satisfied ones are routine)', () => {
-    expect(lines({ type: 'gate_verdict', step: 'plan', satisfied: true })).toEqual([]);
+  it('renders a satisfied verdict separately from its provider-completion line', () => {
+    expect([
+      lines({ type: 'provider_attempt', step: 'plan', provider: 'codex', outcome: 'success', invoked: true }),
+      lines({ type: 'gate_verdict', step: 'plan', satisfied: true, reason: 'covered' }),
+    ]).toEqual([
+      ['·   plan via codex ✓'],
+      ['· gate plan: satisfied — covered'],
+    ]);
+  });
+
+  it('renders unsatisfied gate verdicts', () => {
     expect(
       lines({ type: 'gate_verdict', step: 'plan', satisfied: false, reason: 'uncovered' }),
     ).toEqual(['· gate plan: unsatisfied — uncovered']);

@@ -2653,7 +2653,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     case 'gate_verdict':
-      if (!event.satisfied) {
+      if (event.satisfied) {
+        log(
+          `${dot} ${chalk.green(`gate ${event.step}: satisfied`)}${event.reason ? chalk.dim(` — ${event.reason}`) : ''}`,
+        );
+      } else {
         log(
           `${dot} ${chalk.yellow(`gate ${event.step}: unsatisfied`)}${event.reason ? chalk.dim(` — ${event.reason}`) : ''}`,
         );
