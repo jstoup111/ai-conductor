@@ -276,8 +276,13 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
     }));
     vi.doMock('./tmpdir-leak-guard.js', () => ({
       RUN_TMP_ROOT_ENV: 'TEST_RUN_TMP_ROOT',
+      RUN_TMP_ROOT_STALE_AFTER_MS: 60_000,
+      RUN_TMP_ROOT_LEGACY_STALE_AFTER_MS: 60_000,
       createRunTmpRoot: async () => '/tmp/run-root',
       removeRunTmpRoot: async () => {},
+      writeRunRootOwnerMarker: () => {},
+      startRunRootHeartbeat: () => ({ stop: () => {} }),
+      sweepStaleRunTmpRoots: async () => ({ reaped: [], retained: [], failures: [] }),
       snapshotTmpdirEntries: async () => ({ exists: true, entries: new Set() }),
       diffTmpdirEntries: () => ({ stray: [], ignored: [] }),
     }));
