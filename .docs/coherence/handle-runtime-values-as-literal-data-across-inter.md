@@ -25,6 +25,7 @@ All four accepted stories, nine tasks and 19 exact criteria are covered and cons
 | task | task-3 | story-2 | covered | Owns permission helper integration and failure propagation. |
 | task | task-4 | story-2 | covered | Owns hook helper integration and failure propagation. |
 | task | task-5 | story-3 | covered | Owns actual session-start summary behavior. |
+| task | task-10 | story-2 | covered | Records the installer-surface release waiver in the feature diff. |
 | task | task-6 | story-4 | covered | Direct command-source lexical classification with safe and unsafe fixtures. |
 | task | task-7 | story-4 | covered | Heredoc source classification with quoting, escaping and line handling. |
 | task | task-8 | story-4 | covered | Automatic source/generated inventory and missing-input/loader/error coverage. |

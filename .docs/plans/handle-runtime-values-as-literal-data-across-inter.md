@@ -223,16 +223,36 @@ Every criterion below is diff-local: it describes controlled behavior of changed
 
 **Dependencies:** 1, 2, 3, 4, 5, 8
 
+### Task 10: Record the release waiver for the installer surface
+
+**Story:** 2 — S2.1, S2.2 (installer helpers; no consumer-visible surface change)
+**Type:** infrastructure
+
+**Steps:**
+1. Write `.docs/release-waivers/handle-runtime-values-as-literal-data-across-inter.md` with a `Waives:` line naming `skill symlink targets` verbatim and a non-empty `Rationale:` stating that the release-gate classifier maps every `bin/install` edit to that surface, while this diff only rewrites the installer's permission and hook helpers to fixed interpreter source with argv and explicit failure status; no skill symlink is added, removed, retargeted, or renamed, and no CLI grammar, hook wiring, or settings schema changes.
+2. Confirm the waiver is part of this feature's `base...HEAD` diff; a waiver merged by an earlier feature never satisfies this one.
+3. Commit with message: "chore(release): waive the skill-symlink-targets surface for #1478".
+
+**Done when:**
+1. The waiver file exists in the feature diff with `Waives: skill symlink targets` and a non-empty rationale that names the installer helpers as the only `bin/install` change.
+2. The self-host release gate's breaking-surface check accepts the waiver for this diff and demands no migration block.
+
+**Files:**
+- `.docs/release-waivers/handle-runtime-values-as-literal-data-across-inter.md`
+
+**Dependencies:** 4
+
 ## Task Dependency Graph
 
 ```text
 1 -> 2 -----------------+
 3 -> 4 -----------------+
+     4 -> 10
 5 ----------------------+--> 9
 6 -> 7 -> 8 ------------+
 ```
 
-Dependencies reflect shared files and the gate becoming usable only after its known violations are repaired. Tasks 1, 3, 5 and 6 are independent roots; shared bin/install and shared checker modules serialize their respective edits. No task is a terminal catch-all validation exercise.
+Dependencies reflect shared files and the gate becoming usable only after its known violations are repaired. Tasks 1, 3, 5 and 6 are independent roots; shared bin/install and shared checker modules serialize their respective edits. Task 10 records the release waiver after the last bin/install edit so the waiver rides this feature's own diff. No task is a terminal catch-all validation exercise.
 
 ## Integration ownership
 
