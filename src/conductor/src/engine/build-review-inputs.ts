@@ -22,8 +22,10 @@ import {
   analyzeBuildReviewTestScope,
   type BuildReviewTestScope,
   type BuildReviewTestScopeInput,
+  type BuildReviewTestSourceReference,
   unavailableBuildReviewTestScope,
 } from './build-review-test-scope.js';
+import type { TestDeclarationSpan } from './build-review-test-declarations.js';
 import { discoverBuildReviewScopeDependencies } from './build-review-scope-dependencies.js';
 import {
   BuildReviewScopeSource,
@@ -118,6 +120,14 @@ export interface BuildReviewSourceSnapshot {
    * until the v3 projection consumes this value directly.
    */
   readonly testScope?: BuildReviewTestScope;
+  /** Version of the syntax/binding analysis contract that produced testScope. */
+  readonly testScopeAnalysisVersion?: string;
+  /**
+   * Region bytes read from the same pinned blobs as `testScope`. Projection
+   * consumes these records directly; it must never refill them from HEAD or
+   * the worktree while deriving its identity.
+   */
+  readonly testScopeEvidence?: readonly BuildReviewPinnedScopeEvidence[];
   /** Machine-readable changed paths from the pinned diff, retaining rename pairs. */
   readonly sourceChanges?: readonly BuildReviewPathChange[];
 }
@@ -128,6 +138,15 @@ export interface BuildReviewChangedTestTitle {
   readonly titleText: string;
   /** True when static parsing could not safely recover every declared title. */
   readonly staticExtractionFallback: boolean;
+}
+
+/** One compact, deduplicated source region that a v3 scope record references. */
+export interface BuildReviewPinnedScopeEvidence {
+  readonly id: string;
+  readonly source: { readonly fileName: string; readonly side: 'base' | 'head' };
+  readonly region: TestDeclarationSpan;
+  readonly content: string;
+  readonly contentHash: string;
 }
 
 /** A changed test whose declared Covers reference does not bind to this feature. */
@@ -257,9 +276,9 @@ function snapshotDigest(snapshot: Omit<BuildReviewSourceSnapshot, 'digest' | 'co
 
 function contentSnapshotDigest(snapshot: Pick<
   BuildReviewSourceSnapshot,
-  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'testQuality' | 'testScope'
+  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'testQuality' | 'testScope' | 'testScopeAnalysisVersion' | 'testScopeEvidence'
 >): string {
-  const { diff, planBody, repairContext, removalContext, testQuality, testScope } = snapshot;
+  const { diff, planBody, repairContext, removalContext, testQuality, testScope, testScopeAnalysisVersion, testScopeEvidence } = snapshot;
   return `sha256:${createHash('sha256').update(JSON.stringify({
     diff: withoutDiffBlobIdentities(diff),
     planBody,
@@ -267,6 +286,8 @@ function contentSnapshotDigest(snapshot: Pick<
     removalContext,
     testQuality,
     testScope,
+    testScopeAnalysisVersion,
+    testScopeEvidence,
   })).digest('hex')}`;
 }
 
@@ -559,6 +580,111 @@ function mergeTestScopes(scopes: readonly BuildReviewTestScope[]): BuildReviewTe
   });
 }
 
+type PinnedScopeSourceSide = 'base' | 'head';
+
+interface PinnedScopeRegion {
+  readonly source: { readonly fileName: string; readonly side: PinnedScopeSourceSide };
+  readonly region?: TestDeclarationSpan;
+}
+
+function scopeEvidenceKey(reference: PinnedScopeRegion): string {
+  const { source, region } = reference;
+  return `${source.side}\u0000${source.fileName}\u0000${region?.start ?? 0}\u0000${region?.end ?? -1}`;
+}
+
+function frozenScopeReference(
+  fileName: string,
+  region: TestDeclarationSpan,
+  side: PinnedScopeSourceSide = 'head',
+): PinnedScopeRegion {
+  return { source: { fileName, side }, region };
+}
+
+function associationSide(kind: 'added' | 'removed'): PinnedScopeSourceSide {
+  return kind === 'removed' ? 'base' : 'head';
+}
+
+/**
+ * Extract every region the typed scope itself can cite, then capture its bytes
+ * from the assembly's immutable blob reader. This is intentionally a data
+ * copy, not a later source read by projection or a provider.
+ */
+async function pinScopeEvidence(
+  files: readonly ScopedTestFile[],
+  source: BuildReviewScopeSource,
+  mergeBaseSha: string,
+): Promise<readonly BuildReviewPinnedScopeEvidence[]> {
+  const references = new Map<string, PinnedScopeRegion>();
+  const add = (reference: PinnedScopeRegion): void => {
+    references.set(scopeEvidenceKey(reference), reference);
+  };
+  const addSourceReference = (reference: BuildReviewTestSourceReference): void => add(reference);
+  const addBinding = (binding: { readonly marker: { readonly span: TestDeclarationSpan }; readonly owner?: { readonly declaration: { readonly span: TestDeclarationSpan } } }, fileName: string, side: PinnedScopeSourceSide): void => {
+    add(frozenScopeReference(fileName, binding.marker.span, side));
+    if (binding.owner) add(frozenScopeReference(fileName, binding.owner.declaration.span, side));
+  };
+
+  for (const file of files) {
+    for (const target of file.scope.targets) {
+      add(frozenScopeReference(file.path, target.declaration.span));
+      for (const binding of target.bindings) addBinding(binding, file.path, 'head');
+      for (const change of target.associationChanges) addBinding(change.binding, file.path, associationSide(change.kind));
+    }
+    for (const candidate of file.scope.candidates) {
+      if (candidate.declaration) add(frozenScopeReference(file.path, candidate.declaration.span));
+      if (candidate.diagnostic) add(frozenScopeReference(file.path, candidate.diagnostic.span));
+      for (const marker of candidate.markers) add(frozenScopeReference(file.path, marker.span));
+      for (const change of candidate.associationChanges) addBinding(change.binding, file.path, associationSide(change.kind));
+      if (candidate.affectedGroup) {
+        add(frozenScopeReference(file.path, candidate.affectedGroup.suite.span));
+        addSourceReference(candidate.affectedGroup.setup);
+        candidate.affectedGroup.sharedSources.forEach(addSourceReference);
+        candidate.affectedGroup.unchangedDescendantBodies.forEach(addSourceReference);
+      }
+      if (candidate.affectedDependency) {
+        for (const dependency of [...candidate.affectedDependency.chain, ...candidate.affectedDependency.changedSources]) {
+          add({ source: dependency.source });
+        }
+      }
+    }
+    for (const group of file.scope.affectedGroups) {
+      add(frozenScopeReference(file.path, group.suite.span));
+      addSourceReference(group.setup);
+      group.sharedSources.forEach(addSourceReference);
+      group.unchangedDescendantBodies.forEach(addSourceReference);
+    }
+    file.scope.sharedSources.forEach(addSourceReference);
+    for (const note of file.scope.notes) {
+      if (note.kind === 'declaration-uncertainty') add(frozenScopeReference(file.path, note.diagnostic.span));
+      else {
+        add(frozenScopeReference(file.path, note.declaration.span));
+        if (note.kind === 'unresolved-reference') add(frozenScopeReference(file.path, note.marker.span));
+      }
+    }
+  }
+
+  const records = await Promise.all([...references.values()].map(async (reference) => {
+    const commitSha = reference.source.side === 'base' ? mergeBaseSha : source.headSha;
+    const sourceText = await source.readAtOptional(commitSha, reference.source.fileName);
+    // A missing optional base side (for example an added helper) has no
+    // invented empty payload. The concrete candidate still retains its source
+    // reference and later validation can classify unavailable evidence.
+    if (sourceText === undefined) return undefined;
+    const region = reference.region ?? { start: 0, end: sourceText.length };
+    const content = sourceText.slice(region.start, region.end);
+    return Object.freeze({
+      id: `source:${reference.source.side}:${reference.source.fileName}:${region.start}:${region.end}`,
+      source: Object.freeze({ ...reference.source }),
+      region: Object.freeze({ ...region }),
+      content,
+      contentHash: `sha256:${createHash('sha256').update(content).digest('hex')}`,
+    } satisfies BuildReviewPinnedScopeEvidence);
+  }));
+  return Object.freeze(records
+    .filter((record): record is BuildReviewPinnedScopeEvidence => record !== undefined)
+    .sort((left, right) => left.id.localeCompare(right.id)));
+}
+
 /**
  * Assemble test-quality evidence from the same immutable blob reader used by
  * the plan and diff.  The analyzer receives bytes only; neither declaration
@@ -573,6 +699,7 @@ async function snapshotTypedTestScope(
   analyzer: (input: BuildReviewTestScopeInput) => BuildReviewTestScope,
 ): Promise<{
   readonly scope: BuildReviewTestScope;
+  readonly scopeEvidence: readonly BuildReviewPinnedScopeEvidence[];
   readonly testQuality: BuildReviewTestQualityScope;
   readonly changedTestTitles: readonly BuildReviewChangedTestTitle[];
 }> {
@@ -631,6 +758,7 @@ async function snapshotTypedTestScope(
     }
   });
   const scope = mergeTestScopes(files.map((file) => file.scope));
+  const scopeEvidence = await pinScopeEvidence(files, source, mergeBaseSha);
   const inScopeFiles = files.filter((file) => file.scope.targets.length > 0 || file.scope.candidates.length > 0);
   const unresolvedMarkers = files.flatMap((file) => file.scope.notes.flatMap((note) => note.kind === 'unresolved-reference'
     ? [Object.freeze({ selector: file.path, reference: markerReferenceForScope(note.marker.reference) })]
@@ -651,6 +779,7 @@ async function snapshotTypedTestScope(
   });
   return Object.freeze({
     scope,
+    scopeEvidence,
     testQuality: Object.freeze({
       inScopeTests: Object.freeze(inScopeFiles.map((file) => file.path)),
       unresolvedMarkers: Object.freeze(unresolvedMarkers.sort((left, right) =>
@@ -805,11 +934,13 @@ export async function assembleBuildReviewInputs(
         line: assertion.line,
       }))),
     }),
-    // v2 finding identity still consumes a title projection, but it now comes
-    // from typed changed declarations rather than a file-wide static scan.
+    // Legacy title identity remains readable until result-v3 consumers move
+    // to the source-bound scope; it is not the v3 target set.
     changedTestTitles: typedTestScope.changedTestTitles,
     testQuality: typedTestScope.testQuality,
     testScope: typedTestScope.scope,
+    testScopeAnalysisVersion: 'test-scope-v1',
+    testScopeEvidence: typedTestScope.scopeEvidence,
     sourceChanges: changes,
   } satisfies Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>;
   const sourceSnapshot = Object.freeze({

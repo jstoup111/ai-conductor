@@ -11,7 +11,7 @@ export type BuildReviewRubricPrerequisite = 'none';
 export interface BuildReviewRubricDescriptor {
   readonly skillName: string;
   readonly contractVersion: typeof CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION;
-  readonly projectionVersion: 'v2';
+  readonly projectionVersion: 'v3';
   readonly cachePolicy: BuildReviewRubricCachePolicy;
   readonly prerequisite: BuildReviewRubricPrerequisite;
 }
@@ -32,7 +32,7 @@ export const BUILD_REVIEW_RUBRIC_REGISTRY: Readonly<
   testQuality: Object.freeze({
     skillName: 'build-review-test-quality',
     contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
-    projectionVersion: 'v2',
+    projectionVersion: 'v3',
     cachePolicy: 'content-addressed',
     prerequisite: 'none',
   }),
