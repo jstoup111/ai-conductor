@@ -33,11 +33,15 @@ vi.mock('../../src/engine/rebase.js', async () => {
   };
 });
 
-import type { ConductState, StepName } from '../../src/types/index.js';
+import type { ConductState, StepDefinition, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import { clampToRunnablePrerequisite, Conductor } from '../../src/engine/conductor.js';
+import {
+  clampToRunnablePrerequisite,
+  Conductor,
+  resolveRunnableResumeEntry,
+} from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import * as gateVerdicts from '../../src/engine/gate-verdicts.js';
 import { readVerdict, writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
@@ -108,6 +112,62 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  describe('Task 1: resolve a resume entry against its entry gate', () => {
+    function step(name: StepName, prerequisites: StepName[] = []): StepDefinition {
+      return {
+        name,
+        label: name,
+        phase: 'BUILD',
+        enforcement: 'gating',
+        prerequisites,
+        skippableForTiers: [],
+        isCheckpoint: false,
+      };
+    }
+
+    it('returns a candidate whose gate passes unchanged', () => {
+      const steps = [step('build'), step('build_review', ['build'])];
+      const state = { build: 'done' } as ConductState;
+
+      expect(resolveRunnableResumeEntry(steps, state, 1)).toEqual({
+        kind: 'runnable',
+        index: 1,
+      });
+    });
+
+    it('returns the earlier dispatchable prerequisite when the candidate gate refuses', () => {
+      const steps = [step('build'), step('build_review', ['build'])];
+      const state = { build: 'pending' } as ConductState;
+
+      expect(resolveRunnableResumeEntry(steps, state, 1)).toEqual({
+        kind: 'runnable',
+        index: 0,
+      });
+    });
+
+    it.each([
+      ['is absent from the resolved steps', [step('build_review', ['build'])]],
+      ['sits at or after the candidate', [step('build_review', ['build']), step('build')]],
+    ])('returns the wanted step and recorded status when a prerequisite %s', (_case, steps) => {
+      const state = { build: 'failed' } as ConductState;
+
+      expect(resolveRunnableResumeEntry(steps, state, 0)).toEqual({
+        kind: 'blocked',
+        wantedStep: 'build_review',
+        unsatisfied: [{ step: 'build', status: 'failed' }],
+      });
+    });
+
+    it('treats a candidate past the final step as a runnable no-op', () => {
+      const steps = [step('build')];
+
+      expect(resolveRunnableResumeEntry(steps, {} as ConductState, 1)).toEqual({
+        kind: 'runnable',
+        index: 1,
+      });
+    });
   });
 
   // ── Story 1: resume never dispatches past an unsatisfied gate verdict ─────

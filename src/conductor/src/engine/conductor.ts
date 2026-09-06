@@ -13420,6 +13420,43 @@ export function clampToRunnablePrerequisite(
   return idx;
 }
 
+export type RunnableResumeEntry =
+  | { kind: 'runnable'; index: number }
+  | {
+    kind: 'blocked';
+    wantedStep: StepName;
+    unsatisfied: Array<{ step: StepName; status: StepStatus }>;
+  };
+
+/**
+ * Reconcile a resume candidate with the same state-only entry gate the main
+ * loop will check before dispatching it. The backward walk is bounded and
+ * does not mutate state; a malformed resolved step list that leaves the gate
+ * refused is reported to the caller rather than entering the loop to return
+ * markerlessly.
+ */
+export function resolveRunnableResumeEntry(
+  steps: StepDefinition[],
+  state: ConductState,
+  candidate: number,
+): RunnableResumeEntry {
+  const index = clampToRunnablePrerequisite(steps, state, candidate);
+  const step = steps[index];
+  if (!step) return { kind: 'runnable', index };
+
+  const gate = checkGate(step, state);
+  if (gate.passed) return { kind: 'runnable', index };
+
+  return {
+    kind: 'blocked',
+    wantedStep: step.name,
+    unsatisfied: gate.unsatisfied.map((prerequisite) => ({
+      step: prerequisite,
+      status: getStepStatus(state, prerequisite),
+    })),
+  };
+}
+
 /**
  * Resolve which members of a built-in concurrent group (e.g.
  * `VALIDATION_GROUP`) are actually dispatchable, reusing the SAME per-step
