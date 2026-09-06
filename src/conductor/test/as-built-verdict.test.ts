@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:6
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -584,6 +584,7 @@ describe('as-built SHIP routing', () => {
     priorLap?: boolean;
     projectionRefusal?: boolean;
     writeRemediationPlan?: boolean;
+    haltClass?: { value?: string };
   }): Promise<ConductorEvent[]> {
     const dir = await fixture();
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
@@ -655,6 +656,9 @@ describe('as-built SHIP routing', () => {
       ).mockResolvedValue('forced projection refusal');
     }
     await conductor.run();
+    if (input.haltClass) {
+      input.haltClass.value = await readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8');
+    }
     return observed;
   }
 
@@ -936,13 +940,19 @@ describe('as-built SHIP routing', () => {
   });
 
   it('names the planner no-plan cause and lists the findings on the serial as-built halt', async () => {
-    const observed = await runSerialAsBuiltExit({ report: REMEDIABLE_REPORT, writeRemediationPlan: false });
+    const haltClass: { value?: string } = {};
+    const observed = await runSerialAsBuiltExit({
+      report: REMEDIABLE_REPORT,
+      writeRemediationPlan: false,
+      haltClass,
+    });
     const halt = observed.find((event) => event.type === 'loop_halt');
 
     expect(halt?.reason).toContain('remediation did not route: the planner wrote no remediation plan');
     expect(halt?.reason).toContain('Blocking findings:');
     expect(halt?.reason).toContain('ARCH-1 (REMEDIABLE;');
     expect(observed.some((event) => event.type === 'kickback')).toBe(false);
+    expect(haltClass.value).toBe('needs-human');
   });
 
   it('names the parser fault when the validation-group as-built report is invalid', async () => {
