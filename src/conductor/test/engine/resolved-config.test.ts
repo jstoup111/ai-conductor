@@ -24,8 +24,13 @@ type DispatchStartTimeoutConfig = HarnessConfig & { dispatch_start_timeout_secon
 
 describe('engine/resolved-config', () => {
   describe('resolveCoverageBindingConfig', () => {
-    it('defaults the judge to disabled', () => {
-      expect(resolveCoverageBindingConfig(undefined)).toEqual({ judgeEnabled: false });
+    it('defaults the judge to enabled', () => {
+      expect(resolveCoverageBindingConfig(undefined)).toEqual({ judgeEnabled: true });
+    });
+
+    it('resolves an explicitly disabled judge', () => {
+      expect(resolveCoverageBindingConfig({ coverage_binding: { judge: { enabled: false } } }))
+        .toEqual({ judgeEnabled: false });
     });
 
     it('resolves an explicitly enabled judge', () => {
