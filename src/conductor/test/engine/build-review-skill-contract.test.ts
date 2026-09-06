@@ -44,6 +44,14 @@ describe('build-review Test Quality skill contract', () => {
     expect(skill).toMatch(/never flattened/i);
   });
 
+  it('requires one source-grounded disposition for each supplied fallback candidate', async () => {
+    const skill = await readFile(testQualitySkillPath, 'utf8');
+
+    expect(skill).toMatch(/`scopeResolutions`/i);
+    expect(skill).toMatch(/`resolved`, `out-of-scope`, or `indeterminate`/i);
+    expect(skill).toMatch(/candidateId/i);
+  });
+
   it('never reads, writes, or decides a disposition and judges only the supplied projection', async () => {
     const skill = await readFile(testQualitySkillPath, 'utf8');
 

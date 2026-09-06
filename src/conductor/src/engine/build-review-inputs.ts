@@ -145,6 +145,9 @@ export interface BuildReviewPinnedScopeEvidence {
   readonly id: string;
   readonly source: { readonly fileName: string; readonly side: 'base' | 'head' };
   readonly region: TestDeclarationSpan;
+  /** One-based source lines for the exact pinned character region. */
+  readonly startLine?: number;
+  readonly endLine?: number;
   readonly content: string;
   readonly contentHash: string;
 }
@@ -676,12 +679,14 @@ async function pinScopeEvidence(
       id: `source:${reference.source.side}:${reference.source.fileName}:${region.start}:${region.end}`,
       source: Object.freeze({ ...reference.source }),
       region: Object.freeze({ ...region }),
+      startLine: sourceText.slice(0, region.start).split('\n').length,
+      endLine: sourceText.slice(0, Math.max(region.start, region.end - 1)).split('\n').length,
       content,
       contentHash: `sha256:${createHash('sha256').update(content).digest('hex')}`,
     } satisfies BuildReviewPinnedScopeEvidence);
   }));
   return Object.freeze(records
-    .filter((record): record is BuildReviewPinnedScopeEvidence => record !== undefined)
+    .filter((record): record is NonNullable<typeof record> => record !== undefined)
     .sort((left, right) => left.id.localeCompare(right.id)));
 }
 

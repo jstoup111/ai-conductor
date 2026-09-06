@@ -2,6 +2,7 @@ import type { BuildReviewRubricId } from "../types/config.js";
 import {
   CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
   describeBuildReviewJudgedResultRejection,
+  parseBuildReviewCandidateScopeResolutions,
   parseBuildReviewDispatchFailure,
   buildReviewFindingReferenceContext,
   parseBuildReviewJudgedResult,
@@ -9,6 +10,8 @@ import {
   type BuildReviewLapId,
   type BuildReviewCoordinatorFailureReason,
   type BuildReviewSkip,
+  type BuildReviewCandidateScopeCandidate,
+  type BuildReviewCandidateScopeResolutionContext,
 } from "./build-review-domain.js";
 import {
   BUILD_REVIEW_RUBRIC_IDS,
@@ -209,6 +212,7 @@ export function stampBuildReviewDispatchedCandidate(
     lapId: projection.lapId,
     snapshotDigest: projection.snapshotDigest,
     findings: source?.findings,
+    ...(source?.scopeResolutions === undefined ? {} : { scopeResolutions: source.scopeResolutions }),
     // The relocation audit is provider-owned EVIDENCE, not an envelope field:
     // the test-quality contract validates it as typed evidence, the
     // artifact persists it, and the aggregate consumes it. Pass it through and
@@ -219,6 +223,72 @@ export function stampBuildReviewDispatchedCandidate(
       ? {}
       : { counterfactualSensitivity: source.counterfactualSensitivity }),
   };
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+/**
+ * Extract the exact candidate authority already frozen into v3 `testScope`.
+ * The projection remains the only source: no live files, source readers, or
+ * second provider call participate in candidate settlement.
+ */
+export function buildReviewCandidateScopeResolutionContext(projection: BuildReviewRubricProjection): BuildReviewCandidateScopeResolutionContext {
+  const scope = record(projection.testScope);
+  const rawCandidates = Array.isArray(scope?.candidates) ? scope.candidates : [];
+  const evidence = Array.isArray(scope?.evidence) ? scope.evidence : [];
+  const candidates: BuildReviewCandidateScopeCandidate[] = [];
+  for (const rawCandidate of rawCandidates) {
+    const candidate = record(rawCandidate);
+    const directRegion = record(candidate?.sourceRegion);
+    const declaration = record(candidate?.declaration) ?? record(candidate?.diagnostic);
+    const span = record(declaration?.span);
+    const matchedEvidence = evidence.map(record).find((entry) => {
+      const source = record(entry?.source); const region = record(entry?.region);
+      return source?.side === 'head' && region?.start === span?.start && region?.end === span?.end;
+    });
+    const evidenceSource = record(matchedEvidence?.source);
+    const evidenceRegion = record(matchedEvidence?.region);
+    const sourceRegion = directRegion
+      ? { path: directRegion.path, startLine: directRegion.startLine, endLine: directRegion.endLine, contentHash: directRegion.contentHash, display: directRegion.display }
+      : matchedEvidence && evidenceSource && evidenceRegion
+        ? {
+            path: evidenceSource.fileName,
+            startLine: matchedEvidence.startLine,
+            endLine: matchedEvidence.endLine,
+            contentHash: matchedEvidence.contentHash,
+            display: Array.isArray(declaration?.titleChain) && declaration!.titleChain.every((part) => typeof part === 'string')
+              ? declaration!.titleChain.join(' > ')
+              : typeof declaration?.message === 'string' ? declaration.message : `${evidenceSource.fileName} fallback candidate`,
+          }
+        : undefined;
+    const markerObligations = Array.isArray(candidate?.markers)
+      ? candidate!.markers.map(record).flatMap((marker) => {
+          const reference = record(marker?.reference);
+          return typeof reference?.kind === 'string' && typeof reference.id === 'string' ? [`${reference.kind}:${reference.id}`] : [];
+        })
+      : [];
+    const rawObligations = Array.isArray(candidate?.obligationReferences)
+      ? candidate!.obligationReferences
+      : [...new Set(markerObligations)];
+    const candidateId = typeof candidate?.candidateId === 'string'
+      ? candidate.candidateId
+      : typeof matchedEvidence?.id === 'string' ? matchedEvidence.id : undefined;
+    if (!candidate || !candidateId || !sourceRegion || !Array.isArray(rawObligations)) continue;
+    const contextCandidate = {
+      candidateId,
+      sourceRegion,
+      obligationReferences: rawObligations,
+    } as unknown as BuildReviewCandidateScopeCandidate;
+    const parsed = parseBuildReviewCandidateScopeResolutions([{
+      candidateId, status: 'resolved', sourceRegion,
+      obligationReferences: rawObligations, associationReason: 'engine candidate shape validation',
+    }], { candidates: [contextCandidate] });
+    if (!parsed) continue;
+    candidates.push(contextCandidate);
+  }
+  return { candidates: Object.freeze(candidates) };
 }
 
 /**
@@ -232,7 +302,13 @@ export function validateBuildReviewDispatchedResult(
   rubric: BuildReviewRubricId,
   projection: BuildReviewRubricProjection,
 ): BuildReviewJudgedResult | undefined {
-  const result = parseBuildReviewJudgedResult(candidate, buildReviewFindingReferenceContext(projection));
+  const scopeContext = buildReviewCandidateScopeResolutionContext(projection);
+  const source = record(candidate);
+  const scopeResolutions = source?.scopeResolutions === undefined
+    ? (scopeContext.candidates.length === 0 ? [] : undefined)
+    : parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext);
+  if (!scopeResolutions) return undefined;
+  const result = parseBuildReviewJudgedResult(candidate, buildReviewFindingReferenceContext(projection, scopeResolutions), scopeContext);
   // Treat the provider list as one boundary value.  Parsing individual
   // findings is insufficient: duplicate/colliding identities would otherwise
   // become two independently persisted branch facts.
@@ -267,10 +343,7 @@ function validWrittenArtifact(
 ): BuildReviewJudgedResult | undefined {
   const artifact = parseBuildReviewBranchArtifact(candidate);
   const result = artifact?.result;
-  const projectionBoundResult = result && parseBuildReviewJudgedResult(
-    result,
-    buildReviewFindingReferenceContext(projection),
-  );
+  const projectionBoundResult = result && validateBuildReviewDispatchedResult(result, rubric, projection);
   return artifact?.rubric === rubric && artifact.lapId === projection.lapId &&
     artifact.snapshotDigest === projection.snapshotDigest && projectionBoundResult?.kind === "judged" &&
     projectionBoundResult.rubric === rubric && projectionBoundResult.lapId === projection.lapId &&

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   classifyBuildReviewRubricBranches,
+  buildReviewCandidateScopeResolutionContext,
   coordinateBuildReviewRubrics,
   stampBuildReviewDispatchedCandidate,
   type BuildReviewCoordinationInput,
@@ -553,6 +554,80 @@ describe("build-review coordinator: findings-only provider payloads", () => {
         kind: "judged", rubric: "testQuality", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot",
         verdict, findings: [...findings],
       },
+    });
+  });
+});
+
+describe("build-review coordinator: candidate scope resolutions", () => {
+  const scopeRegion = {
+    path: "test/widget.test.ts", startLine: 1, endLine: 1,
+    contentHash: `sha256:${"a".repeat(64)}`, display: "widget persists state",
+  };
+  const scopeCandidate = {
+    candidateId: "candidate-widget", sourceRegion: scopeRegion,
+    obligationReferences: ["criterion:S5.1"],
+  };
+  const candidateProjection = {
+    rubric: "testQuality", contractVersion: "v3", projectionVersion: "v3", lapId: parseBuildReviewLapId("lap-current")!,
+    snapshotDigest: "sha256:snapshot", contentDigest: "sha256:content", digest: "sha256:projection", mergeBase: "base", headSha: "head",
+    changedFiles: [], changedTestSelectors: [], runnerSelectors: [], unresolvedMarkers: [], changedTestTitles: [],
+    testScope: { candidates: [scopeCandidate] }, testSuiteProof: {}, revertedProductionManifest: [], preflight: { classification: "approved-exception", exception: "empty-test-set" },
+  } as never;
+
+  it("derives candidate authority only from the frozen v3 testScope candidate and pinned evidence", () => {
+    const projection = {
+      ...candidateProjection,
+      testScope: {
+        candidates: [{
+          declaration: { span: { start: 9, end: 29 }, titleChain: ["widget persists state"] },
+          markers: [{ reference: { kind: "criterion", id: "S5.1" } }],
+        }],
+        evidence: [{
+          id: "source:head:test/widget.test.ts:9:29", source: { side: "head", fileName: "test/widget.test.ts" },
+          region: { start: 9, end: 29 }, startLine: 12, endLine: 12, content: "expect(saved).toBe(1)", contentHash: scopeRegion.contentHash,
+        }],
+      },
+    } as never;
+
+    expect(buildReviewCandidateScopeResolutionContext(projection)).toEqual({ candidates: [{
+      candidateId: "source:head:test/widget.test.ts:9:29", sourceRegion: { ...scopeRegion, startLine: 12, endLine: 12 },
+      obligationReferences: ["criterion:S5.1"],
+    }] });
+  });
+
+  it("settles one source-grounded fallback resolution and its finding in one provider dispatch", async () => {
+    const resolution = {
+      candidateId: "candidate-widget", status: "resolved", sourceRegion: scopeRegion,
+      obligationReferences: ["criterion:S5.1"], associationReason: "The changed fallback assertion covers the criterion.",
+    };
+    const finding = {
+      concernKind: "test-insensitive", summary: "The fallback assertion can pass without persistence.", evidenceLocations: ["test/widget.test.ts:1"],
+      anchor: { rubric: "testQuality", locus: { path: scopeRegion.path, contentHash: scopeRegion.contentHash, display: scopeRegion.display } },
+    };
+    const dispatchModel = vi.fn(async () => ({ findings: [finding], scopeResolutions: [resolution], lapId: "provider-lap" }));
+    const input = coordinationInput(true, { projections: { testQuality: candidateProjection }, dispatchModel });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(dispatchModel).toHaveBeenCalledTimes(1);
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: "dispatched", result: {
+        contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot", findings: [finding], scopeResolutions: [resolution], verdict: "FAIL",
+      },
+    });
+  });
+
+  it("retains an out-of-scope exclusion without inventing a quality finding", async () => {
+    const exclusion = { candidateId: "candidate-widget", status: "out-of-scope", exclusionReason: "Pinned candidate is unrelated to the changed behavior." };
+    const input = coordinationInput(true, {
+      projections: { testQuality: candidateProjection },
+      dispatchModel: vi.fn(async () => ({ findings: [], scopeResolutions: [exclusion] })),
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: "dispatched", result: { findings: [], scopeResolutions: [exclusion], verdict: "PASS" },
     });
   });
 });
