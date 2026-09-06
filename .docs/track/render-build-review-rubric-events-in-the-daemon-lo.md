@@ -1,0 +1,19 @@
+# Track: Render build_review rubric events in the daemon log
+
+Track: technical
+
+Scope boundary: Small rendering-only fix for #1592, approved by the operator on 2026-09-06 (delegated). Add daemon-log renderer cases for the six build_review rubric events that already exist on the event spine, so an operator can tell which rubric branch started, which was served from cache, which settled PASS or FAIL, which was neutrally skipped, and which failed for infrastructure reasons. Attribution comes from labeled rubric lines adjacent to the existing provider line, not from changing the provider event. Outside this slice: any change to the `ConductorEvent` union or to any emitter; carrying per-finding detail or provider/model identity on the rubric events; the operator viewer question owned by #1585; the TTY dashboard renderer; and rendering the remaining unrendered build_review events (`build_review_rubric_prompt`, `build_review_mechanical_allowance_exhausted`, `build_review_stale_aggregate`).
+
+This is internal operator tooling with no product requirement; acceptance criteria live in technical stories rather than a PRD.
+
+The filer's hypothesis — "a rendering-level fix in the daemon's event switch may be the whole fix" — was weighed against two alternatives and adopted on merits. Alternative one, enriching `build_review_rubric_result` with findings and provider identity so one line could carry everything, was rejected: it changes the union that machine consumers read, which the issue's own negative path forbids. Alternative two, a post-lap summary block rendered from the settled artifact, was rejected: it gives an operator nothing while a lap is running, which is half of the reported problem, and it reads durable state to reconstruct occurrences the bus already carries.
+
+Event spine
+  Channel?    no                            — renderer cases only; no watcher, sidecar, ledger, or stamped artifact
+  Concern:    occurrence                    — each rubric branch transition is already an event on the bus
+  Verdict:    consume the existing union    — all six variants exist and are emitted today; nothing is added
+  Exception:  none                          — no separate write location is introduced
+
+Scope check: A — consumer-facing (the daemon, its log renderer, and the build_review rubric container all ship in the engine package, so the mechanism exists outside this repository; no repo-only signal fires, since `daemon-cli.ts` is neither under the self-host tree nor gated behind `isSelfBuild()`); B — n/a (no new skill); C — provider-agnostic (the renderer names whichever provider the event reports and adds no host-specific path, flag, or capability). No catalog registration is required.
+
+Verified foundation: `src/conductor/src/daemon-cli.ts` exports `renderDaemonEvent`, which wraps `renderDaemonEventUnsafe` in a try/catch so a throwing formatter drops one line instead of crashing the run; that switch handles `build_review_cache_discarded`, `build_review_base`, and `build_review_stale_mirage_regrade` and ends in `default: break;`, so the six rubric events fall through unrendered. `src/conductor/src/types/events.ts` already declares `build_review_rubric_started`, `build_review_rubric_result`, `build_review_rubric_skipped`, `build_review_cache_hit`, `build_review_rubric_infrastructure_failure`, and `build_review_outer_verdict`, each carrying `rubric` (except the outer verdict) and `lapId`. `src/conductor/src/engine/build-review-coordinator.ts` emits all of them on live paths, and `src/conductor/src/engine/step-runners.ts` emits the outer verdict. The current `.daemon/daemon.log` confirms the gap: a settled lap renders only `build_review via claude (opus)` provider lines and `build_review ✓ done`, with no rubric name and no per-rubric verdict anywhere. `src/conductor/test/daemon-render-provider-attempt.test.ts` establishes the renderer unit-test pattern used here.
