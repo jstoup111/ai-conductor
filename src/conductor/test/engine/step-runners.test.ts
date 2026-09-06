@@ -87,9 +87,6 @@ describe('DefaultStepRunner', () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'coverage-run-1', projectDir, {
       featureDesc: 'coverage-binding-feature',
-      // The judge now defaults to enabled (adr-2026-08-31 D7), so the disabled
-      // path is reached by an explicit opt-out rather than by omitting config.
-      config: { coverage_binding: { judge: { enabled: false } } } as HarnessConfig,
     });
 
     try {
