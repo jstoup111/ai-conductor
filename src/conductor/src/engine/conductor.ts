@@ -3843,6 +3843,20 @@ export class Conductor {
     }
     | { kind: 'none'; reason: string }
   > {
+    // Refusals stay on the normal event spine. This is intentionally the
+    // existing gate_blocked member: remediation has no independent telemetry
+    // file or side channel, and EventPersister already carries this detail.
+    const reportRefusal = async (reason: string): Promise<void> => {
+      try {
+        await this.events.emit({
+          type: 'gate_blocked',
+          step: hintSource.evidence?.[0]?.gate ?? 'remediate',
+          reason,
+        });
+      } catch {
+        // Observability must not hide the refusal itself.
+      }
+    };
     // A route can remain pending while an operator records scope acceptance.
     // Re-evaluate the durable authority immediately before invoking
     // /remediate, so an accepted-only report neither consumes a repair lap nor
@@ -3889,18 +3903,22 @@ export class Conductor {
     const droppedDispositionDetail = formatRejectedDispositions(plan.rejected);
     const droppedSuffix = droppedDispositionDetail ? `; dropped: ${droppedDispositionDetail}` : '';
     if (plan.gaps.length === 0 && !plan.invalidTasklessBuild) {
+      const detail = `remediation planner returned no recognized disposition: ${droppedDispositionDetail}`;
+      await reportRefusal(detail);
       return {
         kind: 'halt',
         haltClass: 'needs-human',
-        detail: `remediation planner returned no recognized disposition: ${droppedDispositionDetail}`,
+        detail,
       };
     }
     if (plan.invalidTasklessBuild) {
+      const detail =
+        'remediation produced no dispatchable build work: rejected an ordinary BUILD disposition with no concrete task; ' +
+        `human needed to provide dispatchable work${droppedSuffix}`;
+      await reportRefusal(detail);
       return {
         kind: 'halt',
-        detail:
-          'remediation produced no dispatchable build work: rejected an ordinary BUILD disposition with no concrete task; ' +
-          `human needed to provide dispatchable work${droppedSuffix}`,
+        detail,
       };
     }
 
@@ -4722,6 +4740,7 @@ export class Conductor {
             head: (await currentCommitSha(this.projectRoot)) ?? '',
             tree: baseline.treeHash ?? '',
             resolvedTaskIds: [],
+            resolvedCount: baseline.resolvedCount,
           },
         });
         if (!admission.ok) {
@@ -4750,9 +4769,15 @@ export class Conductor {
             detail: `existing-task remediation recorded its receipt but could not persist settlement: ${settled.message}`,
           };
         }
+        // A replay must use the boundary captured before the original
+        // re-stage, never the post-re-stage snapshot from this invocation.
+        const admittedBaseline = admission.obligation.baseline;
         this.pendingNoOpBaselines.clear();
         for (const provenance of remediationEvidenceSources) {
-          this.pendingNoOpBaselines.set(provenance.gate, baseline);
+          this.pendingNoOpBaselines.set(provenance.gate, {
+            treeHash: admittedBaseline.tree || null,
+            resolvedCount: admittedBaseline.resolvedCount ?? baseline.resolvedCount,
+          });
         }
         const restage = await restageExistingRemediationTaskStatuses(
           this.projectRoot,
@@ -6089,6 +6114,50 @@ export class Conductor {
     // (and cleared) when that step's dispatch begins, so it only seeds the first
     // attempt; later attempts use the step's own failure/gate-miss hint.
     const pendingRetryHints = new Map<StepName, string>();
+    // Recovery is deliberately sourced from the admitted obligation rather
+    // than the in-memory remediation route. A new Conductor instance has no
+    // pending route object, but an admitted, still-open repair remains work
+    // and retains the pre-re-stage convergence boundary.
+    try {
+      const repairs = createRepairObligationStore(
+        this.projectRoot,
+        join(this.projectRoot, '.pipeline', 'engine-state.json'),
+      );
+      const restored = await repairs.read();
+      if (restored.ok) {
+        const ledger = await readKickbackLedger(this.projectRoot);
+        for (const obligation of Object.values(restored.value.records)) {
+          const isCurrent = obligation.taskIds.some(
+            (taskId) => restored.value.currentByPlan[obligation.planIdentity]?.[taskId] === obligation.id,
+          );
+          const hasOpenTask = Object.values(obligation.tasks).some((task) => task.status === 'open');
+          if (!isCurrent || !hasOpenTask || obligation.settlement !== 'settled') continue;
+
+          const receiptGates = ledger.settlementReceipts?.[obligation.id]?.gates ?? [];
+          for (const gate of receiptGates) {
+            if (steps.some((step) => step.name === gate)) {
+              this.pendingNoOpBaselines.set(gate as StepName, {
+                treeHash: obligation.baseline.tree || null,
+                resolvedCount: obligation.baseline.resolvedCount ?? 0,
+              });
+            }
+          }
+          // The build step is the only target of an existing-task repair.
+          // Preserve the actionable finding rather than inventing a new
+          // planner route or silently dropping the original instruction.
+          if (!pendingRetryHints.has('build')) {
+            pendingRetryHints.set(
+              'build',
+              `Resume admitted repair ${obligation.id}: ${obligation.source.findingId}. ` +
+                `${obligation.source.instruction}`,
+            );
+          }
+        }
+      }
+    } catch {
+      // The task-progress/task-seed paths own malformed repair-state refusal.
+      // Recovery must not downgrade their typed failure into a synthetic route.
+    }
     // The FINISH fence has just recomputed and rejected these validators' own
     // evidence. Keep that evidence through the redirected retry so the
     // validator can inspect or replace it; the ordinary stale sweep still

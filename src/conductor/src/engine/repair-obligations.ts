@@ -20,6 +20,8 @@ export interface RepairAdmission {
     head: string;
     tree: string;
     resolvedTaskIds: readonly string[];
+    /** Count is retained because the no-progress guard is count-based. */
+    resolvedCount?: number;
   };
 }
 
@@ -37,6 +39,7 @@ export interface RepairObligation {
     head: string;
     tree: string;
     resolvedTaskIds: string[];
+    resolvedCount?: number;
   };
   settlement: 'unsettled' | 'settled';
   tasks: Record<string, { status: 'open' | 'resolved'; evidence?: RepairClosureEvidence }>;
@@ -110,6 +113,9 @@ function validObligation(value: unknown): value is RepairObligation {
   if (typeof value.source.findingId !== 'string' || typeof value.source.authority !== 'string' ||
     typeof value.source.instruction !== 'string' || typeof value.baseline.head !== 'string' ||
     typeof value.baseline.tree !== 'string' || !isStringArray(value.baseline.resolvedTaskIds) ||
+    (value.baseline.resolvedCount !== undefined &&
+      (typeof value.baseline.resolvedCount !== 'number' ||
+        !Number.isSafeInteger(value.baseline.resolvedCount) || value.baseline.resolvedCount < 0)) ||
     (value.settlement !== 'unsettled' && value.settlement !== 'settled')) return false;
   return Object.values(value.tasks).every((task) => isRecord(task) &&
     (task.status === 'open' || task.status === 'resolved') &&

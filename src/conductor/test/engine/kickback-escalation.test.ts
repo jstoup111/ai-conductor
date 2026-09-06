@@ -188,6 +188,15 @@ describe('shouldEscalateKickback', () => {
     expect(result.halt).toBe(false);
   });
 
+  it('treats a passing effective review as terminal even when the repair changed no tree bytes', () => {
+    expect(shouldEscalateKickback({
+      progress: 'no-work',
+      priorVerdict: false,
+      nextVerdict: true,
+      enabled: true,
+    })).toEqual({ halt: false });
+  });
+
   it('does not halt when disabled', () => {
     const result = shouldEscalateKickback({
       progress: 'no-work',
