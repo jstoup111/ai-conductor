@@ -849,14 +849,14 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
           // The worktree exists while the callback runs, and it was created
           // by a queued mutation (the queue drained before fn ran).
           observed.push(existsSync(worktreePath) ? 'worktree-present' : 'worktree-missing');
-          return { kind: 'unchanged' as const };
+          return { kind: 'noop' as const };
         },
       };
       const entry = { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 };
 
       const result = await runCiFix(entry, 'feat/fix', 'hint', { fixRunner, liveness: { worktreeLifecycle } }, () => {});
 
-      expect(result.kind).toBe('unchanged');
+      expect(result.kind).toBe('noop');
       expect(observed).toEqual(['worktree-present']);
       expect(queueDepth).toBe(0);
       expect(existsSync(worktreePath)).toBe(false);
@@ -877,7 +877,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         run: async () => {
           // The daemon claims the slug while the fix-runner is mid-flight.
           claimed = true;
-          return { kind: 'unchanged' as const };
+          return { kind: 'noop' as const };
         },
       };
       const entry = { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 };
@@ -887,7 +887,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         liveness: { isFeatureInFlight: async () => claimed, log: (m) => logs.push(m) },
       }, () => {});
 
-      expect(result.kind).toBe('unchanged');
+      expect(result.kind).toBe('noop');
       expect(existsSync(worktreePath)).toBe(true);
       expect(logs.some((line) => line.includes('worktree removal refused') && line.includes(SLUG) && line.includes('active work claim'))).toBe(true);
       execSync(`git worktree remove --force "${worktreePath}"`, { cwd: repoPath });
