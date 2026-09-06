@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5
+// Covers: task:1, task:2, task:3, task:4, task:5, task:6
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -923,7 +923,7 @@ describe('as-built SHIP routing', () => {
     });
     const halt = observed.find((event) => event.type === 'loop_halt');
 
-    expect(halt?.reason.split('Blocking findings:').length - 1).toBe(1);
+    expect((halt?.reason ?? '').split('Blocking findings:').length - 1).toBe(1);
   });
 
   it('keeps the no-verdict-line group halt free of findings and remediation wording', async () => {
