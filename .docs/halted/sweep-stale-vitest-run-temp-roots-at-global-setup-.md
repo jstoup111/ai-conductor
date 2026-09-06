@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-06T10:44:20.685Z
 Slug: sweep-stale-vitest-run-temp-roots-at-global-setup-
 Class: needs-human
 Halting step: unknown
