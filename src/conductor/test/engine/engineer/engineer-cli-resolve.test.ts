@@ -106,6 +106,7 @@ describe('engineer resolve dispatch and validation (integration with dispatchEng
     const opts = (extra: Partial<Parameters<typeof dispatchEngineer>[1]> = {}): Parameters<typeof dispatchEngineer>[1] => ({
       print: (s) => out.push(s),
       printErr: (s) => err.push(s),
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
       ...extra,
     });
     return { out, err, opts };
@@ -197,6 +198,7 @@ describe('engineer resolve: happy path (Task 12)', () => {
     const opts = (extra: Partial<Parameters<typeof dispatchEngineer>[1]> = {}): Parameters<typeof dispatchEngineer>[1] => ({
       print: (s) => out.push(s),
       printErr: (s) => err.push(s),
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
       ...extra,
     });
     return { out, err, opts };

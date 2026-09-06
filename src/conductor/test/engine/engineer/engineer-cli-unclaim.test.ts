@@ -20,6 +20,7 @@ describe('engineer unclaim: happy path (Task 8)', () => {
     const opts = (extra: Partial<Parameters<typeof dispatchEngineer>[1]>): Parameters<typeof dispatchEngineer>[1] => ({
       print: (s) => out.push(s),
       printErr: (s) => err.push(s),
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
       ...extra,
     });
     return { out, err, opts };

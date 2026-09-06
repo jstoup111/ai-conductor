@@ -735,7 +735,7 @@ export async function dispatchEngineer(
 
   // This is a machine precondition, not an intake failure: refuse before any
   // command can create a worktree, branch, or claim record.
-  const canSkipCapabilityProbe = dispatch.kind === 'guide' || dispatch.kind === 'reject';
+  const canSkipCapabilityProbe = dispatch.kind === 'guide' || dispatch.kind === 'reject' || dispatch.kind === 'help';
   const ghVersion = canSkipCapabilityProbe
     ? ({ kind: 'ok' } as const)
     : await (opts.probeGhVersion ?? (opts.gh || opts.launchInteractive

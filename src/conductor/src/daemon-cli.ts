@@ -415,6 +415,8 @@ export interface DaemonModeOptions {
    * interactive prompt lives at `daemon start` (dispatchDaemonSupervisor).
    */
   ensureFresh?: () => Promise<void>;
+  /** Machine-level gh capability probe; injectable at the daemon composition boundary. */
+  probeGhVersion?: typeof probeGhVersion;
   /**
    * Startup migration boundary (tests inject an ordering probe). Production
    * uses runOwnedHaltClassMigration.
@@ -1813,7 +1815,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         return tokenState.state !== 'ok';
       },
       getGhVersionFloorDiagnostic: async () => {
-        const verdict = await probeGhVersion();
+        const verdict = await (opts.probeGhVersion ?? probeGhVersion)();
         if (verdict.kind === 'ok') return null;
         const found = 'version' in verdict
           ? `${verdict.version.major}.${verdict.version.minor}.${verdict.version.patch}`
