@@ -356,30 +356,54 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       } satisfies Partial<BuildReviewSourceReadError>);
     });
 
-    it('does not enumerate sibling titles without typed changed-declaration evidence', async () => {
+    it('enumerates only the changed declaration title while excluding its unchanged sibling', async () => {
       const diff = [
         'diff --git a/test/widget.test.ts b/test/widget.test.ts',
         '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+change',
       ].join('\n');
-      const alphaSource = [
+      const baseSource = [
+        '// Covers: task:8',
         "describe('workspace', () => {",
-        "  describe('alpha branch', () => it('keeps the selected assertion', () => {}));",
-        "  describe('beta branch', () => it('unrelated sibling assertion', () => {}));",
+        "  describe('alpha branch', () => {",
+        "    it('keeps the selected assertion', () => { expect(true).toBe(true); });",
+        '  });',
+        "  describe('beta branch', () => {",
+        "    it('unrelated sibling assertion', () => { expect(true).toBe(true); });",
+        '  });',
         '});',
       ].join('\n');
+      const headSource = baseSource.replace('expect(true).toBe(true);', 'expect(true).toBe(false);');
 
       const baseline = fakeGit([
         ...freshProbeScript,
         { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
         { match: ['diff', 'base123..HEAD'], result: { stdout: diff } },
-        { match: ['show', 'head123:test/widget.test.ts'], result: { stdout: alphaSource } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: Typed scope\n' } },
+        { match: ['show', 'base123:test/widget.test.ts'], result: { stdout: baseSource } },
+        { match: ['show', 'head123:test/widget.test.ts'], result: { stdout: headSource } },
       ]);
       const baselineInputs = await assembleBuildReviewInputs(baseline.git, planPath);
 
-      expect(baselineInputs.sourceSnapshot.changedTestTitles).toEqual([]);
+      expect(baselineInputs.sourceSnapshot.changedTestTitles).toEqual([
+        {
+          selector: 'test/widget.test.ts',
+          titleText: 'workspace > alpha branch > keeps the selected assertion',
+          staticExtractionFallback: false,
+        },
+      ]);
     });
 
-    it('does not turn declaration-shaped source text into typed title evidence', async () => {
+    it('extracts only the executable declaration title amid declaration-shaped prose', async () => {
+      const baseSource = [
+        "// describe('comment suite', () => { it('comment test', () => {}); });",
+        "const ordinary = \"describe('string suite', () => { it('string test', () => {}); });\";",
+        "const templated = `describe('template suite', () => { it('template test', () => {}); });`;",
+        "const declarationPattern = /describe('regex suite', () => { it('regex test', () => {}); });/;",
+        "describe('actual suite', () => {",
+        "  it('actual test', () => { expect(true).toBe(true); });",
+        '});',
+      ].join('\n');
+      const headSource = baseSource.replace('expect(true).toBe(true);', 'expect(true).toBe(false);');
       const { git } = fakeGit([
         ...freshProbeScript,
         { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
@@ -387,18 +411,19 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           'diff --git a/test/widget.test.ts b/test/widget.test.ts',
           '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+change',
         ].join('\n') } },
-        { match: ['show', 'head123:test/widget.test.ts'], result: { stdout: [
-          "// describe('comment suite', () => it('comment test', () => {}));",
-          "const ordinary = \"describe('string suite', () => it('string test', () => {}));\";",
-          "const templated = `describe('template suite', () => it('template test', () => {}));`;",
-          "const declarationPattern = /describe('regex suite', () => it('regex test', () => {}));/;",
-          "describe('actual suite', () => it('actual test', () => {}));",
-        ].join('\n') } },
+        { match: ['show', 'base123:test/widget.test.ts'], result: { stdout: baseSource } },
+        { match: ['show', 'head123:test/widget.test.ts'], result: { stdout: headSource } },
       ]);
 
       const inputs = await assembleBuildReviewInputs(git, planPath);
 
-      expect(inputs.sourceSnapshot.changedTestTitles).toEqual([]);
+      expect(inputs.sourceSnapshot.changedTestTitles).toEqual([
+        {
+          selector: 'test/widget.test.ts',
+          titleText: 'actual suite > actual test',
+          staticExtractionFallback: false,
+        },
+      ]);
     });
 
     it('captures nested title chains declared through function suite callbacks', async () => {
@@ -423,23 +448,34 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       ]);
     });
 
-    it('does not construct legacy title regions for declarations outside typed scope', async () => {
+    it('constructs legacy title regions only for the changed declaration, not a reworded sibling', async () => {
       const diff = [
         'diff --git a/test/widget.test.ts b/test/widget.test.ts',
         '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+change',
       ].join('\n');
       const source = [
+        '// Covers: task:8',
         "describe('workspace', () => {",
-        "  describe('alpha branch', () => it('keeps the selected assertion', () => {}));",
-        "  describe('beta branch', () => it('unrelated sibling assertion', () => {}));",
+        "  describe('alpha branch', () => {",
+        "    it('keeps the selected assertion', () => { expect(true).toBe(true); });",
+        '  });',
+        "  describe('beta branch', () => {",
+        "    it('unrelated sibling assertion', () => { expect(true).toBe(true); });",
+        '  });',
         '});',
       ].join('\n');
-      const inputsFor = (widgetSource: string) => assembleBuildReviewInputs(fakeGit([
+      const inputsFor = (siblingTitle: string) => {
+        const baseSource = source.replace('unrelated sibling assertion', siblingTitle);
+        const headSource = baseSource.replace('expect(true).toBe(true);', 'expect(true).toBe(false);');
+        return assembleBuildReviewInputs(fakeGit([
         ...freshProbeScript,
         { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
         { match: ['diff', 'base123..HEAD'], result: { stdout: diff } },
-        { match: ['show', 'head123:test/widget.test.ts'], result: { stdout: widgetSource } },
-      ]).git, planPath);
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: Typed scope\n' } },
+        { match: ['show', 'base123:test/widget.test.ts'], result: { stdout: baseSource } },
+        { match: ['show', 'head123:test/widget.test.ts'], result: { stdout: headSource } },
+        ]).git, planPath);
+      };
       const titleRegions = (inputs: BuildReviewFrozenInputs) =>
         (buildReviewFindingReferenceContext({
           rubric: 'tautology',
@@ -454,11 +490,16 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           }[];
         }).changedTestRegions;
       const [baseline, siblingReworded] = await Promise.all([
-        inputsFor(source),
-        inputsFor(source.replace('unrelated sibling assertion', 'renamed unrelated sibling assertion')),
+        inputsFor('unrelated sibling assertion'),
+        inputsFor('renamed unrelated sibling assertion'),
       ]);
-      expect(titleRegions(baseline)).toEqual([]);
-      expect(titleRegions(siblingReworded)).toEqual([]);
+      const changedAlphaRegion = {
+        path: 'test/widget.test.ts',
+        contentHash: `sha256:${createHash('sha256').update('workspace > alpha branch > keeps the selected assertion').digest('hex')}`,
+        display: 'workspace > alpha branch > keeps the selected assertion',
+      };
+      expect(titleRegions(baseline)).toEqual([changedAlphaRegion]);
+      expect(titleRegions(siblingReworded)).toEqual([changedAlphaRegion]);
     });
 
     it('derives content identity from review content rather than git provenance or operator reseals', async () => {
@@ -864,7 +905,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       ]);
     });
 
-    it('keeps pinned plan, stories, test bytes and a space-containing rename pair after live worktree mutation', async () => {
+    it('keeps pinned plan, stories, test bytes and a space-containing rename pair despite live pre-assembly mutation', async () => {
       const frozenPlan = join(dir, '.docs/plans/frozen.md');
       const frozenStories = join(dir, '.docs/stories/frozen.md');
       await git('checkout', 'main');
@@ -872,14 +913,39 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       await mkdir(join(dir, 'test'), { recursive: true });
       await writeFile(frozenPlan, '**Stories:** .docs/stories/frozen.md\n\n### Task 1: frozen\n');
       await writeFile(frozenStories, '# Frozen stories\n\n## Story 1: frozen\n\n#### Happy Path\n- Given frozen bytes, when assembled, then they remain pinned\n');
-      await writeFile(join(dir, 'test/old name.test.ts'), '// Covers: S1.1\nit(\'pinned test\', () => {});\n');
+      await writeFile(join(dir, 'test/old name.test.ts'), [
+        '// Covers: S1.1',
+        '// Retained rename fixture context.',
+        '// These unchanged lines keep Git rename detection meaningful.',
+        '// They are also intentionally inert test-source trivia.',
+        "it('pinned test', () => {});",
+        '',
+      ].join('\n'));
       await git('add', '.docs', 'test/old name.test.ts');
       await git('commit', '-m', 'add frozen source artifacts');
       await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
 
       await git('checkout', '-b', 'feature/frozen-source');
       await git('mv', 'test/old name.test.ts', 'test/new name.test.ts');
+      await writeFile(join(dir, 'test/new name.test.ts'), [
+        '// Covers: S1.1',
+        '// Retained rename fixture context.',
+        '// These unchanged lines keep Git rename detection meaningful.',
+        '// They are also intentionally inert test-source trivia.',
+        "it('pinned test', () => { expect(true).toBe(false); });",
+        '',
+      ].join('\n'));
+      await git('add', 'test/new name.test.ts');
       await git('commit', '-m', 'rename test with spaces');
+
+      // Assembly must read the already-pinned Git blobs, not these newer live
+      // worktree bytes. Mutate every frozen source before the call so this
+      // proves source identity rather than merely object immutability after it.
+      await Promise.all([
+        writeFile(frozenPlan, '# MUTATED LIVE PLAN\n'),
+        writeFile(frozenStories, '# MUTATED LIVE STORIES\n'),
+        writeFile(join(dir, 'test/new name.test.ts'), 'it(\'mutated live test\', () => {});\n'),
+      ]);
 
       const result = await assembleInputs(realGit(), frozenPlan, {
         inspectTestSuite: async () => ({
@@ -887,17 +953,15 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         } as Extract<FullSuiteInspectionResult, { status: 'CURRENT' }>),
       });
 
-      await Promise.all([
-        writeFile(frozenPlan, '# MUTATED LIVE PLAN\n'),
-        writeFile(frozenStories, '# MUTATED LIVE STORIES\n'),
-        writeFile(join(dir, 'test/new name.test.ts'), 'it(\'mutated live test\', () => {});\n'),
-      ]);
-
       expect(result.planBody).toContain('### Task 1: frozen');
       expect(result.sourceSnapshot.testQuality).toEqual({
-        inScopeTests: [], counterfactualFileSelectors: [], unresolvedMarkers: [],
+        inScopeTests: ['test/new name.test.ts'],
+        counterfactualFileSelectors: ['test/new name.test.ts'],
+        unresolvedMarkers: [],
       });
-      expect(result.sourceSnapshot.changedTestTitles).toEqual([]);
+      expect(result.sourceSnapshot.changedTestTitles).toEqual([
+        { selector: 'test/new name.test.ts', titleText: 'pinned test', staticExtractionFallback: false },
+      ]);
       expect(result.sourceSnapshot.sourceChanges).toContainEqual({
         kind: 'R', oldPath: 'test/old name.test.ts', path: 'test/new name.test.ts',
       });
