@@ -1,0 +1,13 @@
+# Track: Clamp the resume entry to a runnable step
+
+Track: technical
+
+Scope boundary: Small fix for #1717, approved by the operator on 2026-09-06 (delegated). Reconcile the resume entry index against the loop's own entry-gate predicate on every resume, and fail closed with a named terminal halt when no dispatchable entry can be derived. Kickback restaging policy, downstream-stale cascade coverage, `--from-step` navigation, the in-loop tail selector, and operator recovery tooling stay outside this slice.
+
+This is internal engine selection behavior with no product requirement; acceptance criteria live in technical stories rather than a PRD.
+
+The operator's recorded hypotheses (rewrite `findResumeIndex` to return the first non-done gating step, or stale dependent steps atomically at kickback) were weighed and not adopted: both add a second selection authority beside the verdict/gate predicates the approved verdict-aware-resume ADR deliberately keeps singular, and neither closes the entry hole for an interrupted or hand-edited state. Reusing the existing backward-only prerequisite walk on every resume was chosen on 2026-09-06 (delegated) because it consumes only `checkGate`, the predicate the loop itself applies one instruction later.
+
+Scope check: A — consumer-facing engine behavior (any repository that resumes a conducted feature benefits; no self-host, release-gate, CI, or `.docs/`-layout signal fires), so the change lands in the engine rather than a repo-local surface and adds no rule text; B — n/a (no new skill); C — provider-agnostic (step selection only, no provider, model, or host-specific path). No catalog registration is required.
+
+Verified foundation: `conductor.ts:5789` derives the resume candidate from `findResumeIndex` (first `in_progress`, else last-done + 1); `conductor.ts:5852` applies the verdict clamp and the backward prerequisite walk ONLY when the earliest verdict-unsatisfied gate is strictly before that candidate, so a candidate the loop's own `checkGate` rejects is entered unreconciled whenever the two agree or verdict reading fails. `clampToRunnablePrerequisite` (`conductor.ts:12743`) already implements the backward-only, bounded walk on `checkGate`, and the tail selector applies it unconditionally at `conductor.ts:12117`. `stepSatisfied` (`state.ts:222`) counts `done`, `skipped`, and `stale`, so an entry gate fails only on a `pending`, `failed`, or `in_progress` prerequisite, and the loop's `gate_blocked` branch (`conductor.ts:7844-7868`) writes a halt only when no unsatisfied prerequisite is `pending` — the pending case still returns with no DONE/HALT marker.
