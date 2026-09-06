@@ -326,6 +326,7 @@ import {
 import { WorktreeManager } from './worktree.js';
 import {
   countResolvedTasks,
+  countTaskTrailerCommits,
   haltMarkerExists,
   clearHaltMarker,
   readHaltMarkerContent,
@@ -334,6 +335,10 @@ import {
   normalizeTasks,
   resolveTaskIds,
 } from './task-progress.js';
+import {
+  recordRestageWatermarks,
+  type RecordRestageWatermarksDependencies,
+} from './restage-watermark.js';
 import { supersedeHaltRecord } from './halt-record.js';
 import {
   makeGitRunner,
@@ -12868,7 +12873,7 @@ export type ExistingTaskBindingResolution =
   | { kind: 'unresolvable'; id: string };
 
 type ExistingTaskRestageResult =
-  | { kind: 'restaged' }
+  | { kind: 'restaged'; watermarks: Array<{ id: string; trailerCount: number }> }
   | { kind: 'failed'; detail: string };
 
 /**
@@ -12877,10 +12882,11 @@ type ExistingTaskRestageResult =
  * the authoritative re-seed write path; this only changes the statuses that
  * must not survive that re-seed as terminal rows.
  */
-async function restageExistingRemediationTaskStatuses(
+export async function restageExistingRemediationTaskStatuses(
   projectRoot: string,
   planPath: string,
   boundIds: ReadonlySet<string>,
+  watermarkDependencies?: RecordRestageWatermarksDependencies,
 ): Promise<ExistingTaskRestageResult> {
   const statusPath = join(projectRoot, '.pipeline', 'task-status.json');
   try {
@@ -12905,6 +12911,19 @@ async function restageExistingRemediationTaskStatuses(
       };
     }
 
+    const trailerCounts = await countTaskTrailerCommits(projectRoot, [...boundCanonicalIds]);
+    const watermarks = [...boundCanonicalIds].map((id) => ({
+      id,
+      trailerCount: trailerCounts.get(id) ?? 0,
+    }));
+    const watermarkResult = await recordRestageWatermarks(
+      projectRoot,
+      planStem(planPath),
+      watermarks,
+      watermarkDependencies,
+    );
+    if (watermarkResult.kind === 'failed') return watermarkResult;
+
     for (const task of statusFile.tasks) {
       if (typeof task.id === 'string' && boundCanonicalIds.has(canonicalTaskId(task.id))) {
         task.status = 'pending';
@@ -12912,7 +12931,7 @@ async function restageExistingRemediationTaskStatuses(
     }
     await writeFile(statusPath, JSON.stringify(statusFile, null, 2) + '\n');
     await seedTaskStatus(projectRoot, planPath);
-    return { kind: 'restaged' };
+    return { kind: 'restaged', watermarks };
   } catch (error) {
     return {
       kind: 'failed',
