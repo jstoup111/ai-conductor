@@ -46,6 +46,7 @@ interface RepairObligationSection {
   version: 1;
   records: Record<string, RepairObligation>;
   currentByPlan: Record<string, Record<string, string>>;
+  admissionsByPlan: Record<string, Record<string, string>>;
 }
 
 type RepairResult<T> =
@@ -61,6 +62,8 @@ export type RepairClosureResult =
 
 export interface RepairObligationStore {
   admit(admission: RepairAdmission): Promise<RepairAdmissionResult>;
+  /** Replays only an explicit, caller-authoritative effect key within one plan. */
+  admitOrReplay(admissionKey: string, admission: RepairAdmission): Promise<RepairAdmissionResult>;
   close(input: {
     planPath: string;
     taskId: string;
@@ -114,15 +117,21 @@ function validObligation(value: unknown): value is RepairObligation {
 
 function parseSection(state: Readonly<EngineState>): RepairResult<RepairObligationSection> {
   const raw = state.repairObligations;
-  if (raw === undefined) return { ok: true, value: { version: 1, records: {}, currentByPlan: {} } };
-  if (!isRecord(raw) || raw.version !== 1 || !isRecord(raw.records) || !isRecord(raw.currentByPlan)) {
+  if (raw === undefined) return { ok: true, value: { version: 1, records: {}, currentByPlan: {}, admissionsByPlan: {} } };
+  if (!isRecord(raw) || raw.version !== 1 || !isRecord(raw.records) || !isRecord(raw.currentByPlan) ||
+    (raw.admissionsByPlan !== undefined && !isRecord(raw.admissionsByPlan))) {
     return failure('Engine state repairObligations section is incompatible');
   }
   if (!Object.values(raw.records).every(validObligation) ||
-    !Object.values(raw.currentByPlan).every((tasks) => isRecord(tasks) && Object.values(tasks).every((id) => typeof id === 'string'))) {
+    !Object.values(raw.currentByPlan).every((tasks) => isRecord(tasks) && Object.values(tasks).every((id) => typeof id === 'string')) ||
+    !(raw.admissionsByPlan === undefined || Object.values(raw.admissionsByPlan)
+      .every((keys) => isRecord(keys) && Object.values(keys).every((id) => typeof id === 'string')))) {
     return failure('Engine state repairObligations records are incompatible');
   }
-  return { ok: true, value: raw as unknown as RepairObligationSection };
+  return {
+    ok: true,
+    value: { ...raw, admissionsByPlan: raw.admissionsByPlan ?? {} } as unknown as RepairObligationSection,
+  };
 }
 
 function persistenceFailure(result: { kind: string; message: string }): RepairResult<never> {
@@ -140,14 +149,11 @@ export function createRepairObligationStore(
     return parseSection(current.value);
   };
 
-  return {
-    read,
-
-    async admit(admission): Promise<RepairAdmissionResult> {
+  const admit = async (admission: RepairAdmission, admissionKey?: string): Promise<RepairAdmissionResult> => {
       let result: RepairAdmissionResult | undefined;
       const planIdentity = repairPlanIdentity(projectRoot, admission.planPath);
       const taskIds = uniqueCanonicalTaskIds(admission.taskIds);
-      if (!admission.id || taskIds.length === 0) return failure('Repair admission requires an id and at least one task') as RepairAdmissionResult;
+      if (!admission.id || taskIds.length === 0 || (admissionKey !== undefined && !admissionKey.trim())) return failure('Repair admission requires an id, task, and non-empty key') as RepairAdmissionResult;
 
       const updated = await store.update((current) => {
         const parsed = parseSection(current);
@@ -156,6 +162,16 @@ export function createRepairObligationStore(
           return current as EngineState;
         }
         const section = clone(parsed.value);
+        const replayId = admissionKey === undefined ? undefined : section.admissionsByPlan[planIdentity]?.[admissionKey];
+        if (replayId !== undefined) {
+          const replay = section.records[replayId];
+          if (!replay) {
+            result = failure('Repair admission key points to a missing obligation') as RepairAdmissionResult;
+            return current as EngineState;
+          }
+          result = { ok: true, obligation: clone(replay), replayed: true };
+          return current as EngineState;
+        }
         const existing = section.records[admission.id];
         if (existing) {
           result = { ok: true, obligation: clone(existing), replayed: true };
@@ -171,13 +187,24 @@ export function createRepairObligationStore(
           tasks: Object.fromEntries(taskIds.map((taskId) => [taskId, { status: 'open' as const }])),
         };
         section.records[obligation.id] = obligation;
+        if (admissionKey !== undefined) {
+          section.admissionsByPlan[planIdentity] = {
+            ...(section.admissionsByPlan[planIdentity] ?? {}),
+            [admissionKey]: obligation.id,
+          };
+        }
         const currentTasks = section.currentByPlan[planIdentity] ?? {};
         section.currentByPlan[planIdentity] = { ...currentTasks, ...Object.fromEntries(taskIds.map((taskId) => [taskId, obligation.id])) };
         result = { ok: true, obligation: clone(obligation), replayed: false };
         return { ...current, repairObligations: section };
       });
       return updated.ok ? result! : persistenceFailure(updated) as RepairAdmissionResult;
-    },
+  };
+
+  return {
+    read,
+    admit: (admission) => admit(admission),
+    admitOrReplay: (admissionKey, admission) => admit(admission, admissionKey),
 
     async close(input): Promise<RepairClosureResult> {
       let result: RepairClosureResult | undefined;
