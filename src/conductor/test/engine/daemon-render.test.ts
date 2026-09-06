@@ -350,7 +350,13 @@ describe('renderDaemonEvent', () => {
     ]);
   });
 
-  it('renders unsatisfied gate verdicts', () => {
+  it('renders a reasonless satisfied verdict without a trailing separator', () => {
+    expect(
+      lines({ type: 'gate_verdict', step: 'plan', satisfied: true }),
+    ).toEqual(['· gate plan: satisfied']);
+  });
+
+  it('keeps the unsatisfied gate verdict line byte-identical', () => {
     expect(
       lines({ type: 'gate_verdict', step: 'plan', satisfied: false, reason: 'uncovered' }),
     ).toEqual(['· gate plan: unsatisfied — uncovered']);

@@ -199,6 +199,7 @@ describe('engine/daemon-log', () => {
         { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 },
         { type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'retry' },
         { type: 'gate_verdict', step: 'build', satisfied: false, reason: 'unsatisfied' },
+        { type: 'gate_verdict', step: 'build', satisfied: true },
         { type: 'kickback', from: 'prd_audit', to: 'build', count: 1 },
         { type: 'loop_halt', reason: 'stuck' },
         { type: 'loop_converged' },
