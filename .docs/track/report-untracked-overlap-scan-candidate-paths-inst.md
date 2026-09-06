@@ -1,0 +1,13 @@
+# Track: Report untracked overlap-scan candidate paths instead of a false clean verdict
+
+Track: technical
+
+Scope boundary: Small fix for #875, approved by the operator on 2026-09-06 (delegated). Scope is the advisory overlap scan's candidate-path handling: classify each candidate path against the checkout, name the ones that are not present, withhold the single clean line whenever the scan did not evaluate a present path, and stop the argv parser from dropping candidate paths the operator passed. Rename detection, name-only-diff detection, branch enumeration, the intersection rule, the blocker sweep, and the advisory always-exit-0 contract stay exactly as they are.
+
+This is internal tooling behavior for a non-interactive engine command; acceptance criteria live in technical stories rather than a PRD.
+
+The operator approved annotate-and-keep-scanning over drop-the-missing-path on 2026-09-06 (delegated). A path absent from this checkout can still be created by a sibling branch, and that overlap is the most valuable signal the scan produces for a planned-new file; dropping the path would discard it, while annotating it satisfies the issue's visibility requirement without losing a finding.
+
+Scope check: A — consumer-facing (`ai-conductor overlap-scan` ships in the engine and the plan skill's advisory scan step runs in every consumer repository; no self-host, daemon, release-gate, CI, or `.docs/`-layout signal fires); B — n/a (no new skill); C — provider-agnostic (engine CLI and git plumbing only; no provider path, variable, or capability is touched). No catalog registration is required. No behavioral rule text changes, so neither the consumer-facing nor the repo-local rules file is edited.
+
+Verified foundation: `src/conductor/src/engine/overlap-scan.ts` never inspects whether a candidate path exists — `runOverlapScan` resolves the base, enumerates unmerged `spec/*` branches, and intersects each branch diff with `candidateFiles` in memory, so a candidate absent from the checkout is neither reported nor mentioned. `renderReport` prints its single clean line only when `seamOverlaps`, `blockers`, `indeterminate`, and `skipNotes` are all empty, so `skipNotes` is already the channel that withholds an unearned clean verdict. `detectOverlapScanCommand` in `src/conductor/src/index.ts` reads one value after `--files` and ignores every following bare token, which is why the issue's space-separated repro scanned only the nonexistent path and printed the clean line. `advisoryDuplicateClaimWarn` in `src/conductor/src/engine/engineer/coherence-validator.ts` is the only other caller of `runOverlapScan`; it reads `seamOverlaps` and `blockers` only, so added notes cannot change land behavior.
