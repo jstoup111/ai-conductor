@@ -18,6 +18,7 @@ export type ResolvedOtelConfig =
       exporter: 'otlp';
       endpoint: string;
       protocol?: 'http/protobuf' | 'grpc';
+      headers?: Record<string, string>;
       projectName?: string;
     }
   | { enabled: true; exporter: 'file'; file: string; projectName?: string };
@@ -40,7 +41,7 @@ export function resolveOtelConfig(
     return { enabled: false };
   }
 
-  const { exporter, endpoint, file, protocol, project_name } = otel;
+  const { exporter, endpoint, file, protocol, headers, project_name } = otel;
   const projectName = project_name?.trim() || undefined;
 
   // Unknown exporter → disabled + named error listing valid options.
@@ -61,11 +62,26 @@ export function resolveOtelConfig(
           'No endpoint was provided.',
       };
     }
+    const resolvedHeaders: Record<string, string> = {};
+    if (headers) {
+      for (const [header, reference] of Object.entries(headers)) {
+        const value = process.env[reference.env];
+        if (!value) {
+          return {
+            enabled: false,
+            error: `otel header '${header}' references environment variable '${reference.env}', which is unset or empty.`,
+          };
+        }
+        resolvedHeaders[header] = value;
+      }
+    }
+
     return {
       enabled: true,
       exporter: 'otlp',
       endpoint,
       ...(protocol ? { protocol } : {}),
+      ...(headers ? { headers: resolvedHeaders } : {}),
       ...(projectName ? { projectName } : {}),
     };
   }
