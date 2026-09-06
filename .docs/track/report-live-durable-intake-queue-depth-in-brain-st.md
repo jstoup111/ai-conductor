@@ -1,0 +1,13 @@
+# Track: Report live durable intake queue depth in brain status
+
+Track: technical
+
+Scope boundary: Small fix for #1132, approved by the operator on 2026-09-06 (delegated). The brain status verb reports pending, claimed, and stranded counts computed from the durable intake ledger at the moment the verb runs, and reports the last notification batch as a labelled prior batch rather than as current depth. Redesigning the notifier's status surface, adding a machine-readable status output, reporting per-repository breakdowns, changing the reap or requeue policy, and adding any new status verb or flag are outside this slice.
+
+This is an operator-facing diagnostic correction to an internal CLI verb; acceptance criteria live in technical stories rather than a PRD.
+
+Two approaches were weighed. Reading the durable ledger at invocation time was selected over having the intake loop write richer counts into the notifier status surface on every tick, because a written snapshot is stale by construction between ticks — which is the defect — and because it would keep a sidecar file as the authority for state that already has a durable home. The rejected approach also writes on every tick even when nothing changes. Approved by the operator on 2026-09-06 (delegated).
+
+Scope check: A — harness-repo-only (the brain loop is this repository's host-wide intake supervisor and its ledger layout is a convention only this repository has); B — n/a (no new skill); C — provider-agnostic (no provider path, variable, or capability is involved). No catalog registration is required. Event spine: no new channel — the counts are read from existing durable state at read time, which is exception C (durable state, not an occurrence in time); no watcher, poller, sidecar, or stamped timestamp is introduced, and the notifier's existing surface gains no new fields.
+
+Verified foundation: brain-supervisor-cli.ts's brainStatus reads `intake-status.json` and prints its `count` field as `queued:`; notifier.ts defines that field as the size of the newly-notified batch and writes nothing on an empty batch, so the printed number is a stale batch size rather than a depth. engineer-cli.ts's buildIntake composes the durable ledger at `ledger.json` under the same engineer directory brainStatus already resolves, and ledger.ts's `list()` returns every entry with its status and `lastSeenAt`. stale-claim.ts's `isStaleClaim` and resolved-config.ts's `resolveStaleClaimWindowMs` already define the stranded-claim predicate and its configured window, and engineer-cli.ts's requeue path already pairs them over `ledger.list()`.
