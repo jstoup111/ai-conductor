@@ -3841,6 +3841,27 @@ export class Conductor {
     }
     | { kind: 'none'; reason: string }
   > {
+    // A route can remain pending while an operator records scope acceptance.
+    // Re-evaluate the durable authority immediately before invoking
+    // /remediate, so an accepted-only report neither consumes a repair lap nor
+    // creates a synthetic repair obligation from stale routing state.
+    if (hintSource.evidence?.some((provenance) => provenance.gate === 'prd_audit')) {
+      const overScopeRoute = await this.routeCurrentPrdAuditOverScope(state.feature_desc);
+      if (overScopeRoute.kind === 'record') return { kind: 'none' };
+      if (overScopeRoute.kind === 'halt') {
+        return {
+          kind: 'halt',
+          haltClass: 'needs-human',
+          detail:
+            `prd-audit scope acceptance remains blocking — ${overScopeRoute.detail}` +
+            `\n\n${renderOverScopeDecisionBlock(
+              overScopeRoute.undecided,
+              overScopeRoute.refused,
+              overScopeRoute.defects ?? [],
+            )}`,
+        };
+      }
+    }
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
     const planResult = await readRemediationPlanResult(
       this.projectRoot,
