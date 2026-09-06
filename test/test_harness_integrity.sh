@@ -1749,6 +1749,15 @@ if [ -f "${HARNESS_DIR}/CONTRIBUTING.md" ] &&
 fi
 assert "README and CONTRIBUTING document the Apache-2.0 grant" "$license_docs_ok"
 
+# ── 27. Interpreter source transport ───────────────────────────────────────
+echo ""
+echo -e "${BOLD}27. Interpreter source transport${NC}"
+if bash "${HARNESS_DIR}/test/check_interpreter_source.sh"; then
+  assert "shipped interpreter source contains no shell-expanded runtime data" 0
+else
+  assert "shipped interpreter source contains no shell-expanded runtime data" 1
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""

@@ -287,20 +287,15 @@ Six writers touch a settings file, and each handles unparseable JSON differently
 
 | Writer | Behavior on malformed JSON |
 | --- | --- |
-| `bin/install::configure_permissions` | `json.load` raises, nothing is written, the file is left intact — but the installer still reports success (see the callout below) |
+| `bin/install::configure_permissions` | `json.load` raises, nothing is written, the file is left intact, and the installer reports an incomplete-configuration warning while continuing. |
 | `bin/install::configure_hooks` | Prints `⚠ Could not configure hooks automatically`; the file is left intact. Invoked as `… \|\| warn`, so `set -e` never aborts the install |
 | `worktree-prepare.ts::wireSessionHookSettings` | Renames the file to `<path>.bak-<epoch>`, logs the reason, and rebuilds from `{}`. Never discards content |
 | `write-fence.ts::mergeFenceIntoSettings` | Silently discards and restarts from `{"hooks":{"PreToolUse":[]}}` |
 | `preflight.ts::ensureClaudeSettings` | Never parses. A malformed project `settings.json` is left untouched forever, and the preflight reports nothing |
 | `sandbox-build-env.ts::provisionTrustState` | Malformed operator `~/.claude.json` propagates no workspace trust — the sandbox never guesses trust |
 
-> **Known limitation.** `bin/install::configure_permissions` reports success on a malformed
-> `settings.json`. `rm -f "$perms_file"` runs between the python3 heredoc and the `if [ $? -eq 0 ]`
-> check, so `$?` holds `rm`'s exit code, not python's. The installer prints `✓ Permissions:` with an
-> empty count and no permissions are actually added. If your allow list looks unchanged after
-> `bin/install`, validate the file with `python3 -m json.tool ~/.claude/settings.json` and fix the JSON
-> before re-running. `configure_hooks` has no intervening command and reports correctly. Tracked in
-> [#1020](https://github.com/jstoup111/ai-conductor/issues/1020).
+Both installer helpers pass settings paths as data to fixed Python source and propagate processing
+failures to the existing warning-and-continue installer policy. Malformed settings are left unchanged.
 
 ## Related
 

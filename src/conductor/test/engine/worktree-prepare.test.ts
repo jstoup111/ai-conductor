@@ -1237,7 +1237,7 @@ require('node:fs').writeFileSync(${JSON.stringify(observationPath)}, process.env
       expect(content).not.toBe(staleCommitMsg);
       expect(content).toBe(COMMIT_MSG_HOOK);
       // Assert hardened version: real id extraction via .map() not Object.keys
-      expect(content).toContain('.map(t => String(t && t.id))');
+      expect(content).toContain('.map((task) => String(task && task.id))');
       expect(content).not.toContain('Object.keys');
     });
 
