@@ -131,6 +131,12 @@ describe('TerminalRenderer', () => {
     expect(stream.output()).toBe('  gate plan: satisfied — covered\n');
   });
 
+  it('renders a reasonless satisfied verdict without a trailing separator', async () => {
+    await renderer.handle({ type: 'gate_verdict', step: 'plan', satisfied: true });
+
+    expect(stream.output()).toBe('  gate plan: satisfied\n');
+  });
+
   it('renders typed credential-park progress without a lifecycle restart', async () => {
     await renderer.handle({
       type: 'credentials_park_progress',
