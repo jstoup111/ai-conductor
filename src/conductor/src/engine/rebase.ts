@@ -884,26 +884,36 @@ function lineCounts(content: string): Map<string, number> {
 function parseDroppedCommitDiff(diff: string): DroppedFileEdit[] | null {
   const edits: DroppedFileEdit[] = [];
   let current: DroppedFileEdit | null = null;
+  let inHunk = false;
   for (const line of diff.split('\n')) {
     if (line.startsWith('diff --git ')) {
       current = { oldPath: null, newPath: null, added: [], removed: [] };
       edits.push(current);
+      inHunk = false;
       continue;
     }
     if (line.startsWith('Binary files') || line.startsWith('GIT binary patch')) return null;
-    if (current === null || line.startsWith('@@')) continue;
+    if (current === null) continue;
+    if (line.startsWith('@@')) {
+      inHunk = true;
+      continue;
+    }
+    if (inHunk) {
+      if (line.startsWith('+')) {
+        const body = line.slice(1).trim();
+        if (body) current.added.push(body);
+      } else if (line.startsWith('-')) {
+        const body = line.slice(1).trim();
+        if (body) current.removed.push(body);
+      }
+      continue;
+    }
     if (line.startsWith('--- ')) {
       const source = line.slice(4).trim();
       current.oldPath = source === '/dev/null' ? null : source.replace(/^a\//, '');
     } else if (line.startsWith('+++ ')) {
       const target = line.slice(4).trim();
       current.newPath = target === '/dev/null' ? null : target.replace(/^b\//, '');
-    } else if (line.startsWith('+')) {
-      const body = line.slice(1).trim();
-      if (body) current.added.push(body);
-    } else if (line.startsWith('-')) {
-      const body = line.slice(1).trim();
-      if (body) current.removed.push(body);
     }
   }
   return edits;
