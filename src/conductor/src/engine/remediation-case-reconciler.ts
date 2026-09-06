@@ -214,6 +214,10 @@ function reconcileState(
       && replacement.effect.kind === 'action'
       && !referencedExisting.has(replacement.id)
       && attemptedIds.has(replacement.id)
+      // Same shared effect-status test as the non-action branch below: an
+      // attempted case whose effect is still reserved or durably failed is
+      // unfinished evidence, and attempt membership alone must not resolve it.
+      && !hasReservedOrFailedRemediationEffect(replacement)
     ) {
       changed = true;
       resolvedAbsentCaseIds.push(replacement.id);

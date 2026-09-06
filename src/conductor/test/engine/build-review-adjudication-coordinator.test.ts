@@ -816,6 +816,90 @@ describe('coordinateBuildReviewAdjudication', () => {
       type: 'remediation_case_reconciled', caseId: 'case-gone', resolution: 'resolved',
     }));
   });
+  it.each([
+    ['at entry', 0],
+    ['before dispatch', 1],
+    ['after the judgement', 2],
+  ] as const)('settles an attempted absent action case on the all-resolved shortcut %s', async (_when, reads) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    // An earlier lap applied this action and BUILD attempted it; the current
+    // lap no longer reports its source. The shortcut used to skip the
+    // reconciler, so the case stayed open with an applied effect: the reducer
+    // answered PASS while BUILD recovery still replayed its work order.
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-attempted', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'An earlier finding that BUILD repaired.', resolution: 'open',
+        sources: [{ sourceId: 'testQuality:sha256-earlier', outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+        effect: { id: 'effect-attempted', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+      }],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-attempted',
+      cases: [{ caseId: 'case-attempted', priority: 'high', tasks: [{ title: 'Repair the earlier finding' }] }],
+    });
+    await markBuildReviewWorkOrderAttempted(root, feature);
+    const unresolved = Array.from({ length: reads }, () => new Set<string>());
+    const events: RemediationCaseLifecycleEvent[] = [];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()),
+      resolveOperatorResolvedFindingIds: async () => unresolved.shift() ?? new Set([findingId]),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    await expect(store.read()).resolves.toMatchObject({
+      ok: true, state: { cases: [{ id: 'case-attempted', resolution: 'resolved' }] },
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_case_reconciled', caseId: 'case-attempted', resolution: 'resolved',
+    }));
+  });
+
+  it('fails closed on the all-resolved shortcut when durable attempt evidence is invalid', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'build-review-work-order.json'), '{not json');
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), operatorResolvedFindingIds: new Set([findingId]),
+    });
+
+    expect(result).toMatchObject({ ok: false, detail: expect.stringContaining('build-review work order') });
+  });
+
+  it('takes the acceptance-terminal exit instead of an obsolete HALT when the judgement fails after acceptance', async () => {
+    const root = await projectRoot();
+    const events: string[] = [];
+    // Unresolved at entry, before dispatch, and when the judge is handed the
+    // context; the exact acceptance lands while the provider call is in flight.
+    const resolutions = [new Set<string>(), new Set<string>()];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => { throw new Error('provider unavailable'); }),
+      resolveOperatorResolvedFindingIds: async () => resolutions.shift() ?? new Set([findingId]),
+      emit: async (event) => { events.push(event.type); },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(events).not.toContain('remediation_adjudication_failed');
+  });
+
+  it('keeps a content failure closed when only one of two sources is accepted during the judgement', async () => {
+    const root = await projectRoot();
+    const resolutions = [new Set<string>(), new Set<string>()];
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => { throw new Error('provider unavailable'); }), aggregate: mixedAggregate,
+      resolveOperatorResolvedFindingIds: async () => resolutions.shift() ?? new Set([acceptedSource.findingId]),
+    });
+
+    expect(result).toEqual({ ok: false, detail: 'remediate judgement failed' });
+  });
+
   it('hands the judge the case-v1 contract, sourcing plan and task evidence from the worktree', async () => {
     const root = await projectRoot();
     await mkdir(join(root, '.pipeline'), { recursive: true });

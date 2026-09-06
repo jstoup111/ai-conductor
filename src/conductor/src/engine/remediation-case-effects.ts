@@ -21,7 +21,18 @@ import {
 
 export type RemediationEffectResult =
   | { readonly ok: true; readonly status: 'applied' | 'already-applied'; readonly effectId: string }
-  | { readonly ok: false; readonly reason: string };
+  | {
+    readonly ok: false;
+    readonly reason: string;
+    /**
+     * Case ids whose reserved action effect this executor durably flipped to
+     * `failed` under its own lease. Reported from the same mutation that
+     * persisted the transition, so the caller never has to re-read the store
+     * (and never mistakes a read failure for "nothing failed"). Absent when
+     * the failure left every reservation untouched.
+     */
+    readonly failedCaseIds?: readonly string[];
+  };
 
 type ActionCase = RemediationCaseRecord & {
   readonly effect: Extract<RemediationCaseRecord['effect'], { readonly kind: 'action' }>;
@@ -137,23 +148,24 @@ export async function applyBuildReviewActionEffects(input: {
         ? { ...record, effect: { id: record.effect.id, kind: 'action', status: 'failed', diagnostic } }
         : record,
     );
+    const failedCaseIds = pending.filter(isSettling).map((record) => record.id);
     const published = await (input.publishWorkOrder ?? publishBuildReviewWorkOrder)(input.projectRoot, {
       version: 'v1', domain: 'build_review', feature: input.feature, effectId: primaryEffectId,
       cases: orderBuildReviewActionCases(cases),
     });
     if (!published.ok) {
       const diagnostic = `work-order ${published.reason}`;
-      return { value: { ok: false as const, reason: diagnostic }, nextState: failPending(diagnostic) };
+      return { value: { ok: false as const, reason: diagnostic, failedCaseIds }, nextState: failPending(diagnostic) };
     }
     let charged: Awaited<ReturnType<typeof chargeBuildReviewEffectInLedger>>;
     try {
       charged = await (input.chargeEffect ?? chargeBuildReviewEffectInLedger)(input.projectRoot, primaryEffectId, input.chargeInput);
     } catch (error) {
       const diagnostic = `build-review effect charge failed: ${error instanceof Error ? error.message : String(error)}`;
-      return { value: { ok: false as const, reason: diagnostic }, nextState: failPending(diagnostic) };
+      return { value: { ok: false as const, reason: diagnostic, failedCaseIds }, nextState: failPending(diagnostic) };
     }
     if (charged.status === 'unreadable') {
-      return { value: { ok: false as const, reason: charged.reason }, nextState: failPending(charged.reason) };
+      return { value: { ok: false as const, reason: charged.reason, failedCaseIds }, nextState: failPending(charged.reason) };
     }
     if (charged.status === 'charged' && (charged.exhausted || charged.cumulativeExhausted)) {
       // A bare "budget exhausted" halt told the operator nothing about which
@@ -162,7 +174,7 @@ export async function applyBuildReviewActionEffects(input: {
       const scope = charged.cumulativeExhausted ? 'cumulative' : 'per-gate';
       const diagnostic = `build-review kickback budget exhausted (${scope}): blocked cases ${blocked}; ` +
         `count ${charged.entry.count}, cumulative ${charged.entry.cumulative}`;
-      return { value: { ok: false as const, reason: diagnostic }, nextState: failPending(diagnostic) };
+      return { value: { ok: false as const, reason: diagnostic, failedCaseIds }, nextState: failPending(diagnostic) };
     }
     const next = replaceCases(state, (record) => isSettling(record)
       ? { ...record, effect: { id: record.effect.id, kind: 'action', status: 'applied', workOrderId } }
