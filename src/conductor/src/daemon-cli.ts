@@ -2613,6 +2613,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'renderer_error':
       log(`${dot} ${chalk.yellow(`⚠ renderer ${event.rendererName} failed: ${event.error}`)}`);
       break;
+    case 'pipeline_tail_diagnostic': {
+      const offset = event.byteOffset === undefined ? '' : ` at byte ${event.byteOffset}`;
+      log(`${dot} ${chalk.yellow(`⚠ pipeline tail ${event.reason}: ${event.path}${offset}`)}`);
+      break;
+    }
     case 'scratch_cleanup_reclaimed':
       log(`${dot} ${chalk.green('✓')} scratch reclaimed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
       break;

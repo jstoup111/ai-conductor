@@ -259,6 +259,11 @@ export class TerminalRenderer implements UIRenderer {
         // Log renderer errors as warnings — don't crash the pipeline.
         this.region.log(chalk.yellow(`  ⚠ Renderer error [${event.rendererName}]: ${event.error}`));
         break;
+      case 'pipeline_tail_diagnostic': {
+        const offset = event.byteOffset === undefined ? '' : ` at byte ${event.byteOffset}`;
+        this.region.log(chalk.yellow(`  ⚠ Pipeline tail ${event.reason}: ${event.path}${offset}`));
+        break;
+      }
       case 'gate_verdict':
         // Only surface unsatisfied verdicts — satisfied ones are routine.
         if (!event.satisfied) {

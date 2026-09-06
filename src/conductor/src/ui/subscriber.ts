@@ -51,12 +51,17 @@ export class TerminalSubscriber implements UISubscriber {
       'feature_usage_total',
       'halt_marker_write_failed',
       'renderer_error',
+      'pipeline_tail_diagnostic',
     ];
 
     for (const type of eventTypes) {
       const handler: EventHandler = async (event) => {
         await this.onRender(event);
-        if (event.type === 'halt_marker_write_failed' || event.type === 'renderer_error') {
+        if (
+          event.type === 'halt_marker_write_failed'
+          || event.type === 'renderer_error'
+          || event.type === 'pipeline_tail_diagnostic'
+        ) {
           await this.terminalRenderer?.handle(event);
         }
       };

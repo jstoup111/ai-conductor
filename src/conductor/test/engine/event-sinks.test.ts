@@ -51,6 +51,7 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'build_no_progress',
   'build_stall',
   'renderer_error',
+  'pipeline_tail_diagnostic',
   'when_skip',
   'parallel_started',
   'parallel_completed',
@@ -184,6 +185,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'build_no_progress',
   'build_stall',
   'pipeline_closeout',
+  'pipeline_tail_diagnostic',
   'renderer_error',
   'provider_attempt',
   'scratch_cleanup_reclaimed',
@@ -526,6 +528,15 @@ describe('event sink subscriptions', () => {
       sinks: { render: true, persist: false, audit: false, otel: true },
       rendered: true,
       persisted: false,
+    });
+  });
+
+  it('renders and persists tail diagnostics without widening audit or OTel sinks', () => {
+    expect(EVENT_SINKS.pipeline_tail_diagnostic).toEqual({
+      render: true,
+      persist: true,
+      audit: false,
+      otel: false,
     });
   });
 

@@ -73,6 +73,13 @@ describe('renderDaemonEvent', () => {
     })).toEqual(['· ✋ manual_test status write refused: skipped → stale (restage ship tail after build kickback)']);
   });
 
+  it('renders tail diagnostics without source record contents', () => {
+    expect(lines({
+      type: 'pipeline_tail_diagnostic', reason: 'malformed-line',
+      path: '.pipeline/pipeline-events.jsonl', byteOffset: 42,
+    })).toEqual(['· ⚠ pipeline tail malformed-line: .pipeline/pipeline-events.jsonl at byte 42']);
+  });
+
   it('renders exact operator park boundaries without lifecycle semantics', () => {
     expect([
       lines({
