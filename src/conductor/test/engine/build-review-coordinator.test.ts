@@ -124,16 +124,33 @@ describe("build-review coordinator: registered dispatch", () => {
     });
   });
 
-  it("passes test-quality's empty frozen scope without preflight or grader dispatch", async () => {
+  it.each([
+    ['a production-only refactor'],
+    ['a pure test relocation'],
+    ['a plan without test paths'],
+  ])("passes typed empty scope for %s without preflight or grader dispatch", async () => {
     const frozenInputs = inputs();
+    const emit = vi.fn(async () => undefined);
     const input = coordinationInput(true, {
       inputs: {
         ...frozenInputs,
         sourceSnapshot: {
           ...frozenInputs.sourceSnapshot,
-          testQuality: { inScopeTests: [], counterfactualFileSelectors: [], unresolvedMarkers: [] },
+          // The old compatibility selector is deliberately non-empty: typed
+          // scope, not a file-level selector, decides empty-scope eligibility.
+          testQuality: {
+            inScopeTests: ['test/legacy-selector.test.ts'],
+            counterfactualFileSelectors: [],
+            unresolvedMarkers: [{ selector: 'test/legacy-selector.test.ts', reference: 'S99.1' }],
+          },
+          testScope: {
+            targets: [], candidates: [],
+            notes: [{ kind: 'unresolved-reference' }],
+            changedDeclarations: [], affectedGroups: [], sharedSources: [],
+          } as never,
         },
       },
+      emit,
     });
 
     const result = await coordinateBuildReviewRubrics(input);
@@ -146,6 +163,11 @@ describe("build-review coordinator: registered dispatch", () => {
     expect(input.preflight).toHaveBeenCalledTimes(0);
     expect(input.dispatchModel).not.toHaveBeenCalled();
     expect(input.readCache).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledWith({
+      type: 'build_review_outer_verdict', lapId: 'lap-current', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+      reason: 'test_quality_empty_scope',
+      unresolvedMarkers: [{ selector: 'test/legacy-selector.test.ts', reference: 'S99.1' }],
+    });
   });
 
   it("excludes a relocated refactor-preserving test from the grader and rejects a finding anchored there", async () => {

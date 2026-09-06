@@ -2588,6 +2588,13 @@ export class DefaultStepRunner implements StepRunner {
       modelCliOverride: this.modelOverride,
       effortCliOverride: this.effortOverride,
     });
+    // A whole-gate opt-out is terminal for review work.  In particular it
+    // must precede plan discovery and frozen-input assembly, both of which
+    // can otherwise reach review-specific Git/proof seams before the gate
+    // reports its disabled result.
+    if (!buildReviewConfig.enabled) {
+      return { success: true, output: 'build_review disabled' };
+    }
     let planPath = this.planPathOverride;
     if (!planPath) {
       planPath = await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined);
@@ -2715,13 +2722,6 @@ export class DefaultStepRunner implements StepRunner {
     // The deterministic floor and declared-copy checks deliberately precede
     // this dispatch: they are gate-owned preconditions, and must remain
     // observable even when configuration activates the rubric fan-out.
-    // An explicit whole-gate opt-out is the only route that avoids the
-    // coordinator. The resolved config defaults an absent raw block to
-    // enabled, so raw config shape can never select the retired scalar grader.
-    if (!buildReviewConfig.enabled) {
-      return withBaseFreshness({ success: true, output: 'build_review disabled' });
-    }
-
     // The lifecycle still exposes one public build_review step. Its
     // coordinator owns the bounded auxiliary fan-out and receives the one
     // frozen snapshot. The injectable coordinator remains a narrow test seam.
