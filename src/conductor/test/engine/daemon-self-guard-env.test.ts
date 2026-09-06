@@ -65,6 +65,7 @@ describe('Task 4 — runDaemonMode stamps self-guard env before ensureFresh', ()
         projectRoot,
         concurrency: 1,
         ensureFresh,
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
         exitProcess: () => {},
       } as any),
     ).rejects.toThrow('__stop__');

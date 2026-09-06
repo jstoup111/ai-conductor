@@ -94,6 +94,7 @@ describe('acceptance: canonical tracker-client seam — kill-switch at real comp
         engineerDir,
         print: () => {},
         printErr: (s) => errOut.push(s),
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
         // No `gh` injected — this is the real composition root's default
         // `makeProductionGh()`, exactly like a live `conduct-ts engineer poll`.
       };

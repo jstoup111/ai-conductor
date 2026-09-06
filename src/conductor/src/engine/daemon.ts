@@ -306,6 +306,8 @@ export interface DaemonDeps {
    * always reports false in api-key mode — the gate is inert there).
    */
   isBuildAuthMissing?: () => Promise<boolean>;
+  /** Machine-level gh compatibility gate. A non-null diagnostic blocks only new picks. */
+  getGhVersionFloorDiagnostic?: () => Promise<string | null>;
   /**
    * Task 15 (FR-6): event-driven wake for the build-auth credential gate.
    * Mirrors `watchHaltCleared`'s shape and lifecycle exactly — registered
@@ -764,6 +766,15 @@ export async function runDaemon(
       }
       return true; // fail-closed: an unreadable/erroring credential must never look "present"
     }
+  };
+
+  let ghVersionDiagnosticLogged: string | null = null;
+  const checkGhVersionFloor = async (): Promise<boolean> => {
+    if (!deps.getGhVersionFloorDiagnostic) return false;
+    const diagnostic = await deps.getGhVersionFloorDiagnostic();
+    if (diagnostic && diagnostic !== ghVersionDiagnosticLogged) log(`[daemon] ${diagnostic}`);
+    ghVersionDiagnosticLogged = diagnostic;
+    return diagnostic !== null;
   };
 
   const idlePollMs = options.idlePollMs ?? 5000;
@@ -1267,6 +1278,7 @@ export async function runDaemon(
       // picked this tick; in-flight work is unaffected. Non-blocking: the
       // loop still services watchers/waker/idle-poll bookkeeping below.
       const buildAuthMissing = await checkBuildAuthMissing();
+      const ghVersionBlocked = await checkGhVersionFloor();
 
       // Task 7: Rate-limit episode gate. When an episode is active, skip new
       // feature dispatch to avoid thundering herd. In-flight features remain
@@ -1284,7 +1296,7 @@ export async function runDaemon(
       };
 
       let next: BacklogItem | undefined;
-      if (!paused && !episodeActive && !buildAuthMissing) {
+      if (!paused && !episodeActive && !buildAuthMissing && !ghVersionBlocked) {
         // Local-only discovery first (no remote fetch): cheap, and it preserves
         // the common path when a slot can be filled without origin I/O.
         const parkedBeforeLocal = new Set(claims.listParked());

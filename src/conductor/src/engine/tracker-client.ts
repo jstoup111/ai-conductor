@@ -23,6 +23,27 @@ export type GhRunner = (
   opts: { cwd: string },
 ) => Promise<{ stdout: string }>;
 
+/** A `gh` command requested a JSON field that this installed CLI does not support. */
+export class GhCapabilityError extends Error {
+  readonly cli = 'gh';
+  readonly field: string;
+
+  constructor(field: string, cause: unknown) {
+    super(`gh does not support JSON field "${field}"`, { cause });
+    this.name = 'GhCapabilityError';
+    this.field = field;
+  }
+}
+
+function unsupportedJsonField(cause: unknown): string | undefined {
+  const failure = cause as { code?: unknown; stderr?: unknown };
+  if (typeof failure?.code !== 'number' || failure.code === 0 || typeof failure.stderr !== 'string') {
+    return undefined;
+  }
+
+  return /^Unknown JSON field:\s*"([^"]+)"/m.exec(failure.stderr)?.[1];
+}
+
 /**
  * Test kill-switch. When `AI_CONDUCTOR_NO_REAL_EXEC` is set (the vitest global setup
  * sets it — see `test/setup.ts`), the production `gh`/`git` runners refuse to
@@ -44,11 +65,19 @@ export function assertRealExecAllowed(bin: string): void {
 export function makeProductionGh(): GhRunner {
   return async (args: string[], opts: { cwd: string }) => {
     assertRealExecAllowed('gh');
-    const result = await execFileP('gh', args, {
-      cwd: opts.cwd,
-      maxBuffer: GH_STDOUT_MAX_BUFFER,
-    });
-    return { stdout: String(result.stdout) };
+    try {
+      const result = await execFileP('gh', args, {
+        cwd: opts.cwd,
+        maxBuffer: GH_STDOUT_MAX_BUFFER,
+      });
+      return { stdout: String(result.stdout) };
+    } catch (cause) {
+      const field = unsupportedJsonField(cause);
+      if (field) {
+        throw new GhCapabilityError(field, cause);
+      }
+      throw cause;
+    }
   };
 }
 

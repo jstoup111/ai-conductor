@@ -11,7 +11,7 @@ Markdown skills directly.
 ## Requirements
 
 - [Claude Code](https://docs.claude.com/en/docs/claude-code) v2.0+ and/or [Codex](https://github.com/openai/codex)
-- Git, and [GitHub CLI](https://cli.github.com/) authenticated (`gh auth login`)
+- Git, and [GitHub CLI](https://cli.github.com/) 2.73.0 or later, authenticated (`gh auth login`)
 - Node.js 26.7.0 (minimum Node 26; the engine pins 26.7.0 via `asdf`), npm, tmux, and `python3` with PyYAML
 - A project to work on — Rails + PostgreSQL has full tech-context support; other stacks work with the
   generic skills

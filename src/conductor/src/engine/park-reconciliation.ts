@@ -4,6 +4,7 @@ import {
   type GhRunner,
   type GitRunner,
 } from './pr-labels.js';
+import { GhCapabilityError } from './tracker-client.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
 import { access, readFile, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -21,6 +22,8 @@ export interface ReconcileMergedParkOptions {
   runGh?: GhRunner;
   requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
   log?: (message: string) => void;
+  /** Logger reserved for capability diagnostics during a quiet daemon sweep. */
+  capabilityLog?: (message: string) => void;
   /** Logger reserved for project-teardown output during a quiet sweep. */
   teardownLog?: (message: string) => void;
   disposeHaltWatcher?: (slug: string) => void;
@@ -254,6 +257,7 @@ export type MergedPrHeadDiagnosis =
   | { kind: 'no-pr' }
   | { kind: 'ahead'; headRefOid: string }
   | { kind: 'behind'; headRefOid: string }
+  | { kind: 'capability-unavailable' }
   | { kind: 'indeterminate' };
 
 /**
@@ -280,6 +284,7 @@ export async function proveByMergedPrHead(
   runGh: GhRunner,
   projectRoot: string,
   ref: string,
+  onCapabilityError?: (error: GhCapabilityError) => void,
 ): Promise<MergedPrHeadDiagnosis> {
   try {
     const { stdout } = await runGh(
@@ -304,7 +309,11 @@ export async function proveByMergedPrHead(
       }
       return { kind: 'indeterminate' };
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof GhCapabilityError) {
+      onCapabilityError?.(error);
+      return { kind: 'capability-unavailable' };
+    }
     return { kind: 'indeterminate' };
   }
 }
@@ -475,6 +484,7 @@ export async function reconcileParkedFeatures(
         ...opts,
         slug,
         log: undefined,
+        capabilityLog: opts.log,
         teardownLog: opts.log,
         // Named explicitly (not merely carried by the spread) so the two
         // production hand-off seams stay visible at the only call site that
@@ -579,11 +589,17 @@ export async function reconcileMergedPark(
   if (unproven.length > 0) {
     const runGh = opts.runGh ?? makeProductionGh();
     for (const ref of unproven) {
-      const diagnosis = await proveByMergedPrHead(runGit, runGh, opts.projectRoot, ref);
+      const diagnosis = await proveByMergedPrHead(runGit, runGh, opts.projectRoot, ref, (error) => {
+        (opts.capabilityLog ?? opts.log)?.(
+          `[parked-reconciliation] ${opts.slug}: gh capability unavailable for ${error.field}`,
+        );
+      });
       switch (diagnosis.kind) {
         case 'proven':
           continue;
         case 'no-pr':
+          return { slug: opts.slug, steps: [], refusal: 'no-merge-proof' };
+        case 'capability-unavailable':
           return { slug: opts.slug, steps: [], refusal: 'no-merge-proof' };
         case 'ahead': {
           const unmergedCommits = await listUnmergedCommits(

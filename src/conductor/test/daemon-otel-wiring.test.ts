@@ -199,6 +199,7 @@ async function dispatchWithSessionId(
     ensureFresh: async () => {},
     watch: false,
     workSource: { discover: async () => [{ slug: 'feature-a' }] },
+    probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
   });
   return { repo, pipelineDir };
 }

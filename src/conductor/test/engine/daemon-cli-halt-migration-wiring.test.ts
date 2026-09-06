@@ -43,6 +43,7 @@ describe('daemon halt-class migration startup wiring', () => {
           concurrency: 1,
           baseBranch: 'main',
           ensureFresh: async () => {},
+          probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
         }),
       ).rejects.toThrow('__stop_after_startup_wiring__');
 
@@ -77,6 +78,7 @@ describe('daemon halt-class migration startup wiring', () => {
         concurrency: 1,
         baseBranch: 'main',
         ensureFresh: async () => {},
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
         exitProcess,
       });
 
@@ -115,6 +117,7 @@ describe('daemon halt-class migration startup wiring', () => {
           concurrency: 1,
           baseBranch: 'main',
           ensureFresh: async () => {},
+          probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
           runHaltClassMigration: async () => {
             calls.push('migration');
             return join(projectRoot, '.worktrees');

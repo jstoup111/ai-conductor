@@ -18,6 +18,7 @@ so an unmerged `spec/<slug>` branch is invisible to it.
 | Requirement | Check |
 | --- | --- |
 | `ai-conductor` on PATH | `ai-conductor --help` |
+| GitHub CLI 2.73.0 or later, authenticated | `gh --version` reports 2.73.0 or later; `gh auth status` succeeds |
 | `tmux` installed (for `daemon start` and every management verb) | `tmux -V` |
 | The repo registered | `ai-conductor register <path>` |
 | A fresh install | `bin/install --check` exits 0 or 2 — the freshness gate accepts both |
@@ -1001,6 +1002,11 @@ missing terminal verdict.
 **`status` shows `⚠ session-up/process-dead`.** The tmux session outlived the daemon process. Run
 `ai-conductor daemon restart`, which reconciles the orphan (SIGTERM, then SIGKILL) and reclaims the
 lock before respawning.
+
+**The daemon reports that `gh` cannot satisfy version 2.73.0.** Dispatch is paused before any
+feature is claimed. Upgrade or repair GitHub CLI, confirm `gh --version` reports 2.73.0 or later,
+then let the next poll resume dispatch. If `finish-record` reports an unsupported JSON field, it
+also refuses without writing a finish outcome; upgrade `gh` and rerun the command.
 
 **The daemon keeps re-dispatching a feature you already shipped by hand.** You are missing the
 shipped record. Park it, then run `ai-conductor shipped-record`. See

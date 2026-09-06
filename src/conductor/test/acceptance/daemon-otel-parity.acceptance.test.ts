@@ -159,7 +159,7 @@ async function throughDaemonDispatch(events: ConductorEvent[], filteredType?: Co
   const exporter = new InMemorySpanExporter();
   const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
   buildExporters.mockReturnValueOnce({ spanExporter: exporter, metricExporter });
-  await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] } });
+  await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }) });
   return signals(exporter, metricExporter);
 }
 
@@ -190,7 +190,7 @@ async function runDaemonExportScenario(metricExporter: PushMetricExporter): Prom
   await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true }); await mkdir(join(repo, '.ai-conductor'), { recursive: true });
   await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'otel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n');
   buildExporters.mockReturnValueOnce({ spanExporter: new InMemorySpanExporter(), metricExporter });
-  await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] } });
+  await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }) });
   const rawEvents = await readFile(join(fixture.worktreePath, '.pipeline/events.jsonl'), 'utf8');
   return {
     events: rawEvents.trim().split('\n').map((line) => JSON.parse(line) as ConductorEvent),

@@ -67,6 +67,7 @@ function liveCredentialedSmokeCapabilities(): readonly (readonly [
 /** The executable required by each smoke file that needs the toolchain capability. */
 const SMOKE_TOOLCHAIN_COMMANDS: Readonly<Record<string, string>> = {
   'test/backlog-priority.smoke.test.ts': 'gh',
+  'test/gh-version-floor.smoke.test.ts': 'gh',
   'test/engine/daemon-tmux.smoke.test.ts': 'tmux',
   'test/execution/codex-provider.smoke.test.ts': 'codex',
   'test/smoke/publish-interrupted.smoke.test.ts': 'bin/setup',

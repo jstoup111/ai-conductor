@@ -79,6 +79,7 @@ describe('canonical tracker-client seam grep gate', () => {
       PR_SIDE_EXEMPT,
       'src/engine/worktree.ts',
       'src/engine/engineer/handoff.ts',
+      'src/engine/gh-version-floor.ts',
     ]);
     const files = listSourceFiles().filter((f) => !EXEC_SIDE_EXEMPT.has(f));
 
