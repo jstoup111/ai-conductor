@@ -1,3 +1,4 @@
+// Covers: S1.1, S1.2, S1.3, S1.4, S1.5, S2.1, S2.2, S2.3, S2.4
 /**
  * Acceptance (RED) spec for the gated rebase-conflict resolution sub-loop.
  *
@@ -37,6 +38,7 @@ import {
   resolveRebaseConflicts,
   runGatedRebaseResolution,
   featureCommitsPreserved,
+  type GitRunner,
   type ResolutionAttempt,
   type RebaseOutcome,
   runTier1,
@@ -658,6 +660,167 @@ describe('engine/rebase — featureCommitsPreserved (real git)', () => {
   it('fails closed when the vanished commit cannot be resolved against the pre-rebase tip', async () => {
     const ok = await featureCommitsPreserved(makeGitRunner(repo), 'main', ['feat: never existed']);
     expect(ok).toBe(false);
+  });
+});
+
+describe('engine/rebase — featureCommitsPreserved dropped-diff headers', () => {
+  const sha = 'a'.repeat(40);
+  const subject = 'feat: vanished SQL edit';
+
+  function vanishedCommitGit(diff: string, files: Record<string, string>, parentFiles: Record<string, string>) {
+    const calls: string[][] = [];
+    const git: GitRunner = async (args) => {
+      calls.push(args);
+      if (args[0] === 'log' && args[2] === 'main..HEAD') return { exitCode: 0, stdout: '', stderr: '' };
+      if (args[0] === 'log' && args[2] === 'main..ORIG_HEAD') {
+        return { exitCode: 0, stdout: `${sha}\0${subject}\n`, stderr: '' };
+      }
+      if (args.join(' ') === `show --format= --unified=0 --no-renames ${sha}`) {
+        return { exitCode: 0, stdout: diff, stderr: '' };
+      }
+      if (args[0] === 'show' && args[1]?.startsWith('HEAD:')) {
+        const path = args[1].slice('HEAD:'.length);
+        return path in files
+          ? { exitCode: 0, stdout: files[path]!, stderr: '' }
+          : { exitCode: 128, stdout: '', stderr: `missing ${path}` };
+      }
+      if (args[0] === 'show' && args[1]?.startsWith(`${sha}^:`)) {
+        const path = args[1].slice(`${sha}^:`.length);
+        return path in parentFiles
+          ? { exitCode: 0, stdout: parentFiles[path]!, stderr: '' }
+          : { exitCode: 128, stdout: '', stderr: `missing ${path}` };
+      }
+      if (args[0] === 'cat-file') return { exitCode: 1, stdout: '', stderr: '' };
+      throw new Error(`unexpected git call: ${args.join(' ')}`);
+    };
+    return { git, calls };
+  }
+
+  it('keeps a removed -- comment associated with its header path alongside ordinary removals', async () => {
+    const { git, calls } = vanishedCommitGit(
+      'diff --git a/schema.sql b/schema.sql\n--- a/schema.sql\n+++ b/schema.sql\n@@ -1,2 +0,0 @@\n--- comment\n-ordinary removal\n',
+      { 'schema.sql': '' },
+      { 'schema.sql': '-- comment\nordinary removal\n' },
+    );
+
+    await expect(featureCommitsPreserved(git, 'main', [subject])).resolves.toBe(true);
+    expect(calls.map((args) => args.join(' '))).toContain(`show HEAD:schema.sql`);
+    expect(calls.map((args) => args.join(' '))).toContain(`show ${sha}^:schema.sql`);
+    expect(calls.map((args) => args.join(' '))).not.toContain(`show ${sha}^:comment`);
+  });
+
+  it.each([
+    ['present', '++ value\n', true],
+    ['absent', '', false],
+  ])('accepts an added ++ value only when it is %s in HEAD', async (_state, head, expected) => {
+    const { git, calls } = vanishedCommitGit(
+      'diff --git a/values.sql b/values.sql\n--- a/values.sql\n+++ b/values.sql\n@@ -0,0 +1 @@\n+++ value\n',
+      { 'values.sql': head },
+      { 'values.sql': '' },
+    );
+
+    await expect(featureCommitsPreserved(git, 'main', [subject])).resolves.toBe(expected);
+    expect(calls.map((args) => args.join(' '))).toContain('show HEAD:values.sql');
+    expect(calls.map((args) => args.join(' '))).not.toContain('show HEAD:value');
+  });
+
+  it.each([
+    ['absorbed', '', true],
+    ['skipped', '-- comment\n', false],
+  ])('accepts a comment-only deletion only when it is %s', async (_state, head, expected) => {
+    const { git, calls } = vanishedCommitGit(
+      'diff --git a/schema.sql b/schema.sql\n--- a/schema.sql\n+++ b/schema.sql\n@@ -1 +0,0 @@\n--- comment\n',
+      { 'schema.sql': head },
+      { 'schema.sql': '-- comment\n' },
+    );
+
+    await expect(featureCommitsPreserved(git, 'main', [subject])).resolves.toBe(expected);
+    expect(calls.map((args) => args.join(' '))).toContain(`show ${sha}^:schema.sql`);
+    expect(calls.map((args) => args.join(' '))).not.toContain(`show ${sha}^:comment`);
+  });
+
+  it('checks each file and hunk independently while ignoring the no-newline marker', async () => {
+    const { git, calls } = vanishedCommitGit(
+      [
+        'diff --git a/schema.sql b/schema.sql',
+        '--- a/schema.sql',
+        '+++ b/schema.sql',
+        '@@ -1 +0,0 @@',
+        '--- comment',
+        '\\ No newline at end of file',
+        '@@ -4,0 +4 @@',
+        '+++ value',
+        'diff --git a/later.sql b/later.sql',
+        '--- a/later.sql',
+        '+++ b/later.sql',
+        '@@ -1 +1 @@',
+        '-lost later edit',
+      ].join('\n'),
+      { 'schema.sql': '++ value\n', 'later.sql': 'lost later edit\n' },
+      { 'schema.sql': '-- comment\n', 'later.sql': 'lost later edit\n' },
+    );
+
+    await expect(featureCommitsPreserved(git, 'main', [subject])).resolves.toBe(false);
+    expect(calls.map((args) => args.join(' '))).toContain('show HEAD:schema.sql');
+    expect(calls.map((args) => args.join(' '))).toContain('show HEAD:later.sql');
+    expect(calls.map((args) => args.join(' '))).not.toContain('show HEAD:value');
+  });
+
+  it('retains whole-file deletion and fails closed for empty, binary, and unreadable-parent diffs', async () => {
+    const deleted = vanishedCommitGit(
+      'diff --git a/deleted.sql b/deleted.sql\n--- a/deleted.sql\n+++ /dev/null\n@@ -1 +0,0 @@\n-old content\n',
+      {},
+      { 'deleted.sql': 'old content\n' },
+    );
+    await expect(featureCommitsPreserved(deleted.git, 'main', [subject])).resolves.toBe(true);
+    expect(deleted.calls.map((args) => args.join(' '))).toContain('cat-file -e HEAD:deleted.sql');
+
+    for (const diff of ['', 'diff --git a/blob.bin b/blob.bin\nBinary files a/blob.bin and b/blob.bin differ\n']) {
+      const rejected = vanishedCommitGit(diff, {}, {});
+      await expect(featureCommitsPreserved(rejected.git, 'main', [subject])).resolves.toBe(false);
+    }
+
+    const unreadableParent = vanishedCommitGit(
+      'diff --git a/schema.sql b/schema.sql\n--- a/schema.sql\n+++ b/schema.sql\n@@ -1 +0,0 @@\n-removed\n',
+      { 'schema.sql': '' },
+      {},
+    );
+    await expect(featureCommitsPreserved(unreadableParent.git, 'main', [subject])).resolves.toBe(false);
+  });
+});
+
+describe('engine/rebase — featureCommitsPreserved SQL comment deletion (real git)', () => {
+  let repo: string;
+  const g = (args: string[]) => execFile('git', args, { cwd: repo });
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'commits-preserved-sql-'));
+    await initTestRepo(repo);
+    await writeFile(join(repo, 'schema.sql'), '-- comment\nSELECT 1;\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init schema']);
+  });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['absorbed', '-- comment\nSELECT 1;\n', 'SELECT 1;\n', true],
+    ['skipped', '-- comment\nSELECT 1;\n', '-- comment\nSELECT 1;\n', false],
+  ])('returns %s when a real .sql comment-only deletion vanished', async (_state, initial, main, expected) => {
+    expect(initial).toBe('-- comment\nSELECT 1;\n');
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'schema.sql'), 'SELECT 1;\n');
+    await g(['commit', '-q', '-am', 'feat: remove SQL comment']);
+    const featureTip = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'schema.sql'), main);
+    if (main !== initial) await g(['commit', '-q', '-am', 'main: remove SQL comment']);
+    await g(['update-ref', 'ORIG_HEAD', featureTip]);
+
+    await expect(featureCommitsPreserved(makeGitRunner(repo), 'main', ['feat: remove SQL comment'])).resolves.toBe(expected);
   });
 });
 
