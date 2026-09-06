@@ -1,8 +1,9 @@
-// Covers: task:2
+// Covers: task:2, task:4
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { load } from 'js-yaml';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -155,6 +156,120 @@ describe('shipment-evidence CLI', () => {
         code: 0,
         ghCalls: 0,
         input: { repoDir: '/repo', slug: 'feature', implementationPr: pr, candidateCommit: head },
+      });
+    } finally {
+      await rm(eventDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not bind a quoted corrected body after the same immutable event identity previously bound a plan', async () => {
+    const pr = 'https://github.com/org/repo/pull/1';
+    const base = 'b'.repeat(40);
+    const head = 'a'.repeat(40);
+    const eventDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-edited-event-'));
+    const eventPath = join(eventDir, 'event.json');
+    const reports: string[] = [];
+    const runGit = vi.fn(async (args: string[]) => {
+      if (args[0] === 'diff') {
+        expect(args).toEqual(['diff', '--name-only', `${base}...${head}`]);
+        return { stdout: 'src/conductor/src/engine/feature.ts\n' };
+      }
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: head };
+      throw new Error(`unexpected git args: ${args.join(' ')}`);
+    });
+    const evaluateEvidence = vi.fn(async () => ({
+      kind: 'valid' as const,
+      slug: 'feature',
+      pr,
+      recordPath: '.docs/shipped/feature.md',
+      hash: 'hash',
+      commit: head,
+    }));
+    const runGh = vi.fn(async () => {
+      throw new Error('gh must not run for checked-out edited event evidence');
+    });
+
+    try {
+      await writeFile(eventPath, JSON.stringify({
+        pull_request: {
+          html_url: pr,
+          body: 'Plan: `.docs/plans/feature.md`',
+          base: { sha: base },
+          head: { sha: head },
+        },
+      }));
+      const originalCode = await dispatchShipmentEvidence(
+        { kind: 'check', pr, eventPath },
+        '/repo',
+        { runGh, runGit, listPlanStems: async () => ['feature'], evaluateEvidence, report: (message) => reports.push(message) },
+      );
+
+      await writeFile(eventPath, JSON.stringify({
+        pull_request: {
+          html_url: pr,
+          body: '> Plan: `.docs/plans/feature.md`',
+          base: { sha: base },
+          head: { sha: head },
+        },
+      }));
+      const editedCode = await dispatchShipmentEvidence(
+        { kind: 'check', pr, eventPath },
+        '/repo',
+        { runGh, runGit, listPlanStems: async () => ['feature'], evaluateEvidence, report: (message) => reports.push(message) },
+      );
+
+      expect({
+        originalCode,
+        editedCode,
+        evaluateCalls: evaluateEvidence.mock.calls.length,
+        ghCalls: runGh.mock.calls.length,
+        diffCalls: runGit.mock.calls.filter(([args]) => args[0] === 'diff').map(([args]) => args),
+        reports,
+      }).toEqual({
+        originalCode: 0,
+        editedCode: 0,
+        evaluateCalls: 1,
+        ghCalls: 0,
+        diffCalls: [
+          ['diff', '--name-only', `${base}...${head}`],
+          ['diff', '--name-only', `${base}...${head}`],
+        ],
+        reports: [
+          'shipped-record: plan .docs/plans/feature.md basis=explicit-plan-declaration',
+          'shipped-record: valid .docs/shipped/feature.md',
+          'shipped-record: not applicable (zero-match)',
+        ],
+      });
+    } finally {
+      await rm(eventDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['URL', { body: 'Plan: `.docs/plans/feature.md`', base: { sha: 'b'.repeat(40) }, head: { sha: 'a'.repeat(40) } }],
+    ['base SHA', { html_url: 'https://github.com/org/repo/pull/1', body: 'Plan: `.docs/plans/feature.md`', head: { sha: 'a'.repeat(40) } }],
+    ['head SHA', { html_url: 'https://github.com/org/repo/pull/1', body: 'Plan: `.docs/plans/feature.md`', base: { sha: 'b'.repeat(40) } }],
+  ])('fails closed when the pull-request event lacks its %s', async (_field, pullRequest) => {
+    const eventDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-incomplete-event-'));
+    const eventPath = join(eventDir, 'event.json');
+    const errors: string[] = [];
+    const evaluateEvidence = vi.fn();
+    const runGh = vi.fn(async () => {
+      throw new Error('gh must not run for incomplete event evidence');
+    });
+    try {
+      await writeFile(eventPath, JSON.stringify({ pull_request: pullRequest }));
+      const code = await dispatchShipmentEvidence(
+        { kind: 'check', pr: 'https://github.com/org/repo/pull/1', eventPath },
+        '/repo',
+        { evaluateEvidence, runGh, reportError: (message) => errors.push(message) },
+      );
+
+      expect({ code, errors, evaluateCalls: evaluateEvidence.mock.calls.length, ghCalls: runGh.mock.calls.length }).toEqual({
+        code: 1,
+        errors: [`shipped-record: pull-request event lacks URL or commit identity: ${eventPath}`],
+        evaluateCalls: 0,
+        ghCalls: 0,
       });
     } finally {
       await rm(eventDir, { recursive: true, force: true });
@@ -345,7 +460,30 @@ describe('shipment-evidence CLI', () => {
   it('defines a path-filter-free stable shipped-record check for every PR update', async () => {
     const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
     const workflow = await readFile(join(repoRoot, '.github/workflows/shipped-record.yml'), 'utf8');
+    const parsed = load(workflow) as {
+      name: string;
+      on: { pull_request: { types: string[] } };
+      permissions: Record<string, string>;
+      jobs: Record<string, {
+        name?: string;
+        if: string;
+        permissions?: Record<string, string>;
+        steps: Array<{ uses?: string; with?: Record<string, string>; run?: string }>;
+      }>;
+    };
+    const shipmentEvidence = parsed.jobs['shipment-evidence'];
+    const reconcile = parsed.jobs.reconcile;
+    const checkout = shipmentEvidence.steps.find((step) => step.uses === 'actions/checkout@v5');
+    const command = shipmentEvidence.steps.find((step) => step.run?.includes('shipment-evidence'));
 
-    expect(workflow).toMatch(/name:\s*shipped-record[\s\S]*pull_request:[\s\S]*opened, reopened, synchronize[\s\S]*jobs:[\s\S]*shipment-evidence:[\s\S]*name:\s*shipped-record[\s\S]*node src\/conductor\/dist\/index\.js shipment-evidence/);
+    expect(parsed.name).toBe('shipped-record');
+    expect(parsed.on.pull_request.types).toEqual(['opened', 'reopened', 'synchronize', 'edited', 'closed']);
+    expect(parsed.permissions).toEqual({ contents: 'read', 'pull-requests': 'read' });
+    expect(shipmentEvidence.name).toBe('shipped-record');
+    expect(shipmentEvidence.if).toBe("github.event.action != 'closed'");
+    expect(checkout?.with?.ref).toBe('${{ github.event.pull_request.head.sha }}');
+    expect(command?.run).toBe('node src/conductor/dist/index.js shipment-evidence --pr "${{ github.event.pull_request.html_url }}" --event "$GITHUB_EVENT_PATH"');
+    expect(reconcile.if).toBe("github.event.action == 'closed' && github.event.pull_request.merged == true");
+    expect(reconcile.permissions).toEqual({ contents: 'write', 'pull-requests': 'write', statuses: 'write' });
   });
 });
