@@ -30,6 +30,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Plans now assign production-boundary integration ownership and must provide machine-grounded, semantically reviewed coverage for citable ADR decisions. ([implementation PR #2183](https://github.com/jstoup111/ai-conductor/pull/2183)).
 - Build skills defer aggregate verification to the dedicated test_suite gate and use its failure evidence for scoped repairs. ([implementation PR #2232](https://github.com/jstoup111/ai-conductor/pull/2232)).
 - The hosted documentation site now publishes from the `stable` branch at each release cut instead of from every merge to `main`. ([implementation PR #2363](https://github.com/jstoup111/ai-conductor/pull/2363)).
+- The pre-BUILD coverage-binding judge (`coverage_binding.judge.enabled`) is now on by default. ([implementation PR #2116](https://github.com/jstoup111/ai-conductor/pull/2116)).
 
 ### Fixed
 
