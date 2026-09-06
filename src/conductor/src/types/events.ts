@@ -815,6 +815,8 @@ export type ConductorEvent =
       evidence?: string;
       /** How many times this gate has been re-opened this feature. */
       count: number;
+      /** Existing plan tasks reopened by remediation, with their pre-restage trailer counts. */
+      restaged?: ReadonlyArray<{ id: string; trailerCount: number }>;
       /** Total build-review laps across progress resets; absent for other kickback sources. */
       cumulativeCount?: number;
       /** A rebase invalidation credited this gate's convergence laps. */

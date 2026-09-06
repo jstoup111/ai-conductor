@@ -1,5 +1,5 @@
 import * as fsPromises from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { execa } from 'execa';
 import {
@@ -11,6 +11,8 @@ import {
 } from './autoheal.js';
 import { createTaskEvidence } from './task-evidence.js';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
+import { readRestageWatermarks } from './restage-watermark.js';
+import { countTaskTrailerCommits } from './task-progress.js';
 interface TaskStatusRecord {
   id: string;
   name?: string;
@@ -277,6 +279,12 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
     const provenCompletions = reconstructing
       ? await trailerProvenCompletions(projectRoot)
       : new Map<string, string>();
+    const reconstructionWatermarks = reconstructing
+      ? await readRestageWatermarks(projectRoot, basename(resolvedPlanPath, '.md'))
+      : undefined;
+    const reconstructionTrailerCounts = reconstructing
+      ? await countTaskTrailerCommits(projectRoot, [...planTasks.keys()])
+      : new Map<string, number>();
 
     // Load task evidence (sidecar). Task 14 (#773): no longer consulted to
     // restore/derive task-status.json rows (see the plan-task upsert loop
@@ -358,8 +366,13 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
         // still re-judges the real diff, so no unearned work can pass a gate
         // through this row.
         const provenSha = provenCompletions.get(canonicalId);
+        const watermark = reconstructionWatermarks?.kind === 'ok'
+          ? reconstructionWatermarks.tasks[taskId]
+          : undefined;
+        const restageStillOpen = watermark !== undefined &&
+          (reconstructionTrailerCounts.get(taskId) ?? 0) <= watermark;
         const newTask: TaskStatusRecord = provenSha
-          ? {
+          && !restageStillOpen ? {
               id: taskId,
               name: planTask.name,
               status: 'completed',

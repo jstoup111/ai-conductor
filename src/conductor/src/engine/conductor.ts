@@ -3835,7 +3835,7 @@ export class Conductor {
     dispatchContext: string,
     hintSource: RemediationHintSource,
   ): Promise<
-    | { kind: 'route'; target: StepName; hint: string; evidence: string }
+    | { kind: 'route'; target: StepName; hint: string; evidence: string; restaged?: Array<{ id: string; trailerCount: number }> }
     | {
       kind: 'halt';
       detail: string;
@@ -4667,15 +4667,8 @@ export class Conductor {
       // Existing-task remediation reopens work already named in the plan.
       // Do this only after admission and budget checks have passed, but before
       // the caller rewinds to the repair target.
+      let restaged: Array<{ id: string; trailerCount: number }> | undefined;
       if (resolvedExistingTaskIdsByGapId.size > 0 && planPath) {
-        const baseline = {
-          treeHash: await currentTreeHash(this.projectRoot),
-          resolvedCount: await countResolvedTasks(this.projectRoot),
-        };
-        this.pendingNoOpBaselines.clear();
-        for (const provenance of remediationEvidenceSources) {
-          this.pendingNoOpBaselines.set(provenance.gate, baseline);
-        }
         const restage = await restageExistingRemediationTaskStatuses(
           this.projectRoot,
           planPath,
@@ -4689,6 +4682,18 @@ export class Conductor {
             detail: `existing-task remediation could not re-stage task-status.json: ${restage.detail}`,
           };
         }
+        restaged = restage.watermarks;
+        const baseline = {
+          treeHash: await currentTreeHash(this.projectRoot),
+          resolvedCount: await countResolvedTasks(this.projectRoot),
+        };
+        this.pendingNoOpBaselines.clear();
+        for (const provenance of remediationEvidenceSources) {
+          this.pendingNoOpBaselines.set(provenance.gate, baseline);
+        }
+        const evidence = await createTaskEvidence(this.projectRoot);
+        evidence.lastResolvedCount = baseline.resolvedCount;
+        await evidence.write();
       }
       // #647 D1: a remediation route into `build` can be a guaranteed no-op
       // when the appended/upserted rem-* task(s) are already evidence-
@@ -4731,6 +4736,7 @@ export class Conductor {
           remediationEvidenceSources.map((provenance) => provenance.evidenceFile).join(' and '),
         ),
         evidence: remediationEvidence + droppedSuffix,
+        ...(restaged === undefined ? {} : { restaged }),
       };
     }
     return { kind: 'none' };
@@ -7334,6 +7340,7 @@ export class Conductor {
                     to: remediationOutcome.target,
                     evidence: remediationOutcome.evidence,
                     count: remediationRounds,
+                    ...(remediationOutcome.restaged === undefined ? {} : { restaged: remediationOutcome.restaged }),
                   });
                   pendingRetryHints.set(remediationOutcome.target, remediationOutcome.hint);
 
@@ -7586,6 +7593,7 @@ export class Conductor {
                     to: mergedTarget,
                     evidence: `manual_test: ${mtEvidence}; ${remediationOutcome.evidence}`,
                     count: remediationRounds,
+                    ...(remediationOutcome.restaged === undefined ? {} : { restaged: remediationOutcome.restaged }),
                   });
                   pendingRetryHints.set(mergedTarget, mergedHint);
 
@@ -7726,6 +7734,7 @@ export class Conductor {
                     to: remediationOutcome.target,
                     evidence: remediationOutcome.evidence,
                     count: remediationRounds,
+                    ...(remediationOutcome.restaged === undefined ? {} : { restaged: remediationOutcome.restaged }),
                   });
                   pendingRetryHints.set(remediationOutcome.target, remediationOutcome.hint);
 
@@ -9827,6 +9836,7 @@ export class Conductor {
                           to: outcome.target,
                           evidence: outcome.evidence,
                           count: remediationRounds,
+                          ...(outcome.restaged === undefined ? {} : { restaged: outcome.restaged }),
                         });
                         retryHint = outcome.hint;
                         attempt--;
@@ -10587,6 +10597,7 @@ export class Conductor {
                     to: outcome.target,
                     evidence: outcome.evidence,
                     count: remediationRounds,
+                    ...(outcome.restaged === undefined ? {} : { restaged: outcome.restaged }),
                   });
                   pendingRetryHints.set(outcome.target, outcome.hint);
 
@@ -10683,6 +10694,7 @@ export class Conductor {
                     to: outcome.target,
                     evidence: outcome.evidence,
                     count: remediationRounds,
+                    ...(outcome.restaged === undefined ? {} : { restaged: outcome.restaged }),
                   });
                   pendingRetryHints.set(outcome.target, outcome.hint);
 
@@ -10910,6 +10922,7 @@ export class Conductor {
                     to: remediation.target,
                     evidence: remediation.evidence,
                     count: remediationRounds,
+                    ...(remediation.restaged === undefined ? {} : { restaged: remediation.restaged }),
                     ...(escalation.kickbackOutcome
                       ? { kickback_outcome: escalation.kickbackOutcome }
                       : {}),
@@ -11012,6 +11025,7 @@ export class Conductor {
                   to: outcome.target,
                   evidence: outcome.evidence,
                   count: remediationRounds,
+                  ...(outcome.restaged === undefined ? {} : { restaged: outcome.restaged }),
                   // #647 D3: when checkKickbackToBuildEscalation classified the
                   // prior build cycle as productive (it did not halt for THAT
                   // reason), tag this re-kickback with the same discriminator.

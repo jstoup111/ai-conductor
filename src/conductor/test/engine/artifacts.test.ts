@@ -3505,7 +3505,7 @@ describe('engine/artifacts', () => {
       // resolveTaskIds union call and must still fail closed unchanged by
       // its introduction.
       describe('Task 6: fail-closed guards precede the resolveTaskIds union call', () => {
-        it('fails with the missing-status-file reason when .pipeline/task-status.json does not exist and cannot be seeded', async () => {
+        it('fails with the existing missing-status-file reason before the watermark-aware fold can run', async () => {
           // A plan exists but projectRoot/planPath are omitted from ctx, so
           // seeding never runs and no task-status.json is created — the
           // read guard must reject before ever reaching the resolver.

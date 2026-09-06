@@ -7,6 +7,13 @@ import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
+const corruptWatermarkDiagnostics = new Set<string>();
+
+/** Test seam for the per-process corrupt-watermark diagnostic suppression. */
+export function resetRestageWatermarkDiagnostics(): void {
+  corruptWatermarkDiagnostics.clear();
+}
+
 /**
  * Count of distinct plan task-ids that are "resolved" — i.e. either already
  * `completed`/`skipped` in `.pipeline/task-status.json` (gate-authority /
@@ -103,8 +110,16 @@ export async function resolveTaskIds(projectRoot: string, planIds: string[]): Pr
   const watermarks = activePlanPath
     ? await readRestageWatermarks(projectRoot, basename(activePlanPath, '.md'))
     : undefined;
+  if (watermarks?.kind === 'corrupt') {
+    const stem = basename(activePlanPath!, '.md');
+    if (!corruptWatermarkDiagnostics.has(stem)) {
+      corruptWatermarkDiagnostics.add(stem);
+      console.warn(`[task-progress] corrupt restage watermark for ${stem}: ${watermarks.detail}`);
+    }
+  }
   const trailerCounts = await countTaskTrailerCommits(projectRoot, planIds);
   for (const [id, count] of trailerCounts) {
+    if (watermarks?.kind === 'corrupt') continue;
     const watermark = watermarks?.kind === 'ok' ? watermarks.tasks[id] : undefined;
     if (count > (watermark ?? 0)) resolved.add(id);
   }

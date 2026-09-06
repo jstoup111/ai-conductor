@@ -1,4 +1,4 @@
-// Covers: task:4, task:5
+// Covers: task:4, task:5, task:6
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,7 @@ import {
   clearHaltMarker,
   haltMarkerPath,
   readHaltMarkerContent,
+  resetRestageWatermarkDiagnostics,
   writeStallQuestionEvidence,
   writeStallHalt,
   HALT_MARKER_RELATIVE,
@@ -241,7 +242,10 @@ describe('task-progress', () => {
   });
 
   describe('resolveTaskIds', () => {
-    async function prepareWatermarkedTask(status = 'pending'): Promise<string> {
+    async function prepareWatermarkedTask(
+      status = 'pending',
+      watermark = 2,
+    ): Promise<string> {
       await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
@@ -266,7 +270,7 @@ describe('task-progress', () => {
       );
       await writeFile(
         join(dir, '.daemon', 'restage-watermarks', 'stem-a.json'),
-        JSON.stringify({ version: 1, tasks: { '16': 2 } }),
+        JSON.stringify({ version: 1, tasks: { '16': watermark } }),
       );
       return worktreeRoot;
     }
@@ -341,6 +345,43 @@ describe('task-progress', () => {
       await expect(resolveTaskIds(worktreeRoot, ['16'])).resolves.toEqual(new Set(['16']));
     });
 
+    it('keeps a lowered trailer count unresolved until it exceeds the watermark', async () => {
+      const worktreeRoot = await prepareWatermarkedTask('pending', 3);
+      await commitTaskTrailer(worktreeRoot, 'first.txt', '16');
+
+      await expect(resolveTaskIds(worktreeRoot, ['16'])).resolves.toEqual(new Set());
+
+      await commitTaskTrailer(worktreeRoot, 'second.txt', '16');
+      await commitTaskTrailer(worktreeRoot, 'third.txt', '16');
+
+      await expect(resolveTaskIds(worktreeRoot, ['16'])).resolves.toEqual(new Set());
+
+      await commitTaskTrailer(worktreeRoot, 'fourth.txt', '16');
+
+      await expect(resolveTaskIds(worktreeRoot, ['16'])).resolves.toEqual(new Set(['16']));
+    });
+
+    it('resolves never-restaged trailer ids identically when no watermark exists', async () => {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline', 'engine-state.json'),
+        JSON.stringify({ activePlanPath: '.docs/plans/stem-a.md' }),
+      );
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', status: 'pending' }, { id: '2', status: 'pending' }] }),
+      );
+      await commitTaskTrailer(dir, 'first.txt', '1');
+      await commitTaskTrailer(dir, 'second.txt', '2');
+
+      const withoutWatermark = await resolveTaskIds(dir, ['1', '2']);
+
+      await expect(resolveTaskIds(dir, ['1', '2'])).resolves.toEqual(withoutWatermark);
+    });
+
     it('does not read restage watermarks without an activePlanPath', async () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({}));
@@ -355,6 +396,30 @@ describe('task-progress', () => {
         expect(readWatermarks).not.toHaveBeenCalled();
       } finally {
         readWatermarks.mockRestore();
+      }
+    });
+
+    it('excludes trailer resolution for a corrupt watermark and warns once per stem', async () => {
+      resetRestageWatermarkDiagnostics();
+      const worktreeRoot = await prepareWatermarkedTask('pending', 2);
+      await commitTaskTrailer(worktreeRoot, 'first.txt', '16');
+      await commitTaskTrailer(worktreeRoot, 'second.txt', '16');
+      await writeFile(join(dir, '.daemon', 'restage-watermarks', 'stem-a.json'), '{ not json');
+      await writeFile(
+        join(worktreeRoot, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '16', status: 'pending' }, { id: '21', status: 'completed' }] }),
+      );
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        await expect(resolveTaskIds(worktreeRoot, ['16', '21'])).resolves.toEqual(new Set(['21']));
+        await resolveTaskIds(worktreeRoot, ['16', '21']);
+        await resolveTaskIds(worktreeRoot, ['16', '21']);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('[task-progress] corrupt'));
+        expect(warn.mock.calls[0]?.[0]).toContain('stem-a.json');
+      } finally {
+        warn.mockRestore();
+        resetRestageWatermarkDiagnostics();
       }
     });
 
