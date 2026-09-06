@@ -289,6 +289,14 @@ export async function completeTaskDoneWhen(
   if (!checks) return { kind: 'legacy' };
 
   const verifyOnly = parsePlanTaskVerifyOnly(planText).get(id) === true;
+  const statePath = join(pipelineDir, 'engine-state.json');
+  const repairs = createRepairObligationStore(projectRoot, statePath);
+  const repairState = await repairs.read();
+  if (!repairState.ok) {
+    return { kind: 'refused', message: `[task-cli] cannot close task ${id}: ${repairState.message}` };
+  }
+  const canonicalId = canonicalTaskId(id);
+  const currentObligationId = repairState.value.currentByPlan[repairPlanIdentity(projectRoot, activePlanPath)]?.[canonicalId];
   const evidenceByIndex = new Map<number, string>();
   for (const entry of suppliedEvidence) {
     if (entry.index > 0 && entry.evidence.trim()) {
@@ -343,6 +351,18 @@ export async function completeTaskDoneWhen(
     evidence: verifyOnly ? 'prove-closed' : evidenceByIndex.get(index + 1)!,
     source: verifyOnly ? 'verify-only' : 'reported',
   }));
+
+  if (currentObligationId !== undefined) {
+    const closure = await repairs.close({
+      planPath: activePlanPath,
+      taskId: id,
+      obligationId: currentObligationId,
+      evidence: { kind: 'current-done-when', value: JSON.stringify(doneWhenRecords) },
+    });
+    if (!closure.ok) {
+      return { kind: 'refused', message: `[task-cli] cannot close current repair for task ${id}: ${closure.message}` };
+    }
+  }
   task.status = 'completed';
   task.doneWhen = doneWhenRecords;
 

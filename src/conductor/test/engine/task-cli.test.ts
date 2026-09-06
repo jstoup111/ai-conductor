@@ -8,6 +8,8 @@ import {
 import * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createRepairObligationStore } from '../../src/engine/repair-obligations.js';
+import { resolveTaskIds } from '../../src/engine/task-progress.js';
 
 describe('detectTaskCommand', () => {
   describe('start command', () => {
@@ -509,6 +511,34 @@ describe('runTaskDone', () => {
 
   afterEach(async () => {
     await fsPromises.rm(dir, { recursive: true, force: true });
+  });
+
+  it('closes the current repair only after current Done when evidence is accepted', async () => {
+    await fsPromises.mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+    await fsPromises.writeFile(join(dir, '.docs', 'plans', 'feature.md'), [
+      '### Task 7: Repair current evidence',
+      '**Done when:**',
+      '- Current evidence is recorded.',
+      '',
+    ].join('\n'));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+      activePlanPath: '.docs/plans/feature.md',
+    }));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: [{ id: '7', status: 'in_progress' }],
+    }));
+    await fsPromises.writeFile(join(dir, '.pipeline', 'current-task'), '7');
+    const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+    const admitted = await repairs.admit({
+      id: 'round-7', planPath: '.docs/plans/feature.md', taskIds: ['T7'],
+      source: { findingId: 'finding', authority: 'build_review', instruction: 'repair' },
+      baseline: { head: 'unavailable', tree: 'tree', resolvedTaskIds: [] },
+    });
+    if (!admitted.ok) throw new Error(admitted.message);
+
+    await expect(runTaskDone(dir, '7', [{ index: 1, evidence: 'fresh proof' }])).resolves.toBe(0);
+    expect(await resolveTaskIds(dir, ['7'])).toEqual(new Set(['7']));
   });
 
   describe('happy path — done 7 after start 7', () => {
