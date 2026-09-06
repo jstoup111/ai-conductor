@@ -1,0 +1,31 @@
+{
+  "provenance": {
+    "issue": "#2231",
+    "base": "e1226a981ab52c513e9da4a3ee5716db9b9b3d9f",
+    "head": "c188c0cb6cef8aeaf020272dcb55297e24d688f0"
+  },
+  "feature": {
+    "planPath": "fixture-plan.md",
+    "storiesPath": ".docs/stories/fixture-stories.md",
+    "testPath": "test/portable-2231.test.ts",
+    "unchangedSiblingCount": 714
+  },
+  "criteria": ["S9.1", "S9.2", "S9.3"],
+  "changedBodies": [
+    { "title": "criterion-bound body", "marker": "S9.1", "disposition": "target" },
+    { "title": "task-bound body", "marker": "task:18", "disposition": "target" },
+    { "title": "criterion-three body", "marker": "S9.3", "disposition": "target" },
+    { "title": "unresolved body", "marker": "S9.99", "disposition": "unresolved-reference" },
+    { "title": "unbound body", "disposition": "unbound" },
+    { "title": "header-associated body", "marker": "S9.99", "disposition": "unresolved-reference" },
+    { "title": "ambiguous body", "marker": "S9.2, task:18", "disposition": "conflicting-associations" },
+    { "title": "removed-binding body", "disposition": "binding-removed", "baseMarker": "S9.3" }
+  ],
+  "sharedEvidence": {
+    "suite": "shared setup",
+    "marker": "S9.1",
+    "baseSetup": "base fixture",
+    "headSetup": "changed fixture",
+    "retainedBodies": ["uses shared fixture one", "uses shared fixture two"]
+  }
+}
