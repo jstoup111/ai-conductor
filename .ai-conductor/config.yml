@@ -142,7 +142,11 @@ prd_audit:
   # lap grant below — a-coverage's second as-built lap needs 5 tasks with
   # 4 of 8 spent. Revert with the lap grant.
   max_appended_tasks: 10
-  max_appended_ratio: 0.6
+  # Operator, 2026-09-06: 0.6 raised to 0.8. On a 4-task plan the ratio term
+  # resolved to 3 while an ordinary as-built round asked for 4, so small plans
+  # halted kickback-cap on a one-task overrun (sweep-stale-vitest). Note the
+  # authored count also includes the "Task Dependency Graph" heading.
+  max_appended_ratio: 0.8
   # TEMPORARY (operator, 2026-09-04): second lap granted to clear the
   # bin-setup S4.2 and a-coverage AB-1/AB-2 halts; revert to the default 1
   # once both features pass (see #2147 for the per-feature grant design).
