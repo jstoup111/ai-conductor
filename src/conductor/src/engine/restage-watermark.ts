@@ -54,9 +54,20 @@ export async function recordRestageWatermarks(
   const path = restageWatermarkPath(mainRoot, stem);
   await mkdir(join(mainRoot, '.daemon', RESTAGE_WATERMARKS_SUBDIR), { recursive: true });
 
+  let existingTasks: Record<string, number> = {};
+  try {
+    const contents = await readFile(path, 'utf8');
+    existingTasks = (JSON.parse(contents) as RestageWatermarkFile).tasks;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  const tasks = { ...existingTasks };
+  for (const { id, trailerCount } of entries) {
+    if (!(id in tasks)) tasks[id] = trailerCount;
+  }
   const watermark: RestageWatermarkFile = {
     version: 1,
-    tasks: Object.fromEntries(entries.map(({ id, trailerCount }) => [id, trailerCount])),
+    tasks,
   };
   const temporaryPath = `${path}.${process.pid}.${crypto.randomUUID()}.tmp`;
   await writeFile(temporaryPath, JSON.stringify(watermark, null, 2) + '\n', 'utf8');

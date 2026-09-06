@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -69,5 +69,47 @@ describe('restage watermark store', () => {
     await expect(readRestageWatermarks(worktreeRoot, 'missing-stem')).resolves.toEqual({
       kind: 'absent',
     });
+  });
+
+  it('a later round adds ids without overwriting an earlier count', async () => {
+    const worktreeRoot = await createLinkedWorktree();
+
+    await recordRestageWatermarks(worktreeRoot, 'stem-a', [{ id: '16', trailerCount: 3 }]);
+    await recordRestageWatermarks(worktreeRoot, 'stem-a', [{ id: '19', trailerCount: 2 }]);
+    await recordRestageWatermarks(worktreeRoot, 'stem-a', [{ id: '16', trailerCount: 5 }]);
+
+    await expect(readRestageWatermarks(worktreeRoot, 'stem-a')).resolves.toEqual({
+      kind: 'ok',
+      tasks: { '16': 3, '19': 2 },
+    });
+  });
+
+  it('two stems under one main root are isolated', async () => {
+    const worktreeRoot = await createLinkedWorktree();
+
+    await recordRestageWatermarks(worktreeRoot, 'stem-a', [{ id: '16', trailerCount: 3 }]);
+    await recordRestageWatermarks(worktreeRoot, 'stem-b', [{ id: '19', trailerCount: 2 }]);
+
+    await expect(readRestageWatermarks(worktreeRoot, 'stem-a')).resolves.toEqual({
+      kind: 'ok',
+      tasks: { '16': 3 },
+    });
+    await expect(readRestageWatermarks(worktreeRoot, 'stem-b')).resolves.toEqual({
+      kind: 'ok',
+      tasks: { '19': 2 },
+    });
+  });
+
+  it('engine-state.json is byte-identical across record and read', async () => {
+    const worktreeRoot = await createLinkedWorktree();
+    const engineStatePath = join(worktreeRoot, '.pipeline', 'engine-state.json');
+    const engineState = '{\n  "appendedRemediationTaskIds": ["rem-1"]\n}\n';
+    await mkdir(join(worktreeRoot, '.pipeline'), { recursive: true });
+    await writeFile(engineStatePath, engineState, 'utf8');
+
+    await recordRestageWatermarks(worktreeRoot, 'stem-a', [{ id: '16', trailerCount: 3 }]);
+    await readRestageWatermarks(worktreeRoot, 'stem-a');
+
+    await expect(readFile(engineStatePath, 'utf8')).resolves.toBe(engineState);
   });
 });
