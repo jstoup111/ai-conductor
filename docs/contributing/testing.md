@@ -259,6 +259,14 @@ all depends on is proven rather than assumed.
 
 None of this excuses a fixture from cleaning up after itself — it bounds the damage when one does not.
 
+Before it takes the real-tmpdir baseline, `global-setup.ts` also reaps stale
+`ai-conductor-vitest-run-*` roots left by an interrupted earlier run. Each live root has an owner
+marker refreshed every minute; marked roots are eligible after three hours, while legacy unmarked
+roots wait 24 hours. The sweep retains its own root, live roots, unreadable markers, and every
+non-directory prefixed entry (including symlinks), and reports but does not fail the new run when it
+cannot remove a candidate. This keeps abandoned test artifacts from accumulating without risking a
+live run or a symlink target.
+
 ### setup.ts
 
 `src/conductor/test/setup.ts` runs before every test file (`setupFiles`) and sets three process-wide
