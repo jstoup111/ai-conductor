@@ -4,6 +4,12 @@ spec_hash: 96a5ec25a92542405bbab0ad95452e95e558caf910474eae1519919b1ff15071
 pr: https://github.com/jstoup111/ai-conductor/pull/2243
 shipped: 2026-09-06
 engine_version: 20260906T032235Z-0c471cd2a03d
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/src/engine/engineer-cli.ts:739-741 — the entry gate substitutes a hard-coded `ok` verdict whenever `opts.gh` or `opts.launchInteractive` is present, an unplanned production bypass keyed on the presence of injected test doubles"
+    accepted: false
 ---
 
 ## Cost
