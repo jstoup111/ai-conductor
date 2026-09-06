@@ -297,9 +297,10 @@ HALT on failure so that a self-build can never open a PR that breaks harness int
   and it exits 0, then the integrity check passes and finish proceeds.
 
 #### Negative Paths
-- Given the integrity script exits non-zero, when the gate runs, then it calls `writeHalt()` with a
-  reason naming "harness integrity suite failed" (and, when the script surfaces them, the failing
-  check) and the PR is NOT opened.
+- Given the integrity script exits non-zero and the failure is not mechanically remediable under
+  the bounded remediation lane (adr-2026-06-30-halt-based-release-gates, amended 2026-09-06 by #658),
+  when the gate runs, then it calls `writeHalt()` with a reason naming "harness integrity suite
+  failed" (and, when the script surfaces them, the failing check) and the PR is NOT opened.
 - Given `test/test_harness_integrity.sh` is missing or non-executable, when the gate runs, then it
   HALTs with a clear "integrity suite not found/executable" message rather than treating an absent
   script as a pass (fail-closed on the release gate).
@@ -308,7 +309,7 @@ HALT on failure so that a self-build can never open a PR that breaks harness int
 
 ### Done When
 - [ ] Self-build finish invokes `test_harness_integrity.sh` and reads its exit code.
-- [ ] Non-zero exit → `writeHalt()` naming the failing gate; no PR.
+- [ ] Non-zero exit that is not mechanically remediable → `writeHalt()` naming the failing gate; no PR.
 - [ ] Missing/non-executable script → fail-closed HALT (not a silent pass).
 - [ ] Test: exit 0 → pass; exit non-zero → HALT; missing script → HALT.
 
