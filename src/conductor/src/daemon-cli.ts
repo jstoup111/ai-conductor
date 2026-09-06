@@ -2826,6 +2826,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     }
+    case 'build_review_scope_incomplete': {
+      const candidates = event.candidates.map((candidate) => candidate.candidateId).join(', ');
+      log(
+        `${dot} ${chalk.yellow(`build_review scope incomplete (${event.rubric}; ${candidates || 'no candidates'})`)}`,
+      );
+      break;
+    }
     case 'protected_artifact_rebaseline': {
       // An inherited seal was rebaselined onto the feature's own base — routine
       // bookkeeping on a rebased feature, so it stays dim.

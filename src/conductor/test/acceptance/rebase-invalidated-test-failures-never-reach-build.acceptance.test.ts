@@ -79,7 +79,7 @@ function buildReviewGit(): GitRunner {
     if (command === 'rev-parse HEAD') {
       return { exitCode: 0, stdout: 'fixture-head\n', stderr: '' };
     }
-    if (command === 'merge-base main HEAD') {
+    if (command.startsWith('merge-base main ')) {
       return { exitCode: 0, stdout: 'base-sha\n', stderr: '' };
     }
     if (command.startsWith('diff base-sha..HEAD -- . ')) {
@@ -93,6 +93,12 @@ function buildReviewGit(): GitRunner {
         ].join('\n'),
         stderr: '',
       };
+    }
+    if (command.startsWith('diff --name-status -z --find-renames base-sha..fixture-head -- . ')) {
+      return { exitCode: 0, stdout: 'D\u0000test/obsolete.test.ts\u0000', stderr: '' };
+    }
+    if (command === 'show fixture-head:.docs/plans/feature.md') {
+      return { exitCode: 0, stdout: '# Approved plan\n\nRepair base-invalidated coverage.\n', stderr: '' };
     }
     return { exitCode: 0, stdout: '', stderr: '' };
   };

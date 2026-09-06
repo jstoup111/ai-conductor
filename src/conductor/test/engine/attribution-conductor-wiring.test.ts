@@ -282,11 +282,20 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
       }
       if (args[0] === 'diff') {
+        if (args.includes('--name-status')) {
+          return { exitCode: 0, stdout: 'M\u0000src/test.ts\u0000', stderr: '' };
+        }
         return {
           exitCode: 0,
           stdout: 'diff --git a/src/test.ts b/src/test.ts\n',
           stderr: '',
         };
+      }
+      if (args[0] === 'show' && args[1] === 'fixture-head:.docs/plans/test.md') {
+        return { exitCode: 0, stdout: '# Plan\n\n### Task 7: Test\n**Files:** `src/test.ts`\n', stderr: '' };
+      }
+      if (args[0] === 'show' && args[1] === 'fixture-head:src/test.ts') {
+        return { exitCode: 0, stdout: 'export const test = true;\n', stderr: '' };
       }
       return { exitCode: 1, stdout: '', stderr: '' };
     });
