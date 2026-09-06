@@ -3,6 +3,7 @@ import * as fsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
+// Covers: task:5
 import { seedTaskStatus } from '../../src/engine/task-seed.js';
 
 describe('task-seed', () => {
@@ -129,6 +130,40 @@ Content
   });
 
   describe('preserve completed rows', () => {
+    it('keeps an open repair pending while preserving an untouched completed sibling', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.writeFile(planPath, '# Plan\n\n## Task 1: Repaired\n\n## Task 2: Untouched\n');
+      await fsPromises.writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks: [
+        { id: '1', status: 'completed', commit: 'old-repair' },
+        { id: '2', status: 'completed', commit: 'untouched' },
+      ] }));
+      await fsPromises.writeFile(join(dir, '.pipeline/engine-state.json'), JSON.stringify({
+        activePlanPath: planPath,
+        repairObligations: {
+          version: 1,
+          records: {
+            repair_1: {
+              id: 'repair_1', planIdentity: '.docs/plans/test.md', taskIds: ['1'],
+              source: { findingId: 'F-1', authority: 'test', instruction: 'repair it' },
+              baseline: { head: 'before', tree: 'before', resolvedTaskIds: [] }, settlement: 'unsettled',
+              tasks: { '1': { status: 'open' } },
+            },
+          },
+          currentByPlan: { '.docs/plans/test.md': { '1': 'repair_1' }, },
+        },
+      }));
+
+      await seedTaskStatus(dir, planPath);
+
+      const tasks = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf8')).tasks;
+      expect(tasks).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: '1', status: 'pending' }),
+        expect.objectContaining({ id: '2', status: 'completed', commit: 'untouched' }),
+      ]));
+    });
+
     it('preserves completed rows with engine stamps during re-seed', async () => {
       // Setup: existing task-status.json with a completed task
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });

@@ -1226,20 +1226,14 @@ the unchanged remediation output will halt again.
 documented reason belonging to a valid `halt` disposition. The rejected-disposition event is absent
 unless the corrected plan still contains an invalid entry.
 
-### Remediation routed the work but the engine found nothing to dispatch
+### Remediation names an evidence-complete owning task
 
-**Symptom:** `.pipeline/HALT` ends with this clause, and `.pipeline/HALT.class` reads `needs-human`:
+**Symptom:** a remediation `build` disposition names an existing plan task whose prior `Task:`
+trailer or task-status row says it is complete.
 
-```text
-— remediation produced no dispatchable build work; the implicated task(s) are already
-evidence-complete — human needed
-```
-
-**Diagnosis:** this is not a remediation failure, and reading it as one wastes time. Check
-`.pipeline/remediation.json` first: in this class every disposition is `build`, each names an
-existing plan task that admits the finding, and none asks for a plan widening or a HALT.
-Remediation did its job. The engine then declined to dispatch, because the plan tasks named as
-owners already carry completion evidence, so it had no open task to attach the work to.
+**Diagnosis:** this is valid remediation work, not a terminal no-work condition. The conductor
+persists a repair obligation with the finding, owning task, and the current commit boundary; it
+then re-stages that task and returns to BUILD. Earlier completion evidence cannot close this repair.
 
 ```bash
 python3 -c "
@@ -1250,27 +1244,15 @@ for x in d['dispositions']:
 "
 ```
 
-Distinguish it from the superficially similar case where remediation supplied no recognized
-disposition — that halt names the rejected entries and their accepted vocabulary; correct the
-remediation output rather than treating it as a dispatch problem. A valid remediation containing
-only `halt` dispositions instead reports the planner's stated halt reason.
+**Recovery:** normally, take no operator action. Let BUILD address the finding and record current
+completion evidence. If the run halts instead, use the stated refusal: an unreadable repair state,
+an unavailable post-admission commit boundary, or a task-status re-stage failure needs repair before
+the feature resumes. Do not clear a halt merely to retry unchanged state.
 
-**Recovery:** the owning tasks named in the rationales still need the work, and clearing the halt
-alone will reproduce it on the next lap if the same gate re-raises the same findings. Either:
-
-1. Address the named findings directly, commit, then clear the halt using
-   [the resume procedure](#clear-a-halt-and-let-the-feature-resume); or
-2. If the gate that raised them should not be running for this feature at all — for example a
-   rubric this branch is itself retiring — disable it in the feature worktree's
-   `.ai-conductor/config.yml`, commit that as an operator decision with its rationale, and clear
-   the halt. Disabling every registered rubric is not sufficient on its own: the coordinator
-   returns `refused: no-enabled-rubrics` when the enabled set is empty
-   (`build-review-coordinator.ts:443`), so set `build_review.enabled: false` to take the
-   `gate-disabled` path (`:440`).
-
-**Verification:** the feature re-dispatches and advances past the gate that halted it. Issue #1831
-tracks the durable fix — re-opening an evidence-complete task with the new finding attached instead
-of halting.
+**Verification:** the named task is dispatched in BUILD, and the repair closes only after current
+evidence and the governing review pass. A later, distinct finding creates a new repair boundary;
+restarting the conductor replays an admitted open repair rather than treating the earlier completion
+as sufficient.
 
 ### The feature must stop being dispatched entirely
 

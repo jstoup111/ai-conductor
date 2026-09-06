@@ -3,7 +3,7 @@ import type { Reporter } from 'vitest/reporters';
 import { collectReporterTestResults, firstReporterError } from './reporter-test-results.js';
 
 const INTENT_RATIONALE =
-  'The existing-task disposition is not implemented, so the real remediation route cannot re-stage the bound authored task and dispatch it as pending to BUILD.';
+  'Historical completion evidence still suppresses an explicitly reopened owner, so the real remediation route cannot dispatch the current repair to BUILD.';
 
 export default class ExistingTaskRestageReporter implements Reporter {
   onTestRunEnd(testModules: ReadonlyArray<TestModule>, errors: ReadonlyArray<unknown>): void {

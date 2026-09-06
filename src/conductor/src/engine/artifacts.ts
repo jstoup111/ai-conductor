@@ -26,7 +26,7 @@ import {
   readOverScopeDecisions,
 } from './accepted-widenings.js';
 import { resolveGateCodeValidityConfig } from './config.js';
-import { resolveTaskIds } from './task-progress.js';
+import { resolveTaskIdsWithDiagnostics } from './task-progress.js';
 import { FULL_SUITE_EVIDENCE_PATH } from './full-suite-evidence.js';
 import {
   FullSuiteVerifier,
@@ -39,6 +39,7 @@ import {
   type ShipmentEvidenceResult,
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
+import { createEngineStateStore } from './engine-state-store.js';
 import { extractPrdFrIds } from './prd-fr-ids.js';
 import { parsePlanTaskPaths, resolvePlanTaskReference } from './plan-task-parse.js';
 import {
@@ -695,21 +696,18 @@ export async function recordAppendedRemediationTaskIds(
   const pipelineDir = join(projectRoot, '.pipeline');
   await mkdir(pipelineDir, { recursive: true });
   const engineStatePath = join(pipelineDir, 'engine-state.json');
-
-  let engineState: Record<string, unknown> = {};
-  try {
-    const existing = await readFile(engineStatePath, 'utf-8');
-    engineState = JSON.parse(existing) as Record<string, unknown>;
-  } catch {
-    engineState = {};
+  const result = await createEngineStateStore(engineStatePath).update((state) => {
+    const prior = Array.isArray(state.appendedRemediationTaskIds)
+      ? state.appendedRemediationTaskIds.filter((value): value is string => typeof value === 'string')
+      : [];
+    return {
+      ...state,
+      appendedRemediationTaskIds: Array.from(new Set([...prior, ...ids])),
+    };
+  });
+  if (!result.ok) {
+    throw new Error(`Failed to record appended remediation task ids (${result.kind}): ${result.message}`);
   }
-
-  const prior = Array.isArray(engineState.appendedRemediationTaskIds)
-    ? engineState.appendedRemediationTaskIds.filter((v): v is string => typeof v === 'string')
-    : [];
-  engineState.appendedRemediationTaskIds = Array.from(new Set([...prior, ...ids]));
-
-  await writeFile(engineStatePath, JSON.stringify(engineState, null, 2) + '\n');
 }
 
 /**
@@ -2800,15 +2798,20 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       // task is trailer-evidenced but rows are still pending/in_progress
       // (rows never explicitly flipped) previously false-halted here at
       // 100% real completion.
-      const resolvedIds = await resolveTaskIds(ctx.projectRoot, planTaskIds);
+      const taskResolution = await resolveTaskIdsWithDiagnostics(ctx.projectRoot, planTaskIds);
+      const resolvedIds = taskResolution.resolved;
       const unresolved = planTaskIds.filter((id) => !resolvedIds.has(id));
 
       if (unresolved.length > 0) {
         const names = unresolved.slice(0, 3).join(', ');
         const more = unresolved.length > 3 ? ` (+${unresolved.length - 3} more)` : '';
+        const repairReason = unresolved
+          .map((id) => taskResolution.unavailableReasons.get(id))
+          .find((reason): reason is string => Boolean(reason));
         return {
           done: false,
-          reason: `${unresolved.length}/${planTaskIds.length} tasks pending/not completed: ${names}${more}`,
+          reason: `${unresolved.length}/${planTaskIds.length} tasks pending/not completed: ${names}${more}` +
+            (repairReason ? `; ${repairReason}` : ''),
         };
       }
 

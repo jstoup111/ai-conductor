@@ -1,3 +1,4 @@
+// Covers: task:7
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -28,6 +29,46 @@ describe('planRemediation implementation-only authority routing', () => {
 
   afterEach(async () => {
     await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('does not dispatch remediation for a late accepted-only OVER_SCOPE route', async () => {
+    await mkdir(join(projectRoot, '.docs/stories'), { recursive: true });
+    await writeFile(join(projectRoot, '.docs/stories/feature.md'), [
+      '# Stories', '', '## Story 1: scoped behavior', '', '#### Happy Path',
+      '- Given completed work, when accepted, then it advances.',
+    ].join('\n'), 'utf8');
+    await writeFile(join(projectRoot, '.pipeline/prd-audit.md'), [
+      '**PRD:** none', '', '## Verdict Table',
+      '| Criterion | Grade | Plan task | PRD: | Evidence | Intent relation |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| S1.1 | OVER_SCOPE | 1 | none | Accepted scope objection | outside-visible |',
+    ].join('\n'), 'utf8');
+    await writeFile(join(projectRoot, '.pipeline/accepted-widenings.json'), JSON.stringify({
+      version: 1,
+      decisions: [{
+        criterion: 'S1.1', summary: 'Accepted scope objection', decision: 'accept',
+        rationale: 'Operator accepted the completed scope.', operator: 'test',
+        decidedAt: '2026-09-06T00:00:00.000Z',
+      }],
+    }), 'utf8');
+    let remediationDispatches = 0;
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
+      stepRunner: { run: async () => { remediationDispatches += 1; return { success: true }; } },
+      events: new ConductorEventEmitter(), projectRoot, mode: 'auto', daemon: true,
+      verifyArtifacts: false, maxRetries: 1,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+      ALL_STEPS,
+      'stale pending prd-audit route',
+      { source: 'prd-audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    );
+
+    expect({ outcome: outcome.kind, remediationDispatches }).toEqual({ outcome: 'none', remediationDispatches: 0 });
   });
 
   it('rejects an ADR-keyed remediation task from a gate without a growth allowance', async () => {
