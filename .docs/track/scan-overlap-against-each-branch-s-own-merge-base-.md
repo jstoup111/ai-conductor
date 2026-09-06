@@ -1,0 +1,13 @@
+# Track: Scan overlap against each branch's own merge-base diff
+
+Track: technical
+
+Scope boundary: Small fix for #1650, approved by the operator on 2026-09-06 (delegated). Correct the per-branch comparison the advisory overlap scan performs so a branch is reported only for paths its own commits change, and announce a branch whose comparison cannot be computed. Branch enumeration policy (which refs are candidates at all), the exact path-intersection rule, the blocker sweep, the rendered line formats, the command surface, and the rename/name-only-diff limitation are outside this slice. Behaviour when a queried candidate path does not exist is owned by #875 and is deliberately untouched here.
+
+This is an internal engine correction to an advisory authoring check; acceptance criteria live in technical stories rather than a PRD.
+
+The operator approved correcting the comparison in place over the alternatives of narrowing the candidate branch set to open-PR heads, or suppressing output volume by capping reported branches, on 2026-09-06 (delegated). Narrowing the ref set would reduce the noise without making any surviving report true, and a cap would hide the false reports rather than remove them; both leave the check unable to serve its stated purpose.
+
+Scope check: A — consumer-facing (the scan is an engine command every installed harness runs at plan authoring; no self-host, validation-gate, CI, or repository-private convention signal fires); B — n/a (no new skill); C — provider-agnostic (git plumbing and engine code only, no host-specific path, variable, or capability). No catalog registration is required.
+
+Verified foundation: the scan's per-branch step calls the shared changed-paths helper with the base ref and the branch ref, and that helper runs a two-endpoint `git diff --name-only`, so its result is every difference between the two tips — including every path the base itself changed after the branch forked. Read directly in the engine's overlap-scan module and the rebase module on origin/main. Reproduced against this repository: for the branch named in the issue, the two-endpoint comparison against the default branch returns 3987 paths and contains the queried file, while the merge-base comparison returns 7 and does not. Branch enumeration already excludes refs with zero commits ahead of the base, and the scan already degrades per branch through advisory skip notes rather than throwing. The governing approved ADR for this scan requires a deterministic, advisory, stateless primitive that reuses the changed-paths helper and never blocks authoring; a merge-base-relative comparison keeps every one of those properties, so no ADR amendment is required.
