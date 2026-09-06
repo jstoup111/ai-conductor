@@ -49,7 +49,13 @@ export interface TestDeclarationAnalysis {
 
 export interface TestDeclarationComparison {
   readonly kind: 'compared' | 'uncertain';
+  /** HEAD declarations that are executable quality targets. */
   readonly changed: readonly SupportedTestDeclaration[];
+  /**
+   * Base-only declarations retained as non-executable source evidence.  They
+   * cannot name a HEAD region because their source no longer exists there.
+   */
+  readonly deleted: readonly SupportedTestDeclaration[];
   readonly uncertain: readonly TestDeclarationDiagnostic[];
 }
 
@@ -364,6 +370,7 @@ export function compareTestDeclarations(base: TestDeclarationSource, head: TestD
   const executableHead = headParsed.declarations.filter((entry) => entry.kind !== 'suite');
   const unmatchedBase = new Set(executableBase);
   const unmatchedHead = new Set(executableHead);
+  const ambiguousBase = new Set<ParsedDeclaration>();
   const changed: SupportedTestDeclaration[] = [];
 
   for (const headEntry of executableHead) {
@@ -381,13 +388,22 @@ export function compareTestDeclarations(base: TestDeclarationSource, head: TestD
       unmatchedBase.delete(candidates[0]!);
       changed.push(Object.freeze({ ...withoutPrivateFields(headEntry), change: 'modified' }));
     } else {
+      candidates.forEach((candidate) => ambiguousBase.add(candidate));
       uncertain.push(Object.freeze({
         reason: 'uncertain-correspondence', span: headEntry.span,
         message: 'duplicate declarations have uncertain correspondence',
       }));
     }
   }
-  return Object.freeze({ kind: uncertain.length === 0 ? 'compared' : 'uncertain', changed: Object.freeze(changed), uncertain: Object.freeze(uncertain) });
+  const deleted = [...unmatchedBase]
+    .filter((entry) => !ambiguousBase.has(entry))
+    .map(withoutPrivateFields);
+  return Object.freeze({
+    kind: uncertain.length === 0 ? 'compared' : 'uncertain',
+    changed: Object.freeze(changed),
+    deleted: Object.freeze(deleted),
+    uncertain: Object.freeze(uncertain),
+  });
 }
 
 function withoutPrivateFields(entry: ParsedDeclaration): SupportedTestDeclaration {

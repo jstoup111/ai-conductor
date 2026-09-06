@@ -1,3 +1,4 @@
+// Covers: task:3
 import { describe, expect, it } from 'vitest';
 import {
   analyzeTestDeclarations,
@@ -103,7 +104,7 @@ describe('build-review test declarations', () => {
     `);
 
     expect(compareTestDeclarations(base, head)).toMatchObject({
-      kind: 'uncertain', changed: [],
+      kind: 'uncertain', changed: [], deleted: [],
       uncertain: [
         expect.objectContaining({ reason: 'uncertain-correspondence' }),
         expect.objectContaining({ reason: 'uncertain-correspondence' }),
@@ -136,6 +137,39 @@ describe('build-review test declarations', () => {
       kind: 'compared',
       changed: [expect.objectContaining({ titleChain: ['marked', 'same title'], change: 'modified' })],
       uncertain: [],
+    });
+  });
+
+  it('keeps pure renames and moved blocks out of executable targets while retaining deleted declaration evidence', () => {
+    const original = source('test/old-location.test.ts', `
+      it('relocated assertion', () => { expect(true).toBe(true); });
+      it('deleted assertion', () => { expect(false).toBe(false); });
+    `);
+    const renamed = source('test/new-location.test.ts', `
+      it('relocated assertion', () => { expect(true).toBe(true); });
+      it('deleted assertion', () => { expect(false).toBe(false); });
+    `);
+    const moved = source('test/old-location.test.ts', `
+      it('deleted assertion', () => { expect(false).toBe(false); });
+      it('relocated assertion', () => { expect(true).toBe(true); });
+    `);
+    const deleted = source('test/old-location.test.ts', 'const noExecutableTestsRemain = true;');
+
+    expect({
+      renamed: compareTestDeclarations(original, renamed),
+      moved: compareTestDeclarations(original, moved),
+      deleted: compareTestDeclarations(original, deleted),
+    }).toMatchObject({
+      renamed: { kind: 'compared', changed: [], deleted: [] },
+      moved: { kind: 'compared', changed: [], deleted: [] },
+      deleted: {
+        kind: 'compared',
+        changed: [],
+        deleted: [
+          expect.objectContaining({ titleChain: ['relocated assertion'] }),
+          expect.objectContaining({ titleChain: ['deleted assertion'] }),
+        ],
+      },
     });
   });
 });
