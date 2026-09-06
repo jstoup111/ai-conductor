@@ -848,6 +848,24 @@ then `ai-conductor rewind --to build`. `Missing` and `Duplicate` are planner fau
 gaps: no artifact is wrong, so re-dispatch the step and let the planner re-run against the same
 findings.
 
+### An all-REMEDIABLE as-built review did not route
+
+**Symptom:** the `architecture_review_as_built` HALT says `remediation did not route:` and then
+names one of these causes: remediation is disabled, the run is not in daemon mode, or the planner
+did not write a usable remediation plan. The HALT also lists the `REMEDIABLE` blocking findings.
+
+**Diagnosis:** read `.pipeline/architecture-review-as-built.md` for the finding details. If the
+cause names the planner, inspect `.pipeline/remediation.json`: it may be absent, stale, invalid JSON,
+missing a `dispositions` array, or contain no routable disposition. A `DESIGN` finding is different:
+it requires a human decision and names its governing clause instead of this routing cause.
+
+**Recovery:** enable `architecture_review_as_built.remediation.enabled` and re-run in daemon mode
+when those are the stated causes. Otherwise correct the remediation output so it is current JSON
+with at least one routable disposition for the listed finding, then use the [resume procedure](#clear-a-halt-and-let-the-feature-resume).
+
+**Verification:** the next dispatch either routes the repair work or writes a HALT with a new,
+specific cause; it must not repeat the same cause after its input has been corrected.
+
 ### Worktree preparation failed to install the preventive git hook
 
 **Symptom:** the worktree step halts with `preventive git hook installation failed: <reason>` — for
