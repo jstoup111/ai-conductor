@@ -1,9 +1,21 @@
+// Covers: task:1
 // Unit tests for the tmpdir leak guard (#1112) — the redirect helpers, the
 // pure stray/ignored classification, and the throw-vs-warn teardown decision.
 // No vitest wiring involved: each seam is exercised directly, the same split
 // used by signals-leak-guard.test.ts and global-setup-engineer-signals.test.ts.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { chmod, mkdtemp, mkdir, realpath, readdir, rm, symlink, writeFile } from 'fs/promises';
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -12,8 +24,11 @@ import {
   ensureRunTmpRootSync,
   removeRunTmpRoot,
   RUN_TMP_ROOT_ENV,
+  RUN_TMP_ROOT_OWNER_MARKER,
+  startRunRootHeartbeat,
   snapshotTmpdirEntries,
   diffTmpdirEntries,
+  writeRunRootOwnerMarker,
   IGNORED_TMPDIR_PREFIXES,
   RUN_TMP_ROOT_PREFIX,
   type TmpdirSnapshot,
@@ -172,6 +187,99 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
 
     const missing = await snapshotTmpdirEntries(join(fakeRealTmpdir, 'does-not-exist'));
     expect(missing).toEqual({ exists: false, entries: [] });
+  });
+});
+
+describe('tmpdir-leak-guard: owner marker', () => {
+  let fixtureRoot: string;
+  const owner = { pid: 42, hostname: 'test-host', startedAt: '2026-09-05T12:00:00.000Z' };
+
+  beforeEach(async () => {
+    fixtureRoot = await mkdtemp(join(tmpdir(), 'tmpdir-guard-owner-'));
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await rm(fixtureRoot, { recursive: true, force: true });
+  });
+
+  it('writes the owner identity to the marker and gives it an mtime', async () => {
+    const runRoot = join(fixtureRoot, 'run-root');
+    await mkdir(runRoot);
+
+    writeRunRootOwnerMarker(runRoot, owner);
+
+    const marker = join(runRoot, RUN_TMP_ROOT_OWNER_MARKER);
+    expect(JSON.parse(await readFile(marker, 'utf8'))).toEqual(owner);
+    expect((await stat(marker)).mtimeMs).toBeGreaterThan(0);
+  });
+
+  it('refreshes only the marker mtime on every heartbeat interval', async () => {
+    vi.useFakeTimers();
+    const runRoot = join(fixtureRoot, 'run-root');
+    await mkdir(runRoot);
+    writeRunRootOwnerMarker(runRoot, owner);
+    const marker = join(runRoot, RUN_TMP_ROOT_OWNER_MARKER);
+    const rootEntries = await readdir(runRoot);
+    const parentEntries = await readdir(fixtureRoot);
+    const firstMtime = (await stat(marker)).mtimeMs;
+
+    // The initial write uses the real filesystem clock; begin the fake clock
+    // after it so each virtual heartbeat is observably newer.
+    vi.setSystemTime(new Date('2099-01-01T00:00:00.000Z'));
+    const heartbeat = startRunRootHeartbeat(runRoot, { intervalMs: 1_000, logger: vi.fn() });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const secondMtime = (await stat(marker)).mtimeMs;
+    await vi.advanceTimersByTimeAsync(1_000);
+    const thirdMtime = (await stat(marker)).mtimeMs;
+    heartbeat.stop();
+
+    expect(secondMtime).toBeGreaterThan(firstMtime);
+    expect(thirdMtime).toBeGreaterThan(secondMtime);
+    expect(await readdir(runRoot)).toEqual(rootEntries);
+    expect(await readdir(fixtureRoot)).toEqual(parentEntries);
+  });
+
+  it('stops refreshing the marker after stop is called', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-05T12:00:00.000Z'));
+    const runRoot = join(fixtureRoot, 'run-root');
+    await mkdir(runRoot);
+    writeRunRootOwnerMarker(runRoot, owner);
+    const marker = join(runRoot, RUN_TMP_ROOT_OWNER_MARKER);
+    const heartbeat = startRunRootHeartbeat(runRoot, { intervalMs: 1_000, logger: vi.fn() });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    heartbeat.stop();
+    const stoppedMtime = (await stat(marker)).mtimeMs;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect((await stat(marker)).mtimeMs).toBe(stoppedMtime);
+  });
+
+  it('fails open and logs once when the root disappears before a heartbeat tick', async () => {
+    vi.useFakeTimers();
+    const runRoot = join(fixtureRoot, 'run-root');
+    await mkdir(runRoot);
+    writeRunRootOwnerMarker(runRoot, owner);
+    const logger = vi.fn();
+    const heartbeat = startRunRootHeartbeat(runRoot, { intervalMs: 1_000, logger });
+    await rm(runRoot, { recursive: true, force: true });
+
+    expect(() => vi.advanceTimersByTime(1_000)).not.toThrow();
+    heartbeat.stop();
+
+    expect(logger).toHaveBeenCalledTimes(1);
+    expect(logger).toHaveBeenCalledWith(expect.stringMatching(/^tmpdir-leak-guard: owner marker /));
+  });
+
+  it('fails open and logs once when the owner marker cannot be written', () => {
+    const logger = vi.fn();
+
+    expect(() => writeRunRootOwnerMarker(join(fixtureRoot, 'missing-root'), owner, logger)).not.toThrow();
+
+    expect(logger).toHaveBeenCalledTimes(1);
+    expect(logger).toHaveBeenCalledWith(expect.stringMatching(/^tmpdir-leak-guard: owner marker /));
   });
 });
 

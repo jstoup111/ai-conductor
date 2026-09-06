@@ -1,4 +1,12 @@
-import { chmodSync, lstatSync, mkdtempSync, readdirSync, realpathSync } from 'fs';
+import {
+  chmodSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  utimesSync,
+  writeFileSync,
+} from 'fs';
 import { mkdtemp, readdir, rm } from 'fs/promises';
 import { join } from 'path';
 
@@ -40,6 +48,75 @@ export const RUN_TMP_ROOT_PREFIX = 'ai-conductor-vitest-run-';
  * worker-side test prove propagation by comparing `os.tmpdir()` to it.
  */
 export const RUN_TMP_ROOT_ENV = 'AI_CONDUCTOR_TEST_TMP_ROOT';
+
+/** Owner marker persisted inside each run root for cross-namespace liveness checks. */
+export const RUN_TMP_ROOT_OWNER_MARKER = '.owner';
+
+/** Frequency at which a live run refreshes its owner marker. */
+export const RUN_TMP_ROOT_HEARTBEAT_MS = 60_000;
+
+/** A marker older than this is stale, unless the caller overrides the policy. */
+export const RUN_TMP_ROOT_STALE_AFTER_MS = 3 * 60 * 60 * 1_000;
+
+/** Legacy roots without a marker get a longer retention window. */
+export const RUN_TMP_ROOT_LEGACY_STALE_AFTER_MS = 24 * 60 * 60 * 1_000;
+
+/** Identity recorded when a run root becomes live. */
+export interface RunRootOwnerMarker {
+  pid: number;
+  hostname: string;
+  startedAt: string;
+}
+
+type GuardLogger = (message: string) => void;
+
+function logOwnerMarkerError(logger: GuardLogger, action: string, error: unknown): void {
+  logger(
+    `tmpdir-leak-guard: owner marker ${action} failed — ${
+      error instanceof Error ? error.message : String(error)
+    }`
+  );
+}
+
+/**
+ * Persist this run's owner identity inside its root.
+ *
+ * Marker failures are deliberately non-fatal: cleanup must remain possible
+ * even when a filesystem edge condition prevents stale-root attribution.
+ */
+export function writeRunRootOwnerMarker(
+  runRoot: string,
+  owner: RunRootOwnerMarker,
+  logger: GuardLogger = console.error
+): void {
+  try {
+    writeFileSync(join(runRoot, RUN_TMP_ROOT_OWNER_MARKER), JSON.stringify(owner), 'utf8');
+  } catch (error) {
+    logOwnerMarkerError(logger, 'write', error);
+  }
+}
+
+/** Start an unref'd liveness heartbeat for an existing run-root owner marker. */
+export function startRunRootHeartbeat(
+  runRoot: string,
+  {
+    intervalMs = RUN_TMP_ROOT_HEARTBEAT_MS,
+    logger = console.error,
+  }: { intervalMs?: number; logger?: GuardLogger } = {}
+): { stop: () => void } {
+  const markerPath = join(runRoot, RUN_TMP_ROOT_OWNER_MARKER);
+  const heartbeat = setInterval(() => {
+    try {
+      const now = new Date();
+      utimesSync(markerPath, now, now);
+    } catch (error) {
+      logOwnerMarkerError(logger, 'heartbeat refresh', error);
+    }
+  }, intervalMs);
+  heartbeat.unref(); // portability-ok: heartbeat must not keep an interrupted test run alive
+
+  return { stop: () => clearInterval(heartbeat) };
+}
 
 /** Make nested directories removable without following symlinks. */
 function makeDirectoriesWritableSync(path: string): void {
