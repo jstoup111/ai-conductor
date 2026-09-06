@@ -21,6 +21,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Adds a coverage-binding gate that verifies plan criteria against cited task completion checks. ([implementation PR #2135](https://github.com/jstoup111/ai-conductor/pull/2135)).
 - Daemon runs can now process multiple features concurrently within a single repository. ([implementation PR #2075](https://github.com/jstoup111/ai-conductor/pull/2075)).
 - The daemon prints a startup warning whenever its effective concurrency exceeds 1, describing the extra rebase churn and spend to expect and how to return to serial dispatch. ([implementation PR #2240](https://github.com/jstoup111/ai-conductor/pull/2240)).
+- The daemon and engineer workflows now require GitHub CLI 2.73.0 or later and clearly report unsupported JSON fields. ([implementation PR #2243](https://github.com/jstoup111/ai-conductor/pull/2243)).
 
 ### Changed
 
