@@ -11924,7 +11924,7 @@ export class Conductor {
               step.name,
               await this.completionCtx(state),
             );
-      if (step.name === 'finish') {
+      if (step.name === 'finish' || (step.name === 'build' && buildRoutedForward)) {
         await writeVerdict(this.projectRoot, step.name, verdict);
       }
       await this.events.emit({

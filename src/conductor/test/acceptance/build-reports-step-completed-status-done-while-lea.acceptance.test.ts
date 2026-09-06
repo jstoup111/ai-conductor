@@ -1,3 +1,4 @@
+// Covers: task:1
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execa } from 'execa';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -11,6 +12,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
+import { readVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
 import { Conductor } from '../test-conductor.js';
 
 // RED acceptance coverage for #1270, Stories S3 and S5. These specs drive the
@@ -155,6 +157,10 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
       fromStep: 'build',
       escalateBuildFailure: async () => ({}),
       git,
+      fullSuiteVerifier: {
+        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+        inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+      },
     });
   }
 
@@ -185,14 +191,20 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
       );
     });
 
-    it('preserves the existing clean-tree exhaustion route to build_review', async () => {
+    it('persists the clean-tree exhaustion route before subsequent build_review dispatch', async () => {
       await writePlanAndStatus(dir, 'pending');
       let attempt = 0;
+      let forwardedVerdict: GateVerdict | null = null;
+      const observedBuildReview = new Error('observed build_review');
       const runner: StepRunner = {
         run: vi.fn(async (step) => {
           if (step === 'build') {
             attempt += 1;
+            if (attempt > 2) throw new Error('unexpected third build attempt');
             await commitPlainWork(dir, attempt);
+          } else if (step === 'build_review') {
+            forwardedVerdict = await readVerdict(dir, 'build');
+            throw observedBuildReview;
           }
           return { success: true };
         }),
@@ -203,8 +215,11 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
       expect(attempt).toBe(2);
       expect(completedBuilds).toBe(1);
       expect(stepStarts).toContain('build_review');
-      const state = JSON.parse(await readFile(statePath, 'utf-8')) as Record<string, unknown>;
-      expect(state.build_routed_reason).toMatch(/commit movement/);
+      expect(forwardedVerdict).toEqual(expect.objectContaining({
+        satisfied: true,
+        reason: expect.stringMatching(/commit movement/),
+        checkedAt: expect.any(Number),
+      }));
     });
   });
 
