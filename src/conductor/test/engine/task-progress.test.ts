@@ -388,7 +388,7 @@ describe('task-progress', () => {
       }));
       await writeFile(join(dir, 'baseline.txt'), 'baseline');
       await execa('git', ['add', '.'], { cwd: dir });
-      await execa('git', ['commit', '-m', 'baseline'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'baseline\n\nTask: T2'], { cwd: dir });
       const boundary = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
       const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
       await repairs.admitOrReplay('key-2', {
@@ -398,6 +398,11 @@ describe('task-progress', () => {
         source: { findingId: 'finding-2', authority: 'build_review', instruction: 'repair it' },
         baseline: { head: boundary, tree: 'tree', resolvedTaskIds: [] },
       });
+
+      // The pre-boundary alias remains visible to the legacy trailer union,
+      // so only current-repair resolution can keep it unresolved here.
+      expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set());
+
       await writeFile(join(dir, 'repair.txt'), 'repair');
       await execa('git', ['add', '.'], { cwd: dir });
       await execa('git', ['commit', '-m', 'repair\n\nTask: T2'], { cwd: dir });
