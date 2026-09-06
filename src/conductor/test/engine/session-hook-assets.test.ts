@@ -168,6 +168,7 @@ describe('DOCS_GUARD_HOOK', () => {
   );
 
   it('keeps metacharacter path bytes literal while classifying a protected alias target', () => {
+    const targetName = 'a $(not-run) ; & [x].md';
     const result = runDocsGuardHook({
       markerContent: 'step: build\nphase: BUILD\n',
       setup: (dir) => {
@@ -177,11 +178,33 @@ describe('DOCS_GUARD_HOOK', () => {
       payload: (dir: string) => ({
         tool_name: 'Write',
         tool_input: {
-          file_path: join(dir, 'alternate-root', '.docs', 'plans', 'a $(not-run) ; & [x].md'),
+          file_path: join(dir, 'alternate-root', '.docs', 'plans', targetName),
         },
       }),
     });
     expect(result.status).toBe(2);
+    expect(result.stderr).toContain(targetName);
+    expect(result.stderr).toMatch(/blocked write to/);
+  });
+
+  it('keeps metacharacter path bytes literal while allowing an exempt target', () => {
+    const result = runDocsGuardHook({
+      markerContent: 'step: build\nphase: BUILD\nallow: .docs/release-waivers/\n',
+      setup: (dir) => {
+        mkdirSync(join(dir, '.docs', 'release-waivers', '[p]'), { recursive: true });
+        mkdirSync(join(dir, '.docs', 'plans'), { recursive: true });
+        writeFileSync(join(dir, '.docs', 'plans', 'x.md'), 'protected target', 'utf-8');
+        symlinkSync(join(dir, '.docs', 'plans'), join(dir, '.docs', 'release-waivers', 'p'));
+      },
+      payload: (dir: string) => ({
+        tool_name: 'Write',
+        tool_input: {
+          file_path: join(dir, '.docs', 'release-waivers', '[p]', 'x.md'),
+        },
+      }),
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
   });
 
   it('retains a protected suffix beneath an alternate root alias when an inner link resolves outside', () => {
