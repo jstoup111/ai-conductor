@@ -10,6 +10,7 @@ import {
   validateBuildReviewDispatchedResult,
 } from "../../src/engine/build-review-coordinator.js";
 import {
+  deriveBuildReviewScopeIncompleteFault,
   mapBuildReviewCoordinatorFailureReason,
   parseBuildReviewInfrastructureFailure,
   parseBuildReviewLapId,
@@ -779,6 +780,46 @@ describe("build-review coordinator: candidate scope resolutions", () => {
     expect(testQualityBranch(result)).toMatchObject({
       kind: "dispatched", result: { findings: [], scopeResolutions: [exclusion], verdict: "PASS" },
     });
+  });
+
+  it('re-runs scope coordination against corrected pinned binding evidence instead of retaining an old indeterminacy', async () => {
+    const initial = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      projections: { testQuality: candidateProjection },
+      dispatchModel: vi.fn(async () => ({
+        findings: [], scopeResolutions: [{ candidateId: 'candidate-widget', status: 'indeterminate', missingEvidenceReason: 'the pinned binding is incomplete' }],
+      })),
+    }));
+    const initialBranch = testQualityBranch(initial);
+    expect(initialBranch).toMatchObject({ kind: 'dispatched' });
+    if (!initialBranch || initialBranch.kind !== 'dispatched') throw new Error('fixture must dispatch testQuality');
+    const initialResult = initialBranch.result;
+    if (initialResult.kind !== 'judged') throw new Error('fixture must settle a judged result');
+    expect(deriveBuildReviewScopeIncompleteFault(initialResult)).toMatchObject({
+      candidates: [{ candidateId: 'candidate-widget', missingEvidenceReason: 'the pinned binding is incomplete' }],
+    });
+
+    const correctedRegion = { ...scopeRegion, contentHash: `sha256:${'c'.repeat(64)}`, display: 'corrected setup binding' };
+    const correctedProjection = {
+      ...candidateProjection,
+      digest: 'sha256:corrected-projection',
+      testScope: { candidates: [{ ...scopeCandidate, sourceRegion: correctedRegion }] },
+    };
+    const recovered = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      projections: { testQuality: correctedProjection },
+      dispatchModel: vi.fn(async () => ({
+        findings: [], scopeResolutions: [{
+          candidateId: 'candidate-widget', status: 'resolved', sourceRegion: correctedRegion,
+          obligationReferences: ['criterion:S5.1'], associationReason: 'Corrected pinned binding proves this candidate.',
+        }],
+      })),
+    }));
+    const recoveredBranch = testQualityBranch(recovered);
+    expect(recoveredBranch).toMatchObject({ kind: 'dispatched' });
+    if (!recoveredBranch || recoveredBranch.kind !== 'dispatched') throw new Error('fixture must dispatch testQuality');
+    const recoveredResult = recoveredBranch.result;
+    if (recoveredResult.kind !== 'judged') throw new Error('fixture must settle a judged result');
+    expect(recoveredResult.scopeResolutions).toMatchObject([{ status: 'resolved', sourceRegion: correctedRegion }]);
+    expect(deriveBuildReviewScopeIncompleteFault(recoveredResult)).toBeUndefined();
   });
 
   it('does not empty-pass a concrete candidate, and permits its resolved indeterminate no-findings result', async () => {
