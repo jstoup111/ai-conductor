@@ -1,3 +1,4 @@
+// Covers: task:2
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -11,9 +12,47 @@ import type {
   ShipmentEvidenceDependencies,
   ShipmentEvidenceInput,
 } from '../../src/engine/shipment-evidence.js';
+import { evaluateShipmentEvidence } from '../../src/engine/shipment-evidence.js';
 
 describe('shipment-evidence CLI', () => {
+  it('does not bind a quoted plan path in an implementation PR body', async () => {
+    const reports: string[] = [];
+    const evaluateEvidence = vi.fn(async () => ({
+      kind: 'valid' as const,
+      slug: 'feature',
+      pr: 'https://github.com/org/repo/pull/1',
+      recordPath: '.docs/shipped/feature.md',
+      hash: 'hash',
+      commit: 'a'.repeat(40),
+    }));
+    const code = await dispatchShipmentEvidence(
+      { kind: 'check', pr: 'https://github.com/org/repo/pull/1' },
+      '/repo',
+      {
+        listPlanStems: async () => ['feature'],
+        runGh: vi.fn(async () => ({
+          stdout: JSON.stringify({
+            url: 'https://github.com/org/repo/pull/1',
+            body: '> Plan: `.docs/plans/feature.md`',
+            files: [{ path: 'src/conductor/src/engine/feature.ts' }],
+            headRefOid: 'a'.repeat(40),
+          }),
+        })),
+        runGit: vi.fn(async () => ({ stdout: 'a'.repeat(40) })),
+        evaluateEvidence,
+        report: (message) => reports.push(message),
+      },
+    );
+
+    expect({ code, evaluateCalls: evaluateEvidence.mock.calls.length, reports }).toEqual({
+      code: 0,
+      evaluateCalls: 0,
+      reports: ['shipped-record: not applicable (zero-match)'],
+    });
+  });
+
   it('passes an exactly associated PR with a valid immutable-head record', async () => {
+    const reports: string[] = [];
     const evaluateEvidence = vi.fn(async (_input: ShipmentEvidenceInput, _deps: ShipmentEvidenceDependencies) => ({
       kind: 'valid' as const,
       slug: 'feature',
@@ -37,6 +76,7 @@ describe('shipment-evidence CLI', () => {
         })),
         runGit: vi.fn(async () => ({ stdout: 'a'.repeat(40) })),
         evaluateEvidence,
+        report: (message) => reports.push(message),
       },
     );
 
@@ -46,6 +86,7 @@ describe('shipment-evidence CLI', () => {
       binding: await evaluateEvidence.mock.calls[0]?.[1]?.githubRunner?.(
         'https://github.com/org/repo/pull/1',
       ),
+      reports,
     }).toEqual({
       code: 0,
       input: {
@@ -58,6 +99,10 @@ describe('shipment-evidence CLI', () => {
         url: 'https://github.com/org/repo/pull/1',
         headRefOid: 'a'.repeat(40),
       },
+      reports: [
+        'shipped-record: plan .docs/plans/feature.md basis=explicit-plan-declaration',
+        'shipped-record: valid .docs/shipped/feature.md',
+      ],
     });
   });
 
@@ -166,6 +211,69 @@ describe('shipment-evidence CLI', () => {
     );
 
     expect(code).toBe(1);
+  });
+
+  it('reports its declaration basis before a real missing-record refusal', async () => {
+    const reports: string[] = [];
+    const errors: string[] = [];
+    const code = await dispatchShipmentEvidence(
+      { kind: 'check', pr: 'https://github.com/org/repo/pull/1' },
+      '/repo',
+      {
+        listPlanStems: async () => ['feature'],
+        runGh: vi.fn(async () => ({
+          stdout: JSON.stringify({
+            url: 'https://github.com/org/repo/pull/1',
+            body: 'Plan: .docs/plans/feature.md',
+            files: [{ path: 'src/conductor/src/engine/feature.ts' }],
+            headRefOid: 'a'.repeat(40),
+          }),
+        })),
+        runGit: vi.fn(async () => ({ stdout: 'a'.repeat(40) })),
+        evaluateEvidence: (input, dependencies) => evaluateShipmentEvidence(input, {
+          ...dependencies,
+          readFile: async (path) => path === '.docs/plans/feature.md'
+            ? Buffer.from('# Feature plan\n')
+            : null,
+        }),
+        report: (message) => reports.push(message),
+        reportError: (message) => errors.push(message),
+      },
+    );
+
+    expect({ code, reports, errors }).toEqual({
+      code: 1,
+      reports: ['shipped-record: plan .docs/plans/feature.md basis=explicit-plan-declaration'],
+      errors: ['shipped-record: shipped-record-missing'],
+    });
+  });
+
+  it('reports multi-match without evaluating when multiple existing plans are declared', async () => {
+    const reports: string[] = [];
+    const evaluateEvidence = vi.fn();
+    const code = await dispatchShipmentEvidence(
+      { kind: 'check', pr: 'https://github.com/org/repo/pull/1' },
+      '/repo',
+      {
+        listPlanStems: async () => ['feature', 'other-feature'],
+        runGh: vi.fn(async () => ({
+          stdout: JSON.stringify({
+            url: 'https://github.com/org/repo/pull/1',
+            body: 'Plan: .docs/plans/feature.md\nPlan: .docs/plans/other-feature.md',
+            files: [{ path: 'src/conductor/src/engine/feature.ts' }],
+            headRefOid: 'a'.repeat(40),
+          }),
+        })),
+        evaluateEvidence,
+        report: (message) => reports.push(message),
+      },
+    );
+
+    expect({ code, evaluateCalls: evaluateEvidence.mock.calls.length, reports }).toEqual({
+      code: 0,
+      evaluateCalls: 0,
+      reports: ['shipped-record: not applicable (multi-match)'],
+    });
   });
 
   it('fails a proven implementation when strict verification cannot validate it', async () => {
