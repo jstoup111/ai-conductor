@@ -8,7 +8,8 @@ import { assertPublishWrapperEnv } from './scripts/publish-guard.mjs';
 assertPublishWrapperEnv(process.env);
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: ['src/index.ts', 'src/engine/build-review-test-declarations.ts'],
+  external: ['typescript'],
   format: ['esm'],
   target: 'node26',
   clean: true,
