@@ -862,21 +862,6 @@ The resolved value is consumed by the `build_review`, `prd_audit`,
 `architecture_review_as_built`, and `manual_test` completion predicates, by stale-review-artifact
 sweeping, and by step-runner gate preservation.
 
-## coverage_binding
-
-Pre-BUILD coverage-binding judge (`coverage_binding` step,
-`adr-2026-08-31-coverage-binding-judge-step`). The judge confirms, per story criterion, that the
-cited plan task's `Done when` block asserts the criterion, and halts `needs-human` before `build`
-when it does not.
-
-| Key | Type | Validation | Default |
-| --- | --- | --- | --- |
-| `coverage_binding.judge.enabled` | boolean | Boolean, else hard error | `true` |
-
-`judge` is the only allowed key and `enabled` its only allowed member; a non-object block or an
-unknown key at either level is a hard error. Setting `enabled: false` makes the step complete as a
-no-op `done` with no provider dispatch.
-
 ## harness_self_host
 
 Guardrails that apply when the build target is the harness checkout itself. Validated by

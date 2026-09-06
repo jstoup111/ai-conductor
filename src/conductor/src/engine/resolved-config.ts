@@ -115,15 +115,11 @@ export function resolveDaemonConcurrency(config?: HarnessConfig): number {
  */
 export const DEFAULT_STEP_ESCALATE = true;
 
-/**
- * Resolve the coverage-binding judge configuration. The default is `true` —
- * the D7 exit condition of adr-2026-08-31-coverage-binding-judge-step, flipped
- * from the initial `false` now that the judge has shipped behind the key.
- */
+/** Resolve the default-off coverage-binding judge configuration. */
 export function resolveCoverageBindingConfig(
   config: Pick<HarnessConfig, 'coverage_binding'> | undefined,
 ): { judgeEnabled: boolean } {
-  return { judgeEnabled: config?.coverage_binding?.judge?.enabled ?? true };
+  return { judgeEnabled: config?.coverage_binding?.judge?.enabled ?? false };
 }
 
 // ────────────────────────────────────────────────────────────────────────────
