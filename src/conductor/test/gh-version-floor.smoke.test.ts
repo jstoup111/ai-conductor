@@ -3,6 +3,9 @@ import { promisify } from 'node:util';
 import { expect, it } from 'vitest';
 import { checkGhVersionFloor, parseGhVersion } from '../src/engine/gh-version-floor.js';
 
+const smokeCapability = 'toolchain';
+void smokeCapability;
+
 const execFileP = promisify(execFile);
 
 it('smoke: parses the installed gh binary version', async () => {
