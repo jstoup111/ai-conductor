@@ -1,5 +1,5 @@
 import { rmSync } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { homedir, hostname, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { snapshotPipeline, diffPipeline } from './pipeline-leak-guard.js';
 import {
@@ -14,7 +14,13 @@ import {
   diffTmpdirEntries,
   removeRunTmpRoot,
   snapshotTmpdirEntries,
+  startRunRootHeartbeat,
+  sweepStaleRunTmpRoots,
+  writeRunRootOwnerMarker,
   RUN_TMP_ROOT_ENV,
+  RUN_TMP_ROOT_LEGACY_STALE_AFTER_MS,
+  RUN_TMP_ROOT_STALE_AFTER_MS,
+  type StaleRunTmpRootsResult,
   type TmpdirDiff,
 } from './tmpdir-leak-guard.js';
 import {
@@ -180,6 +186,32 @@ export function applyTmpdirTeardownDecision(
   }
 }
 
+/** Report the non-fatal result of the pre-run stale-root sweep. */
+export function applyRunRootSweepDecision(
+  result: StaleRunTmpRootsResult,
+  realTmpdir: string,
+  logger: (message: string) => void = console.error
+): void {
+  try {
+    if (result.reaped.length > 0) {
+      logger(
+        `tmpdir-leak-guard: swept ${result.reaped.length} stale run root(s) left behind by a ` +
+          `previous interrupted run: ${result.reaped.map(name => join(realTmpdir, name)).join('; ')}`
+      );
+    }
+
+    for (const failure of result.failures) {
+      logger(
+        `tmpdir-leak-guard: stale run root sweep failed for ${failure.name} — ${
+          failure.error instanceof Error ? failure.error.message : String(failure.error)
+        }`
+      );
+    }
+  } catch {
+    // A cleanup report must never turn a fail-open sweep into a setup failure.
+  }
+}
+
 /**
  * Best-effort reap on graceful interruption (SIGINT/SIGTERM). vitest's
  * `globalTeardown` only runs on a normal process exit — Ctrl-C, an external
@@ -191,7 +223,8 @@ export function applyTmpdirTeardownDecision(
 function installInterruptReap(
   getSnapshot: () => ReturnType<typeof snapshotDaemonSessions>,
   logger: (message: string) => void,
-  runTmpRoot: string
+  runTmpRoot: string,
+  stopHeartbeat: () => void
 ): () => void {
   let handled = false;
   const onSignal = (signal: NodeJS.Signals) => {
@@ -206,6 +239,7 @@ function installInterruptReap(
       // Best-effort only — never let reap failure block shutdown.
     }
     try {
+      stopHeartbeat();
       // Same bypassed-teardown problem the reap above exists for: a Ctrl-C
       // would otherwise strand this run's whole temp root, and an operator who
       // interrupts often is exactly the operator whose tmpfs fills up. Sync
@@ -237,6 +271,12 @@ export default async function setup() {
   process.env[RUN_TMP_ROOT_ENV] = runTmpRoot;
   process.env.TMPDIR = runTmpRoot;
   const realTmpdir = dirname(runTmpRoot);
+  writeRunRootOwnerMarker(runTmpRoot, {
+    pid: process.pid,
+    hostname: hostname(),
+    startedAt: new Date().toISOString(),
+  });
+  const heartbeat = startRunRootHeartbeat(runTmpRoot);
 
   // Engine-dist guard: 13 test files spawn the real `bin/conduct-ts`, which
   // exits 1 when `src/conductor/dist` is missing or dangling. `dist` is a
@@ -281,6 +321,19 @@ export default async function setup() {
   // writes temp files, so nothing escapes containment; teardown restores the
   // real tmpdir before the reap for exactly the same reason.
   process.env.TMPDIR = realTmpdir;
+  const staleAfterOverride = Number(process.env.AI_CONDUCTOR_TEST_TMP_ROOT_STALE_AFTER_MS);
+  const staleAfterMs =
+    Number.isFinite(staleAfterOverride) && staleAfterOverride >= 0
+      ? staleAfterOverride
+      : RUN_TMP_ROOT_STALE_AFTER_MS;
+  const runRootSweep = await sweepStaleRunTmpRoots(realTmpdir, {
+    ownRoot: runTmpRoot,
+    now: Date.now(),
+    staleAfterMs,
+    legacyStaleAfterMs: RUN_TMP_ROOT_LEGACY_STALE_AFTER_MS,
+    logger: () => {},
+  });
+  applyRunRootSweepDecision(runRootSweep, realTmpdir);
   const sweep = sweepStaleDaemonSessions();
   if (sweep.killed.length > 0) {
     console.error(
@@ -303,12 +356,14 @@ export default async function setup() {
   const removeInterruptHandlers = installInterruptReap(
     () => globalThis.__tmuxSnapshot ?? daemonSnapshot,
     console.error,
-    runTmpRoot
+    runTmpRoot,
+    heartbeat.stop
   );
 
   // Return the async teardown function
   return async () => {
     removeInterruptHandlers();
+    heartbeat.stop();
 
     // Restore the real tmpdir FIRST so every guard below observes exactly the
     // `os.tmpdir()` it observed before this redirect existed — in particular

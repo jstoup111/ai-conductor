@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { applyEngineerSignalsTeardownDecision } from './global-setup.js';
+import {
+  applyEngineerSignalsTeardownDecision,
+  applyRunRootSweepDecision,
+} from './global-setup.js';
 import type { EngineerSignalsDiff } from './signals-leak-guard.js';
 
 describe('applyEngineerSignalsTeardownDecision', () => {
@@ -15,6 +18,58 @@ describe('applyEngineerSignalsTeardownDecision', () => {
     const logger = vi.fn();
 
     expect(() => applyEngineerSignalsTeardownDecision(diff, logger)).not.toThrow();
+    expect(logger).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyRunRootSweepDecision', () => {
+  it('reports all reaped roots in one previous-interrupted-run line', () => {
+    const logger = vi.fn();
+
+    applyRunRootSweepDecision(
+      { reaped: ['ai-conductor-vitest-run-one', 'ai-conductor-vitest-run-two'], retained: [], failures: [] },
+      '/tmp',
+      logger
+    );
+
+    expect(logger).toHaveBeenCalledTimes(1);
+    expect(logger).toHaveBeenCalledWith(
+      expect.stringContaining('swept 2 stale run root(s)')
+    );
+    expect(logger).toHaveBeenCalledWith(expect.stringContaining('/tmp/ai-conductor-vitest-run-one'));
+    expect(logger).toHaveBeenCalledWith(expect.stringContaining('/tmp/ai-conductor-vitest-run-two'));
+    expect(logger).toHaveBeenCalledWith(expect.stringContaining('previous interrupted run'));
+  });
+
+  it('reports failures separately and stays non-throwing, even if its logger fails', () => {
+    const logger = vi.fn();
+    const error = new Error('simulated EBUSY');
+
+    expect(() =>
+      applyRunRootSweepDecision(
+        { reaped: [], retained: [], failures: [{ name: 'ai-conductor-vitest-run-one', error }] },
+        '/tmp',
+        logger
+      )
+    ).not.toThrow();
+    expect(logger).toHaveBeenCalledWith(expect.stringContaining('ai-conductor-vitest-run-one'));
+    expect(logger).toHaveBeenCalledWith(expect.stringContaining('simulated EBUSY'));
+    expect(() =>
+      applyRunRootSweepDecision(
+        { reaped: ['ai-conductor-vitest-run-one'], retained: [], failures: [] },
+        '/tmp',
+        () => {
+          throw new Error('logger failed');
+        }
+      )
+    ).not.toThrow();
+  });
+
+  it('is silent for an empty sweep result', () => {
+    const logger = vi.fn();
+
+    applyRunRootSweepDecision({ reaped: [], retained: [], failures: [] }, '/tmp', logger);
+
     expect(logger).not.toHaveBeenCalled();
   });
 });
