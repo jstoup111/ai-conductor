@@ -2340,12 +2340,15 @@ export class DefaultStepRunner implements StepRunner {
       classified.tests,
       inputs.sourceSnapshot.removalContext,
     );
+    const counterfactualFileSelectors = inputs.sourceSnapshot.testQuality?.counterfactualFileSelectors
+      ?? classified.tests;
     return await materializeTautologyPreflight({
       scopedWorkingDirectory: this.projectDir,
       mergeBase: inputs.sourceSnapshot.mergeBase,
       headSha: inputs.sourceSnapshot.headSha,
       diff: inputs.diff,
       scopedCommand: this.config?.test_suite?.scoped_command ?? null,
+      counterfactualFileSelectors,
       currentGreenProofIdentity: `${inputs.testSuiteProof.provenanceHeadSha}:${inputs.testSuiteProof.fingerprint}`,
       ...(removalMaintenanceSelectors.length > 0
         ? { approvedException: 'removal-maintenance' as const, removalMaintenanceSelectors }
