@@ -81,4 +81,16 @@ describe('TerminalSubscriber', () => {
 
     expect(renderCallback).toHaveBeenCalledWith(event);
   });
+
+  it('forwards tail diagnostics to the renderer', async () => {
+    subscriber.start();
+    const event: ConductorEvent = {
+      type: 'pipeline_tail_diagnostic', reason: 'malformed-line',
+      path: '.pipeline/pipeline-events.jsonl', byteOffset: 42,
+    };
+
+    await emitter.emit(event);
+
+    expect(renderCallback).toHaveBeenCalledWith(event);
+  });
 });

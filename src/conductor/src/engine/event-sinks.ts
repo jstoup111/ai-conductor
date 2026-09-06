@@ -86,6 +86,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   build_progress: { render: true, persist: true, audit: false, otel: true },
   build_no_progress: { render: true, persist: true, audit: false, otel: true },
   pipeline_closeout: { render: true, persist: false, audit: false, otel: true },
+  pipeline_tail_diagnostic: { render: true, persist: true, audit: false, otel: false },
   renderer_error: { render: true, persist: true, audit: false, otel: false },
   when_skip: { render: true, persist: true, audit: false, otel: false },
   parallel_started: { render: true, persist: true, audit: false, otel: false },

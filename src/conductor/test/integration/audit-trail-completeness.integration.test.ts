@@ -129,6 +129,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_progress: 'not-audited-by-design',
   build_no_progress: 'not-audited-by-design',
   pipeline_closeout: 'not-audited-by-design',
+  pipeline_tail_diagnostic: 'not-audited-by-design',
   renderer_error: 'not-audited-by-design',
   when_skip: 'not-audited-by-design', // skipped steps must have zero records
   parallel_started: 'not-audited-by-design',
@@ -432,6 +433,12 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     startedAt: 100,
     endedAt: 140,
     ts: 140,
+  },
+  pipeline_tail_diagnostic: {
+    type: 'pipeline_tail_diagnostic',
+    reason: 'malformed-line',
+    path: '.pipeline/pipeline-events.jsonl',
+    byteOffset: 12,
   },
   renderer_error: { type: 'renderer_error', rendererName: 'console', error: 'oops' },
   when_skip: { type: 'when_skip', step: 'build', expression: '${foo}' },

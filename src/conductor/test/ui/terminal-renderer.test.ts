@@ -189,6 +189,16 @@ describe('TerminalRenderer', () => {
     expect(stream.output()).toContain('Renderer error [bad-renderer]: boom');
   });
 
+  it('logs tail diagnostics without corrupt record contents', async () => {
+    await renderer.handle({
+      type: 'pipeline_tail_diagnostic',
+      reason: 'malformed-line',
+      path: '.pipeline/pipeline-events.jsonl',
+      byteOffset: 42,
+    });
+    expect(stream.output()).toContain('Pipeline tail malformed-line: .pipeline/pipeline-events.jsonl at byte 42');
+  });
+
   it('implements UIRenderer interface (handle + stop)', () => {
     expect(typeof renderer.handle).toBe('function');
     expect(typeof renderer.stop).toBe('function');

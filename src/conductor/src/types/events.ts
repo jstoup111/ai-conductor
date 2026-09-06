@@ -684,6 +684,15 @@ export type ConductorEvent =
       ts: number;
     }
   | {
+      /** A malformed complete record observed in the pipeline closeout ledger. */
+      type: 'pipeline_tail_diagnostic';
+      reason: 'malformed-line' | 'poll-failed';
+      /** Relative path to the tailed pipeline-owned ledger. */
+      path: string;
+      /** Byte offset of a malformed line, when a line was skipped. */
+      byteOffset?: number;
+    }
+  | {
       type: 'renderer_error';
       rendererName: string;
       error: string;
