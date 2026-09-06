@@ -103,6 +103,7 @@ import { makeIsProcessed, resolveEngineVersion } from './engine/shipped-record.j
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
 import { createGithubTrackerClient, makeProductionGh } from './engine/tracker-client.js';
+import { GH_VERSION_FLOOR, probeGhVersion } from './engine/gh-version-floor.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 import { readSpecOwnerStamp } from './engine/owner-gate/provenance.js';
 import { firstAppearanceTime } from './engine/owner-gate/merge-time.js';
@@ -1810,6 +1811,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         if (buildAuthMode !== 'daemon-token') return false;
         const tokenState = await readDaemonBuildToken(buildAuthTokenPath);
         return tokenState.state !== 'ok';
+      },
+      getGhVersionFloorDiagnostic: async () => {
+        const verdict = await probeGhVersion();
+        if (verdict.kind === 'ok') return null;
+        const found = 'version' in verdict
+          ? `${verdict.version.major}.${verdict.version.minor}.${verdict.version.patch}`
+          : verdict.kind;
+        return `gh ${found} cannot satisfy the required ${GH_VERSION_FLOOR.major}.${GH_VERSION_FLOOR.minor}.${GH_VERSION_FLOOR.patch}; upgrade gh before dispatch resumes.`;
       },
       // Task 14 (FR-6): supply the shared remediation message (Task 7) so the
       // daemon's transition-edge waiting-condition log carries the mint
