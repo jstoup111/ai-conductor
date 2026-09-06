@@ -781,8 +781,9 @@ treated as a credential in configuration.
 The same silent-disable result names these header failures: a non-mapping `headers` value; an empty
 or control-character header name; a literal credential; a reference other than exactly
 `{ env: <non-empty variable name> }`; and an unset or empty referenced environment variable. Header
-entries are also refused with the named errors `otel headers are unsupported with the grpc protocol.`
-and `otel headers are unsupported with the file exporter.`
+entries are also refused for gRPC and the file exporter with an error that names the configured header
+and, when the reference contains a string `env` field, its environment-variable name; it never includes
+the environment variable's value.
 
 Other credential sources are excluded from this slice. Headers are carried only by the HTTP/protobuf
 OTLP exporters: this configuration does not provide gRPC credential or metadata carriage. It also
