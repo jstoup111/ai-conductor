@@ -403,6 +403,46 @@ describe('engine/build-review verdict wiring contract', () => {
     expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(1);
   });
 
+  it('charges valid scope indeterminacy through the existing allowance without discarding its independent finding', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'build-review-scope-incomplete-'));
+    dirs.push(dir);
+    await writeKickbackLedger(dir, { version: 1, gates: { build_review: {
+      count: 0, cumulative: 0, mechanicalFaults: 0, treeHash: null,
+      lastReason: '', priorVerdict: true, resolvedBefore: 0,
+    } } });
+    const lapId = parseBuildReviewLapId('scope-incomplete')!;
+    const snapshotDigest = 'sha256:scope-incomplete';
+    const result = {
+      kind: 'judged' as const, rubric: 'testQuality' as const, lapId, snapshotDigest, contractVersion: 'v3' as const,
+      findings: [{
+        concernKind: 'test-insensitive' as const, summary: 'A resolved target remains insensitive.', evidenceLocations: ['test/a.test.ts:1'],
+        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: `sha256:${'a'.repeat(64)}`, display: 'fixture test' } },
+      }],
+      scopeResolutions: [{
+        candidateId: 'candidate:setup', status: 'indeterminate' as const,
+        sourceRegion: { path: 'test/a.test.ts', startLine: 1, endLine: 2, contentHash: `sha256:${'b'.repeat(64)}`, display: 'fixture setup' },
+        obligationReferences: ['story:S6.1'], missingEvidenceReason: 'the setup association is ambiguous',
+      }],
+      verdict: 'FAIL' as const,
+    };
+    vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
+      kind: 'ready', branches: [{ kind: 'dispatched', rubric: 'testQuality', result }],
+    });
+    const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'scope-incomplete', dir, {
+      pipelineDir: join(dir, '.pipeline'),
+      buildReviewArtifactReader: async (_root, rubric, readLapId, readSnapshotDigest) => ({
+        version: 1, rubric, lapId: readLapId, snapshotDigest: readSnapshotDigest, result, provenance: { kind: 'fresh' as const },
+      }),
+    });
+    const outcome = await (runner as unknown as {
+      runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean; currentLapMechanicalFault?: boolean; output: string }>;
+    }).runRubricBuildReview({ sourceSnapshot: { headSha: 'scope-incomplete', digest: snapshotDigest, mergeBase: 'base' } } as BuildReviewFrozenInputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+
+    expect(outcome).toMatchObject({ success: false, currentLapMechanicalFault: true, output: expect.stringContaining('(scope-incomplete)') });
+    expect((await readKickbackLedger(dir)).gates.build_review.lastMechanicalFault).toMatchObject({ reason: 'scope-incomplete', lapId: 'lap-scope-incomplete' });
+    await expect(readFile(join(dir, '.pipeline/build-review.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('does not consume the mechanical allowance when a judged lap publishes a finding', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'build-review-mixed-lap-'));
     dirs.push(dir);

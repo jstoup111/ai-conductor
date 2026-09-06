@@ -1,6 +1,7 @@
 import type { BuildReviewRubricId } from '../types/config.js';
 import { DEPRECATED_BUILD_REVIEW_RUBRIC_IDS } from './config.js';
 import {
+  deriveBuildReviewScopeIncompleteFault,
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
   type BuildReviewFindingAnchor,
@@ -8,6 +9,7 @@ import {
   type BuildReviewRubricContractVersion,
   type BuildReviewInfrastructureFailure,
   type BuildReviewRubricResult,
+  type BuildReviewScopeIncompleteFault,
 } from './build-review-domain.js';
 import { isRegisteredRubric } from './build-review-registry.js';
 import { isRetiredBuildReviewRubric } from './build-review-dispositions.js';
@@ -24,7 +26,7 @@ const AGGREGATE_VERSION = 'v1' as const;
 const RUBRICS = ['testQuality'] as const;
 const RETIRED_REASON_PREFIX = new RegExp(`^\\[(${DEPRECATED_BUILD_REVIEW_RUBRIC_IDS.join('|')})\\]`);
 
-type Coverage = 'judged' | 'skipped' | 'infrastructure-failure';
+type Coverage = 'judged' | 'skipped' | 'infrastructure-failure' | 'scope-incomplete';
 type RubricFlags = Record<BuildReviewRubricId, boolean>;
 type LegacyFindings = Record<BuildReviewRubricId, string[]>;
 
@@ -40,6 +42,8 @@ export interface BuildReviewAggregate {
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
   readonly results: Readonly<Record<BuildReviewRubricId, BuildReviewRubricResult>>;
+  /** Derived from persisted, validated judged scope resolutions. */
+  readonly scopeIncomplete: readonly BuildReviewScopeIncompleteFault[];
   readonly coverage: Readonly<Record<BuildReviewRubricId, Coverage>>;
   readonly verdict: 'PASS' | 'FAIL';
   readonly rubric: Readonly<RubricFlags>;
@@ -73,6 +77,8 @@ export interface BuildReviewEffectiveVerdict {
    * content-complete PASS unreachable (adr-2026-08-29 D3.3).
    */
   readonly uncoveredInfrastructureFailureRubrics: readonly BuildReviewRubricId[];
+  /** Present from the live reducer; optional for existing injected resolver fakes. */
+  readonly scopeIncompleteRubrics?: readonly BuildReviewRubricId[];
 }
 
 /** Raw, registry-neutral content preserved by the mechanical aggregate join. */
@@ -166,8 +172,14 @@ function parseResults(
   return results;
 }
 
+function scopeFaultFor(result: BuildReviewRubricResult): BuildReviewScopeIncompleteFault | undefined {
+  return result.kind === 'judged' ? deriveBuildReviewScopeIncompleteFault(result) : undefined;
+}
+
+export { deriveBuildReviewScopeIncompleteFault } from './build-review-domain.js';
+
 function coverageFor(result: BuildReviewRubricResult): Coverage {
-  return result.kind === 'judged' ? 'judged' : result.kind;
+  return result.kind === 'judged' ? (scopeFaultFor(result) ? 'scope-incomplete' : 'judged') : result.kind;
 }
 
 function legacyFindingDetails(result: BuildReviewRubricResult): string[] {
@@ -179,7 +191,7 @@ function legacyFindingDetails(result: BuildReviewRubricResult): string[] {
 }
 
 function legacyFailure(result: BuildReviewRubricResult): boolean {
-  return result.kind === 'infrastructure-failure' || (result.kind === 'judged' && result.findings.length > 0);
+  return result.kind === 'infrastructure-failure' || (result.kind === 'judged' && (result.findings.length > 0 || scopeFaultFor(result) !== undefined));
 }
 
 function aggregateVerdict(results: Readonly<Record<BuildReviewRubricId, BuildReviewRubricResult>>): 'PASS' | 'FAIL' {
@@ -193,16 +205,22 @@ export function joinBuildReviewRubricOutcomes(input: BuildReviewAggregateInput):
   const rubric = {} as RubricFlags;
   const findings = {} as LegacyFindings;
   const reasons: string[] = [];
+  const scopeIncomplete: BuildReviewScopeIncompleteFault[] = [];
   for (const name of RUBRICS) {
     const result = input.results[name];
+    const scopeFault = scopeFaultFor(result);
     coverage[name] = coverageFor(result);
     rubric[name] = legacyFailure(result);
     findings[name] = legacyFindingDetails(result);
     reasons.push(...findings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
+    if (scopeFault) {
+      scopeIncomplete.push(scopeFault);
+      reasons.push(`[${name}] scope incomplete: ${scopeFault.detail}`);
+    }
   }
   const aggregate: BuildReviewAggregate = {
     aggregateVersion: AGGREGATE_VERSION, lapId: input.lapId, snapshotDigest: input.snapshotDigest,
-    results: input.results, coverage, verdict: aggregateVerdict(input.results),
+    results: input.results, scopeIncomplete: Object.freeze(scopeIncomplete), coverage, verdict: aggregateVerdict(input.results),
     rubric, findings, reasons,
     ...(input.codeStamp !== undefined ? { codeStamp: input.codeStamp } : {}),
   };
@@ -239,7 +257,7 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
       : carriedRetiredRubric && memberMap ? Object.fromEntries(Object.entries(memberMap).filter(([member]) => !isRetiredBuildReviewRubric(member))) : entry];
   }));
   if (!source || !exactKeys(source, [
-    'aggregateVersion', 'lapId', 'snapshotDigest', 'results', 'coverage', 'verdict', 'rubric', 'findings', 'reasons',
+    'aggregateVersion', 'lapId', 'snapshotDigest', 'results', 'scopeIncomplete', 'coverage', 'verdict', 'rubric', 'findings', 'reasons',
     ...(source.reducedCoverageEvidence === undefined ? [] : ['reducedCoverageEvidence']),
     ...(source.codeStamp === undefined ? [] : ['codeStamp']),
   ]) || source.aggregateVersion !== AGGREGATE_VERSION || !isNonEmptyString(source.snapshotDigest) ||
@@ -251,27 +269,34 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
   const coverage = record(source.coverage);
   const rubric = record(source.rubric);
   const findings = record(source.findings);
-  if (!results || !coverage || !rubric || !findings || !Array.isArray(source.reasons) || source.reasons.some((reason) => typeof reason !== 'string') ||
+  if (!results || !coverage || !rubric || !findings || !Array.isArray(source.scopeIncomplete) || !Array.isArray(source.reasons) || source.reasons.some((reason) => typeof reason !== 'string') ||
     !exactKeys(coverage, RUBRICS) || !exactKeys(rubric, RUBRICS) || !exactKeys(findings, RUBRICS)) return undefined;
   const expectedCoverage = {} as Record<BuildReviewRubricId, Coverage>;
   const expectedRubric = {} as RubricFlags;
   const expectedFindings = {} as LegacyFindings;
   const expectedReasons: string[] = [];
+  const expectedScopeIncomplete: BuildReviewScopeIncompleteFault[] = [];
   for (const name of RUBRICS) {
-    if (coverage[name] !== 'judged' && coverage[name] !== 'skipped' && coverage[name] !== 'infrastructure-failure' ||
+    if (coverage[name] !== 'judged' && coverage[name] !== 'skipped' && coverage[name] !== 'infrastructure-failure' && coverage[name] !== 'scope-incomplete' ||
       typeof rubric[name] !== 'boolean' || !Array.isArray(findings[name]) || findings[name].some((finding) => typeof finding !== 'string')) return undefined;
     expectedCoverage[name] = coverageFor(results[name]);
     expectedRubric[name] = legacyFailure(results[name]);
     expectedFindings[name] = legacyFindingDetails(results[name]);
     expectedReasons.push(...expectedFindings[name].map((detail) => detail.startsWith('[relocation-audit]') ? detail : `[${name}] ${detail}`));
+    const scopeFault = scopeFaultFor(results[name]);
+    if (scopeFault) {
+      expectedScopeIncomplete.push(scopeFault);
+      expectedReasons.push(`[${name}] scope incomplete: ${scopeFault.detail}`);
+    }
   }
   const verdict = aggregateVerdict(results);
   const verdictTolerated = carriedRetiredRubric && (source.verdict === 'PASS' || source.verdict === 'FAIL');
   if ((source.verdict !== verdict && !verdictTolerated) || JSON.stringify(coverage) !== JSON.stringify(expectedCoverage) ||
     JSON.stringify(rubric) !== JSON.stringify(expectedRubric) || JSON.stringify(findings) !== JSON.stringify(expectedFindings) ||
+    JSON.stringify(source.scopeIncomplete) !== JSON.stringify(expectedScopeIncomplete) ||
     JSON.stringify(source.reasons) !== JSON.stringify(expectedReasons)) return undefined;
   return {
-    aggregateVersion: AGGREGATE_VERSION, lapId, snapshotDigest: source.snapshotDigest, results, coverage: expectedCoverage,
+    aggregateVersion: AGGREGATE_VERSION, lapId, snapshotDigest: source.snapshotDigest, results, scopeIncomplete: Object.freeze(expectedScopeIncomplete), coverage: expectedCoverage,
     verdict, rubric: expectedRubric, findings: expectedFindings, reasons: expectedReasons,
     ...(source.reducedCoverageEvidence !== undefined ? { reducedCoverageEvidence: source.reducedCoverageEvidence as string } : {}),
     ...(source.codeStamp !== undefined ? { codeStamp: source.codeStamp as string | null } : {}),
@@ -329,6 +354,8 @@ export function deriveEffectiveBuildReviewVerdict(
   const skipped: BuildReviewRubricId[] = [];
   const infrastructure: BuildReviewRubricId[] = [];
   const uncoveredInfrastructure: BuildReviewRubricId[] = [];
+  const scopeIncomplete: BuildReviewRubricId[] = [];
+  let uncoveredScopeIncompleteCount = 0;
   let judgedCount = 0;
   for (const rubric of RUBRICS) {
     const result = aggregate.results[rubric];
@@ -346,6 +373,13 @@ export function deriveEffectiveBuildReviewVerdict(
       continue;
     }
     judgedCount += 1;
+    const scopeFault = scopeFaultFor(result);
+    if (scopeFault) {
+      scopeIncomplete.push(rubric);
+      if (!reducedCoverage.some((decision) => matchesBuildReviewReducedCoverageDisposition(
+        decision.feature, { rubric, reason: scopeFault.reason }, [decision],
+      ))) uncoveredScopeIncompleteCount += 1;
+    }
     for (const finding of result.findings) {
       const identity = canonicalizeBuildReviewFindingIdentity({
         rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
@@ -356,10 +390,11 @@ export function deriveEffectiveBuildReviewVerdict(
   }
   return Object.freeze({
     rawVerdict: aggregate.verdict,
-    verdict: judgedCount > 0 && unresolved.length === 0 && uncoveredInfrastructure.length === 0 ? 'PASS' : 'FAIL',
+    verdict: judgedCount > 0 && unresolved.length === 0 && uncoveredInfrastructure.length === 0 && uncoveredScopeIncompleteCount === 0 ? 'PASS' : 'FAIL',
     acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved),
     skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
     uncoveredInfrastructureFailureRubrics: Object.freeze(uncoveredInfrastructure),
+    ...(scopeIncomplete.length > 0 ? { scopeIncompleteRubrics: Object.freeze(scopeIncomplete) } : {}),
   });
 }
 

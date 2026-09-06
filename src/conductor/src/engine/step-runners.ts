@@ -92,6 +92,7 @@ import {
 
 import {
   deriveBuildReviewInfrastructureFailureReason,
+  deriveBuildReviewScopeIncompleteFault,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
@@ -2093,9 +2094,31 @@ export class DefaultStepRunner implements StepRunner {
     // Do not publish it as a fresh FAIL aggregate: completion deliberately
     // classifies a missing verdict as `absent`, which re-dispatches this
     // rubric without consuming the build_review kickback budget.
+    const scopeIncompleteFault = Object.values(validResults).flatMap((result) =>
+      result.kind === 'judged' ? [deriveBuildReviewScopeIncompleteFault(result)] : [],
+    ).find((fault): fault is NonNullable<typeof fault> => fault !== undefined);
     const infrastructureFailure = Object.values(validResults).find((result): result is Extract<BuildReviewRubricResult, { kind: 'infrastructure-failure' }> =>
       result.kind === 'infrastructure-failure',
     );
+    // A semantically valid indeterminate candidate is a non-judgment fault,
+    // not a malformed result. It consumes the existing durable allowance but
+    // never gets an in-session repair turn, and its judged findings remain in
+    // the branch artifact for the terminal aggregate.
+    if (scopeIncompleteFault) {
+      const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review', {
+        rubric: scopeIncompleteFault.rubric,
+        reason: scopeIncompleteFault.reason,
+        detail: scopeIncompleteFault.detail,
+        lapId,
+      });
+      if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
+        return {
+          success: false,
+          output: `build_review mechanical fault in ${scopeIncompleteFault.rubric} (${scopeIncompleteFault.reason}): ${scopeIncompleteFault.detail}`,
+          currentLapMechanicalFault: true,
+        };
+      }
+    }
     if (infrastructureFailure) {
       const hasJudgedFinding = Object.values(validResults).some(
         (result) => result.kind === 'judged' && result.findings.length > 0,
