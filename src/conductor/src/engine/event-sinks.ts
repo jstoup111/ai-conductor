@@ -93,7 +93,8 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   parallel_completed: { render: true, persist: true, audit: false, otel: false },
   parallel_failure: { render: false, persist: true, audit: false, otel: false },
   group_member_step: { render: false, persist: false, audit: false, otel: false },
-  gate_verdict: { render: true, persist: false, audit: true, otel: true },
+  // A gate's verdict must outlive the run so recovery can reconstruct it from the ledger.
+  gate_verdict: { render: true, persist: true, audit: true, otel: true },
   test_suite_verification: { render: false, persist: true, audit: false, otel: false },
   build_member_evidence_reused: { render: true, persist: true, audit: false, otel: false },
   build_member_evidence_recomputed: { render: true, persist: true, audit: false, otel: false },

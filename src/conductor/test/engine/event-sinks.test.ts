@@ -119,6 +119,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
   'test_suite_verification',
+  'gate_verdict',
   // S7.5: the budget basis on a post-rebase preservation is only observable
   // if it reaches .pipeline/events.jsonl — its sibling rebase_gate_invalidated
   // is already persisted, so an unpersisted preservation reads as silence.
@@ -340,6 +341,47 @@ describe('event sink subscriptions', () => {
       rendered: true,
       persisted: true,
     });
+  });
+
+  it('persists satisfied and unsatisfied gate verdicts through the event ledger', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'gate-verdict-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const verdicts = [
+      {
+        type: 'gate_verdict' as const,
+        step: 'test_suite' as const,
+        satisfied: true,
+        reason: 'evidence is current',
+      },
+      {
+        type: 'gate_verdict' as const,
+        step: 'build_review' as const,
+        satisfied: false,
+        reason: 'blocking finding remains',
+      },
+    ] satisfies ConductorEvent[];
+
+    try {
+      persister.start();
+      for (const verdict of verdicts) await events.emit(verdict);
+      persister.stop();
+
+      const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect({
+        sinks: EVENT_SINKS.gate_verdict,
+        persisted: persistedEventTypes().includes('gate_verdict'),
+        records,
+      }).toEqual({
+        sinks: { render: true, persist: true, audit: true, otel: true },
+        persisted: true,
+        records: verdicts.map((verdict) => ({ ...verdict, ts: expect.any(String) })),
+      });
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 
   it('persists engine-owned build-review occurrences through the shared ledger exactly once', async () => {
