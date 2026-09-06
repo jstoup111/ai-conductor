@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-06T10:44:46.913Z
 Slug: gh-cli-capability-probe-report-an-unsupported-json
 Class: plan-gap
 Halting step: prd_audit
