@@ -213,6 +213,7 @@ export async function coordinateBuildReviewAdjudication(input: {
     try { exitResolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
     if (options.resolvedAtEntry) exitResolved = new Set([...options.resolvedAtEntry, ...exitResolved]);
     let settleRounds = 0;
+    let completedEmitted = false;
     const settledCases: RemediationCaseRecord[] = [];
     const settledRetirements: OperatorRetirementTransition[] = [];
     for (;;) {
@@ -301,11 +302,25 @@ export async function coordinateBuildReviewAdjudication(input: {
     const grew = [...latest].some((findingId) => !exitResolved.has(findingId));
     if (!grew || settleRounds >= 3) {
       const transition = reduceBuildReviewAdjudication({ currentSourceIds: exitSourceIds, cases: settledCases, mechanical: input.mechanical });
-      await input.emit?.({
-        type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
-        caseIds: settledCases.map((record) => record.id),
-        effectIds: settledCases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
-      });
+      if (!completedEmitted) {
+        completedEmitted = true;
+        await input.emit?.({
+          type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
+          caseIds: settledCases.map((record) => record.id),
+          effectIds: settledCases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
+        });
+      }
+      // The completion emission is itself awaited, so it is one more window in
+      // which an exact acceptance can land. Read authority after it: this is the
+      // last act before the caller's terminal BUILD, HALT, or PASS, so nothing
+      // separates the routed authority from the route. A grown read settles in
+      // one more round (the emission is not repeated); the cap still bounds it.
+      let atExit: ReadonlySet<string>;
+      try { atExit = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
+      if ([...atExit].some((findingId) => !exitResolved.has(findingId)) && settleRounds < 3) {
+        exitResolved = new Set([...exitResolved, ...atExit]);
+        continue;
+      }
       return {
         ok: true, route: transition.route, detail: transition.reason,
         trace: `route: ${transition.route}\n${renderBuildReviewAdjudicationTrace(settledCases)}`,
@@ -404,6 +419,12 @@ export async function coordinateBuildReviewAdjudication(input: {
   const reconciled = await reconcileRemediationCases(store, {
     graph: { ...graph.graph, cases: admitted }, recordedAt: new Date().toISOString(), generateId: input.generateId ?? randomUUID,
     attemptedCaseIds,
+    // A mechanically complete lap saw every finding this join could report, so a
+    // prior open non-action case absent from it is decided by that absence — the
+    // same evidence the exit paths settle on. Leaving it open let stale history
+    // feed a later adjudication as an unresolved prior. A mechanically incomplete
+    // lap proves nothing by absence, so it still leaves that history open.
+    resolveAbsentOpenNonActionCases: input.mechanical === 'healthy',
   });
   if (!reconciled.ok) {
     // A store fault stays fail-closed; a rejected graph is content-specific

@@ -158,12 +158,6 @@ prd_audit:
 architecture_review_as_built:
   max_remediation_laps: 3
 
-# TEMPORARY (operator, 2026-09-05): third as-built remediation lap granted to
-# clear the 2/2 lap-cap halt on this feature's AB findings; worktree-local
-# recovery, revert before ship (see #2147 for the per-feature grant design).
-architecture_review_as_built:
-  max_remediation_laps: 3
-
 steps:
   explore:
     llm_provider: claude

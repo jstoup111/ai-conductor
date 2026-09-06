@@ -281,9 +281,9 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
 
     expect(result).toMatchObject({ ok: true });
-    // Three pre-action reads, the acceptance read, then the exit re-reads
-    // that follow the awaited settlement and its emissions.
-    expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(6);
+    // Three pre-action reads, the acceptance read, then the exit re-reads that
+    // follow the awaited settlement, its emissions, and the completion emission.
+    expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(7);
     expect(chargeEffect).not.toHaveBeenCalled();
     await expect(readFile(ledgerPath, 'utf8')).resolves.toBe(ledgerBefore);
     await expect(access(join(root, '.pipeline/build-review-work-order.json'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -642,6 +642,57 @@ describe('coordinateBuildReviewAdjudication', () => {
     ]);
   });
 
+  it.each([
+    ['healthy', 'resolved'],
+    ['retry', 'open'],
+  ] as const)('settles absent open non-action history on a mechanically %s content lap', async (mechanical, resolution) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    // An earlier lap deferred a finding this lap no longer reports. Its effect
+    // is applied, so nothing about it is unfinished — only its `open` marker,
+    // which a mechanically complete lap decides by absence. Left open, it feeds
+    // a later adjudication as unresolved prior history.
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-absent', domain: 'build_review', disposition: 'defer', priority: 'low', confidence: 'high',
+        rationale: 'An earlier lap deferred this finding.', resolution: 'open',
+        sources: [{ sourceId: 'testQuality:sha256-earlier', outcome: 'deferred', recordedAt: '2026-08-30T18:00:00.000Z' }],
+        effect: { id: 'effect-absent', kind: 'deferral', status: 'applied', issueUrl: 'https://example.invalid/1' },
+      }],
+    });
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()), mechanical, generateId: sequentialIds('absent'),
+    });
+
+    const settled = await store.read();
+    expect(settled.ok && settled.state.cases.find((record) => record.id === 'case-absent')?.resolution).toBe(resolution);
+  });
+
+  it('drops a route made obsolete by acceptance landing during the completion emission', async () => {
+    const root = await projectRoot();
+    // The completion emission is awaited work like any other, so an exact
+    // acceptance can land inside it — after the settle round's own read and
+    // before the caller's terminal BUILD or HALT.
+    let accepted = new Set<string>();
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()),
+      resolveOperatorResolvedFindingIds: async () => accepted,
+      emit: async (event) => {
+        events.push(event);
+        if (event.type === 'remediation_adjudication_completed') accepted = new Set([findingId]);
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    // One settled lap, so exactly one completion occurrence on the spine.
+    expect(events.filter((event) => event.type === 'remediation_adjudication_completed')).toHaveLength(1);
+    const settled = await new RemediationCaseStore(root, feature).read();
+    expect(settled).toMatchObject({ ok: true, state: { cases: [expect.objectContaining({ resolution: 'resolved' })] } });
+  });
+
   it('re-reads operator authority adjacent to the final exit and drops the obsolete route', async () => {
     const root = await projectRoot();
     // Unresolved through reservation and effects; accepted only at the exit.
@@ -653,9 +704,10 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
 
     expect(result).toMatchObject({ ok: true, route: 'pass' });
-    // Four unresolved reads, the acceptance read at the exit, then the two
-    // re-reads adjacent to the settled state that the route derives from.
-    expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(7);
+    // Four unresolved reads, the acceptance read at the exit, then the re-reads
+    // adjacent to the settled state that the route derives from — including the
+    // one after the completion emission, the lap's last awaited work.
+    expect(resolveOperatorResolvedFindingIds).toHaveBeenCalledTimes(8);
     const settled = await new RemediationCaseStore(root, feature).read();
     expect(settled).toMatchObject({
       ok: true,
