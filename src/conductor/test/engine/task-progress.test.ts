@@ -1,3 +1,4 @@
+// Covers: task:4
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -5,6 +6,7 @@ import { join } from 'node:path';
 import { execa } from 'execa';
 import {
   countResolvedTasks,
+  countTaskTrailerCommits,
   resolveTaskIds,
   haltMarkerExists,
   clearHaltMarker,
@@ -238,6 +240,30 @@ describe('task-progress', () => {
   });
 
   describe('resolveTaskIds', () => {
+    it('counts distinct commits per plan id, alias-matched, once per commit', async () => {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+
+      for (const [name, message] of [
+        ['first.txt', 'first task 16\n\nTask: 16'],
+        ['second.txt', 'second task 16\n\nTask: 16'],
+        ['third.txt', 'alias task 16\n\nTask: T16'],
+        ['fourth.txt', 'both tasks\n\nTask: 16\nTask: 16\nTask: 21'],
+      ]) {
+        await writeFile(join(dir, name), name);
+        await execa('git', ['add', '.'], { cwd: dir });
+        await execa('git', ['commit', '-m', message], { cwd: dir });
+      }
+
+      expect(await countTaskTrailerCommits(dir, ['16', '21'])).toEqual(
+        new Map([
+          ['16', 4],
+          ['21', 1],
+        ]),
+      );
+    });
+
     it('resolves completed rows, skipped rows, trailer-only ids, and canonical alias trailers', async () => {
       await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });

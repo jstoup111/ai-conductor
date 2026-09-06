@@ -88,38 +88,45 @@ export async function resolveTaskIds(projectRoot: string, planIds: string[]): Pr
     }
   }
 
-  const trailerIds = await distinctTaskTrailerIds(projectRoot);
-  const planIdSet = new Set(planIds);
-  for (const id of trailerIds) {
-    const canonical = canonicalTaskId(id);
-    const match = planIdSet.has(id)
-      ? id
-      : [...planIdSet].find((p) => canonicalTaskId(p) === canonical);
-    if (match !== undefined) resolved.add(match);
+  const trailerCounts = await countTaskTrailerCommits(projectRoot, planIds);
+  for (const [id, count] of trailerCounts) {
+    if (count > 0) resolved.add(id);
   }
 
   return resolved;
 }
 
 /**
- * Distinct raw `Task:` trailer values across commits on the current branch
- * (per `listCommitsWithTrailers`'s merge-base-relative range). Fails soft to
- * an empty set on any git error (non-repo dir, no commits, etc.) — trailer
- * sourcing is a best-effort addition, never a hard requirement.
+ * Per-plan-id counts of commits with a canonical-matching `Task:` trailer on
+ * the current branch (per `listCommitsWithTrailers`'s merge-base-relative
+ * range). A commit contributes at most once to each plan id, even if it
+ * carries duplicate trailers. Fails soft to an empty map on any git error
+ * (non-repo dir, no commits, etc.) — trailer sourcing is a best-effort
+ * addition, never a hard requirement.
  */
-async function distinctTaskTrailerIds(projectRoot: string): Promise<Set<string>> {
-  const ids = new Set<string>();
+export async function countTaskTrailerCommits(
+  projectRoot: string,
+  planIds: string[],
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
   try {
     const commits = await listCommitsWithTrailers(projectRoot);
     for (const commit of commits) {
+      const matchedIds = new Set<string>();
       for (const value of commit.trailers['Task'] ?? []) {
-        ids.add(value);
+        const canonical = canonicalTaskId(value);
+        for (const planId of planIds) {
+          if (canonicalTaskId(planId) === canonical) matchedIds.add(planId);
+        }
+      }
+      for (const id of matchedIds) {
+        counts.set(id, (counts.get(id) ?? 0) + 1);
       }
     }
   } catch {
     // fail-soft — no trailer data available
   }
-  return ids;
+  return counts;
 }
 
 /** A task row after tolerating both the new array shape and the legacy
