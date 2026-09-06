@@ -505,6 +505,35 @@ describe('as-built verdict gate', () => {
     await expect(checkStepCompletion(dir, 'architecture_review_as_built', ctx)).resolves.toMatchObject({ done: false });
   });
 
+  it('keeps the unparseable-report reason free of decision and repair wording through the completion predicate', async () => {
+    const dir = await fixture();
+    const ctx = { sessionStartedAt: Date.now() - 1_000 };
+    const report = [
+      'Verdict: BLOCKED',
+      '',
+      '## Blocking Findings',
+      '| Finding | Class | Summary |',
+      '| --- | --- | --- |',
+      '| ARCH-9 | REMEDIABLE | Missing the clause column |',
+    ].join('\n');
+    await writeAsBuilt(dir, report);
+
+    // Derived from the classifier's own outcome, the single source the
+    // production reason comes from, so this cannot drift from a literal.
+    const outcome = classifyAsBuiltReviewOutcome(report);
+    expect(outcome.kind).toBe('invalid');
+    const result = await checkStepCompletion(dir, 'architecture_review_as_built', ctx);
+    expect(result).toMatchObject({
+      done: false,
+      reason: renderAsBuiltInvalidReason(outcome as Extract<typeof outcome, { kind: 'invalid' }>),
+      routeClass: 'absent',
+    });
+    const reason = result.done ? '' : result.reason;
+    expect(reason).toContain('malformed header');
+    expect(reason).not.toContain('human decision');
+    expect(reason).not.toContain('a repair');
+  });
+
   it('names a remediable verdict as a repair and names only DESIGN findings in a mixed verdict', async () => {
     const dir = await fixture();
     const ctx = { sessionStartedAt: Date.now() - 1_000 };
