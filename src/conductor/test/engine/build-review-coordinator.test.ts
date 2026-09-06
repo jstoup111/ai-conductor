@@ -329,6 +329,57 @@ function testQualityBranch(result: Awaited<ReturnType<typeof coordinateBuildRevi
 }
 
 describe("build-review coordinator: frozen fan-out", () => {
+  it('keeps a valid indeterminate scope judgement, its independent finding, and named event evidence without a repair dispatch', async () => {
+    const frozenInputs = titledInputs();
+    const candidateHash = `sha256:${'b'.repeat(64)}`;
+    const emit = vi.fn(async () => undefined);
+    const dispatchModel = vi.fn(async () => ({
+      findings: [testQualityFinding()],
+      scopeResolutions: [{
+        candidateId: 'candidate:setup', status: 'indeterminate',
+        missingEvidenceReason: 'the changed setup cannot be associated with one marker',
+      }],
+    }));
+
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      inputs: {
+        ...frozenInputs,
+        sourceSnapshot: {
+          ...frozenInputs.sourceSnapshot,
+          testScope: {
+            targets: [],
+            candidates: [{
+              candidateId: 'candidate:setup',
+              sourceRegion: { path: IN_SCOPE_TEST, startLine: 2, endLine: 4, contentHash: candidateHash, display: 'changed setup' },
+              obligationReferences: ['story:S6.1'],
+            }],
+            notes: [], changedDeclarations: [], affectedGroups: [], sharedSources: [],
+          } as never,
+        },
+      },
+      dispatchModel,
+      emit,
+    }));
+
+    expect(dispatchModel).toHaveBeenCalledTimes(1);
+    expect(testQualityBranch(result)).toMatchObject({
+      kind: 'dispatched',
+      result: {
+        findings: [testQualityFinding()],
+        scopeResolutions: [{
+          candidateId: 'candidate:setup', status: 'indeterminate',
+          sourceRegion: { path: IN_SCOPE_TEST, contentHash: candidateHash },
+          obligationReferences: ['story:S6.1'],
+          missingEvidenceReason: 'the changed setup cannot be associated with one marker',
+        }],
+      },
+    });
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'build_review_scope_incomplete', rubric: 'testQuality', lapId: 'lap-current',
+      candidates: [expect.objectContaining({ candidateId: 'candidate:setup', obligationReferences: ['story:S6.1'] })],
+    }));
+  });
+
   it("emits each rubric occurrence exactly once in branch settlement order", async () => {
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
 
@@ -551,6 +602,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
       "preflight-failed": true,
       "artifact-read-failed": true,
       "artifact-write-failed": true,
+      "scope-incomplete": true,
     };
     // The parser admits exactly the reasons the coordinator mapping can produce;
     // the three union members outside that mapping are carried by other

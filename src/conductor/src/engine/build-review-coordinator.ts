@@ -5,6 +5,7 @@ import {
   parseBuildReviewCandidateScopeResolutions,
   parseBuildReviewDispatchFailure,
   buildReviewFindingReferenceContext,
+  deriveBuildReviewScopeIncompleteFault,
   parseBuildReviewJudgedResult,
   type BuildReviewJudgedResult,
   type BuildReviewLapId,
@@ -151,7 +152,18 @@ export interface BuildReviewCoordinationInput {
     | "build_review_cache_hit"
     | "build_review_cache_discarded"
     | "build_review_rubric_infrastructure_failure"
+    | "build_review_scope_incomplete"
     | "build_review_outer_verdict" }>) => Promise<void>;
+}
+
+async function emitScopeIncomplete(
+  emit: BuildReviewCoordinationInput['emit'],
+  result: BuildReviewJudgedResult,
+  lapId: BuildReviewLapId,
+): Promise<void> {
+  const fault = deriveBuildReviewScopeIncompleteFault(result);
+  if (!fault) return;
+  await emit?.({ type: 'build_review_scope_incomplete', rubric: fault.rubric, lapId, candidates: fault.candidates });
 }
 
 /**
@@ -527,7 +539,10 @@ export async function coordinateBuildReviewRubrics(
         resolved.set(branch.rubric, infrastructure(branch.rubric, "artifact-write-failed"));
         await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "artifact-write-failed" });
       }
-      if (result) await input.emit?.({ type: "build_review_rubric_result", rubric: branch.rubric, lapId: input.lapId, verdict: result.verdict });
+      if (result) {
+        await input.emit?.({ type: "build_review_rubric_result", rubric: branch.rubric, lapId: input.lapId, verdict: result.verdict });
+        await emitScopeIncomplete(input.emit, result, input.lapId);
+      }
     } else {
       await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
       misses.push(branch);
@@ -596,6 +611,7 @@ export async function coordinateBuildReviewRubrics(
   for (const outcome of dispatched) {
     if (outcome.branch.kind === "dispatched") {
       await input.emit?.({ type: "build_review_rubric_result", rubric: outcome.rubric, lapId: input.lapId, verdict: outcome.branch.result.verdict });
+      await emitScopeIncomplete(input.emit, outcome.branch.result, input.lapId);
     } else if (outcome.branch.kind === "infrastructure-failure") {
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: outcome.rubric, lapId: input.lapId, reason: outcome.branch.reason });
     }

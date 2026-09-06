@@ -4,6 +4,7 @@ import type { BuildReviewRubricId } from '../types/config.js';
 import type {
   BuildReviewInfrastructureFailure,
   BuildReviewLapId,
+  BuildReviewScopeIncompleteFault,
 } from './build-review-domain.js';
 import type { BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import type { BuildReviewFrozenInputs, BuildReviewSourceSnapshot, BuildReviewUnresolvedMarker } from './build-review-inputs.js';
@@ -119,7 +120,7 @@ export type BuildReviewRubricProjections = {
 /** One current-lap reduced-coverage stamp, shared by every reader-facing surface. */
 export interface BuildReviewReducedCoverageEntry {
   readonly rubric: BuildReviewRubricId;
-  readonly cause: BuildReviewInfrastructureFailure['reason'];
+  readonly cause: BuildReviewInfrastructureFailure['reason'] | BuildReviewScopeIncompleteFault['reason'];
   readonly diagnostic: string;
   readonly operator: string;
   readonly rationale: string;
@@ -131,7 +132,7 @@ export type BuildReviewReducedCoverageEvidenceInput =
   | {
       readonly state: 'known';
       readonly records: readonly BuildReviewReducedCoverageDispositionRecord[];
-      readonly currentFailures: readonly BuildReviewInfrastructureFailure[];
+      readonly currentFailures: readonly (BuildReviewInfrastructureFailure | BuildReviewScopeIncompleteFault)[];
     };
 
 export type BuildReviewReducedCoverageEvidenceRenderResult =

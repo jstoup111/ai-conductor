@@ -7,9 +7,9 @@ export type BuildReviewLapId = string & { readonly __brand: 'BuildReviewLapId' }
 export type BuildReviewRubricContractVersion = 'v1' | 'v2' | 'v3';
 export const CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION = 'v3' as const;
 export type BuildReviewSkipReason = 'disabled';
-export type BuildReviewInfrastructureFailureReason = 'provider-error' | 'retry-exhausted' | 'missing-artifact' | 'malformed-artifact' | 'stale-artifact' | 'identity-mismatch' | 'preflight-failed' | 'artifact-read-failed' | 'artifact-write-failed';
+export type BuildReviewInfrastructureFailureReason = 'provider-error' | 'retry-exhausted' | 'missing-artifact' | 'malformed-artifact' | 'stale-artifact' | 'identity-mismatch' | 'preflight-failed' | 'artifact-read-failed' | 'artifact-write-failed' | 'scope-incomplete';
 export const mapBuildReviewCoordinatorFailureReason = Object.freeze({
-  'no-changed-tests': 'preflight-failed', 'no-production-changes': 'preflight-failed', 'missing-scoped-configuration': 'preflight-failed', 'materialization-failed': 'preflight-failed', 'missing-merge-base-file': 'preflight-failed', 'scoped-run-failed': 'preflight-failed', 'scoped-run-launch-failed': 'preflight-failed', 'scoped-run-timeout': 'preflight-failed', 'scoped-run-signaled': 'preflight-failed', aborted: 'preflight-failed', 'cleanup-failed': 'preflight-failed', 'cache-read-failed': 'artifact-read-failed', 'cache-write-failed': 'artifact-write-failed', 'artifact-write-failed': 'artifact-write-failed', 'projection-rubric-mismatch': 'malformed-artifact', 'invalid-provider-result': 'malformed-artifact', 'provider-error': 'provider-error', 'missing-settlement': 'missing-artifact',
+  'no-changed-tests': 'preflight-failed', 'no-production-changes': 'preflight-failed', 'missing-scoped-configuration': 'preflight-failed', 'materialization-failed': 'preflight-failed', 'missing-merge-base-file': 'preflight-failed', 'scoped-run-failed': 'preflight-failed', 'scoped-run-launch-failed': 'preflight-failed', 'scoped-run-timeout': 'preflight-failed', 'scoped-run-signaled': 'preflight-failed', aborted: 'preflight-failed', 'cleanup-failed': 'preflight-failed', 'cache-read-failed': 'artifact-read-failed', 'cache-write-failed': 'artifact-write-failed', 'artifact-write-failed': 'artifact-write-failed', 'projection-rubric-mismatch': 'malformed-artifact', 'invalid-provider-result': 'malformed-artifact', 'provider-error': 'provider-error', 'missing-settlement': 'missing-artifact', 'scope-incomplete': 'scope-incomplete',
 } satisfies Record<string, BuildReviewInfrastructureFailureReason>);
 export type BuildReviewCoordinatorFailureReason = keyof typeof mapBuildReviewCoordinatorFailureReason;
 export function deriveBuildReviewInfrastructureFailureReason(branch: { readonly reason: BuildReviewCoordinatorFailureReason }): BuildReviewInfrastructureFailureReason { return mapBuildReviewCoordinatorFailureReason[branch.reason]; }
@@ -21,7 +21,13 @@ export interface BuildReviewCandidateScopeSourceRegion { readonly path: string; 
 export interface BuildReviewCandidateScopeCandidate { readonly candidateId: string; readonly sourceRegion: BuildReviewCandidateScopeSourceRegion; readonly obligationReferences: readonly string[]; }
 export interface BuildReviewCandidateScopeResolutionResolved { readonly candidateId: string; readonly status: 'resolved'; readonly sourceRegion: BuildReviewCandidateScopeSourceRegion; readonly obligationReferences: readonly string[]; readonly associationReason: string; }
 export interface BuildReviewCandidateScopeResolutionOutOfScope { readonly candidateId: string; readonly status: 'out-of-scope'; readonly exclusionReason: string; }
-export interface BuildReviewCandidateScopeResolutionIndeterminate { readonly candidateId: string; readonly status: 'indeterminate'; readonly missingEvidenceReason: string; }
+/**
+ * The provider supplies only `candidateId` and `missingEvidenceReason`.
+ * Validation stamps the frozen binding evidence onto the result before it is
+ * persisted, so a later aggregate can re-derive the fault without reading a
+ * mutable projection or trusting an unbound provider claim.
+ */
+export interface BuildReviewCandidateScopeResolutionIndeterminate { readonly candidateId: string; readonly status: 'indeterminate'; readonly sourceRegion: BuildReviewCandidateScopeSourceRegion; readonly obligationReferences: readonly string[]; readonly missingEvidenceReason: string; }
 export type BuildReviewCandidateScopeResolution = BuildReviewCandidateScopeResolutionResolved | BuildReviewCandidateScopeResolutionOutOfScope | BuildReviewCandidateScopeResolutionIndeterminate;
 export interface BuildReviewCandidateScopeResolutionContext { readonly candidates: readonly BuildReviewCandidateScopeCandidate[]; }
 export interface BuildReviewFinding { readonly concernKind: string; readonly summary: string; readonly evidenceLocations: readonly string[]; readonly anchor: BuildReviewFindingAnchor; }
@@ -29,6 +35,14 @@ export interface BuildReviewJudgedResult { readonly kind: 'judged'; readonly rub
 export interface BuildReviewSkip { readonly kind: 'skipped'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewSkipReason; }
 export interface BuildReviewInfrastructureFailure { readonly kind: 'infrastructure-failure'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewInfrastructureFailureReason; readonly detail: string; }
 export type BuildReviewRubricResult = BuildReviewJudgedResult | BuildReviewSkip | BuildReviewInfrastructureFailure;
+/** A non-judgment coverage fault derived only from an already-valid judged result. */
+export interface BuildReviewScopeIncompleteFault {
+  readonly rubric: BuildReviewRubricId;
+  readonly reason: 'scope-incomplete';
+  readonly candidates: readonly BuildReviewCandidateScopeResolutionIndeterminate[];
+  /** Bounded diagnostic for the existing mechanical-fault ledger and rendering path. */
+  readonly detail: string;
+}
 export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
   testQuality: Object.freeze({
     members: Object.freeze(['test-insensitive']),
@@ -105,7 +119,10 @@ export function parseBuildReviewCandidateScopeResolutions(value: unknown, contex
         : undefined;
     }
     if (source.status === 'out-of-scope' && text(source.exclusionReason)) return { candidateId: candidate.candidateId, status: 'out-of-scope', exclusionReason: source.exclusionReason };
-    if (source.status === 'indeterminate' && text(source.missingEvidenceReason)) return { candidateId: candidate.candidateId, status: 'indeterminate', missingEvidenceReason: source.missingEvidenceReason };
+    if (source.status === 'indeterminate' && text(source.missingEvidenceReason)) return {
+      candidateId: candidate.candidateId, status: 'indeterminate', sourceRegion: candidate.sourceRegion,
+      obligationReferences: candidate.obligationReferences, missingEvidenceReason: source.missingEvidenceReason,
+    };
     return undefined;
   });
   return resolutions.some((resolution) => !resolution) || new Set(resolutions.map((resolution) => resolution!.candidateId)).size !== known.length
@@ -125,7 +142,12 @@ function parsePersistedBuildReviewCandidateScopeResolutions(value: unknown): rea
         : undefined;
     }
     if (source.status === 'out-of-scope' && text(source.exclusionReason)) return { candidateId: source.candidateId, status: 'out-of-scope', exclusionReason: source.exclusionReason };
-    if (source.status === 'indeterminate' && text(source.missingEvidenceReason)) return { candidateId: source.candidateId, status: 'indeterminate', missingEvidenceReason: source.missingEvidenceReason };
+    if (source.status === 'indeterminate') {
+      const sourceRegion = candidateScopeSourceRegion(source.sourceRegion); const obligations = obligationReferences(source.obligationReferences);
+      return sourceRegion && obligations && text(source.missingEvidenceReason)
+        ? { candidateId: source.candidateId, status: 'indeterminate', sourceRegion, obligationReferences: obligations, missingEvidenceReason: source.missingEvidenceReason }
+        : undefined;
+    }
     return undefined;
   });
   return resolutions.some((resolution) => !resolution) || new Set(resolutions.map((resolution) => resolution!.candidateId)).size !== resolutions.length
@@ -154,6 +176,19 @@ export function parseBuildReviewJudgedResult(value: unknown, references?: BuildR
 export function parseBuildReviewSkip(value: unknown): BuildReviewSkip | undefined { const source = object(value); return source?.kind === 'skipped' && source.rubric === 'testQuality' && source.reason === 'disabled' ? { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } : undefined; }
 export function parseBuildReviewInfrastructureFailure(value: unknown): BuildReviewInfrastructureFailure | undefined { const source = object(value); return source?.kind === 'infrastructure-failure' && source.rubric === 'testQuality' && typeof source.reason === 'string' && (Object.values(mapBuildReviewCoordinatorFailureReason) as string[]).includes(source.reason) && text(source.detail) ? { kind: 'infrastructure-failure', rubric: 'testQuality', reason: source.reason as BuildReviewInfrastructureFailureReason, detail: source.detail } : undefined; }
 export function parseBuildReviewRubricResult(value: unknown): BuildReviewRubricResult | undefined { return parseBuildReviewJudgedResult(value) ?? parseBuildReviewSkip(value) ?? parseBuildReviewInfrastructureFailure(value); }
+/**
+ * This deliberately consumes a typed judged result, never provider output.
+ * A malformed scope response remains in the ordinary malformed-result repair
+ * lane; only valid semantic indeterminacy reaches this bounded recovery path.
+ */
+export function deriveBuildReviewScopeIncompleteFault(result: BuildReviewJudgedResult): BuildReviewScopeIncompleteFault | undefined {
+  const candidates = result.scopeResolutions?.filter((resolution): resolution is BuildReviewCandidateScopeResolutionIndeterminate => resolution.status === 'indeterminate') ?? [];
+  if (candidates.length === 0) return undefined;
+  const detail = candidates.slice(0, 6).map((candidate) =>
+    `${candidate.candidateId} (${candidate.obligationReferences.join(', ')}): ${candidate.missingEvidenceReason}`,
+  ).join('; ').slice(0, 2_048);
+  return Object.freeze({ rubric: result.rubric, reason: 'scope-incomplete', candidates: Object.freeze(candidates), detail });
+}
 export function renderBuildReviewJudgedResultShape(_rubric: BuildReviewRubricId): string { return '{ kind: "judged", rubric: "testQuality", lapId: string, snapshotDigest: string, contractVersion: "v3", findings: [{ concernKind: "test-insensitive", summary: string, evidenceLocations: string[], anchor: { rubric: "testQuality", locus: { path: string, contentHash: string, display: string } } }] }'; }
 const MAX_REJECTION_PROBLEMS = 6;
 /**

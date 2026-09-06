@@ -133,7 +133,10 @@ export async function resolveEffectiveBuildReviewVerdict(
   const renderedReducedCoverage = renderBuildReviewReducedCoverageEvidence({
     state: 'known',
     records: reducedCoverageRecords,
-    currentFailures: Object.values(aggregate.results).filter((result) => result.kind === 'infrastructure-failure'),
+    currentFailures: [
+      ...Object.values(aggregate.results).filter((result) => result.kind === 'infrastructure-failure'),
+      ...aggregate.scopeIncomplete,
+    ],
   });
   if (!renderedReducedCoverage.ok) return { ok: false, reason: renderedReducedCoverage.message };
   return {
