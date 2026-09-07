@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 // `conduct-ts engineer poll` + `engineer forget` CLI primitives (Phase 9.3b, T22/T23).
 // FR-32 (poll-on-launch primitive) + FR-40 (manual forget). gh is injected — no network.
 
@@ -147,7 +147,31 @@ describe('engineer poll (T22, FR-32)', () => {
 });
 
 describe('engineer forget (T23, FR-40)', () => {
-  it('drops a ledger entry and strips the engineer:handled label', async () => {
+  it('comments the resolving ref, closes the issue, then drops its ledger entry and strips the label', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+
+    const { gh, calls } = makeGh({});
+    const { out, opts } = captureOut();
+
+    const code = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'o/a#1', resolvedBy: 'o/a#2' },
+      opts({ gh }),
+    );
+    expect(code).toBe(0);
+    expect(calls).toEqual([
+      ['issue', 'comment', '1', '-R', 'o/a', '--body', expect.stringContaining('o/a#2')],
+      ['issue', 'close', '1', '-R', 'o/a'],
+      ['api', '--method', 'DELETE', 'repos/o/a/issues/1/labels/engineer%3Ahandled'],
+    ]);
+    expect(await ledger.known('github-issues', 'o/a#1')).toBe(false);
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0])).toMatchObject({
+      kind: 'forget', sourceRef: 'o/a#1', found: true, closed: true, resolvedBy: 'o/a#2',
+    });
+  });
+
+  it('only strips the label and reports closed:false without a resolving ref', async () => {
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
 
@@ -156,10 +180,15 @@ describe('engineer forget (T23, FR-40)', () => {
 
     const code = await dispatchEngineer({ kind: 'forget', sourceRef: 'o/a#1' }, opts({ gh }));
     expect(code).toBe(0);
-    expect(JSON.parse(out[0])).toMatchObject({ kind: 'forget', sourceRef: 'o/a#1', found: true });
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0])).toMatchObject({
+      kind: 'forget', sourceRef: 'o/a#1', found: true, closed: false,
+    });
 
     expect(await ledger.known('github-issues', 'o/a#1')).toBe(false);
-    expect(calls).toContainEqual(['api', '--method', 'DELETE', 'repos/o/a/issues/1/labels/engineer%3Ahandled']);
+    expect(calls).toEqual([
+      ['api', '--method', 'DELETE', 'repos/o/a/issues/1/labels/engineer%3Ahandled'],
+    ]);
   });
 
   it('reports found:false for an absent ref without crashing or calling gh', async () => {

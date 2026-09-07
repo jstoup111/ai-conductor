@@ -58,7 +58,7 @@ import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
-import { makeProductionGh } from './tracker-client.js';
+import { createGithubTrackerClient, makeProductionGh } from './tracker-client.js';
 import {
   GH_VERSION_FLOOR,
   probeGhVersion,
@@ -1304,11 +1304,23 @@ export async function dispatchEngineer(
         return 0;
       }
 
+      const parsedForget = parseSourceRef(sourceRef);
+      const closed = Boolean(dispatch.resolvedBy && parsedForget);
+      if (dispatch.resolvedBy && parsedForget) {
+        const tracker = createGithubTrackerClient(gh);
+        await tracker.commentOnIssue(
+          parsedForget.repo,
+          parsedForget.issue,
+          `Resolved by ${dispatch.resolvedBy}`,
+          process.cwd(),
+        );
+        await tracker.closeIssue(parsedForget.repo, String(parsedForget.issue), process.cwd());
+      }
+
       await ledger.forget(GITHUB_ISSUES_SOURCE, sourceRef);
 
       // Best-effort label strip; a gh failure must not fail `forget` (the ledger
       // entry is already gone, which is the authoritative dedup state).
-      const parsedForget = parseSourceRef(sourceRef);
       if (parsedForget) {
         try {
           await gh(restRemoveLabelArgs(parsedForget.repo, parsedForget.issue, HANDLED_LABEL), { cwd: process.cwd() });
@@ -1317,7 +1329,14 @@ export async function dispatchEngineer(
         }
       }
 
-      print(JSON.stringify({ kind: 'forget', sourceRef, found: true, removed: true }));
+      print(JSON.stringify({
+        kind: 'forget',
+        sourceRef,
+        found: true,
+        removed: true,
+        closed,
+        ...(closed ? { resolvedBy: dispatch.resolvedBy } : {}),
+      }));
       return 0;
     }
 
