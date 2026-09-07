@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, lstat, readlink, writeFile, readFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir, lstat, readlink, writeFile, readFile, chmod } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile as execFileCb } from 'child_process';
@@ -195,6 +195,26 @@ describe('observeMemorySetup', () => {
 
     expect(emitted).toEqual([expect.objectContaining({
       type: 'memory_setup', before: 'absent', canonical: false, reason: expect.any(String),
+    })]);
+  });
+
+  it('emits a non-canonical verdict when an existing memory directory cannot migrate', async () => {
+    const repo = await makeRepo('unwritable', tmpDir);
+    const memory = join(repo, '.memory');
+    await mkdir(memory);
+    await chmod(repo, 0o555);
+    const emitted: unknown[] = [];
+
+    try {
+      await expect(observeMemorySetup(repo, {
+        emit: async (event: unknown) => { emitted.push(event); },
+      } as never)).resolves.toBeUndefined();
+    } finally {
+      await chmod(repo, 0o755);
+    }
+
+    expect(emitted).toEqual([expect.objectContaining({
+      type: 'memory_setup', before: 'directory', canonical: false, reason: expect.any(String),
     })]);
   });
 });
