@@ -10,12 +10,18 @@ export interface PlanTaskCountClassification {
   readonly band: PlanTaskCountBand;
 }
 
+export interface DocumentedPlanTaskBands {
+  readonly warningBoundary: number;
+  readonly hardStopBoundary: number;
+}
+
 export type PlanTaskCountValidation =
   | { readonly kind: 'authorized'; readonly rationale: string }
   | { readonly kind: 'unauthorized'; readonly taskCount: number }
   | { readonly kind: 'malformed'; readonly taskCount: number };
 
 const SCOPE_EXCEPTION_HEADER = /^\s*\*\*Scope-exception:\*\*\s*(.*)$/gim;
+const DOCUMENTED_PLAN_TASK_BANDS = /^\|\s*\d+-\d+\s*\|[^\n]*\r?\n^\|\s*(\d+)-\d+\s*\|[^\n]*\r?\n^\|\s*(\d+)\+\s*\|/m;
 
 /** Mechanical plan-shape classification; deliberately has no filesystem boundary. */
 export function classifyPlanTaskCount(planText: string): PlanTaskCountClassification {
@@ -27,6 +33,17 @@ export function classifyPlanTaskCount(planText: string): PlanTaskCountClassifica
       : 'hard-stop';
 
   return { taskCount, band };
+}
+
+/** Reads the warning and hard-stop boundaries from the plan skill's band table. */
+export function parseDocumentedPlanTaskBands(skillText: string): DocumentedPlanTaskBands | undefined {
+  const match = skillText.match(DOCUMENTED_PLAN_TASK_BANDS);
+  if (!match) return undefined;
+
+  return {
+    warningBoundary: Number(match[1]),
+    hardStopBoundary: Number(match[2]),
+  };
 }
 
 /** Mechanical land-time exception rule; deliberately has no filesystem boundary. */

@@ -380,9 +380,12 @@ After generating tasks, check the total count:
 |---|---|
 | 1-20 | Normal — proceed |
 | 21-40 | Warning — surface to user: "This plan has N tasks (~X hours). Consider splitting into multiple features." |
-| 41+ | Hard stop — this is likely multiple features bundled together. Break into separately plannable features and run `/stories` + `/plan` for each. |
+| 41+ | Hard stop — refused when the spec is landed unless the plan carries an authorized scope exception. Break into separately plannable features and run the stories and plan steps for each. |
 
-If the user explicitly confirms a large plan, proceed — but record the decision in `.memory/decisions/`.
+The only exception for a plan with 41 or more tasks is exactly one
+`**Scope-exception:** <non-empty rationale>` declaration on one physical line in the plan. A
+missing, empty, or duplicate declaration is rejected when the spec is landed; a valid rationale is
+the recorded authorization for the oversized plan.
 
 ### 7. Coverage Check
 
