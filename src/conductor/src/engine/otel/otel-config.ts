@@ -105,10 +105,21 @@ export function resolveOtelConfig(
     if (headers && hasHeaderEntries(headers)) {
       for (const [header, reference] of Object.entries(headers)) {
         const headerName = renderedHeaderName(header);
+        // Story 3's negative criterion binds every header-related resolution
+        // error for a reference-bearing entry, including one whose NAME is
+        // malformed. Parse the reference before validating the name so the
+        // variable is available to name here; the value itself is still never
+        // read on this path.
+        const environmentVariable = isPlainObject(reference) && typeof reference.env === 'string'
+          ? reference.env
+          : undefined;
+        const referencedVariableClause = environmentVariable
+          ? ` (referencing environment variable '${environmentVariable}')`
+          : '';
         if (header === '' || /[\x00-\x1F\x7F]/.test(header)) {
           return {
             enabled: false,
-            error: `otel header ${headerName} must be a non-empty name without control characters.`,
+            error: `otel header ${headerName}${referencedVariableClause} must be a non-empty name without control characters.`,
           };
         }
         if (typeof reference === 'string') {
@@ -117,9 +128,6 @@ export function resolveOtelConfig(
             error: `otel header ${headerName} refuses a literal credential in configuration; use { env: <variable name> }.`,
           };
         }
-        const environmentVariable = isPlainObject(reference) && typeof reference.env === 'string'
-          ? reference.env
-          : undefined;
         if (!isPlainObject(reference) || Object.keys(reference).length !== 1 || !('env' in reference) || environmentVariable === undefined || environmentVariable === '') {
           return {
             enabled: false,

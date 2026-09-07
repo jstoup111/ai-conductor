@@ -229,6 +229,38 @@ describe('resolveOtelConfig', () => {
       expect((result as { error?: string }).error).toMatch(errorPattern);
     });
 
+    // Story 3's negative criterion binds EVERY header-related resolution error
+    // for a reference-bearing entry, so a malformed header name must still name
+    // the environment variable it references while withholding its value.
+    it.each([
+      ['an empty header name', ''],
+      ['a header name containing a control character', 'Bad\nHeader'],
+    ] as const)('names the referenced variable when refusing %s', (_caseName, header) => {
+      const previous = process.env.OTEL_TEST_AUTHORIZATION;
+      const sentinel = 'malformed-name-sentinel';
+      try {
+        process.env.OTEL_TEST_AUTHORIZATION = sentinel;
+        const result = resolveOtelConfig(
+          {
+            otel: {
+              exporter: 'otlp',
+              endpoint: 'http://localhost:4318',
+              headers: { [header]: { env: 'OTEL_TEST_AUTHORIZATION' } },
+            } as never,
+          },
+          PIPELINE_DIR,
+        );
+
+        expect(result).toMatchObject({ enabled: false });
+        const error = (result as { error?: string }).error ?? '';
+        expect(error).toContain('OTEL_TEST_AUTHORIZATION');
+        expect(error).not.toContain(sentinel);
+      } finally {
+        if (previous === undefined) delete process.env.OTEL_TEST_AUTHORIZATION;
+        else process.env.OTEL_TEST_AUTHORIZATION = previous;
+      }
+    });
+
     it.each([
       ['grpc protocol', { exporter: 'otlp', endpoint: 'http://localhost:4317', protocol: 'grpc', headers: headerConfig.otel.headers }],
       ['file exporter', { exporter: 'file', headers: headerConfig.otel.headers }],

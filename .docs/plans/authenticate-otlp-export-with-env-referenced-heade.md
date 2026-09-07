@@ -80,7 +80,7 @@ Documentation is part of the same change: the reference page's otel table and pr
 
 **Done when:**
 1. A literal string value is refused with an error naming the header key and stating that a literal credential in configuration is refused.
-2. An unknown reference key, an absent reference key, a non-string variable name, a non-mapping header block, an empty header name, and a header name containing a control character are each refused with an error naming the offending header key.
+2. An unknown reference key, an absent reference key, a non-string variable name, a non-mapping header block, an empty header name, and a header name containing a control character are each refused with an error naming the offending header key, and every one of these refusals whose entry carries a parseable `{ env: <variable name> }` reference also names that variable, so a malformed header name is diagnosed as completely as a malformed reference.
 3. A mapping combined with the grpc protocol and a mapping combined with the file exporter are each refused with an error naming the unsupported combination.
 4. No error string produced for any of these cases contains the sentinel value held by the referenced variable.
 5. A well-formed mapping resolves enabled with no error and no warning.
@@ -139,7 +139,7 @@ Documentation is part of the same change: the reference page's otel table and pr
 | Story 3 happy: Given a credential supplied through an environment reference, when its value changes in the environment, then the same unchanged configuration resolves to the new header value. | 1 | "A set environment reference resolves to that header's value on the enabled otlp result, and the same configuration yields a different value after the variable changes." | diff-local |
 | Story 3 happy: Given the parsed otel block used to resolve the config, when it is inspected after resolution, then it contains the header name and the variable name and no credential value. | 1 | "The parsed otel block used for resolution carries the header name and variable name and no credential value." | diff-local |
 | Story 3 happy: Given an operator reads the otel reference documentation, when they look for how a credential is supplied, then the reference form, its one supported source, the refusals, and the excluded sources are stated alongside the other otel keys. | 4 | "The prose states the reference form, the environment source read at load, and the refusal of a literal credential." | diff-local |
-| Story 3 negative: Given any header-related resolution error while the referenced variable holds a distinctive sentinel value, when the error text is inspected, then it names the header key and the variable and never contains the sentinel value. | 2 | "No error string produced for any of these cases contains the sentinel value held by the referenced variable." | diff-local |
+| Story 3 negative: Given any header-related resolution error while the referenced variable holds a distinctive sentinel value, when the error text is inspected, then it names the header key and the variable and never contains the sentinel value. | 2 | "Every one of these refusals whose entry carries a parseable `{ env: <variable name> }` reference also names that variable" and "No error string produced for any of these cases contains the sentinel value held by the referenced variable." | diff-local |
 
 ## Test dispositions and integration ownership
 
