@@ -63,7 +63,7 @@ describe('kickback-budget refusal ladder', () => {
     try {
       const output: string[] = [];
       expect(await dispatchKickbackBudgetCommand(
-        { kind: 'kickback-budget', action: 'raise', feature: 'missing', gate: 'build_review', by: 1, rationale: 'evidence' },
+        { kind: 'kickback-budget', action: 'raise', feature: 'missing', gate: 'build_review', by: 1, rationale: 'evidence', format: 'human' },
         { cwd: root, resolveMainRoot: async () => root, isInteractive: () => true, print: (line) => output.push(line) },
       )).toBe(1);
       expect(output).toEqual(["kickback-budget: feature 'missing' is unavailable."]);
@@ -72,9 +72,9 @@ describe('kickback-budget refusal ladder', () => {
   });
 
   it.each([
-    ['non-interactive mutation', { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'build_review', by: 1, rationale: 'evidence' }, 2, () => false],
-    ['unknown gate', { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'unknown', by: 1, rationale: 'evidence' }, 2, () => true],
-    ['blank rationale', { kind: 'kickback-budget', action: 'reset', feature: 'feature', gate: 'build_review', rationale: '  ' }, 2, () => true],
+    ['non-interactive mutation', { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'build_review', by: 1, rationale: 'evidence', format: 'human' }, 2, (): boolean => false],
+    ['unknown gate', { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'unknown', by: 1, rationale: 'evidence', format: 'human' }, 2, (): boolean => true],
+    ['blank rationale', { kind: 'kickback-budget', action: 'reset', feature: 'feature', gate: 'build_review', rationale: '  ', format: 'human' }, 2, (): boolean => true],
   ] as const)('keeps %s inert', async (_name, command, code, isInteractive) => {
     const fixture = await makeFeature({ version: 1, gates: { build_review: baseEntry } });
     try {
@@ -98,15 +98,17 @@ describe('kickback-budget refusal ladder', () => {
         await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted');
         await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'mechanical');
       }
-      await expectRefusalIsInert(fixture, { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'build_review', by: 1, rationale: 'evidence' }, code);
+      await expectRefusalIsInert(fixture, { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'build_review', by: 1, rationale: 'evidence', format: 'human' }, code);
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 
   it('dispatches a pre-boot refusal through the executable without creating daemon state', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kickback-budget-preboot-'));
     try {
-      const index = resolve(import.meta.dirname, '../../dist/index.js');
-      await expect(execFileP(process.execPath, [index, 'kickback-budget', 'inspect', '--feature', 'missing'], { cwd: root }))
+      const conductorRoot = resolve(import.meta.dirname, '../..');
+      const entry = join(conductorRoot, 'src', 'index.ts');
+      const tsxLoader = join(conductorRoot, 'node_modules', 'tsx', 'dist', 'loader.mjs');
+      await expect(execFileP(process.execPath, ['--import', tsxLoader, entry, 'kickback-budget', 'inspect', '--feature', 'missing'], { cwd: root }))
         .rejects.toMatchObject({ code: 1, stdout: expect.stringContaining("feature 'missing' is unavailable") });
       await expect(access(join(root, '.daemon'))).rejects.toThrow();
       await expect(access(join(root, 'conduct-state.json'))).rejects.toThrow();
