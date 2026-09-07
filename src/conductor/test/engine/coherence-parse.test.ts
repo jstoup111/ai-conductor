@@ -115,6 +115,23 @@ describe('parseCoherenceArtifact', () => {
     });
   });
 
+  it('rejects an unknown data row class before a trailing separator row', () => {
+    const result = parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| widget | task:3 | story:3 | covered | evidence |
+| --- | --- | --- | --- | --- |
+`);
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'unparseable-coherence-artifact',
+      detail: {
+        line: 3,
+        message: expect.stringContaining('unknown coherence row class "widget"'),
+      },
+    });
+  });
+
   it.each([
     ['verdict', 'probably-covered', 'diff-local'],
     ['disposition', 'covered', 'maybe-local'],
