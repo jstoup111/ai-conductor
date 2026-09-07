@@ -383,6 +383,17 @@ export function makeRunFeature(
       worktree = await deps.createWorktree(item.slug);
       featureRun = await deps.beginFeatureRun?.(worktree, item);
       featureLog = featureRun?.log ?? log;
+      // The re-kick sentinel is durable dispatcher state.  A newly created
+      // worktree has neither it nor prior pipeline state; an existing scope
+      // without it is an ordinary resume.
+      const rekick = await readFile(join(worktree.path, '.pipeline', 'REKICK'), 'utf8')
+        .then(() => true)
+        .catch(() => false);
+      await featureRun?.events.emit({
+        type: 'feature_dispatch_started',
+        slug: item.slug,
+        kind: rekick ? 'rekick' : 'resume',
+      });
       providerExecution =
         featureRun?.providerExecution ?? deps.providerExecution?.();
       // Prepare the worktree before the build: write WORKTREE_NAMESPACE and run
@@ -577,6 +588,7 @@ export function makeRunFeature(
       }
 
       if (outcome.halted) {
+        await featureRun?.events.emit({ type: 'feature_dispatch_ended', slug: item.slug, outcome: 'halted' });
         await deps.teardownWorktree(worktree, true); // keep for the human
         featureLog(`✋ ${item.slug} halted — worktree kept (${outcome.reason ?? 'see .pipeline/HALT'})`);
         const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog);
