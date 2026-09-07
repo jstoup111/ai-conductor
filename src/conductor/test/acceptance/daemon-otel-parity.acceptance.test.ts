@@ -184,7 +184,7 @@ async function throughInteractive(events: ConductorEvent[]): Promise<OtelSignals
     .mockReturnValueOnce({ spanExporter: exporter, metricExporter })
     .mockReturnValueOnce({ spanExporter: exporter, metricExporter });
   const emitter = new ConductorEventEmitter();
-  const context: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = { config, pipelineDir, emitter, startContext: { feature: 'interactive', project: 'test', pipelineDir, branch: undefined, engineVersion: undefined } };
+  const context: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = { config, pipelineDir, emitter, startContext: { feature: 'interactive', project: 'test', pipelineDir, branch: undefined, engineVersion: undefined, harnessVersion: undefined } };
   const visualizers = buildInteractiveVisualizers(new PluginRegistry(), config, context);
   for (const event of events) await emitter.emit(event);
   await Promise.all(visualizers.map((visualizer) => visualizer.stop()));

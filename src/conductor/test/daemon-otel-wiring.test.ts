@@ -19,6 +19,7 @@ type VisualizerPlugin = import('../src/types/plugin.js').VisualizerPlugin;
 type HarnessConfig = import('../src/types/config.js').HarnessConfig;
 type LoadMergedConfig = typeof import('../src/engine/config.js').loadMergedConfig;
 type ResolveEngineVersion = typeof import('../src/engine/shipped-record.js').resolveEngineVersion;
+type ResolveHarnessVersion = typeof import('../src/engine/version-report.js').resolveHarnessVersion;
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -38,6 +39,7 @@ const wireOtelVisualizer = vi.hoisted(() => vi.fn<WireOtelVisualizer>(() => null
 const wireDaemonOtel = vi.hoisted(() => vi.fn<WireDaemonOtel>(() => null));
 const loadMergedConfig = vi.hoisted(() => vi.fn<LoadMergedConfig>());
 const resolveEngineVersion = vi.hoisted(() => vi.fn<ResolveEngineVersion>(() => 'dev'));
+const resolveHarnessVersion = vi.hoisted(() => vi.fn<ResolveHarnessVersion>(async () => '0.0.0'));
 
 vi.mock('../src/engine/otel/wire.js', () => ({ wireOtelVisualizer, wireDaemonOtel }));
 vi.mock('../src/engine/config.js', async (importOriginal) => {
@@ -47,6 +49,10 @@ vi.mock('../src/engine/config.js', async (importOriginal) => {
 vi.mock('../src/engine/shipped-record.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/engine/shipped-record.js')>();
   return { ...actual, resolveEngineVersion };
+});
+vi.mock('../src/engine/version-report.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/engine/version-report.js')>();
+  return { ...actual, resolveHarnessVersion };
 });
 vi.mock('../src/engine/self-host/daemon-build-token.js', () => ({
   readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })),
@@ -158,6 +164,8 @@ beforeEach(() => {
   wireOtelVisualizer.mockClear();
   resolveEngineVersion.mockReset();
   resolveEngineVersion.mockReturnValue('dev');
+  resolveHarnessVersion.mockReset();
+  resolveHarnessVersion.mockResolvedValue('0.0.0');
   wireOtelVisualizer.mockImplementation((config, context, events) => {
     if (!resolveOtelConfig(config, context.pipelineDir).enabled) return null;
     fixture.visualizerConstructions += 1;
@@ -211,7 +219,12 @@ describe('daemon OTel visualizer wiring', () => {
   it('exports the daemon module engine identity for source and installed builds', async () => {
     const daemonModuleDirectory = dirname(fileURLToPath(new URL('../src/daemon-cli.ts', import.meta.url)));
     const engineVersions: unknown[] = [];
-    for (const engineVersion of ['dev', 'installed-engine-id']) {
+    const harnessVersions: unknown[] = [];
+    const terminalSpanNames: Array<string | undefined> = [];
+    for (const [engineVersion, harnessVersion] of [
+      ['dev', '0.99.20'],
+      ['installed-engine-id', '0.0.0'],
+    ]) {
       const spanExporter = new InMemorySpanExporter();
       const metricExporter: PushMetricExporter = {
         export(_metrics: ResourceMetrics, resultCallback: (result: ExportResult) => void) {
@@ -221,6 +234,7 @@ describe('daemon OTel visualizer wiring', () => {
         async shutdown(): Promise<void> {},
       };
       resolveEngineVersion.mockReturnValue(engineVersion);
+      resolveHarnessVersion.mockResolvedValue(harnessVersion);
       fixture.emitOtelEvents = true;
       wireOtelVisualizer.mockImplementation((config, context, events) => {
         const visualizer = createOtelVisualizer(
@@ -234,11 +248,17 @@ describe('daemon OTel visualizer wiring', () => {
 
       await dispatchWithSessionId();
       engineVersions.push(spanExporter.getFinishedSpans()[0]?.resource.attributes['conductor.engine.version']);
+      harnessVersions.push(spanExporter.getFinishedSpans()[0]?.resource.attributes['service.version']);
+      terminalSpanNames.push(spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')?.name);
     }
 
     expect(resolveEngineVersion).toHaveBeenNthCalledWith(1, daemonModuleDirectory);
     expect(resolveEngineVersion).toHaveBeenNthCalledWith(2, daemonModuleDirectory);
+    expect(resolveHarnessVersion).toHaveBeenNthCalledWith(1, daemonModuleDirectory);
+    expect(resolveHarnessVersion).toHaveBeenNthCalledWith(2, daemonModuleDirectory);
     expect(engineVersions).toEqual(['dev', 'installed-engine-id']);
+    expect(harnessVersions).toEqual(['0.99.20', '0.0.0']);
+    expect(terminalSpanNames).toEqual(['conductor.run', 'conductor.run']);
   });
 
   it('attaches the visualizer to the feature bus using the persisted read-only session ID', async () => {

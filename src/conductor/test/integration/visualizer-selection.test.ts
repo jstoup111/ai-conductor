@@ -1,4 +1,4 @@
-// Covers: task:2, task:5, task:6, task:9
+// Covers: task:2, task:3, task:5, task:6, task:9
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execa } from 'execa';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -33,6 +33,7 @@ const resolvedInteractiveOtelContext: InteractiveOtelContext = {
     pipelineDir: '/tmp/visualizer-selection',
     branch: 'feature/visualizer-selection',
     engineVersion: '1.2.3',
+    harnessVersion: '0.99.20',
   },
 };
 
@@ -44,6 +45,7 @@ const unresolvedInteractiveOtelContext: InteractiveOtelContext = {
     pipelineDir: '/tmp/visualizer-selection',
     branch: undefined,
     engineVersion: undefined,
+    harnessVersion: undefined,
   },
 };
 
@@ -52,7 +54,7 @@ const missingInteractiveOtelBranch: InteractiveOtelContext = {
   pipelineDir: '/tmp/visualizer-selection',
   emitter: new ConductorEventEmitter(),
   // @ts-expect-error Supported interactive OTel wiring must receive branch resolution.
-  startContext: { pipelineDir: '/tmp/visualizer-selection', engineVersion: '1.2.3' },
+  startContext: { pipelineDir: '/tmp/visualizer-selection', engineVersion: '1.2.3', harnessVersion: '0.99.20' },
 };
 
 const missingInteractiveOtelEngineVersion: InteractiveOtelContext = {
@@ -60,13 +62,22 @@ const missingInteractiveOtelEngineVersion: InteractiveOtelContext = {
   pipelineDir: '/tmp/visualizer-selection',
   emitter: new ConductorEventEmitter(),
   // @ts-expect-error Supported interactive OTel wiring must receive engine-version resolution.
-  startContext: { pipelineDir: '/tmp/visualizer-selection', branch: 'feature/visualizer-selection' },
+  startContext: { pipelineDir: '/tmp/visualizer-selection', branch: 'feature/visualizer-selection', harnessVersion: '0.99.20' },
+};
+
+const missingInteractiveOtelHarnessVersion: InteractiveOtelContext = {
+  config: {},
+  pipelineDir: '/tmp/visualizer-selection',
+  emitter: new ConductorEventEmitter(),
+  // @ts-expect-error Supported interactive OTel wiring must receive harness-version resolution.
+  startContext: { pipelineDir: '/tmp/visualizer-selection', branch: 'feature/visualizer-selection', engineVersion: '1.2.3' },
 };
 
 void resolvedInteractiveOtelContext;
 void unresolvedInteractiveOtelContext;
 void missingInteractiveOtelBranch;
 void missingInteractiveOtelEngineVersion;
+void missingInteractiveOtelHarnessVersion;
 
 class FakeVisualizer implements VisualizerPlugin {
   readonly received: string[] = [];
@@ -113,6 +124,7 @@ function createFactoryContext(
       branch: 'feat/visualizer-selection',
       feature: 'connector-seam-for-event-submissions-is-registered',
       engineVersion: '0.0.0-test',
+      harnessVersion: '0.99.20',
       pipelineDir: '/tmp/visualizer-selection',
       ...startContext,
     },
@@ -131,6 +143,7 @@ describe('visualizer selection', () => {
       feature: 'connector-seam-for-event-submissions-is-registered',
       branch: undefined,
       engineVersion: 'dev',
+      harnessVersion: '0.99.20',
       pipelineDir: '/tmp/visualizer-selection',
     })).toEqual({
       runId: 'run-1516',
@@ -138,6 +151,7 @@ describe('visualizer selection', () => {
       feature: 'connector-seam-for-event-submissions-is-registered',
       branch: undefined,
       engineVersion: 'dev',
+      harnessVersion: '0.99.20',
       pipelineDir: '/tmp/visualizer-selection',
     });
   });

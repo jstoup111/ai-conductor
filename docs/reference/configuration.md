@@ -691,9 +691,11 @@ Not schema-validated.
 OpenTelemetry export. Allow-listed at the top level but **not validated by `validateConfig`** — all
 handling lives in `resolveOtelConfig` (`src/conductor/src/engine/otel/otel-config.ts:26-70`), which never
 throws. When enabled, it exports interactive runs and each daemon-dispatched feature independently;
-the trace Resource identifies the feature, project, durable dispatch run id, branch, and executing
-engine version. For daemon dispatches, the branch is the dispatched feature worktree's branch rather
-than the primary checkout's branch. Branch and engine-version identity use a non-empty resolved value;
+the trace Resource identifies the feature, project, durable dispatch run id, branch, executing
+engine version, and released harness version. The release is exported as the standard
+`service.version` Resource attribute, so OTel backends can group traces from different engine builds
+of the same harness release. For daemon dispatches, the branch is the dispatched feature worktree's
+branch rather than the primary checkout's branch. Branch, engine-version, and harness-version identity use a non-empty resolved value;
 an explicitly attempted but unavailable value is `unresolved`, while a caller that did not supply the
 property is `not-supplied`. The metric Resource uses daemon-stable identity: `service.name`,
 `service.instance.id` (`<project>/<worker>`), `conductor.project`, `conductor.worker`, and
