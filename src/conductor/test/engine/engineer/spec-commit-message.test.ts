@@ -80,7 +80,42 @@ describe('composeSpecCommitMessage', () => {
     );
   });
 
-  it('returns only the subject when every optional input is empty', () => {
+  it('drops copied trailer-shaped lines carrying trailing horizontal whitespace', () => {
+    const message = composeSpecCommitMessage(
+      'trailing whitespace trailers',
+      'technical',
+      'S',
+      '',
+      [
+        '## Summary',
+        '',
+        'Keep the summary reviewable.',
+        'Task: 71   ',
+        '\tTask: 72\t',
+      ].join('\n'),
+    );
+
+    // `git stripspace` (commit message cleanup) strips trailing horizontal
+    // whitespace, so these lines would land as real routing trailers.
+    const trailer = new RegExp(`^Task: ${TASK_ID_PATTERN}$`);
+    expect(
+      message.split('\n').filter((line) => trailer.test(line.replace(/[ \t]+$/, '').trim())),
+    ).toEqual([]);
+    expect(message).toContain('Keep the summary reviewable.');
+  });
+
+  it('keeps the derivable track when plan and stories text are empty', () => {
+    const message = composeSpecCommitMessage('empty artifacts', 'product', undefined, '', '');
+
+    expect(message).toBe(
+      [
+        'spec: land authored artifacts for "empty artifacts" [engineer/land]',
+        'Track: product',
+      ].join('\n\n'),
+    );
+  });
+
+  it('returns only the subject when nothing at all is derivable', () => {
     const message = composeSpecCommitMessage('empty artifacts', '', undefined, '', '');
 
     expect(message).toBe('spec: land authored artifacts for "empty artifacts" [engineer/land]');

@@ -1,7 +1,18 @@
-import { parsePlanTaskBodies, TASK_ID_PATTERN } from '../plan-task-parse.js';
+import { parsePlanTaskBodies, TASK_TRAILER_LINE_PATTERN } from '../plan-task-parse.js';
 import { sectionBody, splitStoryBlocks } from '../story-criteria.js';
 
-const TASK_TRAILER_LINE = new RegExp(`^Task: ${TASK_ID_PATTERN}$`);
+/**
+ * The trailer grammar the build evidence reader accepts, applied here as a
+ * filter so no line copied out of artifact text can be read back as task
+ * routing evidence. Lines are trimmed before the test because the reader's
+ * fast-feedback path trims too, and because Git message cleanup removes the
+ * trailing horizontal whitespace that would otherwise disguise the line.
+ */
+const TASK_TRAILER_LINE = new RegExp(TASK_TRAILER_LINE_PATTERN);
+
+function isTrailerShaped(line: string): boolean {
+  return TASK_TRAILER_LINE.test(line.trim());
+}
 
 function subjectFor(idea: string): string {
   return `spec: land authored artifacts for "${idea}" [engineer/land]`;
@@ -18,7 +29,7 @@ export function composeSpecCommitMessage(
   const sections: string[] = [];
   const summary = sectionBody(planText, /^Summary$/i)
     ?.split('\n')
-    .filter((line) => !TASK_TRAILER_LINE.test(line))
+    .filter((line) => !isTrailerShaped(line))
     .join('\n')
     .trim();
   if (summary) sections.push(`Summary:\n${summary}`);
