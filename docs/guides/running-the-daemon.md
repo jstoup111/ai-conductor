@@ -640,6 +640,11 @@ process contract.
 
 ## Per-dispatch hook
 
+Before project preparation, every daemon dispatch ensures the worktree's `.memory/` path is linked
+to the canonical project memory store. A legacy real directory is migrated at that point. The daemon
+logs the observed pre-setup state and whether the final path is canonical; setup or telemetry failure
+is reported as a non-canonical result and does not prevent project preparation or dispatch.
+
 An executable `bin/dispatch-start` runs at the end of worktree preparation on every daemon dispatch,
 including a redispatch whose successful `bin/setup` marker skips provisioning. It receives the same
 `CI=true` and `WORKTREE_NAMESPACE` environment as setup and teardown. The hook is optional and silent
