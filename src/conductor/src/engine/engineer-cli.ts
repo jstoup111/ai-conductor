@@ -22,8 +22,10 @@
 
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRegistryReader } from './registry.js';
+import { ConductorEventEmitter } from '../ui/events.js';
+import { EventPersister } from './event-persister.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo } from './engineer/target.js';
 import { landSpec } from './engineer/land-spec.js';
@@ -942,15 +944,31 @@ export async function dispatchEngineer(
           sourceRef,
           body: resolvedBody,
         });
-        // This is deliberately worktree-local evidence: the engineer store and
-        // feature event spine are not alternative destinations for an intake fact.
+        // The occurrence rides the one telemetry spine. This CLI process owns no
+        // long-lived bus, so it builds the spine for the duration of the emit —
+        // a ConductorEventEmitter with EventPersister attached to the canonical
+        // `<worktree>/.pipeline/events.jsonl` — exactly as the `operator_rewind`
+        // emit in `engine/rewind.ts` does. No sibling ledger and no bespoke
+        // format: one union, one reader path. Best-effort — a persistence failure
+        // reports on stderr and never fails worktree creation.
         if (sourceRef && inbound) {
+          const events = new ConductorEventEmitter();
+          const persister = new EventPersister(
+            join(wt.worktreePath, '.pipeline', 'events.jsonl'),
+            events,
+          );
           try {
-            const path = join(wt.worktreePath, '.pipeline', 'intake-events.jsonl');
-            await mkdir(join(wt.worktreePath, '.pipeline'), { recursive: true });
-            await appendFile(path, `${JSON.stringify({ type: 'intake_inbound_sanitized', sourceRef, ...inbound, ts: new Date().toISOString() })}\n`, 'utf8');
+            persister.start();
+            await events.emitOrThrow({
+              type: 'intake_inbound_sanitized',
+              sourceRef,
+              neutralizations: inbound.neutralizations,
+              digest: inbound.digest,
+            });
           } catch (err) {
-            printErr(`engineer worktree: could not append inbound intake evidence: ${err instanceof Error ? err.message : String(err)}`);
+            printErr(`engineer worktree: could not record inbound intake event: ${err instanceof Error ? err.message : String(err)}`);
+          } finally {
+            persister.stop();
           }
         }
         print(JSON.stringify({ kind: 'worktree', ...wt }));

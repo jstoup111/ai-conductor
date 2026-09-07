@@ -194,3 +194,107 @@ describe('FR-13: claim → worktree Desired-outcome body threading', () => {
     await expect(readFile(stagedPath, 'utf8')).rejects.toThrow();
   });
 });
+
+// AB-1: the inbound-sanitization occurrence rides the one telemetry spine. The
+// worktree case emits a real `intake_inbound_sanitized` ConductorEvent onto a
+// ConductorEventEmitter with EventPersister attached, so the record lands in the
+// canonical `<worktree>/.pipeline/events.jsonl` that every spine consumer reads.
+// The former bespoke `intake-events.jsonl` sidecar is gone.
+describe('inbound sanitization rides the event spine', () => {
+  const INBOUND = {
+    neutralizations: [{ category: 'agent-directive' as const, count: 2 }],
+    digest: 'a'.repeat(64),
+  };
+
+  async function claimWithInbound(): Promise<void> {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    const queue = createFileQueue(join(engineerDir, 'inbox'));
+    await ledger.record({ source: SOURCE, sourceRef: SOURCE_REF });
+    await ledger.transition(SOURCE, SOURCE_REF, 'pending');
+    await queue.enqueue(makeEnvelope({ inbound: INBOUND }));
+    const code = await dispatchEngineer({ kind: 'claim' }, captureOpts().opts);
+    expect(code).toBe(0);
+  }
+
+  it('persists the event to the canonical .pipeline/events.jsonl through the production emitter', async () => {
+    await claimWithInbound();
+
+    const { out, opts } = captureOpts();
+    const code = await dispatchEngineer(
+      { kind: 'worktree', project: 'alpha', idea: 'spine wiring', sourceRef: SOURCE_REF },
+      opts,
+    );
+    expect(code).toBe(0);
+    const { worktreePath } = JSON.parse(out[0]);
+
+    const ledgerPath = join(worktreePath, '.pipeline', 'events.jsonl');
+    const lines = (await readFile(ledgerPath, 'utf8')).trim().split('\n').filter(Boolean);
+    const records = lines.map((l) => JSON.parse(l));
+    const inboundRecords = records.filter((r) => r.type === 'intake_inbound_sanitized');
+    expect(inboundRecords).toHaveLength(1);
+    expect(inboundRecords[0]).toMatchObject({
+      type: 'intake_inbound_sanitized',
+      sourceRef: SOURCE_REF,
+      neutralizations: INBOUND.neutralizations,
+      digest: INBOUND.digest,
+    });
+    expect(typeof inboundRecords[0].ts).toBe('string');
+  });
+
+  it('writes no parallel sidecar ledger', async () => {
+    await claimWithInbound();
+
+    const { out, opts } = captureOpts();
+    const code = await dispatchEngineer(
+      { kind: 'worktree', project: 'alpha', idea: 'no sidecar', sourceRef: SOURCE_REF },
+      opts,
+    );
+    expect(code).toBe(0);
+    const { worktreePath } = JSON.parse(out[0]);
+
+    await expect(
+      readFile(join(worktreePath, '.pipeline', 'intake-events.jsonl'), 'utf8'),
+    ).rejects.toThrow();
+  });
+
+  it('an empty neutralization list still records the occurrence', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    const queue = createFileQueue(join(engineerDir, 'inbox'));
+    await ledger.record({ source: SOURCE, sourceRef: SOURCE_REF });
+    await ledger.transition(SOURCE, SOURCE_REF, 'pending');
+    await queue.enqueue(
+      makeEnvelope({ inbound: { neutralizations: [], digest: 'b'.repeat(64) } }),
+    );
+    expect(await dispatchEngineer({ kind: 'claim' }, captureOpts().opts)).toBe(0);
+
+    const { out, opts } = captureOpts();
+    const code = await dispatchEngineer(
+      { kind: 'worktree', project: 'alpha', idea: 'empty list', sourceRef: SOURCE_REF },
+      opts,
+    );
+    expect(code).toBe(0);
+    const { worktreePath } = JSON.parse(out[0]);
+    const raw = await readFile(join(worktreePath, '.pipeline', 'events.jsonl'), 'utf8');
+    const record = raw
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l))
+      .find((r) => r.type === 'intake_inbound_sanitized');
+    expect(record).toMatchObject({ neutralizations: [], digest: 'b'.repeat(64) });
+  });
+
+  it('a chat-origin worktree (no claim record) emits nothing', async () => {
+    const { out, opts } = captureOpts();
+    const code = await dispatchEngineer(
+      { kind: 'worktree', project: 'alpha', idea: 'chat origin' },
+      opts,
+    );
+    expect(code).toBe(0);
+    const { worktreePath } = JSON.parse(out[0]);
+
+    const raw = await readFile(join(worktreePath, '.pipeline', 'events.jsonl'), 'utf8').catch(
+      () => '',
+    );
+    expect(raw).not.toContain('intake_inbound_sanitized');
+  });
+});
