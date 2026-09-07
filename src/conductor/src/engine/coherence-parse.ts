@@ -180,6 +180,10 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
       sawSeparator = true;
       continue;
     }
+    if (currentTableRowLines === tableRowLines[0] && currentTableRowLines.length === 0) {
+      currentTableRowLines.push({ cells, line: lineNumber });
+      continue;
+    }
     let nextPipeLineIndex = index + 1;
     let nextCells: string[] | null = null;
     while (nextPipeLineIndex < lines.length && nextCells === null) {
