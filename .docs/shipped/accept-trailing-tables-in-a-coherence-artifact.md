@@ -4,6 +4,12 @@ spec_hash: 3da539c51822be7ade7b5bce5ce23a826872bc3f13258b35adaa178e7d9df5f0
 pr: https://github.com/jstoup111/ai-conductor/pull/2402
 shipped: 2026-09-07
 engine_version: 20260907T120758Z-4f8bdec36946
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: ".docs/plans/accept-trailing-tables-in-a-coherence-artifact.md:128 — the feature diff edits the active plan itself, widening Task 4's `**Files:**` list with `src/conductor/test/engine/engineer/coherence-validator.test.ts`"
+    accepted: true
 ---
 
 ## Cost
