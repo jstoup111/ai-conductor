@@ -32,11 +32,18 @@ vi.mock('../../src/engine/rebase.js', async () => {
     performRebase: vi.fn().mockResolvedValue({ kind: 'noop' }),
   };
 });
+vi.mock('../../src/engine/steps.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/steps.js')>();
+  return {
+    ...actual,
+    buildStepRegistry: vi.fn(actual.buildStepRegistry),
+  };
+});
 
-import type { ConductState, StepDefinition, StepName, StepStatus } from '../../src/types/index.js';
+import type { ConductState, StepDefinition, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
-import { ALL_STEPS } from '../../src/engine/steps.js';
+import { ALL_STEPS, buildStepRegistry } from '../../src/engine/steps.js';
 import {
   clampToRunnablePrerequisite,
   Conductor,
@@ -679,7 +686,19 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
   // ── Task 3: blocked resume entries have a durable terminal outcome ─────
   describe('Task 3: blocked resume entries halt before the loop', () => {
-    it('writes and emits a needs-human halt naming the wanted step and blocked prerequisites', async () => {
+    it('writes and emits a needs-human halt from the real blocked resume branch', async () => {
+      vi.mocked(buildStepRegistry).mockReturnValueOnce([
+        {
+          name: 'build_review',
+          label: 'Build Review',
+          phase: 'BUILD',
+          enforcement: 'gating',
+          prerequisites: ['build'],
+          skippableForTiers: [],
+          isCheckpoint: false,
+        },
+      ]);
+      await writeState(statePath, { build_review: 'in_progress' } as ConductState);
       const { runner, log } = trackingRunner(dir);
       const haltReasons: string[] = [];
       events.on('loop_halt', (event) => {
@@ -688,27 +707,12 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
       });
-      const haltBlockedResumeEntry = (conductor as unknown as {
-        haltBlockedResumeEntry: (resolution: {
-          kind: 'blocked';
-          wantedStep: StepName;
-          unsatisfied: Array<{ step: StepName; status: StepStatus }>;
-        }) => Promise<void>;
-      }).haltBlockedResumeEntry.bind(conductor);
 
-      await haltBlockedResumeEntry({
-        kind: 'blocked',
-        wantedStep: 'build_review',
-        unsatisfied: [
-          { step: 'build', status: 'failed' },
-          { step: 'test_suite', status: 'in_progress' },
-        ],
-      });
+      await conductor.run();
 
       const marker = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
       expect(marker).toContain("resume entry for 'build_review' cannot run");
-      expect(marker).toContain("build (failed)");
-      expect(marker).toContain("test_suite (in_progress)");
+      expect(marker).toContain('build (pending)');
       await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human');
       expect(haltReasons).toEqual([marker.trim()]);
       expect(log.filter((entry) => entry.startsWith('run:'))).toHaveLength(0);
