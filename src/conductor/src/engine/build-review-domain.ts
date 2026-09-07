@@ -157,6 +157,32 @@ function parsePersistedBuildReviewCandidateScopeResolutions(value: unknown): rea
 /** Stamp occurrence ordinals onto equal-content references sharing one path, in projection order. */
 function withOccurrenceOrdinals(references: readonly BuildReviewContentRegionReference[]): readonly BuildReviewContentRegionReference[] { const seen = new Map<string, number>(); return references.map((reference) => { const key = `${reference.path}\u0000${reference.contentHash}`; const occurrence = seen.get(key) ?? 0; seen.set(key, occurrence + 1); return contentRegionReference(reference.path, reference.contentHash, reference.display, occurrence); }); }
 function sameRegion(left: BuildReviewContentRegionReference, right: BuildReviewContentRegionReference): boolean { return left.path === right.path && left.contentHash === right.contentHash && left.occurrence === right.occurrence; }
+/**
+ * adr-2026-08-18 fixes finding identity as `sha256(whitespace-normalized
+ * titleText)`, and the skill contract states the same shape to providers.
+ * A reflowed or re-indented declared title is the same declared test, so both
+ * title-hash sites derive their content hash here and cannot diverge.
+ */
+function normalizedTitleHash(titleText: string): string {
+  return `sha256:${createHash('sha256').update(titleText.trim().replace(/\s+/g, ' ')).digest('hex')}`;
+}
+/**
+ * The declared titles the frozen projection carries for its uncertain
+ * candidates.  A resolved candidate whose display names one of these is
+ * recoverable, so decision 8 requires the existing declared-title reference
+ * rather than its source-byte resolution evidence.
+ */
+function declaredCandidateTitles(projection: BuildReviewRubricProjection): ReadonlySet<string> {
+  const scope = object(projection.testScope);
+  const titles = new Set<string>();
+  if (!scope || !Array.isArray(scope.candidates)) return titles;
+  for (const entry of scope.candidates) {
+    const item = object(entry); const declaration = item && object(item.declaration);
+    const titleChain = declaration?.titleChain;
+    if (Array.isArray(titleChain) && titleChain.length > 0 && titleChain.every(text)) titles.add(titleChain.join(' > '));
+  }
+  return titles;
+}
 function targetRegions(projection: BuildReviewRubricProjection): readonly BuildReviewContentRegionReference[] | undefined {
   const scope = object(projection.testScope);
   if (!scope || !Array.isArray(scope.targets)) return undefined;
@@ -167,7 +193,7 @@ function targetRegions(projection: BuildReviewRubricProjection): readonly BuildR
     const occurrence = declaration?.occurrence;
     if (!path || source?.side !== 'head' || declaration?.kind !== 'test' || !Array.isArray(titleChain) || titleChain.length === 0 || !titleChain.every(text) || !Number.isInteger(occurrence) || (occurrence as number) < 0) return [];
     const display = titleChain.join(' > ');
-    return [contentRegionReference(path, `sha256:${createHash('sha256').update(display).digest('hex')}`, display, occurrence as number)];
+    return [contentRegionReference(path, normalizedTitleHash(display), display, occurrence as number)];
   });
 }
 /** Builds finding authority only from established targets and already-validated resolved candidates. */
@@ -175,10 +201,20 @@ export function buildReviewFindingReferenceContext(projection: BuildReviewRubric
   const targets = targetRegions(projection);
   const titleRegions = targets && targets.length > 0 ? targets : projection.changedTestTitles?.flatMap((title) => {
       const path = parseBuildReviewCanonicalPathReference(title.selector);
-      return path ? [{ path, contentHash: `sha256:${createHash('sha256').update(title.staticExtractionFallback ? title.selector : title.titleText).digest('hex')}`, display: title.titleText || `${path} changed test` }] : [];
+      return path ? [{ path, contentHash: title.staticExtractionFallback ? `sha256:${createHash('sha256').update(title.selector).digest('hex')}` : normalizedTitleHash(title.titleText), display: title.titleText || `${path} changed test` }] : [];
     }) ?? [];
+  // Resolution evidence stays on the resolution record; it is not an identity
+  // input (decision 8).  A recoverable declared title anchors the finding, and
+  // only an unrecoverable one falls back to the explicitly coarse source hash.
+  const declaredTitles = declaredCandidateTitles(projection);
   const resolvedRegions = scopeResolutions.flatMap((resolution) => resolution.status === 'resolved'
-    ? [{ path: resolution.sourceRegion.path, contentHash: resolution.sourceRegion.contentHash, display: resolution.sourceRegion.display }]
+    ? [{
+        path: resolution.sourceRegion.path,
+        contentHash: declaredTitles.has(resolution.sourceRegion.display)
+          ? normalizedTitleHash(resolution.sourceRegion.display)
+          : resolution.sourceRegion.contentHash,
+        display: resolution.sourceRegion.display,
+      }]
     : []);
   const changedTestRegions = targets && targets.length > 0
     ? [...targets, ...withOccurrenceOrdinals(resolvedRegions)]
