@@ -235,6 +235,55 @@ This paragraph explains the mappings below.
     });
   });
 
+  it('preserves a story mapping table followed by a valid task mapping table', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| story | story:1 | outcome:1 | covered | "story mapping evidence" |
+
+| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| task | task:2 | story:1 | covered | "task mapping evidence" |
+`),
+    ).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'story',
+          id: 'story:1',
+          citedIds: ['outcome:1'],
+          verdict: 'covered',
+          quote: 'story mapping evidence',
+        },
+        {
+          rowClass: 'task',
+          id: 'task:2',
+          citedIds: ['story:1'],
+          verdict: 'covered',
+          quote: 'task mapping evidence',
+        },
+      ],
+    });
+  });
+
+  it('reports the second data-row width in a later task mapping table', () => {
+    const result = parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| story | story:1 | outcome:1 | covered | "story mapping evidence" |
+
+| Mapping kind | Mapping id | Cited ids | Status | Evidence |
+| --- | --- | --- | --- | --- |
+| task | task:2 | story:1 | covered | "first task mapping evidence" |
+| task | task:3 | story:1 | covered |
+`);
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'unparseable-coherence-artifact',
+      detail: { line: 8, message: 'legacy row expected 5 and actual 4 cells' },
+    });
+  });
+
   it.each([
     ['id', '| task |  | story:3 | covered | evidence |', 'legacy row has empty id'],
     ['verdict', '| task | task:3 | story:3 |  | evidence |', 'legacy row has empty verdict'],
