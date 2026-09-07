@@ -64,6 +64,9 @@ describe('build_review copy equivalence', () => {
       if (args[0] === 'show' && args[1]?.endsWith(':.docs/plans/feature.md')) {
         return { exitCode: 0, stdout: pinnedPlanBody, stderr: '' };
       }
+      if (args[0] === 'show' && args[1]?.endsWith(':.docs/stories/feature.md')) {
+        return { exitCode: 0, stdout: '# Stories\n', stderr: '' };
+      }
       if (args[0] === 'show' && args[1]?.endsWith(':test/foo.test.ts')) {
         return { exitCode: 0, stdout: args[1].startsWith('fixture-head:')
           ? '// Covers: task:1\nit(\'covered\', () => {});\n'

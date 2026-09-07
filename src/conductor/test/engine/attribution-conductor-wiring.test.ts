@@ -294,6 +294,9 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
       if (args[0] === 'show' && args[1] === 'fixture-head:.docs/plans/test.md') {
         return { exitCode: 0, stdout: '# Plan\n\n### Task 7: Test\n**Files:** `src/test.ts`\n', stderr: '' };
       }
+      if (args[0] === 'show' && args[1] === 'fixture-head:.docs/stories/test.md') {
+        return { exitCode: 0, stdout: '# Stories\n', stderr: '' };
+      }
       if (args[0] === 'show' && args[1] === 'fixture-head:src/test.ts') {
         return { exitCode: 0, stdout: 'export const test = true;\n', stderr: '' };
       }

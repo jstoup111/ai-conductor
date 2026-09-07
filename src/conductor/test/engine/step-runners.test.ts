@@ -4156,6 +4156,7 @@ TIER: M`,
         if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: 'M\u0000x\u0000', stderr: '' };
         if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/x b/x\n', stderr: '' };
         if (args[0] === 'show' && args[1] === 'head:plan.md') return { exitCode: 0, stdout: '# Plan\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === 'head:.docs/stories/plan.md') return { exitCode: 0, stdout: '# Stories\n', stderr: '' };
         if (args[0] === 'show' && args[1] === 'head:x') return { exitCode: 0, stdout: 'export const x = true;\n', stderr: '' };
         return { exitCode: 1, stdout: '', stderr: '' };
       };
@@ -4766,7 +4767,7 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     await dispatch(runner);
 
     const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
-    expect(prompt).toContain('top-level fields are `findings`, `scopeResolutions`, and optional `counterfactualSensitivity`');
+    expect(prompt).toContain('`findings` is an array; `scopeResolutions` has exactly one entry per supplied candidate');
     expect(prompt).not.toContain('`contractVersion` is "v3"');
     expect(prompt).not.toContain('`contractVersion` is "v2"');
     expect(prompt).not.toContain('every anchor value is a plain string');
