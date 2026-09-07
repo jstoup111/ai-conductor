@@ -55,10 +55,22 @@ export interface RemediationCaseRecord {
   readonly effect: RemediationCaseEffect;
 }
 
+/** Engine-owned history of a sub-floor finding; never operator authority. */
+export interface RemediationCaseSuppressionEntry {
+  readonly findingId: string;
+  readonly rubric: string;
+  readonly summary: string;
+  readonly confidence: number;
+  readonly floor: number;
+  readonly lastSeenLap: string;
+}
+
 export interface RemediationCaseStoreState {
   readonly version: typeof STORE_VERSION;
   readonly feature: RemediationCaseFeatureIdentity;
   readonly cases: readonly RemediationCaseRecord[];
+  /** Optional on disk for v1 compatibility; normalized to an empty list on read. */
+  readonly suppressions?: readonly RemediationCaseSuppressionEntry[];
 }
 
 export interface RemediationCaseStoreFilesystem {
@@ -211,14 +223,26 @@ function parseCase(value: unknown):
   } };
 }
 
+function parseSuppression(value: unknown): RemediationCaseSuppressionEntry | undefined {
+  if (!isRecord(value) || !exactKeys(value, ['findingId', 'rubric', 'summary', 'confidence', 'floor', 'lastSeenLap']) ||
+    !boundedString(value.findingId, MAX_REFERENCE_LENGTH) || !boundedString(value.rubric, MAX_REFERENCE_LENGTH) ||
+    !boundedString(value.summary) || !boundedString(value.lastSeenLap, MAX_REFERENCE_LENGTH) ||
+    typeof value.confidence !== 'number' || !Number.isInteger(value.confidence) || value.confidence < 0 || value.confidence > 100 ||
+    typeof value.floor !== 'number' || !Number.isInteger(value.floor) || value.floor < 0 || value.floor > 100) return undefined;
+  return { findingId: value.findingId, rubric: value.rubric, summary: value.summary, confidence: value.confidence, floor: value.floor, lastSeenLap: value.lastSeenLap };
+}
+
 function parseState(value: unknown):
   | { readonly ok: true; readonly state: RemediationCaseStoreState }
   | { readonly ok: false; readonly reason: 'unknown-version' | 'foreign-domain' | 'malformed-state' } {
-  if (!isRecord(value) || !exactKeys(value, ['version', 'feature', 'cases'])) return { ok: false, reason: 'malformed-state' };
+  if (!isRecord(value) || !Object.keys(value).every((key) => ['version', 'feature', 'cases', 'suppressions'].includes(key)) ||
+    !['version', 'feature', 'cases'].every((key) => Object.hasOwn(value, key))) return { ok: false, reason: 'malformed-state' };
   if (value.version !== STORE_VERSION) return { ok: false, reason: 'unknown-version' };
   const feature = parseFeature(value.feature);
   if (!feature || !Array.isArray(value.cases) || value.cases.length > MAX_CASES) return { ok: false, reason: 'malformed-state' };
   const cases: RemediationCaseRecord[] = [];
+  const suppressions = value.suppressions === undefined ? [] : Array.isArray(value.suppressions) ? value.suppressions.map(parseSuppression) : undefined;
+  if (!suppressions || suppressions.some((entry) => entry === undefined) || new Set(suppressions.map((entry) => entry!.findingId)).size !== suppressions.length) return { ok: false, reason: 'malformed-state' };
   // Canonical identity: one row per case id, one case per durable effect id,
   // one link per source within a case. Downstream readers index by these ids
   // (`new Map(cases.map(...))`), which would silently collapse a duplicate
@@ -246,7 +270,7 @@ function parseState(value: unknown):
     }
     cases.push(record);
   }
-  return { ok: true, state: { version: STORE_VERSION, feature, cases } };
+  return { ok: true, state: { version: STORE_VERSION, feature, cases, suppressions: suppressions as RemediationCaseSuppressionEntry[] } };
 }
 
 function isMissing(error: unknown): boolean {
@@ -294,7 +318,7 @@ export class RemediationCaseStore {
       serialized = await this.filesystem.readFile(this.statePath);
     } catch (error) {
       return isMissing(error)
-        ? { ok: true, state: { version: STORE_VERSION, feature: this.feature, cases: [] } }
+        ? { ok: true, state: { version: STORE_VERSION, feature: this.feature, cases: [], suppressions: [] } }
         : { ok: false, reason: 'unreadable' };
     }
     let raw: unknown;

@@ -16,7 +16,7 @@ import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, isBuildE
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds } from './build-review-work-order.js';
-import { RemediationCaseStore, type RemediationCaseRecord } from './remediation-case-store.js';
+import { RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseSuppressionEntry } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
 import type { BuildReviewFeatureIdentity } from './build-review-dispositions.js';
 import type { BumpKickbackGateInput, chargeBuildReviewEffectInLedger } from './kickback-ledger.js';
@@ -102,6 +102,7 @@ export async function coordinateBuildReviewAdjudication(input: {
   readonly operatorResolvedFindingIds: ReadonlySet<string>;
   /** Engine-owned sub-floor identities; never written to the operator store. */
   readonly suppressedFindingIds?: ReadonlySet<string>;
+  readonly suppressions?: readonly RemediationCaseSuppressionEntry[];
   /** Re-reads the separate operator authority before every provider boundary. */
   readonly resolveOperatorResolvedFindingIds?: () => Promise<ReadonlySet<string>>;
   readonly mechanical: BuildReviewMechanicalState;
@@ -148,17 +149,25 @@ export async function coordinateBuildReviewAdjudication(input: {
    */
   const finalizedSourceIds = (cases: readonly RemediationCaseRecord[]): ReadonlySet<string> =>
     new Set(cases.flatMap((record) =>
-      record.resolution !== 'resolved'
-        ? []
-        : record.disposition !== 'act'
-          ? record.sources.map((source) => source.sourceId)
-          : record.sources.filter((source) => source.outcome === 'merged').map((source) => source.sourceId),
+      record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
+        ? record.sources.map((source) => source.sourceId)
+        : record.effect.kind !== 'none' && record.effect.status === 'applied'
+          ? record.sources.filter((source) => source.outcome === 'merged').map((source) => source.sourceId)
+          : [],
     ));
   const fail = async (detail: string): Promise<BuildReviewAdjudicationCoordinatorResult> => {
     await input.emit?.({ type: 'remediation_adjudication_failed', domain: 'build_review', lapId: input.aggregate.lapId, reason: detail });
     return { ok: false, detail };
   };
   const store = new RemediationCaseStore(input.projectRoot, input.feature);
+  if ((input.suppressions?.length ?? 0) > 0) {
+    const persisted = await store.mutate(async (state) => {
+      const byFindingId = new Map((state.suppressions ?? []).map((entry) => [entry.findingId, entry]));
+      for (const entry of input.suppressions ?? []) byFindingId.set(entry.findingId, entry);
+      return { value: undefined, nextState: { ...state, suppressions: [...byFindingId.values()] } };
+    });
+    if (!persisted.ok) return fail(`case store ${persisted.reason}`);
+  }
   // Before the judge is dispatched there is no frozen dispatch set, so live ids
   // are computed against the raw join. The two agree for every all-accepted lap,
   // and this is reassigned to the frozen set once one exists.
@@ -179,6 +188,7 @@ export async function coordinateBuildReviewAdjudication(input: {
    * no action this lap, so it has no tasks to publish and must leave an
    * unrelated surviving case's existing order exactly as it found it.
    */
+  let judgeDispatched = false;
   const finalize = async (options: {
     readonly tasksByCaseId: ReadonlyMap<string, readonly { readonly title: string }[]>;
     readonly republishWorkOrder: boolean;
@@ -342,7 +352,7 @@ export async function coordinateBuildReviewAdjudication(input: {
         await input.emit?.({
           type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
           caseIds: settledCases.map((record) => record.id),
-          effectIds: settledCases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
+          effectIds: judgeDispatched ? settledCases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]) : [],
         });
       }
       // The completion emission is itself awaited, so it is one more window in
@@ -438,7 +448,7 @@ export async function coordinateBuildReviewAdjudication(input: {
   const taskStatus = await (input.readTaskStatus ?? (() => sourceTaskStatus(input.projectRoot)))();
   const contextEvidence = { planContract, taskStatus, attemptedCaseIds };
   const context = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved, ...contextEvidence,
+    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: prior.state.suppressions, operatorResolvedFindingIds: resolved, ...contextEvidence,
   });
   if (!context.ok) return failUnlessAccepted(`adjudication context ${context.stop.code}`, { settleAbsentAttempted: true });
   // A disposition arriving while the case store was read wins before the one
@@ -463,10 +473,11 @@ export async function coordinateBuildReviewAdjudication(input: {
   liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
     new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
   const freshContext = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases,
+    aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: prior.state.suppressions,
     operatorResolvedFindingIds: resolved, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => input.suppressedFindingIds?.has(source.findingId)).map(buildReviewAdjudicationSourceId)]), ...contextEvidence,
   });
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${freshContext.stop.code}`, { settleAbsentAttempted: true });
+  judgeDispatched = true;
   await input.emit?.({ type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId });
   let judgement: RemediationCaseJudgement;
   try { judgement = await input.judge(freshContext.context); } catch { return failUnlessAccepted('remediate judgement failed', { settleAbsentAttempted: true }); }

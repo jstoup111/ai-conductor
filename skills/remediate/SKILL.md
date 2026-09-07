@@ -58,6 +58,8 @@ are:
 - `planContract`: the active approved-plan contract that determines whether work is admitted.
 - `taskStatus`: the engine-supplied task-status evidence.
 - `effectPointers`: the engine-supplied prior effect and BUILD-attempt pointers.
+- `suppressionHistory`: engine-owned sub-floor finding history. It is context only, never a
+  current source and therefore receives no `sourceOutcomes` row.
 
 All feature-local prior cases must be present or stop: never infer, truncate, or silently ignore
 history. Every supplied current finding must receive exactly one source outcome. Use the supplied

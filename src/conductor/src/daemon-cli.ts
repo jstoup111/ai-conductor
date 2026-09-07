@@ -2552,6 +2552,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         log(`${dot} build_review suppressed ${finding.rubric}:${finding.findingId} (confidence ${finding.confidence} < floor ${finding.floor})`);
       }
       break;
+    case 'remediation_adjudication_completed':
+      log(`${dot} build_review adjudication completed (${event.caseIds.length} settled case${event.caseIds.length === 1 ? '' : 's'})`);
+      break;
     case 'contained_live_checkout_drift':
       log(`${dot} ${chalk.dim(`self-host contained; concurrent operator drift: ${event.summary}`)}`);
       break;

@@ -29,7 +29,7 @@ import {
   resolveEffectiveBuildReviewVerdict,
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
-import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { parseBuildReviewAggregate, projectBuildReviewAggregateSources } from './build-review-aggregate.js';
 import { coordinateBuildReviewAdjudication } from './build-review-adjudication-coordinator.js';
 import { isBuildEligibleActionCase, isBuildReviewSettlementObligationCase } from './remediation-case-effects.js';
 import {
@@ -10791,7 +10791,11 @@ export class Conductor {
                   const effective = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
                     this.projectRoot,
                     verdictRaw,
-                    { emit: async (event) => { await this.events.emit(event); } },
+                    {
+                      emit: async (event) => { await this.events.emit(event); },
+                      minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(this.config).rubrics)
+                        .map(([id, policy]) => [id, policy.min_confidence])),
+                    },
                   );
                   // Old raw aggregate fixtures (and pre-adjudication callers)
                   // have no worktree identity from which a feature-local case
@@ -10834,18 +10838,30 @@ export class Conductor {
                     const latest = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
                       this.projectRoot,
                       verdictRaw,
-                      { emit: async (event) => { await this.events.emit(event); } },
+                      {
+                        emit: async (event) => { await this.events.emit(event); },
+                        minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(this.config).rubrics)
+                          .map(([id, policy]) => [id, policy.min_confidence])),
+                      },
                     );
                     if (!latest.ok) throw new Error(latest.reason);
                     return new Set(latest.effective.acceptedFindingIds);
                   };
                   const trackerRepo = await this.resolveTrackerRepoSlug();
+                  const floors = resolveBuildReviewConfig(this.config).rubrics;
+                  const suppressedFindingIds = effective.effective.suppressedFindingIds ?? [];
+                  const suppressions = (projectBuildReviewAggregateSources(aggregate) ?? []).flatMap((source) => {
+                    if (!suppressedFindingIds.includes(source.findingId) || source.confidence === undefined) return [];
+                    return [{ findingId: source.findingId, rubric: source.rubric, summary: source.summary,
+                      confidence: source.confidence, floor: floors[source.rubric].min_confidence, lastSeenLap: aggregate.lapId }];
+                  });
                   const adjudication = await coordinateBuildReviewAdjudication({
                     projectRoot: this.projectRoot,
                     feature: effective.feature,
                     aggregate,
                     operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
-                    suppressedFindingIds: new Set(effective.effective.suppressedFindingIds),
+                    suppressedFindingIds: new Set(suppressedFindingIds),
+                    suppressions,
                     resolveOperatorResolvedFindingIds,
                     mechanical,
                     chargeInput: {
@@ -10891,6 +10907,7 @@ export class Conductor {
                   }
                   if (adjudication.route === 'pass') {
                     await this.saveConductorStepStatus(state, step.name, 'done');
+                    this.log?.(adjudication.trace);
                     continue;
                   }
                   if (adjudication.route === 'build') {

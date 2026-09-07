@@ -115,6 +115,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_mechanical_allowance_exhausted',
   'build_review_disposition_version_invalidated',
   'build_review_outer_verdict',
+  'remediation_adjudication_completed',
   'build_review_stale_aggregate',
   'loop_halt',
   'halt_marker_write_failed',
@@ -182,6 +183,7 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'build_review_cache_discarded',
   'build_review_outer_verdict',
+  'remediation_adjudication_completed',
   'operator_rewind',
   'setup_repair',
   'project_setup',
@@ -431,7 +433,9 @@ describe('event sink subscriptions', () => {
         REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES.map((type) => [type, EVENT_SINKS[type]]),
       ),
     ).toEqual(Object.fromEntries(
-      REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES.map((type) => [type, expected]),
+      REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES.map((type) => [type, type === 'remediation_adjudication_completed'
+        ? { ...expected, render: true }
+        : expected]),
     ));
   });
 

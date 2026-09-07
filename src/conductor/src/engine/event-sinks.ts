@@ -41,7 +41,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   // daemon-log lines, audit-trail records, or OTel metrics; the existing
   // event ledger is the complete reader path for this detail.
   remediation_adjudication_started: { render: false, persist: true, audit: false, otel: false },
-  remediation_adjudication_completed: { render: false, persist: true, audit: false, otel: false },
+  remediation_adjudication_completed: { render: true, persist: true, audit: false, otel: false },
   remediation_adjudication_failed: { render: false, persist: true, audit: false, otel: false },
   remediation_case_reconciled: { render: false, persist: true, audit: false, otel: false },
   remediation_effect_reserved: { render: false, persist: true, audit: false, otel: false },
