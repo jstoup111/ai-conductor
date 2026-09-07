@@ -16,11 +16,13 @@
  * SINGLE LIVE PATH for memory initialisation.
  */
 
-import { lstat } from 'fs/promises';
+import { lstat, readlink } from 'fs/promises';
 import { join, isAbsolute, resolve as resolvePath } from 'path';
 import { existsSync } from 'fs';
-import { ensureMemoryStore } from './memory-store.js';
+import { homedir } from 'os';
+import { ensureMemoryStore, projectKey } from './memory-store.js';
 import { migrateMemory } from './memory-migrate.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Dispatch type (mirrors RegistryDispatch pattern)
@@ -42,6 +44,73 @@ export function detectMemoryCommand(argv: string[]): MemoryDispatch | null {
   return null;
 }
 
+export type MemoryPathState = 'absent' | 'directory' | 'symlink';
+
+async function memoryPathState(projectDir: string): Promise<MemoryPathState> {
+  try {
+    const stat = await lstat(join(projectDir, '.memory'));
+    return stat.isSymbolicLink() ? 'symlink' : 'directory';
+  } catch {
+    return 'absent';
+  }
+}
+
+/** Runs the idempotent setup branch without CLI output or exit-code mapping. */
+export async function setupMemoryStore(projectDir: string): Promise<'migrated' | 'ensured'> {
+  if (!existsSync(projectDir)) {
+    throw new Error(`directory does not exist: ${projectDir}`);
+  }
+
+  if (await memoryPathState(projectDir) === 'directory') {
+    await migrateMemory(projectDir);
+    return 'migrated';
+  }
+
+  await ensureMemoryStore(projectDir);
+  return 'ensured';
+}
+
+async function isCanonicalMemoryPath(projectDir: string): Promise<boolean> {
+  try {
+    const target = await readlink(join(projectDir, '.memory'));
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? homedir();
+    return target === join(home, '.ai-conductor', 'memory', await projectKey(projectDir), 'harness');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Observes daemon memory setup without allowing setup or event failures to
+ * interrupt dispatch preparation.
+ */
+export async function observeMemorySetup(
+  projectDir: string,
+  events?: Pick<ConductorEventEmitter, 'emit'>,
+): Promise<void> {
+  const before = await memoryPathState(projectDir);
+  let reason: string | undefined;
+
+  try {
+    await setupMemoryStore(projectDir);
+  } catch (error) {
+    reason = error instanceof Error ? error.message : String(error);
+  }
+
+  let canonical = false;
+  try {
+    canonical = await isCanonicalMemoryPath(projectDir);
+  } catch (error) {
+    reason ??= error instanceof Error ? error.message : String(error);
+  }
+
+  try {
+    await events?.emit({ type: 'memory_setup', before, canonical, ...(reason ? { reason } : {}) });
+  } catch {
+    // Telemetry is best-effort; daemon dispatch must survive an observer fault.
+  }
+}
+
 /**
  * Execute `conduct memory setup [dir]`.
  *
@@ -58,30 +127,12 @@ export async function dispatchMemorySetup(d: MemoryDispatch): Promise<number> {
   const rawDir = d.dir ?? process.cwd();
   const projectDir = isAbsolute(rawDir) ? rawDir : resolvePath(process.cwd(), rawDir);
 
-  if (!existsSync(projectDir)) {
-    console.error(`conduct memory setup: directory does not exist: ${projectDir}`);
-    return 1;
-  }
-
-  const memPath = join(projectDir, '.memory');
-
   try {
-    let memStat: Awaited<ReturnType<typeof lstat>> | null = null;
-    try {
-      memStat = await lstat(memPath);
-    } catch {
-      // .memory does not exist — fall through to ensureMemoryStore.
-    }
-
-    if (memStat && !memStat.isSymbolicLink()) {
+    const branch = await setupMemoryStore(projectDir);
+    if (branch === 'migrated') {
       // Real directory (pre-migration content) — migrate it.
       console.log(`conduct memory setup: migrating existing .memory/ in ${projectDir}`);
-      await migrateMemory(projectDir);
-    } else {
-      // No .memory/ yet, or already a symlink — ensure the canonical store.
-      await ensureMemoryStore(projectDir);
     }
-
     console.log(`conduct memory setup: .memory/ is ready at ${projectDir}`);
     return 0;
   } catch (e) {
