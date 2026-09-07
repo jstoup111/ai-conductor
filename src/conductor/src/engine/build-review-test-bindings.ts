@@ -144,9 +144,16 @@ function titleMarkers(text: string, declaration: SupportedTestDeclaration): read
   return coversMarkers(raw.slice(1, -1), scanner.getTokenPos() + 1);
 }
 
-function isDescendant(test: SupportedTestDeclaration, suite: SupportedTestDeclaration): boolean {
-  return test.titleChain.length > suite.titleChain.length
-    && suite.titleChain.every((title, index) => test.titleChain[index] === title);
+/**
+ * Declaration titles are labels, not ancestry.  Duplicate sibling suites have
+ * the same title chain, so only the suite callback's lexical body can prove
+ * that a test belongs to that particular suite occurrence.
+ */
+function isLexicalDescendant(test: SupportedTestDeclaration, suite: SupportedTestDeclaration): boolean {
+  const body = suite.bodySpan;
+  return body !== undefined
+    && body.start <= test.span.start
+    && test.span.end <= body.end;
 }
 
 function markerResult(
@@ -176,7 +183,8 @@ export function bindCoversMarkers(input: BuildReviewTestBindingsInput): BuildRev
   const analysis = analyzeTestDeclarations(input.source);
   const declarations = analysis.declarations;
   const byStart = new Map(declarations.map((declaration) => [declaration.span.start, declaration]));
-  const attached = new Map<SupportedTestDeclaration, AssociatedMarker[]>();
+  /** Keys retain the analyzer's per-title-chain occurrence identity. */
+  const attached = new Map<string, AssociatedMarker[]>();
   const uncertain: UncertainCoversAssociation[] = [];
 
   const attach = (declaration: SupportedTestDeclaration, marker: CoversMarker, association: CoversMarkerOwner['association']): void => {
@@ -185,9 +193,10 @@ export function bindCoversMarkers(input: BuildReviewTestBindingsInput): BuildRev
       association,
       declaration,
     });
-    const markers = attached.get(declaration) ?? [];
+    const key = declarationKey(declaration);
+    const markers = attached.get(key) ?? [];
     markers.push(Object.freeze({ marker, owner }));
-    attached.set(declaration, markers);
+    attached.set(key, markers);
   };
 
   for (const comment of comments(text)) {
@@ -206,13 +215,23 @@ export function bindCoversMarkers(input: BuildReviewTestBindingsInput): BuildRev
 
   const criteria = new Set(extractStoryCriterionIds(input.storiesText).map((id) => id.toUpperCase()));
   const taskIds = new Set(parsePlanTaskBodies(input.planText).keys());
+  const targetDeclarations = declarations.filter((entry) => entry.kind === 'test' || entry.kind === 'group');
+  const inherited = new Map<string, AssociatedMarker[]>();
+  for (const suite of declarations.filter((entry) => entry.kind === 'suite')) {
+    const markers = attached.get(declarationKey(suite));
+    if (!markers) continue;
+    for (const target of targetDeclarations.filter((entry) => isLexicalDescendant(entry, suite))) {
+      const key = declarationKey(target);
+      const applicable = inherited.get(key) ?? [];
+      applicable.push(...markers);
+      inherited.set(key, applicable);
+    }
+  }
   const bindings: BuildReviewTestBinding[] = [...uncertain];
-  for (const test of declarations.filter((entry) => entry.kind === 'test' || entry.kind === 'group')) {
+  for (const test of targetDeclarations) {
     const applicable = [
-      ...(attached.get(test) ?? []),
-      ...declarations
-        .filter((suite) => suite.kind === 'suite' && isDescendant(test, suite))
-        .flatMap((suite) => attached.get(suite) ?? []),
+      ...(attached.get(declarationKey(test)) ?? []),
+      ...(inherited.get(declarationKey(test)) ?? []),
     ];
     if (applicable.length === 0) {
       bindings.push(Object.freeze({ kind: 'unbound', target: test }));
