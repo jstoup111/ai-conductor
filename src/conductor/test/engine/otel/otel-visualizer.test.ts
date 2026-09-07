@@ -60,9 +60,9 @@ const { loop_halt: _omittedTracedHandler, ...handlerTableMissingTracedType } = t
 const missingTracedHandler: OtelEventHandlerTable = handlerTableMissingTracedType;
 void missingTracedHandler;
 
-// @ts-expect-error a handler table cannot include an event the sink registry keeps off OTel.
 const handlerForUntracedType: OtelEventHandlerTable = {
   ...tracedHandlerTable,
+  // @ts-expect-error a handler table cannot include an event the sink registry keeps off OTel.
   gate_blocked: () => undefined,
 };
 void handlerForUntracedType;
@@ -84,6 +84,11 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
 
   afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('keeps untraced event types out of the OTel handler table', () => {
+    expect(otelEventTypes()).not.toContain('gate_blocked');
+    expect(new Set(otelEventTypes())).toEqual(new Set(Object.keys(tracedHandlerTable)));
   });
 
   it('constructs without throwing given a valid enabled config with injected exporters', () => {
