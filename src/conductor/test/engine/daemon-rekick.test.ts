@@ -7,6 +7,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import {
+  consumeResumeAuthorizations,
   rekickSweep,
   resumeRebaseFirst,
   hasRebaseInProgress,
@@ -19,6 +20,7 @@ import {
   HALT_CLEARED_MARKER,
   REKICK_SENTINEL,
 } from '../../src/engine/daemon-rekick.js';
+import { writeKickbackLedger, readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { join as pjoin } from 'node:path';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
@@ -34,6 +36,41 @@ import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
 const SHA_C = 'c'.repeat(40);
+
+describe('consumeResumeAuthorizations', () => {
+  it('claims a matching authorization before clearing its halt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kickback-resume-'));
+    try {
+      const worktree = join(root, 'feature');
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await writeKickbackLedger(worktree, {
+        version: 1,
+        gates: {
+          build_review: {
+            count: 1, cumulative: 5, treeHash: null, lastReason: 'cap', priorVerdict: false, resolvedBefore: 0,
+            capEvidence: { gate: 'build_review', consumed: 5, limit: 5, latestReason: 'cap', haltGeneration: 'g1' },
+            resumeAuthorization: { adjustmentId: 'a1', haltGeneration: 'g1', consumed: false },
+          },
+        },
+      });
+      const trace: string[] = [];
+      await expect(consumeResumeAuthorizations({
+        listHaltedWorktrees: async () => ['feature'],
+        worktreePath: () => worktree,
+        isOperatorParked: async () => false,
+        clearMarker: async () => {
+          const ledger = await readKickbackLedger(worktree);
+          expect(ledger.gates.build_review.resumeAuthorization?.consumed).toBe(true);
+          trace.push('clear');
+        },
+        emit: async () => { trace.push('event'); },
+      })).resolves.toEqual(['feature']);
+      expect(trace).toEqual(['clear', 'event']);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 // ── Pure sweep core (injected primitives — no real git) ───────────────────────
 
