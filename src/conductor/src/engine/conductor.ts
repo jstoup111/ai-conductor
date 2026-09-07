@@ -1999,23 +1999,6 @@ export class Conductor {
     );
   }
 
-  /**
-   * Give a malformed resolved registry a terminal outcome instead of letting
-   * its refused resume entry fall through to the loop's markerless return.
-   */
-  private async haltBlockedResumeEntry(
-    resolution: Extract<RunnableResumeEntry, { kind: 'blocked' }>,
-  ): Promise<void> {
-    const prerequisites = resolution.unsatisfied
-      .map(({ step, status }) => `${step} (${status})`)
-      .join(', ');
-    const reason =
-      `resume entry for '${resolution.wantedStep}' cannot run: ` +
-      `unsatisfied prerequisite${resolution.unsatisfied.length === 1 ? '' : 's'}: ${prerequisites}`;
-    await this.writeHaltMarker(reason + '\n', 'needs-human');
-    await this.emitLoopHalt(reason);
-  }
-
   /** Emit through the existing spine while retaining the conductor's open execution state. */
   private emitExecutionEvent(event: ConductorEvent): Promise<void> {
     const start = event.type === 'step_started'
@@ -6234,35 +6217,30 @@ export class Conductor {
         resumeClamp.earliestGateIdx < startIndex
           ? resumeClamp.earliestGateIdx
           : startIndex;
-      const resolution = resolveRunnableResumeEntry(steps, state, candidate);
-      if (resolution.kind === 'runnable') {
-        const resolvedStep = steps[resolution.index];
-        if (resolvedStep && resolution.index !== stateDerivedIndex) {
-          const verdicts = resumeClamp?.verdicts ?? {};
-          const disposition = await this.resolveDecideEntryDisposition({
-            target: resolvedStep.name,
-            steps,
-            daemon: this.daemon,
-            tier: state.complexity_tier,
-            hasContract: hasCompletionContract(resolvedStep.name, this.config),
-            satisfied: gateSatisfied(resolvedStep.name, state, verdicts),
-            grant: null,
-            sourceGate: 'resume-clamp',
-            evidence: verdicts[resolvedStep.name]?.reason,
-          });
-          if (disposition.kind === 'halt') {
-            await this.writeHaltMarker(
-              renderDecideEntryHalt(disposition.halt) + '\n',
-              'needs-human',
-            );
-            return;
-          }
+      const resolvedIndex = resolveRunnableResumeEntry(steps, state, candidate);
+      const resolvedStep = steps[resolvedIndex];
+      if (resolvedStep && resolvedIndex !== stateDerivedIndex) {
+        const verdicts = resumeClamp?.verdicts ?? {};
+        const disposition = await this.resolveDecideEntryDisposition({
+          target: resolvedStep.name,
+          steps,
+          daemon: this.daemon,
+          tier: state.complexity_tier,
+          hasContract: hasCompletionContract(resolvedStep.name, this.config),
+          satisfied: gateSatisfied(resolvedStep.name, state, verdicts),
+          grant: null,
+          sourceGate: 'resume-clamp',
+          evidence: verdicts[resolvedStep.name]?.reason,
+        });
+        if (disposition.kind === 'halt') {
+          await this.writeHaltMarker(
+            renderDecideEntryHalt(disposition.halt) + '\n',
+            'needs-human',
+          );
+          return;
         }
-        startIndex = resolution.index;
-      } else {
-        await this.haltBlockedResumeEntry(resolution);
-        return;
       }
+      startIndex = resolvedIndex;
     }
 
     // Task 27: pending per-member completions for a builtin validation
@@ -13425,41 +13403,18 @@ export function clampToRunnablePrerequisite(
   return idx;
 }
 
-export type RunnableResumeEntry =
-  | { kind: 'runnable'; index: number }
-  | {
-    kind: 'blocked';
-    wantedStep: StepName;
-    unsatisfied: Array<{ step: StepName; status: StepStatus }>;
-  };
-
 /**
  * Reconcile a resume candidate with the same state-only entry gate the main
  * loop will check before dispatching it. The backward walk is bounded and
- * does not mutate state; a malformed resolved step list that leaves the gate
- * refused is reported to the caller rather than entering the loop to return
- * markerlessly.
+ * does not mutate state. If a malformed resolved step list leaves the gate
+ * refused, the loop's existing gate-refusal path owns that terminal outcome.
  */
 export function resolveRunnableResumeEntry(
   steps: StepDefinition[],
   state: ConductState,
   candidate: number,
-): RunnableResumeEntry {
-  const index = clampToRunnablePrerequisite(steps, state, candidate);
-  const step = steps[index];
-  if (!step) return { kind: 'runnable', index };
-
-  const gate = checkGate(step, state);
-  if (gate.passed) return { kind: 'runnable', index };
-
-  return {
-    kind: 'blocked',
-    wantedStep: step.name,
-    unsatisfied: gate.unsatisfied.map((prerequisite) => ({
-      step: prerequisite,
-      status: getStepStatus(state, prerequisite),
-    })),
-  };
+): number {
+  return clampToRunnablePrerequisite(steps, state, candidate);
 }
 
 /**

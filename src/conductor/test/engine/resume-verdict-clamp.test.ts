@@ -138,42 +138,29 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       const steps = [step('build'), step('build_review', ['build'])];
       const state = { build: 'done' } as ConductState;
 
-      expect(resolveRunnableResumeEntry(steps, state, 1)).toEqual({
-        kind: 'runnable',
-        index: 1,
-      });
+      expect(resolveRunnableResumeEntry(steps, state, 1)).toBe(1);
     });
 
     it('returns the earlier dispatchable prerequisite when the candidate gate refuses', () => {
       const steps = [step('build'), step('build_review', ['build'])];
       const state = { build: 'pending' } as ConductState;
 
-      expect(resolveRunnableResumeEntry(steps, state, 1)).toEqual({
-        kind: 'runnable',
-        index: 0,
-      });
+      expect(resolveRunnableResumeEntry(steps, state, 1)).toBe(0);
     });
 
     it.each([
       ['is absent from the resolved steps', [step('build_review', ['build'])]],
       ['sits at or after the candidate', [step('build_review', ['build']), step('build')]],
-    ])('returns the wanted step and recorded status when a prerequisite %s', (_case, steps) => {
+    ])('returns the candidate unchanged when a prerequisite %s', (_case, steps) => {
       const state = { build: 'failed' } as ConductState;
 
-      expect(resolveRunnableResumeEntry(steps, state, 0)).toEqual({
-        kind: 'blocked',
-        wantedStep: 'build_review',
-        unsatisfied: [{ step: 'build', status: 'failed' }],
-      });
+      expect(resolveRunnableResumeEntry(steps, state, 0)).toBe(0);
     });
 
     it('treats a candidate past the final step as a runnable no-op', () => {
       const steps = [step('build')];
 
-      expect(resolveRunnableResumeEntry(steps, {} as ConductState, 1)).toEqual({
-        kind: 'runnable',
-        index: 1,
-      });
+      expect(resolveRunnableResumeEntry(steps, {} as ConductState, 1)).toBe(1);
     });
   });
 
@@ -684,9 +671,9 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     });
   });
 
-  // ── Task 3: blocked resume entries have a durable terminal outcome ─────
-  describe('Task 3: blocked resume entries halt before the loop', () => {
-    it('writes and emits a needs-human halt from the real blocked resume branch', async () => {
+  // ── Task 3: the existing loop owns malformed-entry refusal ────────────
+  describe('Task 3: malformed resume entries reach the loop refusal', () => {
+    it('writes and emits the existing needs-human halt from the real loop gate', async () => {
       vi.mocked(buildStepRegistry).mockReturnValueOnce([
         {
           name: 'build_review',
@@ -698,23 +685,32 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
           isCheckpoint: false,
         },
       ]);
-      await writeState(statePath, { build_review: 'in_progress' } as ConductState);
+      await writeState(statePath, {
+        build: 'failed',
+        build_review: 'in_progress',
+      } as ConductState);
       const { runner, log } = trackingRunner(dir);
       const haltReasons: string[] = [];
+      const blocked: StepName[] = [];
       events.on('loop_halt', (event) => {
         if (event.type === 'loop_halt') haltReasons.push(event.reason);
       });
+      events.on('gate_blocked', (event) => {
+        if (event.type === 'gate_blocked') blocked.push(event.step);
+      });
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+        daemon: true,
       });
 
       await conductor.run();
 
       const marker = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
-      expect(marker).toContain("resume entry for 'build_review' cannot run");
-      expect(marker).toContain('build (pending)');
+      expect(marker).toContain("Step 'build_review' is blocked by unsatisfied prerequisite");
+      expect(marker).toContain('build (failed)');
       await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human');
       expect(haltReasons).toEqual([marker.trim()]);
+      expect(blocked).toEqual(['build_review']);
       expect(log.filter((entry) => entry.startsWith('run:'))).toHaveLength(0);
     });
 
