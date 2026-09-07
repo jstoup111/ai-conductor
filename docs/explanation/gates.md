@@ -550,6 +550,12 @@ still carries every appended remediation task, and a `rem-*` task's outcome is b
 and never enlarges any other task's outcome — remediation-lap products are inputs to converge on, never a
 surface that expands what a later lap must litigate.
 
+The graded diff also excludes paths touched only by feature commits Git identifies as patch-equivalent to
+commits already on the resolved review base. This is path-scoped and fail-closed: a path stays graded if a
+novel feature commit also touched it, or if the patch-equivalence probe or path attribution cannot establish
+the exclusion. The `build_review_base` event payload carries the filtered commit set and excluded paths,
+while the daemon log renders its filtered-commit count for the operator.
+
 When a deterministic BUILD verification gate — `test_suite` or any other gate in that group —
 fails, the engine accumulates the sanitized failure in `.pipeline/build-review-rebase-repairs.json`.
 The ledger is outside rewritten Git history, so repeated rebases retain earlier entries without

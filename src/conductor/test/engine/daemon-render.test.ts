@@ -487,6 +487,34 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
     expect(stale[0]).toContain('fresh: false');
   });
 
+  it('renders the patch-equivalent filtered-commit count alongside the base freshness summary', () => {
+    expect(lines({
+      type: 'build_review_base',
+      mergeBase: 'abc1234567890def',
+      trackingRefSha: 'abc1234567890def',
+      remoteHeadSha: 'abc1234567890def',
+      fresh: true,
+      filteredCommits: [
+        { sha: '111111111111111', subject: 'first equivalent change' },
+        { sha: '222222222222222', subject: 'second equivalent change' },
+      ],
+    })).toEqual(['· build_review base abc123456789 — fresh: true; filtered 2 commits']);
+  });
+
+  it('keeps the baseline build-review base line byte-identical when no commits were filtered', () => {
+    const baseEvent = {
+      type: 'build_review_base',
+      mergeBase: 'abc1234567890def',
+      trackingRefSha: 'abc1234567890def',
+      remoteHeadSha: 'abc1234567890def',
+      fresh: true,
+    } as const;
+    const baseline = ['· build_review base abc123456789 — fresh: true'];
+
+    expect(lines(baseEvent)).toEqual(baseline);
+    expect(lines({ ...baseEvent, filteredCommits: [] })).toEqual(baseline);
+  });
+
   it('renders conditional skips with their expression and undefined-key reason', () => {
     expect(lines({
       type: 'when_skip',
