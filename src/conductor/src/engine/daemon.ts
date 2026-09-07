@@ -23,6 +23,7 @@ import type { FeatureExecutor } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
 import { DaemonMaintenance } from './daemon-maintenance.js';
 import type { FeatureTerminalEffects } from './feature-executor.js';
+import { isOperatorActionHalt, type HaltDisposition } from './halt-marker.js';
 
 type FastForwardOutcome = import('./daemon-backlog.js').FastForwardOutcome;
 
@@ -252,6 +253,12 @@ export interface DaemonDeps {
    * full contract). Absent → behavior is unchanged (backward-compatible).
    */
   isProgressReKickEligible?: (slug: string) => Promise<boolean>;
+  /**
+   * Optional, slug-keyed HALT disposition reader for the progress-gated
+   * re-kick path. A failed read is treated as `unclassified` and therefore
+   * requires operator action. Absent preserves prior behavior.
+   */
+  readHaltClass?: (slug: string) => Promise<HaltDisposition>;
   /**
    * Task 9: per-spec bound on progress-gated cross-dispatch re-kicks
    * (`isProgressReKickEligible`), mirroring `build_progress_halt.dispatch_ceiling`
@@ -804,8 +811,26 @@ export async function runDaemon(
   const progressReKickDispatchCeiling = deps.progressReKickDispatchCeiling ?? 20;
   const progressReKickCounts = new Map<string, number>();
   const progressReKickCeilingLogged = new Set<string>();
+  const progressReKickOperatorActionLogged = new Set<string>();
   const isProgressReKickEligibleBounded = deps.isProgressReKickEligible
     ? async (slug: string): Promise<boolean> => {
+        if (deps.readHaltClass) {
+          let disposition: HaltDisposition;
+          try {
+            disposition = await deps.readHaltClass(slug);
+          } catch {
+            disposition = 'unclassified';
+          }
+          if (isOperatorActionHalt(disposition)) {
+            if (!progressReKickOperatorActionLogged.has(slug)) {
+              progressReKickOperatorActionLogged.add(slug);
+              log(
+                `[daemon] ${slug}: progress-gated re-kick refused — HALT disposition ${disposition} requires operator action`,
+              );
+            }
+            return false;
+          }
+        }
         const count = progressReKickCounts.get(slug) ?? 0;
         if (count >= progressReKickDispatchCeiling) {
           if (!progressReKickCeilingLogged.has(slug)) {
