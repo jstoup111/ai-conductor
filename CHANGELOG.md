@@ -23,6 +23,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The daemon prints a startup warning whenever its effective concurrency exceeds 1, describing the extra rebase churn and spend to expect and how to return to serial dispatch. ([implementation PR #2240](https://github.com/jstoup111/ai-conductor/pull/2240)).
 - The daemon and engineer workflows now require GitHub CLI 2.73.0 or later and clearly report unsupported JSON fields. ([implementation PR #2243](https://github.com/jstoup111/ai-conductor/pull/2243)).
 - Adds durable post-join build-review remediation adjudication that classifies joined findings and safely routes follow-up work. ([implementation PR #2087](https://github.com/jstoup111/ai-conductor/pull/2087)).
+- Gate verdicts are persisted and shown in daemon and interactive terminal output. ([implementation PR #2375](https://github.com/jstoup111/ai-conductor/pull/2375)).
 
 ### Changed
 
