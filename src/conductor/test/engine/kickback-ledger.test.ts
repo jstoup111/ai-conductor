@@ -16,6 +16,8 @@ import {
   bumpKickbackGateInLedger,
   bumpSuiteInfrastructureRetriesInLedger,
   creditKickbackGateLaps,
+  recordRemediationGateLap,
+  updateKickbackLedger,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   MAX_SUITE_INFRASTRUCTURE_RETRIES,
@@ -504,6 +506,67 @@ describe('kickback-ledger', () => {
     await expect(readKickbackLedger(dir)).resolves.toMatchObject({
       gates: { build_review: { count: 2, cumulative: 2 } },
     });
+  });
+
+  it('serializes concurrent remediation laps so both increments land', async () => {
+    await Promise.all([
+      recordRemediationGateLap(dir, 'prd_audit', true),
+      recordRemediationGateLap(dir, 'prd_audit', true),
+    ]);
+    await expect(readKickbackLedger(dir)).resolves.toMatchObject({
+      gates: { prd_audit: { laps: 2 } },
+    });
+  });
+
+  it('records a remediation lap from the value read inside its own lease', async () => {
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        prd_audit: {
+          count: 0, cumulative: 0, laps: 4, treeHash: null, lastReason: '',
+          priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+    });
+    const recorded = await recordRemediationGateLap(dir, 'prd_audit', true);
+    expect(recorded.entry.laps).toBe(5);
+    expect((await readKickbackLedger(dir)).gates.prd_audit.laps).toBe(5);
+  });
+
+  it('does not consume a lap when the gate authorized no tasks', async () => {
+    await recordRemediationGateLap(dir, 'prd_audit', false);
+    expect((await readKickbackLedger(dir)).gates.prd_audit.laps).toBe(0);
+  });
+
+  it('updateKickbackLedger serializes read-modify-write so no update is lost', async () => {
+    await writeKickbackLedger(dir, {
+      version: 1,
+      gates: {
+        build_review: {
+          count: 0, cumulative: 0, treeHash: null, lastReason: '',
+          priorVerdict: true, resolvedBefore: 0,
+        },
+      },
+    });
+    const bump = () => updateKickbackLedger(dir, (ledger) => ({
+      ledger: {
+        ...ledger,
+        gates: {
+          ...ledger.gates,
+          build_review: { ...ledger.gates.build_review, cumulative: ledger.gates.build_review.cumulative + 1 },
+        },
+      },
+      result: undefined,
+    }));
+    await Promise.all([bump(), bump(), bump()]);
+    expect((await readKickbackLedger(dir)).gates.build_review.cumulative).toBe(3);
+  });
+
+  it('updateKickbackLedger writes nothing when its transaction returns no ledger', async () => {
+    await writeKickbackLedger(dir, { version: 1, gates: {} });
+    const before = await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf-8');
+    await expect(updateKickbackLedger(dir, () => ({ result: 'unchanged' }))).resolves.toBe('unchanged');
+    expect(await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf-8')).toBe(before);
   });
 
   it('refuses a live foreign kickback-ledger lease without changing the ledger', async () => {

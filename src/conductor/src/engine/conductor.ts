@@ -253,6 +253,8 @@ import {
   isUnreadableKickbackLedger,
   readSuiteInfrastructureRetries,
   recordGrowth,
+  recordRemediationGateLap,
+  updateKickbackLedger,
   recordKickbackCapEvidence,
   writeKickbackLedger,
   type KickbackGateEntry,
@@ -757,31 +759,20 @@ async function recordRemediationGateAppend(
   budget: RemediationGateAppendBudget,
   events: PlanGrowthEventSink,
 ): Promise<void> {
-  const ledger = await readKickbackLedger(projectRoot);
-  if (isUnreadableKickbackLedger(ledger)) {
-    throw new Error('kickback ledger is unreadable');
-  }
-  const existing = ledger.gates[budget.gate];
-  const next: KickbackGateEntry & { laps: number } = {
-    ...(existing ?? {
-      count: 0,
-      cumulative: 0,
-      treeHash: null,
-      lastReason: '',
-      priorVerdict: true,
-      resolvedBefore: 0,
-    }),
-    laps: budget.priorLaps + (budget.taskCount > 0 ? 1 : 0),
-  };
-  await writeKickbackLedger(projectRoot, {
-    ...ledger,
-    gates: { ...ledger.gates, [budget.gate]: next },
-  });
+  // adr-2026-08-29 D4: the lap read and its write are ONE lease transaction.
+  // Deriving the successor from a pre-lease read could silently overwrite a
+  // concurrent operator adjustment that landed in between.
+  const recorded = await recordRemediationGateLap(
+    projectRoot,
+    budget.gate,
+    budget.taskCount > 0,
+  );
   if (budget.growthTaskCount === 0) return;
   // Earlier gate updates in a consolidated validation group are now durable;
   // merge them before recording this gate rather than replacing their growth
-  // snapshot captured before the shared append.
-  const growth = ledger.growth ?? budget.growth;
+  // snapshot captured before the shared append. The growth record comes from
+  // the same leased read as the lap above, never from a stale snapshot.
+  const growth = recorded.growth ?? budget.growth;
   const priorGateGrowth = growth.byGate[budget.gate] ?? 0;
   await recordGrowth(
     projectRoot,
@@ -2342,17 +2333,20 @@ export class Conductor {
   }
 
   private async persistPendingAsBuiltRemediationFindings(): Promise<void> {
-    const ledger = await readKickbackLedger(this.projectRoot);
-    await writeKickbackLedger(this.projectRoot, {
-      ...ledger,
-      pendingAsBuiltRemediationFindings: [...this.pendingAsBuiltRemediationFindings.values()],
-    });
+    await updateKickbackLedger(this.projectRoot, (ledger) => ({
+      ledger: {
+        ...ledger,
+        pendingAsBuiltRemediationFindings: [...this.pendingAsBuiltRemediationFindings.values()],
+      },
+      result: undefined,
+    }));
   }
 
   private async clearPendingAsBuiltRemediationFindings(): Promise<void> {
-    const ledger = await readKickbackLedger(this.projectRoot);
-    const { pendingAsBuiltRemediationFindings: _pending, ...cleared } = ledger;
-    await writeKickbackLedger(this.projectRoot, cleared);
+    await updateKickbackLedger(this.projectRoot, (ledger) => {
+      const { pendingAsBuiltRemediationFindings: _pending, ...cleared } = ledger;
+      return { ledger: cleared, result: undefined };
+    });
   }
 
   private async projectPendingAsBuiltRemediationFindings(): Promise<string | undefined> {
@@ -6056,22 +6050,26 @@ export class Conductor {
           currentTreeHash(this.projectRoot),
           countResolvedTasks(this.projectRoot),
         ]);
-      const ledger = await readKickbackLedger(this.projectRoot);
-      const existing = ledger.gates[sourceGate];
-      await writeKickbackLedger(this.projectRoot, {
-        ...ledger,
-        gates: {
-          ...ledger.gates,
-          [sourceGate]: {
-            ...existing,
-            count: existing?.count ?? 0,
-            cumulative: existing?.cumulative ?? 0,
-            treeHash: treeBefore,
-            lastReason: existing?.lastReason ?? '',
-            priorVerdict: false, // active D2 baseline: kickback began on a failing gate
-            resolvedBefore,
+      await updateKickbackLedger(this.projectRoot, (ledger) => {
+        const existing = ledger.gates[sourceGate];
+        return {
+          ledger: {
+            ...ledger,
+            gates: {
+              ...ledger.gates,
+              [sourceGate]: {
+                ...existing,
+                count: existing?.count ?? 0,
+                cumulative: existing?.cumulative ?? 0,
+                treeHash: treeBefore,
+                lastReason: existing?.lastReason ?? '',
+                priorVerdict: false, // active D2 baseline: kickback began on a failing gate
+                resolvedBefore,
+              },
+            },
           },
-        },
+          result: undefined,
+        };
       });
       // This producer/consumer hand-off is only for the immediately following
       // existing-task BUILD rewind; every other capture samples afresh. Each
@@ -6089,18 +6087,21 @@ export class Conductor {
     const checkKickbackToBuildEscalation = async (
       sourceGate: StepName,
     ): Promise<ShouldEscalateKickbackResult & { kickbackOutcome?: string }> => {
-      const ledger = await readKickbackLedger(this.projectRoot);
-      const ctx = ledger.gates[sourceGate];
-      if (!ctx || ctx.priorVerdict) return { halt: false };
-      // Consume the baseline before checking it. A later, unrelated failure
-      // must not reuse this one even if the current check throws or halts.
-      await writeKickbackLedger(this.projectRoot, {
-        ...ledger,
-        gates: {
-          ...ledger.gates,
-          [sourceGate]: { ...ctx, priorVerdict: true },
-        },
+      // Consume the baseline before checking it, in the SAME lease transaction
+      // that read it. A later, unrelated failure must not reuse this one even
+      // if the current check throws or halts.
+      const ctx = await updateKickbackLedger(this.projectRoot, (ledger) => {
+        const entry = ledger.gates[sourceGate];
+        if (!entry || entry.priorVerdict) return { result: undefined };
+        return {
+          ledger: {
+            ...ledger,
+            gates: { ...ledger.gates, [sourceGate]: { ...entry, priorVerdict: true } },
+          },
+          result: entry,
+        };
       });
+      if (!ctx) return { halt: false };
       const [treeAfter, resolvedAfter] = await Promise.all([
         currentTreeHash(this.projectRoot),
         countResolvedTasks(this.projectRoot),
@@ -11926,16 +11927,18 @@ export class Conductor {
           if (v && v.satisfied === false && v.kickback?.from === 'rebase') {
             let convergenceCredit: { gate: 'build_review' } | undefined;
             if (target === 'build_review') {
-              const ledger = await readKickbackLedger(this.projectRoot);
-              const entry = ledger.gates.build_review;
-              if (entry) {
-                await writeKickbackLedger(this.projectRoot, {
-                  ...ledger,
-                  gates: {
-                    ...ledger.gates,
-                    build_review: creditKickbackGateLaps(entry),
+              const credited = await updateKickbackLedger(this.projectRoot, (ledger) => {
+                const entry = ledger.gates.build_review;
+                if (!entry) return { result: false };
+                return {
+                  ledger: {
+                    ...ledger,
+                    gates: { ...ledger.gates, build_review: creditKickbackGateLaps(entry) },
                   },
-                });
+                  result: true,
+                };
+              });
+              if (credited) {
                 convergenceCredit = { gate: target };
               }
             }
