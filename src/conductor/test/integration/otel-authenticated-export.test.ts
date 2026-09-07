@@ -1,3 +1,4 @@
+// Covers: task:3
 import { once } from 'node:events';
 import { createServer, type IncomingHttpHeaders } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';

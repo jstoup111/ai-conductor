@@ -1,3 +1,4 @@
+// Covers: task:1
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { CONFIG_CONSUMER_KEY_SETS } from '../../src/engine/config.js';

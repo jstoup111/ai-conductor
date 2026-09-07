@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:1, task:2
 import { describe, it, expect } from 'vitest';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 

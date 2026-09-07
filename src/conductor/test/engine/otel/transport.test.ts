@@ -1,3 +1,4 @@
+// Covers: task:3
 /**
  * T8: buildExporters(otelConfig) — transport factory.
  * FR-7: OTLP HTTP default (port 4318), gRPC (port 4317) selectable via config,
