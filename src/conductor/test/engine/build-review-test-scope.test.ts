@@ -147,6 +147,34 @@ describe('build-review test scope association evidence', () => {
     });
   });
 
+  it('retains a HEAD source identity for equal-span candidates from different files', () => {
+    const left = scope(
+      `it('changed', () => { expect(1).toBe(1); });`,
+      `// Covers: S2.1\nimport { it } from 'vitest';\nit('changed', () => { expect(1).toBe(2); });`,
+      'test/left.test.ts',
+    );
+    const right = scope(
+      `it('changed', () => { expect(1).toBe(1); });`,
+      `// Covers: S2.1\nimport { it } from 'vitest';\nit('changed', () => { expect(1).toBe(2); });`,
+      'test/right.test.ts',
+    );
+
+    const [leftCandidate] = left.candidates;
+    const [rightCandidate] = right.candidates;
+
+    expect(leftCandidate).toMatchObject({
+      source: { fileName: 'test/left.test.ts', side: 'head' },
+      reasons: ['file-header-marker'],
+    });
+    expect(rightCandidate).toMatchObject({
+      source: { fileName: 'test/right.test.ts', side: 'head' },
+      reasons: ['file-header-marker'],
+    });
+    expect(leftCandidate?.declaration?.span).toEqual(rightCandidate?.declaration?.span);
+    expect(leftCandidate?.markers).toEqual(rightCandidate?.markers);
+    expect(leftCandidate?.source).not.toEqual(rightCandidate?.source);
+  });
+
   it('does not turn a trailing uncertain marker into a candidate for an earlier changed declaration', () => {
     const result = scope(
       `it('changed', () => { expect(1).toBe(1); });`,
