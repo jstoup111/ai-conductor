@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
+import { isCanonicalBuildReviewRepoRelativePath } from './build-review-scope-source.js';
 
 export type BuildReviewLapId = string & { readonly __brand: 'BuildReviewLapId' };
 export type BuildReviewRubricContractVersion = 'v1' | 'v2' | 'v3';
@@ -66,30 +67,16 @@ function parseCounterfactualSensitivity(value: unknown): CounterfactualSensitivi
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-const PATH = /^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9.](?:[A-Za-z0-9._/@+ -]*[A-Za-z0-9._/@+-])?(?:\/[A-Za-z0-9.](?:[A-Za-z0-9._/@+ -]*[A-Za-z0-9._/@+-])?)*$/;
-// Interior spaces are admitted for real file names (Story 8: renamed paths
-// such as `test/new name.test.ts`) but the same grammar would also admit
-// prose ("The affected test is test/widget.test.ts."). A space-bearing value
-// is a path only when it has no sentence punctuation, no run of spaces, at
-// least one directory segment, and a space-free first segment: prose puts
-// words before its first slash, file names do not.
-function isCanonicalPath(value: string): boolean {
-  if (!PATH.test(value)) return false;
-  if (!value.includes(' ')) return true;
-  if (/[.,;:!?] |\.$|  /.test(value)) return false;
-  const segments = value.split('/');
-  return segments.length >= 2 && !segments[0].includes(' ');
-}
 const LAP = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 function object(value: unknown): Record<string, unknown> | undefined { return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 function text(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0; }
-export function parseBuildReviewCanonicalPathReference(value: unknown): string | undefined { return typeof value === 'string' && isCanonicalPath(value) ? value : undefined; }
+export function parseBuildReviewCanonicalPathReference(value: unknown): string | undefined { return typeof value === 'string' && isCanonicalBuildReviewRepoRelativePath(value) ? value : undefined; }
 export function parseBuildReviewLapId(value: unknown): BuildReviewLapId | undefined { return typeof value === 'string' && LAP.test(value) ? value as BuildReviewLapId : undefined; }
 export function parseBuildReviewRubricContractVersion(value: unknown): BuildReviewRubricContractVersion | undefined { return value === 'v1' || value === 'v2' || value === 'v3' ? value : undefined; }
 // `occurrence` is the 0-based ordinal among equal-content regions in one path;
 // 0 is the unique/first region and normalizes away so identities never differ
 // on an explicit-versus-omitted zero.
-function region(value: unknown): BuildReviewContentRegionReference | undefined { const source = object(value); if (!source || !text(source.path) || !isCanonicalPath(source.path) || !text(source.contentHash) || !text(source.display) || (source.occurrence !== undefined && (!Number.isInteger(source.occurrence) || (source.occurrence as number) < 0))) return undefined; return contentRegionReference(source.path, source.contentHash, source.display, source.occurrence as number | undefined); }
+function region(value: unknown): BuildReviewContentRegionReference | undefined { const source = object(value); if (!source || !text(source.path) || !isCanonicalBuildReviewRepoRelativePath(source.path) || !text(source.contentHash) || !text(source.display) || (source.occurrence !== undefined && (!Number.isInteger(source.occurrence) || (source.occurrence as number) < 0))) return undefined; return contentRegionReference(source.path, source.contentHash, source.display, source.occurrence as number | undefined); }
 function contentRegionReference(path: string, contentHash: string, display: string, occurrence = 0): BuildReviewContentRegionReference { return { path, contentHash, display, ...(occurrence > 0 ? { occurrence } : {}) }; }
 function candidateScopeSourceRegion(value: unknown): BuildReviewCandidateScopeSourceRegion | undefined {
   const source = object(value);
@@ -170,18 +157,33 @@ function parsePersistedBuildReviewCandidateScopeResolutions(value: unknown): rea
 /** Stamp occurrence ordinals onto equal-content references sharing one path, in projection order. */
 function withOccurrenceOrdinals(references: readonly BuildReviewContentRegionReference[]): readonly BuildReviewContentRegionReference[] { const seen = new Map<string, number>(); return references.map((reference) => { const key = `${reference.path}\u0000${reference.contentHash}`; const occurrence = seen.get(key) ?? 0; seen.set(key, occurrence + 1); return contentRegionReference(reference.path, reference.contentHash, reference.display, occurrence); }); }
 function sameRegion(left: BuildReviewContentRegionReference, right: BuildReviewContentRegionReference): boolean { return left.path === right.path && left.contentHash === right.contentHash && left.occurrence === right.occurrence; }
+function targetRegions(projection: BuildReviewRubricProjection): readonly BuildReviewContentRegionReference[] | undefined {
+  const scope = object(projection.testScope);
+  if (!scope || !Array.isArray(scope.targets)) return undefined;
+  return scope.targets.flatMap((target) => {
+    const item = object(target); const source = item && object(item.source); const declaration = item && object(item.declaration);
+    const path = source && parseBuildReviewCanonicalPathReference(source.fileName);
+    const titleChain = declaration?.titleChain;
+    const occurrence = declaration?.occurrence;
+    if (!path || source?.side !== 'head' || declaration?.kind !== 'test' || !Array.isArray(titleChain) || titleChain.length === 0 || !titleChain.every(text) || !Number.isInteger(occurrence) || (occurrence as number) < 0) return [];
+    const display = titleChain.join(' > ');
+    return [contentRegionReference(path, `sha256:${createHash('sha256').update(display).digest('hex')}`, display, occurrence as number)];
+  });
+}
 /** Builds finding authority only from established targets and already-validated resolved candidates. */
 export function buildReviewFindingReferenceContext(projection: BuildReviewRubricProjection, scopeResolutions: readonly BuildReviewCandidateScopeResolution[] = []): BuildReviewFindingReferenceContext {
-  const regions = [
-    ...(projection.changedTestTitles?.flatMap((title) => {
+  const targets = targetRegions(projection);
+  const titleRegions = targets && targets.length > 0 ? targets : projection.changedTestTitles?.flatMap((title) => {
       const path = parseBuildReviewCanonicalPathReference(title.selector);
       return path ? [{ path, contentHash: `sha256:${createHash('sha256').update(title.staticExtractionFallback ? title.selector : title.titleText).digest('hex')}`, display: title.titleText || `${path} changed test` }] : [];
-    }) ?? []),
-    ...scopeResolutions.flatMap((resolution) => resolution.status === 'resolved'
-      ? [{ path: resolution.sourceRegion.path, contentHash: resolution.sourceRegion.contentHash, display: resolution.sourceRegion.display }]
-      : []),
-  ];
-  return { changedTests: projection.changedTestSelectors, changedTestRegions: withOccurrenceOrdinals(regions), changedPaths: projection.changedFiles.map((file) => file.path), planTasks: [] };
+    }) ?? [];
+  const resolvedRegions = scopeResolutions.flatMap((resolution) => resolution.status === 'resolved'
+    ? [{ path: resolution.sourceRegion.path, contentHash: resolution.sourceRegion.contentHash, display: resolution.sourceRegion.display }]
+    : []);
+  const changedTestRegions = targets && targets.length > 0
+    ? [...targets, ...withOccurrenceOrdinals(resolvedRegions)]
+    : withOccurrenceOrdinals([...titleRegions, ...resolvedRegions]);
+  return { changedTests: projection.changedTestSelectors, changedTestRegions, changedPaths: projection.changedFiles.map((file) => file.path), planTasks: [] };
 }
 export function parseBuildReviewFindingAnchor(value: unknown, references?: BuildReviewFindingReferenceContext): BuildReviewFindingAnchor | undefined { const source = object(value); const locus = source && region(source.locus); return source?.rubric === 'testQuality' && locus && (!references?.changedTestRegions || references.changedTestRegions.some((candidate) => sameRegion(candidate, locus))) ? { rubric: 'testQuality', locus } : undefined; }
 function finding(value: unknown, references?: BuildReviewFindingReferenceContext): BuildReviewFinding | undefined { const source = object(value); const anchor = source && parseBuildReviewFindingAnchor(source.anchor, references); if (!source || !anchor || parseBuildReviewFindingConcernKind(source.concernKind, 'testQuality') === undefined || !text(source.summary) || !Array.isArray(source.evidenceLocations) || source.evidenceLocations.length === 0 || source.evidenceLocations.some((item) => !text(item))) return undefined; return { concernKind: 'test-insensitive', summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations] as string[]), anchor }; }
@@ -204,13 +206,42 @@ export function deriveBuildReviewScopeIncompleteFault(result: BuildReviewJudgedR
 }
 export function renderBuildReviewJudgedResultShape(_rubric: BuildReviewRubricId): string { return '{ kind: "judged", rubric: "testQuality", lapId: string, snapshotDigest: string, contractVersion: "v3", findings: [{ concernKind: "test-insensitive", summary: string, evidenceLocations: string[], anchor: { rubric: "testQuality", locus: { path: string, contentHash: string, display: string } } }] }'; }
 const MAX_REJECTION_PROBLEMS = 6;
+function candidateScopeResolutionProblems(value: unknown, context: BuildReviewCandidateScopeResolutionContext): readonly string[] {
+  const candidates = context.candidates.map(candidateScopeCandidate);
+  if (candidates.some((candidate) => !candidate)) return ['"scopeResolutions" cannot be checked because its frozen candidate context is invalid'];
+  const known = candidates as BuildReviewCandidateScopeCandidate[];
+  if (known.length === 0) return [];
+  if (value === undefined) return ['"scopeResolutions" is missing: exactly one resolution is required for every frozen candidate'];
+  if (!Array.isArray(value)) return ['"scopeResolutions" must be an array of frozen-candidate resolutions (invalid value)'];
+  const problems: string[] = [];
+  const supplied = new Set<string>();
+  for (const entry of value) {
+    const source = object(entry);
+    if (!source || !text(source.candidateId)) { problems.push('"scopeResolutions" contains an invalid resolution without a candidateId'); continue; }
+    const candidate = known.find((item) => item.candidateId === source.candidateId);
+    if (!candidate) { problems.push(`"scopeResolutions" names unknown candidateId "${source.candidateId}"`); continue; }
+    if (supplied.has(candidate.candidateId)) { problems.push(`"scopeResolutions" duplicates candidateId "${candidate.candidateId}"`); continue; }
+    supplied.add(candidate.candidateId);
+    if (source.status === 'resolved') {
+      const sourceRegion = candidateScopeSourceRegion(source.sourceRegion); const obligations = obligationReferences(source.obligationReferences);
+      if (!sourceRegion || !obligations || !text(source.associationReason)) problems.push(`"scopeResolutions" has an invalid resolved entry for candidateId "${candidate.candidateId}"`);
+      else if (!sameCandidateScopeSourceRegion(sourceRegion, candidate.sourceRegion) || !obligations.every((reference) => candidate.obligationReferences.includes(reference))) problems.push(`"scopeResolutions" has foreign sourceRegion or obligationReferences for candidateId "${candidate.candidateId}"`);
+    } else if (source.status === 'out-of-scope') {
+      if (!text(source.exclusionReason)) problems.push(`"scopeResolutions" has an invalid out-of-scope entry for candidateId "${candidate.candidateId}"`);
+    } else if (source.status === 'indeterminate') {
+      if (!text(source.missingEvidenceReason)) problems.push(`"scopeResolutions" has an invalid indeterminate entry for candidateId "${candidate.candidateId}"`);
+    } else problems.push(`"scopeResolutions" has an invalid status for candidateId "${candidate.candidateId}"`);
+  }
+  for (const candidate of known) if (!supplied.has(candidate.candidateId)) problems.push(`"scopeResolutions" is missing candidateId "${candidate.candidateId}"`);
+  return problems;
+}
 /**
  * Names every enumerated contract problem in a rejected judged result so the
  * bounded in-session repair turn can tell the grader WHAT to fix, never only
  * that the result was rejected. The predicate that accepts or rejects stays
  * `parseBuildReviewJudgedResult`; this only explains its verdict.
  */
-export function describeBuildReviewJudgedResultRejection(value: unknown, rubric: BuildReviewRubricId, expected: { readonly lapId: string; readonly snapshotDigest: string }, references?: BuildReviewFindingReferenceContext): string {
+export function describeBuildReviewJudgedResultRejection(value: unknown, rubric: BuildReviewRubricId, expected: { readonly lapId: string; readonly snapshotDigest: string }, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): string {
   const source = object(value);
   if (!source) return 'the result is not a single JSON object';
   const problems: string[] = [];
@@ -220,6 +251,7 @@ export function describeBuildReviewJudgedResultRejection(value: unknown, rubric:
   if (source.contractVersion !== CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION) problems.push(`"contractVersion" must be "${CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION}"`);
   if (source.snapshotDigest !== expected.snapshotDigest) problems.push('"snapshotDigest" must echo the projection\'s snapshotDigest verbatim');
   if (source.counterfactualSensitivity !== undefined && !parseCounterfactualSensitivity(source.counterfactualSensitivity)) problems.push(`"counterfactualSensitivity" must be one of ${COUNTERFACTUAL_SENSITIVITY_VOCABULARY.map((member) => `"${member}"`).join(', ')} (got ${JSON.stringify(source.counterfactualSensitivity).slice(0, 64)})`);
+  if (scopeContext) problems.push(...candidateScopeResolutionProblems(source.scopeResolutions, scopeContext));
   if (!Array.isArray(source.findings)) {
     problems.push('"findings" must be an array (empty when no concern was found)');
   } else {
