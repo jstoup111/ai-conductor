@@ -88,12 +88,13 @@ describe('buildResource', () => {
     expect(resource.attributes['conductor.run.id']).toBe('fixed-id');
   });
 
-  it('uses the resolved project and feature as service.instance.id while retaining resource attributes', async () => {
+  it('uses the resolved project and worker as service.instance.id while retaining trace attributes', async () => {
     const configured = buildResource({
       pipelineDir,
       feature: 'explicit-feature',
       project: '/workspace/explicit-project',
       projectName: 'configured-project',
+      workerName: 'configured-worker',
       runId: 'explicit-run-id',
     });
     await writeFile(join(pipelineDir, 'conduct-session-id'), 'persisted-run-id\n', 'utf-8');
@@ -102,6 +103,7 @@ describe('buildResource', () => {
       feature: 'persisted-feature',
       project: '/workspace/persisted-project',
       projectName: 'persisted-project',
+      workerName: 'persisted-worker',
     });
     const missingProjectName = buildResource({ pipelineDir, feature: 'f', project: 'p', runId: 'run-1' });
     const missingFeature = buildResource({
@@ -119,28 +121,31 @@ describe('buildResource', () => {
     ]).toEqual([
       {
         'service.name': 'ai-conductor',
-        'service.instance.id': 'configured-project/explicit-feature',
+        'service.instance.id': 'configured-project/configured-worker',
         'conductor.run.id': 'explicit-run-id',
         'conductor.feature': 'explicit-feature',
         'conductor.project': '/workspace/explicit-project',
+        'conductor.worker': 'configured-worker',
         'conductor.branch': 'not-supplied',
         'conductor.engine.version': 'not-supplied',
       },
       {
         'service.name': 'ai-conductor',
-        'service.instance.id': 'persisted-project/persisted-feature',
+        'service.instance.id': 'persisted-project/persisted-worker',
         'conductor.run.id': 'persisted-run-id',
         'conductor.feature': 'persisted-feature',
         'conductor.project': '/workspace/persisted-project',
+        'conductor.worker': 'persisted-worker',
         'conductor.branch': 'not-supplied',
         'conductor.engine.version': 'not-supplied',
       },
       {
         'service.name': 'ai-conductor',
-        'service.instance.id': 'unknown/f',
+        'service.instance.id': 'unknown/unknown',
         'conductor.run.id': 'run-1',
         'conductor.feature': 'f',
         'conductor.project': 'p',
+        'conductor.worker': 'unknown',
         'conductor.branch': 'not-supplied',
         'conductor.engine.version': 'not-supplied',
       },
@@ -150,6 +155,7 @@ describe('buildResource', () => {
         'conductor.run.id': 'run-2',
         'conductor.feature': 'unknown',
         'conductor.project': 'p',
+        'conductor.worker': 'unknown',
         'conductor.branch': 'not-supplied',
         'conductor.engine.version': 'not-supplied',
       },
@@ -167,10 +173,11 @@ describe('buildResource', () => {
         feature: 'feature-a',
         project: '/workspace/project-a',
         projectName: 'project-a',
+        workerName: 'worker-a',
       });
     }).not.toThrow();
 
-    expect(resource!.attributes['service.instance.id']).toBe('project-a/feature-a');
+    expect(resource!.attributes['service.instance.id']).toBe('project-a/worker-a');
     expect(resource!.attributes['conductor.run.id']).toMatch(/\S/);
   });
 
@@ -182,11 +189,12 @@ describe('buildResource', () => {
       feature: 'feature-b',
       project: '/workspace/project-b',
       projectName: 'project-b',
+      workerName: 'worker-b',
     });
     const runId = resource.attributes['conductor.run.id'] as string;
 
     expect(runId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
-    expect(resource.attributes['service.instance.id']).toBe('project-b/feature-b');
+    expect(resource.attributes['service.instance.id']).toBe('project-b/worker-b');
     expect(resource.attributes['service.instance.id']).not.toContain(runId);
   });
 
@@ -217,8 +225,8 @@ describe('buildResource', () => {
         'conductor.branch': 'not-supplied',
         'conductor.engine.version': 'not-supplied',
       });
-      expect(buildResource(unresolved, 'metrics').attributes['conductor.branch']).toBe('unresolved');
-      expect(buildResource(omitted, 'metrics').attributes['conductor.branch']).toBe('not-supplied');
+      expect(buildResource(unresolved, 'metrics').attributes['conductor.branch']).toBeUndefined();
+      expect(buildResource(omitted, 'metrics').attributes['conductor.branch']).toBeUndefined();
       expect(buildResource(unresolved, 'metrics').attributes['conductor.engine.version']).toBeUndefined();
       expect(buildResource(omitted, 'metrics').attributes['conductor.engine.version']).toBeUndefined();
     });
@@ -234,6 +242,7 @@ describe('buildResource', () => {
       feature: 'feature-a',
       project: '/workspace/project-a',
       projectName: 'project-a',
+      workerName: 'worker-a',
       branch: 'feat/thing',
       engineVersion: '20260828T000000Z-abc',
       runId: 'run-1',
@@ -244,9 +253,9 @@ describe('buildResource', () => {
 
       // Exact set, not a subset: an added run-varying attribute must fail here.
       expect(Object.keys(resource.attributes).sort()).toEqual([
-        'conductor.branch',
-        'conductor.feature',
         'conductor.project',
+        'conductor.worker',
+        'host.name',
         'service.instance.id',
         'service.name',
       ]);
@@ -263,7 +272,7 @@ describe('buildResource', () => {
       const metrics = buildResource(ctx(), 'metrics');
       const traces = buildResource(ctx(), 'traces');
 
-      expect(metrics.attributes['service.instance.id']).toBe('project-a/feature-a');
+      expect(metrics.attributes['service.instance.id']).toBe('project-a/worker-a');
       expect(traces.attributes['service.instance.id']).toBe(metrics.attributes['service.instance.id']);
       expect(metrics.attributes['service.name']).toBe('ai-conductor');
       expect(traces.attributes['service.name']).toBe('ai-conductor');
@@ -292,7 +301,7 @@ describe('buildResource', () => {
 
       expect(() => buildResource(broken, 'metrics')).not.toThrow();
       expect(() => buildResource(broken, 'traces')).not.toThrow();
-      expect(buildResource(broken, 'metrics').attributes['service.instance.id']).toBe('project-a/feature-a');
+      expect(buildResource(broken, 'metrics').attributes['service.instance.id']).toBe('project-a/worker-a');
     });
   });
 });

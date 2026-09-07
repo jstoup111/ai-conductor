@@ -61,7 +61,7 @@ function findMetric(exporter: InMemoryMetricExporter, name: string) {
     .find((m) => m.descriptor.name === name);
 }
 
-async function recordMetricsWithIdentity(identityAttrs: { project: string; feature: string }) {
+async function recordMetricsWithIdentity(identityAttrs: { project: string; worker: string; feature: string }) {
   const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
   const meterProvider = new MeterProvider({
     readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
@@ -670,7 +670,7 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
     const provider = new MeterProvider({
       readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
     });
-    return { exporter, provider, recorder: new MetricsRecorder(provider.getMeter('task-4'), { project: 'test-project', feature: 'test-feature' }) };
+    return { exporter, provider, recorder: new MetricsRecorder(provider.getMeter('task-4'), { project: 'test-project', worker: 'test-worker', feature: 'test-feature' }) };
   }
 
   it('records cost and token dimensions with bounded feature identity', async () => {
@@ -679,15 +679,15 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
       recorder.onFeatureCostSnapshot(snapshot);
       await provider.forceFlush();
       expect(findMetric(exporter, 'conductor.feature.step.cost')?.dataPoints).toEqual([
-        expect.objectContaining({ value: 1.5, attributes: { step: 'build', model: 'm1', source: 'provider', project: 'test-project', feature: 'test-feature' } }),
-        expect.objectContaining({ value: 2, attributes: { step: 'build_review', model: 'm2', source: 'rate-card', project: 'test-project', feature: 'test-feature' } }),
+        expect.objectContaining({ value: 1.5, attributes: { step: 'build', model: 'm1', source: 'provider', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
+        expect.objectContaining({ value: 2, attributes: { step: 'build_review', model: 'm2', source: 'rate-card', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
       ]);
       expect(findMetric(exporter, 'conductor.feature.cost')?.dataPoints).toEqual([
-        expect.objectContaining({ value: 3.5, attributes: { cost_complete: true, project: 'test-project', feature: 'test-feature' } }),
+        expect.objectContaining({ value: 3.5, attributes: { cost_complete: true, project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
       ]);
       expect(findMetric(exporter, 'conductor.feature.step.tokens')?.dataPoints).toEqual([
-        expect.objectContaining({ value: 150, attributes: { step: 'build', model: 'm1', kind: 'input', project: 'test-project', feature: 'test-feature' } }),
-        expect.objectContaining({ value: 15, attributes: { step: 'build', model: 'm1', kind: 'output', project: 'test-project', feature: 'test-feature' } }),
+        expect.objectContaining({ value: 150, attributes: { step: 'build', model: 'm1', kind: 'input', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
+        expect.objectContaining({ value: 15, attributes: { step: 'build', model: 'm1', kind: 'output', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
       ]);
     } finally { await provider.shutdown(); }
   });
@@ -700,10 +700,10 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
       recorder.onFeatureCostSnapshot(incomplete);
       await provider.forceFlush();
       expect(findMetric(exporter, 'conductor.feature.cost')?.dataPoints).toEqual([
-        expect.objectContaining({ value: 3.5, attributes: { cost_complete: false, project: 'test-project', feature: 'test-feature' } }),
+        expect.objectContaining({ value: 3.5, attributes: { cost_complete: false, project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
       ]);
       expect(findMetric(exporter, 'conductor.feature.step.cost')?.dataPoints).toEqual([
-        expect.objectContaining({ value: 1.5, attributes: { step: 'build', project: 'test-project', feature: 'test-feature' } }),
+        expect.objectContaining({ value: 1.5, attributes: { step: 'build', project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
       ]);
     } finally { await provider.shutdown(); }
   });
@@ -722,7 +722,7 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
       expect(usdNames).toEqual(['conductor.feature.cost', 'conductor.feature.step.cost']);
       for (const metric of ['conductor.feature.cost', 'conductor.feature.step.cost']) {
         for (const point of findMetric(exporter, metric)?.dataPoints ?? []) {
-          expect(point.attributes).toMatchObject({ project: 'test-project', feature: 'test-feature' });
+          expect(point.attributes).toMatchObject({ project: 'test-project', worker: 'test-worker', feature: 'test-feature' });
           expect(Object.keys(point.attributes)).not.toEqual(expect.arrayContaining(['run', 'run_id', 'conductor.run.id']));
         }
       }
@@ -757,7 +757,7 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
       await provider.forceFlush();
 
       expect(findMetric(exporter, 'conductor.feature.cost')?.dataPoints).toEqual([
-        expect.objectContaining({ value: 0, attributes: { cost_complete: false, project: 'test-project', feature: 'test-feature' } }),
+        expect.objectContaining({ value: 0, attributes: { cost_complete: false, project: 'test-project', worker: 'test-worker', feature: 'test-feature' } }),
       ]);
       expect(findMetric(exporter, 'conductor.feature.step.cost')).toBeUndefined();
     } finally { await provider.shutdown(); }
@@ -787,6 +787,7 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
             step: 'unknown_model',
             kind: 'input',
             project: 'test-project',
+            worker: 'test-worker',
             feature: 'test-feature',
           },
         }),
@@ -826,9 +827,9 @@ describe('Task 3: dispatch metering classification', () => {
       value: dataPoint.value,
       attributes: dataPoint.attributes,
     }))).toEqual([
-      { value: 1, attributes: { step: 'explore', metering: 'fully-metered', project: 'test-project', feature: 'test-feature' } },
-      { value: 1, attributes: { step: 'plan', metering: 'cost-unmetered', project: 'test-project', feature: 'test-feature' } },
-      { value: 1, attributes: { step: 'build', metering: 'unmetered', project: 'test-project', feature: 'test-feature' } },
+      { value: 1, attributes: { step: 'explore', metering: 'fully-metered', project: 'test-project', worker: 'unknown', feature: 'test-feature' } },
+      { value: 1, attributes: { step: 'plan', metering: 'cost-unmetered', project: 'test-project', worker: 'unknown', feature: 'test-feature' } },
+      { value: 1, attributes: { step: 'build', metering: 'unmetered', project: 'test-project', worker: 'unknown', feature: 'test-feature' } },
     ]);
   });
 });
@@ -849,7 +850,7 @@ describe('Task 4: unmetered close observability', () => {
     expect(dispatches.dataPoints
       .filter((dataPoint) => dataPoint.attributes['step'] === 'build')
       .map((dataPoint) => ({ value: dataPoint.value, attributes: dataPoint.attributes }))).toEqual([
-        { value: 1, attributes: { step: 'build', metering: 'unmetered', project: 'test-project', feature: 'test-feature' } },
+        { value: 1, attributes: { step: 'build', metering: 'unmetered', project: 'test-project', worker: 'unknown', feature: 'test-feature' } },
       ]);
     expect(findMetric(metricExporter, 'conductor.step.duration')?.dataPoints).toContainEqual(
       expect.objectContaining({ attributes: expect.objectContaining({ step: 'build' }) }),
@@ -955,6 +956,7 @@ describe('feature usage total cost export', () => {
         value: 7.4679372,
         attributes: {
           project: 'test-project',
+          worker: 'unknown',
           feature: 'test-feature',
           cost_complete: false,
         },
@@ -994,6 +996,7 @@ describe('Task 3: metric identity attributes', () => {
   it('adds identity without removing each instrument’s existing attributes', async () => {
     const exporter = await recordMetricsWithIdentity({
       project: 'project-a',
+      worker: 'worker-a',
       feature: 'feature-a',
     });
 
@@ -1003,16 +1006,16 @@ describe('Task 3: metric identity attributes', () => {
       dispatches: findMetric(exporter, 'conductor.step.dispatches')!.dataPoints.map((point) => point.attributes),
       closeout: findMetric(exporter, 'conductor.pipeline.closeout.duration')!.dataPoints.map((point) => point.attributes),
     }).toEqual({
-      duration: [{ step: 'build', project: 'project-a', feature: 'feature-a' }],
-      retries: [{ step: 'build', project: 'project-a', feature: 'feature-a' }],
-      dispatches: [{ step: 'build', metering: 'cost-unmetered', project: 'project-a', feature: 'feature-a' }],
-      closeout: [{ obligation: 'simplify', project: 'project-a', feature: 'feature-a' }],
+      duration: [{ step: 'build', project: 'project-a', worker: 'worker-a', feature: 'feature-a' }],
+      retries: [{ step: 'build', project: 'project-a', worker: 'worker-a', feature: 'feature-a' }],
+      dispatches: [{ step: 'build', metering: 'cost-unmetered', project: 'project-a', worker: 'worker-a', feature: 'feature-a' }],
+      closeout: [{ obligation: 'simplify', project: 'project-a', worker: 'worker-a', feature: 'feature-a' }],
     });
   });
 
   it('keeps project identity distinct between recorder instances', async () => {
-    const first = await recordMetricsWithIdentity({ project: 'project-a', feature: 'shared-feature' });
-    const second = await recordMetricsWithIdentity({ project: 'project-b', feature: 'shared-feature' });
+    const first = await recordMetricsWithIdentity({ project: 'project-a', worker: 'worker-a', feature: 'shared-feature' });
+    const second = await recordMetricsWithIdentity({ project: 'project-b', worker: 'worker-b', feature: 'shared-feature' });
 
     expect([
       findMetric(first, 'conductor.step.duration')!.dataPoints[0].attributes['project'],
@@ -1058,8 +1061,8 @@ describe('Task 4: bounded metric identity', () => {
   });
 
   it('pinning: counters aggregate across projects without changing instrument names', async () => {
-    const first = await recordMetricsWithIdentity({ project: 'project-a', feature: 'shared-feature' });
-    const second = await recordMetricsWithIdentity({ project: 'project-b', feature: 'shared-feature' });
+    const first = await recordMetricsWithIdentity({ project: 'project-a', worker: 'worker-a', feature: 'shared-feature' });
+    const second = await recordMetricsWithIdentity({ project: 'project-b', worker: 'worker-b', feature: 'shared-feature' });
     const retries = (exporter: InMemoryMetricExporter) => (
       findMetric(exporter, 'conductor.step.retries')!.dataPoints[0].value as number
     );
@@ -1101,7 +1104,7 @@ describe('run outcome counter', () => {
     const metric = findMetric(metricExporter, 'conductor.run.outcomes');
     expect(metric?.dataPoints).toEqual([
       expect.objectContaining({
-        attributes: { outcome: 'complete', project: 'test-project', feature: 'test-feature' },
+        attributes: { outcome: 'complete', project: 'test-project', worker: 'unknown', feature: 'test-feature' },
         value: 1,
       }),
     ]);
@@ -1118,7 +1121,7 @@ describe('run outcome counter', () => {
     const metric = findMetric(metricExporter, 'conductor.run.outcomes');
     expect(metric?.dataPoints).toEqual([
       expect.objectContaining({
-        attributes: { outcome: 'halted', project: 'test-project', feature: 'test-feature' },
+        attributes: { outcome: 'halted', project: 'test-project', worker: 'unknown', feature: 'test-feature' },
         value: 1,
       }),
     ]);
@@ -1134,7 +1137,7 @@ describe('run outcome counter', () => {
     const metric = findMetric(metricExporter, 'conductor.run.outcomes');
     expect(metric?.dataPoints).toEqual([
       expect.objectContaining({
-        attributes: { outcome: 'terminated', project: 'test-project', feature: 'test-feature' },
+        attributes: { outcome: 'terminated', project: 'test-project', worker: 'unknown', feature: 'test-feature' },
         value: 1,
       }),
     ]);
@@ -1152,7 +1155,7 @@ describe('run outcome counter', () => {
     const metric = findMetric(metricExporter, 'conductor.run.outcomes');
     expect(metric?.dataPoints).toEqual([
       expect.objectContaining({
-        attributes: { outcome: 'complete', project: 'test-project', feature: 'test-feature' },
+        attributes: { outcome: 'complete', project: 'test-project', worker: 'unknown', feature: 'test-feature' },
         value: 1,
       }),
     ]);
