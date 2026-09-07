@@ -187,6 +187,7 @@ import {
   sweepStaleReviewArtifacts,
   classifyAsBuiltReviewOutcome,
   parseAsBuiltBlockedFindings,
+  readAsBuiltVerdictLine,
   parseAdrDecisions,
   parseTrack,
   parseIntakeSourceRef,
@@ -701,10 +702,9 @@ export async function resolveAsBuiltGoverningClause(
 
 /** Render parser-validated BLOCKED findings into an operator-facing halt body. */
 function renderAsBuiltBlockedFindingDetail(report: string | undefined): string {
-  if (
-    report === undefined ||
-    !/^\s*\*{0,2}\s*Verdict\s*\*{0,2}\s*:+\s*\*{0,2}\s*BLOCKED\b/im.test(report)
-  ) {
+  if (report === undefined) return '';
+  const verdict = readAsBuiltVerdictLine(report);
+  if (!verdict.found || verdict.recognized !== 'BLOCKED') {
     return '';
   }
   const parsed = parseAsBuiltBlockedFindings(report);

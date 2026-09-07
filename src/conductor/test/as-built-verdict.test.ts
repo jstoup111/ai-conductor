@@ -787,6 +787,24 @@ describe('as-built SHIP routing', () => {
     expect(observed.some((event) => event.type === 'kickback')).toBe(false);
   });
 
+  it('lists a DESIGN finding when a heading-decorated BLOCKED verdict halts', async () => {
+    const observed = await runSerialAsBuiltExit({
+      report: [
+        '### **Verdict:** BLOCKED ###',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-HEADING | DESIGN | adr-2026-08-25-example decision 3 | Choose an incompatible policy |',
+      ].join('\n'),
+    });
+
+    const halt = observed.find((event) => event.type === 'loop_halt');
+    expect(halt?.reason).toContain(
+      'Blocking findings:\nARCH-HEADING (DESIGN; adr-2026-08-25-example decision 3): Choose an incompatible policy',
+    );
+  });
+
   async function runGroupedAsBuiltExit(input: {
     report: string;
     priorLap?: boolean;
