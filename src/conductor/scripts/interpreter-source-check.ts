@@ -71,10 +71,44 @@ function commandsOnLine(line: string, lineNumber: number): Word[][] {
   return [...commands, ...nested].filter((words) => words.length > 0);
 }
 
+/**
+ * Performs the shell quote removal that applies to a heredoc delimiter word.
+ * The same pass records whether any quoting suppressed expansion of its body.
+ */
+function heredocDelimiter(word: string): Pick<Heredoc, 'delimiter' | 'expanding'> {
+  let delimiter = '';
+  let quote: "'" | '"' | undefined;
+  let quoted = false;
+  for (let index = 0; index < word.length; index += 1) {
+    const char = word[index];
+    if (quote === "'") {
+      if (char === "'") quote = undefined;
+      else delimiter += char;
+      continue;
+    }
+    if (quote === '"') {
+      if (char === '"') { quote = undefined; continue; }
+      if (char === '\\' && index + 1 < word.length && '$`"\\'.includes(word[index + 1])) {
+        delimiter += word[index + 1];
+        index += 1;
+      } else delimiter += char;
+      continue;
+    }
+    if (char === "'" || char === '"') { quoted = true; quote = char; continue; }
+    if (char === '\\') {
+      quoted = true;
+      if (index + 1 < word.length) { delimiter += word[index + 1]; index += 1; }
+      continue;
+    }
+    delimiter += char;
+  }
+  return { delimiter, expanding: !quoted };
+}
+
 function heredocsOnLine(line: string, words: Word[], lineNumber: number): Heredoc[] {
   const executable = words.find((word) => interpreter.test(word.text));
   return [...line.matchAll(/<<(-?)\s*([^\s;|&]+)/g)].map((match) => ({
-    delimiter: match[2].replace(/["']/g, ''), expanding: !/["']/.test(match[2]), stripTabs: match[1] === '-',
+    ...heredocDelimiter(match[2]), stripTabs: match[1] === '-',
     interpreter: Boolean(executable && /python3?$/.test(executable.text)), line: lineNumber,
   }));
 }

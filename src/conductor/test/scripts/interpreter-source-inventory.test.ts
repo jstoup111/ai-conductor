@@ -1,6 +1,7 @@
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execa } from 'execa';
 import { afterEach, describe, expect, it } from 'vitest';
 import { checkInventory } from '../../scripts/check-interpreter-source.mts';
 
@@ -39,6 +40,14 @@ describe('interpreter-source inventory', () => {
       .rejects.toThrow('controlled loader failure');
   });
 
+  it.each(['git-hook-assets', 'session-hook-assets'])('reports unsafe rendered source from %s exports', async (moduleName) => {
+    await expect(checkInventory(await root(), {
+      [moduleName]: { SAFE: '#!/bin/sh\ntrue\n', UNSAFE: 'python3 -c "print($SECRET)"\n' },
+    })).resolves.toEqual([
+      expect.objectContaining({ sourceName: `${moduleName}#UNSAFE`, line: 1, message: 'shell expansion in interpreter command source' }),
+    ]);
+  });
+
   it('fails closed for an empty file inventory and required file reads', async () => {
     const empty = await mkdtemp(join(tmpdir(), 'interpreter-empty-'));
     roots.push(empty);
@@ -46,8 +55,10 @@ describe('interpreter-source inventory', () => {
     await mkdir(join(empty, 'hooks'));
     await expect(checkInventory(empty, { generated: { SAFE: 'true\n' } })).rejects.toThrow(/inventory is empty/);
     const directory = await root();
-    await rm(join(directory, 'bin', 'safe'));
-    await writeFile(join(directory, 'bin', 'broken'), '');
-    await expect(checkInventory(directory, { generated: { SAFE: 'true\n' } })).resolves.toEqual([]);
+    await chmod(join(directory, 'bin', 'safe'), 0o000);
+    const result = await execa('node', ['--import', 'tsx', 'scripts/check-interpreter-source.mts', directory], {
+      cwd: process.cwd(), reject: false,
+    });
+    expect(result.exitCode).not.toBe(0);
   });
 });

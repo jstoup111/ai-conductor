@@ -65,6 +65,24 @@ describe('checkInterpreterSource', () => {
   });
 
   it.each([
+    ['fully backslash-quoted delimiter', 'python3 <<\\PY\nprint($LITERAL)\nPY'],
+    ['partially backslash-quoted delimiter', 'python3 <<P\\Y\nprint($LITERAL)\nPY'],
+    ['backslash after a single-quoted part', "python3 <<'P'\\Y\nprint($LITERAL)\nPY"],
+    ['backslash after a double-quoted part', 'python3 <<"PY"\\Z\nprint($LITERAL)\nPYZ'],
+  ])('accepts a %s without scanning its literal body', (_name, text) => {
+    expect(checkInterpreterSource('backslash-quoted.sh', text)).toEqual([]);
+  });
+
+  it.each([
+    ['PY', 'PY'],
+    ['PYY', 'PYY'],
+  ])('rejects the unsafe unquoted heredoc twin: %s', (delimiter, terminator) => {
+    expect(checkInterpreterSource('unquoted.sh', `python3 <<${delimiter}\nprint($LITERAL)\n${terminator}`)).toEqual([
+      expect.objectContaining({ sourceName: 'unquoted.sh', line: 2, message: 'shell expansion in interpreter heredoc source' }),
+    ]);
+  });
+
+  it.each([
     ['nested node -e', 'x=$(node -e "console.log($VALUE)")'],
     ['nested python -c', 'x=$(python3 -c "print($VALUE)")'],
     ['doubly nested node -e', 'x=$(printf %s "$(node -e "console.log($VALUE)")")'],
