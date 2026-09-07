@@ -77,6 +77,62 @@ Adjudication or effect failure remains fail-closed and blocks both PASS and part
 repeated attempted/regressed semantic case still halts without a second charge or a free route. Every
 actual first-time BUILD route still increments the cumulative convergence bound.
 
+### D4 — An operator confidence floor may narrow an act to a defer
+
+> **Amended 2026-09-06 by #2383:** The predecessor's D4/D7 contract left a case's disposition a
+> function of provider judgement alone. This amendment adds the decisions below. The original
+> decisions above are preserved and unchanged; nothing here grants a provider new authority, and
+> nothing here lets the engine manufacture an `act`.
+
+> **D4.1 — Confidence is a provider-supplied percentage the engine validates but never derives.**
+> The `case-v1` per-case `confidence` is an integer 0-100, replacing the `high | medium | low`
+> enum. The engine range-validates it exactly as decision 4 of the predecessor already requires
+> for every bounded field ("any field exceeds its bound" fails the whole adjudication closed), and
+> never computes, adjusts, or infers the number. The `rationale` field is unchanged; the number is
+> what the floor reads. The enum has no released consumer, so this replaces it rather than
+> migrating it.
+>
+> **D4.2 — The operator floor narrows, and only narrows.** Config key
+> `build_review.adjudication.act_min_confidence` (integer 0-100, default 0) demotes an `act` case
+> whose confidence is below it to a `defer` case, applied at judgement admission before case
+> reconciliation. The engine may only turn an `act` into a `defer`; it may never promote a
+> `defer` or `reject` into an `act`, never alter `reject` or `defer` cases, and never grant
+> reduced coverage or operator accepted risk — D2's separation of operator authority from
+> autonomous adjudication is untouched. At the default 0 the comparison never fires and behavior
+> is identical to today.
+>
+> **D4.3 — A demoted case is filed, not dropped, and charges nothing.** The demoted case takes the
+> existing deferral effect of decision 6 unchanged — exact hidden-marker lookup first, reusing a
+> matching open or closed issue, otherwise filing through the existing intake adapter with the
+> marker and sanitized Observed/Impact/Desired Outcomes/Hypotheses content — so it files exactly
+> once across laps. The engine synthesizes that content from the case's `caseRef`, `rationale`,
+> and confidence; it authors no new effect shape. The demotion consumes no kickback and publishes
+> no BUILD work order, which is decision 7 applied unchanged ("Deferred, rejected, and
+> merged-only adjudications consume no kickback") rather than a new budget rule. Per
+> `adr-2026-08-12-cumulative-build-review-convergence-bound`, the demotion path must bypass the
+> kickback gate outright rather than call it for a zero charge, so `count` and `cumulative` are
+> never touched. Because the demotion happens before reconciliation, the case's effect id is
+> stable across laps and the marker cannot mint duplicates.
+>
+> **D4.4 — The floor is inert wherever a deferral cannot finalize.** When the tracker
+> dependencies are absent, a deferral effect stays `reserved` and the lap routes to `halt` on the
+> existing unfinished-effect rule. The floor therefore does not apply at all in that state and the
+> `act` proceeds unchanged. A confidence floor must never convert a passing or actionable lap into
+> a halt.
+>
+> **D4.5 — Every demotion is visible, as an additive field on an existing event.** The demotion
+> reason rides an existing remediation `ConductorEvent` member as an additive optional field
+> following the house pattern of `adr-2026-08-11-halt-events-ride-the-persisted-spine`, rather
+> than a new event member; decision 9 already registers those members with every sink. Should a
+> new member prove necessary instead, `adr-2026-07-26-event-sink-registry-exhaustiveness` requires
+> it to declare its sink and `adr-2026-07-07-audit-trail-event-sink` requires it in the audit
+> mapping, or the completeness invariant silently breaks. The demotion is not a `kickback` event
+> and must never be rendered as one (`adr-2026-07-04-kickback-event-emission-and-log-prominence`),
+> since no kickback is charged. It is additionally rendered into the per-lap adjudication trace so
+> it reaches HALT and route evidence and the daemon log. A lap whose every `act` was demoted
+> retains no build-eligible action case and therefore reaches the existing PASS transition; it
+> must not deadlock for want of something to fix.
+
 ## Consequences
 
 - A mechanical failure cannot erase or postpone valid sibling content merely because reduced
