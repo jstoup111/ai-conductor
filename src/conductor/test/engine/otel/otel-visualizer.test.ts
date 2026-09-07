@@ -1,4 +1,4 @@
-// Covers: task:2, task:5, task:6, task:8, task:10
+// Covers: task:2, task:3, task:5, task:6, task:8, task:10
 /**
  * T9: OtelVisualizer — provider/processor setup (off hot path).
  * T17: hot-path guard — emit() resolves promptly even when the transport blocks.
@@ -131,6 +131,52 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
 
       expect(new Set(on.mock.calls.map(([type]) => type))).toEqual(new Set(expectedEventTypes));
       await vis.stop();
+    } finally {
+      vi.doUnmock('../../../src/engine/event-sinks.js');
+      vi.resetModules();
+    }
+  });
+
+  it('warns once when the traced registry includes an event with no handler, while handled events still record effects', async () => {
+    vi.resetModules();
+    const unhandledType = 'renderer_error';
+    vi.doMock('../../../src/engine/event-sinks.js', () => ({
+      otelTracedEventTypes: () => ['step_started', unhandledType],
+    }));
+
+    try {
+      const { OtelVisualizer: FreshOtelVisualizer } = await import('../../../src/engine/otel/otel-visualizer.js');
+      const { ConductorEventEmitter: FreshConductorEventEmitter } = await import('../../../src/ui/events.js');
+      const freshEmitter = new FreshConductorEventEmitter();
+      const freshSpanExporter = new CapturingSpanExporter();
+      const warn = vi.fn();
+      const vis = new FreshOtelVisualizer(
+        resolveOtelConfig(
+          { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+          pipelineDir,
+        ),
+        {
+          runId: 'test-unhandled-traced-event',
+          feature: 'test-feature',
+          project: 'test-project',
+          spanExporter: freshSpanExporter,
+          metricExporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
+          onWarning: warn,
+        },
+      );
+
+      vis.start(freshEmitter);
+      await freshEmitter.emit({ type: 'step_started', step: 'build', index: 0 });
+      await freshEmitter.emit({
+        type: unhandledType,
+        rendererName: 'test-renderer',
+        error: 'extra traced event',
+      });
+      await vis.stop();
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(unhandledType));
+      expect(freshSpanExporter.getFinishedSpans().map((span) => span.name)).toContain('build');
     } finally {
       vi.doUnmock('../../../src/engine/event-sinks.js');
       vi.resetModules();
