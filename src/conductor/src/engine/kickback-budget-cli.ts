@@ -4,12 +4,16 @@ import { join } from 'node:path';
 
 import type { KickbackBudgetDispatch } from '../cli.js';
 import { appendCloseoutEvent } from './closeout-events.js';
+import { AuditTrailWriter } from './audit-trail.js';
+import { EventPersister } from './event-persister.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
 import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackLedger, readKickbackLedger, stageKickbackBudgetAdjustment, type KickbackBudgetAdjustment } from './kickback-ledger.js';
 import { kickbackBudgetView, renderKickbackBudgetView } from './kickback-budget-view.js';
 import { resolveMainRepoRoot, isOperatorParked } from './park-marker.js';
 import { readHaltClass } from './halt-marker.js';
 import { loadConfig } from './config.js';
+import { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEvent } from '../types/events.js';
 
 const GATES = new Set(['build_review', 'prd_audit', 'architecture_review_as_built']);
 const DEFAULTS: Record<string, number> = { build_review: 5, prd_audit: 1, architecture_review_as_built: 1 };
@@ -63,14 +67,33 @@ async function reconcilePendingAdjustments(worktree: string): Promise<void> {
   }
 }
 
+/**
+ * A budget command runs outside a live conductor, so it has no in-memory
+ * feature scope to deliver its authorization.  Persist and audit the typed
+ * occurrence through the ordinary feature event consumers before returning.
+ */
+async function recordAuthorizationEvent(
+  worktree: string,
+  event: Extract<ConductorEvent, { type: 'kickback_budget_adjustment_authorized' }>,
+): Promise<void> {
+  const events = new ConductorEventEmitter();
+  const persister = new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events);
+  const audit = new AuditTrailWriter(worktree, { throwOnWriteFailure: true });
+  persister.start();
+  audit.subscribe(events);
+  try {
+    await events.emit(event);
+  } finally {
+    persister.stop();
+  }
+}
+
 /** Dispatch read-only inspect or an interactive, halted-feature-only mutation. */
 export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispatch, deps: KickbackBudgetCliDeps = {}): Promise<number> {
   const print = deps.print ?? console.log;
   const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(deps.cwd ?? process.cwd());
   const worktree = await resolveWorktree(command.feature, deps.cwd ?? process.cwd(), deps.resolveMainRoot ?? resolveMainRepoRoot);
   if (!worktree) { print(`kickback-budget: feature '${command.feature}' is unavailable.`); return 1; }
-  try { await reconcilePendingAdjustments(worktree); }
-  catch (error) { print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1; }
   if (command.action === 'inspect') {
     const ledger = await readKickbackLedger(worktree);
     if (isUnreadableKickbackLedger(ledger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
@@ -83,6 +106,8 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     print('kickback-budget: mutations require an interactive local operator terminal.'); return 2;
   }
   if (!command.gate || !GATES.has(command.gate) || !command.rationale?.trim()) { print('kickback-budget: invalid gate or rationale.'); return 2; }
+  try { await reconcilePendingAdjustments(worktree); }
+  catch (error) { print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1; }
   const ledger = await readKickbackLedger(worktree);
   if (isUnreadableKickbackLedger(ledger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
   const entry = ledger.gates[command.gate];
@@ -109,12 +134,14 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       timestamp: new Date().toISOString(), haltGeneration: entry.capEvidence.haltGeneration,
     };
     await stageKickbackBudgetAdjustment(worktree, command.gate, adjustment);
-    (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
+    const event: Extract<ConductorEvent, { type: 'kickback_budget_adjustment_authorized' }> = {
       type: 'kickback_budget_adjustment_authorized', adjustmentId: adjustment.id, gate: command.gate, kind: adjustment.kind,
       feature: command.feature, operator: adjustment.operator, rationale: adjustment.rationale,
       beforeConsumed: adjustment.beforeConsumed, afterConsumed: adjustment.afterConsumed,
       beforeLimit: adjustment.beforeLimit, afterLimit: adjustment.afterLimit, ts: adjustment.timestamp,
-    });
+    };
+    (deps.appendEvent ?? appendCloseoutEvent)(worktree, event);
+    await recordAuthorizationEvent(worktree, event);
     const applied = await applyKickbackBudgetAdjustment(worktree, command.gate, adjustment, defaults[command.gate]);
     print(`${renderKickbackBudgetView(applied, command.gate, defaults[command.gate])}${parked ? '\nFeature remains parked; unpark it when ready.' : ''}`);
     return 0;
