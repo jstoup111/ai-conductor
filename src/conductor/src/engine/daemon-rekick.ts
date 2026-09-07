@@ -3,9 +3,14 @@ import { join } from 'node:path';
 import {
   HALT_MARKER,
   HALT_CLASS_MARKER,
-  isOperatorActionHalt,
+  PLAN_GAP_HALT_CLASS,
   type HaltDisposition,
 } from './halt-marker.js';
+import {
+  KICKBACK_CAP_HALT_CLASS,
+  OVER_SCOPE_HALT_CLASS,
+  RECOVERABLE_CAP_HALT_CLASS_BY_GATE,
+} from './halt-classification.js';
 import {
   makeGitRunner,
   rebaseStateActive,
@@ -29,7 +34,6 @@ import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { ALL_STEPS } from './steps.js';
-import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import {
   consumeKickbackResumeAuthorization,
   isUnreadableKickbackGate,
@@ -39,33 +43,66 @@ import {
 
 /** What an automatic path decided about one worktree's live halt classification. */
 export interface HaltRetentionDecision {
-  /** The disposition actually observed; `unclassified` when it could not be read. */
-  haltClass: HaltDisposition;
+  /** The class text actually observed; `unclassified` when the sidecar is absent. */
+  haltClass: string;
   /** True when this halt must survive the automatic path that asked. */
   retained: boolean;
 }
 
 /**
- * The single retention decision EVERY automatic path shares (sealed Story 3):
- * a classified human halt — `needs-human`, `plan-gap`, and every class the
- * sidecar reader does not recognize, which includes `kickback-cap` and
- * `over-scope` — is retained for an operator and never auto-cleared. An
- * unreadable sidecar fails closed to `unclassified`, which is retained.
+ * The halt classes sealed Story 3 names: a halt carrying one of these, with no
+ * operator resume authorization, is retained by EVERY automatic path.
+ * `over-scope` and `kickback-cap` are written verbatim to the sidecar but are
+ * outside the daemon's `HaltDisposition` union, so the raw text is the only
+ * place they can be recognized.
+ */
+export const RETAINED_HALT_CLASSES: ReadonlySet<string> = new Set([
+  'needs-human',
+  PLAN_GAP_HALT_CLASS,
+  OVER_SCOPE_HALT_CLASS,
+  KICKBACK_CAP_HALT_CLASS,
+]);
+
+/**
+ * The single retention decision every automatic path shares (sealed Story 3).
  *
- * The base-advance sweep, the progress re-kick eligibility predicate, and the
- * episode-end recovery sweep all call this rather than each deciding for
- * themselves; a fourth automatic path must call it too.
+ * `readHaltClass` yields the raw `.pipeline/HALT.class` text (or a
+ * `HaltDisposition`, which is a subset of it). A class this daemon does not
+ * recognize is retained — an unknown classification is never evidence that a
+ * halt is safe to clear — and an unreadable sidecar fails closed the same way.
+ *
+ * `retainUnclassified` distinguishes an ABSENT sidecar. The base-advance sweep
+ * has always retained one (its `unclassified` disposition) and its sealed
+ * retention matrix depends on that, while the progress re-kick and episode-end
+ * paths exist precisely to recover halts written without a class. Only that one
+ * case differs; the named classes are decided here for all three.
  */
 export async function resolveHaltRetention(
-  readHaltClass: () => Promise<HaltDisposition>,
+  readHaltClass: () => Promise<string>,
+  options: { retainUnclassified?: boolean } = {},
 ): Promise<HaltRetentionDecision> {
-  let haltClass: HaltDisposition = 'unclassified';
+  let raw: string;
   try {
-    haltClass = await readHaltClass();
+    raw = (await readHaltClass()).trim();
   } catch {
-    /* best-effort: an unreadable class is retained as unclassified */
+    return { haltClass: 'unclassified', retained: true };
   }
-  return { haltClass, retained: isOperatorActionHalt(haltClass) };
+  if (raw === '' || raw === 'unclassified') {
+    return { haltClass: 'unclassified', retained: options.retainUnclassified === true };
+  }
+  if (RETAINED_HALT_CLASSES.has(raw)) return { haltClass: raw, retained: true };
+  if (raw === 'mechanical' || raw === 'legacy') return { haltClass: raw, retained: false };
+  // An unknown classification is never evidence that a halt is safe to clear.
+  return { haltClass: raw, retained: true };
+}
+
+/** Raw `.pipeline/HALT.class` text for a worktree, or '' when absent. */
+export async function readRawHaltClass(worktreePath: string): Promise<string> {
+  try {
+    return await readFile(join(worktreePath, HALT_CLASS_MARKER), 'utf-8');
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -76,7 +113,8 @@ export async function resolveHaltRetention(
 export async function recoverEpisodeHalts(deps: {
   stampedHalts: () => Promise<string[]>;
   isOperatorParked?: (slug: string) => Promise<boolean>;
-  readHaltClass: (slug: string) => Promise<HaltDisposition>;
+  /** Raw `.pipeline/HALT.class` text for the slug (see `readRawHaltClass`). */
+  readHaltClass: (slug: string) => Promise<string>;
   clearMarker: (slug: string) => Promise<void>;
   log?: (message: string) => void;
 }): Promise<string[]> {
@@ -401,8 +439,10 @@ export async function rekickSweep(
     let haltClass: HaltDisposition | undefined;
     if (deps.readHaltClass) {
       const readHaltClass = deps.readHaltClass;
-      const decision = await resolveHaltRetention(() => readHaltClass(slug));
-      haltClass = decision.haltClass;
+      // The base-advance sweep retains an absent class sidecar too; its sealed
+      // retention matrix (Task 6) depends on that and is unchanged here.
+      const decision = await resolveHaltRetention(() => readHaltClass(slug), { retainUnclassified: true });
+      haltClass = decision.haltClass as HaltDisposition;
       if (decision.retained) {
         skipped.push(slug);
         let classReason = 'unknown';

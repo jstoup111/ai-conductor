@@ -168,6 +168,9 @@ async function resolveCliFeature(
       cwd: deps.cwd,
       resolveMainRoot: deps.resolveMainRoot,
       realpath: deps.realpath,
+      // `resolveBuildReviewFeatureIdentity` below is this command's existence
+      // proof; a separate stat would reject an injected resolution seam.
+      verifyDirectory: false,
     });
     if (!worktree) return undefined;
     const feature = await resolveBuildReviewFeatureIdentity(worktree, { resolveMainRoot, realpath });
