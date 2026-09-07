@@ -395,7 +395,7 @@ describe('visualizer selection', () => {
       await emitter.emit({ type: 'feature_complete', featureDesc: 'otel-without-fake' });
       await Promise.all(started.map((visualizer) => visualizer.stop()));
 
-      expect(started.map((visualizer) => visualizer.name)).toEqual(['otel']);
+      expect(started.map((visualizer) => visualizer.name)).toEqual(['otel', 'otel-metrics']);
       expect(await readFile(join(pipelineDir, 'otel.jsonl'), 'utf8')).toContain('bootstrap');
     } finally {
       await rm(pipelineDir, { recursive: true, force: true });

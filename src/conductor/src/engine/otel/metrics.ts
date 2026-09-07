@@ -139,13 +139,13 @@ function createInstruments(meter: Meter): MetricInstruments {
   const counter = (name: string, description: string) => meter.createCounter(name, { description });
   const gauge = (name: string, description: string, unit?: string) => meter.createGauge(name, { description, ...(unit ? { unit } : {}) });
   return {
-    durationHistogram: histogram('conductor.step.duration', 'Duration of conductor steps in milliseconds'),
+    durationHistogram: histogram('conductor.step.duration', 'Duration of conductor steps in milliseconds; quantiles saturate above 8 h (largest finite bucket boundary)'),
     retriesCounter: counter('conductor.step.retries', 'Number of retries per conductor step'),
     dispatchesCounter: counter('conductor.step.dispatches', 'Number of conductor step dispatches classified by metering status'),
     featureCostGauge: gauge('conductor.feature.cost', 'Authoritative shipped-record cost for a conductor feature', 'usd'),
     featureStepCostGauge: gauge('conductor.feature.step.cost', 'Authoritative cumulative feature cost by dimension', 'usd'),
     featureStepTokensGauge: gauge('conductor.feature.step.tokens', 'Authoritative cumulative feature tokens by dimension'),
-    closeoutDurationHistogram: histogram('conductor.pipeline.closeout.duration', 'Duration of pipeline closeout obligations in milliseconds'),
+    closeoutDurationHistogram: histogram('conductor.pipeline.closeout.duration', 'Duration of pipeline closeout obligations in milliseconds; quantiles saturate above 8 h (largest finite bucket boundary)'),
     runOutcomesCounter: counter('conductor.run.outcomes', 'Number of conductor runs by terminal outcome'),
     daemonBacklogGauge: gauge('conductor.daemon.backlog', 'Backlog entries by state'),
     daemonOldestAgeGauge: gauge('conductor.daemon.backlog.oldest_age', 'Oldest backlog age by state', 's'),

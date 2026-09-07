@@ -12,7 +12,11 @@ export class MetricsListener {
   private readonly terminal = new Set<string>();
   private emitter: ConductorEventEmitter | undefined;
 
-  constructor(private readonly recorder: MetricsRecorder, private readonly now: () => number = () => Date.now()) {}
+  constructor(
+    private readonly recorder: MetricsRecorder,
+    private readonly now: () => number = () => Date.now(),
+    private readonly featureName?: string,
+  ) {}
 
   start(emitter: ConductorEventEmitter): void {
     this.emitter = emitter;
@@ -30,11 +34,16 @@ export class MetricsListener {
   }
 
   private feature(event: ConductorEvent): MetricsRecorder | undefined {
-    const slug = forwardedFeatureOf(event) ?? (('slug' in event && typeof event.slug === 'string') ? event.slug : undefined);
+    const slug = this.featureOf(event);
     return slug ? this.recorder.forFeature(slug) : undefined;
   }
   private key(event: ConductorEvent, step: string): string | undefined {
-    const slug = forwardedFeatureOf(event); return slug ? `${slug}:${step}` : undefined;
+    const slug = this.featureOf(event); return slug ? `${slug}:${step}` : undefined;
+  }
+  private featureOf(event: ConductorEvent): string | undefined {
+    return forwardedFeatureOf(event)
+      ?? (('slug' in event && typeof event.slug === 'string') ? event.slug : undefined)
+      ?? this.featureName;
   }
   private handle(event: ConductorEvent): void {
     switch (event.type) {
@@ -64,8 +73,8 @@ export class MetricsListener {
       case 'gate_verdict': this.feature(event)?.onGateVerdict(event.step, event.satisfied ? 'pass' : 'fail'); break;
       case 'kickback': this.feature(event)?.onKickback(event.from, event.to); break;
       case 'build_stall': this.feature(event)?.onStall(event.reason); break;
-      case 'feature_complete': { const metric = this.feature(event); if (metric) { metric.onRunClose('complete'); const slug = forwardedFeatureOf(event); if (slug) this.terminal.add(slug); } break; }
-      case 'loop_halt': { const metric = this.feature(event); if (metric) { metric.onRunClose('halted'); const slug = forwardedFeatureOf(event); if (slug) this.terminal.add(slug); } break; }
+      case 'feature_complete': { const metric = this.feature(event); const slug = this.featureOf(event); if (metric) { metric.onRunClose('complete'); if (slug) this.terminal.add(slug); } break; }
+      case 'loop_halt': { const metric = this.feature(event); const slug = this.featureOf(event); if (metric) { metric.onRunClose('halted'); if (slug) this.terminal.add(slug); } break; }
       default: break;
     }
   }

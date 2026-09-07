@@ -52,7 +52,7 @@ describe('interactive OTel wiring', () => {
         pipelineDir: context.startContext.pipelineDir,
         runId: resource?.['conductor.run.id'],
       }).toEqual({
-        names: ['otel'],
+        names: ['otel', 'otel-metrics'],
         feature: 'interactive-feature',
         project: '/interactive-project',
         pipelineDir,
