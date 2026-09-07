@@ -72,6 +72,29 @@ and keep the auditor's window for grading:
   `git log --oneline -n 30`; filter `rg` output by path before listing. Do not re-read
   `HARNESS.md`, `CLAUDE.md`, or this skill; they are already in context.
 
+## Validator discipline (MUST — copy verbatim into every subagent brief)
+
+Both rules below are operator rules on the auditor and on every subagent it delegates to. Include
+them **verbatim** in each subagent brief; a subagent that never received them is not bound by them.
+
+1. **Read-only evidence.** The validator and every subagent it delegates to MUST NOT execute tests,
+   typecheck, lint, build, the integrity script, or any command that runs project code — including
+   `vitest`, `npm test`/`npm run`, `npx`, `node -e` probes over project modules, and bash test
+   scripts. Evidence is what the source and committed artifacts say: `file:line`, test names read
+   from test source, `git diff`/`git log` output, and `Scope:` trailers. If a criterion cannot be
+   judged without running code, grade it from the evidence available and say so in the rationale;
+   never run it. The only files the validator writes are its own outputs — `.pipeline/prd-audit.md`
+   and `.pipeline/accepted-widenings.json`. Nothing else is written, staged, or committed.
+2. **Never yield with delegated work outstanding.** The validator MUST NOT end its turn while any
+   subagent it spawned has not returned. Collect every digest before grading; if a subagent is slow,
+   wait for it — do not summarize partial results and do not report progress in place of a verdict.
+
+**Why.** Both rules exist to prevent a daemon halt class. Running project code from a validator
+mutates the worktree the SHIP gates fingerprint; and ending the turn with subagents outstanding ends
+the session in print mode, so the host's background-wait ceiling kills the pending subagents, no
+verdict artifact is written, and the engine's freshness handshake HALTs the feature
+(`post-dispatch verdict write handshake failed ... is stale`).
+
 ## Judge each criterion
 
 For every story criterion, record one row.
