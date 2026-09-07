@@ -133,6 +133,31 @@ describe('build-review domain', () => {
     expect(cite(2)).toBeUndefined();
   });
 
+  it('uses each frozen target source, title, and occurrence as current finding authority', () => {
+    const projection = {
+      rubric: 'testQuality', changedTestSelectors: ['test/widget.test.ts'], changedFiles: [],
+      // This compatibility field deliberately contains an unrelated sibling;
+      // current authority must instead consume Task 10's typed target.
+      changedTestTitles: [
+        { selector: 'test/widget.test.ts', titleText: 'bound assertion', staticExtractionFallback: false },
+        { selector: 'test/widget.test.ts', titleText: 'unrelated sibling', staticExtractionFallback: false },
+      ],
+      testScope: {
+        targets: [{
+          source: { fileName: 'test/widget.test.ts', side: 'head' },
+          declaration: { kind: 'test', titleChain: ['bound assertion'], occurrence: 1 },
+        }],
+      },
+    } as unknown as BuildReviewRubricProjection;
+    const references = buildReviewFindingReferenceContext(projection);
+    const target = { path: 'test/widget.test.ts', contentHash: titleHash('bound assertion'), display: 'bound assertion', occurrence: 1 };
+
+    expect(references.changedTestRegions).toEqual([target]);
+    expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: target }, references)).toBeDefined();
+    expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: { ...target, occurrence: 0 } }, references)).toBeUndefined();
+    expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: { ...target, contentHash: titleHash('unrelated sibling'), display: 'unrelated sibling' } }, references)).toBeUndefined();
+  });
+
   it('names each enumerated contract problem in a rejection so the repair turn can act on it', () => {
     const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:snapshot' };
     const locus = { path: 'test/widget.test.ts', contentHash: `sha256:${'a'.repeat(64)}`, display: 'widget renders' };
@@ -170,6 +195,27 @@ describe('build-review domain', () => {
     // Bounded: six named problems, then a count.
     const many = envelope(Array.from({ length: 8 }, () => ({ summary: 'x' })));
     expect(describe(many)).toMatch(/; and \d+ more problem\(s\)$/);
+  });
+
+  it('names missing, duplicate, unknown, foreign, and invalid candidate scope resolution authority', () => {
+    const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
+    const sourceRegion = { path: 'test/widget.test.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'bound assertion' };
+    const scopeContext = { candidates: [{ candidateId: 'bound-target', sourceRegion, obligationReferences: ['S5.4'] }] };
+    const envelope = (scopeResolutions: unknown) => judged([], { scopeResolutions });
+    const describe = (scopeResolutions: unknown) => describeBuildReviewJudgedResultRejection(
+      envelope(scopeResolutions), 'testQuality', expected,
+      { changedTests: [], changedTestRegions: [], changedPaths: [], planTasks: [] }, scopeContext,
+    );
+    const resolved = {
+      candidateId: 'bound-target', status: 'resolved', sourceRegion,
+      obligationReferences: ['S5.4'], associationReason: 'The frozen target proves this association.',
+    };
+
+    expect(describe(undefined)).toContain('missing');
+    expect(describe([resolved, resolved])).toContain('duplicate');
+    expect(describe([{ ...resolved, candidateId: 'unknown-target' }])).toContain('unknown');
+    expect(describe([{ ...resolved, sourceRegion: { ...sourceRegion, startLine: 13, endLine: 13 } }])).toContain('foreign');
+    expect(describe([{ candidateId: 'bound-target', status: 'resolved' }])).toContain('invalid');
   });
 
   it('retains each finding actionable summary and concrete evidence locations and derives the verdict', () => {
