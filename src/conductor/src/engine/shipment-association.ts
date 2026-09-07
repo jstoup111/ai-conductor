@@ -1,3 +1,5 @@
+import { readAsBuiltVerdictLine } from './as-built-verdict-line.js';
+
 export interface ShipmentAssociationInput {
   planStems: readonly string[];
   pr: {
@@ -194,7 +196,9 @@ function deliveredPlanGapSection(report: string): string | undefined {
 }
 
 function deliveredPlanGapFinding(report: string | undefined): RecordedShipmentFinding[] {
-  if (!report || !/^\s*Verdict\s*:\s*PLAN_GAP\s*$/im.test(report) || !/^\s*Outcome delivered\s*:\s*yes\s*$/im.test(report)) return [];
+  if (!report) return [];
+  const verdict = readAsBuiltVerdictLine(report);
+  if (!verdict.found || verdict.recognized !== 'PLAN_GAP' || !/^\s*Outcome delivered\s*:\s*yes\s*$/im.test(report)) return [];
   // AB-R10: a lap that BOTH remediated findings and delivered a PLAN_GAP
   // carries two `## Recorded Findings` sections — the remediation JSON block
   // this engine projects, and the reviewer's PLAN_GAP narrative. Taking the
