@@ -4,6 +4,12 @@ spec_hash: dddc245c7e778ecc9c8d600a4c02589999741d04b7afe851c32084602ff8ff07
 pr: https://github.com/jstoup111/ai-conductor/pull/2407
 shipped: 2026-09-07
 engine_version: 20260907T120758Z-4f8bdec36946
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/execution/claude-provider.test.ts:682 and :1627 — commit 24194784b rewrites two pre-existing Claude env-inheritance assertions to expect `TMUX`/`TMUX_PANE: undefined`; no plan task lists this file and the commit carries no `Task:` or `Scope:` trailer"
+    accepted: false
 ---
 
 ## Cost
