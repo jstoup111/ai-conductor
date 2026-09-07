@@ -578,6 +578,25 @@ conformance.
 Kickback counting is untouched by the consolidation — a `build_review` FAIL routed to `build` counts
 against the per-gate cap like any other.
 
+### Post-join build-review adjudication
+
+For a current aggregate FAIL, the daemon normally runs one `remediate` judgement after the rubric
+join. The judgement receives the complete unresolved finding set and the feature's prior case history;
+it does not replace the raw verdict in `.pipeline/build-review.json` or the operator's exact-finding
+dispositions. `build_review.adjudication.enabled: false` retains the legacy raw-FAIL route.
+
+The engine validates the judgement as a complete source-to-case mapping, assigns durable case and
+effect identities, and records the feature-local state before applying an effect. An action publishes
+a durable BUILD work order and returns to `build`; a justified deferral files or reuses its marked
+intake issue; a rejection has no external effect. In a mixed lap, an action route takes precedence
+while an uncovered infrastructure failure remains blocking after the BUILD attempt. Invalid,
+incomplete, stale, repeated, or unfinished case state halts rather than silently routing or passing.
+
+The case store and work order survive a daemon restart. BUILD stamps the work order before it starts,
+so an already attempted case cannot receive another free route; a later clean review settles cases
+whose sources are absent. Inspect the durable state and lifecycle events in
+[`artifacts`](../reference/artifacts.md#verdict-and-evidence-artifacts) when diagnosing a halt.
+
 Not every gate reruns on retry. For the three judged SHIP gates, a genuine fresh non-passing decision routes
 immediately, while an identical repeat on provably unchanged inputs only routes on the second attempt —
 retrying a judgement that already looked at the same bytes is not progress.
