@@ -749,6 +749,7 @@ describe("build-review coordinator: candidate scope resolutions", () => {
       ...candidateProjection,
       testScope: {
         candidates: [{
+          source: { side: 'head', fileName: 'test/widget.test.ts' },
           declaration: { span: { start: 9, end: 29 }, titleChain: ["widget persists state"] },
           markers: [{ reference: { kind: "criterion", id: "S5.1" } }],
         }],
@@ -763,6 +764,29 @@ describe("build-review coordinator: candidate scope resolutions", () => {
       candidateId: "source:head:test/widget.test.ts:9:29", sourceRegion: { ...scopeRegion, startLine: 12, endLine: 12 },
       obligationReferences: ["criterion:S5.1"],
     }] });
+  });
+
+  it('keeps equal-span fallback candidates bound to their own frozen source identity', () => {
+    const firstRegion = { ...scopeRegion, path: 'test/first.test.ts', display: 'first fallback' };
+    const secondRegion = { ...scopeRegion, path: 'test/second.test.ts', display: 'second fallback' };
+    const projection = {
+      ...candidateProjection,
+      testScope: {
+        candidates: [
+          { source: { side: 'head', fileName: firstRegion.path }, declaration: { span: { start: 9, end: 29 }, titleChain: [firstRegion.display] }, markers: [{ reference: { kind: 'criterion', id: 'S5.1' } }] },
+          { source: { side: 'head', fileName: secondRegion.path }, declaration: { span: { start: 9, end: 29 }, titleChain: [secondRegion.display] }, markers: [{ reference: { kind: 'criterion', id: 'S5.2' } }] },
+        ],
+        evidence: [
+          { id: 'source:head:test/first.test.ts:9:29', source: { side: 'head', fileName: firstRegion.path }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, content: 'expect(first).toBe(1)', contentHash: firstRegion.contentHash },
+          { id: 'source:head:test/second.test.ts:9:29', source: { side: 'head', fileName: secondRegion.path }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, content: 'expect(second).toBe(1)', contentHash: secondRegion.contentHash },
+        ],
+      },
+    } as never;
+
+    expect(buildReviewCandidateScopeResolutionContext(projection)).toEqual({ candidates: [
+      { candidateId: 'source:head:test/first.test.ts:9:29', sourceRegion: { ...firstRegion, startLine: 12, endLine: 12 }, obligationReferences: ['criterion:S5.1'] },
+      { candidateId: 'source:head:test/second.test.ts:9:29', sourceRegion: { ...secondRegion, startLine: 12, endLine: 12 }, obligationReferences: ['criterion:S5.2'] },
+    ] });
   });
 
   it("settles one source-grounded fallback resolution and its finding in one provider dispatch", async () => {
@@ -785,6 +809,10 @@ describe("build-review coordinator: candidate scope resolutions", () => {
         contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot", findings: [finding], scopeResolutions: [resolution], verdict: "FAIL",
       },
     });
+    expect(input.writeArtifact).toHaveBeenCalledWith(expect.objectContaining({
+      rubric: 'testQuality', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot',
+      result: expect.objectContaining({ contractVersion: 'v3', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', scopeResolutions: [resolution] }),
+    }));
   });
 
   it("retains an out-of-scope exclusion without inventing a quality finding", async () => {

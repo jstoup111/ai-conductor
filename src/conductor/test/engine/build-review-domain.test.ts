@@ -19,6 +19,7 @@ import {
   parseBuildReviewRubricResult,
   parseBuildReviewSkip,
   renderBuildReviewJudgedResultShape,
+  renderBuildReviewProviderPayloadShape,
   type BuildReviewInfrastructureFailureReason, describeBuildReviewJudgedResultRejection } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { matchesBuildReviewDisposition, type BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
@@ -358,6 +359,17 @@ describe('build-review domain', () => {
     expect(shape).toContain('contentHash');
     expect(shape).not.toMatch(/(?:^|[-_"\s])other(?:$|[-_"\s])/);
     expect([...vocabulary.members, ...vocabulary.concernKinds].some((member) => /(?:^|[-_])other(?:$|[-_])/.test(member))).toBe(false);
+  });
+
+  it('renders the provider payload without engine-stamped envelope identity', () => {
+    const shape = renderBuildReviewProviderPayloadShape('testQuality');
+
+    expect(shape).toContain('findings');
+    expect(shape).toContain('scopeResolutions');
+    expect(shape).toContain('counterfactualSensitivity');
+    expect(shape).not.toContain('lapId');
+    expect(shape).not.toContain('snapshotDigest');
+    expect(shape).not.toContain('contractVersion');
   });
 
   it('round-trips a dispatch-failure report and rejects other shapes', () => {
