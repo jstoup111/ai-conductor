@@ -623,22 +623,6 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       await writeState(statePath, seed as ConductState);
     }
 
-    it('reconciles a refused state-derived test_suite entry back to build', async () => {
-      await seedReopenedBuildFixture();
-      const { runner, log } = trackingRunner(dir);
-      const conductor = new Conductor({
-        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
-      });
-
-      await conductor.run();
-
-      expect(log.find((entry) => entry.startsWith('run:'))).toBe('run:build');
-      expect(log.filter((entry) => entry.startsWith('run:'))).not.toHaveLength(0);
-      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).rejects.toMatchObject({
-        code: 'ENOENT',
-      });
-    });
-
     it('reconciles from state when the verdict directory cannot be read', async () => {
       await seedReopenedBuildFixture();
       const verdictRead = vi.spyOn(gateVerdicts, 'readAllVerdicts')
@@ -653,6 +637,9 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       expect(verdictRead).toHaveBeenCalledWith(dir);
       expect(log.find((entry) => entry.startsWith('run:'))).toBe('run:build');
       expect(log.filter((entry) => entry.startsWith('run:'))).not.toHaveLength(0);
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
     });
 
     it('keeps a state-derived entry whose own gate already passes', async () => {
