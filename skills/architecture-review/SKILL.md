@@ -483,6 +483,28 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
   - Subagents inherit the context budget above. A subagent that cannot finish within it reports
     what it covered and what it did not; the reviewer records the uncovered surface as unverified
     rather than silently passing it.
+- **Validator discipline (MUST — copy verbatim into every subagent brief).** Both rules below are
+  operator rules on the reviewer and on every subagent it delegates to. Include them **verbatim** in
+  each subagent brief; a subagent that never received them is not bound by them.
+  1. **Read-only evidence.** The validator and every subagent it delegates to MUST NOT execute
+     tests, typecheck, lint, build, the integrity script, or any command that runs project code —
+     including `vitest`, `npm test`/`npm run`, `npx`, `node -e` probes over project modules, and
+     bash test scripts. Evidence is what the source and committed artifacts say: `file:line`, test
+     names read from test source, `git diff`/`git log` output, and `Scope:` trailers. Reachability
+     is proved by citing the caller chain in the source, never by running it. If a check cannot be
+     judged without running code, grade it from the evidence available and say so in the rationale;
+     never run it. The only files the validator writes are its own outputs —
+     `.pipeline/architecture-review-as-built.md` and its review-required markers. Nothing else is
+     written, staged, or committed.
+  2. **Never yield with delegated work outstanding.** The validator MUST NOT end its turn while any
+     subagent it spawned has not returned. Collect every digest before grading; if a subagent is
+     slow, wait for it — do not summarize partial results and do not report progress in place of a
+     verdict.
+  - **Why.** Both rules exist to prevent a daemon halt class. Running project code from a validator
+    mutates the worktree the SHIP gates fingerprint; and ending the turn with subagents outstanding
+    ends the session in print mode, so the host's background-wait ceiling kills the pending
+    subagents, no verdict artifact is written, and the engine's freshness handshake HALTs the
+    feature (`post-dispatch verdict write handshake failed ... is stale`).
 - Do NOT re-run §2/§3/§5 (feasibility/complexity/domain pre-checks) — those belong to the DECIDE
   pass. This is a code-vs-approved-design pattern match plus the reachability sweep above,
   deliberately cheap.
