@@ -3539,7 +3539,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             if (aggregate) {
               const effectiveResolution = await (
                 ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
-              )(dir, aggregate);
+              )(dir, aggregate, {
+                minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(ctx.config ?? {}).rubrics)
+                  .map(([id, policy]) => [id, policy.min_confidence])),
+              });
               if (!effectiveResolution.ok) {
                 return {
                   done: false,

@@ -10985,6 +10985,8 @@ export class Conductor {
                       this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
                     )(this.projectRoot, verdictRaw, {
                       emit: async (event) => { await this.events.emit(event); },
+                      minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(this.config).rubrics)
+                        .map(([id, policy]) => [id, policy.min_confidence])),
                     });
                     if (!rawBuildReviewFailIsEffectivelyAccepted(resolution)) return false;
                   } catch {

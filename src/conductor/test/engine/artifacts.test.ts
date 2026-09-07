@@ -5512,23 +5512,24 @@ Task 1 → Task 2
       const stale = new Date(Date.now() - 10_000);
       await utimes(verdictPath, stale, stale);
 
+      const effectiveResolver = vi.fn(async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: dir, feature: 'fixture' },
+        effective: {
+          rawVerdict: 'PASS' as const,
+          verdict: 'PASS' as const,
+          acceptedFindingIds: [],
+          unresolvedFindingIds: [],
+          suppressedFindingIds: [],
+          skippedRubrics: [],
+          infrastructureFailureRubrics: [],
+          uncoveredInfrastructureFailureRubrics: [],
+        },
+      }));
       const result = await checkStepCompletion(dir, 'build_review', {
         sessionStartedAt: Date.now(),
-        config: { gate_code_validity: { enabled: true } },
-        buildReviewEffectiveResolver: async () => ({
-          ok: true as const,
-          feature: { version: 'v1' as const, repository: dir, feature: 'fixture' },
-          effective: {
-            rawVerdict: 'PASS' as const,
-            verdict: 'PASS' as const,
-            acceptedFindingIds: [],
-            unresolvedFindingIds: [],
-            suppressedFindingIds: [],
-            skippedRubrics: [],
-            infrastructureFailureRubrics: [],
-            uncoveredInfrastructureFailureRubrics: [],
-          },
-        }),
+        config: { gate_code_validity: { enabled: true }, build_review: { rubrics: { testQuality: { enabled: true, min_confidence: 70 } } } },
+        buildReviewEffectiveResolver: effectiveResolver,
         git: async (args) => {
           if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
           if (args[0] === 'merge-base' && args[1] === '--is-ancestor') return { exitCode: 0, stdout: '', stderr: '' };
@@ -5542,6 +5543,9 @@ Task 1 → Task 2
       expect(result).toMatchObject({
         done: true,
         verdictFreshness: { outcome: 'preserved_surface_miss' },
+      });
+      expect(effectiveResolver).toHaveBeenCalledWith(dir, expect.anything(), {
+        minConfidence: { testQuality: 70 },
       });
       expect(result.staleLap).toBeUndefined();
     });
