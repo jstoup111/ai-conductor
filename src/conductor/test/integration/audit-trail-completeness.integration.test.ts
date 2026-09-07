@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:1, task:6
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Every executed step leaves positive evidence —
 // including non-verdict steps" (Story 3,
@@ -59,6 +59,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   feature_dispatch_ended: 'not-audited-by-design',
   feature_shipped: 'not-audited-by-design',
   project_setup: 'not-audited-by-design',
+  memory_setup: 'not-audited-by-design',
   setup_repair: 'not-audited-by-design',
   coverage_binding_judged: 'not-audited-by-design',
   coverage_binding_disabled: 'not-audited-by-design',
@@ -207,6 +208,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   feature_dispatch_ended: { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete' },
   feature_shipped: { type: 'feature_shipped', slug: 'feature', active: { state: 'unavailable' } },
   project_setup: { type: 'project_setup', ran: false, reason: 'marker-valid' },
+  memory_setup: { type: 'memory_setup', before: 'absent', canonical: true },
   setup_repair: {
     type: 'setup_repair',
     disposition: 'engine-committed',

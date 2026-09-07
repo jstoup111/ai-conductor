@@ -144,6 +144,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'operator_rewind',
   'setup_repair',
   'project_setup',
+  'memory_setup',
   'plan_growth',
   'kickback_budget_adjustment_authorized',
   'coverage_binding_judged',
@@ -193,6 +194,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'operator_rewind',
   'setup_repair',
   'project_setup',
+  'memory_setup',
   'plan_growth',
   'contained_live_checkout_drift',
   'self_host_containment_verdict',
@@ -303,6 +305,22 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
+  it('persists and renders memory setup without widening audit or OpenTelemetry sinks', () => {
+    expect({
+      sinks: EVENT_SINKS.memory_setup,
+      persisted: persistedEventTypes(),
+      rendered: renderedEventTypes(),
+      audited: auditedEventTypes(),
+      otel: otelEventTypes(),
+    }).toMatchObject({
+      sinks: { render: true, persist: true, audit: false, otel: false },
+      persisted: expect.arrayContaining(['memory_setup']),
+      rendered: expect.arrayContaining(['memory_setup']),
+      audited: expect.not.arrayContaining(['memory_setup']),
+      otel: expect.not.arrayContaining(['memory_setup']),
+    });
+  });
+
   it('persists coverage-binding terminal observations without rendering, audit, or OpenTelemetry', () => {
     expect({
       judged: EVENT_SINKS.coverage_binding_judged,

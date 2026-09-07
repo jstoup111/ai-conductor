@@ -238,6 +238,16 @@ export type ConductorEvent =
     }
   | { type: 'project_setup'; ran: boolean; reason: 'marker-valid' | 'no-marker' | 'no-script' | 'script-changed' | 'base-moved' | 'marker-invalid' | 'forced' }
   | {
+      /** The memory-path state observed before daemon setup ran. */
+      type: 'memory_setup';
+      /** Whether `.memory` was absent, a real directory, or a symlink. */
+      before: 'absent' | 'directory' | 'symlink';
+      /** Whether `.memory` points to the canonical store after setup. */
+      canonical: boolean;
+      /** Sanitized setup failure or non-canonical outcome, when available. */
+      reason?: string;
+    }
+  | {
       /** Durable plan-task growth accounting after a remediation append. */
       type: 'plan_growth';
       authored: number;
