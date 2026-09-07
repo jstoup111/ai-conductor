@@ -4,6 +4,12 @@ spec_hash: 167a58658b3d74dbfc92fe365af87a18652da8d3d61419e1f991bccb378327bd
 pr: https://github.com/jstoup111/ai-conductor/pull/2405
 shipped: 2026-09-07
 engine_version: 20260907T120758Z-4f8bdec36946
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/integration/gate-loop.test.ts:1979 — an execa mock in a file named by no plan task gains a `cat-file --batch` branch so the pre-existing integration test keeps matching the production read shape; test-only, no shipped behavior added"
+    accepted: true
 ---
 
 ## Cost
