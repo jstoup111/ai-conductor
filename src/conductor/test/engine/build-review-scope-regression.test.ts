@@ -1,9 +1,18 @@
 // Covers: task:18
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
 import { compareBuildReviewScope } from '../../scripts/compare-build-review-scope.mts';
 
 describe('portable build-review scope regression (#2231)', () => {
+  it('registers the portable comparison through its configured production command', async () => {
+    const packageJson = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')) as {
+      scripts?: Record<string, string>;
+    };
+
+    expect(packageJson.scripts?.['compare:build-review-scope']).toContain('scripts/compare-build-review-scope.mts');
+  });
+
   it('compares the real frozen assembly and projection without Git objects, daemon state, or a provider', async () => {
     const result = await compareBuildReviewScope();
 

@@ -73,6 +73,33 @@ describe('build-review test scope association evidence', () => {
     }]);
   });
 
+  it('merges group-binding and dependency facts for one changed suite into one settleable candidate', () => {
+    const result = analyzeBuildReviewTestScope({
+      base: {
+        source: { fileName: 'test/orders.test.ts', bytes: Buffer.from("// Covers: S2.1\ndescribe.each([['base']])('orders %s', () => { it('creates', () => { expect(true).toBe(true); }); });\n") },
+        storiesText,
+        planText: '### Task 7: Example\n',
+      },
+      head: {
+        source: { fileName: 'test/orders.test.ts', bytes: Buffer.from("// Covers: S2.1\ndescribe.each([['changed']])('orders %s', () => { it('creates', () => { expect(true).toBe(true); }); });\n") },
+        storiesText,
+        planText: '### Task 7: Example\n',
+      },
+      dependencyEffects: [{
+        seed: { source: { fileName: 'test/orders.test.ts', side: 'head' } },
+        chain: [{ source: { fileName: 'test/orders.test.ts', side: 'head' } }, { source: { fileName: 'src/order-helper.ts', side: 'head' } }],
+        changedSources: [{ source: { fileName: 'src/order-helper.ts', side: 'head' } }],
+      }],
+    });
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      declaration: { kind: 'group', titleChain: ['orders %s'] },
+      reasons: expect.arrayContaining(['declaration-group', 'affected-dependency']),
+      affectedDependencies: [{ changedSources: [{ source: { fileName: 'src/order-helper.ts' } }] }],
+    });
+  });
+
   it('retains a removed hook or fixture as base-side shared evidence for its opted-in suite', () => {
     const hook = scope(
       `// Covers: S2.1\ndescribe('removed setup', () => {\n  beforeEach(() => { seed('base'); });\n  it('uses setup', () => { expect(true).toBe(true); });\n});`,

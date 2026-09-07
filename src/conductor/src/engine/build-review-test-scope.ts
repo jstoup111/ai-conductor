@@ -16,6 +16,7 @@ import {
   type TestDeclarationDiagnostic,
   type TestDeclarationSpan,
 } from './build-review-test-declarations.js';
+import { buildReviewScopeCandidateIdentityKey } from './build-review-scope-identity.js';
 import type { BuildReviewScopeDependencyEffect } from './build-review-scope-dependencies.js';
 import { parseCoversMarkers } from './covers-marker.js';
 import ts from 'typescript';
@@ -211,6 +212,61 @@ function candidate(
   });
 }
 
+function uniqueAssociationChanges(
+  changes: readonly CoversMarkerAssociationChange[],
+): readonly CoversMarkerAssociationChange[] {
+  const seen = new Set<string>();
+  return Object.freeze(changes.filter((change) => {
+    const key = JSON.stringify(change);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }));
+}
+
+function uniqueDependencyEffects(
+  effects: readonly BuildReviewScopeDependencyEffect[],
+): readonly BuildReviewScopeDependencyEffect[] {
+  const seen = new Set<string>();
+  return Object.freeze(effects.filter((effect) => {
+    const key = JSON.stringify(effect);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }));
+}
+
+/** Co-occurring scope facts for one pinned declaration need one provider disposition. */
+function collapseCandidates(
+  candidates: readonly UncertainBuildReviewTestScopeCandidate[],
+): readonly UncertainBuildReviewTestScopeCandidate[] {
+  const collapsed = new Map<string, UncertainBuildReviewTestScopeCandidate>();
+  for (const next of candidates) {
+    const span = next.declaration?.span ?? next.diagnostic?.span;
+    const key = buildReviewScopeCandidateIdentityKey({ source: next.source, region: span });
+    const current = collapsed.get(key);
+    if (!current) {
+      collapsed.set(key, next);
+      continue;
+    }
+    const affectedDependencies = uniqueDependencyEffects([
+      ...(current.affectedDependencies ?? []),
+      ...(next.affectedDependencies ?? []),
+    ]);
+    collapsed.set(key, candidate(
+      current.source,
+      current.declaration ?? next.declaration,
+      [...current.markers, ...next.markers],
+      uniqueAssociationChanges([...current.associationChanges, ...next.associationChanges]),
+      [...current.reasons, ...next.reasons],
+      current.diagnostic ?? next.diagnostic,
+      current.affectedGroup ?? next.affectedGroup,
+      affectedDependencies,
+    ));
+  }
+  return Object.freeze([...collapsed.values()]);
+}
+
 /**
  * Preserve a parser/analyzer outage as source-bound uncertainty.  This is
  * deliberately narrower than a file fallback: without a feature-local Covers
@@ -244,7 +300,7 @@ export function unavailableBuildReviewTestScope(
   return Object.freeze({
     changedDeclarations: Object.freeze([]),
     targets: Object.freeze([]),
-    candidates: Object.freeze(candidates),
+    candidates: collapseCandidates(candidates),
     notes: Object.freeze([Object.freeze({ kind: 'declaration-uncertainty' as const, diagnostic })]),
     affectedGroups: Object.freeze([]),
     sharedSources: Object.freeze([]),
@@ -633,7 +689,7 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
   return Object.freeze({
     changedDeclarations: Object.freeze([...changedDeclarations]),
     targets: Object.freeze(targets),
-    candidates: Object.freeze(candidates),
+    candidates: collapseCandidates(candidates),
     notes: Object.freeze(notes),
     affectedGroups,
     sharedSources: uniqueSourceReferences(affectedGroups.flatMap((group) => group.sharedSources)),

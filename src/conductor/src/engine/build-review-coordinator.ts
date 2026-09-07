@@ -6,6 +6,7 @@ import {
   parseBuildReviewDispatchFailure,
   buildReviewFindingReferenceContext,
   deriveBuildReviewScopeIncompleteFault,
+  isLegacyBuildReviewTestScope,
   parseBuildReviewJudgedResult,
   type BuildReviewJudgedResult,
   type BuildReviewLapId,
@@ -30,6 +31,7 @@ import {
   type BuildReviewBranchArtifact,
 } from "./build-review-artifacts.js";
 import type { BuildReviewFrozenInputs } from "./build-review-inputs.js";
+import { buildReviewScopeCandidateIdentityKey } from "./build-review-scope-identity.js";
 import {
   deriveBuildReviewRubricProjections,
   type BuildReviewRubricProjections,
@@ -280,10 +282,19 @@ export function buildReviewCandidateScopeResolutionContext(projection: BuildRevi
     const candidateSource = record(candidate?.source);
     const declaration = record(candidate?.declaration) ?? record(candidate?.diagnostic);
     const span = record(declaration?.span);
+    const candidateIdentity = candidateSource && span
+      ? buildReviewScopeCandidateIdentityKey({
+          source: { fileName: candidateSource.fileName as string, side: candidateSource.side as 'base' | 'head' },
+          region: { start: span.start as number, end: span.end as number },
+        })
+      : undefined;
     const matchedEvidence = evidence.map(record).find((entry) => {
       const source = record(entry?.source); const region = record(entry?.region);
-      return source?.side === candidateSource?.side && source?.fileName === candidateSource?.fileName &&
-        region?.start === span?.start && region?.end === span?.end;
+      return candidateIdentity !== undefined && source && region &&
+        buildReviewScopeCandidateIdentityKey({
+          source: { fileName: source.fileName as string, side: source.side as 'base' | 'head' },
+          region: { start: region.start as number, end: region.end as number },
+        }) === candidateIdentity;
     });
     const evidenceSource = record(matchedEvidence?.source);
     const evidenceRegion = record(matchedEvidence?.region);
@@ -409,9 +420,9 @@ export async function coordinateBuildReviewRubrics(
   // a review target. A snapshot from before typed scope existed retains its
   // legacy selector behavior solely for compatibility.
   const typedScope = input.inputs.sourceSnapshot.testScope;
-  const hasEstablishedTargets = typedScope === undefined
+  const hasEstablishedTargets = isLegacyBuildReviewTestScope(typedScope)
     ? inScopeTests.length > 0
-    : (typedScope.targets?.length ?? 0) > 0;
+    : (typedScope?.targets?.length ?? 0) > 0;
   const hasConcreteCandidates = (typedScope?.candidates?.length ?? 0) > 0;
   if (input.config.enabled && testQualityPolicy?.enabled && !hasEstablishedTargets && !hasConcreteCandidates) {
     // An empty scope is still a settled scope assessment: publish its counts and

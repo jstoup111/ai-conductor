@@ -23,6 +23,14 @@ import {
   unavailableBuildReviewTestScope,
 } from './build-review-test-scope.js';
 import type { TestDeclarationSpan } from './build-review-test-declarations.js';
+import {
+  buildReviewScopeCandidateIdentityKey,
+  type BuildReviewScopeCandidateIdentityReference,
+} from './build-review-scope-identity.js';
+export {
+  buildReviewScopeCandidateIdentityKey,
+  type BuildReviewScopeCandidateIdentityReference,
+} from './build-review-scope-identity.js';
 import { discoverBuildReviewScopeDependencies } from './build-review-scope-dependencies.js';
 import {
   BuildReviewScopeSource,
@@ -347,17 +355,8 @@ function mergeTestScopes(scopes: readonly BuildReviewTestScope[]): BuildReviewTe
   });
 }
 
+type PinnedScopeRegion = BuildReviewScopeCandidateIdentityReference;
 type PinnedScopeSourceSide = 'base' | 'head';
-
-interface PinnedScopeRegion {
-  readonly source: { readonly fileName: string; readonly side: PinnedScopeSourceSide };
-  readonly region?: TestDeclarationSpan;
-}
-
-function scopeEvidenceKey(reference: PinnedScopeRegion): string {
-  const { source, region } = reference;
-  return `${source.side}\u0000${source.fileName}\u0000${region?.start ?? 0}\u0000${region?.end ?? -1}`;
-}
 
 function frozenScopeReference(
   fileName: string,
@@ -383,7 +382,7 @@ async function pinScopeEvidence(
 ): Promise<readonly BuildReviewPinnedScopeEvidence[]> {
   const references = new Map<string, PinnedScopeRegion>();
   const add = (reference: PinnedScopeRegion): void => {
-    references.set(scopeEvidenceKey(reference), reference);
+    references.set(buildReviewScopeCandidateIdentityKey(reference), reference);
   };
   const addSourceReference = (reference: BuildReviewTestSourceReference): void => add(reference);
   const addBinding = (binding: { readonly marker: { readonly span: TestDeclarationSpan }; readonly owner?: { readonly declaration: { readonly span: TestDeclarationSpan } } }, fileName: string, side: PinnedScopeSourceSide): void => {
