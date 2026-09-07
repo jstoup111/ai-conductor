@@ -1,3 +1,4 @@
+// Covers: task:3
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,7 +9,13 @@ import {
   type ConductorOptions,
   type StepRunner,
 } from '../../src/engine/conductor.js';
-import { runDaemon, type DaemonDeps, type FeatureOutcome } from '../../src/engine/daemon.js';
+import {
+  pickEligible,
+  runDaemon,
+  type DaemonDeps,
+  type FeatureOutcome,
+} from '../../src/engine/daemon.js';
+import { isHalted } from '../../src/engine/daemon-deps.js';
 import {
   makeRunFeature,
   type FeatureRunnerDeps,
@@ -19,6 +26,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { renderReport } from '../../src/engine/report-renderer.js';
+import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 
 const FEATURE_SLUG = 'boundary-aware-operator-parking';
 
@@ -110,6 +118,45 @@ afterEach(async () => {
 });
 
 describe('boundary-aware operator parking acceptance', () => {
+  it('Task 3: returns a boundary-parked worktree to selection after its operator park is cleared', async () => {
+    const worktreeBase = await makeRoot('operator-park-selection-');
+    const worktreeRoot = join(worktreeBase, FEATURE_SLUG);
+    await mkdir(worktreeRoot, { recursive: true });
+    const statePath = join(worktreeRoot, 'conduct-state.json');
+    await seedPending(statePath, ['memory', 'explore']);
+
+    let parked = false;
+    const conductor = makeConductor(
+      worktreeRoot,
+      statePath,
+      {
+        run: vi.fn(async () => {
+          parked = true;
+          return { success: true };
+        }),
+      },
+      { operatorParkBoundary: async () => parked },
+    );
+
+    const termination = await conductor.run() as unknown as OperatorParkedTermination;
+    const claims = new InMemoryWorkClaims();
+    claims.park(FEATURE_SLUG);
+    const selected = await pickEligible(
+      { items: [{ slug: FEATURE_SLUG, tier: 'M', track: 'technical' }] },
+      {
+        claims,
+        isHalted: (slug) => isHalted(worktreeBase, slug),
+        isParked: async () => false,
+      },
+    );
+
+    expect(termination).toMatchObject({
+      kind: 'operator-parked',
+      boundary: { kind: 'step', name: 'memory' },
+    });
+    expect(selected?.slug).toBe(FEATURE_SLUG);
+  });
+
   it('FR-1/FR-3/FR-4/FR-10: drains one serial step, persists its normal result, and stops before the next step', async () => {
     const root = await makeRoot('operator-park-serial-');
     const statePath = join(root, 'conduct-state.json');
