@@ -143,7 +143,17 @@ export function gitTreeSource(
       }
     },
     async readFile(relPath) {
-      return (await prefetchDocs()).get(relPath) ?? null;
+      const docs = await prefetchDocs();
+      if (relPath.startsWith('.docs/')) return docs.get(relPath) ?? null;
+
+      try {
+        const { stdout } = await execFile('git', ['show', `${baseBranch}:${relPath}`], {
+          cwd: projectRoot,
+        });
+        return stdout;
+      } catch {
+        return null;
+      }
     },
   };
 }

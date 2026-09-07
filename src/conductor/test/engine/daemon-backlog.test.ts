@@ -1851,19 +1851,21 @@ describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
     },
   });
 
-  const writeCorpus = async (count: number) => {
+  const writeCorpus = async (count: number, includeCoherence = true) => {
     for (let index = 0; index < count; index += 1) {
       const slug = `2026-09-06-prefetch-${index}`;
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
       await mkdir(join(dir, '.docs/stories'), { recursive: true });
       await mkdir(join(dir, '.docs/complexity'), { recursive: true });
       await mkdir(join(dir, '.docs/track'), { recursive: true });
-      await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+      if (includeCoherence) await mkdir(join(dir, '.docs/coherence'), { recursive: true });
       await writeFile(join(dir, `.docs/plans/${slug}.md`), `# Plan\n**Stories:** .docs/stories/${slug}.md\n### Task 1\n**Dependencies:** none\n`);
       await writeFile(join(dir, `.docs/stories/${slug}.md`), '# Stories\n**Status:** Accepted\n');
-      await writeFile(join(dir, `.docs/complexity/${slug}.md`), 'Complexity: S\n');
+      await writeFile(join(dir, `.docs/complexity/${slug}.md`), 'Tier: S\n');
       await writeFile(join(dir, `.docs/track/${slug}.md`), 'Track: technical\n');
-      await writeFile(join(dir, `.docs/coherence/${slug}.md`), '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n|---|---|---|---|---|\n| story | S1 | Task 1 | covered | fixture |\n');
+      if (includeCoherence) {
+        await writeFile(join(dir, `.docs/coherence/${slug}.md`), '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n|---|---|---|---|---|\n| story | S1 | Task 1 | covered | fixture |\n');
+      }
     }
     await mkdir(join(dir, '.docs/decisions'), { recursive: true });
     for (let index = 0; index < count; index += 1) {
@@ -1915,6 +1917,43 @@ describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
     });
 
     expect([smallCorpusCalls, invocations.length]).toEqual([1, 1]);
+  });
+
+  it('reports absent in-subtree coherence and intake artifacts from the prefetched memo', async () => {
+    await writeCorpus(3, false);
+    const invocations: number[] = [];
+    const runner: GitBlobBatchRunner = async (file, args, options) => {
+      invocations.push(1);
+      return execaCommand(file, args, options);
+    };
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: gitTreeSource(dir, baseBranch, { blobRunner: runner }),
+    });
+
+    expect([result.items.length, invocations.length]).toEqual([3, 1]);
+  });
+
+  it('reads committed out-of-corpus files and rejects uncommitted ones', async () => {
+    await mkdir(join(dir, 'notes'), { recursive: true });
+    await writeFile(join(dir, 'notes/linked-stories.md'), '# External stories\n');
+    await git(['add', 'notes/linked-stories.md']);
+    await git(['commit', '-q', '-m', 'add external stories']);
+
+    const tree = gitTreeSource(dir, baseBranch);
+
+    await expect(
+      Promise.all([tree.readFile('notes/linked-stories.md'), tree.readFile('notes/not-committed.md')]),
+    ).resolves.toEqual(['# External stories\n', null]);
+  });
+
+  it('returns an empty backlog when the base branch has no documentation subtree', async () => {
+    await expect(discoverBacklog(dir, undefined, undefined, { baseBranch })).resolves.toEqual({
+      items: [],
+      waiting: [],
+      blocked: [],
+      gated: [],
+    });
   });
 });
 
