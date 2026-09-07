@@ -204,6 +204,54 @@ ${row}
     });
   });
 
+  it('rejects a trailing table whose first row is prose before a stranded task mapping row', () => {
+    const result = parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| task | task:1 | story:1 | covered | "mapping evidence" |
+
+| Topic | Notes | Details | Status | Evidence |
+| --- | --- | --- | --- | --- |
+| Follow-up | This is ordinary prose. | No mapping. | noted | prose evidence |
+| task | task:2 | story:1 | covered | "stranded mapping evidence" |
+`);
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'unparseable-coherence-artifact',
+      detail: {
+        line: 8,
+        message: expect.stringContaining(
+          'mapping rows must appear in a table whose first data row is a mapping row',
+        ),
+      },
+    });
+  });
+
+  it('ignores a trailing table containing only ordinary-prose data rows', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| task | task:1 | story:1 | covered | "mapping evidence" |
+
+| Topic | Notes |
+| --- | --- |
+| Follow-up | This is ordinary prose in a table. |
+| Next step | This is more ordinary prose in a table. |
+`),
+    ).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'task',
+          id: 'task:1',
+          citedIds: ['story:1'],
+          verdict: 'covered',
+          quote: 'mapping evidence',
+        },
+      ],
+    });
+  });
+
   it('preserves mapping rows separated by a blank-line paragraph', () => {
     expect(
       parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
