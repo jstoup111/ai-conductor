@@ -224,6 +224,9 @@ export class OtelVisualizer implements VisualizerPlugin {
     build_progress: (event) => {
       this.spanManager!.onBuildProgress(event);
     },
+    unattributed_progress: (event) => {
+      this.spanManager!.onUnattributedProgress(event);
+    },
     build_no_progress: (event) => {
       this.spanManager!.onBuildNoProgress(event);
     },
