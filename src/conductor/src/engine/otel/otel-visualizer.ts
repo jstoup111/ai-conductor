@@ -161,7 +161,7 @@ const METRIC_EXPORT_INTERVAL_MS = 60_000;
  * bound is considered failed; the export is abandoned and warnOnce fires. */
 const EXPORT_TIMEOUT_MS = 5_000;
 
-type OtelEventHandlerTable = {
+export type OtelEventHandlerTable = {
   [Type in OtelTracedEventType]: (event: Extract<ConductorEvent, { type: Type }>) => void;
 };
 
