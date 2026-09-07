@@ -71,6 +71,10 @@ describe('build-review local dependency scope', () => {
       dependencyEffects: dependencies.effects,
     });
 
+    expect(dependencies.effects).toMatchObject([{
+      seed: { source: { fileName: 'test/unmarked.test.ts' } },
+      chain: [{}, { source: { fileName: 'src/helper.ts' } }],
+    }]);
     expect(result.candidates).toEqual([]);
   });
 
