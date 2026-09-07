@@ -800,6 +800,8 @@ export interface OrphanTaskFinding {
   gapId: string;
   /** The task's title, taken from its `### Task <id>: <title>` heading. */
   title: string;
+  /** Why a cited story reference could not be bound, when the task cited one. */
+  detail?: string;
 }
 
 export type OrphanTaskResult =
@@ -900,7 +902,10 @@ export function checkOrphanTasks(
     const isSupportingType = SUPPORTING_TYPES.has(type);
     if (isSupportingType && declaresSupportingPurpose(storyLineRaw)) continue;
 
-    gaps.push({ gapId: `task-${task.id}`, title: task.title });
+    const detail = citedStoryIds.length > 0
+      ? `Unbindable **Story:** reference: ${citedStoryIds.join(', ')}. Accepted spellings: story-N, Story N, bare N, epic-N.`
+      : undefined;
+    gaps.push({ gapId: `task-${task.id}`, title: task.title, detail });
   }
 
   if (gaps.length > 0) return { ok: false, reason: 'orphan-task', gaps };
@@ -1224,7 +1229,7 @@ export function validateCoherence(inputs: ValidateCoherenceInputs): ValidateCohe
         layer: 'orphan-task',
         gapId: gap.gapId,
         artifact: 'plan',
-        item: gap.title,
+        item: gap.detail ? `${gap.title} — ${gap.detail}` : gap.title,
       });
     }
   }
