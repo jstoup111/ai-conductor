@@ -6,6 +6,9 @@ import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
 import { createLiveRegion } from '../../src/ui/live-region.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
+import { startFeatureEventPersistence } from '../../src/engine/event-persister.js';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 
 class CaptureStream extends Writable {
   chunks: string[] = [];
@@ -133,5 +136,33 @@ describe('TerminalSubscriber', () => {
     expect(handle).toHaveBeenCalledOnce();
     expect(handle).toHaveBeenCalledWith(event);
     expect(stream.output()).toBe('  gate plan: satisfied — covered\n');
+  });
+
+  it('does not re-render a feature-forwarded gate verdict on the daemon-wide renderer', async () => {
+    const stream = new CaptureStream();
+    const terminalRenderer = new TerminalRenderer({
+      stateFilePath: '/tmp/test-state.json',
+      steps: ALL_STEPS,
+      readStateFn: async () => ({ ok: true, value: {} }),
+      liveRegion: createLiveRegion({ stream, forceTTY: false }),
+    });
+    const handle = vi.spyOn(terminalRenderer, 'handle');
+    subscriber = new TerminalSubscriber(emitter, renderCallback, terminalRenderer);
+    subscriber.start();
+
+    // A feature-scoped bus renders its own events (tagged) via its own
+    // listeners and then forwards a marked copy onto the daemon-wide bus this
+    // subscriber listens to. Rendering that copy here duplicates the line.
+    const worktreePath = mkdtempSync(join(process.env.TMPDIR ?? '/tmp', 'subscriber-forward-'));
+    mkdirSync(join(worktreePath, '.pipeline'), { recursive: true });
+    const featureEvents = startFeatureEventPersistence(worktreePath, emitter);
+    await featureEvents.events.emit({
+      type: 'gate_verdict', step: 'plan', satisfied: true, reason: 'covered',
+    });
+    featureEvents.stop();
+    rmSync(worktreePath, { recursive: true, force: true });
+
+    expect(handle).not.toHaveBeenCalled();
+    expect(stream.output()).toBe('');
   });
 });
