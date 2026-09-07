@@ -506,6 +506,9 @@ export class OtelVisualizer implements VisualizerPlugin {
       ...(Object.prototype.hasOwnProperty.call(context, 'engineVersion')
         ? { engineVersion: context.engineVersion }
         : {}),
+      ...(Object.prototype.hasOwnProperty.call(context, 'harnessVersion')
+        ? { harnessVersion: context.harnessVersion }
+        : {}),
     };
     // Two scopes, one context: the meter provider must not carry run-varying
     // attributes, because the backend turns the metric Resource into

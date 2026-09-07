@@ -56,6 +56,7 @@ export interface OtelVisualizerStartContext extends VisualizerStartContext {
   pipelineDir: string;
   branch: string | undefined;
   engineVersion: string | undefined;
+  harnessVersion: string | undefined;
 }
 
 /**

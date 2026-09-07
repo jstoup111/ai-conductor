@@ -35,6 +35,7 @@ describe('interactive OTel wiring', () => {
         pipelineDir,
         branch: undefined,
         engineVersion: undefined,
+        harnessVersion: undefined,
       },
     };
 

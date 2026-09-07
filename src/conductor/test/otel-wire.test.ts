@@ -19,12 +19,14 @@ const resolvedOtelContext: OtelWireContext = {
   pipelineDir: '/tmp/otel-wire',
   branch: 'feature/otel-wire',
   engineVersion: '1.2.3',
+  harnessVersion: '0.99.20',
 };
 
 const unresolvedOtelContext: OtelWireContext = {
   pipelineDir: '/tmp/otel-wire',
   branch: undefined,
   engineVersion: undefined,
+  harnessVersion: undefined,
 };
 
 // @ts-expect-error Supported OTel wiring must receive the branch resolution result.
@@ -39,10 +41,18 @@ const missingOtelEngineVersion: OtelWireContext = {
   branch: 'feature/otel-wire',
 };
 
+// @ts-expect-error Supported OTel wiring must receive the harness-version resolution result.
+const missingOtelHarnessVersion: OtelWireContext = {
+  pipelineDir: '/tmp/otel-wire',
+  branch: 'feature/otel-wire',
+  engineVersion: '1.2.3',
+};
+
 void resolvedOtelContext;
 void unresolvedOtelContext;
 void missingOtelBranch;
 void missingOtelEngineVersion;
+void missingOtelHarnessVersion;
 
 describe('wireOtelVisualizer', () => {
   it('gates disabled OTel and starts enabled fake OTLP from the registry factory without writing an injected run id', async () => {
@@ -57,6 +67,7 @@ describe('wireOtelVisualizer', () => {
       project: 'ai-conductor',
       branch: 'feature/otel-wire',
       engineVersion: '1.2.3',
+      harnessVersion: '0.99.20',
     };
     buildExporters.mockReturnValue({
       spanExporter,
@@ -87,6 +98,8 @@ describe('wireOtelVisualizer', () => {
           ?.resource.attributes['conductor.branch'],
         engineVersion: spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')
           ?.resource.attributes['conductor.engine.version'],
+        harnessVersion: spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')
+          ?.resource.attributes['service.version'],
         wroteSessionId: existsSync(join(pipelineDir, 'conduct-session-id')),
       }).toEqual({
         disabled: null,
@@ -96,6 +109,7 @@ describe('wireOtelVisualizer', () => {
         runId: 'wire-test-run',
         branch: 'feature/otel-wire',
         engineVersion: '1.2.3',
+        harnessVersion: '0.99.20',
         wroteSessionId: false,
       });
     } finally {
@@ -142,6 +156,7 @@ describe('wireOtelVisualizer', () => {
           project: 'ai-conductor',
           branch: undefined,
           engineVersion: undefined,
+          harnessVersion: undefined,
         },
         unresolvedEvents,
       );
@@ -162,10 +177,12 @@ describe('wireOtelVisualizer', () => {
         omitted: {
           'conductor.branch': 'not-supplied',
           'conductor.engine.version': 'not-supplied',
+          'service.version': 'not-supplied',
         },
         unresolved: {
           'conductor.branch': 'unresolved',
           'conductor.engine.version': 'unresolved',
+          'service.version': 'unresolved',
         },
       });
     } finally {
