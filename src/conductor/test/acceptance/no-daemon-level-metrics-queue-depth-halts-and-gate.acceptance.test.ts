@@ -319,12 +319,25 @@ describe('daemon-level metrics acceptance', () => {
     roots.push(root);
     const daemon = await createDaemonMeter(root);
     const emissions: Array<Promise<void>> = [];
-    const knownEligibleSinceMs = 1_000;
-    const nowMs = knownEligibleSinceMs + 129_600_000;
-    const eligibleBacklog = [
-      { slug: 'known-eligible', eligibleSinceMs: knownEligibleSinceMs },
-      { slug: 'unknown-eligible' },
-    ];
+    const mixedAgeBacklogFixture = {
+      eligible: [
+        { slug: 'eligible-oldest', oldestAgeSeconds: 129_600 },
+        { slug: 'eligible-newer', oldestAgeSeconds: 86_400 },
+        { slug: 'eligible-undeterminable', oldestAgeSeconds: undefined },
+      ],
+      snapshot: {
+        counts: { eligible: 3, waiting: 0, blocked: 0, gated: 0, parked: 0 },
+        oldestAgeSeconds: {
+          eligible: 129_600,
+          // An invalid age must not produce a gauge point.
+          waiting: Number.NaN,
+        },
+        slots: { busy: 0, free: 3 },
+        inFlight: [],
+        blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
+        pollDurationMs: 0,
+      },
+    } as const;
 
     await runDaemon({
       discoverBacklog: async () => [],
@@ -332,19 +345,10 @@ describe('daemon-level metrics acceptance', () => {
         throw new Error('mixed-age acceptance fixture must not dispatch');
       },
       sleep: async () => {},
-      onTick: (snapshot) => {
-        const knownAgesSeconds = eligibleBacklog.flatMap(({ eligibleSinceMs }) =>
-          typeof eligibleSinceMs === 'number' ? [(nowMs - eligibleSinceMs) / 1_000] : [],
-        );
+      onTick: () => {
         emissions.push(emitUntyped(daemon.events, {
           type: 'daemon_backlog_snapshot',
-          ...snapshot,
-          counts: { ...snapshot.counts, eligible: eligibleBacklog.length },
-          oldestAgeSeconds: {
-            eligible: Math.max(...knownAgesSeconds),
-            // An invalid age must not produce a gauge point.
-            waiting: Number.NaN,
-          },
+          ...mixedAgeBacklogFixture.snapshot,
         }));
       },
     } as DaemonDeps, {
@@ -358,7 +362,7 @@ describe('daemon-level metrics acceptance', () => {
 
     expect(pointValue(daemon.exporter, 'conductor.daemon.backlog', {
       project: 'project-p', worker: 'worker-w', state: 'eligible',
-    })).toBe(2);
+    })).toBe(3);
     expect(pointValue(daemon.exporter, 'conductor.daemon.backlog.oldest_age', {
       project: 'project-p', worker: 'worker-w', state: 'eligible',
     })).toBe(129_600);
