@@ -67,16 +67,29 @@ function parseCounterfactualSensitivity(value: unknown): CounterfactualSensitivi
 }
 
 const PATH = /^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9.](?:[A-Za-z0-9._/@+ -]*[A-Za-z0-9._/@+-])?(?:\/[A-Za-z0-9.](?:[A-Za-z0-9._/@+ -]*[A-Za-z0-9._/@+-])?)*$/;
+// Interior spaces are admitted for real file names (Story 8: renamed paths
+// such as `test/new name.test.ts`) but the same grammar would also admit
+// prose ("The affected test is test/widget.test.ts."). A space-bearing value
+// is a path only when it has no sentence punctuation, no run of spaces, at
+// least one directory segment, and a space-free first segment: prose puts
+// words before its first slash, file names do not.
+function isCanonicalPath(value: string): boolean {
+  if (!PATH.test(value)) return false;
+  if (!value.includes(' ')) return true;
+  if (/[.,;:!?] |\.$|  /.test(value)) return false;
+  const segments = value.split('/');
+  return segments.length >= 2 && !segments[0].includes(' ');
+}
 const LAP = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 function object(value: unknown): Record<string, unknown> | undefined { return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 function text(value: unknown): value is string { return typeof value === 'string' && value.trim().length > 0; }
-export function parseBuildReviewCanonicalPathReference(value: unknown): string | undefined { return typeof value === 'string' && PATH.test(value) ? value : undefined; }
+export function parseBuildReviewCanonicalPathReference(value: unknown): string | undefined { return typeof value === 'string' && isCanonicalPath(value) ? value : undefined; }
 export function parseBuildReviewLapId(value: unknown): BuildReviewLapId | undefined { return typeof value === 'string' && LAP.test(value) ? value as BuildReviewLapId : undefined; }
 export function parseBuildReviewRubricContractVersion(value: unknown): BuildReviewRubricContractVersion | undefined { return value === 'v1' || value === 'v2' || value === 'v3' ? value : undefined; }
 // `occurrence` is the 0-based ordinal among equal-content regions in one path;
 // 0 is the unique/first region and normalizes away so identities never differ
 // on an explicit-versus-omitted zero.
-function region(value: unknown): BuildReviewContentRegionReference | undefined { const source = object(value); if (!source || !text(source.path) || !PATH.test(source.path) || !text(source.contentHash) || !text(source.display) || (source.occurrence !== undefined && (!Number.isInteger(source.occurrence) || (source.occurrence as number) < 0))) return undefined; return contentRegionReference(source.path, source.contentHash, source.display, source.occurrence as number | undefined); }
+function region(value: unknown): BuildReviewContentRegionReference | undefined { const source = object(value); if (!source || !text(source.path) || !isCanonicalPath(source.path) || !text(source.contentHash) || !text(source.display) || (source.occurrence !== undefined && (!Number.isInteger(source.occurrence) || (source.occurrence as number) < 0))) return undefined; return contentRegionReference(source.path, source.contentHash, source.display, source.occurrence as number | undefined); }
 function contentRegionReference(path: string, contentHash: string, display: string, occurrence = 0): BuildReviewContentRegionReference { return { path, contentHash, display, ...(occurrence > 0 ? { occurrence } : {}) }; }
 function candidateScopeSourceRegion(value: unknown): BuildReviewCandidateScopeSourceRegion | undefined {
   const source = object(value);
