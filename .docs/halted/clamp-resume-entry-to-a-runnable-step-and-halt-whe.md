@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-07T00:48:54.238Z
 Slug: clamp-resume-entry-to-a-runnable-step-and-halt-whe
 Class: needs-human
 Halting step: prd_audit
