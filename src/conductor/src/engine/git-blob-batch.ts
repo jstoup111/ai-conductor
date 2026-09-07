@@ -60,6 +60,11 @@ export async function readGitBlobs(
   }
 
   for (const path of individualPaths) {
+    const type = await execaCommand('git', ['cat-file', '-t', `${revision}:${path}`], {
+      cwd: projectRoot,
+      reject: false,
+    });
+    if (type.exitCode !== 0 || type.stdout !== 'blob') continue;
     const result = await execaCommand('git', ['show', `${revision}:${path}`], {
       cwd: projectRoot,
       encoding: 'buffer',

@@ -144,6 +144,19 @@ describe('engine/git-blob-batch', () => {
     }
   });
 
+  it('omits a newline-bearing directory instead of returning raw tree bytes from the fallback', async () => {
+    const directory = 'directory\nname';
+    const { dir, revision } = await createRepository(new Map([
+      [`${directory}/file.md`, Buffer.from('content\n')],
+    ]));
+
+    try {
+      await expect(readGitBlobs(dir, revision, [directory])).resolves.toEqual(new Map());
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
+  });
+
   it('returns no blobs and does not invoke the runner for an empty request', async () => {
     const runner = vi.fn<GitBlobBatchRunner>();
 
