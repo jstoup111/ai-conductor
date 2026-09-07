@@ -614,7 +614,24 @@ export function createProductionFinishPublicationCoordinator(
             await projectShipmentPlanDeclarationToRetainedPr(state.pr_url, state.feature_desc);
           },
           recordOutcome: async (request) => {
-            if (request.choice === 'pr') await projectAcceptedRiskToRetainedPr(request.prUrl);
+            if (request.choice === 'pr') {
+              await projectAcceptedRiskToRetainedPr(request.prUrl);
+              // AB-1: repairPresentation is NOT the only route to a completed PR
+              // outcome. The selector returns record_outcome directly whenever the
+              // retained PR is already non-draft (finish-publication.ts, `if
+              // (!snapshot.pr.ready) return 'ready_pr'`), which covers both a PR
+              // findOrCreatePr reused in ready state and a retry after a ready_pr
+              // effect that marked the PR ready but then failed at declaration
+              // maintenance — that retry observes `ready: !pr.isDraft` and skips
+              // repairPresentation entirely. Binding the declaration to the same
+              // choice === 'pr' rung the accepted-risk projection already occupies
+              // makes the guard unconditional for a PR outcome. The upsert is
+              // idempotent and edits only when the body changes, so the repaired
+              // path re-reads here and issues no second edit. The keep rung
+              // deliberately projects nothing.
+              if (!state.feature_desc) throw new Error('missing shipment identity');
+              await projectShipmentPlanDeclarationToRetainedPr(request.prUrl, state.feature_desc);
+            }
             // finish-record signals every fail-closed refusal as a non-zero exit
             // code, never a throw. Discarding it turned a refusal into a silent
             // no-op, so the loop halted on the generic "record_outcome left

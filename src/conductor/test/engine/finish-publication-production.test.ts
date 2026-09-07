@@ -193,6 +193,155 @@ describe('production FINISH publication composition', () => {
     }
   });
 
+  it.each([
+    {
+      label: 'a retained PR that was already non-draft, so presentation repair never ran',
+      initialBody: 'Reader-facing summary.\n',
+      expectedBody: 'Reader-facing summary.\nPlan: .docs/plans/feature.md\n',
+      expectedEdits: 1,
+    },
+    {
+      label: 'a retry after a ready_pr effect that readied the PR but failed at declaration maintenance',
+      initialBody: 'Reader-facing summary.\nPlan: .docs/plans/stale.md\n',
+      expectedBody: 'Reader-facing summary.\nPlan: .docs/plans/feature.md\n',
+      expectedEdits: 1,
+    },
+    {
+      label: 'a body that is already canonical, which must not be edited again',
+      initialBody: 'Reader-facing summary.\nPlan: .docs/plans/feature.md\n',
+      expectedBody: 'Reader-facing summary.\nPlan: .docs/plans/feature.md\n',
+      expectedEdits: 0,
+    },
+  ])('stamps the declaration on the PR record-outcome rung for $label', async ({
+    initialBody, expectedBody, expectedEdits,
+  }) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-declaration-record-outcome-'));
+    // nextFinishPublicationTransition returns record_outcome directly for an
+    // already-ready PR (asserted in finish-publication.test.ts, "all preceding
+    // PR publication progress complete"), so this fixture reproduces that
+    // transition exactly: recordOutcome is
+    // the ONLY effect the coordinator reaches. repairPresentation is not wired.
+    const advanceFinishPublication = vi.fn(async (input: {
+      effects: { recordOutcome?: (request: { choice: 'pr'; prUrl: string }) => Promise<void> };
+    }) => {
+      await input.effects.recordOutcome!({ choice: 'pr', prUrl: 'https://github.com/acme/widget/pull/3' });
+      return { kind: 'advanced' as const, transition: 'record_outcome' as const };
+    });
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => ({
+      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      advanceFinishPublication,
+    }));
+
+    try {
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(root, '.pipeline'));
+      await writeFile(join(root, '.docs', 'plans', 'feature.md'), 'plan\n');
+      let body = initialBody;
+      let edits = 0;
+      const order: string[] = [];
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ body }) };
+        if (args[0] === 'pr' && args[1] === 'edit') {
+          body = args[args.indexOf('--body') + 1]!;
+          edits += 1;
+          order.push('declaration');
+          return commandResult;
+        }
+        throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+      });
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: root,
+        stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async () => commandResult,
+        gh,
+        acquireInteractiveIntent: async () => 'pr',
+        observeReleaseReadiness: async () => 'present',
+        repairPresentation: async () => { order.push('repair'); },
+        recordFinish: async () => { order.push('outcome'); return 0; },
+      });
+
+      await coordinator.advance({
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: 'https://github.com/acme/widget/pull/3',
+        } as ConductState,
+        mode: 'interactive',
+        daemon: false,
+        dispatchJudgment: async () => ({ success: true }),
+        emit: async () => {},
+      });
+
+      // The declaration is stamped before the finish recorder runs, so a
+      // completed PR outcome can never be recorded without it.
+      expect({ body, edits, order }).toEqual({
+        body: expectedBody,
+        edits: expectedEdits,
+        order: expectedEdits === 0 ? ['outcome'] : ['declaration', 'outcome'],
+      });
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not record a PR outcome when declaration maintenance fails on the record-outcome rung', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-declaration-record-outcome-failure-'));
+    const advanceFinishPublication = vi.fn(async (input: {
+      effects: { recordOutcome?: (request: { choice: 'pr'; prUrl: string }) => Promise<void> };
+    }) => {
+      await input.effects.recordOutcome!({ choice: 'pr', prUrl: 'https://github.com/acme/widget/pull/3' });
+      return { kind: 'advanced' as const, transition: 'record_outcome' as const };
+    });
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => ({
+      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      advanceFinishPublication,
+    }));
+
+    try {
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(root, '.pipeline'));
+      const recordFinish = vi.fn(async () => 0);
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: root,
+        stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async () => commandResult,
+        gh: async () => { throw new Error('unexpected GitHub command'); },
+        acquireInteractiveIntent: async () => 'pr',
+        observeReleaseReadiness: async () => 'present',
+        recordFinish,
+      });
+
+      await expect(coordinator.advance({
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: 'https://github.com/acme/widget/pull/3',
+        } as ConductState,
+        mode: 'interactive',
+        daemon: false,
+        dispatchJudgment: async () => ({ success: true }),
+        emit: async () => {},
+      })).rejects.toThrow('plan not found');
+      expect(recordFinish).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('does not project a shipment declaration for a keep outcome', async () => {
     const advanceFinishPublication = vi.fn(async (input: {
       effects: { recordOutcome?: (request: { choice: 'keep' }) => Promise<void> };
