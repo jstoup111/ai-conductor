@@ -29,7 +29,11 @@ import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { ALL_STEPS } from './steps.js';
-import { consumeKickbackResumeAuthorization, readKickbackLedger } from './kickback-ledger.js';
+import {
+  consumeKickbackResumeAuthorization,
+  isUnreadableKickbackLedger,
+  readKickbackLedger,
+} from './kickback-ledger.js';
 
 /** Consume one-shot operator authorizations; this sweep only clears markers. */
 export async function consumeResumeAuthorizations(deps: {
@@ -46,6 +50,9 @@ export async function consumeResumeAuthorizations(deps: {
       if (await deps.isOperatorParked(slug)) continue;
       const path = deps.worktreePath(slug);
       const ledger = await readKickbackLedger(path);
+      if (isUnreadableKickbackLedger(ledger)) {
+        throw new Error('kickback ledger is unreadable');
+      }
       const match = Object.entries(ledger.gates).find(([, entry]) =>
         entry.capEvidence && entry.resumeAuthorization && !entry.resumeAuthorization.consumed &&
         entry.capEvidence.haltGeneration === entry.resumeAuthorization.haltGeneration,
