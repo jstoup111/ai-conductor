@@ -15,7 +15,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -155,6 +155,7 @@ describe('integration/autoresolve — resolution worktree lifecycle', () => {
 
     const autoresolve = await import('../../src/engine/autoresolve.js');
     let sawFreshCheckout = false;
+    let transientRegistrationCount = 0;
     await autoresolve.withResolveWorktree('widget', 'feat/widget', dir, async (worktreePath: string) => {
       const garbage = await readFile(join(worktreePath, 'stale-garbage.txt'), 'utf-8').catch(
         () => null,
@@ -162,10 +163,25 @@ describe('integration/autoresolve — resolution worktree lifecycle', () => {
       expect(garbage).toBeNull();
       const content = await readFile(join(worktreePath, 'feature.txt'), 'utf-8');
       sawFreshCheckout = content === 'branch tip content\n';
+      transientRegistrationCount = (await worktreeList())
+        .split('\n')
+        .filter((line) => line === `worktree ${worktreePath}`).length;
       return { ok: true };
     });
 
     expect(sawFreshCheckout).toBe(true);
+    expect(transientRegistrationCount).toBe(1);
+  });
+
+  it('tolerates no prior transient registration or directory (negative: no leftover)', async () => {
+    const transientPath = join(dir, '.worktrees', 'resolve-widget');
+    expect(await worktreeList()).not.toContain(`worktree ${transientPath}`);
+    await expect(stat(transientPath)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    await expect(
+      autoresolve.withResolveWorktree('widget', 'feat/widget', dir, async () => ({ callback: 'returned' })),
+    ).resolves.toEqual({ callback: 'returned' });
   });
 
   it('recreates a transient worktree when its prior registration remains after the directory disappears', async () => {
