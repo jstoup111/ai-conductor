@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
+import { buildReviewScopeCandidateIdentityKey } from './build-review-scope-identity.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
 import { isCanonicalBuildReviewRepoRelativePath } from './build-review-scope-source.js';
 
@@ -18,6 +19,11 @@ export function deriveBuildReviewInfrastructureFailureReason(branch: { readonly 
 export interface BuildReviewContentRegionReference { readonly path: string; readonly contentHash: string; readonly display: string; readonly occurrence?: number; }
 export type BuildReviewFindingAnchor = { readonly rubric: 'testQuality'; readonly locus: BuildReviewContentRegionReference };
 export interface BuildReviewFindingReferenceContext { readonly changedTests: readonly string[]; readonly changedTestRegions?: readonly BuildReviewContentRegionReference[]; readonly changedPaths: readonly string[]; readonly planTasks: readonly string[]; }
+
+/** Compatibility title fields are authoritative only for projections before typed scope. */
+export function isLegacyBuildReviewTestScope(testScope: unknown): boolean {
+  return testScope === undefined;
+}
 export interface BuildReviewCandidateScopeSourceRegion { readonly path: string; readonly startLine: number; readonly endLine: number; readonly contentHash: string; readonly display: string; }
 export interface BuildReviewCandidateScopeCandidate { readonly candidateId: string; readonly sourceRegion: BuildReviewCandidateScopeSourceRegion; readonly obligationReferences: readonly string[]; }
 export interface BuildReviewCandidateScopeResolutionResolved { readonly candidateId: string; readonly status: 'resolved'; readonly sourceRegion: BuildReviewCandidateScopeSourceRegion; readonly obligationReferences: readonly string[]; readonly associationReason: string; }
@@ -184,24 +190,37 @@ function normalizedTitleHash(titleText: string): string {
  * rather than its source-byte resolution evidence.
  */
 interface DeclaredTitleOccurrenceIndex {
-  readonly targets: ReadonlyMap<string, number>;
+  readonly targets: ReadonlyMap<string, readonly number[]>;
   readonly candidatesById: ReadonlyMap<string, { readonly title: string; readonly occurrence: number }>;
   readonly candidates: ReadonlyMap<string, readonly number[]>;
 }
 
+function declaredHeadTestTarget(entry: unknown): {
+  readonly path: string;
+  readonly title: string;
+  readonly occurrence: number;
+} | undefined {
+  const item = object(entry); const declaration = item && object(item.declaration); const source = item && object(item.source);
+  const path = source && parseBuildReviewCanonicalPathReference(source.fileName);
+  const titleChain = declaration?.titleChain;
+  const occurrence = declaration?.occurrence;
+  if (!path || source?.side !== 'head' || declaration?.kind !== 'test' || !Array.isArray(titleChain) || titleChain.length === 0 || !titleChain.every(text) || !Number.isInteger(occurrence) || (occurrence as number) < 0) return undefined;
+  return { path, title: titleChain.join(' > '), occurrence: occurrence as number };
+}
+
 function declaredTitleOccurrenceIndex(projection: BuildReviewRubricProjection): DeclaredTitleOccurrenceIndex {
   const scope = object(projection.testScope);
-  const targets = new Map<string, number>();
+  const targets = new Map<string, number[]>();
   const candidatesById = new Map<string, { readonly title: string; readonly occurrence: number }>();
   const candidates = new Map<string, number[]>();
   if (!scope) return { targets, candidatesById, candidates };
   for (const entry of Array.isArray(scope.targets) ? scope.targets : []) {
-    const item = object(entry); const declaration = item && object(item.declaration); const source = item && object(item.source);
-    const path = source && parseBuildReviewCanonicalPathReference(source.fileName);
-    const titleChain = declaration?.titleChain;
-    const occurrence = declaration?.occurrence;
-    if (!path || source?.side !== 'head' || declaration?.kind !== 'test' || !Array.isArray(titleChain) || titleChain.length === 0 || !titleChain.every(text) || !Number.isInteger(occurrence) || (occurrence as number) < 0) continue;
-    targets.set(`${path}\u0000${titleChain.join(' > ')}`, occurrence as number);
+    const target = declaredHeadTestTarget(entry);
+    if (!target) continue;
+    const key = `${target.path}\u0000${target.title}`;
+    const occurrences = targets.get(key) ?? [];
+    occurrences.push(target.occurrence);
+    targets.set(key, occurrences);
   }
   const evidence = Array.isArray(scope.evidence) ? scope.evidence.map(object) : [];
   for (const entry of Array.isArray(scope.candidates) ? scope.candidates : []) {
@@ -215,10 +234,19 @@ function declaredTitleOccurrenceIndex(projection: BuildReviewRubricProjection): 
     const occurrences = candidates.get(key) ?? [];
     occurrences.push(occurrence as number);
     candidates.set(key, occurrences);
+    const candidateIdentity = source && span
+      ? buildReviewScopeCandidateIdentityKey({
+          source: { fileName: source.fileName as string, side: source.side as 'base' | 'head' },
+          region: { start: span.start as number, end: span.end as number },
+        })
+      : undefined;
     const matchedEvidence = evidence.find((item) => {
       const evidenceSource = object(item?.source); const region = object(item?.region);
-      return evidenceSource?.side === source?.side && evidenceSource?.fileName === source?.fileName &&
-        region?.start === span?.start && region?.end === span?.end;
+      return candidateIdentity !== undefined && evidenceSource && region &&
+        buildReviewScopeCandidateIdentityKey({
+          source: { fileName: evidenceSource.fileName as string, side: evidenceSource.side as 'base' | 'head' },
+          region: { start: region.start as number, end: region.end as number },
+        }) === candidateIdentity;
     });
     const candidateId = typeof item?.candidateId === 'string' ? item.candidateId : matchedEvidence?.id;
     if (typeof candidateId === 'string') candidatesById.set(candidateId, { title, occurrence: occurrence as number });
@@ -229,23 +257,20 @@ function targetRegions(projection: BuildReviewRubricProjection, declaredTitles: 
   const scope = object(projection.testScope);
   if (!scope || !Array.isArray(scope.targets)) return undefined;
   return scope.targets.flatMap((target) => {
-    const item = object(target); const source = item && object(item.source); const declaration = item && object(item.declaration);
-    const path = source && parseBuildReviewCanonicalPathReference(source.fileName);
-    const titleChain = declaration?.titleChain;
-    if (!path || source?.side !== 'head' || declaration?.kind !== 'test' || !Array.isArray(titleChain) || titleChain.length === 0 || !titleChain.every(text)) return [];
-    const display = titleChain.join(' > ');
-    const occurrence = declaredTitles.targets.get(`${path}\u0000${display}`);
-    return occurrence === undefined ? [] : [contentRegionReference(path, normalizedTitleHash(display), display, occurrence)];
+    const declared = declaredHeadTestTarget(target);
+    if (!declared || !declaredTitles.targets.get(`${declared.path}\u0000${declared.title}`)?.includes(declared.occurrence)) return [];
+    return [contentRegionReference(declared.path, normalizedTitleHash(declared.title), declared.title, declared.occurrence)];
   });
 }
 /** Builds finding authority only from established targets and already-validated resolved candidates. */
 export function buildReviewFindingReferenceContext(projection: BuildReviewRubricProjection, scopeResolutions: readonly BuildReviewCandidateScopeResolution[] = []): BuildReviewFindingReferenceContext {
   const declaredTitles = declaredTitleOccurrenceIndex(projection);
   const targets = targetRegions(projection, declaredTitles);
-  const titleRegions = targets && targets.length > 0 ? targets : projection.changedTestTitles?.flatMap((title) => {
+  const useLegacyTitles = isLegacyBuildReviewTestScope(projection.testScope);
+  const titleRegions = targets && targets.length > 0 ? targets : useLegacyTitles ? projection.changedTestTitles?.flatMap((title) => {
       const path = parseBuildReviewCanonicalPathReference(title.selector);
       return path ? [{ path, contentHash: title.staticExtractionFallback ? `sha256:${createHash('sha256').update(title.selector).digest('hex')}` : normalizedTitleHash(title.titleText), display: title.titleText || `${path} changed test` }] : [];
-    }) ?? [];
+    }) ?? [] : [];
   // Resolution evidence stays on the resolution record; it is not an identity
   // input (decision 8).  A recoverable declared title anchors the finding, and
   // only an unrecoverable one falls back to the explicitly coarse source hash.
@@ -253,7 +278,7 @@ export function buildReviewFindingReferenceContext(projection: BuildReviewRubric
   for (const [key, occurrences] of declaredTitles.candidates) resolvedOccurrences.set(key, [...occurrences]);
   const resolvedRegions = scopeResolutions.flatMap((resolution) => {
     if (resolution.status !== 'resolved') return [];
-    const declaredCandidate = declaredTitles.candidatesById.get(resolution.candidateId);
+    const declaredCandidate = useLegacyTitles ? undefined : declaredTitles.candidatesById.get(resolution.candidateId);
     const title = declaredCandidate?.title ?? resolution.sourceRegion.display;
     const occurrences = declaredCandidate ? undefined : resolvedOccurrences.get(title);
     const occurrence = declaredCandidate?.occurrence ?? occurrences?.shift();
@@ -264,7 +289,7 @@ export function buildReviewFindingReferenceContext(projection: BuildReviewRubric
       ...(occurrence === undefined ? {} : { occurrence }),
     }];
   });
-  const changedTestRegions = withOccurrenceOrdinals(targets && targets.length > 0
+  const changedTestRegions = withOccurrenceOrdinals(targets !== undefined
     ? [...targets, ...resolvedRegions]
     : [...titleRegions, ...resolvedRegions]);
   return { changedTests: projection.changedTestSelectors, changedTestRegions, changedPaths: projection.changedFiles.map((file) => file.path), planTasks: [] };

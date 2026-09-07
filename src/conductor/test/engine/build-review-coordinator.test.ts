@@ -331,6 +331,22 @@ function titledInputs(): BuildReviewFrozenInputs {
     sourceSnapshot: {
       ...frozenInputs.sourceSnapshot,
       changedTestTitles: [{ selector: IN_SCOPE_TEST, titleText: IN_SCOPE_TITLE, staticExtractionFallback: false }],
+      testScope: {
+        changedDeclarations: [],
+        targets: [{
+          source: { fileName: IN_SCOPE_TEST, side: 'head' },
+          declaration: {
+            kind: 'test', titleChain: [IN_SCOPE_TITLE], occurrence: 0,
+            modifierChain: [], span: { start: 0, end: 1 }, argumentsSpan: { start: 0, end: 1 },
+          },
+          bindings: [],
+          associationChanges: [],
+        }],
+        candidates: [],
+        notes: [],
+        affectedGroups: [],
+        sharedSources: [],
+      },
     },
   };
 }
@@ -367,7 +383,10 @@ describe("build-review coordinator: frozen fan-out", () => {
         sourceSnapshot: {
           ...frozenInputs.sourceSnapshot,
           testScope: {
-            targets: [],
+            targets: [{
+              source: { fileName: IN_SCOPE_TEST, side: 'head' },
+              declaration: { kind: 'test', titleChain: [IN_SCOPE_TITLE], occurrence: 0 },
+            }],
             candidates: [{
               candidateId: 'candidate:setup',
               sourceRegion: { path: IN_SCOPE_TEST, startLine: 2, endLine: 4, contentHash: candidateHash, display: 'changed setup' },
@@ -764,7 +783,13 @@ describe("build-review coordinator: candidate scope resolutions", () => {
     rubric: "testQuality", contractVersion: "v3", projectionVersion: "v3", lapId: parseBuildReviewLapId("lap-current")!,
     snapshotDigest: "sha256:snapshot", contentDigest: "sha256:content", digest: "sha256:projection", mergeBase: "base", headSha: "head",
     changedFiles: [], changedTestSelectors: [], runnerSelectors: [], unresolvedMarkers: [], changedTestTitles: [],
-    testScope: { candidates: [scopeCandidate] }, testSuiteProof: {}, revertedProductionManifest: [], preflight: { classification: "approved-exception", exception: "empty-test-set" },
+    testScope: {
+      targets: [{
+        source: { fileName: IN_SCOPE_TEST, side: 'head' },
+        declaration: { kind: 'test', titleChain: [IN_SCOPE_TITLE], occurrence: 0 },
+      }],
+      candidates: [scopeCandidate],
+    }, testSuiteProof: {}, revertedProductionManifest: [], preflight: { classification: "approved-exception", exception: "empty-test-set" },
   } as unknown as import('../../src/engine/build-review-projections.js').TestQualityProjection;
 
   it('diagnoses invalid candidate authority before blaming an otherwise scoped finding anchor', () => {
@@ -843,6 +868,34 @@ describe("build-review coordinator: candidate scope resolutions", () => {
       candidateId: "source:head:test/widget.test.ts:9:29", sourceRegion: { ...scopeRegion, startLine: 12, endLine: 12 },
       obligationReferences: ["criterion:S5.1"],
     }] });
+  });
+
+  it('keeps merged multi-reason candidates independently settleable by their pinned identities', () => {
+    const projection = {
+      ...candidateProjection,
+      testScope: {
+        candidates: [
+          { source: { side: 'head', fileName: 'test/widget.test.ts' }, declaration: { span: { start: 9, end: 29 }, titleChain: ['widget persists state'] }, markers: [{ reference: { kind: 'criterion', id: 'S5.1' } }], reasons: ['declaration-group', 'affected-dependency'] },
+          { source: { side: 'head', fileName: 'test/widget.test.ts' }, declaration: { span: { start: 30, end: 50 }, titleChain: ['widget removes state'] }, markers: [{ reference: { kind: 'criterion', id: 'S5.2' } }], reasons: ['affected-dependency'] },
+        ],
+        evidence: [
+          { id: 'source:head:test/widget.test.ts:9:29', source: { side: 'head', fileName: 'test/widget.test.ts' }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, content: 'expect(saved).toBe(1)', contentHash: scopeRegion.contentHash },
+          { id: 'source:head:test/widget.test.ts:30:50', source: { side: 'head', fileName: 'test/widget.test.ts' }, region: { start: 30, end: 50 }, startLine: 13, endLine: 13, content: 'expect(removed).toBe(1)', contentHash: `sha256:${'b'.repeat(64)}` },
+        ],
+      },
+    } as never;
+    const context = buildReviewCandidateScopeResolutionContext(projection);
+    const resolutions = context.candidates.map((candidate) => ({
+      candidateId: candidate.candidateId,
+      status: 'out-of-scope' as const,
+      exclusionReason: 'The pinned candidate is unrelated to the changed behavior.',
+    }));
+
+    expect(context.candidates.map((candidate) => candidate.candidateId)).toEqual([
+      'source:head:test/widget.test.ts:9:29',
+      'source:head:test/widget.test.ts:30:50',
+    ]);
+    expect(validateBuildReviewDispatchedResult(stampBuildReviewDispatchedCandidate({ findings: [], scopeResolutions: resolutions }, 'testQuality', projection), 'testQuality', projection)).toBeDefined();
   });
 
   it('keeps equal-span fallback candidates bound to their own frozen source identity', () => {

@@ -600,6 +600,37 @@ describe('build-review domain', () => {
       ]);
     });
 
+    it('keeps duplicate established titles independently citable at their declared occurrences', () => {
+      const duplicate = {
+        rubric: 'testQuality', changedTestSelectors: ['test/duplicate.test.ts'], changedFiles: [], changedTestTitles: [],
+        testScope: {
+          targets: [
+            { source: { fileName: 'test/duplicate.test.ts', side: 'head' }, declaration: { kind: 'test', titleChain: ['duplicate assertion'], occurrence: 0 } },
+            { source: { fileName: 'test/duplicate.test.ts', side: 'head' }, declaration: { kind: 'test', titleChain: ['duplicate assertion'], occurrence: 1 } },
+          ],
+        },
+      } as unknown as BuildReviewRubricProjection;
+      const references = buildReviewFindingReferenceContext(duplicate);
+      const first = { path: 'test/duplicate.test.ts', contentHash: titleHash('duplicate assertion'), display: 'duplicate assertion' };
+
+      expect(references.changedTestRegions).toEqual([first, { ...first, occurrence: 1 }]);
+      expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: first }, references)).toBeDefined();
+      expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: { ...first, occurrence: 1 } }, references)).toBeDefined();
+    });
+
+    it('does not let compatibility titles widen a present typed scope', () => {
+      const compatibilityTitle = { selector: 'test/compatibility.test.ts', titleText: 'legacy sibling', staticExtractionFallback: false };
+      const v3 = {
+        rubric: 'testQuality', changedTestSelectors: [compatibilityTitle.selector], changedFiles: [], changedTestTitles: [compatibilityTitle],
+        testScope: { targets: [], candidates: [{ candidateId: 'unresolved', declaration: { kind: 'test', titleChain: ['unresolved candidate'], occurrence: 0 } }] },
+      } as unknown as BuildReviewRubricProjection;
+      const legacy = { ...v3, testScope: undefined } as unknown as BuildReviewRubricProjection;
+      const anchor = { rubric: 'testQuality', locus: { path: compatibilityTitle.selector, contentHash: titleHash(compatibilityTitle.titleText), display: compatibilityTitle.titleText } };
+
+      expect(parseBuildReviewFindingAnchor(anchor, buildReviewFindingReferenceContext(v3))).toBeUndefined();
+      expect(parseBuildReviewFindingAnchor(anchor, buildReviewFindingReferenceContext(legacy))).toBeDefined();
+    });
+
     it('accepts only a locus that names a projected content region when references are supplied', () => {
       const references = buildReviewFindingReferenceContext(projection);
       const region = references.changedTestRegions![0]!;
