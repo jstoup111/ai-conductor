@@ -675,7 +675,7 @@ no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` fo
 
 `ConductorEvent` defines **108 variants** across **107** event types (`self_host_containment_verdict`
 declares two variants — `contained: true`/`contained: false` — under one type). `EventPersister`
-subscribes to the **94** event types marked `persist: true` in `event-sinks.ts` and writes only
+subscribes to the **95** event types marked `persist: true` in `event-sinks.ts` and writes only
 those:
 
 `contained_live_checkout_drift`, `self_host_containment_verdict`, `containment_check_unresolved`,
@@ -684,7 +684,7 @@ those:
 `build_review_rubric_started`, `build_review_rubric_prompt`, `build_review_rubric_result`, `build_review_rubric_skipped`,
 `build_review_cache_hit`, `build_review_cache_discarded`, `build_review_rubric_infrastructure_failure`, `build_review_outer_verdict`,
 `build_review_stale_aggregate`,
-`build_review_disposition_version_invalidated`,
+`build_review_disposition_version_invalidated`, `build_review_mechanical_allowance_exhausted`,
 `remediation_adjudication_started`, `remediation_adjudication_completed`, `remediation_adjudication_failed`,
 `remediation_case_reconciled`, `remediation_effect_reserved`, `remediation_effect_applied`,
 `remediation_effect_failed`, `remediation_semantic_repeat_halt`,
@@ -698,11 +698,15 @@ those:
 `finish_publication_transition`, `finish_publication_blocked`, `finish_publication_disposition`,
 `feature_complete`, `dashboard_refresh`, `protected_artifact_rebaseline`,
 `protected_artifact_rebaseline_refused`, `auto_heal`, `remediation_sealed_artifact_redirect`,
+`remediation_disposition_rejected`,
 `verdict_freshness`, `build_review_repair_context`, `mode_skip`, `build_stall`, `build_progress`,
 `build_no_progress`, `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`,
-`parallel_failure`, `test_suite_verification`, `build_member_evidence_reused`, `build_member_evidence_recomputed`, `kickback`,
-`loop_halt`, `halt_marker_write_failed`, `step_status_write_refused`, `rebase_changed`, `rebase_gate_invalidated`,
-`rebase_conflict_halt`, `unattributed_progress`, `attribution_divergence`, and `acceptance_red`.
+`parallel_failure`, `gate_verdict`, `test_suite_verification`, `build_member_evidence_reused`,
+`build_member_evidence_recomputed`, `kickback`, `loop_halt`, `over_scope_decision`,
+`halt_marker_write_failed`, `halt_record_written`, `halt_record_write_failed`, `halt_record_push_failed`,
+`shipment_evidence_refused`, `step_status_write_refused`, `rebase_changed`, `rebase_gate_preserved`,
+`rebase_gate_invalidated`, `rebase_conflict_halt`, `unattributed_progress`, `attribution_divergence`,
+and `acceptance_red`.
 
 `contained_live_checkout_drift` and `self_host_containment_verdict` are the containment boundary's
 closure events (`live-containment.ts`): the drift event names a concurrent operator's live-checkout
@@ -720,6 +724,12 @@ cannot be restaged as `stale`. It carries the status field, expected `skipped`, 
 and the write intent. The conductor keeps the on-disk and in-memory value as `skipped` and continues
 the run; operators can use this event to identify a caller that bypassed the normal skip-preserving
 restage filter.
+
+`gate_verdict` records `step`, `satisfied`, and an optional `reason`. The serial path emits it
+after its gate check; a validation-group join emits it for each member that returned a passing
+dispatch outcome and received a computed verdict, including an accepted-risk-adjusted `prd_audit`
+result. The ledger is historical observability, not the authority to resume: the engine still
+recomputes the on-disk gate evidence before it admits a step.
 
 `build_review_disposition_accepted` and `build_review_disposition_refused` are declared `persist:
 false` deliberately: they are written by the external build-review CLI to its own pipeline-owned
