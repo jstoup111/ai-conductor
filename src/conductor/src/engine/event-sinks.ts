@@ -5,13 +5,15 @@ export interface SinkDeclaration {
   persist: boolean;
   audit: boolean;
   otel: boolean;
+  /** OTel events are visualizer-owned by default; false declares metrics-only ownership. */
+  otelTrace?: false;
 }
 
 export const EVENT_SINKS = {
-  daemon_backlog_snapshot: { render: false, persist: true, audit: false, otel: true },
-  feature_dispatch_started: { render: false, persist: true, audit: false, otel: true },
-  feature_dispatch_ended: { render: false, persist: true, audit: false, otel: true },
-  feature_shipped: { render: false, persist: true, audit: false, otel: true },
+  daemon_backlog_snapshot: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
+  feature_dispatch_started: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
+  feature_dispatch_ended: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
+  feature_shipped: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   operator_rewind: { render: true, persist: true, audit: true, otel: false },
   setup_repair: { render: true, persist: true, audit: false, otel: false },
   project_setup: { render: true, persist: true, audit: false, otel: false },
@@ -153,9 +155,12 @@ export type OtelEventType = {
   [Type in keyof typeof EVENT_SINKS]: (typeof EVENT_SINKS)[Type]['otel'] extends true ? Type : never;
 }[keyof typeof EVENT_SINKS];
 
-export type OtelTracedEventType = OtelEventType;
+export type OtelTracedEventType = {
+  [Type in OtelEventType]: (typeof EVENT_SINKS)[Type] extends { readonly otelTrace: false }
+    ? never : Type;
+}[OtelEventType];
 
-function eventTypesFor(sink: keyof SinkDeclaration): ConductorEvent['type'][] {
+function eventTypesFor(sink: keyof Omit<SinkDeclaration, 'otelTrace'>): ConductorEvent['type'][] {
   return (Object.keys(EVENT_SINKS) as ConductorEvent['type'][])
     .filter((type) => EVENT_SINKS[type][sink]);
 }
@@ -174,4 +179,12 @@ export function renderedEventTypes(): ConductorEvent['type'][] {
 
 export function otelEventTypes(): OtelEventType[] {
   return eventTypesFor('otel') as OtelEventType[];
+}
+
+/** Visualizer subscriptions; metrics-only events remain covered by MetricsListener. */
+export function otelTracedEventTypes(): OtelTracedEventType[] {
+  return otelEventTypes().filter((type): type is OtelTracedEventType => {
+    const declaration = EVENT_SINKS[type];
+    return !('otelTrace' in declaration && declaration.otelTrace === false);
+  });
 }
