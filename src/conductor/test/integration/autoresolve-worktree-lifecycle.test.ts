@@ -4,7 +4,7 @@
  * .docs/stories/auto-resolve-open-pr-conflicts.md; adr-2026-07-04-resolution-
  * worktree-lifecycle).
  *
- * Covers: FR-12 (isolation aspect), NFR-2
+ * Covers: FR-12 (isolation aspect), NFR-2, task:3
  *
  * These are true end-to-end acceptance specs: a REAL git repo in a tmpdir (no
  * mocked git), driving the not-yet-existing `withResolveWorktree` helper the
@@ -193,6 +193,39 @@ describe('integration/autoresolve — resolution worktree lifecycle', () => {
     await expect(
       autoresolve.withResolveWorktree('widget', 'feat/widget', dir, async () => ({ callback: 'returned' })),
     ).resolves.toEqual({ callback: 'returned' });
+  });
+
+  it('reaps only the stale transient path and leaves a sibling worktree registered and readable', async () => {
+    const stalePath = join(dir, '.worktrees', 'resolve-widget');
+    const siblingPath = join(dir, '.worktrees', 'sibling');
+    await g(['branch', 'feat/sibling', 'main']);
+    await g(['worktree', 'add', '-q', siblingPath, 'feat/sibling']);
+    await g(['worktree', 'add', '--detach', '-q', stalePath, 'feat/widget']);
+    await rm(stalePath, { recursive: true, force: true });
+
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    await autoresolve.withResolveWorktree('widget', 'feat/widget', dir, async () => ({ callback: 'returned' }));
+
+    expect({
+      siblingRegistered: (await worktreeList()).includes(`worktree ${siblingPath}`),
+      siblingReadme: await readFile(join(siblingPath, 'README.md'), 'utf-8'),
+    }).toEqual({
+      siblingRegistered: true,
+      siblingReadme: '# base\n',
+    });
+  });
+
+  it('does not accumulate transient registrations after repeated crashed attempts for the same slug', async () => {
+    const transientPath = join(dir, '.worktrees', 'resolve-widget');
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await g(['worktree', 'add', '--detach', '-q', transientPath, 'feat/widget']);
+      await rm(transientPath, { recursive: true, force: true });
+      await autoresolve.withResolveWorktree('widget', 'feat/widget', dir, async () => ({ attempt }));
+    }
+
+    expect(await worktreeList()).not.toContain(`worktree ${transientPath}`);
   });
 
   it('recreates a fresh transient checkout when its prior registration and leftover directory remain', async () => {
