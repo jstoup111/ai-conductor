@@ -1021,8 +1021,17 @@ describe('as-built SHIP routing', () => {
     expect((halt?.reason ?? '').split('Blocking findings:').length - 1).toBe(1);
   });
 
-  it('keeps the no-verdict-line group halt free of findings and remediation wording', async () => {
-    const observed = await runGroupedAsBuiltExit({ report: '# As-Built Architecture Review\n\nNo verdict here.\n' });
+  it('keeps a blocked-shaped report without a recognizable verdict free of findings and remediation wording', async () => {
+    const observed = await runGroupedAsBuiltExit({
+      report: [
+        '## As-Built Architecture Review',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-NO-VERDICT | DESIGN | Task 1 | This detail must not route without a verdict |',
+      ].join('\n'),
+    });
     const halt = observed.find((event) => event.type === 'loop_halt');
 
     expect(halt).toBeDefined();

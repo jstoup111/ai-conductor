@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:5
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -368,5 +368,20 @@ describe('shipped-record recorded review findings', () => {
     });
 
     expect(decorated).toEqual(plain);
+  });
+
+  it('does not retain narrative findings without a recognizable PLAN_GAP verdict', () => {
+    const findings = recordedShipmentFindings({
+      asBuilt: [
+        '## Findings from review',
+        'Outcome delivered: yes',
+        '',
+        '## Recorded Findings',
+        '- Outcome: The status channel stays eventually consistent.',
+        '- Summary: The approved architecture has no synchronous channel.',
+      ].join('\n'),
+    });
+
+    expect(findings).not.toContainEqual(expect.objectContaining({ grade: 'PLAN_GAP' }));
   });
 });
