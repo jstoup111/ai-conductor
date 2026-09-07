@@ -224,7 +224,10 @@ export async function sweepEpisodeHalts(
       continue;
     }
     await clearMarker(join(worktreeBase, slug));
-    log(`episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)`);
+    log(
+      `episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)` +
+        (disposition === 'legacy' ? ' (halt class: legacy)' : ''),
+    );
   }
 }
 

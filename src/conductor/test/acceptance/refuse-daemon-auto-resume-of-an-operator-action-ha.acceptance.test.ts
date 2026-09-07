@@ -72,6 +72,9 @@ describe('progress re-kick refuses operator-action halt classifications', () => 
 
       expect(result.dispatches).toBe(3);
       expect(result.outcomes).toHaveLength(3);
+      if (disposition === 'legacy') {
+        expect(result.logs.filter((line) => line.includes(slug) && line.includes('(halt class: legacy)'))).toHaveLength(1);
+      }
     },
   );
 

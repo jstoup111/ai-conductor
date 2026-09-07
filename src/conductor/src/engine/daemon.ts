@@ -812,6 +812,7 @@ export async function runDaemon(
   const progressReKickCounts = new Map<string, number>();
   const progressReKickCeilingLogged = new Set<string>();
   const progressReKickOperatorActionLogged = new Set<string>();
+  const progressReKickLegacyLogged = new Set<string>();
   const isProgressReKickEligibleBounded = deps.isProgressReKickEligible
     ? async (slug: string): Promise<boolean> => {
         if (deps.readHaltClass) {
@@ -829,6 +830,10 @@ export async function runDaemon(
               );
             }
             return false;
+          }
+          if (disposition === 'legacy' && !progressReKickLegacyLogged.has(slug)) {
+            progressReKickLegacyLogged.add(slug);
+            log(`[daemon] ${slug}: progress-gated re-kick compatibility path (halt class: legacy)`);
           }
         }
         const count = progressReKickCounts.get(slug) ?? 0;

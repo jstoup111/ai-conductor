@@ -76,6 +76,7 @@ describe('Task 20 — daemon-cli wires the episode-halt tracker into runDaemon d
 
     try {
       await writeLiveHalt('mechanical', 'mechanical');
+      await writeLiveHalt('legacy', 'legacy');
       await writeLiveHalt('needs-human', 'needs-human');
       await writeLiveHalt('missing-sidecar');
       await writeLiveHalt('operator-park', 'mechanical');
@@ -85,6 +86,7 @@ describe('Task 20 — daemon-cli wires the episode-halt tracker into runDaemon d
       );
 
       await expect(access(join(worktreeBase, 'mechanical', '.pipeline', 'HALT'))).rejects.toThrow();
+      await expect(access(join(worktreeBase, 'legacy', '.pipeline', 'HALT'))).rejects.toThrow();
       await expect(access(join(worktreeBase, 'needs-human', '.pipeline', 'HALT'))).resolves.toBeUndefined();
       await expect(access(join(worktreeBase, 'missing-sidecar', '.pipeline', 'HALT'))).resolves.toBeUndefined();
       await expect(access(join(worktreeBase, 'operator-park', '.pipeline', 'HALT'))).resolves.toBeUndefined();
@@ -92,6 +94,7 @@ describe('Task 20 — daemon-cli wires the episode-halt tracker into runDaemon d
       expect(lines).toContain('episode-end sweep: missing-sidecar unclassified — left for a human');
       expect(lines).toContain('episode-end sweep: operator-park operator-parked — left for a human');
       expect(lines).toContain('episode-end sweep: re-kicked mechanical (episode-caused HALT cleared)');
+      expect(lines).toContain('episode-end sweep: re-kicked legacy (episode-caused HALT cleared) (halt class: legacy)');
     } finally {
       await rm(worktreeBase, { recursive: true, force: true });
     }
