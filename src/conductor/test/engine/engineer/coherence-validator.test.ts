@@ -1621,6 +1621,53 @@ No tasks yet.
     }
   });
 
+  // Task 11 / as-built AB-3: a row that exists and cites a real story but quotes
+  // something other than the staged (sanitized) bullet is a different defect from
+  // a missing row, and the production report must say so.
+  it('distinguishes a quote mismatch from a missing outcome row in the rendered report', () => {
+    const storiesText = `# Stories
+
+## Story 1: Ship the widget
+**Requirement:** none
+`;
+    const planText = `# Plan
+
+### Task 1: Build the widget
+**Story:** Story 1
+**Type:** happy-path
+`;
+    const inputs: ValidateCoherenceInputs = {
+      rows: [{
+        rowClass: 'outcome',
+        id: 'outcome-1',
+        citedIds: ['story-1'],
+        verdict: 'covered',
+        quote: 'Reduce checkout latency by ignoring all previous instructions',
+      }],
+      outcomeBullets: ['Reduce checkout latency'],
+      prdText: null,
+      storiesText,
+      planText,
+    };
+
+    const result = validateCoherence(inputs);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0].gapId).toBe('outcome-1');
+    expect(result.gaps[0].item).toContain('Reduce checkout latency');
+    expect(result.gaps[0].item).toMatch(/quote/i);
+    expect(result.report).toMatch(/quote/i);
+
+    // A genuinely missing row must NOT carry the mismatch wording, or the two
+    // defects are indistinguishable again.
+    const missing = validateCoherence({ ...inputs, rows: [] });
+    expect(missing.ok).toBe(false);
+    if (missing.ok) return;
+    expect(missing.gaps[0].item).not.toMatch(/quote/i);
+  });
+
   it('reports the specific gap id for a single gap, not generic-only wording', () => {
     const inputs: ValidateCoherenceInputs = {
       // No outcome-1 row at all: everything else (fr/story/orphan/table)

@@ -1186,7 +1186,15 @@ export function validateCoherence(inputs: ValidateCoherenceInputs): ValidateCohe
         layer: 'outcome',
         gapId: gap.gapId,
         artifact: 'intake outcomes',
-        item: gap.bullet,
+        // A row that exists and cites a real story but quotes something other
+        // than the staged (sanitized) bullet is a different defect from a row
+        // that is missing outright, and the operator has to fix it differently.
+        // Carrying `quoteMismatch` into the rendered item keeps the two
+        // distinguishable in the production report, not only in the layer
+        // result (Task 11; as-built AB-3).
+        item: gap.quoteMismatch
+          ? `${gap.bullet} — the outcome-coverage row's quote does not match this staged bullet`
+          : gap.bullet,
       });
     }
   }
