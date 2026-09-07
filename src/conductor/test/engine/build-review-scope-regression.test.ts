@@ -24,17 +24,23 @@ describe('portable build-review scope regression (#2231)', () => {
       'ambiguous body': 'conflicting-associations',
       'removed-binding body': 'binding-removed',
     });
+    // Decision 11 requires each measurement separately for both sides over the
+    // same fixture; a combined figure cannot show what the new scope costs.
     expect(result.counts).toMatchObject({
-      sourceReads: expect.any(Number),
+      sourceReads: { legacy: expect.any(Number), scoped: expect.any(Number) },
       declarations: 8,
-      targets: 3,
-      candidates: 3,
+      targets: { legacy: 724, scoped: 3 },
+      candidates: { legacy: 0, scoped: 3 },
       sharedSources: 1,
       ambiguousCandidates: 1,
     });
+    // Whole-file admission read one blob; scoped analysis reads both pinned
+    // sides plus the plan and stories through the frozen reader.
+    expect(result.counts.sourceReads.scoped).toBeGreaterThan(result.counts.sourceReads.legacy);
     expect(result.projectionBytes).toMatchObject({ legacy: expect.any(Number), scoped: expect.any(Number) });
     expect(result.dispatchCounts).toEqual({ legacy: 1, scoped: 1, realProviders: 0 });
-    expect(result.elapsedAnalysisMs).toBeGreaterThanOrEqual(0);
+    expect(result.elapsedAnalysisMs.legacy).toBeGreaterThanOrEqual(0);
+    expect(result.elapsedAnalysisMs.scoped).toBeGreaterThanOrEqual(0);
     expect(result.retainedEvidence).toEqual({ shared: true, ambiguous: true });
   });
 
