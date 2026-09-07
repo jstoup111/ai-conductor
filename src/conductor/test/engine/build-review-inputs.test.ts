@@ -1818,7 +1818,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     async function assemble(calls: string[][], failCherry = false): Promise<BuildReviewFrozenInputs> {
       return assembleInputs(realGit(calls, failCherry), planPath, {
         inspectTestSuite: async () => ({
-          status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' },
+          status: 'CURRENT', evidence: { ...CURRENT_PROOF.evidence, provenanceHeadSha: await git('rev-parse', 'HEAD') },
         }),
       });
     }
