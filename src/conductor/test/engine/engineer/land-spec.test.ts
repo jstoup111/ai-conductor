@@ -212,6 +212,82 @@ afterEach(async () => {
   await rm(repoPath, { recursive: true, force: true });
 });
 
+describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
+  it('preserves the subject while committing the plan, track, tier, stories, and task list in the body', async () => {
+    const idea = 'dep bump';
+    const dir = await seedValidWorktree(idea);
+    const stories = [
+      '# Stories: dep bump',
+      '',
+      '**Status:** Accepted',
+      '',
+      '## Story 1: Explain the landed decision',
+      '### Acceptance Criteria',
+      '#### Happy Path',
+      '- Given X, when Y, then Z.',
+      '',
+      '## Story 2: Keep the commit evidence inert',
+      '### Acceptance Criteria',
+      '#### Happy Path',
+      '- Given X, when Y, then Z.',
+      '',
+    ].join('\n');
+    const plan = [
+      '# Implementation Plan: dep bump',
+      '',
+      '**Stories:** .docs/stories/dep-bump.md',
+      '',
+      '## Summary',
+      '',
+      'Give reviewers a concise record of the decisions this spec lands.',
+      '',
+      '### Task 1: Compose the summary',
+      '**Story:** Story 1',
+      '**Done when:**',
+      '- Given X, when Y, then Z.',
+      '- The subject remains unchanged.',
+      '',
+      '### Task 2: Keep prose inert',
+      '**Story:** Story 2',
+      '**Done when:**',
+      '- Given X, when Y, then Z.',
+      '- No trailer-shaped line is emitted.',
+      '',
+      '### Task 3: Commit the summary',
+      '**Story:** Story 2',
+      '**Done when:**',
+      '- Given X, when Y, then Z.',
+      '- The committed body is reviewable.',
+      '',
+      '## Coverage Check',
+      '',
+      '| Criterion | Task ids | Quote | Disposition |',
+      '| --- | --- | --- | --- |',
+      '| Story 1 happy: Given X, when Y, then Z. | 1 | "Given X, when Y, then Z." | diff-local |',
+      '| Story 2 happy: Given X, when Y, then Z. | 2 | "Given X, when Y, then Z." | diff-local |',
+      '',
+    ].join('\n');
+    await mkdir(join(dir, '.docs', 'track'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'complexity'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), stories);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), plan);
+    await writeFile(join(dir, '.docs', 'track', 'dep-bump.md'), '# Track\n\nTrack: technical\n');
+    await writeFile(join(dir, '.docs', 'complexity', 'dep-bump.md'), '# Complexity\n\nTier: S\n');
+
+    const gh: GhRunner = async () => ({ stdout: 'operator\n' });
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result).toEqual({ slug: 'dep-bump', branch: 'spec/dep-bump', repoPath: dir });
+
+    const message = await git(['log', '-1', '--format=%B'], dir);
+    expect(message.split('\n')[0]).toBe('spec: land authored artifacts for "dep bump" [engineer/land]');
+    expect(message).toContain('Summary:\nGive reviewers a concise record of the decisions this spec lands.');
+    expect(message).toContain('Track: technical; Tier: S');
+    expect(message).toContain('Stories:\n- Story 1: Explain the landed decision\n- Story 2: Keep the commit evidence inert');
+    expect(message).toContain('Tasks: 3\n- Task 1\n- Task 2\n- Task 3');
+  });
+});
+
 describe('landSpec ADR approval diagnostics (Task 6)', () => {
   const gh: GhRunner = async () => ({ stdout: 'operator\n' });
 

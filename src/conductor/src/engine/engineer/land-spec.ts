@@ -66,6 +66,7 @@ import { resolvePlanStoriesPath } from '../plan-stories-reference.js';
 import { scanPlanProtectedTargets } from '../plan-protected-targets.js';
 import { validatePlanDoneWhen } from '../plan-done-when.js';
 import { PLAN_TASK_HARD_STOP_BOUNDARY, validatePlanTaskCount } from '../plan-task-count.js';
+import { composeSpecCommitMessage } from './spec-commit-message.js';
 
 const execFile = promisify(execFileCb);
 
@@ -556,7 +557,7 @@ export async function landSpec(
   await execFile('git', ['add', '.docs'], { cwd: worktreePath });
   await execFile(
     'git',
-    ['commit', '-m', `spec: land authored artifacts for "${idea}" [engineer/land]`],
+    ['commit', '-m', composeSpecCommitMessage(idea, track, tier, storiesContent, planContent)],
     { cwd: worktreePath, env: withEngineCommitEnv() },
   );
 
