@@ -703,6 +703,43 @@ describe('engine/cost-rollup', () => {
     expect(rollup.costUnmetered).toEqual({ count: 0 });
   });
 
+  // adr-2026-07-27-cost-unmetered-is-a-first-class-state D6: absent usage and
+  // absent cost are different states and must not collapse into each other.
+  // The cost-less attempt below carries no `costUsd` key at all, which is the
+  // shape `parseCodexJsonl` actually produces (D1) — the NaN case in the
+  // sibling test covers a cost that is present but unusable.
+  it('separates an invoked attempt with no usage from one whose cost alone is missing', async () => {
+    await writeEvents([
+      JSON.stringify({
+        type: 'provider_attempt', step: 'plan', provider: 'claude', outcome: 'success', invoked: true,
+      }),
+      JSON.stringify({
+        type: 'provider_attempt', step: 'build', provider: 'codex', outcome: 'success', invoked: true,
+        tokenUsage: { input: 100, output: 20 },
+      }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup.dispatches).toBe(2);
+    expect(rollup.tokens).toMatchObject({ input: 100, output: 20 });
+    expect(rollup.costUsd).toBe(0);
+    expect(rollup.unmetered).toEqual({ count: 1, durationMs: 0 });
+    expect(rollup.costUnmetered).toEqual({ count: 1 });
+    // The no-usage attempt is unmetered and never cost-unmetered; the
+    // token-bearing attempt is cost-unmetered and never unmetered.
+    expect(rollup.providers?.claude).toMatchObject({
+      dispatches: 1,
+      unmetered: { count: 1, durationMs: 0 },
+    });
+    expect(rollup.providers?.claude?.costUnmetered).toEqual({ count: 0 });
+    expect(rollup.providers?.codex).toMatchObject({
+      dispatches: 1,
+      unmetered: { count: 0, durationMs: 0 },
+      costUnmetered: { count: 1 },
+    });
+  });
+
   it('keeps invoked attempts with absent usage or unusable cost visibly incomplete', async () => {
     await writeEvents([
       JSON.stringify({
