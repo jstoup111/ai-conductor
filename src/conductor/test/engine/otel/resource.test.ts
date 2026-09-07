@@ -280,7 +280,10 @@ describe('buildResource', () => {
       const first = buildResource({ ...ctx(), engineVersion: 'dist-a' }, 'traces');
       const second = buildResource({ ...ctx(), engineVersion: 'dist-b' }, 'traces');
 
-      expect(first.attributes['service.version']).toBe(second.attributes['service.version']);
+      expect(first.attributes['service.version']).toBe('0.105.0');
+      expect(second.attributes['service.version']).toBe('0.105.0');
+      expect(first.attributes['conductor.engine.version']).toBe('dist-a');
+      expect(second.attributes['conductor.engine.version']).toBe('dist-b');
     });
 
     it('the trace scope marks an omitted harness version as not supplied without throwing', () => {
