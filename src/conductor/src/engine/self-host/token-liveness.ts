@@ -26,6 +26,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { scrubTmuxEnvironment } from '../../execution/child-environment.js';
 
 /** The trivial prompt sent to the CLI — cheap, deterministic, no side effects. */
 const LIVENESS_PROMPT = 'reply with ok';
@@ -103,11 +104,11 @@ export async function verifyTokenLiveness(
     const argv = ['claude', '-p', LIVENESS_PROMPT, '--output-format', 'json', '--model', LIVENESS_MODEL];
 
     // Token passed via env only — never argv, never logged.
-    const env: NodeJS.ProcessEnv = {
+    const env: NodeJS.ProcessEnv = scrubTmuxEnvironment({
       ...process.env,
       CLAUDE_CONFIG_DIR: configDir,
       CLAUDE_CODE_OAUTH_TOKEN: options.token,
-    };
+    });
 
     let spawnResult: LivenessSpawnResult;
     try {

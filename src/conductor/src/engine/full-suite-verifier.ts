@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { execa } from 'execa';
+import { scrubTmuxEnvironment } from '../execution/child-environment.js';
 import {
   loadConfig,
   UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES,
@@ -1245,7 +1246,7 @@ function productionScopedRunRunner(
   return async (command, { signal, cwd }) => {
     const result = await execa(command, {
       cwd: cwd ?? projectRoot,
-      env: environment,
+      env: scrubTmuxEnvironment(environment),
       extendEnv: false,
       shell: true,
       reject: false,

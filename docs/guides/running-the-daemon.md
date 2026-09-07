@@ -248,6 +248,13 @@ ai-conductor daemon connect --write --attach-into mywindow:1.0
 `<target>` is a tmux session, `session:window`, or `session:window.pane` string. This also works on
 `daemon start`.
 
+Everything the daemon spawns — provider sessions (Claude, Codex) and the test or verification
+subprocesses it runs (full-suite, scoped-run, smoke, closeout) — starts with `TMUX` and `TMUX_PANE`
+scrubbed from its environment. A child that inherited them and ran a targetless tmux command
+(`tmux respawn-pane -k`, `tmux new-session`) would have tmux resolve the target to the daemon's own
+pane and kill the daemon silently. A dispatched test or agent that genuinely needs tmux must name its
+target explicitly with `-t`; see [environment](../reference/environment.md#written-into-child-process-environments).
+
 If an enforcement script still cannot be restored, the build remains halted rather than dispatching
 without its attribution gate. The recheck after a repair is authoritative and strict: a script must
 exist as an executable regular file at the expected path, so a hook that restored non-executable or

@@ -20,6 +20,7 @@ import {
   ProviderStreamAssembler,
 } from './provider-stream.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
+import { scrubTmuxEnvironment } from './child-environment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
 
@@ -818,10 +819,12 @@ export class ClaudeProvider implements LLMProvider {
    * enforceFreshSessionOptions — no config off-switch.
    */
   private buildEnv(options: InvokeOptions): NodeJS.ProcessEnv {
-    return withDaemonSessionMarker({
+    // tmux target variables are scrubbed last so neither the inherited env
+    // nor a self-host overlay can hand the child the daemon's own pane.
+    return scrubTmuxEnvironment(withDaemonSessionMarker({
       ...process.env,
       ...options.selfHost?.env,
       ...(options.effort ? { CLAUDE_CODE_EFFORT_LEVEL: options.effort } : {}),
-    });
+    }));
   }
 }

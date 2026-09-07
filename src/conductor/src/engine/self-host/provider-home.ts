@@ -4,6 +4,7 @@
 
 import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
+import { scrubTmuxEnvironment } from '../../execution/child-environment.js';
 import { redactSafetyText } from '../safety-diagnostics.js';
 import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
@@ -117,7 +118,7 @@ class ThrowawayProviderHome implements ProviderHome {
     delete env.CODEX_HOME;
     delete env.CLAUDE_CODE_OAUTH_TOKEN;
     env[HOME_VARIABLE[this.provider]] = this.homeDir;
-    return { ...env, ...this.additions };
+    return scrubTmuxEnvironment({ ...env, ...this.additions });
   }
 
   childArgs(): readonly string[] {

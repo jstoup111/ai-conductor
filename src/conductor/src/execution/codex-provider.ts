@@ -21,6 +21,7 @@ import {
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
+import { scrubTmuxEnvironment } from './child-environment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
@@ -942,9 +943,11 @@ export class CodexProvider implements LLMProvider {
     // entry guard refuses recursive conductor invocations from inside it
     // (see daemon-session.ts). Applied last so neither self-host env nor auth
     // can unset it.
-    return withDaemonSessionMarker(
+    // tmux target variables are masked in the overlay (execa extends
+    // process.env underneath it) so the child cannot resolve the daemon's pane.
+    return scrubTmuxEnvironment(withDaemonSessionMarker(
       options.selfHost ? { ...options.selfHost.env, ...auth } : auth,
-    );
+    ));
   }
 
   private selfHostArgs(options: InvokeOptions): readonly string[] {

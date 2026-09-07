@@ -1,5 +1,6 @@
 import { execa } from 'execa';
 import { existsSync } from 'node:fs';
+import { scrubTmuxEnvironment } from '../execution/child-environment.js';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { loadConfig, type ConfigResult } from './config.js';
 import {
@@ -31,6 +32,8 @@ function makeProductionRunner(fallbackCwd: string): ScopedRunRunner {
   return async (command, { signal, cwd }) => {
     const result = await execa(command, {
       cwd: cwd ?? fallbackCwd,
+      env: scrubTmuxEnvironment(process.env),
+      extendEnv: false,
       shell: true,
       reject: false,
       cancelSignal: signal,
