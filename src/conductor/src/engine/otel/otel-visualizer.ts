@@ -500,7 +500,11 @@ export class OtelVisualizer implements VisualizerPlugin {
     if (!this.spanManager) return;
     const handler = this.eventHandlersByType[event.type as OtelTracedEventType] as (
       event: ConductorEvent,
-    ) => void;
+    ) => void | undefined;
+    if (!handler) {
+      this.onWarning?.(`[otel] no handler for traced event type: ${event.type}`);
+      return;
+    }
     handler(event);
   }
 
