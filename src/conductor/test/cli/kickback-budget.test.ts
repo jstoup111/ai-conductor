@@ -7,7 +7,9 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { detectKickbackBudgetCommand } from '../../src/cli.js';
+import { resolveMachineOperatorIdentity } from '../../src/engine/cli-operator-authority.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
+import type { GhRunner } from '../../src/engine/tracker-client.js';
 
 const execFileP = promisify(execFile);
 const baseEntry = { count: 1, cumulative: 1, treeHash: null, lastReason: 'cap', priorVerdict: true, resolvedBefore: 0 };
@@ -263,16 +265,22 @@ describe('kickback-budget operator authority', () => {
     process.env.GITHUB_ACTOR = 'some-ci-robot';
     try {
       const output: string[] = [];
-      // No injected resolver: the command must reach the machine identity chain,
-      // which resolves nothing in this fixture, rather than trusting the env var.
+      const ghCalls: string[][] = [];
+      const gh: GhRunner = async (args) => {
+        ghCalls.push(args);
+        return { stdout: '' };
+      };
       expect(await dispatchKickbackBudgetCommand(
         { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'build_review', by: 1, rationale: 'evidence', format: 'human' },
         {
           cwd: fixture.root, resolveMainRoot: async () => fixture.root, isInteractive: () => true,
           print: (line) => output.push(line), appendEvent: () => {},
-          resolveOperator: async () => undefined,
+          resolveOperator: () => resolveMachineOperatorIdentity(fixture.root, {
+            readUser: async () => ({ config: {} }), gh,
+          }),
         },
       )).toBe(1);
+      expect(ghCalls).toEqual([['api', 'user', '--jq', '.login']]);
       expect(output.join('\n')).toContain('no approved operator identity is available');
       const entry = JSON.parse(await readFile(join(fixture.worktree, '.pipeline', 'kickback-ledger.json'), 'utf8')).gates.build_review;
       expect(entry.effectiveLimit).toBeUndefined();
@@ -280,6 +288,34 @@ describe('kickback-budget operator authority', () => {
     } finally {
       if (previous === undefined) delete process.env.GITHUB_ACTOR; else process.env.GITHUB_ACTOR = previous;
       await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('uses only the approved user-config to GitHub identity chain', async () => {
+    const previous = process.env.GITHUB_ACTOR;
+    process.env.GITHUB_ACTOR = 'some-ci-robot';
+    try {
+      const unauthenticatedCalls: string[][] = [];
+      const unauthenticatedGh: GhRunner = async (args) => {
+        unauthenticatedCalls.push(args);
+        return { stdout: '' };
+      };
+      expect(await resolveMachineOperatorIdentity('/fixture', {
+        readUser: async () => ({ config: {} }), gh: unauthenticatedGh,
+      })).toBeUndefined();
+      expect(unauthenticatedCalls).toEqual([['api', 'user', '--jq', '.login']]);
+
+      let configuredGhConsulted = false;
+      const configuredGh: GhRunner = async () => {
+        configuredGhConsulted = true;
+        return { stdout: 'some-ci-robot' };
+      };
+      expect(await resolveMachineOperatorIdentity('/fixture', {
+        readUser: async () => ({ config: { spec_owner: 'approved-operator' } }), gh: configuredGh,
+      })).toBe('approved-operator');
+      expect(configuredGhConsulted).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.GITHUB_ACTOR; else process.env.GITHUB_ACTOR = previous;
     }
   });
 

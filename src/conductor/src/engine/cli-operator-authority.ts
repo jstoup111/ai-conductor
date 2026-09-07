@@ -15,8 +15,9 @@ import { realpath as realpathDefault, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { resolveMainRepoRoot } from './park-marker.js';
-import { makeMachineOwnerResolver } from './owner-gate/machine-identity.js';
-import { makeProductionGh } from './tracker-client.js';
+import { makeMachineOwnerResolver, type MachineIdentityConfig } from './owner-gate/machine-identity.js';
+import { makeProductionGh, type GhRunner } from './tracker-client.js';
+import { readUserConfig } from './user-config.js';
 
 /**
  * Longest operator rationale a durable authorization record accepts. The
@@ -70,9 +71,21 @@ export async function resolveCliFeatureWorktree(
  * path, and no environment variable is consulted — an unattended harness or
  * provider child cannot name itself the operator.
  */
-export async function resolveMachineOperatorIdentity(cwd: string): Promise<string | undefined> {
+export interface MachineOperatorIdentityDeps {
+  gh?: GhRunner;
+  readUser?: () => Promise<{ config: MachineIdentityConfig }>;
+}
+
+export async function resolveMachineOperatorIdentity(
+  cwd: string,
+  deps: MachineOperatorIdentityDeps = {},
+): Promise<string | undefined> {
   try {
-    const resolution = await makeMachineOwnerResolver(makeProductionGh(), cwd)();
+    const resolution = await makeMachineOwnerResolver(
+      deps.gh ?? makeProductionGh(),
+      cwd,
+      deps.readUser ?? readUserConfig,
+    )();
     return resolution.resolved ? resolution.id : undefined;
   } catch {
     return undefined;
