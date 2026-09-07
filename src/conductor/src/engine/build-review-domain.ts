@@ -155,7 +155,18 @@ function parsePersistedBuildReviewCandidateScopeResolutions(value: unknown): rea
     : Object.freeze(resolutions as BuildReviewCandidateScopeResolution[]);
 }
 /** Stamp occurrence ordinals onto equal-content references sharing one path, in projection order. */
-function withOccurrenceOrdinals(references: readonly BuildReviewContentRegionReference[]): readonly BuildReviewContentRegionReference[] { const seen = new Map<string, number>(); return references.map((reference) => { const key = `${reference.path}\u0000${reference.contentHash}`; const occurrence = seen.get(key) ?? 0; seen.set(key, occurrence + 1); return contentRegionReference(reference.path, reference.contentHash, reference.display, occurrence); }); }
+function withOccurrenceOrdinals(references: readonly BuildReviewContentRegionReference[]): readonly BuildReviewContentRegionReference[] {
+  const seen = new Map<string, number>();
+  return references.map((reference) => {
+    const key = `${reference.path}\u0000${reference.contentHash}`;
+    const next = seen.get(key) ?? 0;
+    // A typed declaration's ordinal is already authoritative. Coarse regions
+    // use the next free ordinal in that same namespace.
+    const occurrence = reference.occurrence ?? next;
+    seen.set(key, Math.max(next, occurrence + 1));
+    return contentRegionReference(reference.path, reference.contentHash, reference.display, occurrence);
+  });
+}
 function sameRegion(left: BuildReviewContentRegionReference, right: BuildReviewContentRegionReference): boolean { return left.path === right.path && left.contentHash === right.contentHash && left.occurrence === right.occurrence; }
 /**
  * adr-2026-08-18 fixes finding identity as `sha256(whitespace-normalized
@@ -172,33 +183,65 @@ function normalizedTitleHash(titleText: string): string {
  * recoverable, so decision 8 requires the existing declared-title reference
  * rather than its source-byte resolution evidence.
  */
-function declaredCandidateTitles(projection: BuildReviewRubricProjection): ReadonlySet<string> {
-  const scope = object(projection.testScope);
-  const titles = new Set<string>();
-  if (!scope || !Array.isArray(scope.candidates)) return titles;
-  for (const entry of scope.candidates) {
-    const item = object(entry); const declaration = item && object(item.declaration);
-    const titleChain = declaration?.titleChain;
-    if (Array.isArray(titleChain) && titleChain.length > 0 && titleChain.every(text)) titles.add(titleChain.join(' > '));
-  }
-  return titles;
+interface DeclaredTitleOccurrenceIndex {
+  readonly targets: ReadonlyMap<string, number>;
+  readonly candidatesById: ReadonlyMap<string, { readonly title: string; readonly occurrence: number }>;
+  readonly candidates: ReadonlyMap<string, readonly number[]>;
 }
-function targetRegions(projection: BuildReviewRubricProjection): readonly BuildReviewContentRegionReference[] | undefined {
+
+function declaredTitleOccurrenceIndex(projection: BuildReviewRubricProjection): DeclaredTitleOccurrenceIndex {
+  const scope = object(projection.testScope);
+  const targets = new Map<string, number>();
+  const candidatesById = new Map<string, { readonly title: string; readonly occurrence: number }>();
+  const candidates = new Map<string, number[]>();
+  if (!scope) return { targets, candidatesById, candidates };
+  for (const entry of Array.isArray(scope.targets) ? scope.targets : []) {
+    const item = object(entry); const declaration = item && object(item.declaration); const source = item && object(item.source);
+    const path = source && parseBuildReviewCanonicalPathReference(source.fileName);
+    const titleChain = declaration?.titleChain;
+    const occurrence = declaration?.occurrence;
+    if (!path || source?.side !== 'head' || declaration?.kind !== 'test' || !Array.isArray(titleChain) || titleChain.length === 0 || !titleChain.every(text) || !Number.isInteger(occurrence) || (occurrence as number) < 0) continue;
+    targets.set(`${path}\u0000${titleChain.join(' > ')}`, occurrence as number);
+  }
+  const evidence = Array.isArray(scope.evidence) ? scope.evidence.map(object) : [];
+  for (const entry of Array.isArray(scope.candidates) ? scope.candidates : []) {
+    const item = object(entry); const declaration = item && object(item.declaration);
+    const source = item && object(item.source); const span = declaration && object(declaration.span);
+    const titleChain = declaration?.titleChain;
+    const occurrence = declaration?.occurrence;
+    if (declaration?.kind !== 'test' || !Array.isArray(titleChain) || titleChain.length === 0 || !titleChain.every(text) || !Number.isInteger(occurrence) || (occurrence as number) < 0) continue;
+    const title = titleChain.join(' > ');
+    const key = title;
+    const occurrences = candidates.get(key) ?? [];
+    occurrences.push(occurrence as number);
+    candidates.set(key, occurrences);
+    const matchedEvidence = evidence.find((item) => {
+      const evidenceSource = object(item?.source); const region = object(item?.region);
+      return evidenceSource?.side === source?.side && evidenceSource?.fileName === source?.fileName &&
+        region?.start === span?.start && region?.end === span?.end;
+    });
+    const candidateId = typeof item?.candidateId === 'string' ? item.candidateId : matchedEvidence?.id;
+    if (typeof candidateId === 'string') candidatesById.set(candidateId, { title, occurrence: occurrence as number });
+  }
+  return { targets, candidatesById, candidates };
+}
+function targetRegions(projection: BuildReviewRubricProjection, declaredTitles: DeclaredTitleOccurrenceIndex): readonly BuildReviewContentRegionReference[] | undefined {
   const scope = object(projection.testScope);
   if (!scope || !Array.isArray(scope.targets)) return undefined;
   return scope.targets.flatMap((target) => {
     const item = object(target); const source = item && object(item.source); const declaration = item && object(item.declaration);
     const path = source && parseBuildReviewCanonicalPathReference(source.fileName);
     const titleChain = declaration?.titleChain;
-    const occurrence = declaration?.occurrence;
-    if (!path || source?.side !== 'head' || declaration?.kind !== 'test' || !Array.isArray(titleChain) || titleChain.length === 0 || !titleChain.every(text) || !Number.isInteger(occurrence) || (occurrence as number) < 0) return [];
+    if (!path || source?.side !== 'head' || declaration?.kind !== 'test' || !Array.isArray(titleChain) || titleChain.length === 0 || !titleChain.every(text)) return [];
     const display = titleChain.join(' > ');
-    return [contentRegionReference(path, normalizedTitleHash(display), display, occurrence as number)];
+    const occurrence = declaredTitles.targets.get(`${path}\u0000${display}`);
+    return occurrence === undefined ? [] : [contentRegionReference(path, normalizedTitleHash(display), display, occurrence)];
   });
 }
 /** Builds finding authority only from established targets and already-validated resolved candidates. */
 export function buildReviewFindingReferenceContext(projection: BuildReviewRubricProjection, scopeResolutions: readonly BuildReviewCandidateScopeResolution[] = []): BuildReviewFindingReferenceContext {
-  const targets = targetRegions(projection);
+  const declaredTitles = declaredTitleOccurrenceIndex(projection);
+  const targets = targetRegions(projection, declaredTitles);
   const titleRegions = targets && targets.length > 0 ? targets : projection.changedTestTitles?.flatMap((title) => {
       const path = parseBuildReviewCanonicalPathReference(title.selector);
       return path ? [{ path, contentHash: title.staticExtractionFallback ? `sha256:${createHash('sha256').update(title.selector).digest('hex')}` : normalizedTitleHash(title.titleText), display: title.titleText || `${path} changed test` }] : [];
@@ -206,19 +249,24 @@ export function buildReviewFindingReferenceContext(projection: BuildReviewRubric
   // Resolution evidence stays on the resolution record; it is not an identity
   // input (decision 8).  A recoverable declared title anchors the finding, and
   // only an unrecoverable one falls back to the explicitly coarse source hash.
-  const declaredTitles = declaredCandidateTitles(projection);
-  const resolvedRegions = scopeResolutions.flatMap((resolution) => resolution.status === 'resolved'
-    ? [{
-        path: resolution.sourceRegion.path,
-        contentHash: declaredTitles.has(resolution.sourceRegion.display)
-          ? normalizedTitleHash(resolution.sourceRegion.display)
-          : resolution.sourceRegion.contentHash,
-        display: resolution.sourceRegion.display,
-      }]
-    : []);
-  const changedTestRegions = targets && targets.length > 0
-    ? [...targets, ...withOccurrenceOrdinals(resolvedRegions)]
-    : withOccurrenceOrdinals([...titleRegions, ...resolvedRegions]);
+  const resolvedOccurrences = new Map<string, number[]>();
+  for (const [key, occurrences] of declaredTitles.candidates) resolvedOccurrences.set(key, [...occurrences]);
+  const resolvedRegions = scopeResolutions.flatMap((resolution) => {
+    if (resolution.status !== 'resolved') return [];
+    const declaredCandidate = declaredTitles.candidatesById.get(resolution.candidateId);
+    const title = declaredCandidate?.title ?? resolution.sourceRegion.display;
+    const occurrences = declaredCandidate ? undefined : resolvedOccurrences.get(title);
+    const occurrence = declaredCandidate?.occurrence ?? occurrences?.shift();
+    return [{
+      path: resolution.sourceRegion.path,
+      contentHash: declaredCandidate || occurrences ? normalizedTitleHash(title) : resolution.sourceRegion.contentHash,
+      display: resolution.sourceRegion.display,
+      ...(occurrence === undefined ? {} : { occurrence }),
+    }];
+  });
+  const changedTestRegions = withOccurrenceOrdinals(targets && targets.length > 0
+    ? [...targets, ...resolvedRegions]
+    : [...titleRegions, ...resolvedRegions]);
   return { changedTests: projection.changedTestSelectors, changedTestRegions, changedPaths: projection.changedFiles.map((file) => file.path), planTasks: [] };
 }
 export function parseBuildReviewFindingAnchor(value: unknown, references?: BuildReviewFindingReferenceContext): BuildReviewFindingAnchor | undefined { const source = object(value); const locus = source && region(source.locus); return source?.rubric === 'testQuality' && locus && (!references?.changedTestRegions || references.changedTestRegions.some((candidate) => sameRegion(candidate, locus))) ? { rubric: 'testQuality', locus } : undefined; }

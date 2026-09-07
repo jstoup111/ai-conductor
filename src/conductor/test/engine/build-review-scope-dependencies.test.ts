@@ -44,10 +44,10 @@ describe('build-review local dependency scope', () => {
       declaration: { titleChain: ['uses order helper'] },
       markers: [{ reference: { id: 'S3.1' } }],
       reasons: ['affected-dependency'],
-      affectedDependency: {
+      affectedDependencies: [{
         seed: { source: { fileName: 'test/orders.test.ts' } },
         chain: [{}, { source: { fileName: 'src/order-helper.ts' } }],
-      },
+      }],
     }]);
   });
 
@@ -101,6 +101,38 @@ describe('orders', () => {
       markers: [{ reference: { id: 'S3.1' } }],
       reasons: ['affected-dependency'],
     }]);
+  });
+
+  it('groups every changed dependency effect under one opted-in owner candidate', () => {
+    const source = `// Covers: S3.1
+it('uses both helpers', () => { expect(true).toBe(true); });
+`;
+    const result = analyzeBuildReviewTestScope({
+      base: { source: { fileName: 'test/orders.test.ts', bytes: Buffer.from(source) }, storiesText, planText: '### Task 7: dependencies\n' },
+      head: { source: { fileName: 'test/orders.test.ts', bytes: Buffer.from(source) }, storiesText, planText: '### Task 7: dependencies\n' },
+      dependencyEffects: [
+        {
+          seed: { source: { fileName: 'test/orders.test.ts', side: 'head' } },
+          chain: [{ source: { fileName: 'test/orders.test.ts', side: 'head' } }, { source: { fileName: 'src/first-helper.ts', side: 'head' } }],
+          changedSources: [{ source: { fileName: 'src/first-helper.ts', side: 'head' } }],
+        },
+        {
+          seed: { source: { fileName: 'test/orders.test.ts', side: 'head' } },
+          chain: [{ source: { fileName: 'test/orders.test.ts', side: 'head' } }, { source: { fileName: 'src/second-helper.ts', side: 'head' } }],
+          changedSources: [{ source: { fileName: 'src/second-helper.ts', side: 'head' } }],
+        },
+      ],
+    });
+
+    expect(result.candidates).toMatchObject([{
+      declaration: { titleChain: ['uses both helpers'] },
+      reasons: ['affected-dependency'],
+      affectedDependencies: [
+        { chain: [{}, { source: { fileName: 'src/first-helper.ts' } }] },
+        { chain: [{}, { source: { fileName: 'src/second-helper.ts' } }] },
+      ],
+    }]);
+    expect(result.candidates).toHaveLength(1);
   });
 
   it('resolves require through an explicit local index path and ignores an unused plan seed', async () => {

@@ -553,6 +553,53 @@ describe('build-review domain', () => {
       expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: { path: 'test/shared.test.ts', contentHash: HASH, display: 'source bytes' } }, references)).toBeUndefined();
     });
 
+    it('keeps a resolved duplicate title in the established target occurrence namespace', () => {
+      const duplicate = {
+        rubric: 'testQuality', changedTestSelectors: ['test/duplicate.test.ts'], changedFiles: [], changedTestTitles: [],
+        testScope: {
+          targets: [{
+            source: { fileName: 'test/duplicate.test.ts', side: 'head' },
+            declaration: { kind: 'test', titleChain: ['duplicate assertion'], occurrence: 0 },
+          }],
+          candidates: [
+            { candidateId: 'first-duplicate', declaration: { kind: 'test', titleChain: ['duplicate assertion'], occurrence: 0 } },
+            { candidateId: 'duplicate-candidate', declaration: { kind: 'test', titleChain: ['duplicate assertion'], occurrence: 1 } },
+          ],
+        },
+      } as unknown as BuildReviewRubricProjection;
+      const references = buildReviewFindingReferenceContext(duplicate, [{
+        candidateId: 'first-duplicate', status: 'out-of-scope', exclusionReason: 'The first duplicate is unchanged.',
+      }, {
+        candidateId: 'duplicate-candidate', status: 'resolved',
+        sourceRegion: { path: 'test/duplicate.test.ts', startLine: 12, endLine: 16, contentHash: HASH, display: 'duplicate assertion' },
+        obligationReferences: ['S5.4'], associationReason: 'The second declared assertion is the pinned candidate.',
+      }]);
+      const first = { path: 'test/duplicate.test.ts', contentHash: titleHash('duplicate assertion'), display: 'duplicate assertion' };
+      const second = { ...first, occurrence: 1 };
+
+      expect(references.changedTestRegions).toEqual([first, second]);
+      expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: first }, references)).toBeDefined();
+      expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: second }, references)).toBeDefined();
+    });
+
+    it('ordinalizes coarse fallback and resolved regions together when typed targets are absent', () => {
+      const selector = 'test/fallback.test.ts';
+      const coarseHash = `sha256:${createHash('sha256').update(selector).digest('hex')}`;
+      const references = buildReviewFindingReferenceContext({
+        rubric: 'testQuality', changedTestSelectors: [selector], changedFiles: [],
+        changedTestTitles: [{ selector, titleText: '', staticExtractionFallback: true }],
+      } as unknown as BuildReviewRubricProjection, [{
+        candidateId: 'coarse-candidate', status: 'resolved',
+        sourceRegion: { path: selector, startLine: 4, endLine: 8, contentHash: coarseHash, display: 'fallback candidate' },
+        obligationReferences: ['S5.4'], associationReason: 'The pinned fallback region is in scope.',
+      }]);
+
+      expect(references.changedTestRegions).toEqual([
+        { path: selector, contentHash: coarseHash, display: `${selector} changed test` },
+        { path: selector, contentHash: coarseHash, display: 'fallback candidate', occurrence: 1 },
+      ]);
+    });
+
     it('accepts only a locus that names a projected content region when references are supplied', () => {
       const references = buildReviewFindingReferenceContext(projection);
       const region = references.changedTestRegions![0]!;
