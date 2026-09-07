@@ -1,3 +1,4 @@
+// Covers: task:1
 // RED (Task 1): parsePlanTaskPaths and TASK_ID_PATTERN must be relocatable
 // to a standalone module (plan-task-parse.ts) that does not depend on
 // autoheal.ts's evidence-derivation logic. wiring-probe.ts and wired-into.ts
@@ -9,12 +10,26 @@ import {
   parsePlanTaskBodies,
   parsePlanTaskPaths,
   parsePlanTaskDoneWhen,
+  parsePlanTaskStoryIds,
   TASK_HEADER_PATTERN,
   TASK_ID_PATTERN,
 } from '../../src/engine/plan-task-parse.js';
 import { parsePlanTaskVerifyOnly } from '../../src/engine/autoheal.js';
 
 describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)', () => {
+  describe('parsePlanTaskStoryIds', () => {
+    it.each([
+      ['story-3', ['3']],
+      ['Story 3', ['3']],
+      ['3', ['3']],
+      ['epic-3', ['3']],
+      ['3.2-1', ['3.2-1']],
+      ['STORY-3\n**Story:** epic-4\n**Story:** STORY-3', ['3', '4']],
+    ])('parses %s and preserves first-seen unique ids', (reference, expected) => {
+      expect(parsePlanTaskStoryIds(`**Story:** ${reference}`)).toEqual(expected);
+    });
+  });
+
   describe('parsePlanTaskBodies', () => {
     it('returns each task body through the next task header and preserves the final body', () => {
       const result = parsePlanTaskBodies(`# Plan
