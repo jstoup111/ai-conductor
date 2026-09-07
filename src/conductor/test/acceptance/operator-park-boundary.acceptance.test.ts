@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:4
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,6 +20,12 @@ import {
   makeRunFeature,
   type FeatureRunnerDeps,
 } from '../../src/engine/daemon-runner.js';
+import {
+  listHaltedWorktrees,
+  readHaltReason,
+  rekickSweep,
+} from '../../src/engine/daemon-rekick.js';
+import { readHaltClass, writeHaltMarker } from '../../src/engine/halt-marker.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS, STEP_GROUPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -155,6 +161,54 @@ describe('boundary-aware operator parking acceptance', () => {
       boundary: { kind: 'step', name: 'memory' },
     });
     expect(selected?.slug).toBe(FEATURE_SLUG);
+  });
+
+  it('Task 4: keeps a needs-human halted worktree excluded after its operator park is cleared', async () => {
+    const worktreeBase = await makeRoot('operator-park-needs-human-');
+    const worktreeRoot = join(worktreeBase, FEATURE_SLUG);
+    await mkdir(worktreeRoot, { recursive: true });
+    await writeHaltMarker(
+      worktreeRoot,
+      'markerless daemon exit requires operator attention\n',
+      'needs-human',
+    );
+
+    const claims = new InMemoryWorkClaims();
+    claims.park(FEATURE_SLUG);
+    const selected = await pickEligible(
+      { items: [{ slug: FEATURE_SLUG, tier: 'M', track: 'technical' }] },
+      {
+        claims,
+        isHalted: (slug) => isHalted(worktreeBase, slug),
+        isParked: async () => false,
+      },
+    );
+    const log: string[] = [];
+    const abortRebase = vi.fn(async () => {});
+    const clearMarker = vi.fn(async () => {});
+    const sweep = await rekickSweep(
+      {
+        listHaltedWorktrees: () => listHaltedWorktrees(worktreeBase),
+        readHaltReason: (slug) => readHaltReason(worktreeBase, slug),
+        readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)),
+        // Git is a third-party boundary here; this fixture has no rebase.
+        hasRebaseInProgress: async () => false,
+        abortRebase,
+        clearMarker,
+        lastRekickSha: new Map(),
+        log: (line) => log.push(line),
+      },
+      'a'.repeat(40),
+    );
+
+    expect(selected).toBeUndefined();
+    expect(sweep.skipped).toContain(FEATURE_SLUG);
+    expect(sweep.cleared).not.toContain(FEATURE_SLUG);
+    expect(abortRebase).not.toHaveBeenCalled();
+    expect(clearMarker).not.toHaveBeenCalled();
+    expect(log).toContain(
+      `re-kick ${FEATURE_SLUG}: skipped — halt disposition needs-human (markerless daemon exit requires operator attention)`,
+    );
   });
 
   it('FR-1/FR-3/FR-4/FR-10: drains one serial step, persists its normal result, and stops before the next step', async () => {
