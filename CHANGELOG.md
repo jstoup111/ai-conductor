@@ -84,6 +84,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Prevent the daemon from automatically resuming HALTs that require operator action. ([implementation PR #2398](https://github.com/jstoup111/ai-conductor/pull/2398)).
 - Scrub TMUX and TMUX_PANE from provider and test child environments so a spawned tmux command cannot target the daemon's own pane. ([implementation PR #2406](https://github.com/jstoup111/ai-conductor/pull/2406)).
 - Daemon-dispatched features now honor open repair obligations when no active plan path was recorded, instead of halting as evidence-complete. ([implementation PR #2411](https://github.com/jstoup111/ai-conductor/pull/2411)).
+- Daemon logs no longer print a duplicate, untagged copy of each gate verdict line. ([implementation PR #2412](https://github.com/jstoup111/ai-conductor/pull/2412)).
 
 ## [1.0.0] - 2026-08-31
 
