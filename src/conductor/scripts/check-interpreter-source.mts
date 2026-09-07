@@ -5,19 +5,28 @@ import { checkInterpreterSource, type InterpreterSourceFinding } from './interpr
 import * as gitHooks from '../src/engine/git-hook-assets.js';
 import * as sessionHooks from '../src/engine/session-hook-assets.js';
 
+const shellShebang = /^#!\s*\/usr\/bin\/env\s+(?:-S\s+)?(?:ba)?sh\b|^#!.*\/(?:ba)?sh\b/;
+
+async function isShellFile(root: string, relativePath: string): Promise<boolean> {
+  if (relativePath.endsWith('.sh')) return true;
+  const firstLine = (await readFile(join(root, relativePath), 'utf8')).split(/\r?\n/, 1)[0];
+  return shellShebang.test(firstLine);
+}
+
 export async function shellFiles(root: string, directory: string): Promise<string[]> {
   const entries = await readdir(join(root, directory), { withFileTypes: true });
   const paths: string[] = [];
   for (const entry of entries) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) paths.push(...await shellFiles(root, path));
-    else if (entry.isFile() && (directory === 'bin' || entry.name.endsWith('.sh'))) paths.push(path);
+    else if (entry.isFile() && await isShellFile(root, path)) paths.push(path);
   }
   return paths;
 }
 
 type GeneratedModules = Record<string, Record<string, unknown>>;
 type ModuleLoader = () => Promise<GeneratedModules>;
+const expectedGeneratedModules = ['git-hook-assets', 'session-hook-assets'] as const;
 
 export async function checkInventory(
   root: string,
@@ -31,6 +40,9 @@ export async function checkInventory(
   // Keep module acquisition explicit so a load failure cannot be mistaken for
   // an empty/safe generated-hook inventory.
   const loadedModules = loadModules ? await loadModules() : modules;
+  for (const moduleName of expectedGeneratedModules) {
+    if (!loadedModules[moduleName]) throw new Error(`${moduleName} generated-hook module is missing`);
+  }
   for (const [moduleName, module] of Object.entries(loadedModules)) {
     const scripts = Object.entries(module).filter(([, value]) => typeof value === 'string');
     if (scripts.length === 0) throw new Error(`${moduleName} generated-hook inventory is empty`);
