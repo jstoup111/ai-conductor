@@ -152,6 +152,7 @@ export interface BuildReviewCoordinationInput {
     | "build_review_cache_hit"
     | "build_review_cache_discarded"
     | "build_review_rubric_infrastructure_failure"
+    | "build_review_scope_summary"
     | "build_review_scope_incomplete"
     | "build_review_outer_verdict" }>) => Promise<void>;
 }
@@ -164,6 +165,23 @@ async function emitScopeIncomplete(
   const fault = deriveBuildReviewScopeIncompleteFault(result);
   if (!fault) return;
   await emit?.({ type: 'build_review_scope_incomplete', rubric: fault.rubric, lapId, candidates: fault.candidates });
+}
+
+/** Publish the frozen scope assessment once when a valid rubric result settles. */
+async function emitScopeSummary(
+  emit: BuildReviewCoordinationInput['emit'],
+  input: BuildReviewCoordinationInput,
+): Promise<void> {
+  const scope = input.inputs.sourceSnapshot.testScope;
+  const unresolvedReasons = [...new Set(scope?.candidates.flatMap((candidate) => candidate.reasons) ?? [])].sort();
+  await emit?.({
+    type: 'build_review_scope_summary',
+    rubric: TEST_QUALITY_RUBRIC,
+    lapId: input.lapId,
+    establishedTargetCount: scope?.targets.length ?? input.inputs.sourceSnapshot.testQuality?.inScopeTests.length ?? 0,
+    candidateCount: scope?.candidates.length ?? 0,
+    unresolvedReasons,
+  });
 }
 
 /**
@@ -562,6 +580,7 @@ export async function coordinateBuildReviewRubrics(
       }
       if (result) {
         await input.emit?.({ type: "build_review_rubric_result", rubric: branch.rubric, lapId: input.lapId, verdict: result.verdict });
+        await emitScopeSummary(input.emit, input);
         await emitScopeIncomplete(input.emit, result, input.lapId);
       }
     } else {
@@ -632,6 +651,7 @@ export async function coordinateBuildReviewRubrics(
   for (const outcome of dispatched) {
     if (outcome.branch.kind === "dispatched") {
       await input.emit?.({ type: "build_review_rubric_result", rubric: outcome.rubric, lapId: input.lapId, verdict: outcome.branch.result.verdict });
+      await emitScopeSummary(input.emit, input);
       await emitScopeIncomplete(input.emit, outcome.branch.result, input.lapId);
     } else if (outcome.branch.kind === "infrastructure-failure") {
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: outcome.rubric, lapId: input.lapId, reason: outcome.branch.reason });
