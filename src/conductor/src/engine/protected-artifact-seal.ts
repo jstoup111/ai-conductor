@@ -671,6 +671,20 @@ export async function readRecordedAppendedRemediationTaskIds(projectRoot: string
   return [];
 }
 
+/**
+ * Whether `commit` names an object this repository can read. Distinguishes a
+ * seal whose baseline was rewritten away from a probe that failed for any
+ * other reason — only the latter is `baseline-unresolvable`.
+ */
+async function commitIsReadable(projectRoot: string, commit: string): Promise<boolean> {
+  const verified = await execa(
+    'git',
+    ['rev-parse', '--verify', '--quiet', `${commit}^{commit}`],
+    { cwd: projectRoot, reject: false },
+  ).catch(() => undefined);
+  return verified?.exitCode === 0 && verified.stdout.length > 0;
+}
+
 export async function evaluateProtectedArtifactSealRotationInRepository({
   projectRoot,
   seal,
@@ -682,13 +696,23 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
     ['merge-base', '--is-ancestor', seal.baselineCommit, headCommit],
     { cwd: projectRoot, reject: false },
   ).catch(() => undefined);
-  const baselineAncestry =
+  const probedAncestry =
     ancestry?.exitCode === 0 ? 'ancestor'
       : ancestry?.exitCode === 1 ? 'non-ancestor'
         : 'unresolvable';
-  if (baselineAncestry === 'unresolvable') {
+  if (probedAncestry === 'unresolvable' && await commitIsReadable(projectRoot, seal.baselineCommit)) {
+    // The probe failed for some reason other than the seal's own baseline: the
+    // baseline object is right there and readable, so we cannot say anything
+    // about this history. Fail closed.
     return { permitted: false, condition: 'baseline-unresolvable' };
   }
+  // An unreadable baseline commit (rewritten away, pruned) is exactly the case
+  // this rotation exists to survive. Treat it as a non-ancestor and evaluate
+  // against the base tip alone: the sealed-content read below already degrades
+  // to no sealed-baseline map, and the base-tip anchor vouches for every
+  // divergence on its own. Returning early here would make that read — and the
+  // whole base-tip evaluation — unreachable.
+  const baselineAncestry = probedAncestry === 'unresolvable' ? 'non-ancestor' : probedAncestry;
   if (baselineAncestry === 'ancestor') {
     return { permitted: false, condition: 'same-history-ancestor' };
   }

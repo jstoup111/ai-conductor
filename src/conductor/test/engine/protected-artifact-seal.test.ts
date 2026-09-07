@@ -1296,22 +1296,76 @@ describe('evaluateProtectedArtifactSealRotation', () => {
     });
   });
 
-  it('fails closed distinctly when the sealed baseline object cannot resolve', async () => {
-    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
-    const seal = {
+  it('evaluates against the base tip alone when the sealed baseline object cannot resolve', async () => {
+    const path = '.docs/plans/feature.md';
+    const seal = (fingerprintedContent: string) => ({
       version: 2 as const,
       baselineCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
       protectedArtifacts: [{
-        path: '.docs/plans/feature.md',
-        fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+        path,
+        fingerprint: `sha256:${createHash('sha256').update(fingerprintedContent).digest('hex')}`,
       }],
       rebaselines: [],
-    };
+    });
 
+    // The base tip vouches for the workspace: nothing diverges, so the rotation
+    // is permitted even though the seal's own baseline is unreadable.
+    const undivergedRepo = await makeRepo({ [path]: 'approved plan\n' });
+    const undiverged = await evaluateProtectedArtifactSealRotationInRepository({
+      projectRoot: undivergedRepo,
+      seal: seal('approved plan\n'),
+      headCommit: await git(undivergedRepo, ['rev-parse', 'HEAD']),
+      baseTipRef: 'main',
+    });
+
+    // The base tip does NOT vouch for it: the feature amended the artifact, and
+    // the base-tip anchor refuses on its own — the unreadable baseline neither
+    // short-circuits the evaluation nor blinds it.
+    const divergedRepo = await makeRepo({ [path]: 'approved plan\n' });
+    await git(divergedRepo, ['checkout', '-q', '-b', 'feature']);
+    await writeProjectFile(divergedRepo, path, 'amended plan\n');
+    await git(divergedRepo, ['add', '.']);
+    await git(divergedRepo, ['commit', '-q', '-m', 'feature amends the plan']);
+    const diverged = await evaluateProtectedArtifactSealRotationInRepository({
+      projectRoot: divergedRepo,
+      seal: seal('approved plan\n'),
+      headCommit: await git(divergedRepo, ['rev-parse', 'HEAD']),
+      baseTipRef: 'main',
+    });
+
+    expect({ undiverged, diverged }).toEqual({
+      undiverged: { permitted: true, paths: [] },
+      diverged: {
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'not-present',
+        headTouchedPath: true,
+        mergeBase: expect.any(String),
+      },
+    });
+  });
+
+  it('still fails closed as baseline-unresolvable when the probe fails with a readable baseline', async () => {
+    const path = '.docs/plans/feature.md';
+    const repo = await makeRepo({ [path]: 'approved plan\n' });
+
+    // The baseline commit is readable; the probe cannot resolve because the
+    // HEAD it is asked about is not. That is not the rewritten-baseline case,
+    // so the gate must keep refusing rather than falling through to the tip.
     await expect(evaluateProtectedArtifactSealRotationInRepository({
       projectRoot: repo,
-      seal,
-      headCommit: await git(repo, ['rev-parse', 'HEAD']),
+      seal: {
+        version: 2 as const,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+        protectedArtifacts: [{
+          path,
+          fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+        }],
+        rebaselines: [],
+      },
+      headCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
       baseTipRef: 'main',
     })).resolves.toEqual({ permitted: false, condition: 'baseline-unresolvable' });
   });
@@ -3074,29 +3128,60 @@ describe('verifyProtectedArtifactSeal', () => {
       });
     });
 
-    it('is an INDETERMINATE fail-closed refusal, with its own reason, when the baseline object cannot be resolved', async () => {
-      const { repo } = await makeRewrittenRepo({
+    it('falls through to the base-tip anchor when the baseline object cannot be resolved', async () => {
+      // An unreadable baseline is the rewritten-history case itself, so it must
+      // not blind the gate. The base tip alone decides, and it decides both ways.
+      const stranded = async (options: Parameters<typeof makeRewrittenRepo>[0]) => {
+        const { repo } = await makeRewrittenRepo(options);
+        const seal = await readSeal(repo);
+        await writeFile(
+          join(repo, '.pipeline/protected-artifact-seal.json'),
+          `${JSON.stringify({ ...seal, baselineCommit: 'd'.repeat(40) }, null, 2)}\n`,
+        );
+        return repo;
+      };
+
+      // Base-ahead only: another feature's merged amendment is inherited, so the
+      // base tip vouches for it and the rotation is permitted.
+      const inheritedRepo = await stranded({
         initial: { '.docs/plans/other-feature.md': 'approved plan\n' },
         baseAdvance: { '.docs/plans/other-feature.md': 'amended by its owner\n' },
       });
-      const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
-      const seal = await readSeal(repo);
-      const missingBaseline = 'd'.repeat(40);
-      await writeFile(
-        sealPath,
-        `${JSON.stringify({ ...seal, baselineCommit: missingBaseline }, null, 2)}\n`,
-      );
-
-      const verdict = await verifyProtectedArtifactSeal({
-        projectRoot: repo,
+      const inherited = await verifyProtectedArtifactSeal({
+        projectRoot: inheritedRepo,
         featureDesc: 'mine',
         baseBranch: 'main',
       });
 
-      expect(verdict.ok).toBe(false);
-      // Never "rewritten, therefore rotatable" — a distinct, baseline-specific reason.
-      expect((verdict as { reason: string }).reason).toMatch(/baseline/i);
-      expect((await readSeal(repo)).baselineCommit).toBe(missingBaseline);
+      // Feature-authored amendment: the base tip does NOT vouch for it, and the
+      // refusal survives the unreadable baseline rather than being pre-empted.
+      const authoredRepo = await stranded({
+        initial: { '.docs/plans/mine.md': 'approved plan\n' },
+        baseAdvance: { 'src/base.ts': 'base work\n' },
+        featureCommit: { '.docs/plans/mine.md': 'amended by the build\n' },
+      });
+      const authored = await verifyProtectedArtifactSeal({
+        projectRoot: authoredRepo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+      });
+
+      expect({ inheritedOk: inherited.ok, authoredOk: authored.ok }).toEqual({
+        inheritedOk: true,
+        authoredOk: false,
+      });
+      expect(await readSeal(inheritedRepo)).toMatchObject({
+        baselineCommit: await git(inheritedRepo, ['rev-parse', 'HEAD']),
+        rebaselines: [expect.objectContaining({
+          trigger: 'defensive-history-rewrite',
+          fromCommit: 'd'.repeat(40),
+          paths: ['.docs/plans/other-feature.md'],
+        })],
+      });
+      expect((authored as { reason: string }).reason).toContain('.docs/plans/mine.md');
+      // The permitted rotation re-baselines onto the rewritten HEAD; the refusal
+      // leaves the stranded baseline exactly as it found it.
+      expect(await readSeal(authoredRepo)).toMatchObject({ baselineCommit: 'd'.repeat(40) });
     });
 
     it('REFUSES rotation and preserves the pre-existing failure when the base tip cannot be resolved', async () => {
