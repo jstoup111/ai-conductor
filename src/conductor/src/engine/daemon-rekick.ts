@@ -29,6 +29,7 @@ import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { ALL_STEPS } from './steps.js';
+import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import {
   consumeKickbackResumeAuthorization,
   isUnreadableKickbackLedger,
@@ -97,19 +98,102 @@ export async function recoverEpisodeHalts(deps: {
   return cleared;
 }
 
-/** Consume one-shot operator authorizations; this sweep only clears markers. */
-export async function consumeResumeAuthorizations(deps: {
+/** How a halt-for-resume clear ended: fully repaired, or left partially repaired. */
+export type ResumeHaltClearResult = 'confirmed' | 'partial';
+
+export interface ClearHaltForResumeDeps {
+  worktreePath: string;
+  slug: string;
+  /** Marker + class sidecar + REKICK sentinel (`clearMarker`). */
+  clearMarker: (worktreePath: string) => Promise<void>;
+  /** The feature's recorded PR, when it has one. */
+  resolvePrUrl?: (slug: string) => Promise<string | undefined>;
+  /** `cleanupHaltPresentation` for that PR. */
+  cleanupPresentation?: (prUrl: string) => Promise<ResumeHaltClearResult>;
+  /** Supersede the committed halt record (`.docs/halted/<slug>.md`). */
+  resolveCommittedRecord?: (worktreePath: string, slug: string) => Promise<void>;
+  log?: (message: string) => void;
+}
+
+/**
+ * Clear one halt as a single operation (adr-2026-08-09: marker and label are
+ * atomic; adr-2026-08-29 D6: the canonical marker/presentation lifecycle and
+ * committed-record resolution).
+ *
+ * Presentation repair runs BEFORE the marker is removed. The sealed negative
+ * path requires that a `partial` clear leaves the feature halted with its
+ * authorization unconsumed; repairing first is the only ordering under which
+ * "stays halted" is literally true rather than a marker already deleted.
+ */
+export async function clearHaltForResume(
+  deps: ClearHaltForResumeDeps,
+): Promise<ResumeHaltClearResult> {
+  const prUrl = await deps.resolvePrUrl?.(deps.slug);
+  if (prUrl && deps.cleanupPresentation) {
+    const presentation = await deps.cleanupPresentation(prUrl);
+    if (presentation === 'partial') {
+      deps.log?.(`kickback-budget ${deps.slug}: presentation repair partial — halt retained`);
+      return 'partial';
+    }
+  }
+  await deps.clearMarker(deps.worktreePath);
+  try {
+    await deps.resolveCommittedRecord?.(deps.worktreePath, deps.slug);
+  } catch (error) {
+    // The halt is already cleared; a record that could not be superseded is a
+    // reporting gap, not a reason to leave the feature halted.
+    deps.log?.(`kickback-budget ${deps.slug}: halt record not superseded (${errMsg(error)})`);
+  }
+  return 'confirmed';
+}
+
+export interface ConsumeResumeAuthorizationsDeps {
   listHaltedWorktrees: () => Promise<string[]>;
   worktreePath: (slug: string) => string;
   isOperatorParked: (slug: string) => Promise<boolean>;
-  clearMarker: (slug: string) => Promise<void>;
+  /**
+   * True when the slug's work already shipped. A processed feature has nothing
+   * to resume, so its authorization is never consumed (same precedence the
+   * base-advance sweep gives `isProcessed`). Throwing is treated as
+   * NOT processed, matching that sweep's fail-open read.
+   */
+  isProcessed?: (slug: string) => Promise<boolean>;
+  /** Raw `.pipeline/HALT.class` text for the live halt, or '' when absent. */
+  readLiveHaltClass: (slug: string) => Promise<string>;
+  /** Clear the halt as one operation; `partial` retains it. */
+  clearHalt: (slug: string) => Promise<ResumeHaltClearResult>;
   emit?: (event: { type: 'halt_cleared'; cause: 'kickback-budget' }) => void | Promise<void>;
   log?: (message: string) => void;
-}): Promise<string[]> {
+}
+
+/**
+ * Consume one-shot operator authorizations at the daemon's halted-feature
+ * boundary (adr-2026-08-29 successor D3). This sweep never dispatches:
+ * `pickEligible`/`isHalted` remain the sole dispatch authority.
+ *
+ * Order is load-bearing. Park and processed checks come first, then the live
+ * halt must still be the cap halt the authorization was bound to, then the
+ * atomic clear, and only a CONFIRMED clear consumes the authorization.
+ */
+export async function consumeResumeAuthorizations(
+  deps: ConsumeResumeAuthorizationsDeps,
+): Promise<string[]> {
   const cleared: string[] = [];
   for (const slug of await deps.listHaltedWorktrees()) {
     try {
       if (await deps.isOperatorParked(slug)) continue;
+      if (deps.isProcessed) {
+        let processed = false;
+        try {
+          processed = await deps.isProcessed(slug);
+        } catch (error) {
+          deps.log?.(`kickback-budget ${slug}: isProcessed check FAILED (${errMsg(error)}); treating as unprocessed`);
+        }
+        if (processed) {
+          deps.log?.(`kickback-budget ${slug}: already shipped — authorization left unconsumed`);
+          continue;
+        }
+      }
       const path = deps.worktreePath(slug);
       const ledger = await readKickbackLedger(path);
       if (isUnreadableKickbackLedger(ledger)) {
@@ -121,11 +205,22 @@ export async function consumeResumeAuthorizations(deps: {
       );
       if (!match) continue;
       const [gate, entry] = match;
-      // Claim the one-shot authorization before clearing the halt.  A lease
-      // refusal must leave the feature halted; clearing first could otherwise
-      // resume it without a durable operator authorization.
+      // The live halt must still be THIS gate's cap halt. Without this an
+      // authorization raised against a cap halt would clear whatever unrelated
+      // halt happened to replace it (D6: "no unrelated halt is cleared").
+      const liveHaltClass = (await deps.readLiveHaltClass(slug)).trim();
+      const expected = RECOVERABLE_CAP_HALT_CLASS_BY_GATE[gate];
+      if (expected === undefined || liveHaltClass !== expected) {
+        deps.log?.(
+          `kickback-budget ${slug}: retained — live halt class '${liveHaltClass || 'absent'}' ` +
+            `is not ${gate}'s recoverable cap halt`,
+        );
+        continue;
+      }
+      // Repair-then-clear, then consume. A `partial` clear leaves the halt and
+      // the authorization exactly as they were, so the next iteration retries.
+      if ((await deps.clearHalt(slug)) === 'partial') continue;
       if (await consumeKickbackResumeAuthorization(path, gate, entry.resumeAuthorization!.adjustmentId)) {
-        await deps.clearMarker(slug);
         await deps.emit?.({ type: 'halt_cleared', cause: 'kickback-budget' });
         cleared.push(slug);
       }
