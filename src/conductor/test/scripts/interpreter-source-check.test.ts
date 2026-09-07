@@ -98,6 +98,12 @@ describe('checkInterpreterSource', () => {
     ]);
   });
 
+  it('preserves physical locations for tab-stripped expanding heredocs in a command substitution', () => {
+    expect(checkInterpreterSource('nested-tabbed-heredoc.sh', 'result=$(python3 <<-PY\n\tprint(`id`)\n\tPY\n)')).toEqual([
+      expect.objectContaining({ sourceName: 'nested-tabbed-heredoc.sh', line: 2, message: 'shell expansion in interpreter heredoc source' }),
+    ]);
+  });
+
   it('accepts fixed interpreter source inside a command substitution', () => {
     expect(checkInterpreterSource('nested-safe.sh', "x=$(node -e 'console.log(process.argv[1])' -- \"$VALUE\")\ny=$(python3 - \"$VALUE\" <<'PY'\nprint('$')\nPY\n)")).toEqual([]);
   });
