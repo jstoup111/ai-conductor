@@ -21,6 +21,8 @@ export interface ResourceContext {
   branch?: string;
   /** Engine version: a non-empty string resolves; own empty/undefined is unresolved; omission is not supplied. */
   engineVersion?: string;
+  /** Released harness version: a non-empty string resolves; own empty/undefined is unresolved; omission is not supplied. */
+  harnessVersion?: string;
   /**
    * Override the run id. When supplied, the session-id file and generated id
    * are both bypassed. Used by tests that need deterministic run ids.
@@ -81,6 +83,7 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
     ...traceStable,
     'conductor.run.id': ctx.runId ?? resolveRunId(ctx.pipelineDir),
     'conductor.engine.version': normalizeIdentity(ctx, 'engineVersion'),
+    'service.version': normalizeIdentity(ctx, 'harnessVersion'),
   });
 }
 
@@ -92,7 +95,7 @@ function resolveHostName(): string {
   }
 }
 
-function normalizeIdentity(ctx: ResourceContext, key: 'branch' | 'engineVersion'): string {
+function normalizeIdentity(ctx: ResourceContext, key: 'branch' | 'engineVersion' | 'harnessVersion'): string {
   if (!Object.prototype.hasOwnProperty.call(ctx, key)) return 'not-supplied';
 
   const value = ctx[key];
