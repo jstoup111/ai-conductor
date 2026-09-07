@@ -156,18 +156,49 @@ function isLexicalDescendant(test: SupportedTestDeclaration, suite: SupportedTes
     && test.span.end <= body.end;
 }
 
+/** The active feature's resolvable `Covers:` ids, derived once per pinned side. */
+export interface CoversResolutionIds {
+  readonly criteria: ReadonlySet<string>;
+  readonly frs: ReadonlySet<string>;
+  readonly taskIds: ReadonlySet<string>;
+}
+
+/** `FR-<number>` tokens as they appear in the active stories artifact. */
+const FR_TOKEN = /\bFR-\d+\b/gi;
+
+/**
+ * Derives every feature-local id a `Covers:` reference may resolve against.
+ * Marker association and the parser-outage fallback both consume this one
+ * derivation, so the two enumerations cannot silently diverge again.
+ */
+export function coversResolutionIds(storiesText: string, planText: string): CoversResolutionIds {
+  return Object.freeze({
+    criteria: new Set(extractStoryCriterionIds(storiesText).map((id) => id.toUpperCase())),
+    frs: new Set([...storiesText.matchAll(FR_TOKEN)].map((match) => match[0].toUpperCase())),
+    taskIds: new Set(parsePlanTaskBodies(planText).keys()),
+  });
+}
+
+/**
+ * The single predicate deciding whether a parsed reference resolves in the
+ * active feature.  `Covers: FR-N` is part of the approved opt-in grammar, so
+ * an active requirement id resolves exactly as a criterion or task id does.
+ */
+export function resolvesCoversReference(reference: CoversReference, ids: CoversResolutionIds): boolean {
+  switch (reference.kind) {
+    case 'criterion': return ids.criteria.has(reference.id.toUpperCase());
+    case 'fr': return ids.frs.has(reference.id.toUpperCase());
+    case 'task': return resolvePlanTaskReference(reference.id, ids.taskIds).kind === 'resolved';
+    default: return false;
+  }
+}
+
 function markerResult(
   target: SupportedTestDeclaration,
   marker: AssociatedMarker,
-  criteria: ReadonlySet<string>,
-  taskIds: ReadonlySet<string>,
+  ids: CoversResolutionIds,
 ): BoundCoversMarker | UnresolvedCoversMarker {
-  const { reference } = marker.marker;
-  const resolved = reference.kind === 'criterion'
-    ? criteria.has(reference.id.toUpperCase())
-    : reference.kind === 'task'
-      ? resolvePlanTaskReference(reference.id, taskIds).kind === 'resolved'
-      : false;
+  const resolved = resolvesCoversReference(marker.marker.reference, ids);
   return Object.freeze(resolved
     ? { kind: 'bound' as const, target, marker: marker.marker, owner: marker.owner }
     : { kind: 'unresolved-reference' as const, target, marker: marker.marker, owner: marker.owner });
@@ -213,8 +244,7 @@ export function bindCoversMarkers(input: BuildReviewTestBindingsInput): BuildRev
     for (const marker of titleMarkers(text, declaration)) attach(declaration, marker, 'title');
   }
 
-  const criteria = new Set(extractStoryCriterionIds(input.storiesText).map((id) => id.toUpperCase()));
-  const taskIds = new Set(parsePlanTaskBodies(input.planText).keys());
+  const ids = coversResolutionIds(input.storiesText, input.planText);
   const targetDeclarations = declarations.filter((entry) => entry.kind === 'test' || entry.kind === 'group');
   const inherited = new Map<string, AssociatedMarker[]>();
   for (const suite of declarations.filter((entry) => entry.kind === 'suite')) {
@@ -236,7 +266,7 @@ export function bindCoversMarkers(input: BuildReviewTestBindingsInput): BuildRev
     if (applicable.length === 0) {
       bindings.push(Object.freeze({ kind: 'unbound', target: test }));
     } else {
-      for (const marker of applicable) bindings.push(markerResult(test, marker, criteria, taskIds));
+      for (const marker of applicable) bindings.push(markerResult(test, marker, ids));
     }
   }
   return Object.freeze({ bindings: Object.freeze(bindings) });

@@ -142,4 +142,33 @@ it('same body', () => { expect(true).toBe(true); });
       },
     ]);
   });
+
+  it('resolves an FR reference that names an active feature requirement, alongside criterion and task references', () => {
+    const result = bindCoversMarkers({
+      source: { fileName: 'test/example.test.ts', bytes: Buffer.from(`
+// Covers: FR-3
+it('fr bound', () => {});
+`, 'utf8') },
+      storiesText: '## Story 2: Example\n\nThis story delivers FR-3.\n\n#### Happy Path\n- Given a feature, when it runs, then it succeeds\n',
+      planText: '### Task 7: Example\n',
+    });
+
+    expect(result.bindings).toMatchObject([
+      {
+        kind: 'bound',
+        target: { titleChain: ['fr bound'] },
+        marker: { reference: { kind: 'fr', id: 'FR-3' } },
+        owner: { kind: 'test', association: 'leading-comment', declaration: { titleChain: ['fr bound'] } },
+      },
+    ]);
+  });
+
+  it('leaves an FR reference absent from the active stories text as an unresolved reference', () => {
+    expect(bindings(`
+// Covers: FR-3
+it('fr unbound', () => {});
+`).bindings).toMatchObject([
+      { kind: 'unresolved-reference', target: { titleChain: ['fr unbound'] }, marker: { reference: { kind: 'fr', id: 'FR-3' } } },
+    ]);
+  });
 });

@@ -1,5 +1,7 @@
 import {
   compareCoversMarkerBindings,
+  coversResolutionIds,
+  resolvesCoversReference,
   type BoundCoversMarker,
   type BuildReviewTestBinding,
   type BuildReviewTestBindingsInput,
@@ -16,8 +18,6 @@ import {
 } from './build-review-test-declarations.js';
 import type { BuildReviewScopeDependencyEffect } from './build-review-scope-dependencies.js';
 import { parseCoversMarkers } from './covers-marker.js';
-import { parsePlanTaskPaths } from './plan-task-parse.js';
-import { extractStoryCriterionIds } from './story-criteria.js';
 import ts from 'typescript';
 
 export interface BuildReviewTestScopeInput {
@@ -228,22 +228,13 @@ export function unavailableBuildReviewTestScope(
   error: unknown,
 ): BuildReviewTestScope {
   const text = sourceText(input.head.source);
-  const criteria = new Set(extractStoryCriterionIds(input.head.storiesText).map((id) => id.toUpperCase()));
-  const frs = new Set([...input.head.storiesText.matchAll(/\bFR-\d+\b/gi)].map((match) => match[0].toUpperCase()));
-  const tasks = new Set(parsePlanTaskPaths(input.head.planText).keys());
+  const ids = coversResolutionIds(input.head.storiesText, input.head.planText);
   const markers: CoversMarker[] = [];
   const markerPattern = /\bCovers\s*:\s*[^\r\n]*/g;
   for (const match of text.matchAll(markerPattern)) {
     const start = match.index ?? 0;
     for (const reference of parseCoversMarkers(match[0])) {
-      const resolved = reference.kind === 'criterion'
-        ? criteria.has(reference.id.toUpperCase())
-        : reference.kind === 'fr'
-          ? frs.has(reference.id.toUpperCase())
-          : reference.kind === 'task'
-            ? tasks.has(reference.id)
-            : false;
-      if (resolved) markers.push(Object.freeze({
+      if (resolvesCoversReference(reference, ids)) markers.push(Object.freeze({
         span: Object.freeze({ start, end: start + match[0].length }),
         reference,
       }));
