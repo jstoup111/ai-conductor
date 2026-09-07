@@ -79,6 +79,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Revert the coverage_binding judge default to off; the judge-on default caused a daemon retry spin. ([implementation PR #2370](https://github.com/jstoup111/ai-conductor/pull/2370)).
 - Reopened remediation tasks now resume with fresh evidence instead of halting after prior completion. ([implementation PR #2355](https://github.com/jstoup111/ai-conductor/pull/2355)).
 - prd_audit and as-built verdicts are preserved across a SHIP-tail rebase rewrite and across a halt/resume when the reviewed code is unchanged; a review re-runs only when its surface actually changed. ([implementation PR #2382](https://github.com/jstoup111/ai-conductor/pull/2382)).
+- Resumed runs now return to an earlier runnable prerequisite instead of stopping without dispatching work. ([implementation PR #2385](https://github.com/jstoup111/ai-conductor/pull/2385)).
 
 ## [1.0.0] - 2026-08-31
 
