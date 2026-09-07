@@ -34,14 +34,25 @@ As an operator whose feature was re-kicked, I want resume to enter the earliest 
 
 ## Story 2: An undispatchable resume names the inconsistency
 
+> **Amended 2026-09-07 (operator decision, as-built AB-1 on this feature):** the blocked outcome
+> is prevented by construction. Every registry production can build preserves the
+> earlier-prerequisite invariant, so the bounded backward walk always terminates on a step whose
+> entry gate passes; a dedicated "blocked resume" halt branch is therefore an unreachable production
+> rung and is removed. When the walk cannot improve the candidate, the resume enters that candidate
+> and the loop's **existing** gate refusal owns the reporting (it already emits `gate_blocked` and
+> writes the needs-human halt when every unsatisfied prerequisite is non-pending). No new halt path,
+> outcome type, or marker text is introduced. The acceptance criteria and Done When below are
+> narrowed accordingly; the two negative criteria are unchanged.
+
+
 As an operator diagnosing a re-kicked feature, I want a resume that cannot derive a dispatchable entry to end with a terminal halt naming the blockage so that I get an instruction instead of an identical markerless park on every re-kick.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- Given a resume whose entry gate is still unsatisfied after backward reconciliation, when the conductor resumes, then it writes a terminal needs-human halt whose text names the step it wanted and every unsatisfied prerequisite with that prerequisite's recorded status.
-- Given that same resume, when the conductor resumes, then it dispatches no step and ends through that halt rather than through a return that leaves no terminal marker.
+- Given a resume whose entry gate is still unsatisfied after backward reconciliation, when the conductor resumes, then it enters that candidate step and the loop's existing entry-gate refusal reports the unsatisfied prerequisites through its existing `gate_blocked` event and needs-human halt; no resume-specific halt branch runs.
+- Given that same resume, when the conductor resumes, then it dispatches no step before the loop's gate refusal and leaves no resume-specific marker of its own.
 
 #### Negative Paths
 
@@ -50,8 +61,8 @@ As an operator diagnosing a re-kicked feature, I want a resume that cannot deriv
 
 ### Done When
 
-- [ ] The entry resolution reports a blocked outcome carrying the wanted step and each unsatisfied prerequisite paired with its recorded status.
-- [ ] A blocked entry resolution produces a needs-human halt marker naming the wanted step and each blocking prerequisite status, with no step dispatched.
+- [ ] The entry resolution is total: it returns the earliest dispatchable earlier prerequisite when one exists and otherwise the candidate itself; it has no blocked outcome type.
+- [ ] No resume-specific blocked-halt helper, outcome type, or test fixture remains; a resume whose candidate gate still refuses is reported by the loop's existing gate refusal.
 - [ ] A dispatchable resume fixture and a past-the-end resume fixture each leave no halt marker behind.
 
 ## Negative-category review

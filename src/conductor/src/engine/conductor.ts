@@ -6153,6 +6153,7 @@ export class Conductor {
       startIndex = indexOf(this.fromStep);
     } else if (this.resume) {
       startIndex = this.findResumeIndex(state, steps);
+      const stateDerivedIndex = startIndex;
 
       // Clamp startIndex backward to honor on-disk gate verdicts.
       // Read verdicts and derive gate topology to find the earliest unsatisfied gate.
@@ -6206,58 +6207,40 @@ export class Conductor {
         }
       }
 
-      // Clamp backward (min) only — never move startIndex forward.
-      // If earliestGateIdx is valid and precedes the candidate, use it.
-      // The clamp on the local startIndex is the ONLY resume-entry mechanism
-      // (adr-2026-07-11-verdict-aware-resume-entry): resume never mutates
-      // conduct-state.json; scanKickbackVerdicts owns verdict-driven state
-      // demotion inside the loop.
-      if (
+      // Reconcile every resume candidate against the loop's own state-only
+      // entry gate. Verdicts may move the candidate backward first, but a
+      // missing or unreadable verdict directory must not leave a refused
+      // state-derived entry to return markerlessly from the loop.
+      const candidate =
         resumeClamp &&
         resumeClamp.earliestGateIdx >= 0 &&
         resumeClamp.earliestGateIdx < startIndex
-      ) {
-        const { verdicts, earliestGateIdx } = resumeClamp;
-        // The clamp's satisfaction predicate (`gateSatisfied`) is VERDICT-
-        // authoritative, but the loop's own entry check (`checkGate` →
-        // `stepSatisfied`) is STATE-only. When a step's verdict says
-        // satisfied while its state says `failed` (e.g. build passed review
-        // once, then a later build attempt failed without rewriting the
-        // verdict), the clamp lands PAST that step on a downstream gate
-        // whose `checkGate` can never pass. The loop then takes the
-        // markerless `gate_blocked` return and the finally-backstop parks
-        // the run with "loop exited without a terminal verdict" — a
-        // deterministic livelock that re-parks identically on every resume
-        // and never dispatches a session (#1052).
-        //
-        // Walk the prerequisite chain back to the earliest step the loop
-        // will actually accept, using the SAME predicate `checkGate` uses,
-        // so the entry point is never one the very next check rejects.
-        // Backward-only and bounded by steps.length, so it cannot loop.
-        const clampedIndex = clampToRunnablePrerequisite(steps, state, earliestGateIdx);
-        const clampedStep = steps[clampedIndex];
-        if (clampedStep) {
-          const disposition = await this.resolveDecideEntryDisposition({
-            target: clampedStep.name,
-            steps,
-            daemon: this.daemon,
-            tier: state.complexity_tier,
-            hasContract: hasCompletionContract(clampedStep.name, this.config),
-            satisfied: gateSatisfied(clampedStep.name, state, verdicts),
-            grant: null,
-            sourceGate: 'resume-clamp',
-            evidence: verdicts[clampedStep.name]?.reason,
-          });
-          if (disposition.kind === 'halt') {
-            await this.writeHaltMarker(
-              renderDecideEntryHalt(disposition.halt) + '\n',
-              'needs-human',
-            );
-            return;
-          }
+          ? resumeClamp.earliestGateIdx
+          : startIndex;
+      const resolvedIndex = resolveRunnableResumeEntry(steps, state, candidate);
+      const resolvedStep = steps[resolvedIndex];
+      if (resolvedStep && resolvedIndex !== stateDerivedIndex) {
+        const verdicts = resumeClamp?.verdicts ?? {};
+        const disposition = await this.resolveDecideEntryDisposition({
+          target: resolvedStep.name,
+          steps,
+          daemon: this.daemon,
+          tier: state.complexity_tier,
+          hasContract: hasCompletionContract(resolvedStep.name, this.config),
+          satisfied: gateSatisfied(resolvedStep.name, state, verdicts),
+          grant: null,
+          sourceGate: 'resume-clamp',
+          evidence: verdicts[resolvedStep.name]?.reason,
+        });
+        if (disposition.kind === 'halt') {
+          await this.writeHaltMarker(
+            renderDecideEntryHalt(disposition.halt) + '\n',
+            'needs-human',
+          );
+          return;
         }
-        startIndex = clampedIndex;
       }
+      startIndex = resolvedIndex;
     }
 
     // Task 27: pending per-member completions for a builtin validation
@@ -13418,6 +13401,20 @@ export function clampToRunnablePrerequisite(
     idx = earliest;
   }
   return idx;
+}
+
+/**
+ * Reconcile a resume candidate with the same state-only entry gate the main
+ * loop will check before dispatching it. The backward walk is bounded and
+ * does not mutate state. If a malformed resolved step list leaves the gate
+ * refused, the loop's existing gate-refusal path owns that terminal outcome.
+ */
+export function resolveRunnableResumeEntry(
+  steps: StepDefinition[],
+  state: ConductState,
+  candidate: number,
+): number {
+  return clampToRunnablePrerequisite(steps, state, candidate);
 }
 
 /**

@@ -32,12 +32,23 @@ vi.mock('../../src/engine/rebase.js', async () => {
     performRebase: vi.fn().mockResolvedValue({ kind: 'noop' }),
   };
 });
+vi.mock('../../src/engine/steps.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/steps.js')>();
+  return {
+    ...actual,
+    buildStepRegistry: vi.fn(actual.buildStepRegistry),
+  };
+});
 
-import type { ConductState, StepName } from '../../src/types/index.js';
+import type { ConductState, StepDefinition, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
-import { ALL_STEPS } from '../../src/engine/steps.js';
-import { clampToRunnablePrerequisite, Conductor } from '../../src/engine/conductor.js';
+import { ALL_STEPS, buildStepRegistry } from '../../src/engine/steps.js';
+import {
+  clampToRunnablePrerequisite,
+  Conductor,
+  resolveRunnableResumeEntry,
+} from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import * as gateVerdicts from '../../src/engine/gate-verdicts.js';
 import { readVerdict, writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
@@ -108,6 +119,49 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  describe('Task 1: resolve a resume entry against its entry gate', () => {
+    function step(name: StepName, prerequisites: StepName[] = []): StepDefinition {
+      return {
+        name,
+        label: name,
+        phase: 'BUILD',
+        enforcement: 'gating',
+        prerequisites,
+        skippableForTiers: [],
+        isCheckpoint: false,
+      };
+    }
+
+    it('returns a candidate whose gate passes unchanged', () => {
+      const steps = [step('build'), step('build_review', ['build'])];
+      const state = { build: 'done' } as ConductState;
+
+      expect(resolveRunnableResumeEntry(steps, state, 1)).toBe(1);
+    });
+
+    it('returns the earlier dispatchable prerequisite when the candidate gate refuses', () => {
+      const steps = [step('build'), step('build_review', ['build'])];
+      const state = { build: 'pending' } as ConductState;
+
+      expect(resolveRunnableResumeEntry(steps, state, 1)).toBe(0);
+    });
+
+    it.each([
+      ['is absent from the resolved steps', [step('build_review', ['build'])]],
+      ['sits at or after the candidate', [step('build_review', ['build']), step('build')]],
+    ])('returns the candidate unchanged when a prerequisite %s', (_case, steps) => {
+      const state = { build: 'failed' } as ConductState;
+
+      expect(resolveRunnableResumeEntry(steps, state, 0)).toBe(0);
+    });
+
+    it('treats a candidate past the final step as a runnable no-op', () => {
+      const steps = [step('build')];
+
+      expect(resolveRunnableResumeEntry(steps, {} as ConductState, 1)).toBe(1);
+    });
   });
 
   // ── Story 1: resume never dispatches past an unsatisfied gate verdict ─────
@@ -548,6 +602,133 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       expect(started.length).toBeGreaterThan(0);
       expect(started[0]).toBe('build');
       expect(blocked).not.toContain('build_review');
+    });
+  });
+
+  // ── Task 2: every resume candidate is reconciled with checkGate ─────────
+  describe('Task 2: resume reconciles state-derived entries without a verdict clamp', () => {
+    async function seedReopenedBuildFixture(): Promise<void> {
+      const seed = seedDoneThrough('test_suite');
+      // findResumeIndex honors the in-progress test suite first, even though
+      // build was subsequently re-opened. Its entry gate refuses test_suite;
+      // build is the earlier runnable prerequisite.
+      seed.build = 'failed';
+      seed.test_suite = 'in_progress';
+      await writeState(statePath, seed as ConductState);
+    }
+
+    it('reconciles from state when the verdict directory cannot be read', async () => {
+      await seedReopenedBuildFixture();
+      const verdictRead = vi.spyOn(gateVerdicts, 'readAllVerdicts')
+        .mockRejectedValueOnce(new Error('fixture verdict directory unreadable'));
+      const { runner, log } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+      });
+
+      await conductor.run();
+
+      expect(verdictRead).toHaveBeenCalledWith(dir);
+      expect(log.find((entry) => entry.startsWith('run:'))).toBe('run:build');
+      expect(log.filter((entry) => entry.startsWith('run:'))).not.toHaveLength(0);
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    });
+
+    it('keeps a state-derived entry whose own gate already passes', async () => {
+      const seed = seedDoneThrough('build_review');
+      seed.build_review = 'in_progress';
+      await writeState(statePath, seed as ConductState);
+      const { runner, log } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+      });
+
+      await conductor.run();
+
+      expect(log.find((entry) => entry.startsWith('run:'))).toBe('run:build_review');
+      expect(log).not.toContain('run:build');
+    });
+
+    it('daemon resume halts through the existing DECIDE-entry disposition after reconciliation', async () => {
+      const seed = seedDoneThrough('coverage_binding');
+      seed.plan = 'failed';
+      seed.coverage_binding = 'in_progress';
+      await writeState(statePath, seed as ConductState);
+      const { runner, log } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        resume: true, daemon: true, mode: 'auto',
+      });
+
+      await conductor.run();
+
+      expect(log.filter((entry) => entry.startsWith('run:'))).toHaveLength(0);
+      expect(await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).toMatch(
+        /DECIDE entry refused.*resume-clamp.*plan/is,
+      );
+    });
+  });
+
+  // ── Task 3: the existing loop owns malformed-entry refusal ────────────
+  describe('Task 3: malformed resume entries reach the loop refusal', () => {
+    it('writes and emits the existing needs-human halt from the real loop gate', async () => {
+      vi.mocked(buildStepRegistry).mockReturnValueOnce([
+        {
+          name: 'build_review',
+          label: 'Build Review',
+          phase: 'BUILD',
+          enforcement: 'gating',
+          prerequisites: ['build'],
+          skippableForTiers: [],
+          isCheckpoint: false,
+        },
+      ]);
+      await writeState(statePath, {
+        build: 'failed',
+        build_review: 'in_progress',
+      } as ConductState);
+      const { runner, log } = trackingRunner(dir);
+      const haltReasons: string[] = [];
+      const blocked: StepName[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') haltReasons.push(event.reason);
+      });
+      events.on('gate_blocked', (event) => {
+        if (event.type === 'gate_blocked') blocked.push(event.step);
+      });
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+        daemon: true,
+      });
+
+      await conductor.run();
+
+      const marker = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+      expect(marker).toContain("Step 'build_review' is blocked by unsatisfied prerequisite");
+      expect(marker).toContain('build (failed)');
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human');
+      expect(haltReasons).toEqual([marker.trim()]);
+      expect(blocked).toEqual(['build_review']);
+      expect(log.filter((entry) => entry.startsWith('run:'))).toHaveLength(0);
+    });
+
+    it('leaves no halt marker for a converged resume past the final step', async () => {
+      const seed = seedDoneThrough('finish');
+      seed.finish = 'done';
+      await writeState(statePath, seed as ConductState);
+      const { runner, log } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+      });
+
+      await conductor.run();
+
+      expect(log.filter((entry) => entry.startsWith('run:'))).toHaveLength(0);
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
     });
   });
 
