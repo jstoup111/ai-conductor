@@ -1,0 +1,13 @@
+# Track: Compose sealed content and engine remediation appends in seal rotation
+
+Track: technical
+
+Scope boundary: Small fix for #2120, approved by the operator on 2026-09-06 (delegated). Let the protected-artifact rotation evaluator vouch for the engine's own recorded remediation-task append against the sealed baseline content as well as the base-branch tip, keep every feature-authored amendment refused, and make a refusal say which authorship exit was consulted and why it declined. The operator reseal command, the reseal interactive-terminal gate, the remediation planner's append format, halt retention across base advances, and any widening of what counts as an engine append are outside this slice.
+
+This is internal engine machinery for the harness's own DECIDE-artifact guard; acceptance criteria live in technical stories rather than a PRD.
+
+Approach: anchor the engine-append exception on the seal's own baseline content rather than only the base tip, and verify that anchor against the seal's recorded fingerprint before trusting it. The alternative considered and rejected was reconstructing the pre-append prefix by scanning HEAD backwards for the appended block boundary and hashing it: it re-derives what the seal already records, has to guess the appender's separator form, and widens the trusted surface for no gain. Approved by the operator on 2026-09-06 (delegated).
+
+Scope check: A — harness-repo-only; the protected-artifact seal, its remediation append, and its rotation refusal exist only in this repository's engine and no installed consumer has that mechanism. B — n/a, no new skill. C — provider-agnostic; nothing here reads or branches on the selected provider. No catalog registration is required.
+
+Verified foundation: `isEngineAppendedRemediationAmendment` in `src/conductor/src/engine/protected-artifact-seal.ts` requires the base-tip buffer to be a byte prefix of HEAD, and `evaluateProtectedArtifactSealRotation` calls it with `baseTipArtifacts.get(path)`. The operator-reseal exit immediately above it requires `sealed.get(path)` to equal the workspace fingerprint, so it cannot cover a later append. `createSeal` fingerprints `contentAtCommit(baselineCommit, path)`, and `resealProtectedArtifactSeal` persists the scoped reseal with `baselineCommit: toCommit`, so the sealed bytes for a resealed path are exactly that path's blob at `seal.baselineCommit`. `protectedArtifactsAtCommit` already reads protected blobs at an arbitrary commit, and `appendRemediationTasks` in `src/conductor/src/engine/remediation-append.ts` returns `planText + separator + blocks.join('\n')`, a pure suffix append whose ids are always `rem-`-prefixed.
