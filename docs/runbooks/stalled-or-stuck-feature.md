@@ -553,6 +553,32 @@ hand-edit `conduct-state.json`, gate files, `HALT`, or `HALT.class`.
 explicit HALT. After a rewind, confirm it also prints
 `Rewound to test_suite.` and that the next dispatch starts at `test_suite`.
 
+#### Build review cannot resolve the feature plan
+
+**Symptom:** `.pipeline/HALT` begins `build_review cannot resolve a plan for feature` and lists
+candidate plan stems. Its class is `needs-human`; no provider was dispatched and no
+`.pipeline/build-review.json` verdict was written.
+
+**Diagnosis:** More than one plan exists, but neither a recorded active plan nor a plan whose stem
+equals the feature slug identifies this feature's plan. Read the named candidates; do not select one
+because of its alphabetical position.
+
+**Recovery:** Restore or correct the feature's authoritative plan through the normal DECIDE process.
+When several plan files remain, its filename stem must equal the feature slug. Then rerun the
+preceding verifier from the feature worktree:
+
+```bash
+cd .worktrees/<slug>
+ai-conductor rewind --to test_suite
+```
+
+`rewind` clears the halt and stale gate state atomically, then runs `test_suite` before a fresh
+`build_review`. Do not delete the halt markers by hand or rename an unrelated plan to force a match.
+
+**Verification:** The log shows `Rewound to test_suite.`, then a `test_suite` settle line followed
+by `build_review`; the new review either has the resolved feature plan as input or reports an
+independent gate result.
+
 #### Setup failures
 
 If the project's `bin/setup` failed inside the worktree, the feature may be quarantined:
