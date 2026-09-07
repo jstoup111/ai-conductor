@@ -567,10 +567,21 @@ async function snapshotTypedTestScope(
   const unresolvedMarkers = files.flatMap((file) => file.scope.notes.flatMap((note) => note.kind === 'unresolved-reference'
     ? [Object.freeze({ selector: file.path, reference: markerReferenceForScope(note.marker.reference) })]
     : []));
-  // Kept as a compatibility projection until input v3.  Unlike the old
-  // scanner it is derived only from declarations proven changed by the typed
-  // comparison, so unchanged siblings in a marked file never appear here.
+  // Kept as a compatibility projection until no live consumer remains. Its
+  // title regions must be the same established targets that v3 projects,
+  // never every changed declaration in a file that happens to contain one.
+  // Parser uncertainty remains a marked fallback only when this file has no
+  // established direct target at all.
   const changedTestTitles: BuildReviewChangedTestTitle[] = files.flatMap<BuildReviewChangedTestTitle>((file) => {
+    const targets = file.scope.targets.filter((target) => target.declaration.kind === 'test');
+    if (targets.length > 0) return targets.map((target) => Object.freeze({
+      selector: target.source.fileName,
+      titleText: target.declaration.titleChain.join(' > '),
+      staticExtractionFallback: false,
+    }));
+    // No established target leaves legacy consumers with their pre-v3
+    // changed-declaration behavior; it must not weaken an existing target
+    // file by appending its unbound siblings.
     const declarations = file.scope.changedDeclarations.filter((declaration) => declaration.kind === 'test');
     if (declarations.length > 0) return declarations.map((declaration) => Object.freeze({
       selector: file.path,

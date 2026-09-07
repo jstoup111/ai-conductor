@@ -130,6 +130,7 @@ function scopedSource(overrides: {
   const testScope: BuildReviewTestScope = {
     changedDeclarations: [declaration],
     targets: [{
+      source: { fileName: 'test/a.test.ts', side: 'head' },
       declaration,
       bindings: [{
         kind: 'bound',
