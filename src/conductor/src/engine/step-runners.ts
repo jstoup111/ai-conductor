@@ -64,6 +64,7 @@ import {
   type BuildReviewRepairProvenance,
 } from './build-review-inputs.js';
 import {
+  composeContainmentAdvisoryOutput,
   runContainmentFloor,
   renderContainmentFloorReport,
   type ContainmentFloorReport,
@@ -2722,7 +2723,7 @@ export class DefaultStepRunner implements StepRunner {
     const withContainmentAdvisory = (result: StepRunResult): StepRunResult => ({
       ...result,
       ...(typeof result.output === 'string' && containmentAdvisoryLines.length > 0
-        ? { output: `${containmentAdvisoryLines.join('\n')}\n\n${result.output}` }
+        ? { output: composeContainmentAdvisoryOutput(result.output, containmentAdvisoryLines, result.success) }
         : {}),
     });
     if (this.buildReviewCoordinator) {
