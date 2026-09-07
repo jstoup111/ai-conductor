@@ -8,6 +8,7 @@ import {
 } from './autoheal.js';
 import { readEngineState } from './engine-state-store.js';
 import { createRepairObligationStore, repairPlanIdentity, type RepairObligation } from './repair-obligations.js';
+import { resolveRepairPlanBinding } from './repair-plan-binding.js';
 import { parsePlanTaskDoneWhen } from './plan-task-parse.js';
 import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
@@ -174,14 +175,28 @@ async function readOpenRepairState(projectRoot: string): Promise<OpenRepairState
   const statePath = join(projectRoot, '.pipeline', 'engine-state.json');
   const state = await readEngineState(statePath);
   if (!state.ok) return { kind: 'unavailable', reason: `repair state is unavailable: ${state.message}` };
-  const activePlanPath = state.value.activePlanPath;
-  if (typeof activePlanPath !== 'string' || !activePlanPath.trim()) return { kind: 'none' };
 
   const repairs = await createRepairObligationStore(projectRoot, statePath).read();
   if (!repairs.ok) return { kind: 'unavailable', reason: `repair state is unavailable: ${repairs.message}` };
-  const planIdentity = repairPlanIdentity(projectRoot, activePlanPath);
-  const obligations = Object.values(repairs.value.records)
-    .filter((obligation) => obligation.planIdentity === planIdentity);
+  const records = Object.values(repairs.value.records);
+  // No obligation has ever been admitted here: the legacy union is the whole
+  // authority and no plan needs resolving. This fast path keeps every feature
+  // that predates repair obligations (and every telemetry-only
+  // `countResolvedTasks` caller) on exactly its previous behaviour.
+  if (records.length === 0) return { kind: 'none' };
+
+  // Obligations exist, so the plan they are keyed by MUST be established
+  // before the legacy union may speak. `activePlanPath` alone is not that
+  // authority — a daemon-dispatched feature never runs the plan step that
+  // records it, which is precisely how open obligations used to be read as
+  // "none" and the re-staged task re-closed by an old `Task:` trailer
+  // (#1831, #2261). Fail closed instead: an unresolvable plan under present
+  // obligations is `unavailable`, never `none`.
+  const binding = await resolveRepairPlanBinding(projectRoot);
+  if (binding.kind === 'unbound') {
+    return { kind: 'unavailable', reason: `repair state is unavailable: ${binding.reason}` };
+  }
+  const obligations = records.filter((obligation) => obligation.planIdentity === binding.identity);
   return obligations.length === 0 ? { kind: 'none' } : { kind: 'available', obligations };
 }
 

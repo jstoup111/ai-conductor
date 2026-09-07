@@ -77,7 +77,8 @@ import type {
 } from './provider-execution.js';
 import { formatProviderCapabilityGapMessages } from './provider-execution.js';
 import { createEngineStateStore } from './engine-state-store.js';
-import { createRepairObligationStore, repairPlanIdentity } from './repair-obligations.js';
+import { createRepairObligationStore } from './repair-obligations.js';
+import { resolveRepairPlanBinding } from './repair-plan-binding.js';
 import type { ParallelBranch } from '../types/config.js';
 import {
   runGroupBranch,
@@ -6367,9 +6368,12 @@ export class Conductor {
       const restored = await repairs.read();
       // Obligations are plan-scoped. A superseded plan's open obligation must
       // not seed baselines or hints once another plan is active (AB-2).
-      const activePlanPath = await this.getActivePlanPath();
-      const activePlanIdentity =
-        activePlanPath === null ? null : repairPlanIdentity(this.projectRoot, activePlanPath);
+      // The identity comes from the shared binding, not `activePlanPath`
+      // alone: a daemon-dispatched feature never runs the plan step that
+      // records that field, so keying on it dropped every admitted obligation
+      // on restart (#1831, #2261).
+      const planBinding = await resolveRepairPlanBinding(this.projectRoot);
+      const activePlanIdentity = planBinding.kind === 'bound' ? planBinding.identity : null;
       if (restored.ok && activePlanIdentity !== null) {
         const ledger = await readKickbackLedger(this.projectRoot);
         for (const obligation of Object.values(restored.value.records)) {
