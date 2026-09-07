@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-07T15:44:41.624Z
 Slug: name-the-missing-feature-content-when-the-rebase-g
 Class: plan-gap
 Halting step: prd_audit
