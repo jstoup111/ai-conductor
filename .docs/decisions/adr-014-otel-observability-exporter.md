@@ -228,6 +228,85 @@ Relevant existing facts (evidence):
 > `conductor.run.id` on the trace Resource, and metrics separate by the `instance` label rather than
 > depending on it.
 
+> **Amended 2026-09-06 by #1937 (daemon-owned meter, worker identity, daemon-level signals):** the
+> per-dispatch `MeterProvider` of Decision 3 / the #1934 amendment made every counter restart at zero
+> on each re-dispatch (`conductor.run.outcomes` reads a constant `1` for every feature that ever
+> halted; `conductor.step.retries` walks backwards across dispatches; verified on the live backend
+> 2026-09-06), and a daemon with no dispatch in flight exported nothing at all. Three decisions
+> revise how metrics are owned and identified. Decisions 1, 2, 4, 5 and 6 stand; traces are
+> unaffected.
+>
+> 7. **The dispatcher-side process owns the one metric provider, and every metric is derived
+>    from events by one listener.** `daemon-cli.ts` constructs a single long-lived `MeterProvider`
+>    + `MetricsRecorder` at daemon start (when `otel:` is enabled) and shuts it down only at daemon
+>    stop. A `MetricsListener` subscribed to the daemon root bus records **all** instruments —
+>    the existing per-feature ones (`step.duration`, `step.retries`, `step.dispatches`,
+>    `feature.cost`, `feature.step.cost`, `feature.step.tokens`, `pipeline.closeout.duration`,
+>    `run.outcomes`) and the new daemon-level ones — from the typed events that already reach that
+>    bus (`step_started`/`step_completed`/`step_failed`/`step_retry`, `feature_cost_snapshot`,
+>    `feature_usage_total`, `pipeline_closeout`, `feature_complete`, `loop_halt`, plus the new
+>    `feature_dispatch_ended`). Per-dispatch `OtelVisualizer` instances become **spans only**: they
+>    keep their `TracerProvider` (spans are per-run by nature) and construct no `MeterProvider`
+>    under the daemon. Because the recorder is fed by events rather than by the process that ran
+>    the step, counters stay monotonic for the daemon's life whether the dispatch ran in-process,
+>    in a child process, or — the intended end state — in a remote worker that exits after one
+>    dispatch and ships its event stream back. The interactive `index.ts` path (single run, single
+>    process) constructs its own provider and attaches the same `MetricsListener` to its run bus, so
+>    there is exactly one metric-recording code path and the interactive instrument set is
+>    byte-identical to today. Rationale: one long-lived meter fed by events is the only shape where
+>    "fix the resetting counters", "emit daemon-level signals", and "workers may be remote and
+>    ephemeral" are the same mechanism rather than three.
+> 8. **Metric identity is `service.instance.id = <project>/<worker>`; `feature` is a data-point
+>    attribute only.** `<project>` is the resolved project name of the 2026-08-27 amendment;
+>    `<worker>` is `otel.worker_name` from `.ai-conductor/config.yml` when non-blank (trimmed), else
+>    `os.hostname()`. `project` and `worker` are injected as data-point attributes on every
+>    instrument at the `MetricsRecorder` seam; `feature` is injected on per-feature instruments
+>    only (anything that happens *to* a feature), never on daemon-level ones (anything that
+>    describes the daemon), so daemon-level series are bounded by workers × states. The metric
+>    Resource is therefore worker-stable: `service.name`, `service.instance.id`,
+>    `conductor.project`, `conductor.worker`, and `host.name` (the raw hostname, so Datadog's host
+>    mapping lines up — data-point attributes are what every backend turns into tags without
+>    collector configuration; resource attributes are backend-dependent) — `conductor.feature` and
+>    `conductor.branch` leave the
+>    metric Resource (one provider now serves many features) and remain on the trace Resource.
+>    `target_info` becomes joinable per worker on `(job, instance)`; per-feature questions join on
+>    the `feature` data-point attribute instead. The 2026-08-28 boundedness reasoning holds: the
+>    instance value varies only with the set of workers, which is small and stable, not with runs.
+>    Proof obligation carried forward: a test asserts the exported metric Resource's
+>    `service.instance.id` and the absence of `conductor.feature` on it directly — a data-point
+>    assertion cannot observe this. Two workers of one project report the same backlog; consumers
+>    read backlog gauges with `max by (project)` and per-worker gauges (slots, in-flight) with
+>    `sum` — documented per instrument in `docs/reference/configuration.md`.
+> 9. **Daemon-level signals ride the spine as typed events, persisted to a daemon-scoped sibling
+>    ledger, with per-feature events forwarded — not re-persisted — onto the daemon bus.** The
+>    daemon loop emits `daemon_backlog_snapshot` once per discovery tick (counts per backlog
+>    state sourced from the existing eligible/waiting/blocked/gated channels and the park
+>    claims, oldest age per state, slots busy/free, in-flight slugs, the dispatch-blocking flags,
+>    and the tick's discovery duration), `feature_dispatch_started` (`kind: initial | resume |
+>    rekick`) at dispatch, `feature_dispatch_ended` (`outcome: complete | halted | terminated`) when
+>    the dispatch's process or worker returns, and `feature_shipped` (with `run_started_at` and the timing rollup's
+>    active total and its `exact | partial | unavailable` state) at the ship point. Each is a
+>    `ConductorEvent` union member with an `EVENT_SINKS` row and a visualizer `handleEvent` case.
+>    Because the daemon root bus has no persister today, the daemon attaches an `EventPersister`
+>    writing `<mainRoot>/.daemon/events.jsonl` — same schema, same reader, a sibling ledger under
+>    event-spine exception B (one writer per file), not a new channel. Every per-feature event is already re-emitted onto the daemon bus by the existing
+>    `ForwardingEventEmitter`; the forwarded copy is additionally tagged with its feature slug
+>    (a `WeakMap` beside the existing `forwardedFromFeature` `WeakSet`, read through
+>    `forwardedFeatureOf(event)`) so the listener can attribute it, and tagged as forwarded so
+>    the daemon persister skips it — the per-feature `.pipeline/events.jsonl` remains their ledger and their
+>    `EVENT_SINKS` rows are untouched. The `MetricsListener` records, beside the existing per-feature instruments,
+>    `daemon.backlog`, `daemon.backlog.oldest_age`, `daemon.slots`, `daemon.inflight`,
+>    `daemon.up`, `daemon.blocked_reason`, `daemon.poll.duration`, `daemon.stalls`,
+>    `feature.dispatches`, `feature.halts` (attribute `haltClass` carries the existing
+>    sidecar classification verbatim — the `HaltDisposition` values `needs-human | mechanical |
+>    protected-artifact | plan-gap | legacy | unclassified` plus the two operator-owned classes the
+>    conductor already writes past that union, `kickback-cap | over-scope`; a closed set of eight,
+>    never a new label), `feature.shipped`,
+>    `feature.duration.wall`, `feature.duration.active` (omitted, never fabricated, when the
+>    rollup state is `partial` or `unavailable`), `gate.verdicts` and `gate.kickbacks`. Handlers
+>    stay within Decision 4: bounded in-memory work, no I/O; the snapshot's counts are computed by
+>    the discovery pass that already ran, before the event is emitted.
+
 ## Consequences
 
 **Positive**
