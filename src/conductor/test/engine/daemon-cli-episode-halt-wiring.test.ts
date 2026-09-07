@@ -1,3 +1,4 @@
+// Covers: task:3
 // ─────────────────────────────────────────────────────────────────────────────
 // Test: daemon-cli wires the REAL episode-halt tracker into the daemon loop
 // (Task 20, daemon-api-rate-limit-episode-cascades-into-mass-h).
@@ -14,7 +15,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect } from 'vitest';
-import { readFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -26,7 +27,7 @@ describe('Task 20 — daemon-cli wires the episode-halt tracker into runDaemon d
     const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
 
     expect(source).toMatch(
-      /import\s*\{\s*createEpisodeHaltTracker\s*\}\s*from\s*['"]\.\/engine\/episode-halt-tracker\.js['"]/,
+      /import\s*\{[\s\S]*?createEpisodeHaltTracker[\s\S]*?\}\s*from\s*['"]\.\/engine\/episode-halt-tracker\.js['"]/,
     );
     expect(source).toMatch(/const episodeHaltTracker\s*=\s*createEpisodeHaltTracker\(\)/);
   });
@@ -37,15 +38,13 @@ describe('Task 20 — daemon-cli wires the episode-halt tracker into runDaemon d
     // Stamp path: the deps' onHaltWritten delegates to the tracker.
     expect(source).toMatch(/onHaltWritten:\s*async[\s\S]{0,200}episodeHaltTracker\.onHaltWritten\(/);
 
-    // Sweep path: the deps' sweepEpisodeHalts reads stamped slugs from the
-    // tracker (gated on the live HALT marker) and clears via the existing
-    // rekick primitive, respecting operator-park.
-    const sweepMatch = source.match(/sweepEpisodeHalts:\s*async\s*\(([\s\S]*?)\n\s*\},/);
-    expect(sweepMatch, 'expected a sweepEpisodeHalts binding in the runDaemon deps').toBeTruthy();
-    const sweepBody = sweepMatch![0];
-    expect(sweepBody).toMatch(/episodeHaltTracker\.getEpisodeHalts\(/);
-    expect(sweepBody).toMatch(/clearMarker\(/);
-    expect(sweepBody).toMatch(/isParked/);
+    // Sweep path: the deps delegate to the real sweep binding, which the
+    // integration case below drives against real marker files.
+    expect(source).toMatch(
+      /sweepEpisodeHalts:\s*\(isParkedDep\)\s*=>\s*sweepEpisodeHalts\(episodeHaltTracker, worktreeBase, log, isParkedDep\)/,
+    );
+    expect(source).toMatch(/isOperatorActionHalt\(disposition\)/);
+    expect(source).toMatch(/readHaltClass\(join\(worktreeBase, slug\)\)/);
   });
 
   it('the real tracker records only episode-caused parks and gates on the live HALT marker', async () => {
@@ -58,5 +57,46 @@ describe('Task 20 — daemon-cli wires the episode-halt tracker into runDaemon d
     // Only the stamped slug comes back, and only while its HALT is still live.
     expect(await tracker.getEpisodeHalts(async () => true)).toEqual(['episode-halt']);
     expect(await tracker.getEpisodeHalts(async () => false)).toEqual([]);
+  });
+
+  it('retains operator-action episode halts while clearing mechanical halts, after operator-park precedence', async () => {
+    const { createEpisodeHaltTracker } = await import('../../src/engine/episode-halt-tracker.js');
+    const { sweepEpisodeHalts } = await import('../../src/daemon-cli.js');
+    const worktreeBase = await mkdtemp(join(process.env.TMPDIR!, 'episode-halt-sweep-'));
+    const tracker = createEpisodeHaltTracker();
+    const lines: string[] = [];
+
+    const writeLiveHalt = async (slug: string, haltClass?: string) => {
+      const pipeline = join(worktreeBase, slug, '.pipeline');
+      await mkdir(pipeline, { recursive: true });
+      await writeFile(join(pipeline, 'HALT'), 'episode-caused halt\n');
+      if (haltClass) await writeFile(join(pipeline, 'HALT.class'), haltClass);
+      tracker.onHaltWritten(slug, true);
+    };
+
+    try {
+      await writeLiveHalt('mechanical', 'mechanical');
+      await writeLiveHalt('legacy', 'legacy');
+      await writeLiveHalt('needs-human', 'needs-human');
+      await writeLiveHalt('missing-sidecar');
+      await writeLiveHalt('operator-park', 'mechanical');
+
+      await sweepEpisodeHalts(tracker, worktreeBase, (line) => lines.push(line), async (slug) =>
+        slug === 'operator-park',
+      );
+
+      await expect(access(join(worktreeBase, 'mechanical', '.pipeline', 'HALT'))).rejects.toThrow();
+      await expect(access(join(worktreeBase, 'legacy', '.pipeline', 'HALT'))).rejects.toThrow();
+      await expect(access(join(worktreeBase, 'needs-human', '.pipeline', 'HALT'))).resolves.toBeUndefined();
+      await expect(access(join(worktreeBase, 'missing-sidecar', '.pipeline', 'HALT'))).resolves.toBeUndefined();
+      await expect(access(join(worktreeBase, 'operator-park', '.pipeline', 'HALT'))).resolves.toBeUndefined();
+      expect(lines).toContain('episode-end sweep: needs-human needs-human — left for a human');
+      expect(lines).toContain('episode-end sweep: missing-sidecar unclassified — left for a human');
+      expect(lines).toContain('episode-end sweep: operator-park operator-parked — left for a human');
+      expect(lines).toContain('episode-end sweep: re-kicked mechanical (episode-caused HALT cleared)');
+      expect(lines).toContain('episode-end sweep: re-kicked legacy (episode-caused HALT cleared) (halt class: legacy)');
+    } finally {
+      await rm(worktreeBase, { recursive: true, force: true });
+    }
   });
 });

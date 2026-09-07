@@ -465,6 +465,9 @@ bounded by the `build_progress_halt` block. Defaults: enabled, `attempt_ceiling:
 "genuinely stuck" apart from "still progressing but out of runway". Key details are in
 [configuration](../reference/configuration.md).
 
+A halt awaiting operator action is neither progress-re-kicked nor cleared by rate-limit episode
+recovery; the daemon log names the blocking halt disposition.
+
 The `▶ build <resolved>/<total>` line counts a task as resolved when its `.pipeline/task-status.json`
 row reads `completed`/`skipped` **or** a commit on the branch carries its `Task: <id>` trailer — the
 same union the build completion gate routes on. Nothing writes those rows back mid-build except the
@@ -478,7 +481,8 @@ check the commit trailers before treating it as a stall.
 A rate-limited dispatch emits `rate_limit` and waits — to the deadline parsed from the provider
 message when one is available, otherwise 300 seconds. The wait does **not** burn the retry
 budget. HALTs written while a rate-limit episode is active are stamped so they can be recovered
-when the episode ends.
+when the episode ends. A halt awaiting operator action is neither progress-re-kicked nor cleared by
+episode recovery; the daemon log names the blocking halt disposition.
 
 > **Known limitation.** The episode stamp is in-memory, scoped to the running daemon process.
 > Restart the daemon during an episode and its episode-caused halts are no longer recognized as

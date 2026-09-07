@@ -177,7 +177,7 @@ import {
   clearMarker,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
-import { readHaltClass } from './engine/halt-marker.js';
+import { isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import { enrollWatch, sweepMergeableLabels, type WatchEntry } from './engine/mergeable-sweep.js';
 import type { PrMergeState } from './engine/pr-labels.js';
@@ -191,10 +191,45 @@ import {
   type RestartIntent,
 } from './engine/restart-marker.js';
 import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';
-import { createEpisodeHaltTracker } from './engine/episode-halt-tracker.js';
+import {
+  createEpisodeHaltTracker,
+  type EpisodeHaltTracker,
+} from './engine/episode-halt-tracker.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const execFile = promisify(execFileCb);
+
+/**
+ * Recover only episode-caused HALTs that remain safe for daemon re-kick.
+ * Operator parks retain their historical precedence over halt classification.
+ */
+export async function sweepEpisodeHalts(
+  episodeHaltTracker: EpisodeHaltTracker,
+  worktreeBase: string,
+  log: (message: string) => void,
+  isParkedDep?: (slug: string) => Promise<boolean>,
+): Promise<void> {
+  const stamped = await episodeHaltTracker.getEpisodeHalts((slug) =>
+    isHalted(worktreeBase, slug),
+  );
+  for (const slug of stamped) {
+    // Operator intent outranks automatic recovery (same rule as rekickSweep).
+    if (isParkedDep && (await isParkedDep(slug))) {
+      log(`episode-end sweep: ${slug} operator-parked — left for a human`);
+      continue;
+    }
+    const disposition = await readHaltClass(join(worktreeBase, slug));
+    if (isOperatorActionHalt(disposition)) {
+      log(`episode-end sweep: ${slug} ${disposition} — left for a human`);
+      continue;
+    }
+    await clearMarker(join(worktreeBase, slug));
+    log(
+      `episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)` +
+        (disposition === 'legacy' ? ' (halt class: legacy)' : ''),
+    );
+  }
+}
 
 /** One git adapter for WorkOrder build and its executor-side verification. */
 export function createWorkOrderGitRunner(projectRoot: string): WorkOrderGitRunner {
@@ -1799,6 +1834,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // — previously constructed and fully unit-tested only at the
       // daemon.ts/pickEligible level, never reachable from this entrypoint.
       ...buildProgressReKickDeps(config, worktreeBase),
+      // Task 2 (refuse-daemon-auto-resume-of-an-operator-action-ha): the
+      // progress-gated re-kick veto must read the live class from this
+      // feature's worktree, using the same canonical worktree base as the
+      // base-advance sweep above.
+      readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)),
       // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).
@@ -1840,20 +1880,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // episode-caused HALT recovery (daemon.ts guards with ?.()).
       onHaltWritten: async (slug, episodeCaused) =>
         episodeHaltTracker.onHaltWritten(slug, episodeCaused),
-      sweepEpisodeHalts: async (isParkedDep) => {
-        const stamped = await episodeHaltTracker.getEpisodeHalts((slug) =>
-          isHalted(worktreeBase, slug),
-        );
-        for (const slug of stamped) {
-          // Operator intent outranks automatic recovery (same rule as rekickSweep).
-          if (isParkedDep && (await isParkedDep(slug))) {
-            log(`episode-end sweep: ${slug} operator-parked — left for a human`);
-            continue;
-          }
-          await clearMarker(join(worktreeBase, slug));
-          log(`episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)`);
-        }
-      },
+      sweepEpisodeHalts: (isParkedDep) =>
+        sweepEpisodeHalts(episodeHaltTracker, worktreeBase, log, isParkedDep),
       runFeature,
       onExecutorStarted: () => {
         activeExecutorCount += 1;
