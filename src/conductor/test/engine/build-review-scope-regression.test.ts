@@ -41,6 +41,7 @@ describe('portable build-review scope regression (#2231)', () => {
   it('labels projection bytes as bytes rather than claiming provider-token or end-to-end savings', async () => {
     const result = await compareBuildReviewScope();
 
+    expect(result.projectionBytes).toMatchObject({ legacy: expect.any(Number), scoped: expect.any(Number) });
     expect(result).not.toHaveProperty('tokenSavings');
     expect(result).not.toHaveProperty('endToEndLatencySavings');
     expect(JSON.stringify(result)).not.toMatch(/token|end-to-end|latency savings/i);
