@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import type { BuildReviewRubricId } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
@@ -154,7 +155,21 @@ export async function withKickbackLedgerLease<T>(
   const lease = createConductStateLease(join(projectRoot, KICKBACK_LEDGER_PATH), {
     label: 'kickback-ledger',
   });
-  const acquired = await lease.acquire();
+  let acquired = await lease.acquire();
+  // A competing writer creates the lease directory just before it records
+  // owner metadata.  That tiny window is neither a live nor ambiguous owner;
+  // retry it briefly so concurrent ledger transactions remain serialized.
+  for (
+    let retry = 0;
+    !acquired.ok &&
+      acquired.kind === 'recovery_refused' &&
+      acquired.message.includes('owner metadata is unavailable (ENOENT:') &&
+      retry < 10;
+    retry += 1
+  ) {
+    await delay(10);
+    acquired = await lease.acquire();
+  }
   if (!acquired.ok) throw new KickbackLedgerLeaseError(acquired.kind, acquired.message);
 
   let operationSucceeded = false;
