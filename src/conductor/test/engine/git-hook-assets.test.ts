@@ -886,3 +886,49 @@ describe('git-hook-assets — embedding hook scripts', () => {
     });
   });
 });
+
+describe('commit-msg literal lookup regression', () => {
+  it('passes matching and rejects absent interpreter-shaped task IDs without executing them', async () => {
+    const repo = await mkdtemp(join(tmpdir(), "git hook 'literal' $() `ticks` "));
+    const sentinel = join(repo, 'PWNED');
+    const git = async (...args: string[]) => execFileAsync('git', ['-C', repo, ...args]);
+    const matching = "id '\\ $() `ticks`";
+    const missing = "nope '\\ $(touch PWNED) `touch PWNED`";
+    try {
+      await git('init', '-b', 'main');
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await writeFile(join(repo, 'README.md'), 'initial\n');
+      await git('add', '.');
+      await git('commit', '-m', 'initial');
+      await prepareWorktree(repo);
+      await mkdir(join(repo, '.pipeline'), { recursive: true });
+      await writeFile(join(repo, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: matching }] }));
+      await writeFile(join(repo, 'match.txt'), 'match\n');
+      await git('add', 'match.txt');
+      await expect(git('commit', '-m', `literal match\n\nTask: ${matching}`)).resolves.toBeDefined();
+      await writeFile(join(repo, 'missing.txt'), 'missing\n');
+      await git('add', 'missing.txt');
+      await expect(git('commit', '-m', `literal absent\n\nTask: ${missing}`)).rejects.toMatchObject({ code: 1 });
+      expect(await (async () => { try { await execFileAsync('test', ['-e', sentinel]); return true; } catch { return false; } })()).toBe(false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['{bad json', 'not readable by node'])('reports task-status processing failures distinctly: %s', async (contents) => {
+    const repo = await mkdtemp(join(tmpdir(), 'git-hook-assets-processing-'));
+    try {
+      await execFileAsync('git', ['-C', repo, 'init', '-q']);
+      await mkdir(join(repo, '.pipeline', 'git-hooks'), { recursive: true });
+      const hook = join(repo, '.pipeline', 'git-hooks', 'commit-msg');
+      const message = join(repo, 'message');
+      await writeFile(hook, buildCommitMsgHook('/bin/true'), { mode: 0o755 });
+      await writeFile(join(repo, '.pipeline', 'task-status.json'), contents);
+      await writeFile(message, 'test\n\nTask: 1\n');
+      await expect(execFileAsync(hook, [message], { cwd: repo })).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('could not process task-status.json') });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
