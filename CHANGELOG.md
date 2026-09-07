@@ -24,6 +24,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The daemon and engineer workflows now require GitHub CLI 2.73.0 or later and clearly report unsupported JSON fields. ([implementation PR #2243](https://github.com/jstoup111/ai-conductor/pull/2243)).
 - Adds durable post-join build-review remediation adjudication that classifies joined findings and safely routes follow-up work. ([implementation PR #2087](https://github.com/jstoup111/ai-conductor/pull/2087)).
 - Gate verdicts are persisted and shown in daemon and interactive terminal output. ([implementation PR #2375](https://github.com/jstoup111/ai-conductor/pull/2375)).
+- Configure OTLP HTTP exporter headers from environment-variable references. ([implementation PR #2369](https://github.com/jstoup111/ai-conductor/pull/2369)).
 
 ### Changed
 
@@ -80,6 +81,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Reopened remediation tasks now resume with fresh evidence instead of halting after prior completion. ([implementation PR #2355](https://github.com/jstoup111/ai-conductor/pull/2355)).
 - prd_audit and as-built verdicts are preserved across a SHIP-tail rebase rewrite and across a halt/resume when the reviewed code is unchanged; a review re-runs only when its surface actually changed. ([implementation PR #2382](https://github.com/jstoup111/ai-conductor/pull/2382)).
 - Resumed runs now return to an earlier runnable prerequisite instead of stopping without dispatching work. ([implementation PR #2385](https://github.com/jstoup111/ai-conductor/pull/2385)).
+- Prevent the daemon from automatically resuming HALTs that require operator action. ([implementation PR #2398](https://github.com/jstoup111/ai-conductor/pull/2398)).
 
 ## [1.0.0] - 2026-08-31
 
