@@ -85,6 +85,16 @@ function metricPoints(exporter: InMemoryMetricExporter, name: string): MetricPoi
   );
 }
 
+function latestMetricPoints(exporter: InMemoryMetricExporter, name: string): MetricPoint[] {
+  return exporter.getMetrics().slice(-1).flatMap((resourceMetrics): MetricPoint[] =>
+    resourceMetrics.scopeMetrics.flatMap((scopeMetrics) =>
+      scopeMetrics.metrics
+        .filter((metric) => metric.descriptor.name === name)
+        .flatMap((metric) => metric.dataPoints as unknown as MetricPoint[]),
+    ),
+  );
+}
+
 function pointValue(
   exporter: InMemoryMetricExporter,
   name: string,
@@ -94,6 +104,26 @@ function pointValue(
     Object.entries(attributes).every(([key, value]) => candidate.attributes[key] === value),
   );
   return typeof point?.value === 'number' ? point.value : undefined;
+}
+
+function metricPointsWithAttributes(
+  exporter: InMemoryMetricExporter,
+  name: string,
+  attributes: Record<string, string>,
+): MetricPoint[] {
+  return metricPoints(exporter, name).filter((candidate) =>
+    Object.entries(attributes).every(([key, value]) => candidate.attributes[key] === value),
+  );
+}
+
+function latestMetricPointsWithAttributes(
+  exporter: InMemoryMetricExporter,
+  name: string,
+  attributes: Record<string, string>,
+): MetricPoint[] {
+  return latestMetricPoints(exporter, name).filter((candidate) =>
+    Object.entries(attributes).every(([key, value]) => candidate.attributes[key] === value),
+  );
 }
 
 async function createDaemonMeter(root: string): Promise<{
@@ -231,5 +261,109 @@ describe('daemon-level metrics acceptance', () => {
       pollDurationMs: 0,
     });
     expect(metricPoints(daemon.exporter, 'conductor.daemon.up')).toHaveLength(upBeforeDetachedEmission);
+  });
+
+  it('exports live slots and one in-flight point per slug from a real busy daemon tick', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'busy-daemon-metrics-'));
+    roots.push(root);
+    const daemon = await createDaemonMeter(root);
+    const releases = new Map<string, () => void>();
+    let busyTickSeen: (() => void) | undefined;
+    const busyTick = new Promise<void>((resolve) => { busyTickSeen = resolve; });
+    let stopAfterBusyTick = false;
+    const emissions: Array<Promise<void>> = [];
+
+    const daemonRun = runDaemon({
+      discoverBacklog: async () => [{ slug: 'feature-a' }, { slug: 'feature-b' }],
+      runFeature: async (item) => new Promise((resolve) => {
+        releases.set(item.slug, () => resolve({ slug: item.slug, status: 'done' }));
+      }),
+      onTick: (snapshot) => {
+        if (snapshot.slots.busy !== 2) return;
+        emissions.push(emitUntyped(daemon.events, { type: 'daemon_backlog_snapshot', ...snapshot }));
+        stopAfterBusyTick = true;
+        busyTickSeen?.();
+      },
+      shouldStop: () => stopAfterBusyTick,
+    }, {
+      concurrency: 3,
+      once: false,
+      idlePollMs: 0,
+    });
+
+    await busyTick;
+    await Promise.all(emissions);
+    await daemon.scope.stop();
+
+    expect(pointValue(daemon.exporter, 'conductor.daemon.slots', {
+      project: 'project-p', worker: 'worker-w', state: 'busy',
+    })).toBe(2);
+    expect(pointValue(daemon.exporter, 'conductor.daemon.slots', {
+      project: 'project-p', worker: 'worker-w', state: 'free',
+    })).toBe(1);
+    for (const feature of ['feature-a', 'feature-b']) {
+      expect(latestMetricPointsWithAttributes(daemon.exporter, 'conductor.daemon.inflight', {
+        project: 'project-p', worker: 'worker-w', feature,
+      })).toHaveLength(1);
+      expect(pointValue(daemon.exporter, 'conductor.daemon.inflight', {
+        project: 'project-p', worker: 'worker-w', feature,
+      })).toBe(1);
+    }
+
+    for (const release of releases.values()) release();
+    await daemonRun;
+  });
+
+  it('exports oldest age only for determinable members while retaining the full backlog depth', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'mixed-age-daemon-metrics-'));
+    roots.push(root);
+    const daemon = await createDaemonMeter(root);
+    const emissions: Array<Promise<void>> = [];
+    const knownEligibleSinceMs = 1_000;
+    const nowMs = knownEligibleSinceMs + 129_600_000;
+    const eligibleBacklog = [
+      { slug: 'known-eligible', eligibleSinceMs: knownEligibleSinceMs },
+      { slug: 'unknown-eligible' },
+    ];
+
+    await runDaemon({
+      discoverBacklog: async () => [],
+      runFeature: async () => {
+        throw new Error('mixed-age acceptance fixture must not dispatch');
+      },
+      sleep: async () => {},
+      onTick: (snapshot) => {
+        const knownAgesSeconds = eligibleBacklog.flatMap(({ eligibleSinceMs }) =>
+          typeof eligibleSinceMs === 'number' ? [(nowMs - eligibleSinceMs) / 1_000] : [],
+        );
+        emissions.push(emitUntyped(daemon.events, {
+          type: 'daemon_backlog_snapshot',
+          ...snapshot,
+          counts: { ...snapshot.counts, eligible: eligibleBacklog.length },
+          oldestAgeSeconds: {
+            eligible: Math.max(...knownAgesSeconds),
+            // An invalid age must not produce a gauge point.
+            waiting: Number.NaN,
+          },
+        }));
+      },
+    } as DaemonDeps, {
+      concurrency: 3,
+      once: false,
+      idlePollMs: 0,
+      maxIdlePolls: 1,
+    });
+    await Promise.all(emissions);
+    await daemon.scope.stop();
+
+    expect(pointValue(daemon.exporter, 'conductor.daemon.backlog', {
+      project: 'project-p', worker: 'worker-w', state: 'eligible',
+    })).toBe(2);
+    expect(pointValue(daemon.exporter, 'conductor.daemon.backlog.oldest_age', {
+      project: 'project-p', worker: 'worker-w', state: 'eligible',
+    })).toBe(129_600);
+    expect(metricPointsWithAttributes(daemon.exporter, 'conductor.daemon.backlog.oldest_age', {
+      project: 'project-p', worker: 'worker-w', state: 'waiting',
+    })).toHaveLength(0);
   });
 });
