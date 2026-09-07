@@ -115,3 +115,70 @@ describe('kickback-budget refusal ladder', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });
+
+// Covers: task:14 — reconciliation is a COMMAND-ENTRY obligation. `inspect` is
+// the first command an operator reaches for after a crash, so both sealed
+// crash-recovery cases must be delivered by it, not only by raise/reset.
+describe('kickback-budget inspect reconciles an interrupted adjustment at command entry', () => {
+  const capEvidence = { gate: 'build_review', consumed: 1, limit: 5, latestReason: 'cap', haltGeneration: 'halt-1' };
+  const pending = {
+    id: 'adj-1', kind: 'raise' as const, beforeConsumed: 1, afterConsumed: 1, beforeLimit: 5, afterLimit: 6,
+    operator: 'operator', rationale: 'one more lap', timestamp: '2026-09-07T00:00:00.000Z', haltGeneration: 'halt-1',
+  };
+
+  const inspect = async (fixture: { root: string }): Promise<number> =>
+    dispatchKickbackBudgetCommand(
+      { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
+      { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: () => {} },
+    );
+
+  const readLedger = async (worktree: string): Promise<any> =>
+    JSON.parse(await readFile(join(worktree, '.pipeline', 'kickback-ledger.json'), 'utf8'));
+
+  it('discards a pending record whose authorization event never landed', async () => {
+    const fixture = await makeFeature({
+      version: 1, gates: { build_review: { ...baseEntry, capEvidence, pendingAdjustment: pending } },
+    });
+    try {
+      expect(await inspect(fixture)).toBe(0);
+      const entry = (await readLedger(fixture.worktree)).gates.build_review;
+      expect(entry.pendingAdjustment).toBeUndefined();
+      expect(entry.effectiveLimit).toBeUndefined();
+      expect(entry.cumulative).toBe(1);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('completes the apply exactly once when the authorization event exists', async () => {
+    const fixture = await makeFeature({
+      version: 1, gates: { build_review: { ...baseEntry, capEvidence, pendingAdjustment: pending } },
+    });
+    try {
+      await writeFile(
+        join(fixture.worktree, '.pipeline', 'pipeline-events.jsonl'),
+        `${JSON.stringify({ type: 'kickback_budget_adjustment_authorized', adjustmentId: 'adj-1' })}\n`,
+      );
+      expect(await inspect(fixture)).toBe(0);
+      const first = (await readLedger(fixture.worktree)).gates.build_review;
+      expect(first.pendingAdjustment).toBeUndefined();
+      expect(first.effectiveLimit).toBe(6);
+      expect(first.adjustments).toHaveLength(1);
+      expect(first.cumulative).toBe(1);
+
+      expect(await inspect(fixture)).toBe(0);
+      const second = (await readLedger(fixture.worktree)).gates.build_review;
+      expect(second.adjustments).toHaveLength(1);
+      expect(second.effectiveLimit).toBe(6);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('keeps the pending record and exits non-zero when the event ledger is unreadable', async () => {
+    const fixture = await makeFeature({
+      version: 1, gates: { build_review: { ...baseEntry, capEvidence, pendingAdjustment: pending } },
+    });
+    try {
+      await writeFile(join(fixture.worktree, '.pipeline', 'pipeline-events.jsonl'), '{not json\n');
+      expect(await inspect(fixture)).toBe(1);
+      expect((await readLedger(fixture.worktree)).gates.build_review.pendingAdjustment.id).toBe('adj-1');
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+});

@@ -94,7 +94,18 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(deps.cwd ?? process.cwd());
   const worktree = await resolveWorktree(command.feature, deps.cwd ?? process.cwd(), deps.resolveMainRoot ?? resolveMainRepoRoot);
   if (!worktree) { print(`kickback-budget: feature '${command.feature}' is unavailable.`); return 1; }
+  const reconcile = async (): Promise<number | undefined> => {
+    try { await reconcilePendingAdjustments(worktree); return undefined; }
+    catch (error) { print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1; }
+  };
   if (command.action === 'inspect') {
+    // D5: reconciliation is a COMMAND-ENTRY obligation, not a mutation-path
+    // one. The sealed crash windows say "the operator re-runs any
+    // kickback-budget command", and `inspect` is the command an operator
+    // reaches for first after a crash — a pending record left unreconciled
+    // here would render a budget the ledger does not actually hold.
+    const refused = await reconcile();
+    if (refused !== undefined) return refused;
     const ledger = await readKickbackLedger(worktree);
     if (isUnreadableKickbackLedger(ledger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
     const defaults = await defaultsFor(worktree);
@@ -106,8 +117,10 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     print('kickback-budget: mutations require an interactive local operator terminal.'); return 2;
   }
   if (!command.gate || !GATES.has(command.gate) || !command.rationale?.trim()) { print('kickback-budget: invalid gate or rationale.'); return 2; }
-  try { await reconcilePendingAdjustments(worktree); }
-  catch (error) { print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1; }
+  // Mutations reconcile only after D3's argument/authority refusals, which must
+  // leave the park and the ledger untouched.
+  const refused = await reconcile();
+  if (refused !== undefined) return refused;
   const ledger = await readKickbackLedger(worktree);
   if (isUnreadableKickbackLedger(ledger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
   const entry = ledger.gates[command.gate];
