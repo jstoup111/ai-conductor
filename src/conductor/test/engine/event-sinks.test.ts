@@ -877,7 +877,6 @@ describe('event sink subscriptions', () => {
   it('derives the daemon-rendered set from the switch-handled event types', () => {
     expect(new Set(renderedEventTypes())).toEqual(new Set([
       ...DAEMON_SWITCH_HANDLED_EVENT_TYPES,
-      'intake_inbound_sanitized',
       'halt_marker_write_failed',
       'halt_record_written',
       'halt_record_write_failed',

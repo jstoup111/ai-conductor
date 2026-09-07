@@ -54,7 +54,6 @@ export class TerminalSubscriber implements UISubscriber {
       'renderer_error',
       'pipeline_tail_diagnostic',
       'gate_verdict',
-      'intake_inbound_sanitized',
     ];
 
     for (const type of eventTypes) {
@@ -71,7 +70,6 @@ export class TerminalSubscriber implements UISubscriber {
           || event.type === 'renderer_error'
           || event.type === 'pipeline_tail_diagnostic'
           || event.type === 'gate_verdict'
-          || event.type === 'intake_inbound_sanitized'
         ) {
           await this.terminalRenderer?.handle(event);
         }
