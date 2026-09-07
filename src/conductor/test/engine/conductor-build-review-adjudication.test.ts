@@ -114,6 +114,9 @@ interface FixtureOptions {
   readonly chargeEffect?: typeof chargeBuildReviewEffectInLedger;
   /** A clean lap. The adjudication coordinator never runs for one. */
   readonly rawVerdict?: 'PASS' | 'FAIL';
+  /** Models an operator disposition arriving through the event spine mid-lap. */
+  readonly acceptedFindingIds?: () => readonly string[];
+  readonly onLifecycleEvent?: (event: ConductorEvent) => void;
 }
 
 async function fixture(options: FixtureOptions = {}) {
@@ -161,19 +164,22 @@ async function fixture(options: FixtureOptions = {}) {
   const infrastructureRubrics = mixed || options.reportUncoveredInfrastructure ? (['testQuality'] as const) : ([] as const);
   const uncovered = options.infrastructure === 'uncovered' || options.reportUncoveredInfrastructure
     ? (['testQuality'] as const) : ([] as const);
-  const resolver: NonNullable<CompletionContext['buildReviewEffectiveResolver']> = vi.fn(async () => ({
-    ok: true as const,
-    feature,
-    effective: {
-      rawVerdict: clean ? ('PASS' as const) : ('FAIL' as const),
-      verdict: clean ? ('PASS' as const) : ('FAIL' as const),
-      acceptedFindingIds: [] as string[],
-      unresolvedFindingIds: mixed || clean ? [] : [FINDING_ID],
-      skippedRubrics: [],
-      infrastructureFailureRubrics: [...infrastructureRubrics],
-      uncoveredInfrastructureFailureRubrics: [...uncovered],
-    },
-  })) as never;
+  const resolver: NonNullable<CompletionContext['buildReviewEffectiveResolver']> = vi.fn(async () => {
+    const acceptedFindingIds = [...(options.acceptedFindingIds?.() ?? [])];
+    return {
+      ok: true as const,
+      feature,
+      effective: {
+        rawVerdict: clean ? ('PASS' as const) : ('FAIL' as const),
+        verdict: clean ? ('PASS' as const) : ('FAIL' as const),
+        acceptedFindingIds,
+        unresolvedFindingIds: mixed || clean || acceptedFindingIds.includes(FINDING_ID) ? [] : [FINDING_ID],
+        skippedRubrics: [],
+        infrastructureFailureRubrics: [...infrastructureRubrics],
+        uncoveredInfrastructureFailureRubrics: [...uncovered],
+      },
+    };
+  }) as never;
 
   const ghCalls: string[][] = [];
   const gh = vi.fn(async (args: string[]) => {
@@ -190,8 +196,14 @@ async function fixture(options: FixtureOptions = {}) {
   const loopHalts: ConductorEvent[] = [];
   events.on('kickback', (event) => { if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to }); });
   events.on('loop_halt', (event) => { loopHalts.push(event); });
-  for (const type of ['remediation_adjudication_started', 'remediation_adjudication_completed', 'remediation_effect_applied', 'remediation_case_reconciled'] as const) {
-    events.on(type, (event) => { lifecycle.push(event); });
+  for (const type of [
+    'remediation_adjudication_started', 'remediation_adjudication_completed', 'remediation_adjudication_failed',
+    'remediation_effect_applied', 'remediation_case_reconciled',
+  ] as const) {
+    events.on(type, (event) => {
+      lifecycle.push(event);
+      options.onLifecycleEvent?.(event);
+    });
   }
 
   const conductor = new Conductor({
@@ -261,6 +273,25 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
 
     expect({ dispatched: run.dispatched, charges: charge.mock.calls.length }).toEqual({ dispatched: ['build_review', 'remediate'], charges: 1 });
     expect(await run.haltMarker()).toContain('build_review adjudication halted:');
+  });
+
+  it('does not convert an action failure accepted during failure delivery into a needs-human HALT', async () => {
+    let accepted = false;
+    const charge = vi.fn(async () => ({ status: 'unreadable' as const, reason: 'ledger unavailable' }));
+    const run = await fixture({
+      chargeEffect: charge as never,
+      acceptedFindingIds: () => accepted ? [FINDING_ID] : [],
+      onLifecycleEvent: (event) => { if (event.type === 'remediation_adjudication_failed') accepted = true; },
+    });
+
+    expect(run.dispatched).toEqual(['build_review', 'remediate']);
+    expect(run.kickbacks).toEqual([]);
+    expect(charge).toHaveBeenCalledTimes(1);
+    expect(await run.haltMarker()).toBe('');
+    await expect(run.readJson('.pipeline/remediation-cases.json')).resolves.toMatchObject({
+      cases: [expect.objectContaining({ resolution: 'resolved', effect: expect.objectContaining({ status: 'failed' }) })],
+    });
+    expect(run.lifecycle.filter((event) => event.type === 'remediation_adjudication_completed' || event.type === 'remediation_adjudication_failed')).toHaveLength(1);
   });
 
   it('recovers the accepted work order and BUILD navigation point from disk alone after a restart', async () => {

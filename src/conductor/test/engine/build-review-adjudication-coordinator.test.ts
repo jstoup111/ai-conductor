@@ -617,6 +617,109 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(settled.state.cases.map((record) => record.resolution)).toEqual(['resolved', 'resolved']);
   });
 
+  it('settles an action-effect failure accepted during its terminal failure delivery', async () => {
+    const root = await projectRoot();
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const charge = vi.fn(async () => ({ status: 'unreadable' as const, reason: 'ledger unavailable' }));
+    let failureDelivered = false;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()),
+      resolveOperatorResolvedFindingIds: async () => failureDelivered ? new Set([findingId]) : new Set<string>(),
+      chargeEffect: charge, generateId: sequentialIds('action-delivery'), emit: async (event) => {
+        events.push(event);
+        if (event.type === 'remediation_adjudication_failed') failureDelivered = true;
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(charge).toHaveBeenCalledTimes(1);
+    const settled = await new RemediationCaseStore(root, feature).read();
+    expect(settled).toMatchObject({
+      ok: true,
+      state: { cases: [expect.objectContaining({ resolution: 'resolved', effect: expect.objectContaining({ status: 'failed' }) })] },
+    });
+    // The order remains durable recovery evidence, but its accepted case is no
+    // longer build-eligible and no kickback route can consume it.
+    await expect(access(join(root, '.pipeline', 'build-review-work-order.json'))).resolves.toBeUndefined();
+    expect(events.filter((event) => event.type === 'remediation_adjudication_completed' || event.type === 'remediation_adjudication_failed')).toHaveLength(1);
+  });
+
+  it('settles a deferral-effect failure accepted during its terminal failure delivery', async () => {
+    const root = await projectRoot();
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const fileIssue = vi.fn(async () => { throw new Error('tracker unavailable'); });
+    let failureDelivered = false;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => deferralJudgement()),
+      resolveOperatorResolvedFindingIds: async () => failureDelivered ? new Set([findingId]) : new Set<string>(),
+      tracker: { findIssueByEffectMarker: async () => undefined } as unknown as EffectMarkerTrackerClient,
+      repo: 'acme/conductor', fileIssue, generateId: sequentialIds('deferral-delivery'), emit: async (event) => {
+        events.push(event);
+        if (event.type === 'remediation_adjudication_failed') failureDelivered = true;
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(fileIssue).toHaveBeenCalledTimes(1);
+    await expect(new RemediationCaseStore(root, feature).read()).resolves.toMatchObject({
+      ok: true,
+      state: { cases: [expect.objectContaining({ resolution: 'resolved', effect: expect.objectContaining({ status: 'failed' }) })] },
+    });
+    await expect(access(join(root, '.pipeline', 'build-review-work-order.json'))).rejects.toThrow();
+    expect(events.filter((event) => event.type === 'remediation_adjudication_completed' || event.type === 'remediation_adjudication_failed')).toHaveLength(1);
+  });
+
+  it('settles only a semantic-repeat case accepted during failure delivery and halts for its sibling', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-accepted', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The first test needs a focused assertion.', resolution: 'open',
+        sources: [{ sourceId: buildReviewAdjudicationSourceId(acceptedSource), outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+        effect: { id: 'effect-accepted', kind: 'action', status: 'applied', workOrderId: 'order-accepted' },
+      }],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-accepted',
+      cases: [{ caseId: 'case-accepted', priority: 'high', tasks: [{ title: 'Repair the first test' }] }],
+    });
+    await markBuildReviewWorkOrderAttempted(root, feature);
+    const mixed = mixedJudgement();
+    const repeated: RemediationCaseJudgement = {
+      ...mixed,
+      cases: [{ ...mixed.cases[0]!, existingCaseId: 'case-accepted' }, mixed.cases[1]!],
+    };
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+    let failureDelivered = false;
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => repeated), aggregate: mixedAggregate,
+      resolveOperatorResolvedFindingIds: async () => failureDelivered ? new Set([acceptedSource.findingId]) : new Set<string>(),
+      chargeEffect: charge, generateId: sequentialIds('semantic-delivery'), emit: async (event) => {
+        events.push(event);
+        if (event.type === 'remediation_adjudication_failed') failureDelivered = true;
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'halt' });
+    expect(charge).not.toHaveBeenCalled();
+    const settled = await store.read();
+    expect(settled).toMatchObject({
+      ok: true,
+      state: { cases: [
+        expect.objectContaining({ id: 'case-accepted', resolution: 'resolved' }),
+        expect.objectContaining({ resolution: 'open', effect: expect.objectContaining({ status: 'reserved' }) }),
+      ] },
+    });
+    await expect(readFile(join(root, '.pipeline', 'build-review-work-order.json'), 'utf8')).resolves.toContain('case-accepted');
+    expect(events.filter((event) => event.type === 'remediation_adjudication_completed' || event.type === 'remediation_adjudication_failed')).toHaveLength(1);
+  });
+
   it('retires an accepted action-effect failure but halts for an unaccepted sibling', async () => {
     const root = await projectRoot();
     const events: RemediationCaseLifecycleEvent[] = [];

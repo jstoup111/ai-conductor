@@ -177,6 +177,8 @@ export async function coordinateBuildReviewAdjudication(input: {
      * path uses.
      */
     readonly settleAbsentAttempted?: boolean;
+    /** A delivered failure remains this lap's one terminal lifecycle event. */
+    readonly terminalFailureEmitted?: boolean;
   }): Promise<BuildReviewAdjudicationCoordinatorResult> => {
     if (options.settleAbsentAttempted) {
       const exitAttemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(input.projectRoot, input.feature);
@@ -313,7 +315,7 @@ export async function coordinateBuildReviewAdjudication(input: {
       // authority the round just settled under.
       const exitSourceIds = [...liveSourceIdsFor(exitResolved)];
       const transition = reduceBuildReviewAdjudication({ currentSourceIds: exitSourceIds, cases: settledCases, mechanical: input.mechanical });
-      if (!completedEmitted) {
+      if (!completedEmitted && !options.terminalFailureEmitted) {
         completedEmitted = true;
         await input.emit?.({
           type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
@@ -351,7 +353,15 @@ export async function coordinateBuildReviewAdjudication(input: {
    */
   const failUnlessAccepted = async (
     detail: string,
-    options: { readonly settleAbsentAttempted: boolean },
+    options: {
+      readonly settleAbsentAttempted: boolean;
+      /**
+       * A content failure can belong to one case while another source remains
+       * autonomous. A delivery-window acceptance retires that failing case;
+       * `finalize` then derives the surviving sibling's route.
+       */
+      readonly caseSourceIds?: readonly ReadonlySet<string>[];
+    },
   ): Promise<BuildReviewAdjudicationCoordinatorResult> => {
     let latest: ReadonlySet<string>;
     try { latest = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
@@ -367,8 +377,16 @@ export async function coordinateBuildReviewAdjudication(input: {
     const failed = await fail(detail);
     let afterDelivery: ReadonlySet<string>;
     try { afterDelivery = await operatorResolvedFindingIds(); } catch { return failed; }
-    if (allOperatorResolved(afterDelivery)) {
-      return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: afterDelivery, settleAbsentAttempted: options.settleAbsentAttempted });
+    const liveAfterDelivery = liveSourceIdsFor(afterDelivery);
+    const failingCaseWasAccepted = options.caseSourceIds
+      ? options.caseSourceIds.some((sourceIds) => [...sourceIds].every((sourceId) => !liveAfterDelivery.has(sourceId)))
+      : liveAfterDelivery.size === 0;
+    if (failingCaseWasAccepted) {
+      return finalize({
+        tasksByCaseId: new Map(), republishWorkOrder: false,
+        resolvedAtEntry: afterDelivery, settleAbsentAttempted: options.settleAbsentAttempted,
+        terminalFailureEmitted: true,
+      });
     }
     return failed;
   };
@@ -514,7 +532,10 @@ export async function coordinateBuildReviewAdjudication(input: {
       // The emission was awaited; the HALT decision reads authority after it.
       return failUnlessAccepted(reuse === 'halt-repeat'
         ? `semantic remediation case repeat ${caseId}`
-        : `semantic remediation case regression ${caseId}`, { settleAbsentAttempted: false });
+        : `semantic remediation case regression ${caseId}`, {
+          settleAbsentAttempted: false,
+          caseSourceIds: [new Set(record.sources.map((source) => source.sourceId))],
+        });
     }
   }
 
@@ -580,7 +601,10 @@ export async function coordinateBuildReviewAdjudication(input: {
       if (retiredAtExit) {
         return finalize({ tasksByCaseId, republishWorkOrder: false, resolvedAtEntry: resolved });
       }
-      return fail(action.reason);
+      return failUnlessAccepted(action.reason, {
+        settleAbsentAttempted: false,
+        caseSourceIds: pendingActionEffects.map((record) => new Set(record.sources.map((source) => source.sourceId))),
+      });
     }
     if (action.status === 'applied') {
       for (const record of pendingActionEffects) {
@@ -634,7 +658,10 @@ export async function coordinateBuildReviewAdjudication(input: {
         if (deferredFailureRetiredByAcceptance || retiredAtExit) {
           return finalize({ tasksByCaseId, republishWorkOrder: false, resolvedAtEntry: resolved });
         }
-        return fail(deferred.reason);
+        return failUnlessAccepted(deferred.reason, {
+          settleAbsentAttempted: false,
+          caseSourceIds: [new Set(record.sources.map((source) => source.sourceId))],
+        });
       }
       if (deferred.status === 'applied') {
         await input.emit?.({
