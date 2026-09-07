@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-07T11:49:53.996Z
 Slug: close-already-fixed-intake-issues-from-compose-for
 Class: needs-human
 Halting step: unknown
