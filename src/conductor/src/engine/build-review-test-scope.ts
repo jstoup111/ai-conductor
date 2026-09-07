@@ -57,6 +57,8 @@ export interface BuildReviewAffectedOptedInGroup {
 }
 
 export interface EstablishedBuildReviewTestTarget {
+  /** The pinned source identity prevents same-file execution from widening review authority. */
+  readonly source: BuildReviewTestSourceIdentity;
   readonly declaration: SupportedTestDeclaration;
   readonly bindings: readonly BoundCoversMarker[];
   readonly associationChanges: readonly CoversMarkerAssociationChange[];
@@ -559,7 +561,12 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
     }
 
     if (bound.length === 1) {
-      targets.push(Object.freeze({ declaration, bindings: Object.freeze(bound), associationChanges: Object.freeze([...associationChanges]) }));
+      targets.push(Object.freeze({
+        source: candidateSource,
+        declaration,
+        bindings: Object.freeze(bound),
+        associationChanges: Object.freeze([...associationChanges]),
+      }));
     }
   }
 

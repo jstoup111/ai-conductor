@@ -270,6 +270,72 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(evidence).toMatchObject({ startLine: 2, endLine: 2 });
     });
 
+    it('projects a bound changed target by content identity without admitting an unbound changed sibling in its file', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+          'diff --git a/test/widget.test.ts b/test/widget.test.ts',
+          '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+two changed assertions',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: Typed scope\n' } },
+        { match: ['show', 'base123:test/widget.test.ts'], result: { stdout: [
+          '// Covers: task:8',
+          "it('bound assertion', () => { expect(true).toBe(true); });",
+          "it('unbound sibling', () => { expect(true).toBe(true); });",
+        ].join('\n') } },
+        { match: ['show', 'head123:test/widget.test.ts'], result: { stdout: [
+          '// Covers: task:8',
+          "it('bound assertion', () => { expect(true).toBe(false); });",
+          "it('unbound sibling', () => { expect(false).toBe(true); });",
+        ].join('\n') } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+      const projection = deriveBuildReviewRubricProjections({
+        lapId: parseBuildReviewLapId('target-identity')!,
+        inputs,
+        testQuality: {
+          changedTestSelectors: ['test/widget.test.ts'],
+          unresolvedMarkers: [],
+          revertedProductionManifest: [],
+          preflight: { classification: 'approved-exception', exception: 'empty-test-set' },
+        },
+      }).testQuality;
+      const scope = projection.testScope as {
+        readonly targets: readonly {
+          readonly source: { readonly fileName: string; readonly side: string };
+          readonly declaration: {
+            readonly titleChain: readonly string[];
+            readonly occurrence: number;
+            readonly span: { readonly start: number; readonly end: number };
+          };
+        }[];
+        readonly evidence: readonly {
+          readonly source: { readonly fileName: string; readonly side: string };
+          readonly region: { readonly start: number; readonly end: number };
+          readonly content: string;
+        }[];
+      };
+
+      expect(projection.changedTestTitles).toEqual([
+        { selector: 'test/widget.test.ts', titleText: 'bound assertion', staticExtractionFallback: false },
+      ]);
+      expect(scope.targets).toHaveLength(1);
+      expect(scope.targets[0]).toMatchObject({
+        source: { fileName: 'test/widget.test.ts', side: 'head' },
+        declaration: { titleChain: ['bound assertion'], occurrence: 0 },
+      });
+      expect(scope.evidence).toContainEqual(expect.objectContaining({
+        source: scope.targets[0]!.source,
+        region: scope.targets[0]!.declaration.span,
+        content: expect.stringContaining("it('bound assertion'"),
+      }));
+      expect(buildReviewFindingReferenceContext(projection).changedTestRegions).toEqual([
+        expect.objectContaining({ path: 'test/widget.test.ts', display: 'bound assertion' }),
+      ]);
+    });
+
     it('memoizes frozen side-effect source and preserves an injected analyzer failure as a marked candidate', async () => {
       const sideEffect = '__buildReviewConsumerSideEffect';
       delete (globalThis as Record<string, unknown>)[sideEffect];
