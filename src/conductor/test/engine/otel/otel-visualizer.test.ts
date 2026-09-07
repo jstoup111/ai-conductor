@@ -331,9 +331,9 @@ describe('Task 5: visualizer identity wiring', () => {
       spanInstanceId: exported.span.resource.attributes['service.instance.id'],
       metricInstanceId: exported.metricResource.attributes['service.instance.id'],
     }).toEqual({
-      dataPoint: { step: 'build', project: 'nested-project', feature: 'nested-feature' },
-      spanInstanceId: 'nested-project/nested-feature',
-      metricInstanceId: 'nested-project/nested-feature',
+      dataPoint: { step: 'build', project: 'nested-project', worker: 'unknown', feature: 'nested-feature' },
+      spanInstanceId: 'nested-project/unknown',
+      metricInstanceId: 'nested-project/unknown',
     });
   });
 
@@ -344,9 +344,9 @@ describe('Task 5: visualizer identity wiring', () => {
     // a run-varying attribute here mints one series per run — the defect the
     // 2026-08-28 as-built review caught after `service.instance.id` was re-keyed.
     expect(Object.keys(exported.metricResource.attributes).sort()).toEqual([
-      'conductor.branch',
-      'conductor.feature',
       'conductor.project',
+      'conductor.worker',
+      'host.name',
       'service.instance.id',
       'service.name',
     ]);
@@ -360,6 +360,7 @@ describe('Task 5: visualizer identity wiring', () => {
     expect(exported.dataPoint.attributes).toEqual({
       step: 'build',
       project: 'nested-project',
+      worker: 'unknown',
       feature: 'unknown',
     });
   });
@@ -444,12 +445,12 @@ describe('Task 5: feature cost snapshot routing', () => {
 
     expect(metric(task5MetricExporter, 'conductor.feature.cost')?.dataPoints).toContainEqual(
       expect.objectContaining({ value: 3.5, attributes: {
-        project: 'task-5-project', feature: 'task-5-feature', cost_complete: true,
+        project: 'task-5-project', worker: 'unknown', feature: 'task-5-feature', cost_complete: true,
       } }),
     );
     expect(metric(task5MetricExporter, 'conductor.feature.step.cost')?.dataPoints).toContainEqual(
       expect.objectContaining({ value: 2, attributes: {
-        project: 'task-5-project', feature: 'task-5-feature', step: 'build_review', model: 'm2', source: 'rate-card',
+        project: 'task-5-project', worker: 'unknown', feature: 'task-5-feature', step: 'build_review', model: 'm2', source: 'rate-card',
       } }),
     );
     expect(metric(task5MetricExporter, 'conductor.feature.step.tokens')?.dataPoints).toEqual(
@@ -497,7 +498,7 @@ describe('Task 5: feature cost snapshot routing', () => {
 
     expect(metric(secondExporter, 'conductor.feature.cost')?.dataPoints).toContainEqual(
       expect.objectContaining({ value: 3.5, attributes: {
-        project: 'task-5-project', feature: 'task-5-feature', cost_complete: true,
+        project: 'task-5-project', worker: 'unknown', feature: 'task-5-feature', cost_complete: true,
       } }),
     );
   });
@@ -511,7 +512,7 @@ describe('Task 5: feature cost snapshot routing', () => {
 
     expect(metric(task5MetricExporter, 'conductor.feature.cost')?.dataPoints).toContainEqual(
       expect.objectContaining({ value: 0, attributes: {
-        project: 'task-5-project', feature: 'task-5-feature', cost_complete: false,
+        project: 'task-5-project', worker: 'unknown', feature: 'task-5-feature', cost_complete: false,
       } }),
     );
     expect(metric(task5MetricExporter, 'conductor.feature.step.cost')).toBeUndefined();

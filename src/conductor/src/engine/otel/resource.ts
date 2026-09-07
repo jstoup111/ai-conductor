@@ -14,6 +14,8 @@ export interface ResourceContext {
   project?: string;
   /** Resolved project identity for service.instance.id. Defaults to 'unknown'. */
   projectName?: string;
+  /** Worker identity; metrics are stable per project/worker instead of feature. */
+  workerName?: string;
   /** Git branch: a non-empty string resolves; own empty/undefined is unresolved; omission is not supplied. */
   branch?: string;
   /** Engine version: a non-empty string resolves; own empty/undefined is unresolved; omission is not supplied. */
@@ -50,11 +52,12 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
   const feature = ctx.feature ?? 'unknown';
   const project = ctx.project ?? 'unknown';
   const projectName = ctx.projectName ?? 'unknown';
+  const workerName = ctx.workerName ?? 'unknown';
   const branch = normalizeIdentity(ctx, 'branch');
 
-  const featureStable = {
+  const traceStable = {
     'service.name': SERVICE_NAME,
-    'service.instance.id': `${projectName}/${feature}`,
+    'service.instance.id': `${projectName}/${workerName}`,
     'conductor.feature': feature,
     'conductor.project': project,
     'conductor.branch': branch,
@@ -63,10 +66,17 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
   // one row per feature rather than one per run. Resolving the run id is also
   // skipped here: it writes the session-id file as a side effect, and the
   // metric scope has no use for the value.
-  if (signal === 'metrics') return resourceFromAttributes(featureStable);
+  if (signal === 'metrics') return resourceFromAttributes({
+    'service.name': SERVICE_NAME,
+    'service.instance.id': `${projectName}/${workerName}`,
+    'conductor.project': project,
+    'conductor.worker': workerName,
+    'host.name': workerName,
+  });
 
   return resourceFromAttributes({
-    ...featureStable,
+    ...traceStable,
+    'conductor.worker': workerName,
     'conductor.run.id': ctx.runId ?? resolveRunId(ctx.pipelineDir),
     'conductor.engine.version': normalizeIdentity(ctx, 'engineVersion'),
   });

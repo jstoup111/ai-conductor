@@ -198,6 +198,8 @@ export interface DaemonSweepContext {
 }
 
 export interface DaemonDeps {
+  /** Synchronous observation of each scheduler pass; consumers must not perform I/O here. */
+  onTick?: (snapshot: DaemonTickSnapshot) => void;
   /**
    * Features eligible to run: stories + plan present, not yet at .pipeline/DONE.
    *
@@ -577,6 +579,15 @@ export interface DaemonDeps {
    * @param isParked - Optional function to check if a slug is operator-parked
    */
   sweepEpisodeHalts?: (isParked?: (slug: string) => Promise<boolean>) => Promise<void>;
+}
+
+export interface DaemonTickSnapshot {
+  counts: Record<'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked', number>;
+  oldestAgeSeconds: Partial<Record<'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked', number>>;
+  slots: { busy: number; free: number };
+  inFlight: string[];
+  blocked: Record<'paused' | 'build_auth_missing' | 'gh_version' | 'episode_active', boolean>;
+  pollDurationMs: number;
 }
 
 export interface DaemonOptions {
@@ -1271,6 +1282,16 @@ export async function runDaemon(
   let staleAlreadyHandledByPreflight = false;
 
   while (true) {
+    // A zero-filled baseline means an idle daemon remains observable. The CLI's
+    // richer discovery adapter may overwrite this with its classified counts.
+    deps.onTick?.({
+      counts: { eligible: 0, waiting: 0, blocked: 0, gated: 0, parked: claims.listParked().length },
+      oldestAgeSeconds: {},
+      slots: { busy: inFlight.size, free: Math.max(0, concurrency - inFlight.size) },
+      inFlight: workers.map((worker) => worker.slug),
+      blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
+      pollDurationMs: 0,
+    });
     if (deps.shouldStop?.()) {
       log('[daemon] teardown requested — draining in-flight, no new dispatch');
       stopReason = 'signal_teardown';

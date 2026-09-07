@@ -756,6 +756,7 @@ each sample already represents the whole feature total at that moment.
 | `otel.protocol` | string | No | `http/protobuf`, `grpc` per the type | passed through unchecked; omitted when falsy |
 | `otel.headers` | mapping | No; non-empty mappings only with `exporter: otlp` and HTTP/protobuf | header name to `{ env: <non-empty variable name> }` | absent; no headers are sent |
 | `otel.project_name` | string | No | any non-blank name | project root basename |
+| `otel.worker_name` | string | No | any non-blank name | OS hostname |
 
 The failure mode is silent-disable-with-an-error-string, not a halt. An unknown exporter yields
 `{ enabled: false, error: "Unknown otel exporter '<x>'. Valid options: otlp, file." }`; `otlp` without an
@@ -794,6 +795,9 @@ export-failure handling remains in effect.
 the basename of the absolute project root for metric data-point identity; it does not affect
 `service.name` (`ai-conductor`) or the Resource `conductor.project` attribute. It is the project
 half of `service.instance.id` as well.
+
+`otel.worker_name` is trimmed before use. An absent or blank value falls back to the OS hostname,
+then `unknown` if hostname resolution fails. It is the worker half of metric `service.instance.id`.
 
 > **Known limitation.** `otel.protocol` is passed through entirely unvalidated
 > (`otel-config.ts:60`) even though the type restricts it to `'http/protobuf' | 'grpc'`
