@@ -23,8 +23,6 @@ import ts from 'typescript';
 export interface BuildReviewTestScopeInput {
   readonly base: BuildReviewTestBindingsInput;
   readonly head: BuildReviewTestBindingsInput;
-  /** Supplied by later setup/dependency analysis; marker evidence remains mandatory. */
-  readonly affectedOptedInGroups?: readonly BuildReviewConcreteAffectedGroup[];
   /** Dependency traversal may seed evidence, but this analyzer retains local Covers authority. */
   readonly dependencyEffects?: readonly BuildReviewScopeDependencyEffect[];
 }
@@ -33,11 +31,6 @@ export interface BuildReviewTestScopeInput {
 export interface BuildReviewTestSourceIdentity {
   readonly fileName: string;
   readonly side: 'base' | 'head';
-}
-
-export interface BuildReviewConcreteAffectedGroup {
-  readonly declaration: SupportedTestDeclaration;
-  readonly markers: readonly CoversMarker[];
 }
 
 /** A pinned source region retained as compact shared or unchanged-body evidence. */
@@ -559,11 +552,6 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
         associationChanges: Object.freeze([...associationChanges]),
       }));
     }
-  }
-
-  for (const group of input.affectedOptedInGroups ?? []) {
-    if (group.markers.length === 0) continue;
-    candidates.push(candidate(candidateSource, group.declaration, group.markers, [], ['affected-opted-in-group']));
   }
 
   // Dependencies discover bounded source evidence only. A plan path never

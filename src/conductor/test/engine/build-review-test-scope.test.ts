@@ -250,4 +250,18 @@ describe('build-review test scope association evidence', () => {
     expect(result.notes.filter((note) => note.kind === 'unresolved-reference')).toEqual([]);
     expect(result.candidates).toEqual([]);
   });
+
+  it('produces every affected-opted-in-group candidate from the internally derived setup analysis, with no externally supplied group input', () => {
+    const result = scope(
+      `// Covers: S2.1\ndescribe('accounts', () => {\n  beforeEach(() => { seed('base'); });\n  it('creates an account', () => { expect(true).toBe(true); });\n});`,
+      `// Covers: S2.1\ndescribe('accounts', () => {\n  beforeEach(() => { seed('changed'); });\n  it('creates an account', () => { expect(true).toBe(true); });\n});`,
+    );
+
+    const groupCandidates = result.candidates.filter((entry) => entry.reasons.includes('affected-opted-in-group'));
+    expect(groupCandidates).toHaveLength(1);
+    // The removed external `affectedOptedInGroups` rung emitted a candidate with
+    // no derived group; every surviving one is anchored to derivedAffectedGroups.
+    expect(groupCandidates.every((entry) => entry.affectedGroup !== undefined)).toBe(true);
+    expect(result.affectedGroups).toHaveLength(1);
+  });
 });
