@@ -236,4 +236,18 @@ describe('build-review test scope association evidence', () => {
       expect.objectContaining({ kind: 'unbound', declaration: expect.objectContaining({ titleChain: ['later'] }) }),
     ]));
   });
+
+  it('establishes an FR-bound changed test as a target instead of an empty scope with an unresolved note', () => {
+    const frStories = '## Story 2: Binding\n\nThis story delivers FR-4.\n\n#### Happy Path\n- Given a marker, when it binds, then it is retained\n';
+    const result = analyzeBuildReviewTestScope({
+      base: { source: { fileName: 'test/example.test.ts', bytes: Buffer.from("// Covers: FR-4\nit('fr body', () => { expect('base').toBe('base'); });\n") }, storiesText: frStories, planText: '### Task 7: Example\n' },
+      head: { source: { fileName: 'test/example.test.ts', bytes: Buffer.from("// Covers: FR-4\nit('fr body', () => { expect('head').toBe('head'); });\n") }, storiesText: frStories, planText: '### Task 7: Example\n' },
+    });
+
+    expect(result.targets).toMatchObject([
+      { declaration: { titleChain: ['fr body'] }, bindings: [{ kind: 'bound', marker: { reference: { kind: 'fr', id: 'FR-4' } } }] },
+    ]);
+    expect(result.notes.filter((note) => note.kind === 'unresolved-reference')).toEqual([]);
+    expect(result.candidates).toEqual([]);
+  });
 });
