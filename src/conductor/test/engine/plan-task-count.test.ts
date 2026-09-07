@@ -1,9 +1,10 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, expect, it } from 'vitest';
 import {
   PLAN_TASK_HARD_STOP_BOUNDARY,
   PLAN_TASK_WARNING_BOUNDARY,
   classifyPlanTaskCount,
+  validatePlanTaskCount,
 } from '../../src/engine/plan-task-count.js';
 
 function planWithTasks(taskCount: number): string {
@@ -41,5 +42,45 @@ ${planWithTasks(PLAN_TASK_HARD_STOP_BOUNDARY)}
       taskCount: 3,
       band: 'normal',
     });
+  });
+});
+
+describe('validatePlanTaskCount', () => {
+  it('reports an unauthorized hard-stop plan with no declaration', () => {
+    expect(validatePlanTaskCount(planWithTasks(PLAN_TASK_HARD_STOP_BOUNDARY))).toEqual({
+      kind: 'unauthorized',
+      taskCount: PLAN_TASK_HARD_STOP_BOUNDARY,
+    });
+  });
+
+  it('authorizes one non-empty scope-exception rationale', () => {
+    expect(validatePlanTaskCount(`${planWithTasks(PLAN_TASK_HARD_STOP_BOUNDARY)}
+
+**Scope-exception:** The tasks must land together to preserve one atomic migration.`)).toEqual({
+      kind: 'authorized',
+      rationale: 'The tasks must land together to preserve one atomic migration.',
+    });
+  });
+
+  it.each([
+    ['an empty rationale', '**Scope-exception:**'],
+    ['a whitespace-only rationale', '**Scope-exception:**   \t '],
+    ['duplicate declarations', '**Scope-exception:** First reason.\n**Scope-exception:** Second reason.'],
+  ])('reports a malformed declaration for %s', (_caseName, declaration) => {
+    expect(validatePlanTaskCount(`${planWithTasks(PLAN_TASK_HARD_STOP_BOUNDARY)}
+
+${declaration}`)).toEqual({
+      kind: 'malformed',
+      taskCount: PLAN_TASK_HARD_STOP_BOUNDARY,
+    });
+  });
+
+  it.each([
+    ['without a declaration', planWithTasks(PLAN_TASK_HARD_STOP_BOUNDARY - 1)],
+    ['with a declaration', `${planWithTasks(PLAN_TASK_HARD_STOP_BOUNDARY - 1)}
+
+**Scope-exception:** Inert below the hard-stop boundary.`],
+  ])('leaves a below-boundary plan alone %s', (_caseName, plan) => {
+    expect(validatePlanTaskCount(plan)).toBeUndefined();
   });
 });
