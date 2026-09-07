@@ -1818,7 +1818,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
 describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
   let dir: string;
   const baseBranch = 'main';
-  const gitInvocations: string[][] = [];
+  const gitInvocations: (readonly string[])[] = [];
 
   const git = async (args: string[]) => {
     const { stdout } = await execFile('git', args, { cwd: dir });
@@ -1906,7 +1906,7 @@ describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
 
   it('uses a bounded number of batched blob reads as the committed corpus grows', async () => {
     await writeCorpus(4);
-    const invocations: string[][] = [];
+    const invocations: (readonly string[])[] = [];
     const runner: GitBlobBatchRunner = async (file, args, options) => {
       if (file === 'git') {
         invocations.push(args);
@@ -1934,7 +1934,7 @@ describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
 
   it('reports absent in-subtree coherence and intake artifacts from the prefetched memo', async () => {
     await writeCorpus(3, false);
-    const invocations: string[][] = [];
+    const invocations: (readonly string[])[] = [];
     const runner: GitBlobBatchRunner = async (file, args, options) => {
       if (file === 'git') {
         invocations.push(args);
@@ -1972,6 +1972,36 @@ describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
       blocked: [],
       gated: [],
     });
+  });
+
+  it('treats a failed recursive documentation enumeration as an absent documentation tree', async () => {
+    await writeCorpus(3);
+    const blobInvocations: (readonly string[])[] = [];
+    const runner: GitBlobBatchRunner = async (file, args, options) => {
+      if (file === 'git') blobInvocations.push(args);
+      return execaCommand(file, args, options);
+    };
+    const recursiveDocsEnumeration = ['ls-tree', '-r', '-z', '--name-only', baseBranch, '--', '.docs'];
+    const enumerationAttempts: string[][] = [];
+    gitInvocations.length = 0;
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: gitTreeSource(dir, baseBranch, {
+        blobRunner: runner,
+        gitRunner: async (args) => {
+          if (args.every((arg, index) => arg === recursiveDocsEnumeration[index]) && args.length === recursiveDocsEnumeration.length) {
+            enumerationAttempts.push(args);
+            throw new Error('recursive documentation enumeration failed');
+          }
+          return recordingGitRunner(args);
+        },
+      }),
+    });
+
+    expect(result).toEqual({ items: [], waiting: [], blocked: [], gated: [] });
+    expect(enumerationAttempts).toEqual([recursiveDocsEnumeration]);
+    expect(blobInvocations).toEqual([]);
+    expect(gitInvocations.filter(([command, target]) => command === 'show' && target.startsWith(`${baseBranch}:.docs/`))).toEqual([]);
   });
 });
 
