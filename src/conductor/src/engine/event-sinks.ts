@@ -147,11 +147,13 @@ export const EVENT_SINKS = {
   ci_failed: { render: true, persist: false, audit: false, otel: false },
   attribution_divergence: { render: false, persist: true, audit: false, otel: false },
   acceptance_red: { render: false, persist: true, audit: false, otel: false },
-} satisfies Record<ConductorEvent['type'], SinkDeclaration>;
+} as const satisfies Record<ConductorEvent['type'], SinkDeclaration>;
 
 export type OtelEventType = {
   [Type in keyof typeof EVENT_SINKS]: (typeof EVENT_SINKS)[Type]['otel'] extends true ? Type : never;
 }[keyof typeof EVENT_SINKS];
+
+export type OtelTracedEventType = OtelEventType;
 
 function eventTypesFor(sink: keyof SinkDeclaration): ConductorEvent['type'][] {
   return (Object.keys(EVENT_SINKS) as ConductorEvent['type'][])
