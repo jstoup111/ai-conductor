@@ -8,7 +8,6 @@ import { describe, expect, it } from 'vitest';
 import {
   PLAN_TASK_HARD_STOP_BOUNDARY,
   PLAN_TASK_WARNING_BOUNDARY,
-  parseDocumentedPlanTaskBands,
 } from '../../src/engine/plan-task-count.js';
 
 const execFile = promisify(execFileCallback);
@@ -20,6 +19,19 @@ const HARD_STOP_LAND_PROSE =
 const SCOPE_EXCEPTION_GRAMMAR =
   '`**Scope-exception:** <non-empty rationale>` declaration on one physical line in the plan.';
 const LEGACY_MEMORY_INSTRUCTION = 'record the decision in `.memory/decisions/`';
+const DOCUMENTED_PLAN_TASK_BANDS = /^\|\s*\d+-\d+\s*\|[^\n]*\r?\n^\|\s*(\d+)-\d+\s*\|[^\n]*\r?\n^\|\s*(\d+)\+\s*\|/m;
+
+function parseDocumentedPlanTaskBands(skillText: string): {
+  warningBoundary: number;
+  hardStopBoundary: number;
+} | undefined {
+  const match = skillText.match(DOCUMENTED_PLAN_TASK_BANDS);
+  if (!match) return undefined;
+  return {
+    warningBoundary: Number(match[1]),
+    hardStopBoundary: Number(match[2]),
+  };
+}
 
 const planSkillPath = fileURLToPath(
   new URL('../../../../skills/plan/SKILL.md', import.meta.url),
