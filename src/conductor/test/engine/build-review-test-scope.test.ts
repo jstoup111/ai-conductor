@@ -153,7 +153,12 @@ describe('build-review test scope association evidence', () => {
       `it('changed', () => { expect(1).toBe(2); });\n// Covers: S2.1`,
     );
 
-    expect(result).toMatchObject({ targets: [], candidates: [] });
+    expect(result).toMatchObject({
+      changedDeclarations: [{ titleChain: ['changed'] }],
+      targets: [],
+      candidates: [],
+      notes: [{ kind: 'unbound', declaration: { titleChain: ['changed'] } }],
+    });
   });
 
   it('records unresolved and unmarked declarations as notes, while unsupported unmarked source creates no candidate or halt', () => {
@@ -194,6 +199,13 @@ describe('build-review test scope association evidence', () => {
       `// Covers: S2.1\nwithEnvironment(it)('unsupported', () => {});\nit('later', () => { expect(1).toBe(2); });`,
     );
 
-    expect(result).toMatchObject({ targets: [], candidates: [] });
+    expect(result).toMatchObject({
+      changedDeclarations: [{ titleChain: ['later'] }],
+      targets: [],
+      candidates: [],
+    });
+    expect(result.notes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'unbound', declaration: expect.objectContaining({ titleChain: ['later'] }) }),
+    ]));
   });
 });
