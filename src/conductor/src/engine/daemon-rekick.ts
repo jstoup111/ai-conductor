@@ -617,7 +617,7 @@ export async function resumeRebaseFirst(opts: {
 
   if (outcome.kind === 'conflict_halt') {
     // Re-conflict on the new base → re-park via 9.0's existing HALT path.
-    await writeHalt(opts.worktreePath, outcome.conflicts, outcome.reason, opts.events);
+    await writeHalt(opts.worktreePath, outcome.conflicts, outcome.reason, opts.events, outcome.resumeShape);
     opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase re-conflicted on advanced base — re-parked`);
     return 'halted';
   }

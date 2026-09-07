@@ -521,7 +521,13 @@ export type RebaseOutcome =
       allChangedPaths?: string[];
       featureSurface?: string[];
     }
-  | { kind: 'conflict_halt'; conflicts: string[]; reason: string };
+  | {
+      kind: 'conflict_halt';
+      conflicts: string[];
+      reason: string;
+      /** A completed rebase failed a post-resolution acceptance guard. */
+      resumeShape?: RebaseResumeShape;
+    };
 
 /** A protected-artifact refusal raised before git starts a rebase. */
 export class ProtectedArtifactSealRejection extends Error {
@@ -1188,6 +1194,7 @@ export async function resolveRebaseConflicts(
         kind: 'conflict_halt',
         conflicts,
         reason: 'rebase resolution left the branch not current with base',
+        resumeShape: 'completed-rebase',
       };
     }
 
@@ -1198,6 +1205,7 @@ export async function resolveRebaseConflicts(
         kind: 'conflict_halt',
         conflicts,
         reason: formatFeatureCommitPreservationRejection(preserved),
+        resumeShape: 'completed-rebase',
       };
     }
 

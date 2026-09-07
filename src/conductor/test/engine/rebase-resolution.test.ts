@@ -1,4 +1,4 @@
-// Covers: S1.1, S1.2, S1.3, S1.4, S1.5, S2.1, S2.2, S2.3, S2.4, task:1, task:2
+// Covers: S1.1, S1.2, S1.3, S1.4, S1.5, S2.1, S2.2, S2.3, S2.4, task:1, task:2, task:4
 /**
  * Acceptance (RED) spec for the gated rebase-conflict resolution sub-loop.
  *
@@ -122,6 +122,7 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
     expect(outcome.kind).toBe('conflict_halt');
     if (outcome.kind === 'conflict_halt') {
       expect(outcome.reason).toContain('human needed');
+      expect(outcome.resumeShape).toBeUndefined();
     }
   });
 
@@ -157,6 +158,9 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
 
     expect(calls).toBe(1); // no unsafe retry after a completed-but-bad rebase
     expect(outcome.kind).toBe('conflict_halt');
+    if (outcome.kind === 'conflict_halt') {
+      expect(outcome.resumeShape).toBe('completed-rebase');
+    }
     // branch is genuinely NOT current — base still has a commit the branch lacks
     expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).not.toBe('0');
   });
@@ -510,6 +514,32 @@ describe('engine/rebase — runGatedRebaseResolution (shared gate, real git)', (
     expect(out.kind).toBe('changed');
     expect(attempts[0]).toEqual({ index: 1, cap: 3 });
     expect(settled).toBe('succeeded');
+  });
+
+  it('Task 4: a resolver that completes the rebase by dropping feature content HALTs with completed-rebase resume shape', async () => {
+    const { git, pre } = await intoConflict();
+    let calls = 0;
+
+    const out = await runGatedRebaseResolution({
+      git,
+      projectRoot: repo,
+      outcome: pre,
+      cap: 3,
+      resolve: async (): Promise<ResolutionAttempt> => {
+        calls++;
+        await gc(['rebase', '--skip']);
+        return { resolved: true };
+      },
+    });
+
+    expect(calls).toBe(1);
+    const rebasedContent = (await g(['show', 'HEAD:a.ts'])).stdout;
+    expect(rebasedContent).toBe('mainchange\n');
+    expect(rebasedContent).not.toContain('feature');
+    expect(out).toMatchObject({
+      kind: 'conflict_halt',
+      resumeShape: 'completed-rebase',
+    });
   });
 
   it('resolver throws → caught as {resolved:false}, short-circuits to HALT, onSettled(exhausted)', async () => {
