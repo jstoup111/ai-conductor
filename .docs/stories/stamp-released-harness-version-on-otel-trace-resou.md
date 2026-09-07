@@ -60,7 +60,7 @@ As an operator, I want the metric Resource to stay exactly as it is, so that add
 
 #### Happy Path
 
-- Given a resource context supplies a released harness version, when the metric resource is built, then its attribute set is exactly the five feature-stable attributes and contains no `service.version`.
+- Given a resource context supplies a released harness version, when the metric resource is built, then its attribute set is exactly the worker-stable attribute set (`service.name`, `service.instance.id`, `conductor.project`, `conductor.worker`, `host.name`) and contains no `service.version`.
 
 #### Negative Paths
 
@@ -68,7 +68,7 @@ As an operator, I want the metric Resource to stay exactly as it is, so that add
 
 ### Done When
 
-- [ ] The metric-scope exact-key assertion supplies a release value and still lists exactly the five feature-stable keys.
+- [ ] The metric-scope exact-key assertion supplies a release value and still lists exactly the worker-stable keys (`service.name`, `service.instance.id`, `conductor.project`, `conductor.worker`, `host.name`).
 - [ ] Metric resources built under two different release values compare equal.
 
 ## Negative-category review
