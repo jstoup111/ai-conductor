@@ -35,6 +35,68 @@ import {
   readKickbackLedger,
 } from './kickback-ledger.js';
 
+/** What an automatic path decided about one worktree's live halt classification. */
+export interface HaltRetentionDecision {
+  /** The disposition actually observed; `unclassified` when it could not be read. */
+  haltClass: HaltDisposition;
+  /** True when this halt must survive the automatic path that asked. */
+  retained: boolean;
+}
+
+/**
+ * The single retention decision EVERY automatic path shares (sealed Story 3):
+ * a classified human halt — `needs-human`, `plan-gap`, and every class the
+ * sidecar reader does not recognize, which includes `kickback-cap` and
+ * `over-scope` — is retained for an operator and never auto-cleared. An
+ * unreadable sidecar fails closed to `unclassified`, which is retained.
+ *
+ * The base-advance sweep, the progress re-kick eligibility predicate, and the
+ * episode-end recovery sweep all call this rather than each deciding for
+ * themselves; a fourth automatic path must call it too.
+ */
+export async function resolveHaltRetention(
+  readHaltClass: () => Promise<HaltDisposition>,
+): Promise<HaltRetentionDecision> {
+  let haltClass: HaltDisposition = 'unclassified';
+  try {
+    haltClass = await readHaltClass();
+  } catch {
+    /* best-effort: an unreadable class is retained as unclassified */
+  }
+  return { haltClass, retained: isOperatorActionHalt(haltClass) };
+}
+
+/**
+ * Episode-end recovery (Task 20): clear exactly the halts an outage episode
+ * caused. Operator intent wins first, then the shared retention predicate — an
+ * episode that happened to coincide with a human halt must not clear it.
+ */
+export async function recoverEpisodeHalts(deps: {
+  stampedHalts: () => Promise<string[]>;
+  isOperatorParked?: (slug: string) => Promise<boolean>;
+  readHaltClass: (slug: string) => Promise<HaltDisposition>;
+  clearMarker: (slug: string) => Promise<void>;
+  log?: (message: string) => void;
+}): Promise<string[]> {
+  const cleared: string[] = [];
+  for (const slug of await deps.stampedHalts()) {
+    // Operator intent outranks automatic recovery (same rule as rekickSweep).
+    if (deps.isOperatorParked && (await deps.isOperatorParked(slug))) {
+      deps.log?.(`episode-end sweep: ${slug} operator-parked — left for a human`);
+      continue;
+    }
+    const decision = await resolveHaltRetention(() => deps.readHaltClass(slug));
+    if (decision.retained) {
+      deps.log?.(`episode-end sweep: ${slug} retained — halt disposition ${decision.haltClass}`);
+      continue;
+    }
+    await deps.clearMarker(slug);
+    deps.log?.(`episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)`);
+    cleared.push(slug);
+  }
+  return cleared;
+}
+
 /** Consume one-shot operator authorizations; this sweep only clears markers. */
 export async function consumeResumeAuthorizations(deps: {
   listHaltedWorktrees: () => Promise<string[]>;
@@ -227,13 +289,10 @@ export async function rekickSweep(
     // is reused below so mechanical/legacy clear-path logs are observable.
     let haltClass: HaltDisposition | undefined;
     if (deps.readHaltClass) {
-      haltClass = 'unclassified';
-      try {
-        haltClass = await deps.readHaltClass(slug);
-      } catch {
-        /* best-effort: an unreadable class is retained as unclassified */
-      }
-      if (isOperatorActionHalt(haltClass)) {
+      const readHaltClass = deps.readHaltClass;
+      const decision = await resolveHaltRetention(() => readHaltClass(slug));
+      haltClass = decision.haltClass;
+      if (decision.retained) {
         skipped.push(slug);
         let classReason = 'unknown';
         try {

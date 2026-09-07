@@ -154,6 +154,8 @@ import {
   abortRebase,
   clearMarker,
   consumeResumeAuthorizations,
+  recoverEpisodeHalts,
+  resolveHaltRetention,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
 import { readHaltClass } from './engine/halt-marker.js';
@@ -542,6 +544,7 @@ export function createRestartRequester(
 export function buildProgressReKickDeps(
   config: HarnessConfig | undefined,
   worktreeBase: string,
+  log?: (message: string) => void,
 ): {
   isProgressReKickEligible?: (slug: string) => Promise<boolean>;
   progressReKickDispatchCeiling: number;
@@ -558,6 +561,15 @@ export function buildProgressReKickDeps(
     progressReKickDispatchCeiling,
     isProgressReKickEligible: async (slug: string) => {
       const slugRoot = join(worktreeBase, slug);
+      // Sealed Story 3: a classified human halt is retained by EVERY automatic
+      // path, not only the base-advance sweep. Forward task progress is not
+      // authority to re-dispatch a halt only an operator can resolve, so the
+      // shared retention predicate is consulted before the progress compare.
+      const retention = await resolveHaltRetention(() => readHaltClass(slugRoot));
+      if (retention.retained) {
+        log?.(`progress re-kick: ${slug} retained — halt disposition ${retention.haltClass}`);
+        return false;
+      }
       const [lastResolvedCount, liveResolvedCount] = await Promise.all([
         readLastResolvedCount(slugRoot),
         countResolvedTasks(slugRoot),
@@ -1583,7 +1595,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // real progress-gated cross-dispatch re-kick (T8/T9/T10) into runDaemon
       // — previously constructed and fully unit-tested only at the
       // daemon.ts/pickEligible level, never reachable from this entrypoint.
-      ...buildProgressReKickDeps(config, worktreeBase),
+      ...buildProgressReKickDeps(config, worktreeBase, log),
       // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).
@@ -1618,18 +1630,16 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       onHaltWritten: async (slug, episodeCaused) =>
         episodeHaltTracker.onHaltWritten(slug, episodeCaused),
       sweepEpisodeHalts: async (isParkedDep) => {
-        const stamped = await episodeHaltTracker.getEpisodeHalts((slug) =>
-          isHalted(worktreeBase, slug),
-        );
-        for (const slug of stamped) {
-          // Operator intent outranks automatic recovery (same rule as rekickSweep).
-          if (isParkedDep && (await isParkedDep(slug))) {
-            log(`episode-end sweep: ${slug} operator-parked — left for a human`);
-            continue;
-          }
-          await clearMarker(join(worktreeBase, slug));
-          log(`episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)`);
-        }
+        await recoverEpisodeHalts({
+          stampedHalts: () =>
+            episodeHaltTracker.getEpisodeHalts((slug) => isHalted(worktreeBase, slug)),
+          isOperatorParked: isParkedDep,
+          // Sealed Story 3: share the base-advance sweep's retention predicate
+          // so an episode that coincided with a human halt cannot clear it.
+          readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)),
+          clearMarker: (slug) => clearMarker(join(worktreeBase, slug)),
+          log,
+        });
       },
       runFeature,
       featureLog: featureLogFor,
