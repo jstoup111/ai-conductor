@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-07T15:44:09.622Z
 Slug: a-halted-feature-only-re-runs-when-a-human-clears-
 Class: needs-human
 Halting step: prd_audit
