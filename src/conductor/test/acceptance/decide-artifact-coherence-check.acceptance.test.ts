@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:3, task:4
 // Acceptance specs for the DECIDE artifact coherence check
 // (jstoup111/ai-conductor#539, .docs/stories/decide-artifact-coherence-check.md,
 // PRD .docs/specs/2026-07-22-decide-artifact-coherence-check.md FR-1..14).
@@ -485,6 +485,15 @@ describe('Story 4 / FR-3 — FR coverage, product track (fr-<N>)', () => {
 
 // ── Story 5 (FR-4): every story maps to at least one plan task ─────────────────
 describe('Story 5 / FR-4 — story coverage (story-<id>)', () => {
+  it('happy: task references written as story-N bind at land without orphan or coverage gaps', async () => {
+    const plan = PLAN
+      .replace('**Story:** Story 1 (happy path — outcomes travel)', '**Story:** story-1 (happy path — outcomes travel)')
+      .replace('**Story:** Story 2 (happy path — stories map)', '**Story:** story-2 (happy path — stories map)');
+    const wt = await seedWorktree('coherence demo', { plan });
+
+    await expect(landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts())).resolves.toBeDefined();
+  });
+
   it('negative: a story cited by no task is refused with a story gap id', async () => {
     // Remove Task 2 (the only task citing Story 2).
     const plan = PLAN.replace(/### Task 2:[\s\S]*?\n\n/, '');

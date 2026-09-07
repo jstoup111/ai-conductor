@@ -33,6 +33,7 @@ import {
   parsePlanTaskBodies,
   parsePlanTaskDoneWhen,
   parsePlanTaskPaths,
+  parsePlanTaskStoryIds,
   resolveCitedPlanTaskIds,
 } from '../plan-task-parse.js';
 import {
@@ -610,11 +611,7 @@ function extractTaskStoryIds(planText: string | null): Map<string, Set<string>> 
   if (currentId) blocks.push({ id: currentId, text: currentLines.join('\n') });
 
   for (const block of blocks) {
-    const storyRefRe = /\*\*Story:\*\*\s*(?:story|epic)?\s*([A-Za-z0-9.\-]+)/gi;
-    let storyMatch: RegExpExecArray | null;
-    while ((storyMatch = storyRefRe.exec(block.text)) !== null) {
-      const storyId = storyMatch[1];
-      if (/^(n\/?a|prerequisite|none|all)$/i.test(storyId)) continue;
+    for (const storyId of parsePlanTaskStoryIds(block.text)) {
       if (!map.has(storyId)) map.set(storyId, new Set());
       map.get(storyId)!.add(block.id);
     }
@@ -853,15 +850,7 @@ function extractTypeLineRaw(blockText: string): string | null {
 
 /** Story ids (e.g. `1`, `1.2`) cited on a task block's `**Story:**` line(s). */
 function extractCitedStoryIdsFromBlock(blockText: string): string[] {
-  const ids: string[] = [];
-  const storyRefRe = /\*\*Story:\*\*[ \t]*(?:story|epic)?[ \t]*([A-Za-z0-9.\-]+)/gi;
-  let m: RegExpExecArray | null;
-  while ((m = storyRefRe.exec(blockText)) !== null) {
-    const id = m[1];
-    if (/^(n\/?a|prerequisite|none|all)$/i.test(id)) continue;
-    ids.push(id);
-  }
-  return ids;
+  return parsePlanTaskStoryIds(blockText);
 }
 
 const SUPPORTING_TYPES: ReadonlySet<string> = new Set(['infrastructure', 'refactor']);
