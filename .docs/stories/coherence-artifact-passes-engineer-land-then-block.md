@@ -59,7 +59,7 @@ line and what disagrees with what so that I can fix the artifact without reading
 ### Acceptance Criteria
 
 #### Happy Path
-- Given an artifact whose row 12 is a five-cell `criterion` row, when parsing fails, then the failure carries the line number and states the expected cell count (6) versus the actual (5)
+- Given an artifact whose row 12 is a five-cell `criterion` row, when parsing fails, then the failure carries the line number and states the expected cell count (6 or 7) versus the actual (5)
 - Given an artifact whose first table row is not followed by a separator row, when parsing fails, then the failure names the offending line and states that a separator row was expected
 - Given a data row with an unknown row class, when parsing fails, then the failure names the line and the unrecognized class token
 - Given a parse failure at dispatch, when the spec is blocked, then the `remedy` string and the skip log line include the structural detail verbatim
