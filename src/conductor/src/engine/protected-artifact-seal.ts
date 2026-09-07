@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { execa } from 'execa';
+import { readGitBlobs, type GitBlobBatchRunner } from './git-blob-batch.js';
 import { resolveDocsAllowlist } from './phase-marker.js';
 
 /**
@@ -141,6 +142,8 @@ export interface CreateProtectedArtifactSealOptions {
   projectRoot: string;
   /** Approved commit whose DECIDE artifacts must remain authoritative. */
   baselineCommit: string;
+  /** Test seam for observing the bounded committed-blob read. */
+  runner?: GitBlobBatchRunner;
 }
 
 export interface CreateScopedProtectedArtifactSealOptions {
@@ -563,15 +566,29 @@ async function contentAtCommit(
   return result.stdout;
 }
 
+async function protectedArtifactBlobsAtCommit(
+  projectRoot: string,
+  commit: string,
+  runner?: GitBlobBatchRunner,
+): Promise<{ paths: string[]; blobs: Map<string, Buffer> }> {
+  const paths = await committedProtectedPaths(projectRoot, commit);
+  const blobs = await readGitBlobs(projectRoot, commit, paths, { runner });
+  const missingPath = paths.find((path) => !blobs.has(path));
+  if (missingPath !== undefined) {
+    throw new Error(`Protected artifact is unreadable at ${commit}: ${missingPath}`);
+  }
+  return { paths, blobs };
+}
+
 async function protectedArtifactsAtCommit(
   projectRoot: string,
   commit: string,
 ): Promise<Map<string, Buffer>> {
-  const paths = await committedProtectedPaths(projectRoot, commit);
-  return new Map(await Promise.all(paths.map(async (path) => [
+  const { paths, blobs } = await protectedArtifactBlobsAtCommit(projectRoot, commit);
+  return new Map(paths.map((path) => [
     path,
-    Buffer.from(await contentAtCommit(projectRoot, commit, path)),
-  ] as const)));
+    Buffer.from(blobs.get(path)!.toString('utf8')),
+  ]));
 }
 
 async function workspaceProtectedArtifacts(
@@ -704,13 +721,15 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
 }
 
 async function createSeal(options: CreateProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
-  const paths = await committedProtectedPaths(options.projectRoot, options.baselineCommit);
-  const protectedArtifacts = await Promise.all(
-    paths.map(async (path) => ({
-      path,
-      fingerprint: fingerprint(await contentAtCommit(options.projectRoot, options.baselineCommit, path)),
-    })),
+  const { paths, blobs } = await protectedArtifactBlobsAtCommit(
+    options.projectRoot,
+    options.baselineCommit,
+    options.runner,
   );
+  const protectedArtifacts = paths.map((path) => ({
+    path,
+    fingerprint: fingerprint(blobs.get(path)!.toString('utf8')),
+  }));
   return { version: 2, baselineCommit: options.baselineCommit, protectedArtifacts, rebaselines: [] };
 }
 
