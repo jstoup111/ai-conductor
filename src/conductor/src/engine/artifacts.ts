@@ -673,10 +673,10 @@ export async function resolveArtifactFiles(
  * Resolution order:
  * 1. `.pipeline/engine-state.json` `activePlanPath` — authoritative when the
  *    plan step recorded it (interactive runs, Task 14 of #302).
- * 2. The plan whose stem equals `featureDesc` — the daemon convention
+ * 2. A single plan file on disk — unambiguous regardless of name.
+ * 3. The plan whose stem equals `featureDesc` — the daemon convention
  *    (engineer/land writes `.docs/plans/<slug>.md`, and daemon-cli seeds
  *    `feature_desc` = slug).
- * 3. A single plan file on disk — unambiguous regardless of name.
  * 4. Otherwise `undefined` — multiple plans, none provably ours: never guess.
  *    Callers fail closed (the build gate reports an actionable reason rather
  *    than evaluating someone else's task list).
@@ -728,16 +728,26 @@ export async function readAppendedRemediationTaskIds(projectRoot: string): Promi
   return [];
 }
 
-export async function resolveFeaturePlanPath(
+export type FeaturePlanSelection =
+  | { kind: 'resolved'; path: string }
+  | { kind: 'unresolvable'; candidates: string[] }
+  | { kind: 'empty' };
+
+/**
+ * Select this feature's plan while preserving why no plan path can be returned.
+ * The resolution rungs intentionally match {@link resolveFeaturePlanPath}'s
+ * legacy behavior: recorded path, singleton corpus, then feature stem.
+ */
+export async function selectFeaturePlan(
   projectRoot: string,
   featureDesc: string | undefined,
-): Promise<string | undefined> {
+): Promise<FeaturePlanSelection> {
   try {
     const raw = await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf-8');
     const engineState = JSON.parse(raw) as Record<string, unknown>;
     if (typeof engineState.activePlanPath === 'string' && engineState.activePlanPath.trim()) {
       const recorded = engineState.activePlanPath;
-      return recorded.startsWith('/') ? recorded : join(projectRoot, recorded);
+      return { kind: 'resolved', path: recorded.startsWith('/') ? recorded : join(projectRoot, recorded) };
     }
   } catch {
     // No engine state (daemon-preseeded runs never execute the plan step) —
@@ -745,14 +755,22 @@ export async function resolveFeaturePlanPath(
   }
 
   const planFiles = await findArtifactFiles(projectRoot, 'plan');
-  if (planFiles.length === 0) return undefined;
-  if (planFiles.length === 1) return planFiles[0];
+  if (planFiles.length === 0) return { kind: 'empty' };
+  if (planFiles.length === 1) return { kind: 'resolved', path: planFiles[0] };
 
   if (featureDesc) {
     const bySlug = planFiles.find((p) => planStem(p) === featureDesc);
-    if (bySlug) return bySlug;
+    if (bySlug) return { kind: 'resolved', path: bySlug };
   }
-  return undefined;
+  return { kind: 'unresolvable', candidates: [...planFiles].sort() };
+}
+
+export async function resolveFeaturePlanPath(
+  projectRoot: string,
+  featureDesc: string | undefined,
+): Promise<string | undefined> {
+  const selection = await selectFeaturePlan(projectRoot, featureDesc);
+  return selection.kind === 'resolved' ? selection.path : undefined;
 }
 
 /**
