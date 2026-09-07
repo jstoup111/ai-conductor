@@ -145,6 +145,7 @@ import { isOperatorParked, reconcileStrandedParkMarkers, writeAutoPark } from '.
 import { amendDeferredAutoParkHaltAtWorktree } from './engine/auto-park-halt.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { getStepStatus, readState } from './engine/state.js';
+import { supersedeHaltRecord } from './engine/halt-record.js';
 import {
   createStepStatusWriteRefusalDiagnostics,
   resolveConductorStateStore,
@@ -175,12 +176,13 @@ import {
   hasRebaseInProgress,
   abortRebase,
   clearMarker,
+  clearHaltForResume,
   consumeResumeAuthorizations,
   recoverEpisodeHalts,
   resolveHaltRetention,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
-import { isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
+import { HALT_CLASS_MARKER, isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import { enrollWatch, sweepMergeableLabels, type WatchEntry } from './engine/mergeable-sweep.js';
 import type { PrMergeState } from './engine/pr-labels.js';
@@ -2165,7 +2167,34 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           listHaltedWorktrees: () => listHaltedWorktrees(worktreeBase),
           worktreePath: (slug) => join(worktreeBase, slug),
           isOperatorParked: (slug) => isOperatorParked(projectRoot, slug),
-          clearMarker: (slug) => clearMarker(join(worktreeBase, slug)),
+          // Same content-aware dedup the base-advance sweep uses: a shipped
+          // feature has nothing to resume, so its authorization is left alone.
+          isProcessed: makeIsProcessed(processedDir, gitTreeSource(projectRoot, baseBranch)),
+          readLiveHaltClass: async (slug) => {
+            try {
+              return await readFile(join(worktreeBase, slug, HALT_CLASS_MARKER), 'utf-8');
+            } catch {
+              return '';
+            }
+          },
+          // adr-2026-08-29 D6: the canonical marker/presentation lifecycle plus
+          // committed-record resolution, as ONE operation reporting `partial`.
+          clearHalt: (slug) =>
+            clearHaltForResume({
+              worktreePath: join(worktreeBase, slug),
+              slug,
+              clearMarker,
+              resolvePrUrl: async (feature) => {
+                const state = await readState(join(worktreeBase, feature));
+                return state.ok ? state.value.pr_url : undefined;
+              },
+              cleanupPresentation: (prUrl) =>
+                cleanupHaltPresentation(ownerGh, projectRoot, prUrl, log),
+              resolveCommittedRecord: async (worktreePath, feature) => {
+                await supersedeHaltRecord(worktreePath, feature, 'kickback-budget');
+              },
+              log,
+            }),
           // Feature events are installed by the normal per-feature runner;
           // this daemon boundary intentionally emits only after durable consume.
           emit: (event) => events.emit(event),
