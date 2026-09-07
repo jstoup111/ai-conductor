@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-07T14:25:46.753Z
 Slug: operator-configurable-confidence-floor-for-acting-
 Class: needs-human
 Halting step: prd_audit
