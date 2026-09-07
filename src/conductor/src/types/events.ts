@@ -586,12 +586,17 @@ export type ConductorEvent =
         | 'head-unresolvable'
         | 'base-tip-unresolved'
         | 'workspace-differs-from-head'
-        | 'head-differs-from-base';
+        | 'head-differs-from-base'
+        | 'engine-append-unvouched';
       path?: string;
       /** Merge-base used to classify a named path, when provenance resolved far enough to obtain one. */
       mergeBase?: string;
       /** Whether HEAD changed the named path since `mergeBase`; degraded probes stay explicit. */
       headTouchedPath?: boolean | 'indeterminate';
+      /** Why the operator-reseal exit could not approve this named path. */
+      operatorResealExit?: 'not-resealed' | 'sealed-content-mismatch';
+      /** Why the engine-remediation-append exit could not approve this named path. */
+      engineAppendExit?: 'not-present' | 'unvouched';
     }
   | {
       /** An interactive operator resealed the enumerated protected artifacts. */

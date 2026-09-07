@@ -844,7 +844,13 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       sameHistoryAncestor: { permitted: false, condition: 'same-history-ancestor' },
       baseTipUnresolved: { permitted: false, condition: 'base-tip-unresolved' },
       workspaceDiffersFromHead: { permitted: false, condition: 'workspace-differs-from-head', path },
-      headDiffersFromBase: { permitted: false, condition: 'head-differs-from-base', path },
+      headDiffersFromBase: {
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'not-present',
+      },
       headDiffersFromBaseNotAuthored: { permitted: true, paths: [], excludedBaseAheadPaths: [path] },
       missingWorkspaceArtifactDiffersFromHead: { permitted: false, condition: 'workspace-differs-from-head', path },
     });
@@ -902,6 +908,8 @@ describe('evaluateProtectedArtifactSealRotation', () => {
         permitted: false,
         condition: 'head-differs-from-base',
         path,
+        operatorResealExit: 'sealed-content-mismatch',
+        engineAppendExit: 'not-present',
       });
     });
 
@@ -912,6 +920,8 @@ describe('evaluateProtectedArtifactSealRotation', () => {
         permitted: false,
         condition: 'head-differs-from-base',
         path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'not-present',
       });
     });
   });
@@ -926,7 +936,11 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       rebaselines: [],
     };
 
-    function evaluate(headBytes: Buffer, appendedRemediationTaskIds?: readonly string[]) {
+    function evaluate(
+      headBytes: Buffer,
+      appendedRemediationTaskIds?: readonly string[],
+      sealedArtifacts?: ReadonlyMap<string, Buffer>,
+    ) {
       return evaluateProtectedArtifactSealRotation({
         seal,
         baselineAncestry: 'non-ancestor',
@@ -935,8 +949,62 @@ describe('evaluateProtectedArtifactSealRotation', () => {
         baseTipArtifacts: new Map([[path, baseBytes]]),
         authorshipByPath: new Map([[path, 'authored']]),
         ...(appendedRemediationTaskIds ? { appendedRemediationTaskIds } : {}),
+        ...(sealedArtifacts ? { sealedArtifacts } : {}),
       });
     }
+
+    it('permits an authored plan appended to its fingerprint-verified sealed baseline', () => {
+      const sealedBytes = Buffer.from('# Resealed Plan\n\n### Task 1: ship it\n');
+      const head = Buffer.concat([sealedBytes, Buffer.from(
+        '### Task rem-scope-1: remove the unauthorized change\n',
+      )]);
+      const sealed = {
+        ...seal,
+        protectedArtifacts: [{
+          path,
+          fingerprint: `sha256:${createHash('sha256').update(sealedBytes).digest('hex')}`,
+        }],
+      };
+
+      expect(evaluateProtectedArtifactSealRotation({
+        seal: sealed,
+        baselineAncestry: 'non-ancestor',
+        workspaceArtifacts: new Map([[path, head]]),
+        headArtifacts: new Map([[path, head]]),
+        baseTipArtifacts: new Map([[path, baseBytes]]),
+        sealedArtifacts: new Map([[path, sealedBytes]]),
+        authorshipByPath: new Map([[path, 'authored']]),
+        appendedRemediationTaskIds: ['rem-scope-1'],
+      })).toEqual({
+        permitted: true,
+        paths: [path],
+        includedEngineAppendedPaths: [path],
+      });
+    });
+
+    it('discards a sealed anchor whose bytes do not match the recorded fingerprint', () => {
+      const head = Buffer.from('# Resealed Plan\n### Task rem-scope-1: repair\n');
+      const mismatched = new Map([[path, Buffer.from('# different sealed plan\n')]]);
+      const sealed = {
+        ...seal,
+        protectedArtifacts: [{
+          path,
+          fingerprint: `sha256:${createHash('sha256').update('# expected sealed plan\n').digest('hex')}`,
+        }],
+      };
+      const input = {
+        seal: sealed,
+        baselineAncestry: 'non-ancestor' as const,
+        workspaceArtifacts: new Map([[path, head]]),
+        headArtifacts: new Map([[path, head]]),
+        baseTipArtifacts: new Map([[path, baseBytes]]),
+        authorshipByPath: new Map([[path, 'authored' as const]]),
+        appendedRemediationTaskIds: ['rem-scope-1'],
+      };
+
+      expect(evaluateProtectedArtifactSealRotation({ ...input, sealedArtifacts: mismatched }))
+        .toEqual(evaluateProtectedArtifactSealRotation(input));
+    });
 
     it('permits an authored plan whose divergence is exactly the recorded appended task blocks', () => {
       const head = Buffer.concat([baseBytes, Buffer.from(
@@ -960,8 +1028,10 @@ describe('evaluateProtectedArtifactSealRotation', () => {
 
       expect(evaluate(head, ['rem-scope-1'])).toEqual({
         permitted: false,
-        condition: 'head-differs-from-base',
+        condition: 'engine-append-unvouched',
         path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'unvouched',
       });
     });
 
@@ -970,8 +1040,10 @@ describe('evaluateProtectedArtifactSealRotation', () => {
 
       expect(evaluate(head, ['rem-scope-1'])).toEqual({
         permitted: false,
-        condition: 'head-differs-from-base',
+        condition: 'engine-append-unvouched',
         path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'unvouched',
       });
     });
 
@@ -982,8 +1054,20 @@ describe('evaluateProtectedArtifactSealRotation', () => {
         omitted: evaluate(head),
         empty: evaluate(head, []),
       }).toEqual({
-        omitted: { permitted: false, condition: 'head-differs-from-base', path },
-        empty: { permitted: false, condition: 'head-differs-from-base', path },
+        omitted: {
+          permitted: false,
+          condition: 'head-differs-from-base',
+          path,
+          operatorResealExit: 'not-resealed',
+          engineAppendExit: 'not-present',
+        },
+        empty: {
+          permitted: false,
+          condition: 'head-differs-from-base',
+          path,
+          operatorResealExit: 'not-resealed',
+          engineAppendExit: 'not-present',
+        },
       });
     });
 
@@ -994,8 +1078,10 @@ describe('evaluateProtectedArtifactSealRotation', () => {
 
       expect(evaluate(head, ['rem-scope-1'])).toEqual({
         permitted: false,
-        condition: 'head-differs-from-base',
+        condition: 'engine-append-unvouched',
         path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'unvouched',
       });
     });
 
@@ -1006,8 +1092,10 @@ describe('evaluateProtectedArtifactSealRotation', () => {
 
       expect(evaluate(head, ['rem-scope-1'])).toEqual({
         permitted: false,
-        condition: 'head-differs-from-base',
+        condition: 'engine-append-unvouched',
         path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'unvouched',
       });
     });
 
@@ -1016,10 +1104,12 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       const repo = await makeRepo({ [planPath]: 'approved plan\n' });
       const sharedCommit = await git(repo, ['rev-parse', 'HEAD']);
       await git(repo, ['checkout', '-q', '-b', 'sealed-history', sharedCommit]);
-      await git(repo, ['commit', '--allow-empty', '-q', '-m', 'sealed baseline lineage']);
+      await writeProjectFile(repo, planPath, 'operator-resealed plan\n');
+      await git(repo, ['add', planPath]);
+      await git(repo, ['commit', '-q', '-m', 'operator reseals plan']);
       const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
       await git(repo, ['checkout', '-q', '-b', 'feature', sharedCommit]);
-      await writeProjectFile(repo, planPath, 'approved plan\n### Task rem-scope-1: remove the unauthorized change\n');
+      await writeProjectFile(repo, planPath, 'operator-resealed plan\n### Task rem-scope-1: remove the unauthorized change\n');
       await git(repo, ['add', planPath]);
       await git(repo, ['commit', '-q', '-m', 'chore(plan): record appended remediation tasks']);
       await mkdir(join(repo, '.pipeline'), { recursive: true });
@@ -1035,7 +1125,7 @@ describe('evaluateProtectedArtifactSealRotation', () => {
           baselineCommit,
           protectedArtifacts: [{
             path: planPath,
-            fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+            fingerprint: `sha256:${createHash('sha256').update('operator-resealed plan\n').digest('hex')}`,
           }],
           rebaselines: [],
         },
@@ -1182,9 +1272,27 @@ describe('evaluateProtectedArtifactSealRotation', () => {
         ]),
       }),
     }).toEqual({
-      equalContent: { permitted: false, condition: 'head-differs-from-base', path: authoredPath },
-      deletion: { permitted: false, condition: 'head-differs-from-base', path: authoredPath },
-      mixed: { permitted: false, condition: 'head-differs-from-base', path: authoredPath },
+      equalContent: {
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path: authoredPath,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'not-present',
+      },
+      deletion: {
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path: authoredPath,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'not-present',
+      },
+      mixed: {
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path: authoredPath,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'not-present',
+      },
     });
   });
 
@@ -2437,8 +2545,44 @@ describe('verifyProtectedArtifactSeal', () => {
           path,
           mergeBase,
           headTouchedPath: true,
+          operatorResealExit: 'not-resealed',
+          engineAppendExit: 'not-present',
         }],
       });
+    });
+
+    it('names an unvouched recorded engine append without instructing a revert', async () => {
+      const path = '.docs/plans/other-feature.md';
+      const { repo } = await makeRewrittenRepo({
+        initial: { [path]: 'approved plan\n' },
+        baseAdvance: { 'src/base.ts': 'base work before rebase\n' },
+        featureCommit: { [path]: 'feature rewrite\n### Task rem-scope-1: repair\n' },
+      });
+      await writeFile(
+        join(repo, '.pipeline/engine-state.json'),
+        `${JSON.stringify({ appendedRemediationTaskIds: ['rem-scope-1'] })}\n`,
+      );
+      const events: ProtectedArtifactSealRebaselineEvent[] = [];
+
+      const verdict = await verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+        onRebaseline: (event) => { events.push(event); },
+      });
+
+      expect(verdict).toEqual({
+        ok: false,
+        reason: `Unvouched engine remediation append: ${path}\nOperator-reseal exit: not-resealed; engine-append exit: unvouched.`,
+      });
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'protected_artifact_rebaseline_refused',
+        condition: 'feature-authored:engine-append-unvouched',
+        verdictCondition: 'engine-append-unvouched',
+        path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'unvouched',
+      }));
     });
 
     it('refuses the incident-shaped rotation when only the workspace diverges from HEAD', async () => {
@@ -2482,6 +2626,8 @@ describe('verifyProtectedArtifactSeal', () => {
           path,
           mergeBase: await git(repo, ['merge-base', 'main', 'HEAD']),
           headTouchedPath: false,
+          operatorResealExit: 'not-resealed',
+          engineAppendExit: 'not-present',
         }],
       });
     });
@@ -2770,6 +2916,8 @@ describe('verifyProtectedArtifactSeal', () => {
           path,
           mergeBase,
           headTouchedPath: true,
+          operatorResealExit: 'not-resealed',
+          engineAppendExit: 'not-present',
         }],
       });
     });
@@ -2801,6 +2949,8 @@ describe('verifyProtectedArtifactSeal', () => {
         path,
         mergeBase,
         headTouchedPath: 'indeterminate',
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'not-present',
       });
     });
 
