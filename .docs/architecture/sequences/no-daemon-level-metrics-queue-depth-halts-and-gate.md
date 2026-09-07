@@ -12,9 +12,9 @@ sequenceDiagram
     participant D as daemon loop
     participant W as wireDaemonOtel
     participant M as shared MeterProvider + MetricsRecorder
-    participant L as DaemonMetricsListener
+    participant L as MetricsListener (records every metric)
     participant B as beginFeatureRun
-    participant V as OtelVisualizer (per dispatch)
+    participant V as OtelVisualizer (per dispatch, spans only)
     participant C as Conductor (feature run)
     participant O as OTLP endpoint
 
@@ -35,17 +35,17 @@ sequenceDiagram
 
     D->>L: feature_dispatch_started («slug», kind=initial)
     L->>M: feature.dispatches«feature,kind»
-    D->>B: beginFeatureRun(worktree «slug», item, recorder=M)
-    B->>V: wire spans-only visualizer with shared recorder
+    D->>B: beginFeatureRun(worktree «slug», item)
+    B->>V: wire spans-only visualizer (metrics false, no MeterProvider)
     D->>C: runConductorInWorktree(...)
-    C-->>V: step / gate / cost events on featureEvents
-    V->>M: step.duration, step.retries, run.outcomes «feature»
-    C-->>V: gate_verdict, kickback (forwarded to rootEvents)
-    V-->>L: forwarded gate_verdict / kickback
+    C-->>V: step / gate / cost events on featureEvents (spans)
+    C-->>L: every feature event forwarded to rootEvents, tagged with «slug»
+    L->>M: step.duration, step.retries, step.dispatches, cost gauges «feature»
     L->>M: gate.verdicts«feature,step,outcome», gate.kickbacks«feature,from,to»
-    C-->>V: loop_halt + halt_record_written (forwarded)
+    C-->>L: loop_halt (forwarded) and the daemon reads the HALT.class sidecar
     L->>M: feature.halts«feature,haltClass,step» and run.outcomes«halted» (incremented)
-    D->>B: stop() → V flushes spans, M keeps running
+    D->>L: feature_dispatch_ended («slug», outcome=halted)
+    D->>B: stop() → V flushes spans, M is force-flushed and keeps running
 
     Note over D,M: operator clears HALT and the daemon re-dispatches in the SAME process
     D->>L: feature_dispatch_started («slug», kind=rekick)
@@ -65,6 +65,9 @@ sequenceDiagram
   nothing is dispatched.
 - The re-dispatch after a halt lands on the **same** `MetricsRecorder`, so per-feature counters
   (`run.outcomes`, `feature.halts`, `feature.dispatches`) accumulate instead of restarting at zero.
+- The listener only ever sees events. A dispatch that ran in a process that has since exited — or,
+  later, on a remote worker — contributes exactly the same way, because nothing it recorded lived
+  in that process.
 - A daemon restart still resets counters — that is ordinary Prometheus counter semantics handled
   by `increase()`/`rate()`; the defect being fixed is a reset on every dispatch.
 
@@ -73,3 +76,4 @@ sequenceDiagram
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-09-06 | Initial generation | DECIDE for #1937 |
+| 2026-09-06 | Listener records every metric; visualizer spans-only | Operator-directed revision for remote/ephemeral workers |

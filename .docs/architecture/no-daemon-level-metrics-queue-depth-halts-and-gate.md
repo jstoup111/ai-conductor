@@ -16,20 +16,20 @@ graph TD
         rbus["daemon bus (root events)"]
         dwire["wireDaemonOtel(config, ctx, rootEvents) — NEW"]
         meter["MeterProvider + MetricsRecorder — NEW owner<br/>resource: service.instance.id = «project»/«worker»<br/>data-point attrs: project, worker (+ feature on per-feature instruments)"]
-        dlistener["DaemonMetricsListener — NEW<br/>daemon_backlog_snapshot → daemon.backlog / oldest_age / slots / inflight / blocked_reason / poll.duration<br/>feature_dispatch_started → feature.dispatches«kind»<br/>loop_halt + halt_record_written → feature.halts«haltClass,step»<br/>feature_shipped → feature.shipped + feature.duration.wall/active<br/>gate_verdict / kickback / build_stall → gate.verdicts / gate.kickbacks / daemon.stalls<br/>heartbeat → daemon.up"]
+        dlistener["MetricsListener — NEW, the ONLY metric recorder<br/>step_started/completed/failed/retry → step.duration / step.retries / step.dispatches<br/>feature_cost_snapshot / feature_usage_total / pipeline_closeout → cost + closeout gauges<br/>feature_complete / loop_halt / feature_dispatch_ended → run.outcomes<br/>daemon_backlog_snapshot → daemon.backlog / oldest_age / slots / inflight / blocked_reason / poll.duration / up<br/>feature_dispatch_started → feature.dispatches«kind»<br/>loop_halt + sidecar class → feature.halts«haltClass,step»<br/>feature_shipped → feature.shipped + feature.duration.wall/active<br/>gate_verdict / kickback / build_stall → gate.verdicts / gate.kickbacks / daemon.stalls"]
         bfr["beginFeatureRun(worktree, item)"]
         fbus["per-feature bus (persistence.events)"]
-        fwd["forward selected feature events → daemon bus — NEW<br/>(gate_verdict, kickback, loop_halt, halt_record_written, build_stall, feature_complete)"]
-        vis["OtelVisualizer (per dispatch)<br/>spans only: own TracerProvider<br/>metrics: records onto the SHARED recorder (no own MeterProvider)"]
+        fwd["ForwardingEventEmitter (existing) forwards EVERY feature event<br/>NEW: tagged with feature slug (forwardedFeatureOf)"]
+        vis["OtelVisualizer (per dispatch)<br/>SPANS ONLY: own TracerProvider<br/>metrics: false — constructs no MeterProvider"]
         dpers["daemon EventPersister — NEW<br/>«mainRoot»/.daemon/events.jsonl (same schema)<br/>skips forwardedFromFeature-tagged events"]
     end
 
     subgraph spine["Event spine (extended)"]
-        ev["ConductorEvent union + EVENT_SINKS<br/>NEW variants: daemon_backlog_snapshot,<br/>feature_dispatch_started, feature_shipped"]
+        ev["ConductorEvent union + EVENT_SINKS<br/>NEW variants: daemon_backlog_snapshot, feature_dispatch_started,<br/>feature_dispatch_ended, feature_shipped"]
     end
 
     subgraph interactive["Interactive entry (index.ts) — unchanged"]
-        ivis["OtelVisualizer with its own MeterProvider<br/>(single run, single process)"]
+        ivis["OtelVisualizer (spans) + MetricsListener on the run bus<br/>with an interactive-owned MeterProvider (single run, single process)"]
     end
 
     otlp["OTLP endpoint / file exporter"]
@@ -45,7 +45,6 @@ graph TD
     fbus --> vis
     fbus --> fwd
     fwd --> rbus
-    vis -->|"step.duration, step.retries, step.dispatches,<br/>feature.cost/step.cost/step.tokens, closeout.duration, run.outcomes"| meter
     meter -->|"PeriodicExportingMetricReader (60 s)"| otlp
     vis -->|"spans (BatchSpanProcessor)"| otlp
     ivis --> otlp
@@ -58,18 +57,21 @@ graph TD
 - **NEW owner** — the daemon constructs the one `MeterProvider`; it lives for the daemon's life, so
   every counter recorded on it is monotonic across re-dispatches. This is what fixes
   `conductor.run.outcomes` (stuck at 1.0) and `conductor.step.retries` (resets per dispatch).
+- **Event-fed** — the `MetricsListener` derives every instrument from typed events on the bus it is
+  attached to. Nothing about recording depends on which process ran the step, so a future remote
+  worker only has to ship its event stream to the dispatcher; no metric code changes.
 - **Per-dispatch visualizer** — still one per feature dispatch on the feature bus, still owns the
   `TracerProvider` (spans are per-run by nature, `conductor.run.id` stays on the trace resource).
-  It receives the shared `MetricsRecorder` handle from `beginFeatureRun` instead of building its
-  own meter.
-- **Forwarding** — the per-feature events the daemon-level listener needs are re-emitted onto the
-  daemon bus (one listener per bus, adr-014 D1). Forwarded events are not re-persisted; the
-  per-feature `events.jsonl` remains their ledger.
+  Under the daemon it is spans-only and builds no meter.
+- **Forwarding** — every per-feature event is already re-emitted onto the daemon bus by the
+  existing forwarding emitter; the copy is now tagged with its feature slug. Forwarded events are
+  not re-persisted; the per-feature `events.jsonl` remains their ledger.
 - **Identity** — `service.instance.id = «project»/«worker»`; `worker` defaults to hostname and is
   overridable by `otel.worker_name`. Backlog gauges report the same value from every worker of a
   project (query with `max by (project)`); slots/inflight are per-worker (`sum`).
-- **Interactive path** — no daemon, no shared meter; the existing single-visualizer wiring is
-  byte-for-byte unchanged in behavior.
+- **Interactive path** — no daemon; the visualizer (spans) and a `MetricsListener` with an
+  interactive-owned meter attach to the run bus, so the recording code path is the same one and
+  the exported instrument set is byte-identical to today.
 - Disabled/absent OTel config → `wireDaemonOtel` returns null and `beginFeatureRun` passes no
   recorder; daemon behavior unchanged.
 
@@ -79,3 +81,4 @@ graph TD
 |------|--------|--------|
 | 2026-09-06 | Initial generation | DECIDE for #1937 (daemon-level metrics) |
 | 2026-09-06 | Added daemon EventPersister node | Plan update (architecture-review condition C6) |
+| 2026-09-06 | Listener records every metric; visualizer spans-only | Operator-directed revision for remote/ephemeral workers |

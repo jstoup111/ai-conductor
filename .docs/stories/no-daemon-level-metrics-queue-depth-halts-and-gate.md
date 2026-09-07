@@ -16,17 +16,19 @@ As an operator, I want a feature's halt and retry counts to keep counting across
 #### Happy Path
 - Given OTel is enabled and one daemon process dispatches feature S, which halts, is re-kicked, and halts again, when metrics are exported after the second dispatch, then conductor.run.outcomes{feature=S, outcome=halted} reads 2 and never reads 1 in between
 - Given one daemon process dispatches feature S twice and each dispatch retries the build step once, when metrics are exported after the second dispatch, then conductor.step.retries{feature=S, step=build} reads 2, monotonic across both dispatches
-- Given OTel is enabled, when the daemon starts, then exactly one MeterProvider exists for the daemon's lifetime and both dispatches of Story 1's feature record onto it
+- Given OTel is enabled, when the daemon starts, then exactly one MeterProvider exists for the daemon's lifetime and both dispatches of Story 1's feature are recorded onto it by the daemon's metrics listener from their forwarded events
+- Given a dispatch runs in a process that exits at dispatch end, when its forwarded step and terminal events reach the daemon bus, then the same per-feature counters continue from their prior values, because no metric state lived in the exited process
 
 #### Negative Paths
-- Given feature A's dispatch stops while feature B is still running under the same daemon, when A's per-dispatch visualizer stops, then the shared meter is force-flushed (so A's final data points are exported before the daemon could die) but not shut down, and B's next step still exports conductor.step.duration{feature=B}
+- Given feature A's dispatch stops while feature B is still running under the same daemon, when A's per-dispatch visualizer stops, then the daemon meter is force-flushed (so A's final data points are exported before the daemon could die) but not shut down, the visualizer holds no meter of its own to shut down, and B's next step still exports conductor.step.duration{feature=B}
 - Given the daemon process itself restarts, when metrics resume, then counters restart from zero exactly once (an ordinary process restart) and the exported series carries the same identity so backend rate functions treat it as a counter reset, not a new series
 - Given OTel is disabled or the otel config block is absent, when the daemon starts and dispatches a feature, then no MeterProvider is constructed, no recorder is passed to the dispatch, and daemon behavior is byte-for-byte unchanged from today
 
 ### Done When
 - [ ] An acceptance test drives two sequential dispatches of one feature under one daemon with an in-memory exporter and asserts conductor.run.outcomes{outcome=halted} = 2 and conductor.step.retries monotonic, with no duplicate-instrument warning
 - [ ] An acceptance test stops feature A's visualizer while feature B is mid-run and asserts B's later data points still export
-- [ ] The daemon start path constructs the MeterProvider once and the per-dispatch visualizer calls forceFlush() but never shutdown() on a provider it did not construct (unit test on the ownership flag)
+- [ ] The daemon start path constructs the MeterProvider once and the per-dispatch visualizer constructs no MeterProvider under the daemon (unit test on the spans-only mode)
+- [ ] An acceptance test runs a dispatch through a child-process-shaped fake that exits after emitting its events and asserts the feature's counters continue from their prior values
 
 ## Story 2: Metric identity is project plus worker, with feature on data points only
 
@@ -149,18 +151,20 @@ As a maintainer, I want the new daemon signals to be ordinary typed events that 
 
 #### Happy Path
 - Given the daemon completes a discovery tick, when the snapshot is emitted, then a daemon_backlog_snapshot event is appended to the daemon ledger at .daemon/events.jsonl in the same schema as .pipeline/events.jsonl
-- Given the daemon dispatches or ships a feature, when the lifecycle point is reached, then feature_dispatch_started and feature_shipped events are emitted on the daemon bus and appended to the daemon ledger
+- Given the daemon dispatches or ships a feature, when the lifecycle point is reached, then feature_dispatch_started, feature_dispatch_ended, and feature_shipped events are emitted on the daemon bus and appended to the daemon ledger
+- Given a step_completed is emitted on a feature bus and forwarded to the daemon bus, when the daemon's metrics listener records it, then the resulting conductor.step.duration data point carries that feature's slug as its feature attribute and the same attribute keys, unit, and name as the pre-change instrument
 - Given the three new event types exist, when the event-sink registry is compiled, then each has a sink declaration row with otel true and the OTel subscription list derived from the registry includes them
 
 #### Negative Paths
 - Given a gate_verdict is emitted on a feature bus and forwarded to the daemon bus, when both ledgers are read, then the event appears once in that feature's .pipeline/events.jsonl and zero times in .daemon/events.jsonl
 - Given a new event type is added to the union without a sink row, when the project compiles, then compilation fails naming the missing row
-- Given a new event type has a sink row with otel true but no handler case, when the daemon-path handler coverage test runs, then it fails naming the unhandled type
+- Given a new event type has a sink row with otel true but no metrics-listener handler case, when the listener coverage test runs, then it fails naming the unhandled type
 - Given the daemon ledger's directory is unwritable, when a snapshot is emitted, then the daemon logs the write failure once, the metrics are still recorded, and the loop continues
 
 ### Done When
 - [ ] A test reads both ledgers after a forwarded event and asserts single persistence in the feature ledger only
-- [ ] A test drives each of the three new event types through the daemon path and asserts the named instrument gains a data point
+- [ ] A test drives each of the four new event types through the daemon path and asserts the named instrument gains a data point
+- [ ] A parity test asserts the listener-recorded instrument set (names, units, attribute keys) equals the pre-change visualizer-recorded set and step.duration agrees with the span duration within 5 ms
 - [ ] The existing sink-registry exhaustiveness and OTel parity tests pass with the three new rows
 
 ## Story 8: The interactive run path is unchanged
@@ -170,13 +174,13 @@ As an operator running conduct interactively without a daemon, I want telemetry 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given OTel is enabled and conduct runs interactively, when the run completes, then one visualizer constructs its own MeterProvider and TracerProvider, exports the existing instruments, and shuts both providers down on stop
+- Given OTel is enabled and conduct runs interactively, when the run completes, then the visualizer owns the TracerProvider, a metrics listener on the same run bus owns an interactive MeterProvider, the existing instruments are exported with unchanged names and attributes, and both providers are shut down on stop
 - Given the interactive path, when the metric Resource is inspected, then service.instance.id is P/W with W resolved exactly as in Story 2 and per-feature data points still carry feature
 
 #### Negative Paths
-- Given the interactive path receives no shared recorder, when the visualizer initializes, then it constructs its own meter rather than throwing on the absent handle
-- Given the interactive visualizer owns its meter, when stop() runs, then meterProvider.shutdown() is called exactly once (the ownership flag does not suppress it)
+- Given the interactive path passes no spans-only flag, when the visualizer and listener initialize, then the listener constructs its own meter and the visualizer initializes without throwing on the absent flag
+- Given the interactive listener owns its meter, when the run stops, then meterProvider.shutdown() is called exactly once
 
 ### Done When
 - [ ] The existing interactive OTel wiring tests pass unchanged
-- [ ] A test asserts the interactive visualizer shuts down its own meter on stop
+- [ ] A test asserts the interactive listener shuts down its own meter on stop

@@ -9,18 +9,25 @@
 
 Move metric ownership from per-dispatch visualizers to one daemon-lifetime meter, re-key metric
 identity to project/worker, and add the daemon-level and per-feature instruments that make
-backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
+backlog, halts, gates, and end-to-end duration chartable — with every metric derived from typed
+events by one listener, so the design holds when dispatch moves to a service with remote workers.
+21 tasks.
 
 ## Technical Approach
 
-- **One meter per daemon (adr-014 D7).** `wireDaemonOtel(config, ctx, rootEvents)` in
-  `src/conductor/src/engine/otel/wire.ts` builds the `MeterProvider` + `MetricsRecorder` once at
-  daemon start and returns `{ recorder, meterProvider, stop }`. `beginFeatureRun` passes the
-  recorder into the existing `wireOtelVisualizer` through a new optional `metricsRecorder` field on
-  `VisualizerFactoryContext`/`OtelVisualizerContext`; `OtelVisualizer.initializeProviders` skips
-  meter construction when one is injected and records `ownsMeterProvider=false`, so `_doStop`
-  force-flushes but never shuts down a provider it did not build. The interactive `index.ts` path
-  passes nothing and behaves exactly as today.
+- **One meter per daemon, fed by events (adr-014 D7).** `wireDaemonOtel(config, ctx, rootEvents)`
+  in `src/conductor/src/engine/otel/wire.ts` builds the `MeterProvider` + `MetricsRecorder` once at
+  daemon start, attaches a `MetricsListener` (`otel/metrics-listener.ts`) to the root bus, and
+  returns `{ stop }`. The listener is the **only** metric recorder: it derives the existing
+  per-feature instruments from forwarded `step_started`/`step_completed`/`step_failed`/`step_retry`
+  (duration from event timestamps, retries from retry events, dispatch metering from the completed
+  event's token usage), the cost gauges from `feature_cost_snapshot`/`feature_usage_total`, closeout
+  from `pipeline_closeout`, `run.outcomes` from `feature_complete`/`loop_halt`/`feature_dispatch_ended`,
+  and the new daemon-level and feature instruments from the new events. `beginFeatureRun` passes
+  `metrics: false` into `wireOtelVisualizer`; `OtelVisualizer` then builds only its `TracerProvider`
+  and its `SpanManager` metric callbacks are no-ops. The interactive `index.ts` path constructs a
+  `MetricsListener` with its own meter on the run bus beside the visualizer, so there is one
+  recording code path and the interactive instrument set is byte-identical to today.
 - **Identity (D8).** `buildResource(ctx, 'metrics')` emits `service.instance.id=<project>/<worker>`,
   `conductor.project`, `conductor.worker`, `host.name`; `conductor.feature`/`conductor.branch` stay on
   the trace Resource only. `MetricsRecorder` gains a per-process identity (`project`, `worker`) and a
@@ -28,11 +35,12 @@ backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
   attach no `feature`. `worker` resolves from `otel.worker_name` (trimmed, non-blank) else
   `os.hostname()` else `unknown`, mirroring the `otel.project_name` chain in `otel-config.ts`.
 - **Spine (D9).** Three new `ConductorEvent` variants with closed-union payloads:
-  `daemon_backlog_snapshot`, `feature_dispatch_started`, `feature_shipped`. The daemon root bus gets
+  `daemon_backlog_snapshot`, `feature_dispatch_started`, `feature_dispatch_ended`, `feature_shipped`. The daemon root bus gets
   an `EventPersister` writing `<mainRoot>/.daemon/events.jsonl` that skips events tagged by the
-  existing `forwardedFromFeature` WeakSet. A `DaemonMetricsListener` (`otel/daemon-metrics-listener.ts`)
-  subscribes to `otelEventTypes()` on the root bus and records the daemon-level instruments; the
-  per-feature events it needs already reach the root bus via `ForwardingEventEmitter`.
+  existing `forwardedFromFeature` WeakSet. A `MetricsListener` (`otel/daemon-metrics-listener.ts`)
+  subscribes to `otelEventTypes()` on whichever bus it is given. Every per-feature event already
+  reaches the root bus via `ForwardingEventEmitter`; a `WeakMap` beside the existing
+  `forwardedFromFeature` `WeakSet` tags each forwarded copy with its slug (`forwardedFeatureOf`).
 - **Daemon loop seam.** `DaemonDeps` gains `onTick?(snapshot)`; the loop in `daemon.ts` calls it
   once per discovery pass with counts it already computed (items/waiting/blocked/gated come from the
   discovery hook layer where they are visible today — follow the `onGatedDiscovered` precedent in
@@ -54,9 +62,10 @@ backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
   (search hints: `InMemoryMetricExporter`, `findMetric`, `daemon-otel-wiring.test.ts`,
   `daemon-otel-parity.acceptance.test.ts`); Resource assertions read the exported Resource, never
   data-point attributes.
-- **Sequencing.** Spine + config + identity first (1–5), meter ownership and daemon wiring (6–8),
-  the tick seam and daemon-level gauges (9–12), feature lifecycle counters (13–16), forwarding and
-  gate counters (17–18), interactive parity last (19).
+- **Sequencing.** Spine + config + identity first (1–5), spans-only visualizer and daemon wiring
+  (6–7), forwarded-slug tagging and the listener's per-feature instruments (17, 20, 21), the
+  monotonic acceptance (8), the tick seam and daemon-level gauges (9–12), feature lifecycle counters
+  (13–16), gate counters (18), interactive parity last (19).
 
 ## Prerequisites
 
@@ -65,19 +74,19 @@ backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
 
 ## Tasks
 
-### Task 1: Add the three daemon-level event variants and their sink rows
+### Task 1: Add the four daemon-level event variants and their sink rows
 **Story:** Story 7 (registry rows; missing-row compile failure)
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: `otelEventTypes()` and `persistedEventTypes()` both include `daemon_backlog_snapshot`, `feature_dispatch_started`, `feature_shipped`; a type-level test (`// @ts-expect-error`) proves omitting a row for a union member fails compilation
+1. Write failing test: `otelEventTypes()` and `persistedEventTypes()` both include `daemon_backlog_snapshot`, `feature_dispatch_started`, `feature_dispatch_ended`, `feature_shipped`; a type-level test (`// @ts-expect-error`) proves omitting a row for a union member fails compilation
 2. Verify test fails (RED)
-3. Implement: add the three variants to `src/conductor/src/types/events.ts` with closed unions `BacklogState = 'eligible'|'waiting'|'blocked'|'gated'|'parked'`, `DispatchKind = 'initial'|'resume'|'rekick'`, `DispatchBlockReason = 'paused'|'build_auth_missing'|'gh_version'|'episode_active'`, and payloads: snapshot `{ counts: Record<BacklogState, number>, oldestAgeSeconds: Partial<Record<BacklogState, number>>, slots: { busy: number; free: number }, inFlight: string[], blocked: Record<DispatchBlockReason, boolean>, pollDurationMs: number }`; dispatch `{ slug: string; kind: DispatchKind }`; shipped `{ slug: string; runStartedAt?: number; active: { state: 'exact'|'partial'|'unavailable'; activeMs?: number } }`; add `EVENT_SINKS` rows `{ render: false, persist: true, audit: false, otel: true }`
+3. Implement: add the four variants to `src/conductor/src/types/events.ts` with closed unions `BacklogState = 'eligible'|'waiting'|'blocked'|'gated'|'parked'`, `DispatchKind = 'initial'|'resume'|'rekick'`, `DispatchBlockReason = 'paused'|'build_auth_missing'|'gh_version'|'episode_active'`, and payloads: snapshot `{ counts: Record<BacklogState, number>, oldestAgeSeconds: Partial<Record<BacklogState, number>>, slots: { busy: number; free: number }, inFlight: string[], blocked: Record<DispatchBlockReason, boolean>, pollDurationMs: number }`; dispatch `{ slug: string; kind: DispatchKind }`; ended `{ slug: string; outcome: 'complete'|'halted'|'terminated' }`; shipped `{ slug: string; runStartedAt?: number; active: { state: 'exact'|'partial'|'unavailable'; activeMs?: number } }`; add `EVENT_SINKS` rows `{ render: false, persist: true, audit: false, otel: true }`
 4. Verify test passes (GREEN)
-5. Commit with message: "Add daemon_backlog_snapshot, feature_dispatch_started, feature_shipped events with sink rows"
+5. Commit with message: "Add daemon_backlog_snapshot, feature_dispatch_started, feature_dispatch_ended, feature_shipped events with sink rows"
 
 **Done when:**
-- A test asserts `otelEventTypes()` and `persistedEventTypes()` each contain the three new type names
+- A test asserts `otelEventTypes()` and `persistedEventTypes()` each contain the four new type names
 - A `@ts-expect-error` fixture proves a union member without an EVENT_SINKS row fails compilation
 - The three payload types use only closed string unions for state, kind, and reason fields (no `string`)
 - Existing `event-sink-registry.test.ts` and `otel-visualizer-parity.test.ts` still pass
@@ -187,52 +196,52 @@ backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
 
 **Dependencies:** Task 3
 
-### Task 6: OtelVisualizer accepts an injected recorder and never shuts down a meter it did not build
-**Story:** Story 1 (stop force-flushes but does not shut down shared meter); Story 8 (interactive path owns and shuts down its own meter; no-recorder construction)
+### Task 6: OtelVisualizer runs spans-only when told to, and owns its meter otherwise
+**Story:** Story 1 (visualizer holds no meter under the daemon); Story 8 (interactive visualizer initializes without the flag)
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: (a) a visualizer constructed with `metricsRecorder` + `meterProvider` in its context creates no `MeterProvider` of its own, and its `stop()` calls `forceFlush()` on the injected provider but never `shutdown()`; (b) a visualizer constructed without them creates its own provider and `stop()` calls `shutdown()` exactly once; (c) both variants still create their own `TracerProvider` and flush spans on stop
+1. Write failing test: (a) a visualizer constructed with `metrics: false` in its context creates no `MeterProvider` and no `MetricsRecorder`, its `SpanManager` still opens and closes spans, and `stop()` flushes spans and never touches a meter; (b) a visualizer constructed without the flag creates its own `TracerProvider` only when a `MetricsListener` is not also supplied — the meter now lives in the listener (Task 20) — and initializes without throwing
 2. Verify test fails (RED)
-3. Implement: add optional `metricsRecorder` and `meterProvider` to `OtelVisualizerContext` and `VisualizerFactoryContext`; in `initializeProviders` use them when present and set `ownsMeterProvider=false`; in `_doStop` branch on the flag (`forceFlush` vs existing shutdown path); forward the field in `plugin-loader.ts`'s `visualizer:otel` factory and in `createOtelVisualizer`
+3. Implement: add optional `metrics?: boolean` (default true for compatibility during the refactor; Task 19 flips the interactive path to the listener) to `OtelVisualizerContext` and `VisualizerFactoryContext`; in `initializeProviders` skip the meter/recorder branch when false and make the `SpanManagerCallbacks` metric hooks no-ops; `_doStop` guards the meter shutdown on `this.meterProvider` being non-null; forward the field in `plugin-loader.ts`'s `visualizer:otel` factory and in `createOtelVisualizer`
 4. Verify test passes (GREEN)
-5. Commit with message: "OtelVisualizer: injected shared meter is flushed on stop, never shut down"
+5. Commit with message: "OtelVisualizer: spans-only mode constructs no MeterProvider"
 
 **Done when:**
-- A test asserts an injected `MeterProvider` receives `forceFlush()` and zero `shutdown()` calls across a visualizer start/stop
-- A test asserts a self-built `MeterProvider` receives exactly one `shutdown()` on stop
-- A test asserts a visualizer constructed with no recorder in context initializes without throwing and exports the existing instruments
-- The trace side is unchanged: both variants own a `TracerProvider` and force-flush spans on stop (existing flush tests pass)
+- A test asserts a `metrics: false` visualizer constructs no `MeterProvider` and `stop()` calls no meter method while spans still flush
+- A test asserts a visualizer constructed with no `metrics` flag initializes without throwing and still exports spans
+- The trace side is unchanged in both modes: a `TracerProvider` is owned and spans are force-flushed on stop (existing flush tests pass)
 
 **Files likely touched:**
-- src/conductor/src/engine/otel/otel-visualizer.ts — context fields, ownership flag, stop branch
+- src/conductor/src/engine/otel/otel-visualizer.ts — metrics flag, no-op metric callbacks, guarded shutdown
 - src/conductor/src/engine/otel/create-otel-visualizer.ts — pass-through
 - src/conductor/src/engine/plugin-loader.ts — factory pass-through
 - src/conductor/src/types/plugin.ts — VisualizerFactoryContext field
-- src/conductor/test/otel-visualizer-meter-ownership.test.ts — new
+- src/conductor/test/otel-visualizer-spans-only.test.ts — new
 
 **Dependencies:** Task 5
 
-### Task 7: Wire the daemon-owned meter at daemon start and hand it to every dispatch
+### Task 7: Wire the daemon-owned meter and listener at daemon start; dispatches are spans-only
 **Story:** Story 1 (exactly one MeterProvider for the daemon's life; disabled config leaves the daemon unchanged)
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: with OTel enabled, the daemon start path calls `wireDaemonOtel` once and every `beginFeatureRun` receives the same recorder instance; with OTel disabled or absent, `wireDaemonOtel` returns `null`, no `MeterProvider` is constructed, and `beginFeatureRun` passes no recorder (the existing per-dispatch behavior test still passes)
+1. Write failing test: with OTel enabled, the daemon start path calls `wireDaemonOtel` once, which constructs one `MeterProvider`, one `MetricsRecorder`, and one `MetricsListener` subscribed to the root bus; every `beginFeatureRun` wires its visualizer with `metrics: false`; with OTel disabled or absent, `wireDaemonOtel` returns `null`, no `MeterProvider` is constructed, and the per-dispatch wiring is unchanged from today
 2. Verify test fails (RED)
-3. Implement: `wireDaemonOtel(config, { mainRoot, projectName, workerName, rootEvents })` in `src/conductor/src/engine/otel/wire.ts` building the metric Resource (Task 4), `PeriodicExportingMetricReader`, `MeterProvider`, `MetricsRecorder` (Task 5), and returning `{ recorder, meterProvider, stop }` where `stop` force-flushes and shuts down; call it in `daemon-cli.ts` before the loop and await its `stop` in the shutdown path; in `beginFeatureRun` pass `recorder.forFeature(item.slug)` and `meterProvider` into `wireOtelVisualizer`'s context
+3. Implement: `wireDaemonOtel(config, { mainRoot, projectName, workerName, rootEvents })` in `src/conductor/src/engine/otel/wire.ts` building the metric Resource (Task 4), `PeriodicExportingMetricReader`, `MeterProvider`, `MetricsRecorder` (Task 5), and a `MetricsListener` stub (Task 20 fills its handlers) attached to `rootEvents`, returning `{ stop }` where `stop` detaches the listener, force-flushes, and shuts down; call it in `daemon-cli.ts` before the loop and await `stop` in the shutdown path; in `beginFeatureRun` pass `metrics: false` into `wireOtelVisualizer`'s context
 4. Verify test passes (GREEN)
-5. Commit with message: "Daemon owns one MeterProvider; dispatches record onto the shared recorder"
+5. Commit with message: "Daemon owns one MeterProvider and one MetricsListener; dispatch visualizers are spans-only"
 
 **Done when:**
-- A test asserts one `MeterProvider` is constructed per daemon start and two dispatches receive the same recorder instance
-- A test asserts disabled or absent OTel config constructs no `MeterProvider` and passes no recorder to `beginFeatureRun`
-- A test asserts daemon shutdown calls `forceFlush()` then `shutdown()` on the shared provider exactly once
+- A test asserts one `MeterProvider` and one `MetricsListener` are constructed per daemon start and two dispatches each wire a `metrics: false` visualizer
+- A test asserts disabled or absent OTel config constructs no `MeterProvider` and leaves per-dispatch wiring unchanged
+- A test asserts daemon shutdown detaches the listener, then calls `forceFlush()` and `shutdown()` on the daemon provider exactly once each
 - `daemon-otel-wiring.test.ts` and `daemon-otel-parity.acceptance.test.ts` still pass
 
 **Files likely touched:**
 - src/conductor/src/engine/otel/wire.ts — wireDaemonOtel
-- src/conductor/src/daemon-cli.ts — start/stop wiring, beginFeatureRun pass-through
+- src/conductor/src/engine/otel/metrics-listener.ts — new (class skeleton, subscribe/detach)
+- src/conductor/src/daemon-cli.ts — start/stop wiring, beginFeatureRun flag
 - src/conductor/test/daemon-otel-wiring.test.ts — daemon-meter cases
 
 **Dependencies:** Task 4, Task 6
@@ -244,7 +253,7 @@ backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
 **Steps:**
 1. Write failing test (acceptance, in-memory exporter, fake feature runs): one daemon dispatches feature S which halts, re-dispatches S which halts again — `conductor.run.outcomes{feature=S, outcome=halted}` reads 2 after the second dispatch and never reads a value lower than a previous export; two dispatches each retrying `build` once give `conductor.step.retries{feature=S, step=build}` = 2; a second daemon process (new `wireDaemonOtel`) exports the same series identity (`service.instance.id`, `project`, `worker`, `feature`) with a fresh counter
 2. Verify test fails (RED)
-3. Implement: no production code expected beyond Tasks 5–7; fix any identity or reset defect the test exposes
+3. Implement: no production code expected beyond Tasks 5–7, 17, 20, 21; fix any identity or reset defect the test exposes
 4. Verify test passes (GREEN)
 5. Commit with message: "Acceptance: per-feature counters are monotonic across dispatches under one daemon"
 
@@ -253,11 +262,12 @@ backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
 - The same test asserts `conductor.step.retries` for the feature is 2 after two single-retry dispatches
 - A test asserts a second daemon instance exports the identical series identity attribute set with counters restarting from zero exactly once
 - No duplicate-instrument warning is emitted across the two dispatches (asserted on captured warnings)
+- A variant runs each dispatch through a child-process-shaped fake that emits its events and exits, and asserts the feature's counters continue from their prior values
 
 **Files likely touched:**
 - src/conductor/test/acceptance/daemon-monotonic-counters.acceptance.test.ts — new
 
-**Dependencies:** Task 7
+**Dependencies:** Task 7, Task 20, Task 21
 
 ### Task 9: Daemon loop reports a per-tick snapshot through a DaemonDeps hook
 **Story:** Story 3 (counts per state; slots and in-flight; poll duration)
@@ -313,11 +323,11 @@ backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
 **Type:** happy-path
 
 **Steps:**
-1. Write failing test: `DaemonMetricsListener` subscribed to a root bus receives a `daemon_backlog_snapshot` and the exporter shows `conductor.daemon.backlog` with five points (3, 2, 1, 4, 2), `conductor.daemon.backlog.oldest_age{state=eligible}` ≈ 129600, `conductor.daemon.slots` busy=2 free=1, `conductor.daemon.inflight` = 1 for each in-flight slug, `conductor.daemon.poll.duration` one observation of 840, `conductor.daemon.blocked_reason` = 1 for `paused` and 0 for the other three, and `conductor.daemon.up` = 1; a snapshot with all-zero counts still yields five backlog points reading 0
+1. Write failing test: `MetricsListener` subscribed to a root bus receives a `daemon_backlog_snapshot` and the exporter shows `conductor.daemon.backlog` with five points (3, 2, 1, 4, 2), `conductor.daemon.backlog.oldest_age{state=eligible}` ≈ 129600, `conductor.daemon.slots` busy=2 free=1, `conductor.daemon.inflight` = 1 for each in-flight slug, `conductor.daemon.poll.duration` one observation of 840, `conductor.daemon.blocked_reason` = 1 for `paused` and 0 for the other three, and `conductor.daemon.up` = 1; a snapshot with all-zero counts still yields five backlog points reading 0
 2. Verify test fails (RED)
-3. Implement: `src/conductor/src/engine/otel/daemon-metrics-listener.ts` following the `AuditTrailWriter` shape (subscribe to `otelEventTypes()` on the root bus, never throw, detach on stop) with a `daemon_backlog_snapshot` handler calling the Task 5 daemon-level record methods; `wireDaemonOtel` constructs and starts it; in `daemon-cli.ts` the `onTick` hook emits `daemon_backlog_snapshot` on the root bus
+3. Implement: in `src/conductor/src/engine/otel/metrics-listener.ts` (skeleton from Task 7, `AuditTrailWriter` shape: subscribe to `otelEventTypes()`, never throw, detach on stop) add a `daemon_backlog_snapshot` handler calling the Task 5 daemon-level record methods; in `daemon-cli.ts` the `onTick` hook emits `daemon_backlog_snapshot` on the root bus
 4. Verify test passes (GREEN)
-5. Commit with message: "DaemonMetricsListener records backlog, age, slots, inflight, blocked_reason, poll duration, and up"
+5. Commit with message: "MetricsListener records backlog, age, slots, inflight, blocked_reason, poll duration, and up"
 
 **Done when:**
 - A test asserts all five `conductor.daemon.backlog` states are present with the exact counts, and a zero-member state reads 0 rather than being absent
@@ -326,7 +336,7 @@ backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
 - `conductor.daemon.up` is a synchronous Gauge recorded once per snapshot, not an observable callback (asserted by instrument type on the exporter)
 
 **Files likely touched:**
-- src/conductor/src/engine/otel/daemon-metrics-listener.ts — new
+- src/conductor/src/engine/otel/metrics-listener.ts — new
 - src/conductor/src/engine/otel/wire.ts — construct/start/stop the listener
 - src/conductor/src/daemon-cli.ts — onTick emits the snapshot event
 - src/conductor/test/daemon-metrics-listener.test.ts — new
@@ -361,7 +371,7 @@ backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
 **Steps:**
 1. Write failing test: dispatching a slug with no existing worktree emits `feature_dispatch_started{kind: 'initial'}`; dispatching a slug whose worktree exists and whose HALT was just cleared (the `.pipeline/REKICK` sentinel or a `HALT.cleared` cause present) emits `kind: 'rekick'`; dispatching a slug whose worktree exists with no halt-clear signal emits `kind: 'resume'`; the listener records `conductor.feature.dispatches{feature, kind}` = 1 for each
 2. Verify test fails (RED)
-3. Implement: `createWorktree` (or the runner's call site) surfaces `wasExisting`; `classifyDispatchKind({ wasExisting, rekickSignal })` returns the closed union; `daemon-runner.ts` emits `feature_dispatch_started` on the root bus at the dispatch site; `DaemonMetricsListener` handles it
+3. Implement: `createWorktree` (or the runner's call site) surfaces `wasExisting`; `classifyDispatchKind({ wasExisting, rekickSignal })` returns the closed union; `daemon-runner.ts` emits `feature_dispatch_started` on the root bus at the dispatch site; `MetricsListener` handles it
 4. Verify test passes (GREEN)
 5. Commit with message: "Emit feature_dispatch_started with initial/resume/rekick and count feature.dispatches"
 
@@ -373,7 +383,7 @@ backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
 **Files likely touched:**
 - src/conductor/src/engine/worktree.ts — wasExisting
 - src/conductor/src/engine/daemon-runner.ts — classify and emit
-- src/conductor/src/engine/otel/daemon-metrics-listener.ts — handler
+- src/conductor/src/engine/otel/metrics-listener.ts — handler
 - src/conductor/test/daemon-dispatch-kind.test.ts — new
 
 **Dependencies:** Task 11
@@ -398,7 +408,7 @@ backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
 **Files likely touched:**
 - src/conductor/src/engine/halt-marker.ts — readHaltSidecarClassification
 - src/conductor/src/engine/daemon-runner.ts — read and emit at halted dispatch end
-- src/conductor/src/engine/otel/daemon-metrics-listener.ts — handler
+- src/conductor/src/engine/otel/metrics-listener.ts — handler
 - src/conductor/test/halt-sidecar-classification.test.ts — new
 
 **Dependencies:** Task 11
@@ -421,7 +431,7 @@ backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
 
 **Files likely touched:**
 - src/conductor/src/engine/daemon-runner.ts — ship-branch emission
-- src/conductor/src/engine/otel/daemon-metrics-listener.ts — handler
+- src/conductor/src/engine/otel/metrics-listener.ts — handler
 - src/conductor/test/daemon-feature-shipped.test.ts — new
 
 **Dependencies:** Task 11
@@ -445,34 +455,34 @@ backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
 - A test with a two-day gap between dispatches asserts wall minus active is at least 172800000 ms
 
 **Files likely touched:**
-- src/conductor/src/engine/otel/daemon-metrics-listener.ts — duration handling
+- src/conductor/src/engine/otel/metrics-listener.ts — duration handling
 - src/conductor/test/feature-duration-metrics.test.ts — new
 
 **Dependencies:** Task 15
 
-### Task 17: Forwarded per-feature events reach the daemon listener exactly once
-**Story:** Story 5 (forwarded verdict counted once); Story 7 (forwarded event persisted once, in the feature ledger only)
+### Task 17: Forwarded per-feature events carry their slug and are counted once
+**Story:** Story 5 (forwarded verdict counted once); Story 7 (forwarded step_completed attributed to its feature; forwarded event persisted once, in the feature ledger only)
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: with a feature `ForwardingEventEmitter` attached to the root bus, emitting one `gate_verdict` on the feature bus results in exactly one `conductor.gate.verdicts` data point with value 1 (the listener sees the forwarded copy once and the per-dispatch visualizer does not also record it); the same holds for `kickback`, `loop_halt`, `build_stall`, and `feature_complete`
+1. Write failing test: with a feature `ForwardingEventEmitter` for slug S attached to the root bus, emitting one `gate_verdict` on the feature bus delivers one forwarded copy to the root bus for which `forwardedFeatureOf(copy) === 'S'`; a listener on the root bus records exactly one `conductor.gate.verdicts` point with `feature=S` and value 1; a `step_completed` forwarded the same way yields one `conductor.step.duration` point with `feature=S`; a non-forwarded root-bus event has `forwardedFeatureOf === undefined`
 2. Verify test fails (RED)
-3. Implement: confirm `ForwardingEventEmitter` forwards these types (they are in its forwarded set today — if not, add them); the per-dispatch visualizer's `handleEvent` records only span-side effects for these five types under the daemon (metric recording for them lives in the listener); the listener ignores non-forwarded duplicates by identity if any path double-delivers
+3. Implement: `ForwardingEventEmitter` takes the slug at construction (`startFeatureEventPersistence` already knows it) and records `forwardedFeature.set(copy, slug)` in a `WeakMap` beside the existing `WeakSet`; export `forwardedFeatureOf(event)`; the listener's per-feature handlers take the feature from `forwardedFeatureOf` and skip events with no slug for per-feature instruments
 4. Verify test passes (GREEN)
-5. Commit with message: "Forwarded gate, kickback, halt, stall, and complete events are counted once by the daemon listener"
+5. Commit with message: "Tag forwarded feature events with their slug; listener attributes and counts each once"
 
 **Done when:**
-- A test asserts one feature-bus `gate_verdict` yields exactly one `conductor.gate.verdicts` point with value 1
-- The same assertion holds for `kickback`, `loop_halt`, `build_stall`, and `feature_complete` (one test per type or a table test naming each)
+- A test asserts one feature-bus `gate_verdict` yields exactly one `conductor.gate.verdicts` point with value 1 and `feature=S`
+- A test asserts a forwarded `step_completed` yields one `conductor.step.duration` point with `feature=S`
+- A test asserts `forwardedFeatureOf` is `undefined` for a root-bus-originated event and the listener records no per-feature point for it
 - The Task 2 ledger test still shows the forwarded event once in the feature ledger and never in the daemon ledger
 
 **Files likely touched:**
-- src/conductor/src/engine/event-persister.ts — forwarded set (if extended)
-- src/conductor/src/engine/otel/otel-visualizer.ts — no metric recording for the five types when a shared recorder is injected
-- src/conductor/src/engine/otel/daemon-metrics-listener.ts — dedupe guard
+- src/conductor/src/engine/event-persister.ts — WeakMap tag, forwardedFeatureOf, slug parameter
+- src/conductor/src/engine/otel/metrics-listener.ts — feature attribution helper
 - src/conductor/test/daemon-forwarded-events-once.test.ts — new
 
-**Dependencies:** Task 11
+**Dependencies:** Task 7
 
 ### Task 18: Count gate verdicts, kickbacks, and stalls
 **Story:** Story 5 (pass; fail plus kickback routing; stall by reason; unknown step name verbatim; three fails read 3)
@@ -491,50 +501,99 @@ backlog, halts, gates, and end-to-end duration chartable. 19 tasks.
 - A test asserts three fails for one gate in one dispatch read `outcome=fail` = 3
 
 **Files likely touched:**
-- src/conductor/src/engine/otel/daemon-metrics-listener.ts — handlers
+- src/conductor/src/engine/otel/metrics-listener.ts — handlers
 - src/conductor/test/gate-metrics.test.ts — new
 
 **Dependencies:** Task 17
 
-### Task 19: Interactive visualizer handles the three new event types and coverage is enforced
-**Story:** Story 7 (sink row with otel true but no handler case fails the coverage test); Story 8 (interactive path unchanged, own meter shut down on stop)
+### Task 19: Interactive path uses the listener with its own meter; listener coverage is enforced
+**Story:** Story 7 (sink row with otel true but no listener handler fails the coverage test); Story 8 (interactive path: visualizer owns traces, listener owns an interactive meter, unchanged instrument set, shutdown once)
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: the handler-coverage test (the mechanism that fails naming an `otel: true` type with no `handleEvent` case) fails for the three new types before the cases exist; after implementation, driving each of the three events through an interactive visualizer records the matching instrument; an interactive run's metric Resource carries `service.instance.id = P/W` and per-feature points still carry `feature`; `stop()` on the interactive visualizer calls `shutdown()` on its own meter exactly once
+1. Write failing test: the listener coverage test names any `otel: true` event type with no `MetricsListener` handler case (fails for the four new types until their cases exist and for any type the visualizer used to record); an interactive run exports the pre-change instrument set with unchanged names and attributes, its metric Resource carries `service.instance.id = P/W`, per-feature points carry `feature`, and the interactive listener's meter receives `shutdown()` exactly once on stop; a visualizer initialized without the `metrics` flag does not throw
 2. Verify test fails (RED)
-3. Implement: add `handleEvent` cases for `daemon_backlog_snapshot`, `feature_dispatch_started`, `feature_shipped` in `otel-visualizer.ts` delegating to the same recorder methods the listener uses (interactive runs will rarely see these, but parity is mechanical)
+3. Implement: in `index.ts`'s interactive wiring construct a `MetricsListener` with an interactive-owned `MeterProvider` on the run bus beside the visualizer (now `metrics: false` there too, so the visualizer never records metrics anywhere); remove the metric branches from `otel-visualizer.ts`'s `handleEvent` (spans only) and delete the now-dead recorder construction; rewrite `otel-visualizer-parity.test.ts`'s handler-coverage assertion to target the listener's handler table
 4. Verify test passes (GREEN)
-5. Commit with message: "OtelVisualizer handles the three daemon event types; interactive path parity"
+5. Commit with message: "Interactive path records metrics through MetricsListener; visualizer is spans-only everywhere"
 
 **Done when:**
-- The handler-coverage test names any `otel: true` event type lacking a `handleEvent` case and passes with all three new cases present
-- A test asserts each new event type recorded through the interactive visualizer yields its named instrument's data point
-- A test asserts the interactive metric Resource is `P/W` and per-feature points carry `feature`, and `shutdown()` is called exactly once on stop
-- `interactive-otel-wiring.test.ts` passes unchanged
+- The listener coverage test names any `otel: true` event type lacking a `MetricsListener` handler and passes with every case present
+- A test asserts the interactive exported instrument set (names, units, attribute keys) equals the pre-change set and the metric Resource is `P/W` with `feature` on per-feature points
+- A test asserts the interactive listener's meter receives `shutdown()` exactly once on stop and a visualizer without the `metrics` flag initializes without throwing
+- `interactive-otel-wiring.test.ts` passes with its assertions retargeted from the visualizer's meter to the listener's meter
 
 **Files likely touched:**
-- src/conductor/src/engine/otel/otel-visualizer.ts — three cases
-- src/conductor/test/engine/otel-visualizer-parity.test.ts — coverage cases
-- src/conductor/test/interactive-otel-wiring.test.ts — resource and shutdown assertions
+- src/conductor/src/index.ts — interactive listener wiring
+- src/conductor/src/engine/otel/otel-visualizer.ts — remove metric branches
+- src/conductor/test/engine/otel-visualizer-parity.test.ts — coverage retargeted to the listener
+- src/conductor/test/interactive-otel-wiring.test.ts — resource, instrument-set, and shutdown assertions
 
-**Dependencies:** Task 6, Task 11
+**Dependencies:** Task 6, Task 11, Task 20, Task 21
+
+### Task 20: Listener derives the existing step and cost instruments from forwarded events
+**Story:** Story 7 (forwarded step_completed yields step.duration with the pre-change name, unit, attribute keys; parity within 5 ms)
+**Type:** infrastructure
+
+**Steps:**
+1. Write failing test: driving one fake feature run's event stream (`step_started` at t0, `step_retry`, `step_completed` at t1 with token usage and model, `feature_cost_snapshot`, `feature_usage_total`, `pipeline_closeout`) through a root-bus `MetricsListener` yields `conductor.step.duration{feature,step}` = t1−t0, `conductor.step.retries` = retry count, `conductor.step.dispatches{step, metering}` = 1, the three cost/token gauges and the closeout histogram with the same names, units, and attribute keys as `MetricsRecorder` records today; a parity test runs the same stream through the pre-change visualizer path and asserts the two instrument sets are equal and durations agree within 5 ms
+2. Verify test fails (RED)
+3. Implement: listener handlers for `step_started` (remember start per feature+step), `step_retry` (count), `step_completed`/`step_failed` (record duration, retries, dispatch metering via `classifyMetering`, clear state), `feature_cost_snapshot`, `feature_usage_total`, `pipeline_closeout`, delegating to the Task 5 recorder's per-feature methods; per-feature state is keyed by `forwardedFeatureOf(event)` (Task 17) and dropped at `feature_dispatch_ended`
+4. Verify test passes (GREEN)
+5. Commit with message: "MetricsListener derives step duration, retries, dispatches, cost, and closeout from events"
+
+**Done when:**
+- A test asserts `conductor.step.duration`, `conductor.step.retries`, `conductor.step.dispatches`, the three cost/token gauges, and `conductor.pipeline.closeout.duration` are recorded from a forwarded event stream with the pre-change names, units, and attribute keys
+- A parity test asserts the listener-recorded and pre-change visualizer-recorded instrument sets are equal and each step duration agrees within 5 ms
+- A test asserts per-feature start state is dropped after `feature_dispatch_ended` (a later `step_completed` with no matching start records no duration and no throw)
+
+**Files likely touched:**
+- src/conductor/src/engine/otel/metrics-listener.ts — step/cost handlers
+- src/conductor/test/metrics-listener-step-parity.test.ts — new
+
+**Dependencies:** Task 17
+
+### Task 21: Listener records run outcomes from terminal events, including dispatch end
+**Story:** Story 1 (run.outcomes halted reads 2 across dispatches); Story 7 (feature_dispatch_ended emitted and persisted)
+**Type:** happy-path
+
+**Steps:**
+1. Write failing test: a forwarded `feature_complete` yields `conductor.run.outcomes{feature=S, outcome=complete}` += 1; a forwarded `loop_halt` yields `outcome=halted` += 1; a `feature_dispatch_ended{outcome:'terminated'}` with no preceding terminal yields `outcome=terminated` += 1, while one that follows a `feature_complete` or `loop_halt` for the same dispatch records nothing further (one outcome per dispatch); `daemon-runner.ts` emits `feature_dispatch_ended` on the root bus when a dispatch returns with the observed outcome
+2. Verify test fails (RED)
+3. Implement: listener terminal handlers with a per-feature "terminal seen" flag cleared at `feature_dispatch_started`; `daemon-runner.ts` emits `feature_dispatch_ended` at the dispatch-return site with `complete`, `halted`, or `terminated`
+4. Verify test passes (GREEN)
+5. Commit with message: "Record run.outcomes from feature_complete, loop_halt, and feature_dispatch_ended, once per dispatch"
+
+**Done when:**
+- Tests assert `run.outcomes` increments once for `complete`, `halted`, and `terminated` from their events, and a `feature_dispatch_ended` after a terminal for the same dispatch records nothing further
+- A runner test asserts `feature_dispatch_ended` is emitted on the root bus with the observed outcome when a dispatch returns
+- The Task 2 ledger test shows `feature_dispatch_ended` persisted once in the daemon ledger
+
+**Files likely touched:**
+- src/conductor/src/engine/otel/metrics-listener.ts — terminal handlers
+- src/conductor/src/engine/daemon-runner.ts — emit feature_dispatch_ended
+- src/conductor/test/run-outcomes-from-events.test.ts — new
+- src/conductor/test/daemon-event-persistence.test.ts — ledger case
+
+**Dependencies:** Task 17
 
 ## Task Dependency Graph
 
 ```text
 1 ──► 2
+3 ──► 4 ─┐
+3 ──► 5 ──► 6 ──► 7 ──► 17 ──► 20, 21 ──► 8
 1, 5, 7, 9, 10 ──► 11 ──► 12
-3 ──► 4 ─┐                ├──► 13, 14, 15 ──► 16
-3 ──► 5 ──► 6 ──► 7 ──► 8 ├──► 17 ──► 18
-9 ──► 10                  └──► 19 (also needs 6)
+9 ──► 10                  11 ──► 13, 14, 15 ──► 16
+                          17 ──► 18
+6, 11, 20, 21 ──► 19
 ```
 
-Independent starts: Tasks 1, 3, 9. Task 8 (monotonic counters) needs only the meter chain (3→5→6→7).
+Independent starts: Tasks 1, 3, 9. Task 8 (monotonic counters) needs the full recording chain (7 → 17 → 20/21).
 
 ## Integration Points
 
-- After Task 7: a daemon with OTel enabled exports the existing instruments through one meter; per-dispatch visualizers still export spans.
+- After Task 20: a daemon with OTel enabled exports the existing instruments through one event-fed meter; per-dispatch visualizers export spans only.
 - After Task 12: an idle daemon exports `up`, `backlog`, `slots` — the first end-to-end proof of the issue's "no dispatch required" outcome.
 - After Task 18: every intake outcome is exportable; the Grafana halt/retry panels read true counts with no query change.
 
@@ -544,10 +603,11 @@ Independent starts: Tasks 1, 3, 9. Task 8 (monotonic counters) needs only the me
 | --- | --- | --- | --- |
 | Story 1 happy: Given OTel is enabled and one daemon process dispatches feature S, which halts, is re-kicked, and halts again, when metrics are exported after the second dispatch, then conductor.run.outcomes{feature=S, outcome=halted} reads 2 and never reads 1 in between | 8 | "reads 2 after two halting dispatches under one daemon" | diff-local |
 | Story 1 happy: Given one daemon process dispatches feature S twice and each dispatch retries the build step once, when metrics are exported after the second dispatch, then conductor.step.retries{feature=S, step=build} reads 2, monotonic across both dispatches | 8 | "`conductor.step.retries` for the feature is 2 after two single-retry dispatches" | diff-local |
-| Story 1 happy: Given OTel is enabled, when the daemon starts, then exactly one MeterProvider exists for the daemon's lifetime and both dispatches of Story 1's feature record onto it | 7 | "one `MeterProvider` is constructed per daemon start and two dispatches receive the same recorder instance" | diff-local |
-| Story 1 negative: Given feature A's dispatch stops while feature B is still running under the same daemon, when A's per-dispatch visualizer stops, then the shared meter is force-flushed (so A's final data points are exported before the daemon could die) but not shut down, and B's next step still exports conductor.step.duration{feature=B} | 6 | "an injected `MeterProvider` receives `forceFlush()` and zero `shutdown()` calls" | diff-local |
+| Story 1 happy: Given OTel is enabled, when the daemon starts, then exactly one MeterProvider exists for the daemon's lifetime and both dispatches of Story 1's feature are recorded onto it by the daemon's metrics listener from their forwarded events | 7 | "one `MeterProvider` and one `MetricsListener` are constructed per daemon start and two dispatches each wire a `metrics: false` visualizer" | diff-local |
+| Story 1 happy: Given a dispatch runs in a process that exits at dispatch end, when its forwarded step and terminal events reach the daemon bus, then the same per-feature counters continue from their prior values, because no metric state lived in the exited process | 8 | "child-process-shaped fake that emits its events and exits, and asserts the feature's counters continue from their prior values" | diff-local |
+| Story 1 negative: Given feature A's dispatch stops while feature B is still running under the same daemon, when A's per-dispatch visualizer stops, then the daemon meter is force-flushed (so A's final data points are exported before the daemon could die) but not shut down, the visualizer holds no meter of its own to shut down, and B's next step still exports conductor.step.duration{feature=B} | 6 | "a `metrics: false` visualizer constructs no `MeterProvider` and `stop()` calls no meter method while spans still flush" | diff-local |
 | Story 1 negative: Given the daemon process itself restarts, when metrics resume, then counters restart from zero exactly once (an ordinary process restart) and the exported series carries the same identity so backend rate functions treat it as a counter reset, not a new series | 8 | "identical series identity attribute set with counters restarting from zero exactly once" | diff-local |
-| Story 1 negative: Given OTel is disabled or the otel config block is absent, when the daemon starts and dispatches a feature, then no MeterProvider is constructed, no recorder is passed to the dispatch, and daemon behavior is byte-for-byte unchanged from today | 7 | "disabled or absent OTel config constructs no `MeterProvider` and passes no recorder to `beginFeatureRun`" | diff-local |
+| Story 1 negative: Given OTel is disabled or the otel config block is absent, when the daemon starts and dispatches a feature, then no MeterProvider is constructed, no recorder is passed to the dispatch, and daemon behavior is byte-for-byte unchanged from today | 7 | "disabled or absent OTel config constructs no `MeterProvider` and leaves per-dispatch wiring unchanged" | diff-local |
 | Story 2 happy: Given project P and a worker whose resolved name is W, when the daemon exports metrics, then the metric Resource carries service.name=ai-conductor, service.instance.id=P/W, conductor.project, conductor.worker=W, and host.name equal to the OS hostname | 4 | "`service.instance.id === 'P/W'` and `host.name` present" | diff-local |
 | Story 2 happy: Given a per-feature instrument such as conductor.step.duration for feature S, when it is exported, then its data point carries project=P, worker=W, and feature=S as attributes | 5 | "a per-feature data point carries exactly `project`, `worker`, `feature` plus the instrument's own attributes" | diff-local |
 | Story 2 happy: Given a daemon-level instrument such as conductor.daemon.backlog, when it is exported, then its data point carries project=P and worker=W and no feature attribute | 5 | "a daemon-level data point carries `project` and `worker` and has no `feature` key" | diff-local |
@@ -578,7 +638,7 @@ Independent starts: Tasks 1, 3, 9. Task 8 (monotonic counters) needs only the me
 | Story 5 happy: Given gate build_review passes for feature S, when the verdict event is emitted, then conductor.gate.verdicts{feature=S, step=build_review, outcome=pass} increments by 1 | 18 | "the exact attribute sets and values for pass, fail-plus-kickback, and stall above" | diff-local |
 | Story 5 happy: Given gate build_review fails for feature S and routes work back to build, when the events are emitted, then conductor.gate.verdicts{feature=S, step=build_review, outcome=fail} increments by 1 and conductor.gate.kickbacks{feature=S, from=build_review, to=build} increments by 1 | 18 | "the exact attribute sets and values for pass, fail-plus-kickback, and stall above" | diff-local |
 | Story 5 happy: Given a build stalls with reason no_task_progress, when the stall event is emitted, then conductor.daemon.stalls{feature=S, reason=no_task_progress} increments by 1 | 18 | "the exact attribute sets and values for pass, fail-plus-kickback, and stall above" | diff-local |
-| Story 5 negative: Given a gate verdict is emitted on the feature bus during a daemon dispatch, when it reaches the daemon-level listener, then it is counted exactly once (the forwarded copy is counted, the original is not double-counted) | 17 | "one feature-bus `gate_verdict` yields exactly one `conductor.gate.verdicts` point with value 1" | diff-local |
+| Story 5 negative: Given a gate verdict is emitted on the feature bus during a daemon dispatch, when it reaches the daemon-level listener, then it is counted exactly once (the forwarded copy is counted, the original is not double-counted) | 17 | "one feature-bus `gate_verdict` yields exactly one `conductor.gate.verdicts` point with value 1 and `feature=S`" | diff-local |
 | Story 5 negative: Given a gate verdict for a step name outside the known gate set, when it is recorded, then the step attribute carries the step name verbatim and no error is raised | 18 | "an unknown step name is carried verbatim on the `step` attribute with no thrown error" | diff-local |
 | Story 5 negative: Given the same gate fails three times in one dispatch, when metrics are exported, then verdicts{outcome=fail} reads 3, not 1 | 18 | "three fails for one gate in one dispatch read `outcome=fail` = 3" | diff-local |
 | Story 6 happy: Given feature S was first dispatched at T0 and ships at T1, when the ship is recorded, then conductor.feature.duration.wall{feature=S} has one observation of T1 minus T0 in milliseconds | 16 | "one wall observation equal to ship time minus `runStartedAt` and one active observation equal to `activeMs` for an exact rollup" | diff-local |
@@ -588,16 +648,17 @@ Independent starts: Tasks 1, 3, 9. Task 8 (monotonic counters) needs only the me
 | Story 6 negative: Given the worktree's conduct-state has no run_started_at, when the ship is recorded, then conductor.feature.duration.wall has no data point for S and the ship counter still increments | 16 | "a missing `runStartedAt` yields zero wall observations while `feature.shipped` increments" | diff-local |
 | Story 6 negative: Given a feature terminates by halt rather than ship, when the terminal is recorded, then neither duration histogram gains an observation | 16 | "a halted terminal leaves both histograms with zero observations" | diff-local |
 | Story 7 happy: Given the daemon completes a discovery tick, when the snapshot is emitted, then a daemon_backlog_snapshot event is appended to the daemon ledger at .daemon/events.jsonl in the same schema as .pipeline/events.jsonl | 2 | "a root-bus snapshot event appears exactly once in `.daemon/events.jsonl` in the same JSON schema as `.pipeline/events.jsonl`" | diff-local |
-| Story 7 happy: Given the daemon dispatches or ships a feature, when the lifecycle point is reached, then feature_dispatch_started and feature_shipped events are emitted on the daemon bus and appended to the daemon ledger | 15 | "`feature_shipped` is emitted on the root bus with `runStartedAt` equal to the worktree state's `run_started_at`" | diff-local |
-| Story 7 happy: Given the three new event types exist, when the event-sink registry is compiled, then each has a sink declaration row with otel true and the OTel subscription list derived from the registry includes them | 1 | "`otelEventTypes()` and `persistedEventTypes()` each contain the three new type names" | diff-local |
+| Story 7 happy: Given the daemon dispatches or ships a feature, when the lifecycle point is reached, then feature_dispatch_started, feature_dispatch_ended, and feature_shipped events are emitted on the daemon bus and appended to the daemon ledger | 21 | "`feature_dispatch_ended` is emitted on the root bus with the observed outcome when a dispatch returns" | diff-local |
+| Story 7 happy: Given a step_completed is emitted on a feature bus and forwarded to the daemon bus, when the daemon's metrics listener records it, then the resulting conductor.step.duration data point carries that feature's slug as its feature attribute and the same attribute keys, unit, and name as the pre-change instrument | 20 | "recorded from a forwarded event stream with the pre-change names, units, and attribute keys" | diff-local |
+| Story 7 happy: Given the three new event types exist, when the event-sink registry is compiled, then each has a sink declaration row with otel true and the OTel subscription list derived from the registry includes them | 1 | "`otelEventTypes()` and `persistedEventTypes()` each contain the four new type names" | diff-local |
 | Story 7 negative: Given a gate_verdict is emitted on a feature bus and forwarded to the daemon bus, when both ledgers are read, then the event appears once in that feature's .pipeline/events.jsonl and zero times in .daemon/events.jsonl | 2 | "a forwarded gate_verdict appears once in the feature ledger and zero times in the daemon ledger" | diff-local |
 | Story 7 negative: Given a new event type is added to the union without a sink row, when the project compiles, then compilation fails naming the missing row | 1 | "a union member without an EVENT_SINKS row fails compilation" | diff-local |
-| Story 7 negative: Given a new event type has a sink row with otel true but no handler case, when the daemon-path handler coverage test runs, then it fails naming the unhandled type | 19 | "names any `otel: true` event type lacking a `handleEvent` case" | diff-local |
+| Story 7 negative: Given a new event type has a sink row with otel true but no metrics-listener handler case, when the listener coverage test runs, then it fails naming the unhandled type | 19 | "names any `otel: true` event type lacking a `MetricsListener` handler and passes with every case present" | diff-local |
 | Story 7 negative: Given the daemon ledger's directory is unwritable, when a snapshot is emitted, then the daemon logs the write failure once, the metrics are still recorded, and the loop continues | 2 | "one logged failure line, no throw, and the emitter still delivers the event to other subscribers" | diff-local |
-| Story 8 happy: Given OTel is enabled and conduct runs interactively, when the run completes, then one visualizer constructs its own MeterProvider and TracerProvider, exports the existing instruments, and shuts both providers down on stop | 19 | "`shutdown()` is called exactly once on stop" | diff-local |
-| Story 8 happy: Given the interactive path, when the metric Resource is inspected, then service.instance.id is P/W with W resolved exactly as in Story 2 and per-feature data points still carry feature | 19 | "the interactive metric Resource is `P/W` and per-feature points carry `feature`" | diff-local |
-| Story 8 negative: Given the interactive path receives no shared recorder, when the visualizer initializes, then it constructs its own meter rather than throwing on the absent handle | 6 | "a visualizer constructed with no recorder in context initializes without throwing and exports the existing instruments" | diff-local |
-| Story 8 negative: Given the interactive visualizer owns its meter, when stop() runs, then meterProvider.shutdown() is called exactly once (the ownership flag does not suppress it) | 6 | "a self-built `MeterProvider` receives exactly one `shutdown()` on stop" | diff-local |
+| Story 8 happy: Given OTel is enabled and conduct runs interactively, when the run completes, then the visualizer owns the TracerProvider, a metrics listener on the same run bus owns an interactive MeterProvider, the existing instruments are exported with unchanged names and attributes, and both providers are shut down on stop | 19 | "the interactive exported instrument set (names, units, attribute keys) equals the pre-change set" | diff-local |
+| Story 8 happy: Given the interactive path, when the metric Resource is inspected, then service.instance.id is P/W with W resolved exactly as in Story 2 and per-feature data points still carry feature | 19 | "the metric Resource is `P/W` with `feature` on per-feature points" | diff-local |
+| Story 8 negative: Given the interactive path passes no spans-only flag, when the visualizer and listener initialize, then the listener constructs its own meter and the visualizer initializes without throwing on the absent flag | 19 | "a visualizer without the `metrics` flag initializes without throwing" | diff-local |
+| Story 8 negative: Given the interactive listener owns its meter, when the run stops, then meterProvider.shutdown() is called exactly once | 19 | "the interactive listener's meter receives `shutdown()` exactly once on stop" | diff-local |
 
 ## Architecture Obligation Coverage
 
@@ -609,9 +670,9 @@ Independent starts: Tasks 1, 3, 9. Task 8 (monotonic counters) needs only the me
 | adr-014-otel-observability-exporter#D4 | task | task-9, task-11 | A test asserts the hook performs no filesystem or git call (spied `fs`/`execFile` receive zero calls from inside `onTick`) |
 | adr-014-otel-observability-exporter#D5 | task | task-2 | A test with an unwritable `.daemon/` asserts one logged failure line, no throw, and the emitter still delivers the event to other subscribers |
 | adr-014-otel-observability-exporter#D6 | existing | none | Dual transport under `otel:` is unchanged; `wireDaemonOtel` reuses `buildExporters` from `transport.ts` |
-| adr-014-otel-observability-exporter#D7 | task | task-6, task-7, task-8 | A test asserts one `MeterProvider` is constructed per daemon start and two dispatches receive the same recorder instance |
+| adr-014-otel-observability-exporter#D7 | task | task-6, task-7, task-8, task-19, task-20 | A test asserts one `MeterProvider` and one `MetricsListener` are constructed per daemon start and two dispatches each wire a `metrics: false` visualizer |
 | adr-014-otel-observability-exporter#D8 | task | task-4, task-5 | A test asserts the exported metric Resource's exact key set and `service.instance.id === 'P/W'` and `host.name` present |
-| adr-014-otel-observability-exporter#D9 | task | task-1, task-2, task-11, task-14, task-16, task-17 | A test asserts a forwarded gate_verdict appears once in the feature ledger and zero times in the daemon ledger |
+| adr-014-otel-observability-exporter#D9 | task | task-1, task-2, task-11, task-14, task-16, task-17, task-21 | A test asserts a forwarded gate_verdict appears once in the feature ledger and zero times in the daemon ledger |
 
 ## Verification
 

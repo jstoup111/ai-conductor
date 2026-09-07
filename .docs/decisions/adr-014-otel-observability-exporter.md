@@ -236,17 +236,26 @@ Relevant existing facts (evidence):
 > revise how metrics are owned and identified. Decisions 1, 2, 4, 5 and 6 stand; traces are
 > unaffected.
 >
-> 7. **The daemon process owns the one metric provider.** `daemon-cli.ts` constructs a single
->    long-lived `MeterProvider` + `MetricsRecorder` at daemon start (when `otel:` is enabled) and
->    shuts it down only at daemon stop. Per-dispatch `OtelVisualizer` instances keep owning their
->    `TracerProvider` (spans are per-run by nature) but receive the shared recorder through the
->    factory context and record every metric onto it; a visualizer that did not construct its
->    `MeterProvider` never shuts it down (`stop()` flushes spans only). Because the daemon outlives
->    every dispatch, all counters are monotonic for the daemon's life — a daemon restart is an
->    ordinary Prometheus counter reset handled by `increase()`/`rate()`. The interactive
->    `index.ts` path (single run, single process) keeps constructing its own provider, unchanged.
->    Rationale: one long-lived meter is the only shape where "fix the resetting counters" and
->    "emit daemon-level signals" are the same mechanism rather than two.
+> 7. **The dispatcher-side process owns the one metric provider, and every metric is derived
+>    from events by one listener.** `daemon-cli.ts` constructs a single long-lived `MeterProvider`
+>    + `MetricsRecorder` at daemon start (when `otel:` is enabled) and shuts it down only at daemon
+>    stop. A `MetricsListener` subscribed to the daemon root bus records **all** instruments —
+>    the existing per-feature ones (`step.duration`, `step.retries`, `step.dispatches`,
+>    `feature.cost`, `feature.step.cost`, `feature.step.tokens`, `pipeline.closeout.duration`,
+>    `run.outcomes`) and the new daemon-level ones — from the typed events that already reach that
+>    bus (`step_started`/`step_completed`/`step_failed`/`step_retry`, `feature_cost_snapshot`,
+>    `feature_usage_total`, `pipeline_closeout`, `feature_complete`, `loop_halt`, plus the new
+>    `feature_dispatch_ended`). Per-dispatch `OtelVisualizer` instances become **spans only**: they
+>    keep their `TracerProvider` (spans are per-run by nature) and construct no `MeterProvider`
+>    under the daemon. Because the recorder is fed by events rather than by the process that ran
+>    the step, counters stay monotonic for the daemon's life whether the dispatch ran in-process,
+>    in a child process, or — the intended end state — in a remote worker that exits after one
+>    dispatch and ships its event stream back. The interactive `index.ts` path (single run, single
+>    process) constructs its own provider and attaches the same `MetricsListener` to its run bus, so
+>    there is exactly one metric-recording code path and the interactive instrument set is
+>    byte-identical to today. Rationale: one long-lived meter fed by events is the only shape where
+>    "fix the resetting counters", "emit daemon-level signals", and "workers may be remote and
+>    ephemeral" are the same mechanism rather than three.
 > 8. **Metric identity is `service.instance.id = <project>/<worker>`; `feature` is a data-point
 >    attribute only.** `<project>` is the resolved project name of the 2026-08-27 amendment;
 >    `<worker>` is `otel.worker_name` from `.ai-conductor/config.yml` when non-blank (trimmed), else
@@ -274,17 +283,18 @@ Relevant existing facts (evidence):
 >    state sourced from the existing eligible/waiting/blocked/gated channels and the park
 >    claims, oldest age per state, slots busy/free, in-flight slugs, the dispatch-blocking flags,
 >    and the tick's discovery duration), `feature_dispatch_started` (`kind: initial | resume |
->    rekick`) at dispatch, and `feature_shipped` (with `run_started_at` and the timing rollup's
+>    rekick`) at dispatch, `feature_dispatch_ended` (`outcome: complete | halted | terminated`) when
+>    the dispatch's process or worker returns, and `feature_shipped` (with `run_started_at` and the timing rollup's
 >    active total and its `exact | partial | unavailable` state) at the ship point. Each is a
 >    `ConductorEvent` union member with an `EVENT_SINKS` row and a visualizer `handleEvent` case.
 >    Because the daemon root bus has no persister today, the daemon attaches an `EventPersister`
 >    writing `<mainRoot>/.daemon/events.jsonl` — same schema, same reader, a sibling ledger under
->    event-spine exception B (one writer per file), not a new channel. The per-feature events the
->    daemon-level listener needs (`gate_verdict`, `kickback`, `loop_halt`,
->    `halt_record_written`, `build_stall`, `feature_complete`) are re-emitted onto the daemon bus
->    by the existing `ForwardingEventEmitter` path, tagged as forwarded so the daemon persister
->    skips them — the per-feature `.pipeline/events.jsonl` remains their ledger and their
->    `EVENT_SINKS` rows are untouched. The daemon-level `MetricsRecorder` listener records
+>    event-spine exception B (one writer per file), not a new channel. Every per-feature event is already re-emitted onto the daemon bus by the existing
+>    `ForwardingEventEmitter`; the forwarded copy is additionally tagged with its feature slug
+>    (a `WeakMap` beside the existing `forwardedFromFeature` `WeakSet`, read through
+>    `forwardedFeatureOf(event)`) so the listener can attribute it, and tagged as forwarded so
+>    the daemon persister skips it — the per-feature `.pipeline/events.jsonl` remains their ledger and their
+>    `EVENT_SINKS` rows are untouched. The `MetricsListener` records, beside the existing per-feature instruments,
 >    `daemon.backlog`, `daemon.backlog.oldest_age`, `daemon.slots`, `daemon.inflight`,
 >    `daemon.up`, `daemon.blocked_reason`, `daemon.poll.duration`, `daemon.stalls`,
 >    `feature.dispatches`, `feature.halts` (attribute `haltClass` carries the existing
