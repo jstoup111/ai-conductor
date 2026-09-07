@@ -320,11 +320,6 @@ describe('daemon-level metrics acceptance', () => {
     const daemon = await createDaemonMeter(root);
     const emissions: Array<Promise<void>> = [];
     const mixedAgeBacklogFixture = {
-      eligible: [
-        { slug: 'eligible-oldest', oldestAgeSeconds: 129_600 },
-        { slug: 'eligible-newer', oldestAgeSeconds: 86_400 },
-        { slug: 'eligible-undeterminable', oldestAgeSeconds: undefined },
-      ],
       snapshot: {
         counts: { eligible: 3, waiting: 0, blocked: 0, gated: 0, parked: 0 },
         oldestAgeSeconds: {
