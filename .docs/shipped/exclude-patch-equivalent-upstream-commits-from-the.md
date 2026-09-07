@@ -4,13 +4,6 @@ spec_hash: 21a78da2e01438b83944f3b1b8329fec7e50fdbfc4b1e1c1300765fa0ec7778a
 pr: https://github.com/jstoup111/ai-conductor/pull/2427
 shipped: 2026-09-07
 engine_version: 20260907T120758Z-4f8bdec36946
-findings:
-  - gate: architecture_review_as_built
-    finding: AB-1
-    class: REMEDIABLE
-    governing_clause: "adr-2026-09-06-engine-owned-test-quality-scope decision 1"
-    outcome: remediated
-    summary: "Patch-equivalence attribution re-reads symbolic base and HEAD identities instead of consuming one frozen base/HEAD pair."
 ---
 
 ## Cost
@@ -19,18 +12,20 @@ output: 113905
 cache_read: 23663234
 cache_creation: 578275
 cost_usd: 19.0493
-dispatches: 19
+dispatches: 20
 retries: 1
 halts: 0
-unmetered: count: 6, duration_ms: 0
+unmetered: count: 7, duration_ms: 0
 cost_unmetered: count: 0
 providers:
   codex: input: 802432, output: 66624, cache_read: 18343936, cache_creation: 0, cost_usd: 7.7978, dispatches: 8, cost_unmetered: 0
   claude: input: 98, output: 47281, cache_read: 5319298, cache_creation: 578275, cost_usd: 11.2515, dispatches: 5, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:finish
+state: measured
+active_ms: 7321217
+provider_active_ms: 6763372
+no_provider_active_ms: 557845
 
 ## Build Review
 laps_to_pass: 1
