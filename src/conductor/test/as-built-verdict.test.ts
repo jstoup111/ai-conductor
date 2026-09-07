@@ -60,6 +60,32 @@ describe('as-built verdict gate', () => {
     });
   });
 
+  it('recognizes every verdict with one-to-six heading markers, optional bold, and closing markers', () => {
+    for (const verdict of ['APPROVED', 'APPROVED WITH DRIFT NOTES', 'PLAN_GAP', 'BLOCKED']) {
+      for (let depth = 1; depth <= 6; depth += 1) {
+        const decoration = '#'.repeat(depth);
+        for (const line of [
+          `${decoration} Verdict: ${verdict}`,
+          `${decoration} Verdict: ${verdict} ${decoration}`,
+          `${decoration} **Verdict: ${verdict}**`,
+          `${decoration} **Verdict: ${verdict}** ${decoration}`,
+        ]) {
+          expect(readAsBuiltVerdictLine(line)).toEqual({
+            found: true,
+            raw: verdict,
+            recognized: verdict,
+          });
+        }
+      }
+    }
+  });
+
+  it('classifies an APPROVED WITH DRIFT NOTES heading as approved', () => {
+    expect(classifyAsBuiltReviewOutcome('### **Verdict: APPROVED WITH DRIFT NOTES** ###')).toEqual({
+      kind: 'approved',
+    });
+  });
+
   it('parses an all-remediable BLOCKED findings table', () => {
     const report = [
       'Verdict: BLOCKED',
