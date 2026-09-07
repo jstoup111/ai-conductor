@@ -10,6 +10,31 @@
 
 Four bounded tasks close the residue of #1490: the OTel visualizer's per-event routing becomes a compile-checked table derived from the same sink declaration that already drives its subscriptions, and an event that is subscribed but unroutable reports itself instead of being discarded. Halt outcomes, span closure at termination, and the membership of the traced set are already delivered and are not touched.
 
+## Amendment 2026-09-07 — `unattributed_progress` leaves the traced set (PG-1)
+
+The as-built review recorded PLAN_GAP **PG-1**: Story 1 requires every sink-declared traced event
+to record that type's span or metric effect, but the approved Task 2 directed BUILD to preserve a
+deliberate empty handler for `unattributed_progress` while claiming all sixteen traced types
+retained an effect. The two cannot both hold.
+
+The operator decided: **remove `unattributed_progress` from the traced set.** It has no OTel effect,
+so it must not be declared traced; a no-op handler sitting in the traced table is exactly the drift
+this feature exists to catch. It is deliberately NOT given a metric or span event. Its `render`,
+`persist` and `audit` sink declarations are unchanged, so the daemon renderer, the persisted event
+log and the progress-event coverage guard are untouched.
+
+The traced set is therefore fifteen types, the handler table is fifteen entries with no no-op member,
+and the `OtelTracedEventType` mapped type continues to prove table-equals-traced-set at compile time
+over those fifteen. Task 2's step 3, its completion contract, Task 3's second completion item, and the
+Story 1 happy-path coverage row are amended below to match. Story 1 itself is unchanged — this
+amendment makes the plan deliver the criterion the story already stated.
+
+No APPROVED ADR required amendment: `adr-014-otel-observability-exporter` enumerates no traced
+membership, and `adr-2026-07-26-event-sink-registry-exhaustiveness` governs registry totality (which
+is preserved — the row stays, only its `otel` value changes) and names `unattributed_dispatch`, not
+`unattributed_progress`. `.docs/architecture/2026-06-28-otel-observability.md` lists no traced
+membership either and is unchanged. This feature has no coherence artifact.
+
 ## Technical Approach
 
 `EVENT_SINKS` is annotated `Record<ConductorEvent['type'], SinkDeclaration>`, which widens each `otel` value to `boolean` and erases the per-type literal. Re-declare it as `as const satisfies Record<ConductorEvent['type'], SinkDeclaration>` so the literal `true`/`false` survives, then export a type alias that filters the table's keys by `otel extends true`. This changes no runtime value: `eventTypesFor` still keys into the same object and the four accessors return the same members. The pattern is already established in this engine — `live-e2e-providers.ts`, `config.ts`, `model-table-metadata.ts` and `closeout-cli.ts` all use `as const satisfies`. The readonly properties `as const` introduces stay assignable to the mutable `SinkDeclaration`, so the existing registry test's `@ts-expect-error` on a table missing one declaration continues to hold.
@@ -61,13 +86,13 @@ Tests stay at unit level and inject every boundary. The visualizer test file alr
 **Steps:**
 1. Write a failing unit test that constructs a visualizer with in-memory exporters and asserts its handled event-type set equals the set returned by the traced-type accessor, with no missing and no extra member.
 2. Run the file's narrowest invocation and confirm the accessor does not exist (RED).
-3. Replace `handleEvent`'s `switch` with a private readonly instance field typed as a mapped record over the alias from Task 1, one arrow entry per traced type carrying exactly the effect its case had, including the pending-dispatch cleanup on completion and the deliberate no-op for routine progress. Expose a read accessor for the table's keys and keep the existing early return for uninitialized providers.
+3. Replace `handleEvent`'s `switch` with a private readonly instance field typed as a mapped record over the alias from Task 1, one arrow entry per traced type carrying exactly the effect its case had, including the pending-dispatch cleanup on completion. `unattributed_progress` is NOT traced: clear its `otel` declaration in `EVENT_SINKS` (leaving its `render`, `persist` and `audit` flags as they are) and delete its empty handler entry, so the table and the traced set are both fifteen types and no member of the table is a no-op. Expose a read accessor for the table's keys and keep the existing early return for uninitialized providers.
 4. Run the visualizer, span-manager, parity, wiring and observability OTel test files plus both typecheck projects (GREEN), then commit.
 
 **Done when:**
 1. A unit test asserts the visualizer's handled event-type set equals the traced-type accessor's set, with no missing and no extra member.
-2. All sixteen traced types keep their previous span or metric effect, proven by the existing OTel visualizer, span-manager, parity, wiring and observability test files passing unchanged.
-3. `npm run typecheck` passes with the routing table typed as a mapped record over the derived alias rather than an index signature.
+2. All fifteen traced types keep their previous span or metric effect and `unattributed_progress` is no longer declared traced and no longer has a handler entry, proven by the OTel visualizer, span-manager, parity, wiring and observability test files passing.
+3. `npm run typecheck` passes with the routing table typed as a mapped record over the derived alias rather than an index signature, so the compile-time exhaustiveness proof covers exactly the fifteen traced types.
 
 ### Task 3: Report a traced event that has no handler entry
 **Story:** Story 1 (negative path)
@@ -83,7 +108,7 @@ Tests stay at unit level and inject every boundary. The visualizer test file alr
 
 **Done when:**
 1. The mocked-registry unit test observes exactly one warning whose text contains the unhandled event type, and the emit resolves without throwing.
-2. No warning is emitted for any of the sixteen traced types across the existing OTel test files.
+2. No warning is emitted for any of the fifteen traced types across the existing OTel test files.
 3. In the same mocked run, a traced type that does have a handler entry still records its span or metric effect.
 
 ### Task 4: Prove untraced types stay off the OTel surface
@@ -107,7 +132,7 @@ Tests stay at unit level and inject every boundary. The visualizer test file alr
 
 | Criterion | Task id(s) | Done when quote | Disposition |
 | --- | --- | --- | --- |
-| Story 1 happy: Given the sink table declares an event type as traced, when the visualizer starts and that event is emitted, then the visualizer routes it to the handler that owns it and records that type's span or metric effect. | 2 | "All sixteen traced types keep their previous span or metric effect, proven by the existing OTel visualizer, span-manager, parity, wiring and observability test files passing unchanged." | diff-local |
+| Story 1 happy: Given the sink table declares an event type as traced, when the visualizer starts and that event is emitted, then the visualizer routes it to the handler that owns it and records that type's span or metric effect. | 2 | "All fifteen traced types keep their previous span or metric effect and `unattributed_progress` is no longer declared traced and no longer has a handler entry, proven by the OTel visualizer, span-manager, parity, wiring and observability test files passing." | diff-local |
 | Story 1 happy: Given a started visualizer, when its handled event-type set is compared with the traced set derived from the sink table, then the two sets are equal. | 2 | "A unit test asserts the visualizer's handled event-type set equals the traced-type accessor's set, with no missing and no extra member." | diff-local |
 | Story 1 negative: Given a traced event type the visualizer has no handler entry for, when that event is emitted, then the visualizer reports the unhandled type through its injected warning callback and the emit completes without throwing. | 3 | "The mocked-registry unit test observes exactly one warning whose text contains the unhandled event type, and the emit resolves without throwing." | diff-local |
 | Story 2 happy: Given an event type declared as not traced, when it is emitted on the bus, then the visualizer never subscribes to it and exports no span, span event, or metric for it. | 4 | "A unit test observes no subscription and no exported span or metric for a declared-untraced event type." | diff-local |
