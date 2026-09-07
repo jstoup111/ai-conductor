@@ -90,6 +90,12 @@ export interface BuildReviewInputs {
   testSuiteProof?: FullSuitePassEvidence;
   /** Immutable identity of every source value shared by the rubric fan-out. */
   sourceSnapshot?: BuildReviewSourceSnapshot;
+  /**
+   * Advisory record of feature work Git identified as already represented on
+   * the review base. This is deliberately outside the source snapshot: it
+   * explains the filtered diff but must not affect review identity or verdicts.
+   */
+  patchEquivalentExclusion?: BuildReviewPatchEquivalentExclusion;
 }
 
 /** Inputs returned after the proof gate has frozen a source snapshot. */
@@ -171,6 +177,12 @@ export interface BuildReviewTestQualityScope {
   readonly counterfactualFileSelectors: readonly string[];
   /** Changed-test markers that name no criterion, FR, or task in this feature. */
   readonly unresolvedMarkers: readonly BuildReviewUnresolvedMarker[];
+}
+
+/** Advisory provenance for paths excluded because Git found their patches upstream. */
+export interface BuildReviewPatchEquivalentExclusion {
+  readonly filteredCommits: readonly { readonly sha: string; readonly subject: string }[];
+  readonly excludedPaths: readonly string[];
 }
 
 /** Process-free proof inspection seam; it must never launch the aggregate suite. */
@@ -272,6 +284,74 @@ async function engineAppendedPlanExclusion(
   )
     ? [`:(exclude)${pathspec}`]
     : [];
+}
+
+const GIT_SHA = /^[0-9a-f]{7,64}$/i;
+
+function patchEquivalentCommits(cherryOutput: string): readonly { readonly sha: string; readonly subject: string }[] | undefined {
+  const commits: { sha: string; subject: string }[] = [];
+  for (const line of cherryOutput.split('\n')) {
+    if (line === '') continue;
+    const match = /^([+-]) ([0-9a-f]{7,64}) (.+)$/i.exec(line);
+    if (match === null || !GIT_SHA.test(match[2]!)) return undefined;
+    if (match[1] === '-') commits.push({ sha: match[2]!, subject: match[3]! });
+  }
+  return commits;
+}
+
+function equivalentShaFor(
+  commitSha: string,
+  equivalentCommits: readonly { readonly sha: string; readonly subject: string }[],
+): string | undefined {
+  const matches = equivalentCommits.filter(({ sha }) => commitSha === sha || commitSha.startsWith(sha) || sha.startsWith(commitSha));
+  return matches.length === 1 ? matches[0]!.sha : undefined;
+}
+
+/**
+ * Keep Git's patch-equivalence judgement path-scoped: a path is excluded only
+ * if every range commit that touched it is one of `git cherry`'s minus records.
+ * Any failed or malformed attribution leaves the reviewed diff unchanged.
+ */
+async function patchEquivalentExclusion(
+  git: GitRunner,
+  baseRef: string,
+  mergeBaseSha: string,
+): Promise<BuildReviewPatchEquivalentExclusion | undefined> {
+  const cherry = await git(['cherry', '-v', baseRef, 'HEAD']);
+  if (cherry.exitCode !== 0) return undefined;
+  const filteredCommits = patchEquivalentCommits(cherry.stdout);
+  if (filteredCommits === undefined || filteredCommits.length === 0) return undefined;
+
+  const attribution = await git([
+    'log',
+    '--format=%H',
+    '--name-only',
+    '--no-renames',
+    `${mergeBaseSha}..HEAD`,
+  ]);
+  if (attribution.exitCode !== 0) return undefined;
+
+  const touchingCommits = new Map<string, Set<string>>();
+  const records = attribution.stdout.trimEnd().split(/\n{2,}/);
+  for (const record of records) {
+    if (record === '') continue;
+    const [sha, ...paths] = record.split('\n');
+    if (sha === undefined || !GIT_SHA.test(sha) || paths.some((path) => path === '' || path.startsWith(':'))) return undefined;
+    for (const path of paths) {
+      const commits = touchingCommits.get(path) ?? new Set<string>();
+      commits.add(sha);
+      touchingCommits.set(path, commits);
+    }
+  }
+
+  const excludedPaths = [...touchingCommits.entries()]
+    .filter(([, commits]) => commits.size > 0 && [...commits].every((sha) => equivalentShaFor(sha, filteredCommits) !== undefined))
+    .map(([path]) => path)
+    .sort();
+  return Object.freeze({
+    filteredCommits: Object.freeze(filteredCommits.map((commit) => Object.freeze(commit))),
+    excludedPaths: Object.freeze(excludedPaths),
+  });
 }
 
 function projectRootForPlan(planPath: string): string {
@@ -671,12 +751,14 @@ export async function assembleBuildReviewInputs(
     planRepoPath,
     liveHeadSha,
   );
+  const equivalentExclusion = await patchEquivalentExclusion(git, baseRef, mergeBaseSha);
 
   const diffArgs = [
     '--',
     '.',
     ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
     ...planExclusion,
+    ...(equivalentExclusion?.excludedPaths.map((path) => `:(exclude)${path}`) ?? []),
   ];
   const diffResult = await git([
     'diff', `${mergeBaseSha}..${liveHeadSha}`,
@@ -779,5 +861,6 @@ export async function assembleBuildReviewInputs(
     repairProvenance,
     testSuiteProof: inspection.evidence,
     sourceSnapshot,
+    patchEquivalentExclusion: equivalentExclusion,
   };
 }

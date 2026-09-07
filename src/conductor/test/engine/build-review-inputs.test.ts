@@ -884,6 +884,108 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       ]);
     });
 
+    // Covers: task:1
+    it('excludes paths touched exclusively by patch-equivalent commits from the graded diff', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        {
+          match: ['cherry', '-v', 'origin/main', 'HEAD'],
+          result: { stdout: '- 1234567 replayed upstream patch\n+ 7654321 novel feature work\n' },
+        },
+        {
+          match: ['log', '--format=%H', '--name-only', '--no-renames', 'abc1234..HEAD'],
+          result: { stdout: '1234567\nsrc/replayed.ts\nsrc/also-replayed.ts\n\n7654321\nsrc/novel.ts\n' },
+        },
+        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/src/novel.ts b/src/novel.ts\n+novel\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(calls.find((call) => call[0] === 'diff')).toEqual([
+        'diff',
+        'abc1234..HEAD',
+        '--',
+        '.',
+        ...MACHINERY_AUTHORED_PATHS.map((path) => `:(exclude)${path}`),
+        ':(exclude)src/also-replayed.ts',
+        ':(exclude)src/replayed.ts',
+      ]);
+      expect(inputs.patchEquivalentExclusion).toEqual({
+        filteredCommits: [{ sha: '1234567', subject: 'replayed upstream patch' }],
+        excludedPaths: ['src/also-replayed.ts', 'src/replayed.ts'],
+      });
+    });
+
+    it('keeps the graded-diff argv unchanged when Git reports no patch-equivalent commits', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['cherry', '-v', 'origin/main', 'HEAD'], result: { stdout: '+ 7654321 novel feature work\n' } },
+        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/src/novel.ts b/src/novel.ts\n+novel\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(calls.find((call) => call[0] === 'diff')).toEqual([
+        'diff',
+        'abc1234..HEAD',
+        '--',
+        '.',
+        ...MACHINERY_AUTHORED_PATHS.map((path) => `:(exclude)${path}`),
+      ]);
+      expect(calls.some((call) => call[0] === 'log')).toBe(false);
+      expect(inputs.patchEquivalentExclusion).toBeUndefined();
+    });
+
+    it('fails closed when Git cherry emits an unparseable record', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['cherry', '-v', 'origin/main', 'HEAD'], result: { stdout: '- 1234567 replayed upstream patch\n- not-a-sha malformed\n' } },
+        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/src/replayed.ts b/src/replayed.ts\n+replayed\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(calls.find((call) => call[0] === 'diff')).toEqual([
+        'diff',
+        'abc1234..HEAD',
+        '--',
+        '.',
+        ...MACHINERY_AUTHORED_PATHS.map((path) => `:(exclude)${path}`),
+      ]);
+      expect(calls.some((call) => call[0] === 'cherry')).toBe(true);
+      expect(calls.some((call) => call[0] === 'log')).toBe(false);
+      expect(inputs.patchEquivalentExclusion).toBeUndefined();
+    });
+
+    it('fails closed rather than interpreting a colon-prefixed path as pathspec magic', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['cherry', '-v', 'origin/main', 'HEAD'], result: { stdout: '- 1234567 replayed upstream patch\n' } },
+        {
+          match: ['log', '--format=%H', '--name-only', '--no-renames', 'abc1234..HEAD'],
+          result: { stdout: '1234567\n:(glob)*\n' },
+        },
+        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/:\(glob\)\* b/:\(glob\)\*\n+replayed\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(calls.find((call) => call[0] === 'diff')).toEqual([
+        'diff',
+        'abc1234..HEAD',
+        '--',
+        '.',
+        ...MACHINERY_AUTHORED_PATHS.map((path) => `:(exclude)${path}`),
+      ]);
+      expect(calls.some((call) => call[0] === 'cherry')).toBe(true);
+      expect(calls.some((call) => call[0] === 'log')).toBe(true);
+      expect(inputs.patchEquivalentExclusion).toBeUndefined();
+    });
+
     // The engine appends its own `### Task rem-*` blocks to the approved plan
     // during remediation rounds (recorded in `.pipeline/engine-state.json`).
     // That append lands as a feature commit, so the graded diff showed it as a
