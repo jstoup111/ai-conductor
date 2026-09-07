@@ -283,7 +283,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(run.remediateDispatches()).toBe(0);
     expect(run.kickbacks).toEqual([]);
     expect((await run.state()).build_review).toBe('done');
-    expect(run.resolver.mock.calls.map((call) => call[2])).toContainEqual(expect.objectContaining({
+    expect(vi.mocked(run.resolver).mock.calls.map((call) => call[2])).toContainEqual(expect.objectContaining({
       minConfidence: { testQuality: 70 },
     }));
   });
