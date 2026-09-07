@@ -77,6 +77,89 @@ Adjudication or effect failure remains fail-closed and blocks both PASS and part
 repeated attempted/regressed semantic case still halts without a second charge or a free route. Every
 actual first-time BUILD route still increments the cumulative convergence bound.
 
+### D4 — Grader confidence and an operator floor suppress a finding before it fails the gate
+
+> **Amended 2026-09-06 by #2383:** D1 admits every "valid operator-unresolved content finding" to
+> the mixed-lap judgement. This amendment adds the decisions below, which narrow that set by one
+> engine-applied rule before D1 classifies the lap. The original decisions above are preserved and
+> unchanged; nothing here grants a provider operator authority, and nothing here lets the engine
+> manufacture or adjust a confidence.
+
+> **D4.1 — Confidence is a grader-supplied percentage the engine validates but never derives.**
+> Each rubric finding may carry an integer `confidence` 0-100 stating how sure the grader is that
+> the finding is a real defect. The engine range-validates it in the finding parser; an
+> out-of-range or non-integer value makes the result malformed exactly as any other invalid field
+> does. The engine never computes, defaults, or adjusts the number. Confidence is presentation
+> evidence, not identity: it never enters the finding identity hash, so a re-graded finding at a
+> different confidence keeps its id and every operator disposition bound to it.
+>
+> **D4.2 — Absent means blocking.** `confidence` is optional in the result contract. A finding
+> that omits it is never suppressed. This keeps the change fail-safe — a grader that forgets the
+> field can only cost a lap, never drop a finding — and keeps the contract at `v3`, so no stored
+> operator disposition is invalidated. The skill-digest cache check already discards cached results
+> when the skill text changes, so graders re-run with the new contract without a version bump.
+>
+> **D4.3 — The floor suppresses at the effective verdict, in its own bucket.** Per-rubric config
+> `build_review.rubrics.<id>.min_confidence` (integer 0-100, default 0) is applied in
+> `deriveEffectiveBuildReviewVerdict`: a finding whose confidence is below its rubric's floor is
+> placed in a `suppressed` bucket beside `accepted` and `unresolved`, and the verdict formula is
+> unchanged — only `unresolved` blocks. Suppression is engine bookkeeping on a grader judgement and
+> is never recorded as, merged into, or promoted to an operator accepted-risk disposition; D2's
+> separation of operator authority from autonomous outcomes is untouched. At the default 0 the
+> comparison never fires and behavior is identical to today.
+>
+> **D4.4 — A suppressed finding never reaches remediate.** A lap whose every finding is suppressed
+> or operator-resolved is an effective PASS and does not enter the post-join judgement at all. On a
+> mixed lap the suppressed findings are excluded from the adjudication sources, so the one
+> `remediate` dispatch of D2 sees only the surviving findings. No kickback is charged for a
+> suppressed finding because none ever becomes an action case.
+>
+> **D4.5 — Every suppression is visible.** Each suppressed finding is recorded on the existing
+> `build_review_outer_verdict` event as an additive optional list carrying its finding id, rubric,
+> reported confidence, and the floor that suppressed it, following the additive-field pattern of
+> `adr-2026-08-11-halt-events-ride-the-persisted-spine`, and it is rendered by the existing daemon
+> log projection of that event. Suppression is not a `kickback` event and is never rendered as one.
+>
+> **D4.6 — Suppressed findings persist and remain visible to the judge.** A suppressed finding is
+> not a blocking source, but it is not forgotten either. The coordinator records each suppression in
+> the feature-scoped durable case store as a suppression entry keyed by the finding's exact id —
+> rubric, summary, reported confidence, the floor applied, and the lap last seen — retained across
+> laps and never pruned when the finding stops recurring or a related case resolves. The adjudication
+> context carries these entries as a distinct non-blocking history section, separate from current
+> sources, so the D4 source-complete validator does not demand an outcome for them while the judge
+> can still weigh a suppressed finding when a later finding from another rubric conflicts with it.
+> This is the predecessor's decision 5 store used as designed: the occurrence is emitted on the
+> spine (D4.5), and the store carries it as durable control input for later judgement.
+
+### D5 — Exact-id recurrence of a settled finding does not re-dispatch the judge
+
+> **Amended 2026-09-06 by #2383:** The predecessor's decision 7 says a previously deferred or
+> rejected case "reuses that outcome after the current adjudication confirms the binding". That
+> confirmation costs one provider session per lap for a finding the harness has already settled,
+> and it is the reason a deferred finding spins. This amendment adds the decision below.
+
+> **D5.1 — Settled recurrence is a mechanical predicate, not a judgement.** Before the D2 dispatch,
+> the coordinator reads the durable case store and removes from the live source set every finding
+> whose exact content-anchored id already appears as a source link on a case that is finalized —
+> disposition `defer` or `reject` with its effect `applied` or `none`, or a source outcome of
+> `merged`. Exact-id match is the only admitted equivalence: a finding whose id has drifted is not
+> settled and still dispatches the judge, because equivalence under drift is the judgement D2 exists
+> for. If the live set is empty after this and after operator resolution, the lap finalizes from
+> durable state without dispatching `remediate`; if any live source remains, the dispatch proceeds
+> with the reduced set.
+>
+> **D5.2 — Unfinished and action cases are never settled.** A case with a `reserved` or `failed`
+> effect, or any open action case, does not satisfy the predicate; the existing halt and BUILD
+> routes for those states are unchanged. The predicate can only skip a dispatch that D7 would have
+> resolved to the same finalized non-action outcome. The predicate reads the store and never
+> writes, prunes, or resolves it: every case, including resolved ones, stays durable so a later
+> judgement on a conflicting finding still sees the full history.
+>
+> **D5.3 — A skipped dispatch is recorded.** When the predicate empties the live set, the
+> coordinator emits the existing `remediation_adjudication_completed` event for the lap with the
+> settled case ids and no new effect ids, so the skipped session is visible on the spine and in the
+> daemon log as a completed adjudication rather than as an absence.
+
 ## Consequences
 
 - A mechanical failure cannot erase or postpone valid sibling content merely because reduced
