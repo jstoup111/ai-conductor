@@ -21,6 +21,54 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+describe('poll() assigned-issue completeness signal', () => {
+  function issueListingGh(count: number): GhRunner {
+    return async (args) => {
+      if (args[0] === 'issue' && args[1] === 'list') {
+        return {
+          stdout: JSON.stringify(Array.from({ length: count }, (_, index) => ({
+            number: index + 1,
+            title: `Issue ${index + 1}`,
+            body: 'body',
+            labels: [],
+          }))),
+        };
+      }
+      return { stdout: '' };
+    };
+  }
+
+  it('logs once for a saturated listing while still capturing every returned issue', async () => {
+    const logs: string[] = [];
+    const adapter = createGithubIssuesAdapter({
+      gh: issueListingGh(3),
+      registry: { list: async () => [{ name: 'o/a', path: dir }] },
+      ledger: createLedger(join(dir, 'ledger.json')),
+      issueListLimit: 3,
+      log: (message) => logs.push(message),
+    });
+
+    expect(await adapter.poll()).toHaveLength(3);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('o/a');
+    expect(logs[0]).toContain('3');
+  });
+
+  it('does not log a completeness warning for an unsaturated listing', async () => {
+    const logs: string[] = [];
+    const adapter = createGithubIssuesAdapter({
+      gh: issueListingGh(2),
+      registry: { list: async () => [{ name: 'o/a', path: dir }] },
+      ledger: createLedger(join(dir, 'ledger.json')),
+      issueListLimit: 3,
+      log: (message) => logs.push(message),
+    });
+
+    expect(await adapter.poll()).toHaveLength(2);
+    expect(logs).toEqual([]);
+  });
+});
+
 function makeRecordingGh(): { gh: GhRunner; cwds: string[] } {
   const cwds: string[] = [];
   const gh: GhRunner = async (_args, opts) => {
