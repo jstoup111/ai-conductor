@@ -76,13 +76,16 @@ function buildReviewGit(): GitRunner {
   return async (args) => {
     const command = args.join(' ');
     if (command === 'remote') return { exitCode: 0, stdout: '', stderr: '' };
+    if (command === 'rev-parse main') {
+      return { exitCode: 0, stdout: 'fixture-base\n', stderr: '' };
+    }
     if (command === 'rev-parse HEAD') {
       return { exitCode: 0, stdout: 'fixture-head\n', stderr: '' };
     }
-    if (command.startsWith('merge-base main ')) {
+    if (command === 'merge-base fixture-base fixture-head') {
       return { exitCode: 0, stdout: 'base-sha\n', stderr: '' };
     }
-    if (command.startsWith('diff base-sha..HEAD -- . ')) {
+    if (command.startsWith('diff base-sha..fixture-head -- . ')) {
       return {
         exitCode: 0,
         stdout: [

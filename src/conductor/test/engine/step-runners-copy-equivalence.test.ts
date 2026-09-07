@@ -52,6 +52,7 @@ describe('build_review copy equivalence', () => {
     };
     const gitRunner = async (args: string[]) => {
       if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+      if (args[0] === 'rev-parse' && args[1] === 'main') return { exitCode: 0, stdout: 'fixture-base\n', stderr: '' };
       if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: 'fixture-head\n', stderr: '' };
       if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
       if (args[0] === 'diff' && args.includes('--name-status')) {
