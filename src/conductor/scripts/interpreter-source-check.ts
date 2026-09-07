@@ -4,36 +4,54 @@ export interface InterpreterSourceFinding {
   message: string;
 }
 
-type Word = { text: string; line: number; expandable: string[]; closed: boolean; openQuote?: "'" | '"' };
+type Word = { text: string; line: number; expandable: string[]; closed: boolean; openQuote?: "'" | '"'; regions: string[] };
 type Heredoc = { delimiter: string; expanding: boolean; stripTabs: boolean; interpreter: boolean; line: number };
 const expansion = /(?<!\\)(?:\$\{|\$\(|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9]|\$[@*#?$!\-$]|`)/g;
 const interpreter = /^(?:\/[^\s/]+)*\/(?:python3?|node)$|^(?:python3?|node)$/;
 const findingsIn = (value: string): string[] => [...value.matchAll(expansion)].map((match) => match[0]);
 
-/** Reads one shell word without evaluating it. Single quoted parts are data. */
+/**
+ * Reads one shell word without evaluating it. Single quoted parts are data.
+ * The inner text of every outermost command substitution the word spans is
+ * captured verbatim so the caller can tokenize it as its own command context.
+ */
 function wordAt(text: string, start: number, line: number): [Word, number] {
   let index = start;
   let quote: "'" | '"' | undefined;
   let substitutionDepth = 0;
   let value = '';
   let expandable = '';
+  const regions: string[] = [];
+  const enclosing: ("'" | '"' | undefined)[] = [];
+  let regionStart = -1;
   while (index < text.length) {
     const char = text[index];
     if (!quote && substitutionDepth === 0 && (/\s/.test(char) || ';|&<>'.includes(char))) break;
     if (!quote && (char === "'" || char === '"')) { quote = char; index += 1; continue; }
     if (quote && char === quote) { quote = undefined; index += 1; continue; }
     if (char === '\\' && index + 1 < text.length) { value += text[index + 1]; index += 2; continue; }
-    if (quote !== "'" && char === '$' && text[index + 1] === '(') substitutionDepth += 1;
-    else if (quote !== "'" && char === ')' && substitutionDepth > 0) substitutionDepth -= 1;
+    if (quote !== "'" && char === '$' && text[index + 1] === '(') {
+      // Quoting restarts inside a substitution, so stack the enclosing quote.
+      enclosing.push(quote);
+      quote = undefined;
+      if (substitutionDepth === 0) regionStart = index + 2;
+      substitutionDepth += 1;
+    } else if (!quote && char === ')' && substitutionDepth > 0) {
+      substitutionDepth -= 1;
+      quote = enclosing.pop();
+      if (substitutionDepth === 0 && regionStart >= 0) { regions.push(text.slice(regionStart, index)); regionStart = -1; }
+    }
     value += char;
     if (quote !== "'") expandable += char;
     index += 1;
   }
-  return [{ text: value, line, expandable: findingsIn(expandable), closed: !quote, openQuote: quote }, index];
+  if (regionStart >= 0) regions.push(text.slice(regionStart));
+  return [{ text: value, line, expandable: findingsIn(expandable), closed: !quote, openQuote: quote, regions }, index];
 }
 
 function commandsOnLine(line: string, lineNumber: number): Word[][] {
   const commands: Word[][] = [[]];
+  const nested: Word[][] = [];
   let cursor = 0;
   while (cursor < line.length) {
     while (/\s/.test(line[cursor] ?? '')) cursor += 1;
@@ -47,9 +65,10 @@ function commandsOnLine(line: string, lineNumber: number): Word[][] {
     const [word, next] = wordAt(line, cursor, lineNumber);
     if (next === cursor) { cursor += 1; continue; }
     commands.at(-1)?.push(word);
+    nested.push(...word.regions.flatMap((region) => commandsOnLine(region, lineNumber)));
     cursor = next;
   }
-  return commands.filter((words) => words.length > 0);
+  return [...commands, ...nested].filter((words) => words.length > 0);
 }
 
 function heredocsOnLine(line: string, words: Word[], lineNumber: number): Heredoc[] {

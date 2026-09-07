@@ -44,6 +44,26 @@ describe('checkInterpreterSource', () => {
     ]);
   });
 
+  it.each([
+    ['nested node -e', 'x=$(node -e "console.log($VALUE)")'],
+    ['nested python -c', 'x=$(python3 -c "print($VALUE)")'],
+    ['doubly nested node -e', 'x=$(printf %s "$(node -e "console.log($VALUE)")")'],
+  ])('rejects expanded interpreter source inside a command substitution: %s', (_name, text) => {
+    expect(checkInterpreterSource('nested.sh', text)).toEqual([
+      expect.objectContaining({ sourceName: 'nested.sh', line: 1, message: 'shell expansion in interpreter command source' }),
+    ]);
+  });
+
+  it('rejects an expanding interpreter heredoc opened inside a command substitution', () => {
+    expect(checkInterpreterSource('nested-heredoc.sh', 'x=$(python3 <<PY\nprint($VALUE)\nPY\n)')).toEqual([
+      expect.objectContaining({ sourceName: 'nested-heredoc.sh', line: 2, message: 'shell expansion in interpreter heredoc source' }),
+    ]);
+  });
+
+  it('accepts fixed interpreter source inside a command substitution', () => {
+    expect(checkInterpreterSource('nested-safe.sh', "x=$(node -e 'console.log(process.argv[1])' -- \"$VALUE\")\ny=$(python3 - \"$VALUE\" <<'PY'\nprint('$')\nPY\n)")).toEqual([]);
+  });
+
   it('terminates after case-pattern separators at end of line', () => {
     expect(checkInterpreterSource('case.sh', 'case "$name" in\n  conduct-ts)\n    true\n    ;;\nesac')).toEqual([]);
   });
