@@ -142,6 +142,36 @@ start, completion, refusal, and the halt itself ride the existing `step_started`
 no `coverage_binding_started`/`_halted` duplicates of a concern the spine already carries. No
 sidecar log.
 
+> **Amended 2026-09-07 by #2419:** D1's "6-cell `criterion` row (unchanged shape)" is widened, not
+> replaced. The M/L coherence-artifact carrier accepts an optional seventh cell; every existing
+> six-cell row keeps its meaning and its gap ids. The tier-S plan carrier is unchanged.
+>
+> **D10 — A `fail` criterion row may carry an authored correction cell.** The seventh cell is the
+> correction reference: exactly `plan`, or `architecture:<adr-stem>#D<n>`. It records the author's
+> judgement that the cited task's stated mechanism cannot deliver the criterion, and which layer must
+> correct it. The shared parser accepts a `criterion` row of six or seven cells; a seventh cell whose
+> value is outside that grammar, or a seventh cell on a row whose verdict is not `fail`, is
+> `unparseable-criterion-row` — an evidentiary defect, never waivable
+> (`adr-2026-08-24-evidentiary-defects-are-not-waivable`). At land, a `fail` row with a correction
+> cell is reported as `criterion:cannot-deliver-plan:<n>` or
+> `criterion:cannot-deliver-architecture:<n>`, whose detail names the criterion, the cited task
+> id(s), the quoted `Done when` text, the constraint reference, and the correction layer. A `fail` or
+> `gap` row with no seventh cell keeps today's `criterion:verdict:<n>` — no existing gap id is renamed
+> (`adr-2026-07-22-coherence-waiver-and-duplicate-claim`). Both new ids are waivable coverage gaps.
+> Discovery reads the row through the same shared parser and requires nothing of the cell
+> (`adr-2026-08-26-shared-coherence-parser-at-discovery`).
+>
+> **D11 — An `architecture` correction must cite an enumerable decision, and no correction routes.**
+> `runCoherenceGate` resolves an `architecture:<adr-stem>#D<n>` reference against the decision-id set
+> it already enumerates for the ADR layer — `parseAdrDecisions` over the change set's non-deleted
+> ADRs, formatted by `formatArchitectureDecisionId` (`adr-2026-09-02-adr-decision-citability-contract`
+> D1; no second ADR parser). A reference outside that set is the waivable coverage gap
+> `criterion:correction-unknown-decision:<n>`. The correction layer is a label rendered in the land
+> rejection and the spec PR diff; the engine never appends a task, never re-dispatches `plan` or
+> `architecture_review`, and no BUILD or SHIP consumer reads the cell
+> (`adr-2026-08-22-one-owner-per-review-question`; D6 above). `prd_audit`'s `PLAN_GAP` halt is
+> unchanged.
+
 ## Consequences
 
 ### Positive
