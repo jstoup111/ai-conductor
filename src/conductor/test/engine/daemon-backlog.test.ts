@@ -5,6 +5,8 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
+import { execa as execaCommand } from 'execa';
+import type { GitBlobBatchRunner } from '../../src/engine/git-blob-batch.js';
 import {
   discoverBacklog,
   fastForwardRoot,
@@ -1810,6 +1812,109 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
       baseBranch,
     });
     expect(backlog).toEqual([]);
+  });
+});
+
+describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
+  let dir: string;
+  const baseBranch = 'main';
+
+  const git = async (args: string[]) => {
+    const { stdout } = await execFile('git', args, { cwd: dir });
+    return stdout.trim();
+  };
+
+  const legacyTreeSource = (): BacklogTreeSource => ({
+    async listPlanFiles() {
+      const { stdout } = await execFile('git', ['ls-tree', '--name-only', `${baseBranch}:.docs/plans`], { cwd: dir });
+      return stdout.split('\n').filter((path) => path.endsWith('.md'));
+    },
+    async listShippedFiles() {
+      try {
+        const { stdout } = await execFile('git', ['ls-tree', '--name-only', `${baseBranch}:.docs/shipped`], { cwd: dir });
+        return stdout.split('\n').filter((path) => path.endsWith('.md'));
+      } catch {
+        return [];
+      }
+    },
+    async listAdrFiles() {
+      const { stdout } = await execFile('git', ['ls-tree', '--name-only', `${baseBranch}:.docs/decisions`], { cwd: dir });
+      return stdout.split('\n').filter((path) => /^adr-.*\.md$/i.test(path));
+    },
+    async readFile(path) {
+      try {
+        const { stdout } = await execFile('git', ['show', `${baseBranch}:${path}`], { cwd: dir });
+        return stdout;
+      } catch {
+        return null;
+      }
+    },
+  });
+
+  const writeCorpus = async (count: number) => {
+    for (let index = 0; index < count; index += 1) {
+      const slug = `2026-09-06-prefetch-${index}`;
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await mkdir(join(dir, '.docs/stories'), { recursive: true });
+      await mkdir(join(dir, '.docs/complexity'), { recursive: true });
+      await mkdir(join(dir, '.docs/track'), { recursive: true });
+      await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+      await writeFile(join(dir, `.docs/plans/${slug}.md`), `# Plan\n**Stories:** .docs/stories/${slug}.md\n### Task 1\n**Dependencies:** none\n`);
+      await writeFile(join(dir, `.docs/stories/${slug}.md`), '# Stories\n**Status:** Accepted\n');
+      await writeFile(join(dir, `.docs/complexity/${slug}.md`), 'Complexity: S\n');
+      await writeFile(join(dir, `.docs/track/${slug}.md`), 'Track: technical\n');
+      await writeFile(join(dir, `.docs/coherence/${slug}.md`), '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n|---|---|---|---|---|\n| story | S1 | Task 1 | covered | fixture |\n');
+    }
+    await mkdir(join(dir, '.docs/decisions'), { recursive: true });
+    for (let index = 0; index < count; index += 1) {
+      await writeFile(join(dir, `.docs/decisions/adr-prefetch-${index}.md`), '# ADR\n**Status:** APPROVED\n');
+    }
+    await git(['add', '.docs']);
+    await git(['commit', '-q', '-m', `commit corpus (${count})`]);
+  };
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'daemon-backlog-prefetch-'));
+    await execFile('git', ['init', '-b', baseBranch, '-q'], { cwd: dir });
+    await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+    await execFile('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeFile(join(dir, 'README.md'), 'init\n');
+    await git(['add', 'README.md']);
+    await git(['commit', '-q', '-m', 'init']);
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('preserves discovery output from the previous per-file tree reader for a committed corpus', async () => {
+    await writeCorpus(12);
+
+    const expected = await discoverBacklog(dir, undefined, undefined, { treeSource: legacyTreeSource() });
+    const actual = await discoverBacklog(dir, undefined, undefined, { baseBranch });
+
+    expect(actual).toEqual(expected);
+  });
+
+  it('uses a bounded number of batched blob reads as the committed corpus grows', async () => {
+    await writeCorpus(4);
+    const invocations: number[] = [];
+    const runner: GitBlobBatchRunner = async (file, args, options) => {
+      invocations.push(1);
+      return execaCommand(file, args, options);
+    };
+
+    await discoverBacklog(dir, undefined, undefined, {
+      treeSource: gitTreeSource(dir, baseBranch, { blobRunner: runner }),
+    });
+    const smallCorpusCalls = invocations.length;
+
+    await writeCorpus(300);
+    invocations.length = 0;
+    await discoverBacklog(dir, undefined, undefined, {
+      treeSource: gitTreeSource(dir, baseBranch, { blobRunner: runner }),
+    });
+
+    expect([smallCorpusCalls, invocations.length]).toEqual([1, 1]);
   });
 });
 
