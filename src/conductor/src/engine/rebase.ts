@@ -446,27 +446,37 @@ export async function rebaseStateActive(
 
 // ── HALT (FR-8) ──────────────────────────────────────────────────────────────
 
+export type RebaseResumeShape = 'paused-rebase' | 'completed-rebase';
+
 /**
- * Park for a human: write `.pipeline/HALT` listing the conflicted files and the
- * resume procedure. The rebase is LEFT PAUSED (no `--abort`); the caller must
- * not mark the feature processed, continue, or open a PR.
+ * Park for a human: write `.pipeline/HALT` with the appropriate resume
+ * procedure. A paused-rebase halt leaves the rebase paused (no `--abort`); the
+ * caller must not mark the feature processed, continue, or open a PR.
  */
 export async function writeHalt(
   projectRoot: string,
   conflicts: string[],
   extraReason?: string,
   events?: ConductorEventEmitter,
+  resumeShape: RebaseResumeShape = 'paused-rebase',
 ): Promise<HaltMarkerWriteResult> {
-  const fileList = conflicts.length > 0 ? conflicts.join(', ') : '(unknown)';
   const note =
-    `rebase conflict — parked for human resolution\n` +
-    (extraReason ? `${extraReason}\n` : '') +
-    `Conflicted files: ${fileList}\n\n` +
-    `Resume procedure:\n` +
-    `  1. Resolve the conflicts in the listed file(s).\n` +
-    `  2. git rebase --continue\n` +
-    `  3. rm .pipeline/HALT\n` +
-    `  4. Re-queue the feature for the daemon.\n`;
+    resumeShape === 'completed-rebase'
+      ? `rebase completed — parked for human review\n` +
+        (extraReason ? `${extraReason}\n` : '') +
+        `\nResume procedure:\n` +
+        `  1. Review the completed rebase and restore any missing feature content.\n` +
+        `  2. Confirm the working tree is clean.\n` +
+        `  3. rm .pipeline/HALT\n` +
+        `  4. Re-queue the feature for the daemon.\n`
+      : `rebase conflict — parked for human resolution\n` +
+        (extraReason ? `${extraReason}\n` : '') +
+        `Conflicted files: ${conflicts.length > 0 ? conflicts.join(', ') : '(unknown)'}\n\n` +
+        `Resume procedure:\n` +
+        `  1. Resolve the conflicts in the listed file(s).\n` +
+        `  2. git rebase --continue\n` +
+        `  3. rm .pipeline/HALT\n` +
+        `  4. Re-queue the feature for the daemon.\n`;
   return writeHaltMarker(projectRoot, note, 'needs-human', events);
 }
 
