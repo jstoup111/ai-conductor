@@ -1,3 +1,4 @@
+// Covers: task:1
 // `conduct-ts engineer poll` + `engineer forget` CLI primitives (Phase 9.3b, T22/T23).
 // FR-32 (poll-on-launch primitive) + FR-40 (manual forget). gh is injected — no network.
 
@@ -80,6 +81,7 @@ function captureOut() {
 
 // detectEngineerCommand reads process.argv offsets: [node, entry, 'engineer', sub, ...].
 const argv = (...rest: string[]) => ['node', 'conduct-ts', 'engineer', ...rest];
+const composeArgv = (...rest: string[]) => ['node', 'conduct-ts', 'compose', ...rest];
 
 describe('detectEngineerCommand: poll + forget grammar', () => {
   it('parses `engineer poll`', () => {
@@ -87,6 +89,28 @@ describe('detectEngineerCommand: poll + forget grammar', () => {
   });
   it('parses `engineer forget <ref>`', () => {
     expect(detectEngineerCommand(argv('forget', 'o/a#1'))).toEqual({ kind: 'forget', sourceRef: 'o/a#1' });
+  });
+  it('parses `compose forget <source-ref> --resolved-by <reference>`', () => {
+    expect(detectEngineerCommand(composeArgv('forget', 'o/a#1', '--resolved-by', 'o/a#2'))).toEqual({
+      kind: 'forget',
+      sourceRef: 'o/a#1',
+      resolvedBy: 'o/a#2',
+    });
+  });
+  it('preserves the forget descriptor shape without `--resolved-by`', () => {
+    expect(detectEngineerCommand(composeArgv('forget', 'o/a#1'))).toEqual({ kind: 'forget', sourceRef: 'o/a#1' });
+  });
+  it.each([
+    ['missing', composeArgv('forget', 'o/a#1', '--resolved-by')],
+    ['blank', composeArgv('forget', 'o/a#1', '--resolved-by', '')],
+    ['flag-shaped', composeArgv('forget', 'o/a#1', '--resolved-by', '--other')],
+  ])('guides when `--resolved-by` has a %s value', (_case, command) => {
+    expect(detectEngineerCommand(command)).toEqual({ kind: 'guide' });
+  });
+  it('rejects unknown forget flags by name', () => {
+    expect(detectEngineerCommand(composeArgv('forget', 'o/a#1', '--unknown'))).toEqual({
+      kind: 'reject', sub: 'forget', flag: '--unknown',
+    });
   });
   it('forget without a ref → guide', () => {
     expect(detectEngineerCommand(argv('forget'))).toEqual({ kind: 'guide' });

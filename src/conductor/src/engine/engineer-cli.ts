@@ -76,7 +76,7 @@ type EngineerDispatchDescriptor =
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
   | { kind: 'poll' }
   | { kind: 'claim' }
-  | { kind: 'forget'; sourceRef: string }
+  | { kind: 'forget'; sourceRef: string; resolvedBy?: string }
   | { kind: 'unclaim'; sourceRef: string }
   | { kind: 'requeue'; stale: true; olderThan?: string }
   | { kind: 'resolve'; sourceRef: string; prUrl: string; branch?: string }
@@ -211,14 +211,21 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
   }
 
   if (subCmd === 'forget') {
-    // `ai-conductor engineer forget <sourceRef>` — drop a ledger entry + strip the label.
+    // `ai-conductor engineer forget <sourceRef> [--resolved-by <reference>]` — drop a
+    // ledger entry + strip the label, optionally recording resolution evidence.
     const sourceRef = argv[4];
-    if (!sourceRef || sourceRef.startsWith('--')) {
+    if (!sourceRef || !sourceRef.trim() || sourceRef.startsWith('--')) {
       return { kind: 'guide' };
     }
-    const unk = findUnknownFlag(argv, []);
+    const resolvedBy = parseFlag(argv, '--resolved-by');
+    if (argv.includes('--resolved-by') && (!resolvedBy || !resolvedBy.trim())) {
+      return { kind: 'guide' };
+    }
+    const unk = findUnknownFlag(argv, ['--resolved-by']);
     if (unk) return { kind: 'reject', sub: 'forget', flag: unk };
-    return { kind: 'forget', sourceRef };
+    return resolvedBy
+      ? { kind: 'forget', sourceRef, resolvedBy }
+      : { kind: 'forget', sourceRef };
   }
 
   if (subCmd === 'unclaim') {
