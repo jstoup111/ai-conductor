@@ -6,7 +6,7 @@ Track: technical
 
 Tier: S
 
-Approved by the operator on 2026-09-06 (delegated). Scope is the binding between the sink table's traced declaration and the OTel visualizer's per-event routing. Halt outcomes, span closure on termination, and the traced membership of any event type are already delivered and remain unchanged.
+Approved by the operator on 2026-09-06 (delegated). Scope is the binding between the sink table's traced declaration and the OTel visualizer's per-event routing. Halt outcomes and span closure on termination are already delivered and remain unchanged. Traced membership changes once: `unattributed_progress` leaves the traced set (amendment 2026-09-07, PG-1).
 
 ## Story 1: Every traced event type reaches a handler
 
@@ -24,7 +24,7 @@ As an engine contributor, I want a traced event type to be routed rather than dr
 ### Done When
 - [ ] A unit test asserts the visualizer's handled event-type set equals the set returned by the traced-type accessor, with no missing and no extra member.
 - [ ] A unit test that makes the traced set contain one type with no handler entry observes exactly one warning naming that type, and the emit resolves without throwing.
-- [ ] The sixteen currently traced types keep their existing span and metric effects, proven by the existing OTel visualizer, span-manager, parity, wiring and observability test files passing unchanged.
+- [ ] The fifteen traced types (all previously traced types except `unattributed_progress`, which is no longer declared traced and has no handler entry) keep their existing span and metric effects, proven by the OTel visualizer, span-manager, parity, wiring and observability test files passing.
 
 ## Story 2: Untraced event types stay off the OTel surface
 
@@ -46,3 +46,8 @@ As an engine contributor, I want an event declared untraced to remain a recorded
 ## Negative-category review
 
 Invalid input is covered by the unhandled-type path, which is the only malformed input this surface can receive: the emitter delivers a well-typed union member for which routing may be absent. Data integrity is covered by the two compile-time assignability assertions and by the non-vacuity check, which together prevent the guard from passing while asserting nothing. Dependency unavailability and partial failure are covered by the existing bounded-warning contract, which this change reuses rather than extends: the visualizer never throws into `emit()`, so an unroutable event degrades to a warning instead of failing the run. Auth, timeout, concurrency, resource exhaustion, cascade deletion, and immutability categories are inapplicable — the change adds no I/O, no external call, no shared mutable state beyond the existing per-instance table, and no persisted record. Exception-hierarchy and idempotency categories are inapplicable because no exception is caught or rethrown and no deduplication key is introduced.
+
+---
+## Amendment 2026-09-07 — `unattributed_progress` leaves the traced set (PG-1)
+
+The as-built review recorded PLAN_GAP PG-1: this story fixed the traced set at sixteen with unchanged membership, while `unattributed_progress` has no OTel effect and only a no-op handler. The operator decided to remove `unattributed_progress` from the traced set rather than invent a span or metric for it. The scope line and Story 1's third Done-When bullet above are amended to the fifteen-type set; the plan amendment of the same date carries the task-level detail.
