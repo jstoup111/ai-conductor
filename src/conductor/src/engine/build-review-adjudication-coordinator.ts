@@ -132,6 +132,18 @@ export async function coordinateBuildReviewAdjudication(input: {
    */
   const allOperatorResolved = (accepted: ReadonlySet<string>): boolean =>
     sources.every((source) => accepted.has(source.findingId));
+  /**
+   * A finalized non-action case is durable resolution for its exact source;
+   * a merged source is likewise settled even when its historical case acted.
+   * This deliberately keys by the rubric-namespaced source id, not prose or
+   * bare finding id, so a same-id finding in another rubric remains live.
+   */
+  const finalizedSourceIds = (cases: readonly RemediationCaseRecord[]): ReadonlySet<string> =>
+    new Set(cases.flatMap((record) =>
+      record.resolution === 'resolved' && (record.disposition !== 'act' || record.sources.some((source) => source.outcome === 'merged'))
+        ? record.sources.map((source) => source.sourceId)
+        : [],
+    ));
   const fail = async (detail: string): Promise<BuildReviewAdjudicationCoordinatorResult> => {
     await input.emit?.({ type: 'remediation_adjudication_failed', domain: 'build_review', lapId: input.aggregate.lapId, reason: detail });
     return { ok: false, detail };
@@ -426,7 +438,14 @@ export async function coordinateBuildReviewAdjudication(input: {
   if (allOperatorResolved(resolved)) {
     return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true });
   }
-  currentSources = sources.filter((source) => !resolved.has(source.findingId));
+  const settledSourceIds = finalizedSourceIds(prior.state.cases);
+  currentSources = sources.filter((source) =>
+    !resolved.has(source.findingId) && !settledSourceIds.has(buildReviewAdjudicationSourceId(source)),
+  );
+  if (currentSources.length === 0) {
+    liveSourceIdsFor = () => new Set();
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, settleAbsentAttempted: true });
+  }
   // Frozen at dispatch: the exact source set the judge was asked about. Every
   // later authority read is a delta against this, never against the raw join.
   const dispatchSources = currentSources;
@@ -434,7 +453,8 @@ export async function coordinateBuildReviewAdjudication(input: {
   liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
     new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
   const freshContext = assembleBuildReviewAdjudicationContext({
-    aggregate: input.aggregate, priorCases: prior.state.cases, operatorResolvedFindingIds: resolved, ...contextEvidence,
+    aggregate: input.aggregate, priorCases: prior.state.cases,
+    operatorResolvedFindingIds: resolved, excludedSourceIds: settledSourceIds, ...contextEvidence,
   });
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${freshContext.stop.code}`, { settleAbsentAttempted: true });
   await input.emit?.({ type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId });

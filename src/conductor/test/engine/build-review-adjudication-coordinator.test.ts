@@ -1,4 +1,4 @@
-// Covers: task:16, task:rem-as-built-rem-ab1-4
+// Covers: task:14, task:16, task:rem-as-built-rem-ab1-4
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -825,6 +825,61 @@ describe('coordinateBuildReviewAdjudication', () => {
       type: 'remediation_semantic_repeat_halt', caseId: 'case-durable', effectId: 'effect-durable', reason: 'regressed',
     }));
   });
+
+  it.each([
+    ['an applied deferral', 'defer', 'deferred', { id: 'effect-durable', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/1' }],
+    ['a rejection', 'reject', 'rejected', { kind: 'none' }],
+    ['a merged source on an applied action case', 'act', 'merged', { id: 'effect-durable', kind: 'action', status: 'applied', workOrderId: 'order-durable' }],
+  ] as const)('skips the judge when exact recurrence is settled by %s', async (_description, disposition, outcome, effect) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-finalized', domain: 'build_review', disposition, priority: 'low', confidence: 'high',
+        rationale: 'This finding is already finalized.', resolution: 'resolved',
+        sources: [{ sourceId, outcome, recordedAt: '2026-09-06T00:00:00.000Z' }], effect,
+      }],
+    });
+    const judge = vi.fn(async () => actionJudgement());
+
+    const result = await coordinateBuildReviewAdjudication(input(root, judge));
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(judge).not.toHaveBeenCalled();
+  });
+
+  it('dispatches only the new source when another exact recurrence is settled', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-finalized', domain: 'build_review', disposition: 'reject', priority: 'low', confidence: 'high',
+        rationale: 'The first finding is already finalized.', resolution: 'resolved',
+        sources: [{ sourceId: buildReviewAdjudicationSourceId(acceptedSource), outcome: 'rejected', recordedAt: '2026-09-06T00:00:00.000Z' }],
+        effect: { kind: 'none' },
+      }],
+    });
+    const judge = vi.fn(async (context: unknown) => {
+      expect(context).toMatchObject({ currentFindings: [expect.objectContaining({ sourceId: buildReviewAdjudicationSourceId(liveSource) })] });
+      return {
+        mode: 'case-v1' as const, domain: 'build_review' as const,
+        sourceOutcomes: [{ sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'acted' as const, caseRef: 'case-live' }],
+        cases: [{
+          caseRef: 'case-live', disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+          rationale: 'The second test needs a focused assertion.',
+          effect: { kind: 'action' as const, route: 'build' as const, tasks: [{ title: 'Repair the second test' }] },
+        }],
+      };
+    });
+
+    const result = await coordinateBuildReviewAdjudication({ ...input(root, judge), aggregate: mixedAggregate });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    expect(judge).toHaveBeenCalledTimes(1);
+  });
+
   it('adjudicates the unresolved remainder when the lap opens with a pre-existing acceptance', async () => {
     const root = await projectRoot();
     const judge = vi.fn(async () => {

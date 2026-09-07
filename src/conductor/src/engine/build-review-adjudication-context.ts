@@ -71,6 +71,8 @@ export interface AssembleBuildReviewAdjudicationContextInput {
   readonly priorCases: readonly RemediationCaseRecord[];
   /** Exact accepted-risk identities only; no summary or rubric-wide matching. */
   readonly operatorResolvedFindingIds?: ReadonlySet<string>;
+  /** Exact source identities settled from finalized durable case history. */
+  readonly excludedSourceIds?: ReadonlySet<string>;
   readonly planContract?: BuildReviewAdjudicationPlanContract;
   readonly taskStatus?: BuildReviewAdjudicationTaskStatus;
   /** Durable work-order attempt evidence; renders into `effectPointers`. */
@@ -234,7 +236,10 @@ export function assembleBuildReviewAdjudicationContext(
 ): AssembleBuildReviewAdjudicationContextResult {
   const rawSources = projectBuildReviewAggregateSources(input.aggregate);
   if (!rawSources) return { ok: false, stop: { code: 'invalid-aggregate' } };
-  const unresolvedSources = rawSources.filter((source) => !input.operatorResolvedFindingIds?.has(source.findingId));
+  const unresolvedSources = rawSources.filter((source) =>
+    !input.operatorResolvedFindingIds?.has(source.findingId) &&
+    !input.excludedSourceIds?.has(buildReviewAdjudicationSourceId(source)),
+  );
   if (unresolvedSources.length > LIMITS.maxCurrentSources) {
     return { ok: false, stop: { code: 'field-overflow', subject: 'current-source', field: 'currentFindings', limit: LIMITS.maxCurrentSources, actual: unresolvedSources.length } };
   }
