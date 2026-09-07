@@ -264,14 +264,16 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 
 1. Add failing tests in the coherence validator test file (`src/conductor/test/engine/engineer/coherence-validator*.test.ts`): staged outcomes produced by `sanitizeInboundText` over a directive-shaped fixture; a coherence artifact whose `outcome-N` rows quote the sanitized bullets passes `runCoherenceGate`; an artifact quoting the raw pre-neutralization bullet is rejected as an unmatched outcome.
 2. Verify RED (the test imports the new module).
-3. No production change expected in the validator; the test pins that the sanitized text is the single authority.
-4. Verify GREEN; commit `test(coherence): sanitized intake bullets are the outcome authority`.
+3. Implement the check in `checkOutcomeCoverage`: compare each `outcome-N` row's `Quote` cell with `outcomeBullets[n-1]` after normalizing presentation only (leading list marker, surrounding quotation marks, collapsed whitespace) and report a mismatch as an uncovered outcome that names the quote as the problem, per adr-2026-09-06-inbound-intake-trust-boundary decision 10.
+4. Verify GREEN; commit `feat(coherence): sanitized intake bullets are the outcome authority`.
 
 **Done when:**
 - The coherence validator test proves `runCoherenceGate` passes when every `outcome-N` row matches the sanitized staged bullets.
 - The coherence validator test proves a row quoting the raw pre-neutralization bullet is rejected as an unmatched outcome.
+- `checkOutcomeCoverage` reports a row whose quote is not the sanitized staged bullet as an outcome gap distinguishable from a missing row, and normalizes presentation only so a correctly authored row still passes.
 
 **Files likely touched:**
+- src/conductor/src/engine/engineer/coherence-validator.ts
 - src/conductor/test/engine/engineer/coherence-validator.test.ts
 
 **Dependencies:** 3
@@ -325,6 +327,7 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 | adr-2026-09-06-inbound-intake-trust-boundary#D6 | task | task-7 | the persisted claim record carries `inbound` and `loadClaimRecord` returns it |
 | adr-2026-09-06-inbound-intake-trust-boundary#D7 | task | task-8, task-9 | holds one `intake_inbound_sanitized` line with `sourceRef`, `neutralizations`, `digest`, and `ts` |
 | adr-2026-09-06-inbound-intake-trust-boundary#D8 | task | task-10, task-11 | no raw copy of the directive bullet exists under the worktree or the engineer directory |
+| adr-2026-09-06-inbound-intake-trust-boundary#D10 | task | task-11 | `checkOutcomeCoverage` reports a row whose quote is not the sanitized staged bullet as an outcome gap distinguishable from a missing row, and normalizes presentation only so a correctly authored row still passes |
 | adr-2026-09-06-inbound-intake-trust-boundary#D9 | no-change | none | The decision excludes build privilege; no task touches `--dangerously-skip-permissions`, `execution/claude-provider.ts`, `execution/session.ts`, or self-host containment. |
 | adr-011-async-intake-queue-and-github-source#D1 | existing | none | `IntakeSource.poll()` exists in `src/conductor/src/engine/engineer/intake/source.ts` and is unchanged by this feature. |
 | adr-011-async-intake-queue-and-github-source#D2 | task | task-5 | poll, re-route, and re-eligibility all emit `text` with armor lines and markers and set `inbound` on the envelope |

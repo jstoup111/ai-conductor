@@ -140,6 +140,12 @@ The five legacy row classes — `outcome`, `fr`, `story`, `task`, and `adr` — 
 | Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |
 ```
 
+An `outcome` row's quote cell must be the staged intake bullet itself — the sanitized projection in
+`.pipeline/intake-outcomes.md` — and the land gate compares the two. Only presentation is normalized
+(a leading list marker, surrounding quotation marks, collapsed whitespace); any other difference is
+reported as an uncovered outcome naming the quote as the problem, so raw tracker text cannot reach
+the committed artifact through this cell.
+
 The `criterion` row class uses six required cells because its subject is the exact criterion text and its
 coverage claim needs grounded task evidence plus a locality decision. A seventh, optional `Correction`
 cell is permitted only on a `fail` row:

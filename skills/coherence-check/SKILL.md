@@ -89,7 +89,12 @@ The artifact is a Markdown table (or one table per row class) with these columns
 1. **outcome** — one row per intake Desired-outcome bullet (skip this class entirely
    if no outcomes were staged/committed — an empty outcome layer is "not required,"
    never a gap). Cited id: `outcome-<n>` (1-based, in bullet order). Counterpart:
-   the story id(s) that cover the bullet.
+   the story id(s) that cover the bullet. The `Quote` cell must be the staged bullet
+   itself — the sanitized projection under `.pipeline/intake-outcomes.md`, not the
+   tracker's raw text and not a paraphrase. Only presentation is normalized away (a
+   leading list marker, surrounding quotation marks, collapsed whitespace), so any
+   other difference is an unmatched outcome
+   (adr-2026-09-06-inbound-intake-trust-boundary D10).
 2. **fr** — one row per enumerated PRD `FR-N` (product track only; skip this class on
    the technical track). Cited id: `fr-<N>`. Counterpart: the story id(s) whose
    `**Requirement:**` line cites that FR.
@@ -158,7 +163,8 @@ to emit the ids in the correct form so a later waiver can cite them):
 For the `adr` row class, the cited id form and the canonical gap-id form are both
 `adr-<stem>`, where `<stem>` is the ADR filename stem.
 
-- `outcome-<n>` — unmapped or negative-verdict outcome bullet
+- `outcome-<n>` — unmapped or negative-verdict outcome bullet, or one whose row quotes
+  something other than the staged sanitized bullet
 - `fr-<N>` — FR cited by no story, or only by a story that itself maps to no task
 - `story-<id>` — story cited by no task, or a story that does not tie out to the PRD
   (cites an `FR-N` the PRD never declares, or cites no FR at all — §4e)

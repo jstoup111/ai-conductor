@@ -136,11 +136,22 @@ Constraints found by the sweep that the design must honor:
    The engine never retains raw tracker text; the tracker itself remains the raw record.
    Criterion rows and coverage quotes are authored from stories and plan tasks
    (adr-2026-08-23-coverage-claims-grounded-by-verbatim-quote), never copied from
-   `Envelope.text`, so the verbatim-quote chain is unaffected.
+   `Envelope.text`, so the verbatim-quote chain is unaffected. `outcome-N` rows are the
+   exception this decision must close: they quote the intake bullet itself, so authorship
+   alone is not a boundary and decision 10 enforces it mechanically.
 
 9. **Build privilege is out of scope.** `--dangerously-skip-permissions` and the
    non-autonomy invariant (adr-005) are unchanged by this decision; consequence narrowing is
    a separate intake.
+
+10. **An `outcome-N` coherence row's quote must be the sanitized staged bullet.** The land
+    gate compares each `outcome-N` row's `Quote` cell against `outcomeBullets[n-1]` — the
+    sanitized projection decision 8 stages — and treats a mismatch as an uncovered outcome
+    naming the quote as the problem. Presentation is not content: a leading list marker,
+    surrounding quotation marks, and collapsed whitespace are normalized away, and nothing
+    else is. Without this, a row carrying valid ids and an affirmative verdict admits raw
+    tracker text into the committed coherence artifact, which is precisely the laundering
+    decision 8 exists to prevent.
 
 ## Consequences
 
