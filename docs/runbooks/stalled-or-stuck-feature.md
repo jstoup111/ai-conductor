@@ -889,7 +889,8 @@ protect and is skipped as a no-op.
 
 Do not delete or edit `.pipeline/protected-artifact-seal.json`. The engine rebaselines a stale seal
 automatically after a clean engine rebase, or during verification when it proves that every changed
-artifact is byte-identical to the base-branch tip.
+artifact is byte-identical to the base-branch tip or a recorded remediation append extends a
+fingerprint-verified sealed baseline.
 
 **First, identify an amendment request.** If the halt arose because BUILD discovered that an accepted
 DECIDE assertion must change, do not amend or reseal it in BUILD. Route the feature back to its owning
@@ -928,6 +929,10 @@ return this amendment to DECIDE; BUILD tasks must not target protected artifacts
      Restore the file from `HEAD`.
    - `Protected artifact changed: <path>` with a `Feature-authored committed change` cause — revert
      to the committed DECIDE content and route any actual amendment to DECIDE.
+   - `Unvouched engine remediation append: <path>` — a recorded remediation-task heading is present,
+     but the committed content is not an exact append of either the base-tip or fingerprint-verified
+     sealed content. Review the named content and the reported operator-reseal and engine-append exits;
+     do not treat it as the ordinary feature-authored revert case.
    - `Protected artifact provenance undeterminable: <path>` — the base ref could not be resolved, no
      merge-base exists between `HEAD` and the base branch, or the inheritance probe (`git diff`)
      failed. Supply the base ref, or rebase onto the base branch to establish shared history, then

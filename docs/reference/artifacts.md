@@ -174,12 +174,15 @@ refuses completion while any recorded id's `### Task <id>` heading is missing fr
 deleting a remediation task never completes it. The guard disarms only when the engine-state file is
 absent (e.g. a recreated worktree), never on a plan edit.
 
-The seal-rotation evaluator honors the same record: an authored plan whose divergence from the base
-tip is exactly an append of the recorded `### Task rem-*` blocks (base content a byte prefix of
-head, every suffix heading a recorded task id) is treated as the engine's own amendment and rotates
-without an operator reseal — the `protected_artifact_rebaseline` event reports it under
-`includedEngineAppendedPaths`. Any other authored divergence (unrecorded ids, extra headings, prose
-before the first recorded heading, or a non-append edit) still refuses with
+The seal-rotation evaluator honors the same record: an authored plan whose divergence from either the
+base tip or the fingerprint-verified content at the seal baseline is exactly an append of the recorded
+`### Task rem-*` blocks (anchor content a byte prefix of head, every suffix heading a recorded task
+id) is treated as the engine's own amendment and rotates without an operator reseal — the
+`protected_artifact_rebaseline` event reports it under `includedEngineAppendedPaths`. The sealed
+baseline is an anchor only when its bytes reproduce the recorded fingerprint. Any other authored
+divergence (unrecorded ids, extra headings, prose before the first recorded heading, or a non-append
+edit) still refuses. A recorded remediation heading that cannot be vouched by either anchor reports
+`engine-append-unvouched`; other committed feature-authored divergence reports
 `feature-authored:head-differs-from-base` and requires `ai-conductor reseal`.
 
 **Protected-artifact seal.** `.pipeline/protected-artifact-seal.json` fingerprints every file under
@@ -249,11 +252,14 @@ Verification also tolerates these cases without halting:
   this is neither a local amendment nor an uncommitted edit, so it is tolerated the same as base-branch
   inheritance.
 
-Everything else still halts BUILD/SHIP before dispatch: any content the base branch does not vouch
-for, any addition the base branch does not contain, and any deletion the base branch still retains.
-Tolerance requires the base branch name and seal baseline to be resolvable — when either is not,
-the seal remains fully protected, and the halt reason is `Protected artifact provenance
-undeterminable: <path>` followed by the specific cause (`Missing base ref`, `No merge-base exists
+Everything else still halts BUILD/SHIP before dispatch: content that neither the base branch nor a
+fingerprint-verified sealed baseline vouches for, any addition neither contains, and any deletion
+either still retains.
+Tolerance requires the base branch name to be resolvable. When the seal baseline commit is no longer
+readable, verification omits the sealed-baseline anchor and decides from the base-tip proof alone; it
+does not fail merely because that older object is gone. An unavailable base ref, missing merge base,
+or failed inheritance probe still leaves the seal fully protected and reports `Protected artifact
+provenance undeterminable: <path>` with the specific cause (`Missing base ref`, `No merge-base exists
 between HEAD and <base>`, or `Inheritance probe failed: git diff`) and the recovery step (supply the
 base ref, or rebase onto the base branch to establish shared history). A genuine violation instead
 reports either `Uncommitted protected artifact changed: <path>` (the workspace differs from `HEAD`;
