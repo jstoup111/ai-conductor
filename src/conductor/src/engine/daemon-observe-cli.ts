@@ -472,7 +472,11 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
     discover: async () => [],
   });
 
-  for (const feature of state.inProgress) {
+  // A fresh authorization normally belongs to a halted feature; excluding it
+  // would hide the only recovery budget the operator needs to inspect.
+  const visibleFeatures = [...state.inProgress, ...state.halted]
+    .filter((feature, index, features) => features.findIndex((item) => item.slug === feature.slug) === index);
+  for (const feature of visibleFeatures) {
     const featureRoot = join(repoPath, '.worktrees', feature.slug);
     const initial = await readGrowth(featureRoot, 0);
     const config = await loadConfig(featureRoot);
@@ -492,8 +496,12 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
     const ledger = await readKickbackLedger(featureRoot);
     for (const [gate, entry] of Object.entries(ledger.gates)) {
       if ((entry.adjustments?.length ?? 0) === 0) continue;
-      const limit = gate === 'build_review' ? 5 : 1;
-      const view = renderKickbackBudgetView(entry, gate, limit).split('\n')[0];
+      const limit = gate === 'build_review'
+        ? 5
+        : gate === 'prd_audit'
+          ? (config.ok ? (config.config as HarnessConfig & { prd_audit?: { max_remediation_laps?: number } }).prd_audit?.max_remediation_laps ?? 1 : 1)
+          : (config.ok ? (config.config as HarnessConfig & { architecture_review_as_built?: { max_remediation_laps?: number } }).architecture_review_as_built?.max_remediation_laps ?? 1 : 1);
+      const view = renderKickbackBudgetView(entry, gate, limit).replace(/\n/g, ' | ');
       out(`  KICKBACK BUDGET [${feature.slug}]: ${view}`);
     }
   }

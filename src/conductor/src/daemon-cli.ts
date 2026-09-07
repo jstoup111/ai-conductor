@@ -2143,18 +2143,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       },
       readPersistedBaseSha: () => readPersistedBaseSha(projectRoot),
       writePersistedBaseSha: (sha) => writePersistedBaseSha(projectRoot, sha, log),
-      rekickSweep: async (sha, context) => {
-        // Reconcile stranded park markers at the TOP of the sweep so the same
-        // sweep that moves them also skips them (#486).
-        await reconcileStrandedParkMarkers(projectRoot, log);
+      consumeResumeAuthorizations: async () => {
         await consumeResumeAuthorizations({
           listHaltedWorktrees: () => listHaltedWorktrees(worktreeBase),
           worktreePath: (slug) => join(worktreeBase, slug),
           isOperatorParked: (slug) => isOperatorParked(projectRoot, slug),
           clearMarker: (slug) => clearMarker(join(worktreeBase, slug)),
+          // Feature events are installed by the normal per-feature runner;
+          // this daemon boundary intentionally emits only after durable consume.
           emit: (event) => events.emit(event),
           log,
         });
+      },
+      rekickSweep: async (sha, context) => {
+        // Reconcile stranded park markers at the TOP of the sweep so the same
+        // sweep that moves them also skips them (#486).
+        await reconcileStrandedParkMarkers(projectRoot, log);
         // Fresh resolver per sweep: makeIsProcessed caches the shipped-record
         // listing per instance, and this sweep runs because the base branch
         // just advanced — a run-long cache would miss records merged mid-run.

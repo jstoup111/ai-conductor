@@ -1,17 +1,31 @@
 import { randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { userInfo } from 'node:os';
 import { join } from 'node:path';
 
 import type { KickbackBudgetDispatch } from '../cli.js';
 import { appendCloseoutEvent } from './closeout-events.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
-import { applyKickbackBudgetAdjustment, readKickbackLedger, type KickbackBudgetAdjustment } from './kickback-ledger.js';
+import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackLedger, readKickbackLedger, stageKickbackBudgetAdjustment, type KickbackBudgetAdjustment } from './kickback-ledger.js';
 import { kickbackBudgetView, renderKickbackBudgetView } from './kickback-budget-view.js';
 import { resolveMainRepoRoot, isOperatorParked } from './park-marker.js';
+import { readHaltClass } from './halt-marker.js';
+import { loadConfig } from './config.js';
 
 const GATES = new Set(['build_review', 'prd_audit', 'architecture_review_as_built']);
 const DEFAULTS: Record<string, number> = { build_review: 5, prd_audit: 1, architecture_review_as_built: 1 };
+
+async function defaultsFor(worktree: string): Promise<Record<string, number>> {
+  const loaded = await loadConfig(worktree);
+  const config = loaded.ok ? loaded.config as {
+    prd_audit?: { max_remediation_laps?: number };
+    architecture_review_as_built?: { max_remediation_laps?: number };
+  } : {};
+  return {
+    ...DEFAULTS,
+    prd_audit: config.prd_audit?.max_remediation_laps ?? DEFAULTS.prd_audit,
+    architecture_review_as_built: config.architecture_review_as_built?.max_remediation_laps ?? DEFAULTS.architecture_review_as_built,
+  };
+}
 
 export interface KickbackBudgetCliDeps {
   cwd?: string;
@@ -29,44 +43,79 @@ async function resolveWorktree(feature: string, cwd: string, resolveMainRoot: (c
   } catch { return undefined; }
 }
 
+async function reconcilePendingAdjustments(worktree: string): Promise<void> {
+  const ledger = await readKickbackLedger(worktree);
+  if (isUnreadableKickbackLedger(ledger)) throw new Error('ledger is unreadable');
+  let eventText = '';
+  try { eventText = await readFile(join(worktree, '.pipeline', 'pipeline-events.jsonl'), 'utf8'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('authorization event ledger is unreadable'); }
+  const defaults = await defaultsFor(worktree);
+  for (const [gate, entry] of Object.entries(ledger.gates)) {
+    const pending = entry.pendingAdjustment;
+    if (!pending) continue;
+    const recorded = eventText.split('\n').some((line) => {
+      try { return (JSON.parse(line) as { adjustmentId?: unknown }).adjustmentId === pending.id; }
+      catch { return false; }
+    });
+    if (!recorded) await discardPendingKickbackBudgetAdjustment(worktree, gate, pending.id);
+    else await applyKickbackBudgetAdjustment(worktree, gate, pending, defaults[gate] ?? 1);
+  }
+}
+
 /** Dispatch read-only inspect or an interactive, halted-feature-only mutation. */
 export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispatch, deps: KickbackBudgetCliDeps = {}): Promise<number> {
   const print = deps.print ?? console.log;
   const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(deps.cwd ?? process.cwd());
   const worktree = await resolveWorktree(command.feature, deps.cwd ?? process.cwd(), deps.resolveMainRoot ?? resolveMainRepoRoot);
   if (!worktree) { print(`kickback-budget: feature '${command.feature}' is unavailable.`); return 1; }
-  const ledger = await readKickbackLedger(worktree);
+  try { await reconcilePendingAdjustments(worktree); }
+  catch (error) { print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1; }
   if (command.action === 'inspect') {
-    const views = Object.entries(ledger.gates).map(([gate, entry]) => kickbackBudgetView(entry, gate, DEFAULTS[gate] ?? 2));
-    print(command.format === 'json' ? JSON.stringify({ feature: command.feature, gates: views }) : views.map((view) => renderKickbackBudgetView(ledger.gates[view.gate], view.gate, DEFAULTS[view.gate] ?? 2)).join('\n\n'));
+    const ledger = await readKickbackLedger(worktree);
+    if (isUnreadableKickbackLedger(ledger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
+    const defaults = await defaultsFor(worktree);
+    const views = [...GATES].map((gate) => kickbackBudgetView(ledger.gates[gate], gate, defaults[gate]));
+    print(command.format === 'json' ? JSON.stringify({ feature: command.feature, gates: views }) : views.map((view) => renderKickbackBudgetView(ledger.gates[view.gate], view.gate, defaults[view.gate])).join('\n\n'));
     return 0;
   }
   if (!deps.isInteractive?.() && deps.isInteractive !== undefined || (deps.isInteractive === undefined && !process.stdin.isTTY)) {
     print('kickback-budget: mutations require an interactive local operator terminal.'); return 2;
   }
   if (!command.gate || !GATES.has(command.gate) || !command.rationale?.trim()) { print('kickback-budget: invalid gate or rationale.'); return 2; }
+  const ledger = await readKickbackLedger(worktree);
+  if (isUnreadableKickbackLedger(ledger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
   const entry = ledger.gates[command.gate];
   if (!entry?.capEvidence) { print('kickback-budget: no current cap evidence for that gate.'); return 1; }
   try { await readFile(join(worktree, '.pipeline', 'HALT'), 'utf8'); } catch { print('kickback-budget: feature is not currently halted.'); return 1; }
+  if ((await readHaltClass(worktree)) !== 'needs-human') { print('kickback-budget: live halt is not eligible for recovery.'); return 1; }
   const parked = await isOperatorParked(root, command.feature);
   if (!parked) {
     const result = await dispatchDaemonPark({ kind: 'park', slug: command.feature }, { cwd: root, out: () => {} });
     if (result !== 0) { print(`kickback-budget: could not park '${command.feature}'.`); return 1; }
   }
   try {
+    const defaults = await defaultsFor(worktree);
     const remediation = command.gate !== 'build_review';
-    const currentLimit = remediation ? (entry.effectiveLapCap ?? DEFAULTS[command.gate]) : (entry.effectiveLimit ?? DEFAULTS[command.gate]);
+    const currentLimit = remediation ? (entry.effectiveLapCap ?? defaults[command.gate]) : (entry.effectiveLimit ?? defaults[command.gate]);
     const currentConsumed = remediation ? (entry.laps ?? 0) : entry.cumulative;
+    const operator = deps.resolveOperator?.() ?? process.env.GITHUB_ACTOR;
+    if (!operator?.trim()) { print('kickback-budget: no approved operator identity is available.'); return 1; }
     const adjustment: KickbackBudgetAdjustment = {
       id: randomUUID(), kind: command.action, beforeConsumed: currentConsumed,
       afterConsumed: command.action === 'reset' ? 0 : currentConsumed,
       beforeLimit: currentLimit, afterLimit: command.action === 'raise' ? currentLimit + command.by! : currentLimit,
-      operator: deps.resolveOperator?.() ?? userInfo().username, rationale: command.rationale,
+      operator, rationale: command.rationale,
       timestamp: new Date().toISOString(), haltGeneration: entry.capEvidence.haltGeneration,
     };
-    (deps.appendEvent ?? appendCloseoutEvent)(worktree, { type: 'kickback_budget_adjustment_authorized', adjustmentId: adjustment.id, gate: command.gate, kind: adjustment.kind, ts: adjustment.timestamp });
-    await applyKickbackBudgetAdjustment(worktree, command.gate, adjustment, DEFAULTS[command.gate]);
-    print(`kickback-budget: ${command.action} authorized for ${command.gate}; daemon will resume '${command.feature}'.`);
+    await stageKickbackBudgetAdjustment(worktree, command.gate, adjustment);
+    (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
+      type: 'kickback_budget_adjustment_authorized', adjustmentId: adjustment.id, gate: command.gate, kind: adjustment.kind,
+      feature: command.feature, operator: adjustment.operator, rationale: adjustment.rationale,
+      beforeConsumed: adjustment.beforeConsumed, afterConsumed: adjustment.afterConsumed,
+      beforeLimit: adjustment.beforeLimit, afterLimit: adjustment.afterLimit, ts: adjustment.timestamp,
+    });
+    const applied = await applyKickbackBudgetAdjustment(worktree, command.gate, adjustment, defaults[command.gate]);
+    print(`${renderKickbackBudgetView(applied, command.gate, defaults[command.gate])}${parked ? '\nFeature remains parked; unpark it when ready.' : ''}`);
     return 0;
   } catch (error) {
     print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1;

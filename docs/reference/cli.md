@@ -915,8 +915,12 @@ ai-conductor kickback-budget reset --feature <slug> --gate <gate> --rationale "<
 
 Use this operator-only command to inspect or authorize one recovery from a budget-cap halt. `raise`
 and `reset` require a local interactive terminal, a live HALT, and matching cap evidence; they record
-an auditable authorization for the daemon to consume. Supported gates are `build_review`, `prd_audit`,
-and `architecture_review_as_built`.
+an auditable authorization for the daemon to consume. The authorization is durably staged before its
+event is written, so an interrupted command is reconciled exactly once on the next command entry.
+The daemon consumes a matching authorization on its next loop iteration; it does not wait for an
+unrelated base-branch advance. Supported gates are `build_review`, `prd_audit`, and
+`architecture_review_as_built`. Inspect always lists all three gates; JSON renders an empty
+`adjustments` array for a valid gate with no adjustment history.
 
 ## `ai-conductor decide-grant`
 

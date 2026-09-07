@@ -1132,6 +1132,13 @@ export type ConductorEvent =
       adjustmentId: string;
       gate: string;
       kind: 'raise' | 'reset';
+      feature: string;
+      operator: string;
+      rationale: string;
+      beforeConsumed: number;
+      afterConsumed: number;
+      beforeLimit: number;
+      afterLimit: number;
       ts: string;
     }
   // ── Ship→CI feedback loop (Task 5): CI failure events ──

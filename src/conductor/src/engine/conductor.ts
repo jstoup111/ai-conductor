@@ -284,6 +284,7 @@ import {
   type PlanGrowth,
   type PlanGrowthEventSink,
 } from './kickback-ledger.js';
+import { renderKickbackBudgetView } from './kickback-budget-view.js';
 import {
   consumeOperatorGrant,
   decideEntryDisposition,
@@ -4476,6 +4477,11 @@ export class Conductor {
             :
               `growth cap reached (${prdAuditBudget.growth.added}/${prdAuditBudget.growthCap} appended; ` +
               `${prdAuditBudget.growthTaskCount} requested, ${prdAuditBudget.growth.remaining} remaining)`;
+          await recordKickbackCapEvidence(this.projectRoot, 'prd_audit', {
+            consumed: prdAuditBudget.priorLaps,
+            limit: prdAuditBudget.lapCap,
+            latestReason: capReason,
+          });
           return {
             kind: 'halt',
             haltClass: KICKBACK_CAP_HALT_CLASS,
@@ -4500,6 +4506,11 @@ export class Conductor {
             :
               `shared plan-growth allowance exhausted (${asBuiltBudget.growth.added}/${asBuiltBudget.growthCap} appended; ` +
               `${asBuiltBudget.growthTaskCount} requested, ${asBuiltBudget.growth.remaining} remaining)`;
+          await recordKickbackCapEvidence(this.projectRoot, 'architecture_review_as_built', {
+            consumed: asBuiltBudget.priorLaps,
+            limit: asBuiltBudget.lapCap,
+            latestReason: capReason,
+          });
           return {
             kind: 'halt',
             haltClass: KICKBACK_CAP_HALT_CLASS,
@@ -11160,9 +11171,12 @@ export class Conductor {
                 if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted) {
                   if (await reenterBuildReviewIfEffectivePass()) continue;
                   const reason =
-                    `build_review cumulative kickback cap exceeded (cumulative ` +
-                    `${kickback.entry.cumulative}, cap ${MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW}): ` +
-                    `${kickback.entry.lastReason || 'no reasons recorded'}`;
+                    `build_review cumulative kickback cap exceeded:\n` +
+                    renderKickbackBudgetView(
+                      kickback.entry,
+                      'build_review',
+                      MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+                    );
                   await recordKickbackCapEvidence(this.projectRoot, 'build_review', {
                     consumed: kickback.entry.cumulative,
                     limit: kickback.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,

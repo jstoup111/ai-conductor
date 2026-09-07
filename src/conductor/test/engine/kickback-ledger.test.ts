@@ -1006,17 +1006,17 @@ describe('kickback-ledger', () => {
       });
     });
 
-    it('keeps the legacy mechanical caller fail-open when its ledger is unreadable', async () => {
+    it('fails closed without rewriting when the mechanical caller finds an unreadable ledger', async () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
       await writeFile(ledgerPath, 'not valid json {', 'utf8');
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       try {
-        await expect(bumpMechanicalFaultsInLedger(dir, 'build_review')).resolves.toMatchObject({ mechanicalFaults: 1 });
-        await expect(readKickbackLedger(dir)).resolves.toMatchObject({
-          gates: { build_review: { mechanicalFaults: 1 } },
-        });
+        await expect(bumpMechanicalFaultsInLedger(dir, 'build_review')).rejects.toThrow(
+          'kickback ledger is unreadable',
+        );
+        await expect(readFile(ledgerPath, 'utf8')).resolves.toBe('not valid json {');
       } finally {
         warnSpy.mockRestore();
       }
