@@ -205,6 +205,17 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
     const firstRowClass = tableRows[0]?.cells[0].trim().toLowerCase();
     if (firstRowClass === 'criterion' || LEGACY_ROW_CLASSES.has(firstRowClass ?? '')) {
       coherenceTableRows.push(...tableRows);
+      continue;
+    }
+    const strandedMappingRow = tableRows.find(({ cells }) => {
+      const rowClass = cells[0].trim().toLowerCase();
+      return rowClass === 'criterion' || LEGACY_ROW_CLASSES.has(rowClass);
+    });
+    if (strandedMappingRow !== undefined) {
+      return structuralParseFailure('unparseable-coherence-artifact', {
+        line: strandedMappingRow.line,
+        message: 'mapping rows must appear in a table whose first data row is a mapping row',
+      });
     }
   }
 
