@@ -371,7 +371,7 @@ describe('as-built verdict gate', () => {
     }
   });
 
-  it('classifies a heading-style verdict as a missing verdict line', () => {
+  it('keeps a Verdict heading without a colon and a later value as a missing verdict line', () => {
     expect(classifyAsBuiltReviewOutcome('## Verdict\n\n**BLOCKED**')).toEqual({
       kind: 'invalid',
       cause: 'no-verdict-line',
@@ -385,6 +385,24 @@ describe('as-built verdict gate', () => {
       value: 'REJECTED',
     });
   });
+
+  it('classifies a heading-decorated unrecognized verdict with its raw value', () => {
+    expect(classifyAsBuiltReviewOutcome('### **Verdict: REJECTED** ###')).toEqual({
+      kind: 'invalid',
+      cause: 'unrecognized-verdict',
+      value: 'REJECTED',
+    });
+  });
+
+  it.each(['## Verdict: ', '## Verdict: **'])(
+    'classifies an empty or marker-only heading-decorated verdict as missing its verdict line: %j',
+    (report) => {
+      expect(classifyAsBuiltReviewOutcome(report)).toEqual({
+        kind: 'invalid',
+        cause: 'no-verdict-line',
+      });
+    },
+  );
 
   it.each(['Verdict: PLAN_GAP', 'Verdict: PLAN_GAP\nOutcome delivered: maybe'])(
     'classifies PLAN_GAP report %j without a valid outcome as missing its outcome',
