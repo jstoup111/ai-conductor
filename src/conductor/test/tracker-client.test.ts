@@ -11,6 +11,7 @@ import {
   makeProductionGh,
   assertRealExecAllowed,
   createGithubTrackerClient,
+  DEFAULT_ASSIGNED_ISSUES_LIMIT,
   type GhRunner,
 } from '../src/engine/tracker-client.js';
 
@@ -255,7 +256,7 @@ describe('createGithubTrackerClient — read ops argv parity', () => {
     expect(state).toBe('CLOSED');
   });
 
-  it('listAssignedIssues: matches github-issues.ts assignee-scoped poll argv', async () => {
+  it('listAssignedIssues: requests the exported maximum in the assignee-scoped poll argv', async () => {
     const { runner, calls } = fakeRunner(
       JSON.stringify([{ number: 1, title: 't', body: 'b', labels: [] }]),
     );
@@ -274,6 +275,8 @@ describe('createGithubTrackerClient — read ops argv parity', () => {
           'open',
           '--json',
           'number,title,body,labels',
+          '--limit',
+          String(DEFAULT_ASSIGNED_ISSUES_LIMIT),
           '-R',
           'owner/repo',
         ],
@@ -281,6 +284,16 @@ describe('createGithubTrackerClient — read ops argv parity', () => {
       },
     ]);
     expect(issues).toEqual([{ number: 1, title: 't', body: 'b', labels: [] }]);
+  });
+
+  it('listAssignedIssues: substitutes an explicit maximum', async () => {
+    const { runner, calls } = fakeRunner('[]');
+    const client = createGithubTrackerClient(runner);
+
+    await client.listAssignedIssues('owner/repo', '/repo/path', 45);
+
+    expect(calls[0]?.args).toContain('--limit');
+    expect(calls[0]?.args[calls[0]?.args.indexOf('--limit') + 1]).toBe('45');
   });
 });
 
