@@ -342,15 +342,23 @@ describe('engine/cost-rollup', () => {
     const providerFreeCompletions = [
       'finish', 'review', 'rebase', 'suite', 'finish', 'review', 'rebase', 'suite', 'finish',
     ].map((step) => ({ type: 'step_completed', step, status: 'done', unmetered: true }));
+    const expected = attempts.reduce((totals, attempt) => ({
+      input: totals.input + attempt.tokenUsage.input,
+      output: totals.output + attempt.tokenUsage.output,
+      cacheRead: totals.cacheRead + attempt.tokenUsage.cacheRead,
+      cacheCreation: totals.cacheCreation + attempt.tokenUsage.cacheCreation,
+      costUsd: totals.costUsd + attempt.tokenUsage.costUsd,
+    }), { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, costUsd: 0 });
+    const { costUsd: expectedCostUsd, ...expectedTokens } = expected;
     await writeEvents([...attempts, ...providerFreeCompletions].map((event) => JSON.stringify(event)));
 
     const rollup = await computeCostRollup(dir);
     const totals = toFeatureUsageTotals(rollup);
 
     expect(rollup).toMatchObject({
-      tokens: { input: 10_500, output: 1_050, cacheRead: 105, cacheCreation: 210 },
-      costUsd: 10.5,
-      dispatches: 14,
+      tokens: expectedTokens,
+      costUsd: expectedCostUsd,
+      dispatches: attempts.length,
       unmetered: { count: 0, durationMs: 0 },
       costUnmetered: { count: 0 },
       providers: {
@@ -359,14 +367,14 @@ describe('engine/cost-rollup', () => {
       },
     });
     expect(totals).toMatchObject({
-      dispatches: 14,
-      meteredDispatches: 14,
+      dispatches: attempts.length,
+      meteredDispatches: attempts.length,
       unmeteredDispatches: 0,
       costUnmeteredDispatches: 0,
-      inputTokens: 10_500,
-      outputTokens: 1_050,
-      cachedInputTokens: 315,
-      costUsd: 10.5,
+      inputTokens: expected.input,
+      outputTokens: expected.output,
+      cachedInputTokens: expected.cacheRead + expected.cacheCreation,
+      costUsd: expectedCostUsd,
     });
   });
 
