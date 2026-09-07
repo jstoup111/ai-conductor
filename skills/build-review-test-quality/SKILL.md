@@ -18,7 +18,8 @@ Use only the supplied projection version `v3`. Its closed input contains:
 
 - the lap ID, snapshot digest, and top-level `contentDigest`;
 - the in-scope changed tests: only changed tests with a resolvable `Covers:` binding to an approved
-  story criterion or task `Done when:` check, represented as immutable content-region references;
+  story criterion, an active feature requirement (`FR-N`), or a task `Done when:` check, represented
+  as immutable content-region references;
 - the changed diff by reference (`changedFiles`: per-file path, change kind, and hunk ranges),
   anchored by `mergeBase` and `headSha`;
 - the current code-valid `test_suite` PASS; and
