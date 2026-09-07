@@ -10,7 +10,8 @@ import { dispatchDaemonPark } from './daemon-park-cli.js';
 import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackLedger, readKickbackLedger, stageKickbackBudgetAdjustment, type KickbackBudgetAdjustment } from './kickback-ledger.js';
 import { kickbackBudgetView, renderKickbackBudgetView } from './kickback-budget-view.js';
 import { resolveMainRepoRoot, isOperatorParked } from './park-marker.js';
-import { readHaltClass } from './halt-marker.js';
+import { HALT_CLASS_MARKER } from './halt-marker.js';
+import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import { loadConfig } from './config.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import type { ConductorEvent } from '../types/events.js';
@@ -126,7 +127,14 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   const entry = ledger.gates[command.gate];
   if (!entry?.capEvidence) { print('kickback-budget: no current cap evidence for that gate.'); return 1; }
   try { await readFile(join(worktree, '.pipeline', 'HALT'), 'utf8'); } catch { print('kickback-budget: feature is not currently halted.'); return 1; }
-  if ((await readHaltClass(worktree)) !== 'needs-human') { print('kickback-budget: live halt is not eligible for recovery.'); return 1; }
+  // The recovery-eligible class is per gate: the cumulative build_review cap
+  // writes `needs-human` (D1), while the two remediation-append cap terminals
+  // write `kickback-cap` (adr-2026-08-25 D4, preserved by D1's amendment). Read
+  // the raw sidecar — `readHaltClass` folds every class outside the daemon's
+  // scheduling union to `unclassified`, which would refuse both of them.
+  let liveHaltClass = '';
+  try { liveHaltClass = (await readFile(join(worktree, HALT_CLASS_MARKER), 'utf8')).trim(); } catch { /* absent → ineligible */ }
+  if (liveHaltClass !== RECOVERABLE_CAP_HALT_CLASS_BY_GATE[command.gate]) { print('kickback-budget: live halt is not eligible for recovery.'); return 1; }
   const parked = await isOperatorParked(root, command.feature);
   if (!parked) {
     const result = await dispatchDaemonPark({ kind: 'park', slug: command.feature }, { cwd: root, out: () => {} });
