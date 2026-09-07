@@ -34,6 +34,11 @@ describe('interpreter-source inventory', () => {
     await expect(checkInventory(await root(), modules)).rejects.toThrow(message);
   });
 
+  it('fails closed when the generated-hook module loader fails', async () => {
+    await expect(checkInventory(await root(), {}, async () => { throw new Error('controlled loader failure'); }))
+      .rejects.toThrow('controlled loader failure');
+  });
+
   it('fails closed for an empty file inventory and required file reads', async () => {
     const empty = await mkdtemp(join(tmpdir(), 'interpreter-empty-'));
     roots.push(empty);

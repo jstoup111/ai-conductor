@@ -79,12 +79,12 @@ function heredocsOnLine(line: string, words: Word[], lineNumber: number): Heredo
   }));
 }
 
-function closesQuote(line: string, quote: "'" | '"'): boolean {
+function quoteCloseIndex(line: string, quote: "'" | '"'): number {
   for (let index = 0; index < line.length; index += 1) {
     if (line[index] === '\\') { index += 1; continue; }
-    if (line[index] === quote) return true;
+    if (line[index] === quote) return index;
   }
-  return false;
+  return -1;
 }
 
 /** A bounded lexical checker. Candidate shell/interpreter text is never run. */
@@ -115,8 +115,12 @@ export function checkInterpreterSource(sourceName: string, text: string): Interp
           let continuation = index + 1;
           let expanded = source.expandable.length > 0;
           while (continuation < lines.length) {
-            if (source.openQuote !== "'" && findingsIn(lines[continuation]).length > 0) expanded = true;
-            if (closesQuote(lines[continuation], source.openQuote)) break;
+            const closing = quoteCloseIndex(lines[continuation], source.openQuote);
+            // Once the source quote closes, the remainder of that physical
+            // line is ordinary shell data (often an argv value), not source.
+            const sourceLine = closing >= 0 ? lines[continuation].slice(0, closing) : lines[continuation];
+            if (source.openQuote !== "'" && findingsIn(sourceLine).length > 0) expanded = true;
+            if (closing >= 0) break;
             continuation += 1;
           }
           if (continuation < lines.length) {
