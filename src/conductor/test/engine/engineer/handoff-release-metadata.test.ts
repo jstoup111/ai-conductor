@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:3
 // Test: openSpecPr supplies a release disposition ONLY where one is required.
 //
 // `gh pr create --fill` builds the body from the branch name and last commit
@@ -107,16 +107,20 @@ describe('declaresReleaseDisposition — repository opt-in', () => {
 });
 
 describe('openSpecPr — repos that do NOT require a disposition', () => {
-  it('never reads or edits the PR body (byte-identical to prior behavior)', async () => {
+  it('keeps the --fill path and never reads or edits the PR body', async () => {
     // The regression this guards: stamping a repo-local convention into every
     // consumer repo the engineer targets.
     const { runner, calls, getBody } = makeRunner();
     const before = getBody();
 
     const result = await openSpecPr(target(), 'spec/consumer', deps(runner));
+    const create = calls.find((args) => args[0] === 'pr' && args[1] === 'create')!;
 
     expect(result.kind).toBe('pr-opened');
     expect(getBody()).toBe(before);
+    expect(create).toContain('--fill');
+    expect(create).not.toContain('--body');
+    expect(create).not.toContain('--title');
     expect(calls.filter((a) => a[1] === 'view' || a[1] === 'edit')).toEqual([]);
   });
 });
@@ -144,6 +148,24 @@ describe('openSpecPr — repos that DO require a disposition', () => {
 
     expect(result.kind).toBe('pr-opened');
     // The authoritative assertion is that the real parser accepts the result.
+    expect(parseReleaseDisposition(getBody())).toEqual({ disposition: 'no-note' });
+  });
+
+  it('falls back to --fill and repairs the body when the branch-tip read fails', async () => {
+    await optIn();
+    const { runner, calls, getBody } = makeRunner();
+    const gitRunner: NonNullable<HandoffDeps['gitRunner']> = async (args) => {
+      if (args[0] === 'show') throw new Error('branch-tip read failed');
+      return { stdout: '', stderr: '' };
+    };
+
+    const result = await openSpecPr(target(), 'spec/dep-bump', deps(runner, gitRunner));
+    const create = calls.find((args) => args[0] === 'pr' && args[1] === 'create')!;
+
+    expect(result).toEqual({ kind: 'pr-opened', url: PR_URL });
+    expect(create).toContain('--fill');
+    expect(create).not.toContain('--body');
+    expect(create).not.toContain('--title');
     expect(parseReleaseDisposition(getBody())).toEqual({ disposition: 'no-note' });
   });
 
