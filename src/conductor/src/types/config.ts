@@ -239,6 +239,8 @@ export interface OtelConfig {
   protocol?: 'http/protobuf' | 'grpc';
   /** Optional metric project identity. Defaults to the project root basename. */
   project_name?: string;
+  /** Stable worker identity for daemon-scoped metric Resources. */
+  worker_name?: string;
 }
 
 /**

@@ -8,6 +8,10 @@ export interface SinkDeclaration {
 }
 
 export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
+  daemon_backlog_snapshot: { render: false, persist: true, audit: false, otel: true },
+  feature_dispatch_started: { render: false, persist: true, audit: false, otel: true },
+  feature_dispatch_ended: { render: false, persist: true, audit: false, otel: true },
+  feature_shipped: { render: false, persist: true, audit: false, otel: true },
   operator_rewind: { render: true, persist: true, audit: true, otel: false },
   setup_repair: { render: true, persist: true, audit: false, otel: false },
   project_setup: { render: true, persist: true, audit: false, otel: false },

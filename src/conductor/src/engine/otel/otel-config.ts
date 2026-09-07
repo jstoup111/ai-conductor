@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { hostname } from 'node:os';
 import type { HarnessConfig } from '../../types/config.js';
 
 const VALID_EXPORTERS = ['otlp', 'file'] as const;
@@ -19,8 +20,9 @@ export type ResolvedOtelConfig =
       endpoint: string;
       protocol?: 'http/protobuf' | 'grpc';
       projectName?: string;
+      workerName?: string;
     }
-  | { enabled: true; exporter: 'file'; file: string; projectName?: string };
+  | { enabled: true; exporter: 'file'; file: string; projectName?: string; workerName?: string };
 
 /**
  * Parse and validate the `otel:` block from `config`. Returns a discriminated
@@ -40,8 +42,9 @@ export function resolveOtelConfig(
     return { enabled: false };
   }
 
-  const { exporter, endpoint, file, protocol, project_name } = otel;
+  const { exporter, endpoint, file, protocol, project_name, worker_name } = otel;
   const projectName = project_name?.trim() || undefined;
+  const workerName = worker_name?.trim() || undefined;
 
   // Unknown exporter → disabled + named error listing valid options.
   if (!VALID_EXPORTERS.includes(exporter as (typeof VALID_EXPORTERS)[number])) {
@@ -67,6 +70,7 @@ export function resolveOtelConfig(
       endpoint,
       ...(protocol ? { protocol } : {}),
       ...(projectName ? { projectName } : {}),
+      ...(workerName ? { workerName } : {}),
     };
   }
 
@@ -77,5 +81,16 @@ export function resolveOtelConfig(
     exporter: 'file',
     file: resolvedFile,
     ...(projectName ? { projectName } : {}),
+    ...(workerName ? { workerName } : {}),
   };
+}
+
+/** Resolve a stable worker label without allowing host lookup failures to disable telemetry. */
+export function resolveWorkerName(config: Pick<ResolvedOtelConfig, 'enabled'> & { workerName?: string }): string {
+  if (typeof config.workerName === 'string' && config.workerName.trim()) return config.workerName.trim();
+  try {
+    return hostname().trim() || 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }

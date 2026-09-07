@@ -13,6 +13,12 @@ import type { SchedulingUnitRef } from './scheduling-unit.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
+/** Daemon-lifetime backlog dimensions. Kept closed so metric cardinality is bounded. */
+export type BacklogState = 'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked';
+export type DispatchKind = 'initial' | 'resume' | 'rekick';
+export type DispatchBlockReason = 'paused' | 'build_auth_missing' | 'gh_version' | 'episode_active';
+export type FeatureDispatchOutcome = 'complete' | 'halted' | 'terminated';
+
 /** Closed outcomes for the daemon's bounded setup repair session. */
 export type SetupRepairDisposition =
   | 'engine-committed'
@@ -194,6 +200,23 @@ export type ProviderStreamProgressEvent = ProviderStreamObservation & {
 };
 
 export type ConductorEvent =
+  | {
+      type: 'daemon_backlog_snapshot';
+      counts: Record<BacklogState, number>;
+      oldestAgeSeconds: Partial<Record<BacklogState, number>>;
+      slots: { busy: number; free: number };
+      inFlight: string[];
+      blocked: Record<DispatchBlockReason, boolean>;
+      pollDurationMs: number;
+    }
+  | { type: 'feature_dispatch_started'; slug: string; kind: DispatchKind }
+  | { type: 'feature_dispatch_ended'; slug: string; outcome: FeatureDispatchOutcome }
+  | {
+      type: 'feature_shipped';
+      slug: string;
+      runStartedAt?: number;
+      active: { state: 'exact' | 'partial' | 'unavailable'; activeMs?: number };
+    }
   | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
   | {
       type: 'setup_repair';
