@@ -979,10 +979,12 @@ If REKICK encounters this refusal before starting git, the HALT begins
 resolver or run `git rebase --continue`; review and rotate the seal as above, then clear the HALT
 and re-queue.
 
-### The rebase halted on "dropped feature commit(s)"
+### The completed rebase halted for missing feature content
 
-**Symptom:** `.pipeline/HALT` is `needs-human` and reads `rebase resolution dropped feature
-commit(s)`, naming the files the resolver had to resolve.
+**Symptom:** `.pipeline/HALT` is `needs-human` and begins `rebase completed — parked for human
+review`. Its reason lists up to three missing commit subjects, each with its abbreviated pre-rebase
+identity and the failed content evidence; a suffix states how many further subjects were omitted.
+The rebase has already completed, so do not run `git rebase --continue`.
 
 The rebase work-preservation guard requires every pre-rebase commit subject to survive the replay.
 A commit legitimately vanishes when the base already carries its work: the replay empties it and
@@ -995,19 +997,19 @@ must be present in `HEAD`, and no line it removed may be back (counted against t
 parent, so a structural line like `});` surviving elsewhere in the file does not count as restored).
 A commit whose work is genuinely absent and cleanly re-appliable still halts.
 
-**Recovery:** confirm the branch really is intact, then clear the halt:
+**Recovery:** park the feature, review the named evidence, and restore any missing work:
 
 ```bash
+ai-conductor daemon park <slug>
 cd .worktrees/<slug>
-git log --format=%s "$(git merge-base HEAD main)"..ORIG_HEAD   # pre-rebase subjects
-git log --format=%s "$(git merge-base HEAD main)"..HEAD        # what survived
-git status                                                      # must be clean
+git show ORIG_HEAD -- <path>   # inspect the named pre-rebase content
+git status                     # must be clean before clearing the halt
 ```
 
-For each subject in the first list and not the second, confirm `main` already carries an equivalent
-change (`git log --oneline main -- <path>`). If every difference is accounted for that way, remove
-both halt files and let the daemon re-dispatch. If any feature work is actually missing, recover it
-from `ORIG_HEAD` before clearing anything.
+If the evidence is correct, restore the missing feature content from `ORIG_HEAD`, commit the repair,
+and confirm the working tree is clean. If the content is already present through an equivalent base
+change, verify that equivalence before clearing the halt. Then remove both live halt files, verify
+they are absent, and unpark as described in [A completed rebase still appears halted](#a-completed-rebase-still-appears-halted).
 
 ### A completed rebase still appears halted
 
