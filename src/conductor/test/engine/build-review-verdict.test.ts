@@ -243,7 +243,9 @@ describe('engine/build-review verdict wiring contract', () => {
     await expect(checkGateCompletion(dir, 'build_review', {
       buildReviewEffectiveResolver: resolver,
     })).resolves.toMatchObject({ done: true });
-    expect(resolver).toHaveBeenCalledWith(dir, aggregate);
+    expect(resolver).toHaveBeenCalledWith(dir, aggregate, {
+      minConfidence: { testQuality: 0 },
+    });
   });
 
   it('routes unresolved siblings and infrastructure failures by their effective cause', async () => {
