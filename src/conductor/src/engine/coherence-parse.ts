@@ -156,11 +156,13 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
   }
 
   const lines = text.split('\n');
-  const tableRowLines: Array<{ cells: string[]; line: number }> = [];
+  const tableRowLines: Array<Array<{ cells: string[]; line: number }>> = [[]];
+  let currentTableRowLines = tableRowLines[0];
   let sawHeader = false;
   let sawSeparator = false;
 
-  for (const [index, line] of lines.entries()) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     const lineNumber = index + 1;
     const cells = splitRow(line);
     if (cells === null) continue;
@@ -178,15 +180,27 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
       sawSeparator = true;
       continue;
     }
-    tableRowLines.push({ cells, line: lineNumber });
+    let nextPipeLineIndex = index + 1;
+    let nextCells: string[] | null = null;
+    while (nextPipeLineIndex < lines.length && nextCells === null) {
+      nextCells = splitRow(lines[nextPipeLineIndex]);
+      nextPipeLineIndex += 1;
+    }
+    if (nextCells !== null && isSeparatorRow(nextCells)) {
+      currentTableRowLines = [];
+      tableRowLines.push(currentTableRowLines);
+      index = nextPipeLineIndex - 1;
+      continue;
+    }
+    currentTableRowLines.push({ cells, line: lineNumber });
   }
 
-  if (!sawHeader || !sawSeparator || tableRowLines.length === 0) {
+  if (!sawHeader || !sawSeparator || tableRowLines[0].length === 0) {
     return { ok: false, reason: 'unparseable-coherence-artifact' };
   }
 
   const rows: CoherenceRow[] = [];
-  for (const { cells, line } of tableRowLines) {
+  for (const { cells, line } of tableRowLines[0]) {
     const rawRowClass = cells[0];
     const rowClass = rawRowClass.trim().toLowerCase();
     if (rowClass === 'criterion') {

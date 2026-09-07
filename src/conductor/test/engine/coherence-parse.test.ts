@@ -1,4 +1,4 @@
-// Covers: task:2, task:3
+// Covers: task:1, task:2, task:3
 // Test: direct coherence parser import isolation
 
 import { readFileSync } from 'node:fs';
@@ -177,6 +177,61 @@ ${row}
       ok: false,
       reason: 'unparseable-coherence-artifact',
       detail: { line: 3, message: 'legacy row expected 5 and actual 4 cells' },
+    });
+  });
+
+  it('returns only mapping rows when an ordinary-prose table follows the mapping table', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| task | task:1 | story:1 | covered | "mapping evidence" |
+
+| Topic | Notes |
+| --- | --- |
+| Follow-up | This is ordinary prose in a table. |
+`),
+    ).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'task',
+          id: 'task:1',
+          citedIds: ['story:1'],
+          verdict: 'covered',
+          quote: 'mapping evidence',
+        },
+      ],
+    });
+  });
+
+  it('preserves mapping rows separated by a blank-line paragraph', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| task | task:1 | story:1 | covered | "first mapping evidence" |
+
+This paragraph explains the mappings below.
+
+| task | task:2 | story:2 | covered | "second mapping evidence" |
+`),
+    ).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'task',
+          id: 'task:1',
+          citedIds: ['story:1'],
+          verdict: 'covered',
+          quote: 'first mapping evidence',
+        },
+        {
+          rowClass: 'task',
+          id: 'task:2',
+          citedIds: ['story:2'],
+          verdict: 'covered',
+          quote: 'second mapping evidence',
+        },
+      ],
     });
   });
 
