@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:4
 // Test: direct coherence parser import isolation
 
 import { readFileSync } from 'node:fs';
@@ -348,8 +348,8 @@ ${row}
     });
   });
 
-  // Covers: task:6
-  it('preserves legacy acceptances and enumerates only shared-parser acceptance expansions', () => {
+  // Covers: task:4, task:6
+  it('preserves legacy acceptances and pins the widened shared-parser corpus boundary', () => {
     const observations = coherenceRegressionCorpus.map((fixture) => ({
       ...fixture,
       oracleAccepted: retiredHasCoherenceTableDataRow(fixture.content),
@@ -361,7 +361,7 @@ ${row}
       observations
         .filter(({ oracleAccepted, parserAccepted }) => oracleAccepted && !parserAccepted)
         .map(({ slug }) => slug),
-    ).toEqual(['decide-artifact-coherence-check']);
+    ).toEqual([]);
     expect(observations
       .filter(({ oracleAccepted, parserAccepted }) => !oracleAccepted && parserAccepted)
       .map(({ name }) => name),
@@ -369,6 +369,40 @@ ${row}
       'five-wide header over six-wide separator and criterion row',
       'six-wide header over five-wide separator and legacy row',
     ]);
+
+    expect(observations.filter(({ parserAccepted }) => parserAccepted).map(({ name }) => name)).toEqual([
+      'minimal valid table',
+      'ragged mixed legacy and criterion rows',
+      'five-wide header over six-wide separator and criterion row',
+      'six-wide header over five-wide separator and legacy row',
+      'zero-criterion legacy artifact',
+      'shipped second-table artifact',
+      'two mapping tables',
+    ]);
+
+    const twoMappingTables = coherenceRegressionCorpus.find(({ slug }) => slug === 'two-mapping-tables');
+    if (twoMappingTables?.content === undefined || twoMappingTables.content === null) {
+      throw new Error('missing two-mapping-tables corpus fixture');
+    }
+    expect(parseCoherenceArtifact(twoMappingTables.content)).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'story',
+          id: 'story:1',
+          citedIds: ['outcome:1'],
+          verdict: 'covered',
+          quote: 'fixture',
+        },
+        {
+          rowClass: 'task',
+          id: 'task:2',
+          citedIds: ['story:1'],
+          verdict: 'covered',
+          quote: 'fixture',
+        },
+      ],
+    });
   });
 });
 
