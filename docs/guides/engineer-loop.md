@@ -176,8 +176,10 @@ ai-conductor compose land \
 ```
 
 `land` commits the already-authored `.docs/` artifacts in place on the worktree's `spec/<slug>`
-branch. It authors nothing. You should see `{"slug":"…","branch":"spec/<slug>","repoPath":"…"}` —
-pass `branch` and the same `--worktree` to step 6.
+branch. It authors nothing. Its commit body summarizes the available plan summary, track and tier,
+story headings, and task count; `handoff` uses that body to prefill the spec PR description. You
+should see `{"slug":"…","branch":"spec/<slug>","repoPath":"…"}` — pass `branch` and the same
+`--worktree` to step 6.
 
 Before committing, `land` refuses on any of:
 
