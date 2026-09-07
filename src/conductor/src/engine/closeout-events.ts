@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { ConductorEvent } from '../types/events.js';
@@ -28,8 +28,22 @@ export function appendCloseoutEvent(
 ): void {
   const pipelineDir = join(projectRoot, '.pipeline');
   mkdirSync(pipelineDir, { recursive: true });
+  const eventPath = join(pipelineDir, 'pipeline-events.jsonl');
+  // Authorization replay is keyed by its durable adjustment id. This makes a
+  // command-entry reconciliation safe after a crash between event and apply.
+  if (event.type === 'kickback_budget_adjustment_authorized' && existsSync(eventPath)) {
+    const alreadyRecorded = readFileSync(eventPath, 'utf8').split('\n').some((line) => {
+      try {
+        const parsed: unknown = JSON.parse(line);
+        return typeof parsed === 'object' && parsed !== null &&
+          (parsed as { type?: unknown }).type === event.type &&
+          (parsed as { adjustmentId?: unknown }).adjustmentId === event.adjustmentId;
+      } catch { return false; }
+    });
+    if (alreadyRecorded) return;
+  }
   appendFileSync(
-    join(pipelineDir, 'pipeline-events.jsonl'),
+    eventPath,
     `${JSON.stringify(event)}\n`,
     'utf8',
   );
