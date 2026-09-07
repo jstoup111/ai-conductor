@@ -495,6 +495,64 @@ describe('build-review domain', () => {
       });
     });
 
+    it('normalizes declared-title whitespace so a reflowed provider anchor still matches its established target', () => {
+      const reflowed = {
+        rubric: 'testQuality', changedTestSelectors: ['test/widget.test.ts'], changedFiles: [],
+        changedTestTitles: [{ selector: 'test/widget.test.ts', titleText: 'widget  >   persists\n  state', staticExtractionFallback: false }],
+        testScope: {
+          targets: [{
+            source: { fileName: 'test/widget.test.ts', side: 'head' },
+            declaration: { kind: 'test', titleChain: ['widget', 'persists\n  state'], occurrence: 0 },
+          }],
+        },
+      } as unknown as BuildReviewRubricProjection;
+
+      // adr-2026-08-18 fixes anchor identity as sha256(whitespace-normalized
+      // titleText); a re-indented or reflowed title is the same declared test.
+      const references = buildReviewFindingReferenceContext(reflowed);
+      expect(references.changedTestRegions).toEqual([
+        { path: 'test/widget.test.ts', contentHash: titleHash('widget > persists state'), display: 'widget > persists\n  state' },
+      ]);
+      expect(parseBuildReviewFindingAnchor({
+        rubric: 'testQuality',
+        locus: { path: 'test/widget.test.ts', contentHash: titleHash('widget > persists state'), display: 'widget > persists state' },
+      }, references)).toBeDefined();
+
+      const fallbackOnly = buildReviewFindingReferenceContext({ ...reflowed, testScope: undefined } as unknown as BuildReviewRubricProjection);
+      expect(fallbackOnly.changedTestRegions).toEqual([
+        { path: 'test/widget.test.ts', contentHash: titleHash('widget > persists state'), display: 'widget  >   persists\n  state' },
+      ]);
+    });
+
+    it('anchors resolved candidates on their declared title and occurrence rather than a shared source-byte hash', () => {
+      const shared = {
+        rubric: 'testQuality', changedTestSelectors: ['test/shared.test.ts'], changedFiles: [],
+        changedTestTitles: [],
+        testScope: {
+          targets: [],
+          candidates: [
+            { declaration: { kind: 'test', titleChain: ['shared setup', 'first candidate'], occurrence: 0 } },
+            { declaration: { kind: 'test', titleChain: ['shared setup', 'second candidate'], occurrence: 0 } },
+          ],
+        },
+      } as unknown as BuildReviewRubricProjection;
+      // Both candidates were pinned to the same changed setup region, so their
+      // source-byte evidence hash is identical; identity must not collapse them.
+      const sourceRegion = (display: string) => ({ path: 'test/shared.test.ts', startLine: 4, endLine: 9, contentHash: HASH, display });
+
+      const references = buildReviewFindingReferenceContext(shared, [
+        { candidateId: 'c1', status: 'resolved', sourceRegion: sourceRegion('shared setup > first candidate'), obligationReferences: ['S5.4'], associationReason: 'Pinned source proves the candidate.' },
+        { candidateId: 'c2', status: 'resolved', sourceRegion: sourceRegion('shared setup > second candidate'), obligationReferences: ['S5.4'], associationReason: 'Pinned source proves the candidate.' },
+      ]);
+
+      expect(references.changedTestRegions).toEqual([
+        { path: 'test/shared.test.ts', contentHash: titleHash('shared setup > first candidate'), display: 'shared setup > first candidate' },
+        { path: 'test/shared.test.ts', contentHash: titleHash('shared setup > second candidate'), display: 'shared setup > second candidate' },
+      ]);
+      expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: { path: 'test/shared.test.ts', contentHash: titleHash('shared setup > second candidate'), display: 'second' } }, references)).toBeDefined();
+      expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: { path: 'test/shared.test.ts', contentHash: HASH, display: 'source bytes' } }, references)).toBeUndefined();
+    });
+
     it('accepts only a locus that names a projected content region when references are supplied', () => {
       const references = buildReviewFindingReferenceContext(projection);
       const region = references.changedTestRegions![0]!;
