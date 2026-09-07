@@ -81,14 +81,6 @@ const tracedEventSamples: {
 } = {
   step_started: { type: 'step_started', step: 'build', index: 0 },
   build_progress: { type: 'build_progress', step: 'build', resolved: 1, total: 3 },
-  unattributed_progress: {
-    type: 'unattributed_progress',
-    step: 'build',
-    attempt: 2,
-    resolvedCount: 1,
-    headBefore: 'before',
-    headAfter: 'after',
-  },
   build_no_progress: {
     type: 'build_no_progress',
     step: 'build',
@@ -410,27 +402,6 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
     // Non-vacuity for the dispatch itself: the routed events produced real
     // exported telemetry rather than being silently discarded.
     expect(spanExporter.getFinishedSpans().length).toBeGreaterThan(0);
-  });
-
-  it('records unattributed progress as an event on the active build span', async () => {
-    const vis = new OtelVisualizer(
-      resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, pipelineDir),
-      { runId: 'test-unattributed-progress', feature: 'test-feature', project: 'test-project', spanExporter, metricExporter },
-    );
-    vis.start(emitter);
-    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
-    await emitter.emit({
-      type: 'unattributed_progress', step: 'build', attempt: 2, resolvedCount: 1,
-      headBefore: 'before', headAfter: 'after',
-    });
-    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
-    await vis.stop();
-
-    const build = spanExporter.getFinishedSpans().find((span) => span.name === 'build');
-    expect(build?.events).toContainEqual(expect.objectContaining({
-      name: 'unattributed_progress',
-      attributes: expect.objectContaining({ attempt: 2, resolvedCount: 1, headBefore: 'before', headAfter: 'after' }),
-    }));
   });
 
   it('records a bus-emitted loop_halt as the halted root span outcome', async () => {

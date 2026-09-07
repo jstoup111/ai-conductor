@@ -208,22 +208,6 @@ export class SpanManager {
     targetSpan.addEvent('build_progress', attrs);
   }
 
-  onUnattributedProgress(event: Extract<ConductorEvent, { type: 'unattributed_progress' }>): void {
-    this.ensureRunSpan();
-    const state = this.openSteps.get(event.step);
-    const targetSpan = state?.span ?? this.runSpan;
-    if (!targetSpan) {
-      this.warn(`unattributed_progress for '${event.step}' received but no span available — dropping`);
-      return;
-    }
-    targetSpan.addEvent('unattributed_progress', {
-      attempt: event.attempt,
-      resolvedCount: event.resolvedCount,
-      headBefore: event.headBefore ?? '',
-      headAfter: event.headAfter ?? '',
-    });
-  }
-
   onBuildNoProgress(event: Extract<ConductorEvent, { type: 'build_no_progress' }>): void {
     this.ensureRunSpan();
     const state = this.openSteps.get(event.step);
