@@ -20,9 +20,26 @@ export class BuildReviewSourceReadError extends Error {
   }
 }
 
+/** A frozen source read either has bytes or proves that this tree has no blob at that path. */
+export type BuildReviewOptionalSourceRead =
+  | { readonly kind: 'present'; readonly value: string }
+  | { readonly kind: 'absent' };
+
 function bounded(value: string): string {
   if (value.length <= ERROR_EXCERPT_BYTES) return value;
   return `${value.slice(0, ERROR_EXCERPT_BYTES)}… [truncated ${value.length - ERROR_EXCERPT_BYTES} bytes]`;
+}
+
+const CANONICAL_REPO_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9.](?:[A-Za-z0-9._\/@+ -]*[A-Za-z0-9._\/@+-])?(?:\/[A-Za-z0-9.](?:[A-Za-z0-9._\/@+ -]*[A-Za-z0-9._\/@+-])?)*$/;
+
+// Keep source-reader paths no broader than persisted finding references. In
+// particular, a prose sentence that happens to contain a path is not a path.
+function isCanonicalRepoPath(path: string): boolean {
+  if (!CANONICAL_REPO_PATH.test(path)) return false;
+  if (!path.includes(' ')) return true;
+  if (/[.,;:!?] |\.$|  /.test(path)) return false;
+  const segments = path.split('/');
+  return segments.length >= 2 && !segments[0]!.includes(' ');
 }
 
 /** Validate a portable repository-relative Git path before it reaches a Git revision expression. */
@@ -37,6 +54,7 @@ export function safeRepoRelativePath(path: string): string {
   if (
     normalized === '.' || normalized === '..' || normalized.startsWith('../')
     || normalized !== path || path.split('/').some((part) => part === '' || part === '.' || part === '..')
+    || !isCanonicalRepoPath(path)
   ) {
     throw new BuildReviewSourceReadError('invalid-path', path);
   }
@@ -76,7 +94,7 @@ export function parseNameStatusZ(stdout: string): readonly BuildReviewPathChange
  * worktree mutation after the assembly begins.
  */
 export class BuildReviewScopeSource {
-  private readonly reads = new Map<string, Promise<{ value?: string; stderr: string }>>();
+  private readonly reads = new Map<string, Promise<{ readonly result: BuildReviewOptionalSourceRead; readonly detail?: string }>>();
 
   constructor(readonly git: GitRunner, readonly headSha: string) {}
 
@@ -86,18 +104,18 @@ export class BuildReviewScopeSource {
 
   async readAtRequired(commitSha: string, path: string): Promise<string> {
     const safePath = safeRepoRelativePath(path);
-    const result = await this.read(commitSha, safePath);
-    if (result.value !== undefined) return result.value;
-    throw new BuildReviewSourceReadError('required-read-failed', safePath, result.stderr || 'blob is missing or unreadable');
+    const read = await this.read(commitSha, safePath);
+    if (read.result.kind === 'present') return read.result.value;
+    throw new BuildReviewSourceReadError('required-read-failed', safePath, read.detail || 'blob is absent');
   }
 
   /** An optional HEAD side may be absent (for example, a deleted diff side). */
-  async readOptional(path: string): Promise<string | undefined> {
+  async readOptional(path: string): Promise<BuildReviewOptionalSourceRead> {
     return this.readAtOptional(this.headSha, path);
   }
 
-  async readAtOptional(commitSha: string, path: string): Promise<string | undefined> {
-    return (await this.read(commitSha, safeRepoRelativePath(path))).value;
+  async readAtOptional(commitSha: string, path: string): Promise<BuildReviewOptionalSourceRead> {
+    return (await this.read(commitSha, safeRepoRelativePath(path))).result;
   }
 
   async inventory(baseSha: string, args: readonly string[]): Promise<readonly BuildReviewPathChange[]> {
@@ -110,7 +128,7 @@ export class BuildReviewScopeSource {
     return parseNameStatusZ(result.stdout);
   }
 
-  private read(commitSha: string, path: string): Promise<{ value?: string; stderr: string }> {
+  private read(commitSha: string, path: string): Promise<{ readonly result: BuildReviewOptionalSourceRead; readonly detail?: string }> {
     const key = `${commitSha}\0${path}`;
     let pending = this.reads.get(key);
     if (!pending) {
@@ -120,9 +138,21 @@ export class BuildReviewScopeSource {
     return pending;
   }
 
-  private async readBlob(commitSha: string, path: string): Promise<{ value?: string; stderr: string }> {
+  private async readBlob(commitSha: string, path: string): Promise<{ readonly result: BuildReviewOptionalSourceRead; readonly detail?: string }> {
     const result = await this.git(['show', `${commitSha}:${path}`]);
-    if (result.exitCode === 0) return { value: result.stdout, stderr: '' };
-    return { stderr: result.stderr };
+    if (result.exitCode === 0) return Object.freeze({ result: Object.freeze({ kind: 'present', value: result.stdout }) });
+
+    // Do not infer absence from Git's human stderr. `show` may fail to read a
+    // blob that is present in the already-pinned tree; only Git's tree probe
+    // can distinguish that from a genuinely absent optional side.
+    const tree = await this.git(['ls-tree', '-z', commitSha, '--', path]);
+    if (tree.exitCode === 0 && tree.stdout === '') {
+      return Object.freeze({ result: Object.freeze({ kind: 'absent' }), detail: result.stderr });
+    }
+    throw new BuildReviewSourceReadError(
+      'required-read-failed',
+      path,
+      result.stderr || tree.stderr || 'git show failed for a blob present in the pinned tree',
+    );
   }
 }

@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -32,6 +33,11 @@ describe('build-review scope source', () => {
     (path) => expect(() => safeRepoRelativePath(path)).toThrow(BuildReviewSourceReadError),
   );
 
+  it('keeps a normal space-bearing filename while rejecting prose rather than a repository path', () => {
+    expect(safeRepoRelativePath('test/widget name.test.ts')).toBe('test/widget name.test.ts');
+    expect(() => safeRepoRelativePath('The affected test is test/widget.test.ts.')).toThrow(BuildReviewSourceReadError);
+  });
+
   it('reads each pinned blob once and never falls back to live content', async () => {
     const calls: string[][] = [];
     const git: GitRunner = async (args) => {
@@ -58,6 +64,32 @@ describe('build-review scope source', () => {
       path: '.docs/plans/active.md',
     });
     await expect(source.readRequired('.docs/plans/active.md')).rejects.toThrow(/truncated/);
+  });
+
+  it('allows an explicitly absent optional pinned blob without treating it as readable content', async () => {
+    const source = new BuildReviewScopeSource(scriptedGit({
+      'show\u0000head123:.docs/stories/optional.md': {
+        exitCode: 128,
+        stderr: "fatal: path '.docs/stories/optional.md' does not exist in 'head123'",
+      },
+      'ls-tree\u0000-z\u0000head123\u0000--\u0000.docs/stories/optional.md': { stdout: '' },
+    }), 'head123');
+
+    await expect(source.readAtOptional('head123', '.docs/stories/optional.md')).resolves.toEqual({ kind: 'absent' });
+    await expect(source.readOptional('.docs/stories/optional.md')).resolves.toEqual({ kind: 'absent' });
+  });
+
+  it('surfaces an unreadable optional pinned blob as a bounded source-read error', async () => {
+    const source = new BuildReviewScopeSource(scriptedGit({
+      'show\u0000head123:.docs/stories/optional.md': { exitCode: 128, stderr: 'x'.repeat(2_000) },
+      'ls-tree\u0000-z\u0000head123\u0000--\u0000.docs/stories/optional.md': { stdout: '100644 blob optional\t.docs/stories/optional.md\0' },
+    }), 'head123');
+
+    await expect(source.readAtOptional('head123', '.docs/stories/optional.md')).rejects.toMatchObject({
+      name: 'BuildReviewSourceReadError',
+      path: '.docs/stories/optional.md',
+    } satisfies Partial<BuildReviewSourceReadError>);
+    await expect(source.readAtOptional('head123', '.docs/stories/optional.md')).rejects.toThrow(/truncated/);
   });
 
   it('keeps a deleted side in inventory while a missing required HEAD blob is an error', async () => {
