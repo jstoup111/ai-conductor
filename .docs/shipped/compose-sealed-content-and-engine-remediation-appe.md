@@ -4,6 +4,13 @@ spec_hash: a0dc23f26765eca768ccf0e47e6ca8cf480236c3828f627e465e1bb3dc5ed48a
 pr: https://github.com/jstoup111/ai-conductor/pull/2394
 shipped: 2026-09-07
 engine_version: 20260907T120758Z-4f8bdec36946
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "Task 2"
+    outcome: remediated
+    summary: "An unreadable seal baseline returns `baseline-unresolvable` before the required base-tip-only verdict can be evaluated."
 ---
 
 ## Cost
