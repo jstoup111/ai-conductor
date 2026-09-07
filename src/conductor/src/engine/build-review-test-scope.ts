@@ -77,7 +77,7 @@ export interface UncertainBuildReviewTestScopeCandidate {
   readonly associationChanges: readonly CoversMarkerAssociationChange[];
   readonly reasons: readonly BuildReviewTestScopeCandidateReason[];
   readonly affectedGroup?: BuildReviewAffectedOptedInGroup;
-  readonly affectedDependency?: BuildReviewScopeDependencyEffect;
+  readonly affectedDependencies?: readonly BuildReviewScopeDependencyEffect[];
 }
 
 export type BuildReviewTestScopeNote =
@@ -197,14 +197,14 @@ function candidate(
   reasons: readonly BuildReviewTestScopeCandidateReason[],
   diagnostic?: TestDeclarationDiagnostic,
   affectedGroup?: BuildReviewAffectedOptedInGroup,
-  affectedDependency?: BuildReviewScopeDependencyEffect,
+  affectedDependencies?: readonly BuildReviewScopeDependencyEffect[],
 ): UncertainBuildReviewTestScopeCandidate {
   return Object.freeze({
     source: sourceIdentity(source.fileName, source.side),
     ...(declaration ? { declaration } : {}),
     ...(diagnostic ? { diagnostic } : {}),
     ...(affectedGroup ? { affectedGroup } : {}),
-    ...(affectedDependency ? { affectedDependency } : {}),
+    ...(affectedDependencies && affectedDependencies.length > 0 ? { affectedDependencies: Object.freeze([...affectedDependencies]) } : {}),
     markers: uniqueMarkers(markers),
     associationChanges: Object.freeze([...associationChanges]),
     reasons: Object.freeze([...new Set(reasons)]),
@@ -557,32 +557,31 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
   // Dependencies discover bounded source evidence only. A plan path never
   // becomes authority: every emitted candidate is attached to this source's
   // already-established local Covers binding.
-  for (const effect of input.dependencyEffects ?? []) {
-    if (effect.seed.source.side !== 'head' || effect.seed.source.fileName !== input.head.source.fileName) continue;
-    if (effect.changedSources.length === 0) continue;
-    const byOwner = new Map<string, BoundCoversMarker[]>();
-    for (const binding of associations.head.bindings.filter((entry): entry is BoundCoversMarker => entry.kind === 'bound')) {
-      const key = JSON.stringify([
-        declarationKey(binding.owner.declaration),
-        binding.owner.association,
-      ]);
-      const bindings = byOwner.get(key) ?? [];
-      bindings.push(binding);
-      byOwner.set(key, bindings);
-    }
-    for (const bindings of byOwner.values()) {
-      const first = bindings[0]!;
-      candidates.push(candidate(
-        candidateSource,
-        first.owner.declaration,
-        bindings.map((binding) => binding.marker),
-        [],
-        ['affected-dependency'],
-        undefined,
-        undefined,
-        effect,
-      ));
-    }
+  const dependencyEffects = (input.dependencyEffects ?? []).filter((effect) =>
+    effect.seed.source.side === 'head' && effect.seed.source.fileName === input.head.source.fileName && effect.changedSources.length > 0,
+  );
+  const dependencyBindingsByOwner = new Map<string, BoundCoversMarker[]>();
+  for (const binding of associations.head.bindings.filter((entry): entry is BoundCoversMarker => entry.kind === 'bound')) {
+    const key = JSON.stringify([
+      declarationKey(binding.owner.declaration),
+      binding.owner.association,
+    ]);
+    const bindings = dependencyBindingsByOwner.get(key) ?? [];
+    bindings.push(binding);
+    dependencyBindingsByOwner.set(key, bindings);
+  }
+  for (const bindings of dependencyEffects.length > 0 ? dependencyBindingsByOwner.values() : []) {
+    const first = bindings[0]!;
+    candidates.push(candidate(
+      candidateSource,
+      first.owner.declaration,
+      bindings.map((binding) => binding.marker),
+      [],
+      ['affected-dependency'],
+      undefined,
+      undefined,
+      dependencyEffects,
+    ));
   }
 
   for (const group of affectedGroups) {
