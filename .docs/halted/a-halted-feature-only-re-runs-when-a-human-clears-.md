@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-07T01:17:41.759Z
+Status: halted
 Slug: a-halted-feature-only-re-runs-when-a-human-clears-
 Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-a-halted-feature-only-re-runs-when-a-human-clears-
-Head SHA: b719bd5eeb1c6035cfa93e6b397e084a6ad520ed
-Halted at: 2026-09-05T22:15:55.772Z
+Head SHA: 2dca2dd64679d8c46f78da10e94efe4a52e39e2b
+Halted at: 2026-09-07T02:16:55.692Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: needs human DECIDE — As-built review remediation cannot resolve governing clause(s): AB-8: adr-2026-08-29-kickback-budget-recovery-uses-needs-human-halt-class D3. A REMEDIABLE row cites exactly one clause: an APPROVED ADR filename stem plus its decision number, or one task id from this feature's plan.
+3 uncommitted paths: src/conductor/src/engine/daemon-rekick.ts, src/conductor/test/engine/daemon-rekick.test.ts, src/conductor/test/cli/kickback-budget.test.ts
 ```
