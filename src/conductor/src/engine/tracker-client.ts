@@ -89,6 +89,9 @@ interface AssignedIssue {
   labels: unknown;
 }
 
+/** Explicitly exceed the GitHub CLI's implicit 30-result issue-list default. */
+export const DEFAULT_ASSIGNED_ISSUES_LIMIT = 1000;
+
 /**
  * Canonical seam for tracker/PR read+write operations. GitHub is the only
  * implementation today; the interface is backend-agnostic so future trackers
@@ -112,8 +115,8 @@ export interface TrackerClient {
   viewerIdentity(cwd: string): Promise<string>;
   /** `gh api repos/<repo>/issues/<number>/dependencies/blocked_by` — raw JSON. */
   getBlockedBy(repo: string, number: number, cwd: string): Promise<unknown>;
-  /** `gh issue list --assignee @me --state open --json ... -R <repo>` — assigned issues. */
-  listAssignedIssues(repo: string, cwd: string): Promise<AssignedIssue[]>;
+  /** `gh issue list --assignee @me --state open --json ... --limit <n> -R <repo>` — assigned issues. */
+  listAssignedIssues(repo: string, cwd: string, limit?: number): Promise<AssignedIssue[]>;
   /** `gh issue comment <number> -R <repo> --body <body>` — comment on an issue. */
   commentOnIssue(repo: string, number: number, body: string, cwd: string): Promise<void>;
   /** `gh issue create --title <title> --body <body> [--repo <repo>]` — returns the created issue URL. */
@@ -279,7 +282,7 @@ export function createGithubTrackerClient(runner: GhRunner): EffectMarkerTracker
       return parseJsonOrThrow('getBlockedBy', stdout);
     },
 
-    async listAssignedIssues(repo, cwd) {
+    async listAssignedIssues(repo, cwd, limit = DEFAULT_ASSIGNED_ISSUES_LIMIT) {
       const { stdout } = await runOrThrow(
         runner,
         [
@@ -291,6 +294,8 @@ export function createGithubTrackerClient(runner: GhRunner): EffectMarkerTracker
           'open',
           '--json',
           'number,title,body,labels',
+          '--limit',
+          String(limit),
           '-R',
           repo,
         ],
