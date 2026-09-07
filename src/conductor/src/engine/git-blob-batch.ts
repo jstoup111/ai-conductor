@@ -26,27 +26,47 @@ export async function readGitBlobs(
 ): Promise<Map<string, Buffer>> {
   if (paths.length === 0) return new Map();
 
-  const runner = options.runner ?? execaCommand;
-  const { stdout } = await runner('git', ['cat-file', '--batch', '--buffer'], {
-    cwd: projectRoot,
-    encoding: 'buffer',
-    input: paths.map((path) => `${revision}:${path}`).join('\n') + '\n',
-    maxBuffer: GIT_BATCH_MAX_BUFFER,
-    stripFinalNewline: false,
-  });
-  const output = Buffer.from(stdout);
   const blobs = new Map<string, Buffer>();
-  let offset = 0;
+  const batchPaths = paths.filter((path) => path.length > 0 && !path.includes('\n'));
+  const individualPaths = paths.filter((path) => path.length === 0 || path.includes('\n'));
 
-  for (const path of paths) {
-    const headerEnd = output.indexOf(0x0a, offset);
-    const header = Buffer.from(output.subarray(offset, headerEnd)).toString('ascii').split(' ');
-    const size = Number(header[2]);
-    const contentStart = headerEnd + 1;
-    const contentEnd = contentStart + size;
+  if (batchPaths.length > 0) {
+    const runner = options.runner ?? execaCommand;
+    const { stdout } = await runner('git', ['cat-file', '--batch', '--buffer'], {
+      cwd: projectRoot,
+      encoding: 'buffer',
+      input: batchPaths.map((path) => `${revision}:${path}`).join('\n') + '\n',
+      maxBuffer: GIT_BATCH_MAX_BUFFER,
+      stripFinalNewline: false,
+    });
+    const output = Buffer.from(stdout);
+    let offset = 0;
 
-    blobs.set(path, output.subarray(contentStart, contentEnd) as Buffer);
-    offset = contentEnd + 1;
+    for (const path of batchPaths) {
+      const headerEnd = output.indexOf(0x0a, offset);
+      if (headerEnd === -1) throw new Error('Incomplete git cat-file batch response');
+      const header = output.subarray(offset, headerEnd).toString('ascii').split(' ');
+      offset = headerEnd + 1;
+      const size = Number(header[2]);
+      if (!Number.isSafeInteger(size) || size < 0) continue;
+
+      const contentEnd = offset + size;
+      if (contentEnd >= output.length || output[contentEnd] !== 0x0a) {
+        throw new Error('Incomplete git cat-file batch response');
+      }
+      if (header[1] === 'blob') blobs.set(path, output.subarray(offset, contentEnd));
+      offset = contentEnd + 1;
+    }
+  }
+
+  for (const path of individualPaths) {
+    const result = await execaCommand('git', ['show', `${revision}:${path}`], {
+      cwd: projectRoot,
+      encoding: 'buffer',
+      stripFinalNewline: false,
+      reject: false,
+    });
+    if (result.exitCode === 0) blobs.set(path, Buffer.from(result.stdout));
   }
 
   return blobs;

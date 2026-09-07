@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -92,5 +92,66 @@ describe('engine/git-blob-batch', () => {
     } finally {
       await rm(dir, { force: true, recursive: true });
     }
+  });
+
+  it('omits an absent path without changing neighboring committed blobs', async () => {
+    const files = new Map<string, Uint8Array>([
+      ['before.md', Buffer.from('before\n')],
+      ['after.md', Buffer.from('after\n')],
+    ]);
+    const { dir, revision } = await createRepository(files);
+
+    try {
+      const contents = await readGitBlobs(dir, revision, ['before.md', 'absent.md', 'after.md']);
+
+      expect(Object.fromEntries(contents)).toEqual({
+        'before.md': await singlePathBytes(dir, revision, 'before.md'),
+        'after.md': await singlePathBytes(dir, revision, 'after.md'),
+      });
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
+  });
+
+  it('omits a tree path instead of returning its raw tree bytes', async () => {
+    const { dir, revision } = await createRepository(new Map([
+      ['directory/file.md', Buffer.from('content\n')],
+    ]));
+
+    try {
+      await expect(readGitBlobs(dir, revision, ['directory'])).resolves.toEqual(new Map());
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
+  });
+
+  it('reads a newline-bearing path through the single-path form without altering ordinary blobs', async () => {
+    const newlinePath = 'newline\nname.md';
+    const files = new Map<string, Uint8Array>([
+      ['ordinary.md', Buffer.from('ordinary\n')],
+      [newlinePath, Buffer.from('newline filename\n')],
+    ]);
+    const { dir, revision } = await createRepository(files);
+
+    try {
+      const contents = await readGitBlobs(dir, revision, ['ordinary.md', newlinePath]);
+
+      expect(Object.fromEntries(contents)).toEqual(Object.fromEntries(
+        await Promise.all([...files.keys()].map(async (path) => [path, await singlePathBytes(dir, revision, path)])),
+      ));
+    } finally {
+      await rm(dir, { force: true, recursive: true });
+    }
+  });
+
+  it('returns no blobs and does not invoke the runner for an empty request', async () => {
+    const runner = vi.fn<GitBlobBatchRunner>();
+
+    const contents = await readGitBlobs('/unused', 'HEAD', [], { runner });
+
+    expect({ contents: Object.fromEntries(contents), invocations: runner.mock.calls.length }).toEqual({
+      contents: {},
+      invocations: 0,
+    });
   });
 });
