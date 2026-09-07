@@ -219,6 +219,18 @@ before persistence, as asserted by the unsigned-artifact test." A test name alon
 name the behavior it verifies. Existing mechanisms remain valid for `Verify-only:` tasks, and internal
 tasks retain the lower-layer scope allowed by §3d.
 
+For a preserved/default-mode behavior, make the relevant checks bound any new side effects on that
+path to their intended conditions. For a closed result/state/reason set, ensure the checks can
+represent each required scenario's actual outcome, including required absence or no-op cases. An
+existing value may cover several scenarios when its meaning fits; do not invent extra states or
+broaden the accepted criteria to fill a speculative case. Resolve any conflict with an approved
+decision during DECIDE rather than leaving BUILD to widen the set or choose which promise wins.
+
+When a check uses normalized inputs or an enumerated subset, name the owning check that establishes
+how source data reaches that representation and how the enumeration covers the criterion's scope.
+An invalid-input fixture or a self-consistent subset alone does not prove that boundary. Reuse a
+sibling task's proof when it owns the boundary; do not add duplicate integration tasks.
+
 Keep each `Done when:` bullet on one physical line. A wrapped continuation ends the parsed block,
 so later checks can disappear from the land-time count and quoted evidence can lose its grounding.
 

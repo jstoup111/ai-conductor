@@ -407,6 +407,10 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   for binding constraints. An established inability to deliver is `fail`, explained with
   `CANNOT-DELIVER:` prose below the table identifying the criterion, task, quoted check, and any
   binding ADR decision. Criterion rows retain six cells; no Notes cell or new gap-id vocabulary is added.
+  The review also checks preserved/default-mode observables against new side effects across tasks,
+  and verifies that closed state/result/reason sets can truthfully represent required negative paths.
+  Checks over normalized inputs or exported subsets must establish the source boundary as well as
+  the helper behavior; agreement within an incomplete subset does not establish complete coverage.
 - **PRD ↔ stories tie-out** — the `fr` and `story` row classes are checked in both directions (SKILL.md
   §4e). Forward: no PRD `FR-N` without a citing story that a task covers. Reverse: no story citing an
   `FR-N` the PRD never declares, and no story citing no FR at all. Both directions are re-derived

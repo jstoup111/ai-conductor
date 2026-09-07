@@ -223,6 +223,13 @@ verify-claims protocol in Section 5. "These feel like they might conflict" is no
 finding. If a suspected contradiction cannot be grounded in quoted text, surface it as
 an assumption for the operator rather than recording a verdict either way.
 
+**Preserved-behavior sweep.** For a criterion promising unchanged behavior, compatibility, or a
+default-mode no-op, compare that scenario with every task check that introduces a side effect on the
+same path, including logging, emitted events, writes, and dispatches. A new effect with no condition
+excluding the preserved scenario can defeat the promise even when its own task serves a different
+story. Name the exact protected observable and conflicting check; do not infer preservation merely
+from a separate regression-test task. Use §5 if the artifacts do not establish that the paths overlap.
+
 When a contradiction is confirmed, amend the artifact during this DECIDE pass — do not
 defer it to BUILD. Follow the accepted-artifact amendment convention the sibling DECIDE
 skills use: add a dated note beside the original assertion, additively, leaving the
@@ -300,7 +307,7 @@ exists and coverage is satisfied; what is wrong is that its promised behavior do
 existing verdict so the validator blocks it, and explain the failure with `CANNOT-DELIVER:` prose
 below the table per §4c.
 
-Apply both detection heuristics:
+Apply these detection heuristics:
 
 - **Mechanism-vs-restatement.** If the cited check merely paraphrases the Then-clause instead of
   naming the code path, state change, or check that produces it, achievability is unestablished: the
@@ -311,6 +318,22 @@ Apply both detection heuristics:
   If the task could deliver it only by violating an approved decision, mark the criterion row `fail`.
   The explanation must name the `adr-<stem>`, decision id, and binding decision text. Preserve §4f's
   separate architecture-obligation judgement and its existing row pool.
+- **Representable outcomes.** When the approved design uses a closed set of states, result values,
+  or reasons, walk each required happy and negative scenario through the cited checks and identify
+  the legal value that represents its actual outcome. Include required absence, skip, and no-change
+  cases: reporting that an operation ran cannot deliver a criterion saying it did not run. A set
+  whose permitted values cannot express a required outcome is `fail`, even if the producer and
+  consumer agree on the same incomplete set. Quote the scenario and binding set; do not demand a
+  distinct value per scenario when an existing value represents it truthfully, or invent scenarios
+  outside the accepted criteria. Unspecified value meanings remain an assumption under §5.
+- **Input-boundary proof.** If checks operate on a prepared input, normalized status, or exported
+  subset, trace the required scenario to the check that produces that input from the actual source.
+  A helper that correctly handles `invalid` does not establish that malformed source data becomes
+  `invalid`; matching a registry to an exported subset does not establish that the subset includes
+  everything the criterion quantifies over. Identify the decoding/validation or enumeration boundary
+  and its owning task check. Consider required error exits too: a later reporter cannot supply a
+  promised result if the planned earlier refusal never reaches it. Credit existing evidence and
+  sibling tasks, and distinguish a demonstrated bypass (`fail`) from an unspecified connection (§5).
 
 Ground each finding in the exact criterion and cited `Done when` text, with the binding ADR decision
 where applicable. "This task feels thin" is not a finding. If the artifacts do not settle
@@ -362,12 +385,13 @@ per row and must never assert "covered" that it has not actually confirmed.
       (legacy rows can silently pass them; criterion rows reject them as malformed)
 - [ ] §4d consistency pass run over every covered row; contradictions recorded as `fail`
       with `CONTRADICTS:` notes quoting the opposing text from both artifacts
+- [ ] Preserved/default-mode behavior compared with new side effects on the same path across tasks
 - [ ] §4e PRD↔stories tie-out checked in BOTH directions — no FR without a story, and no
       story citing a phantom FR or citing no FR at all
 - [ ] §4f architecture-decision mappings judged semantically; every `task`, `existing`, or
       `no-change` disposition actually satisfies its cited ADR decision
 - [ ] §4g achievability judged for every criterion from cited `Done when` checks and approved
-      architecture; mechanism-vs-restatement and the change-set ADR constraint sweep both applied
+      architecture; mechanism-vs-restatement, ADR constraints, representable outcomes, and input boundaries checked
 - [ ] Established inability to deliver recorded as `fail`; unsettled achievability handled under §5
 - [ ] Each achievability failure has `CANNOT-DELIVER:` prose below the table naming the criterion,
       task id, quoted check, and any binding ADR and decision id; six-cell rows and quotes stay intact
