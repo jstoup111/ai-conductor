@@ -1,3 +1,4 @@
+// Covers: task:2
 // Test: openSpecPr supplies a release disposition ONLY where one is required.
 //
 // `gh pr create --fill` builds the body from the branch name and last commit
@@ -29,7 +30,11 @@ function makeRunner(initialBody = 'spec: land authored artifacts for "x" [engine
   const calls: string[][] = [];
   const runner: HandoffDeps['runner'] = async (args) => {
     calls.push([...args]);
-    if (args[0] === 'pr' && args[1] === 'create') return { stdout: `${PR_URL}\n`, stderr: '' };
+    if (args[0] === 'pr' && args[1] === 'create') {
+      const bodyIndex = args.indexOf('--body');
+      if (bodyIndex >= 0) body = args[bodyIndex + 1]!;
+      return { stdout: `${PR_URL}\n`, stderr: '' };
+    }
     if (args[0] === 'pr' && args[1] === 'view') {
       return { stdout: JSON.stringify({ body }), stderr: '' };
     }
@@ -69,10 +74,13 @@ const noOpGitRunner: NonNullable<HandoffDeps['gitRunner']> = async () => ({
   stderr: '',
 });
 
-function deps(runner: HandoffDeps['runner']): HandoffDeps {
+function deps(
+  runner: HandoffDeps['runner'],
+  gitRunner: NonNullable<HandoffDeps['gitRunner']> = noOpGitRunner,
+): HandoffDeps {
   return {
     runner,
-    gitRunner: noOpGitRunner,
+    gitRunner,
     ledgerOpts: { engineerDir: tempDir },
   } as HandoffDeps;
 }
@@ -114,6 +122,20 @@ describe('openSpecPr — repos that do NOT require a disposition', () => {
 });
 
 describe('openSpecPr — repos that DO require a disposition', () => {
+  it('creates the PR with a parser-accepted body and needs no post-create body edit', async () => {
+    await optIn();
+    const { runner, calls } = makeRunner();
+
+    const result = await openSpecPr(target(), 'spec/dep-bump', deps(runner));
+    const create = calls.find((args) => args[0] === 'pr' && args[1] === 'create')!;
+
+    expect(result).toEqual({ kind: 'pr-opened', url: PR_URL });
+    expect(parseReleaseDisposition(create[create.indexOf('--body') + 1]!)).toEqual({
+      disposition: 'no-note',
+    });
+    expect(calls.filter((args) => args[0] === 'pr' && args[1] === 'edit')).toEqual([]);
+  });
+
   it('adds a no-note disposition when the --fill body carries none', async () => {
     await optIn();
     const { runner, getBody } = makeRunner();
@@ -146,8 +168,11 @@ describe('openSpecPr — repos that DO require a disposition', () => {
       'Release-Note: Something reader-facing.',
     ].join('\n');
     const { runner, getBody } = makeRunner(authored);
+    const gitRunner: NonNullable<HandoffDeps['gitRunner']> = async (args) => ({
+      stdout: args[0] === 'show' ? authored : '',
+    });
 
-    await openSpecPr(target(), 'spec/authored', deps(runner));
+    await openSpecPr(target(), 'spec/authored', deps(runner, gitRunner));
 
     expect(parseReleaseDisposition(getBody())).toMatchObject({
       disposition: 'note',
