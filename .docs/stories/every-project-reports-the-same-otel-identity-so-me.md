@@ -36,17 +36,18 @@ concurrent features') series never merge silently.
 - [ ] A test asserts absent, blank, and whitespace-only `otel.project_name` each fall back to the basename with no error raised
 - [ ] A test asserts a configured `otel.project_name` leaves `service.name` and the Resource `conductor.project` unchanged
 
-## Story 2: The metric Resource is feature-stable and the run id lives only on the trace side
+## Story 2: The metric Resource is worker-stable and feature identity lives on data points
 
 As an operator correlating a feature's traces with its metrics, I want the metric Resource to carry
-only values that are stable for the feature's lifetime, so that `target_info` is joinable per feature
-and neither a data point nor a resource attribute mints a series per run.
+only values that are stable for the worker's lifetime, so that `target_info` is joinable per worker,
+feature identity joins on the `feature` data-point attribute, and neither a data point nor a
+resource attribute mints a series per run.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a resource built for a project and a feature, when the metric Resource attributes are inspected, then `service.instance.id` equals the project and feature joined by a slash, using the same resolved project name the data-point seam uses
-- Given a run exporting both spans and metrics, when the span Resource and the metric Resource are inspected, then both carry the same `service.instance.id`, so the feature's traces and its `target_info` row share one key
+- Given a resource built for a project and a worker, when the metric Resource attributes are inspected, then `service.instance.id` equals the project and the worker joined by a slash, where the worker is `otel.worker_name` when non-blank else the OS hostname, using the same resolved project name the data-point seam uses
+- Given a run exporting both spans and metrics, when the span Resource and the metric Resource are inspected, then both carry the same `service.instance.id`, the span Resource additionally carries `conductor.feature` and `conductor.run.id`, and per-feature metric data points carry `feature`, so a feature's traces join its metrics on that attribute
 - Given a non-blank `otel.project_name` configured, when the resource is built, then the project half of `service.instance.id` is that configured value and equals the data-point `project` attribute exactly
 - Given a run exporting spans, when the span Resource attributes are inspected, then `conductor.run.id` and `conductor.engine.version` are both present, so trace-side run correlation is unchanged
 - Given no runId override and a `.pipeline/conduct-session-id` file with content, when the resources are built, then the span Resource's `conductor.run.id` equals the file's trimmed content and no metric Resource attribute carries that value
@@ -54,15 +55,15 @@ and neither a data point nor a resource attribute mints a series per run.
 #### Negative Paths
 - Given a run exporting metrics, when every metric label path is inspected — data-point attributes and all metric Resource attributes, which the backend copies into `target_info` — then none carries the run id (backend series growth stays bounded as runs accumulate)
 - Given two runs of one feature under different engine versions, when their metric Resource attribute sets are compared, then the sets are identical, so `target_info` gains no series
-- Given an absent project name or an absent feature, when the resource is built, then the missing half of `service.instance.id` is `unknown` and construction does not throw (the never-fails contract is preserved)
+- Given an absent project name or a worker name that cannot be resolved, when the resource is built, then the missing half of `service.instance.id` is `unknown` and construction does not throw (the never-fails contract is preserved)
 - Given the resolved resource, when its attributes are inspected, then `service.name` is exactly the constant `ai-conductor` — project identity is never folded into the service name nor into the backend's derived `job` label
 - Given an unwritable pipeline directory, when the resources are built, then construction still succeeds and no exception reaches the caller
 
 ### Done When
-- [ ] Resource tests assert `service.instance.id` equals the composed project-and-feature value for the configured-name, basename, and absent-value paths
+- [ ] Resource tests assert `service.instance.id` equals the composed project-and-worker value for the configured-name, hostname, and absent-value paths
 - [ ] A test asserts the metric Resource carries neither the run id nor the engine version, and the span Resource carries both
 - [ ] A test asserts two differing engine versions yield an identical metric Resource attribute set
-- [ ] A test asserts `service.name === 'ai-conductor'` and unchanged `conductor.feature`/`conductor.project`/`conductor.branch` on the metric Resource
+- [ ] A test asserts `service.name === 'ai-conductor'` and that the metric Resource carries `conductor.project`, `conductor.worker`, and `host.name` and no `conductor.feature` or `conductor.branch`
 - [ ] The unwritable-directory test passes with no throw
 
 ## Story 3: Wiring passes real identity values from the production construction site
