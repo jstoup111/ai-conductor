@@ -4,7 +4,7 @@
  * .docs/stories/auto-resolve-open-pr-conflicts.md; adr-2026-07-04-resolution-
  * worktree-lifecycle).
  *
- * Covers: FR-12 (isolation aspect), NFR-2, task:3
+ * Covers: FR-12 (isolation aspect), NFR-2, task:3, task:4
  *
  * These are true end-to-end acceptance specs: a REAL git repo in a tmpdir (no
  * mocked git), driving the not-yet-existing `withResolveWorktree` helper the
@@ -226,6 +226,38 @@ describe('integration/autoresolve — resolution worktree lifecycle', () => {
     }
 
     expect(await worktreeList()).not.toContain(`worktree ${transientPath}`);
+  });
+
+  it('refuses an active work claim without reaping its registered transient checkout', async () => {
+    const transientPath = join(dir, '.worktrees', 'resolve-widget');
+    await g(['worktree', 'add', '--detach', '-q', transientPath, 'feat/widget']);
+    await writeFile(join(transientPath, 'active-claim-leftover.txt'), 'leave this worktree alone\n');
+
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    let callbackRan = false;
+    await expect(
+      autoresolve.withResolveWorktree(
+        'widget',
+        'feat/widget',
+        dir,
+        async () => {
+          callbackRan = true;
+          return { ok: true };
+        },
+        undefined,
+        { isFeatureInFlight: async () => true },
+      ),
+    ).rejects.toThrow('active work claim for widget; resolution worktree removal refused');
+
+    expect({
+      callbackRan,
+      registered: (await worktreeList()).includes(`worktree ${transientPath}`),
+      leftover: await readFile(join(transientPath, 'active-claim-leftover.txt'), 'utf-8'),
+    }).toEqual({
+      callbackRan: false,
+      registered: true,
+      leftover: 'leave this worktree alone\n',
+    });
   });
 
   it('recreates a fresh transient checkout when its prior registration and leftover directory remain', async () => {
