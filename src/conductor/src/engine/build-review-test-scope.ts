@@ -29,6 +29,12 @@ export interface BuildReviewTestScopeInput {
   readonly dependencyEffects?: readonly BuildReviewScopeDependencyEffect[];
 }
 
+/** The pinned side and path that own a typed scope record. */
+export interface BuildReviewTestSourceIdentity {
+  readonly fileName: string;
+  readonly side: 'base' | 'head';
+}
+
 export interface BuildReviewConcreteAffectedGroup {
   readonly declaration: SupportedTestDeclaration;
   readonly markers: readonly CoversMarker[];
@@ -36,7 +42,7 @@ export interface BuildReviewConcreteAffectedGroup {
 
 /** A pinned source region retained as compact shared or unchanged-body evidence. */
 export interface BuildReviewTestSourceReference {
-  readonly source: { readonly fileName: string; readonly side: 'base' | 'head' };
+  readonly source: BuildReviewTestSourceIdentity;
   readonly region: TestDeclarationSpan;
 }
 
@@ -67,6 +73,8 @@ export type BuildReviewTestScopeCandidateReason =
   | 'affected-dependency';
 
 export interface UncertainBuildReviewTestScopeCandidate {
+  /** Source-bound identity retained across per-file scope merging and evidence pinning. */
+  readonly source: BuildReviewTestSourceIdentity;
   /** Present for parsed declarations/groups; absent for a source-bound parser diagnostic. */
   readonly declaration?: SupportedTestDeclaration;
   readonly diagnostic?: TestDeclarationDiagnostic;
@@ -168,6 +176,10 @@ function sourceReference(
   });
 }
 
+function sourceIdentity(fileName: string, side: 'base' | 'head' = 'head'): BuildReviewTestSourceIdentity {
+  return Object.freeze({ fileName, side });
+}
+
 function sourceReferenceKey(reference: BuildReviewTestSourceReference): string {
   return JSON.stringify([reference.source.fileName, reference.source.side, reference.region.start, reference.region.end]);
 }
@@ -183,6 +195,7 @@ function uniqueSourceReferences<T extends BuildReviewTestSourceReference>(refere
 }
 
 function candidate(
+  source: BuildReviewTestSourceIdentity,
   declaration: SupportedTestDeclaration | undefined,
   markers: readonly CoversMarker[],
   associationChanges: readonly CoversMarkerAssociationChange[],
@@ -192,6 +205,7 @@ function candidate(
   affectedDependency?: BuildReviewScopeDependencyEffect,
 ): UncertainBuildReviewTestScopeCandidate {
   return Object.freeze({
+    source: sourceIdentity(source.fileName, source.side),
     ...(declaration ? { declaration } : {}),
     ...(diagnostic ? { diagnostic } : {}),
     ...(affectedGroup ? { affectedGroup } : {}),
@@ -240,7 +254,7 @@ export function unavailableBuildReviewTestScope(
   });
   const candidates = markers.length === 0
     ? []
-    : [candidate(undefined, markers, [], ['unsupported-declaration'], diagnostic)];
+    : [candidate(sourceIdentity(input.head.source.fileName), undefined, markers, [], ['unsupported-declaration'], diagnostic)];
   return Object.freeze({
     changedDeclarations: Object.freeze([]),
     targets: Object.freeze([]),
@@ -473,6 +487,7 @@ function diagnosticChanged(
  * permission to admit the whole file or to reuse base-side authority.
  */
 export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): BuildReviewTestScope {
+  const candidateSource = sourceIdentity(input.head.source.fileName);
   const compared = compareTestDeclarations(input.base.source, input.head.source);
   const associations = compareCoversMarkerBindings(input);
   const baseAnalysis = analyzeTestDeclarations(input.base.source);
@@ -512,17 +527,18 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
     if (headBindings.length === 0) notes.push(Object.freeze({ kind: 'unbound', declaration }));
 
     if (declaration.kind === 'group' && bound.length > 0) {
-      candidates.push(candidate(declaration, bound.map((binding) => binding.marker), associationChanges, ['declaration-group']));
+      candidates.push(candidate(candidateSource, declaration, bound.map((binding) => binding.marker), associationChanges, ['declaration-group']));
       continue;
     }
 
     if (distinctBoundReferences.size > 1) {
-      candidates.push(candidate(declaration, bound.map((binding) => binding.marker), associationChanges, ['conflicting-associations']));
+      candidates.push(candidate(candidateSource, declaration, bound.map((binding) => binding.marker), associationChanges, ['conflicting-associations']));
       continue;
     }
 
     if (localUncertainMarkers.length > 0) {
       candidates.push(candidate(
+        candidateSource,
         declaration,
         localUncertainMarkers,
         associationChanges,
@@ -533,6 +549,7 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
 
     if (removedBound.length > 0 && bound.length === 0) {
       candidates.push(candidate(
+        candidateSource,
         declaration,
         removedBound.map((change) => change.binding.marker),
         associationChanges,
@@ -548,7 +565,7 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
 
   for (const group of input.affectedOptedInGroups ?? []) {
     if (group.markers.length === 0) continue;
-    candidates.push(candidate(group.declaration, group.markers, [], ['affected-opted-in-group']));
+    candidates.push(candidate(candidateSource, group.declaration, group.markers, [], ['affected-opted-in-group']));
   }
 
   // Dependencies discover bounded source evidence only. A plan path never
@@ -570,6 +587,7 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
     for (const bindings of byOwner.values()) {
       const first = bindings[0]!;
       candidates.push(candidate(
+        candidateSource,
         first.owner.declaration,
         bindings.map((binding) => binding.marker),
         [],
@@ -590,6 +608,7 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
         && unchangedBodyKeys.has(sourceReferenceKey(sourceReference(input.head.source.fileName, binding.target.bodySpan))))
       .map((binding) => binding.marker);
     candidates.push(candidate(
+      candidateSource,
       group.suite,
       groupMarkers,
       [],
@@ -612,6 +631,7 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
         .filter((marker) => marker.span.end <= diagnostic.span.start);
       if (applicableMarkers.length === 0) continue;
       candidates.push(candidate(
+        candidateSource,
         undefined,
         applicableMarkers,
         [],
