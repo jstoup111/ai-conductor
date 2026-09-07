@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-07T22:12:34.767Z
 Slug: keep-containment-advisories-out-of-build-review-s-
 Class: needs-human
 Halting step: unknown
