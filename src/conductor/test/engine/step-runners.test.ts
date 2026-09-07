@@ -33,6 +33,8 @@ import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '..
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
+import { projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -3967,6 +3969,65 @@ TIER: M`,
       expect(events.emit).toHaveBeenCalledWith(expect.objectContaining({
         type: 'build_review_outer_verdict', rawVerdict: 'FAIL', effectiveVerdict: 'PASS',
       }));
+    });
+
+    // adr-2026-08-29 D4.4 keeps a fully suppressed lap out of post-join
+    // judgement: the runner returns success, so the conductor's adjudication
+    // branch — the coordinator that used to be the only suppression writer —
+    // is never entered. D4.6 still requires the durable entry, so the seam
+    // must run here, before that pass/fail fork.
+    it('persists durable suppression entries on a fully suppressed lap that never reaches adjudication', async () => {
+      await scopedPlan();
+      const provider = createMockProvider();
+      const events = { emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) } as any;
+      const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
+      let suppressedFindingId: string | undefined;
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scopedTestGit(), planPath, events,
+        config: {
+          test_suite: { scoped_command: 'exit 1' },
+          build_review: { enabled: true, rubrics: { testQuality: { enabled: true, min_confidence: 70 } } },
+        } as HarnessConfig,
+        buildReviewEffectiveResolver: vi.fn(async (_projectRoot, aggregate) => {
+          suppressedFindingId = projectBuildReviewAggregateSources(aggregate as never)![0]!.findingId;
+          return {
+            ok: true as const,
+            feature,
+            effective: {
+              rawVerdict: 'FAIL' as const, verdict: 'PASS' as const, acceptedFindingIds: [],
+              unresolvedFindingIds: [], suppressedFindingIds: [suppressedFindingId],
+              skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+            },
+          };
+        }),
+        ...currentBuildReviewProof(),
+      });
+      vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
+        kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        contractVersion: 'v3',
+        findings: [{
+          concernKind: 'test-insensitive', summary: 'The changed test does not observe the behavior it should.',
+          evidenceLocations: ['x:1'],
+          anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
+          confidence: 40,
+        }],
+        verdict: 'FAIL',
+      }));
+
+      // `success: true` is exactly the route selector the conductor reads to
+      // skip adjudication, so no remediate dispatch can follow this lap.
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
+
+      const persisted = await new RemediationCaseStore(dir, feature).read();
+      if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
+      expect(persisted.state.suppressions).toEqual([{
+        findingId: suppressedFindingId,
+        rubric: 'testQuality',
+        summary: 'The changed test does not observe the behavior it should.',
+        confidence: 40,
+        floor: 70,
+        lastSeenLap: 'lap-head',
+      }]);
     });
 
     it('publishes an empty registered-rubric set as a reasoned PASS without dispatch', async () => {

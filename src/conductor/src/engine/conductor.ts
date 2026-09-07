@@ -29,7 +29,8 @@ import {
   resolveEffectiveBuildReviewVerdict,
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
-import { parseBuildReviewAggregate, projectBuildReviewAggregateSources } from './build-review-aggregate.js';
+import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import { coordinateBuildReviewAdjudication } from './build-review-adjudication-coordinator.js';
 import { isBuildEligibleActionCase, isBuildReviewSettlementObligationCase } from './remediation-case-effects.js';
 import {
@@ -10850,10 +10851,14 @@ export class Conductor {
                   const trackerRepo = await this.resolveTrackerRepoSlug();
                   const floors = resolveBuildReviewConfig(this.config).rubrics;
                   const suppressedFindingIds = effective.effective.suppressedFindingIds ?? [];
-                  const suppressions = (projectBuildReviewAggregateSources(aggregate) ?? []).flatMap((source) => {
-                    if (!suppressedFindingIds.includes(source.findingId) || source.confidence === undefined) return [];
-                    return [{ findingId: source.findingId, rubric: source.rubric, summary: source.summary,
-                      confidence: source.confidence, floor: floors[source.rubric].min_confidence, lastSeenLap: aggregate.lapId }];
+                  // One shared projection with the effective-verdict seam that
+                  // already persisted these rows for this lap; the coordinator
+                  // re-runs that same idempotent upsert rather than owning a
+                  // second, divergent write.
+                  const suppressions = projectBuildReviewSuppressionEntries({
+                    aggregate,
+                    suppressedFindingIds,
+                    floors: Object.fromEntries(Object.entries(floors).map(([id, policy]) => [id, policy.min_confidence])),
                   });
                   const adjudication = await coordinateBuildReviewAdjudication({
                     projectRoot: this.projectRoot,

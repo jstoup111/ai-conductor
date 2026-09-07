@@ -12,6 +12,7 @@ import {
 import { planContractPointers, readActivePlanPath } from './remediation-context-pointers.js';
 import { orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
+import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, isBuildEligibleActionCase } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
@@ -160,14 +161,16 @@ export async function coordinateBuildReviewAdjudication(input: {
     return { ok: false, detail };
   };
   const store = new RemediationCaseStore(input.projectRoot, input.feature);
-  if ((input.suppressions?.length ?? 0) > 0) {
-    const persisted = await store.mutate(async (state) => {
-      const byFindingId = new Map((state.suppressions ?? []).map((entry) => [entry.findingId, entry]));
-      for (const entry of input.suppressions ?? []) byFindingId.set(entry.findingId, entry);
-      return { value: undefined, nextState: { ...state, suppressions: [...byFindingId.values()] } };
-    });
-    if (!persisted.ok) return fail(`case store ${persisted.reason}`);
-  }
+  // Not a second writer: the same seam the effective-verdict path already ran
+  // for this lap. Its upsert is keyed by finding id, so re-running it here is a
+  // no-op refresh rather than a duplicate row.
+  const persisted = await persistBuildReviewSuppressions({
+    projectRoot: input.projectRoot,
+    feature: input.feature,
+    suppressions: input.suppressions ?? [],
+    store,
+  });
+  if (!persisted.ok) return fail(`case store ${persisted.reason}`);
   // Before the judge is dispatched there is no frozen dispatch set, so live ids
   // are computed against the raw join. The two agree for every all-accepted lap,
   // and this is reassigned to the frozen set once one exists.

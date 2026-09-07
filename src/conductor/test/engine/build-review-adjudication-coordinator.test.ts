@@ -1,4 +1,4 @@
-// Covers: task:14, task:16, task:rem-as-built-rem-ab1-4
+// Covers: task:12, task:14, task:16, task:rem-as-built-rem-ab1-4
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review-adjudication-coordinator.js';
+import { persistBuildReviewSuppressions } from '../../src/engine/build-review-suppression-history.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
@@ -323,6 +324,58 @@ describe('coordinateBuildReviewAdjudication', () => {
     if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
     expect(persisted.state.suppressions?.filter((entry) => entry.findingId === findingId)).toEqual([refreshed]);
     await expect(access(join(root, '.pipeline/build-review-dispositions.json'))).rejects.toThrow();
+  });
+
+  it('leaves exactly one row when the coordinator re-runs the seam over a lap the effective-verdict path already persisted', async () => {
+    const root = await projectRoot();
+    const entry = {
+      findingId,
+      rubric: 'testQuality',
+      summary: 'A sub-floor finding on a mixed lap.',
+      confidence: 45,
+      floor: 70,
+      lastSeenLap: 'lap-1',
+    } as const;
+
+    // The effective-verdict seam writes first, on every lap.
+    await expect(persistBuildReviewSuppressions({ projectRoot: root, feature, suppressions: [entry] }))
+      .resolves.toEqual({ ok: true });
+
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => { throw new Error('suppressed finding must not reach the judge'); }),
+      suppressions: [entry],
+      suppressedFindingIds: new Set([findingId]),
+    })).resolves.toMatchObject({ ok: true, route: 'pass' });
+
+    const persisted = await new RemediationCaseStore(root, feature).read();
+    if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
+    expect(persisted.state.suppressions).toEqual([entry]);
+  });
+
+  it('shows the judge a suppression the seam wrote on an earlier lap as non-blocking history', async () => {
+    const root = await projectRoot();
+    const earlierLap = {
+      findingId: 'finding-suppressed-on-an-earlier-lap',
+      rubric: 'testQuality',
+      summary: 'A finding suppressed on a fully suppressed lap.',
+      confidence: 30,
+      floor: 70,
+      lastSeenLap: 'lap-0',
+    } as const;
+
+    await expect(persistBuildReviewSuppressions({ projectRoot: root, feature, suppressions: [earlierLap] }))
+      .resolves.toEqual({ ok: true });
+
+    const judge = vi.fn(async (context: unknown) => {
+      expect(context).toMatchObject({
+        currentFindings: [expect.objectContaining({ findingId })],
+        suppressionHistory: [earlierLap],
+      });
+      return actionJudgement();
+    });
+
+    await expect(coordinateBuildReviewAdjudication(input(root, judge))).resolves.toMatchObject({ ok: true, route: 'build' });
+    expect(judge).toHaveBeenCalledTimes(1);
   });
 
   it.each([
