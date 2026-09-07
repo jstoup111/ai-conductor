@@ -966,6 +966,59 @@ export async function bumpSuiteInfrastructureRetriesInLedger(
   });
 }
 
+/**
+ * Run one ledger read-modify-write as a SINGLE lease transaction.
+ *
+ * adr-2026-08-29 D4 requires every ledger read-modify-write path to share the
+ * bounded feature-local lease. Reading with `readKickbackLedger` and writing
+ * with `writeKickbackLedger` takes the lease only for the write half, so a
+ * concurrent operator adjustment landing in between is silently overwritten.
+ * Callers that derive their next ledger from its current contents use this.
+ *
+ * Returning no `ledger` from the transaction writes nothing.
+ */
+export async function updateKickbackLedger<T>(
+  projectRoot: string,
+  transaction: (ledger: KickbackLedger) => { ledger?: KickbackLedger; result: T } | Promise<{ ledger?: KickbackLedger; result: T }>,
+): Promise<T> {
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const current = await readKickbackLedger(projectRoot);
+    requireReadableLedger(current);
+    const { ledger, result } = await transaction(current);
+    if (ledger !== undefined) await writeKickbackLedgerUnsafe(projectRoot, ledger);
+    return result;
+  });
+}
+
+/**
+ * Consume one remediation lap for `gate` under a SINGLE lease transaction.
+ *
+ * adr-2026-08-29 D4 carries forward "all ledger read-modify-write paths share
+ * the existing bounded lease". Reading the entry outside the lease and writing
+ * the derived value inside it is not that: a concurrent operator adjustment
+ * landing between the two silently loses. The prior lap count is therefore read
+ * here, inside the same transaction that writes its successor.
+ *
+ * Returns the growth record observed under the lease so the caller merges its
+ * growth update from durable state rather than from a pre-lease snapshot.
+ */
+export async function recordRemediationGateLap(
+  projectRoot: string,
+  gate: string,
+  consumesLap: boolean,
+): Promise<{ entry: KickbackGateEntry & { laps: number }; growth: PlanGrowthRecord | undefined }> {
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableLedger(ledger);
+    const existing = ledger.gates[gate] ?? {
+      count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+    };
+    const entry = { ...existing, laps: (existing.laps ?? 0) + (consumesLap ? 1 : 0) };
+    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, gates: { ...ledger.gates, [gate]: entry } });
+    return { entry, growth: ledger.growth };
+  });
+}
+
 /** Persist the evidence that makes an operator budget recovery eligible. */
 export async function recordKickbackCapEvidence(
   projectRoot: string,
