@@ -8,6 +8,7 @@ import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-i
 import { parseBuildReviewLapId } from './build-review-domain.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { resolveMainRepoRoot } from './park-marker.js';
+import { resolveCliFeatureWorktree } from './cli-operator-authority.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
 import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, readKickbackLedger, type KickbackGateEntry } from './kickback-ledger.js';
 import type { BuildReviewRubricId } from '../types/config.js';
@@ -161,8 +162,14 @@ async function resolveCliFeature(
   try {
     const resolveMainRoot = deps.resolveMainRoot ?? resolveMainRepoRoot;
     const realpath = deps.realpath ?? realpathDefault;
-    const root = await resolveMainRoot(deps.cwd ?? process.cwd());
-    const worktree = await realpath(join(root, '.worktrees', command.feature));
+    // The shared named-worktree resolution every operator command uses
+    // (adr-2026-08-29 D3: factored into a shared module rather than copied).
+    const worktree = await resolveCliFeatureWorktree(command.feature, {
+      cwd: deps.cwd,
+      resolveMainRoot: deps.resolveMainRoot,
+      realpath: deps.realpath,
+    });
+    if (!worktree) return undefined;
     const feature = await resolveBuildReviewFeatureIdentity(worktree, { resolveMainRoot, realpath });
     return feature?.feature === command.feature ? { worktree, feature } : undefined;
   } catch {
