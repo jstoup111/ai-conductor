@@ -1865,6 +1865,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           log(`episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)`);
         }
       },
+      // Keep daemon-level observations on the existing root event spine.  The
+      // loop owns scheduling state; this adapter is deliberately only the
+      // synchronous projection from that state to its typed occurrence.
+      onTick: (snapshot) => {
+        void events.emit({ type: 'daemon_backlog_snapshot', ...snapshot });
+      },
       runFeature,
       onExecutorStarted: () => {
         activeExecutorCount += 1;
