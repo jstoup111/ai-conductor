@@ -155,8 +155,6 @@ function scopeFaultFor(result: BuildReviewRubricResult): BuildReviewScopeIncompl
   return result.kind === 'judged' ? deriveBuildReviewScopeIncompleteFault(result) : undefined;
 }
 
-export { deriveBuildReviewScopeIncompleteFault } from './build-review-domain.js';
-
 function coverageFor(result: BuildReviewRubricResult): Coverage {
   return result.kind === 'judged' ? (scopeFaultFor(result) ? 'scope-incomplete' : 'judged') : result.kind;
 }

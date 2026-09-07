@@ -1,4 +1,8 @@
+// Covers: task:15
 import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -23,6 +27,8 @@ import type {
   ResolvedBuildReviewConfig,
   ResolvedBuildReviewRubricPolicy,
 } from "../../src/engine/resolved-config.js";
+import { EventPersister } from "../../src/engine/event-persister.js";
+import { ConductorEventEmitter } from "../../src/ui/events.js";
 
 const policy: ResolvedBuildReviewRubricPolicy = {
   enabled: true,
@@ -383,6 +389,64 @@ describe("build-review coordinator: frozen fan-out", () => {
     }));
   });
 
+  it('persists normal scope counts and an indeterminate candidate through the shared event spine', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'build-review-scope-events-'));
+    const emitter = new ConductorEventEmitter();
+    const persister = new EventPersister(join(directory, 'events.jsonl'), emitter);
+    persister.start();
+    try {
+      const scopedInputs = inputs();
+      await coordinateBuildReviewRubrics(coordinationInput(true, {
+        inputs: {
+          ...scopedInputs,
+          sourceSnapshot: {
+            ...scopedInputs.sourceSnapshot,
+            testScope: {
+              targets: [{}, {}],
+              candidates: [{
+                candidateId: 'candidate:setup',
+                sourceRegion: { path: IN_SCOPE_TEST, startLine: 2, endLine: 4, contentHash: IN_SCOPE_HASH, display: 'changed setup' },
+                obligationReferences: ['story:S6.1'],
+                reasons: ['uncertain-association'],
+              }],
+            } as never,
+          },
+        },
+        dispatchModel: vi.fn(async () => ({
+          findings: [],
+          scopeResolutions: [{
+            candidateId: 'candidate:setup', status: 'indeterminate',
+            missingEvidenceReason: 'the pinned marker association is ambiguous',
+          }],
+        })),
+        emit: async (event) => { await emitter.emit(event); },
+      }));
+      persister.stop();
+
+      const records = (await readFile(join(directory, 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => {
+          const { ts: _ts, ...event } = JSON.parse(line);
+          return event;
+        });
+      expect(records.filter((event) => event.type === 'build_review_scope_summary' || event.type === 'build_review_scope_incomplete')).toEqual([
+        {
+          type: 'build_review_scope_summary', rubric: 'testQuality', lapId: 'lap-current',
+          establishedTargetCount: 2, candidateCount: 1, unresolvedReasons: ['uncertain-association'],
+        },
+        {
+          type: 'build_review_scope_incomplete', rubric: 'testQuality', lapId: 'lap-current',
+          candidates: [expect.objectContaining({
+            candidateId: 'candidate:setup',
+            missingEvidenceReason: 'the pinned marker association is ambiguous',
+          })],
+        },
+      ]);
+    } finally {
+      persister.stop();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("emits each rubric occurrence exactly once in branch settlement order", async () => {
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
 
@@ -396,6 +460,10 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(emit.mock.calls.map(([event]) => event)).toEqual([
       { type: "build_review_rubric_started", rubric: "testQuality", lapId: "lap-current" },
       { type: "build_review_rubric_result", rubric: "testQuality", lapId: "lap-current", verdict: "PASS" },
+      {
+        type: 'build_review_scope_summary', rubric: 'testQuality', lapId: 'lap-current',
+        establishedTargetCount: 1, candidateCount: 0, unresolvedReasons: [],
+      },
     ]);
   });
 

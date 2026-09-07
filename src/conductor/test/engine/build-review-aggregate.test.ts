@@ -1,10 +1,9 @@
-// Covers: S3.2, task:3
+// Covers: S3.2, task:3, task:15
 import { describe, expect, it } from 'vitest';
 
-import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import type { BuildReviewFinding, BuildReviewJudgedResult } from '../../src/engine/build-review-domain.js';
 import {
-  deriveBuildReviewScopeIncompleteFault,
   deriveEffectiveBuildReviewVerdict,
   deriveEffectiveBuildReviewVerdictWithDispositions,
   joinBuildReviewRubricOutcomes,
