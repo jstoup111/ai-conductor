@@ -129,6 +129,11 @@ whitespace normalization. `existing` and `no-change` rows cite no tasks and requ
 Bookkeeping validation is mechanical; `coherence-check` judges whether the evidence semantically satisfies
 the decision.
 
+A coherence artifact may contain one mapping table or several. Ordinary trailing Markdown tables and
+commentary are ignored. A later table is mapping content only when its first data row begins with a
+recognized mapping row class. If a recognized mapping row is stranded in an ignored prose-first table,
+the artifact is refused and the parser reports that row.
+
 The five legacy row classes — `outcome`, `fr`, `story`, `task`, and `adr` — use five cells:
 
 ```markdown
