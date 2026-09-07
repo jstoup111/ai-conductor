@@ -143,7 +143,11 @@ describe('resolveOtelConfig', () => {
       const previous = process.env.OTEL_TEST_AUTHORIZATION;
       try {
         process.env.OTEL_TEST_AUTHORIZATION = 'credential-value';
-        resolveOtelConfig(headerConfig, PIPELINE_DIR);
+        const result = resolveOtelConfig(headerConfig, PIPELINE_DIR);
+        expect(result).toMatchObject({
+          enabled: true,
+          headers: { Authorization: 'credential-value' },
+        });
         expect(headerConfig).toEqual({
           otel: {
             exporter: 'otlp',
