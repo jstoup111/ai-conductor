@@ -342,6 +342,83 @@ describe('production FINISH publication composition', () => {
     }
   });
 
+  it('stamps an already-ready retained PR before recording its outcome through the real coordinator lifecycle', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-ready-retained-pr-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await mkdir(pipeline);
+      await writeFile(join(root, '.docs', 'plans', 'feature.md'), 'plan\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+
+      const prUrl = 'https://github.com/acme/widget/pull/3';
+      let body = 'Reader-facing summary.';
+      const order: string[] = [];
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return { stdout: JSON.stringify({
+            url: prUrl, title: 'feat: retained publication', body, isDraft: false,
+          }) };
+        }
+        if (args[0] === 'pr' && args[1] === 'edit') {
+          body = args[args.indexOf('--body') + 1]!;
+          order.push('declaration');
+          return commandResult;
+        }
+        throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+      });
+      const recordFinish = vi.fn(async () => {
+        order.push('outcome');
+        await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+        return 0;
+      });
+      const repairPresentation = vi.fn(async () => {
+        throw new Error('already-ready PR must not be repaired');
+      });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        gh,
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        observeReleaseReadiness: async () => 'present',
+        acquireInteractiveIntent: async () => 'pr',
+        repairPresentation,
+        recordFinish,
+      });
+      const input = {
+        state: {
+          feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
+          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'interactive' as const,
+        daemon: false,
+        dispatchJudgment: async () => ({
+          success: true,
+          publicationDisposition: { kind: 'accepted' as const },
+        }),
+        emit: async () => {},
+      };
+
+      for (let i = 0; i < 6 && !recordFinish.mock.calls.length; i++) {
+        await coordinator.advance(input);
+      }
+
+      expect(repairPresentation).not.toHaveBeenCalled();
+      expect(recordFinish).toHaveBeenCalledOnce();
+      expect({ body, order }).toEqual({
+        body: 'Reader-facing summary.\nPlan: .docs/plans/feature.md\n',
+        order: ['declaration', 'outcome'],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('does not project a shipment declaration for a keep outcome', async () => {
     const advanceFinishPublication = vi.fn(async (input: {
       effects: { recordOutcome?: (request: { choice: 'keep' }) => Promise<void> };
