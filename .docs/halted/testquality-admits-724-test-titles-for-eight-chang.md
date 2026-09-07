@@ -2,7 +2,7 @@
 
 Status: resolved
 Resolution cause: rekick
-Resolved at: 2026-09-07T17:25:12.645Z
+Resolved at: 2026-09-07T20:24:25.490Z
 Slug: testquality-admits-724-test-titles-for-eight-chang
 Class: needs-human
 Halting step: unknown
