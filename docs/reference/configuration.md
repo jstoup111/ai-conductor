@@ -754,7 +754,7 @@ each sample already represents the whole feature total at that moment.
 | `otel.endpoint` | string | Yes, when `exporter: otlp` | any URL | — |
 | `otel.file` | string | No | any path | `<pipelineDir>/otel.jsonl` |
 | `otel.protocol` | string | No | `http/protobuf`, `grpc` per the type | passed through unchecked; omitted when falsy |
-| `otel.headers` | mapping | No; only with `exporter: otlp` and HTTP/protobuf | header name to `{ env: <non-empty variable name> }` | absent; no headers are sent |
+| `otel.headers` | mapping | No; non-empty mappings only with `exporter: otlp` and HTTP/protobuf | header name to `{ env: <non-empty variable name> }` | absent; no headers are sent |
 | `otel.project_name` | string | No | any non-blank name | project root basename |
 
 The failure mode is silent-disable-with-an-error-string, not a halt. An unknown exporter yields
