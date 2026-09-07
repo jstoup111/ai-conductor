@@ -82,6 +82,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - prd_audit and as-built verdicts are preserved across a SHIP-tail rebase rewrite and across a halt/resume when the reviewed code is unchanged; a review re-runs only when its surface actually changed. ([implementation PR #2382](https://github.com/jstoup111/ai-conductor/pull/2382)).
 - Resumed runs now return to an earlier runnable prerequisite instead of stopping without dispatching work. ([implementation PR #2385](https://github.com/jstoup111/ai-conductor/pull/2385)).
 - Prevent the daemon from automatically resuming HALTs that require operator action. ([implementation PR #2398](https://github.com/jstoup111/ai-conductor/pull/2398)).
+- Scrub TMUX and TMUX_PANE from provider and test child environments so a spawned tmux command cannot target the daemon's own pane. ([implementation PR #2406](https://github.com/jstoup111/ai-conductor/pull/2406)).
 
 ## [1.0.0] - 2026-08-31
 
