@@ -38,6 +38,7 @@ import {
 import { evaluateCoherenceWaiver } from '../../../src/engine/engineer/coherence-waiver.js';
 import { extractAuthoritativeStoryCriteria } from '../../../src/engine/artifacts.js';
 import { AuthoringGuard } from '../../../src/engine/engineer/authoring-guard.js';
+import { coherenceRegressionCorpus } from '../coherence-corpus.js';
 import type { GitRunner, GitResult } from '../../../src/engine/rebase.js';
 import type { RunOverlapScanArgs } from '../../../src/engine/overlap-scan.js';
 
@@ -2679,6 +2680,48 @@ Return requests are accepted.
 });
 
 describe('runCoherenceGate criterion fail-closed guard', () => {
+  // Covers: task:4 — run the land gate, rather than its shared parser helper,
+  // over the same corpus text used by discovery. The fixture intentionally
+  // lacks the surrounding plan, so the later fabricated-id failure proves the
+  // gate parsed it before applying its independent cross-checks.
+  it('accepts the shared trailing-table corpus fixture at the land-gate parse entry point', async () => {
+    const worktreePath = await mkdtemp(join(tmpdir(), 'coherence-trailing-table-land-gate-'));
+    temporaryRepositories.push(worktreePath);
+    await runGit(worktreePath, ['init', '--initial-branch=main']);
+    await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+    await runGit(worktreePath, ['config', 'user.name', 'Test User']);
+    await writeFile(join(worktreePath, 'README.md'), '# fixture\n');
+    await runGit(worktreePath, ['add', '.']);
+    await runGit(worktreePath, ['commit', '-m', 'seed fixture']);
+
+    const fixture = coherenceRegressionCorpus.find(
+      ({ slug }) => slug === 'decide-artifact-coherence-check',
+    );
+    if (fixture?.content === null || fixture?.content === undefined) {
+      throw new Error('missing shipped second-table corpus fixture');
+    }
+
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await writeFile(join(worktreePath, `.docs/coherence/${fixture.slug}.md`), fixture.content);
+
+    await expect(
+      runCoherenceGate({
+        worktreePath,
+        canonicalPath: worktreePath,
+        tier: 'M',
+        track: 'technical',
+        sourceRef: undefined,
+        planStem: fixture.slug,
+        storiesText: null,
+        planText: null,
+        prdText: null,
+        outcomeBullets: [],
+        ideaFiles: new Set([`.docs/coherence/${fixture.slug}.md`]),
+        guard: new AuthoringGuard(worktreePath),
+      }),
+    ).rejects.toThrow('fabricated-id "task:6"');
+  });
+
   it('carries an empty criterion row reason, line, and disagreement text through land', async () => {
     const worktreePath = await mkdtemp(join(tmpdir(), 'coherence-empty-criterion-'));
     temporaryRepositories.push(worktreePath);
