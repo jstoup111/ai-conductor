@@ -758,6 +758,9 @@ async function recordRemediationGateAppend(
   events: PlanGrowthEventSink,
 ): Promise<void> {
   const ledger = await readKickbackLedger(projectRoot);
+  if (isUnreadableKickbackLedger(ledger)) {
+    throw new Error('kickback ledger is unreadable');
+  }
   const existing = ledger.gates[budget.gate];
   const next: KickbackGateEntry & { laps: number } = {
     ...(existing ?? {
