@@ -17,6 +17,7 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { createOtelVisualizer } from '../../../src/engine/otel/create-otel-visualizer.js';
 import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
+import { otelTracedEventTypes } from '../../../src/engine/event-sinks.js';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import {
   InMemoryMetricExporter,
@@ -100,11 +101,11 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
     return vis.stop();
   });
 
-  it('subscribes to exactly the event types derived by otelEventTypes()', async () => {
+  it('subscribes to exactly the event types derived by otelTracedEventTypes()', async () => {
     vi.resetModules();
     const expectedEventTypes = ['renderer_error'];
     vi.doMock('../../../src/engine/event-sinks.js', () => ({
-      otelEventTypes: () => expectedEventTypes,
+      otelTracedEventTypes: () => expectedEventTypes,
     }));
 
     try {
@@ -136,6 +137,26 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
     }
   });
 
+  it('handles exactly the event types derived by otelTracedEventTypes()', async () => {
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      pipelineDir,
+    );
+    const vis = new OtelVisualizer(resolved, {
+      runId: 'test-handler-coverage',
+      feature: 'test-feature',
+      project: 'test-project',
+      spanExporter,
+      metricExporter,
+    });
+
+    vis.start(emitter);
+
+    expect(new Set(vis.handledEventTypes())).toEqual(new Set(otelTracedEventTypes()));
+
+    await vis.stop();
+  });
+
   it('records a bus-emitted loop_halt as the halted root span outcome', async () => {
     const resolved = resolveOtelConfig(
       { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
@@ -156,6 +177,24 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
 
     const root = spanExporter.getFinishedSpans().find((span) => !span.parentSpanContext)!;
     expect(root.attributes['conductor.run.outcome']).toBe('halted');
+  });
+
+  it('exports traces when the shared listener owns metrics', async () => {
+    const vis = new OtelVisualizer(resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, pipelineDir,
+    ), { metrics: false, spanExporter, metricExporter });
+    const on = vi.spyOn(emitter, 'on');
+    try {
+      vis.start(emitter, { runId: 'trace-only-run', feature: 'trace-only-feature' });
+      expect(on.mock.calls.map(([type]) => type)).not.toContain('daemon_backlog_snapshot');
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+      await emitter.emit({ type: 'loop_halt', step: 'build', reason: 'test halt' });
+    } finally {
+      await vis.stop();
+    }
+    expect(spanExporter.getFinishedSpans().find((span) => !span.parentSpanContext)
+      ?.attributes['conductor.run.outcome']).toBe('halted');
+    expect(metricExporter.getMetrics()).toEqual([]);
   });
 
   it('uses identity supplied to start() for exported spans', async () => {

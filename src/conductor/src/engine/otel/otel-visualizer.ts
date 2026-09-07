@@ -41,7 +41,7 @@ import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import { basename } from 'node:path';
 import type { ConductorEventEmitter, EventHandler } from '../../ui/events.js';
 import type { ConductorEvent } from '../../types/events.js';
-import { otelEventTypes } from '../event-sinks.js';
+import { otelTracedEventTypes, type OtelTracedEventType } from '../event-sinks.js';
 import type { VisualizerPlugin, VisualizerStartContext } from '../../types/plugin.js';
 import type { ResolvedOtelConfig } from './otel-config.js';
 import { buildResource } from './resource.js';
@@ -161,12 +161,83 @@ const METRIC_EXPORT_INTERVAL_MS = 60_000;
  * bound is considered failed; the export is abandoned and warnOnce fires. */
 const EXPORT_TIMEOUT_MS = 5_000;
 
+type OtelEventHandlerTable = {
+  [Type in OtelTracedEventType]: (event: Extract<ConductorEvent, { type: Type }>) => void;
+};
+
 /**
  * The OTel visualizer plugin. Attach to the event bus via start(); detach and
  * flush via stop(). Only construct when resolveOtelConfig().enabled (FR-1).
  */
 export class OtelVisualizer implements VisualizerPlugin {
   readonly name = 'otel';
+
+  private readonly eventHandlersByType: OtelEventHandlerTable = {
+    memory_setup: (event) => { this.metricsRecorder?.onMemorySetup(event); },
+    step_started: (event) => {
+      this.spanManager!.onStepStarted(event);
+    },
+    step_completed: (event) => {
+      // Provider attempts are authoritative; unmatched completions retain
+      // compatibility with older emitters that only populated this event.
+      this.pendingDispatch.set(event.step, this.dispatchMetering.observe(event));
+      this.spanManager!.onStepCompleted(event);
+      // Cleanup: on the orphan path (no open span), onStepClose never fires and
+      // the entry would leak. onStepClose deletes the entry synchronously when it
+      // runs; if it did, this is a no-op. If it didn't (orphan), we clean up here.
+      this.pendingDispatch.delete(event.step);
+    },
+    step_failed: (event) => {
+      this.spanManager!.onStepFailed(event);
+    },
+    provider_attempt: (event) => {
+      const dispatch = this.dispatchMetering.observe(event);
+      if (dispatch) {
+        this.metricsRecorder?.onDispatch(
+          dispatch.step ?? event.step,
+          dispatch.tokenUsage,
+          dispatch.model,
+        );
+      }
+    },
+    feature_usage_total: (event) => {
+      this.metricsRecorder?.onFeatureUsageTotal(event);
+    },
+    feature_cost_snapshot: (event) => {
+      this.metricsRecorder?.onFeatureCostSnapshot(event);
+    },
+    step_retry: (event) => {
+      this.spanManager!.onStepRetry(event);
+    },
+    gate_verdict: (event) => {
+      this.spanManager!.onGateVerdict(event);
+    },
+    kickback: (event) => {
+      this.spanManager!.onKickback(event);
+    },
+    feature_complete: (event) => {
+      this.spanManager!.onFeatureComplete(event);
+    },
+    loop_halt: (event) => {
+      this.spanManager!.onLoopHalt(event);
+    },
+    build_progress: (event) => {
+      this.spanManager!.onBuildProgress(event);
+    },
+    unattributed_progress: () => {
+      // Routine telemetry is intentionally tolerated without a span event.
+    },
+    build_no_progress: (event) => {
+      this.spanManager!.onBuildNoProgress(event);
+    },
+    build_stall: (event) => {
+      this.spanManager!.onBuildStall(event);
+    },
+    pipeline_closeout: (event) => {
+      this.spanManager!.onPipelineCloseout(event);
+      this.metricsRecorder?.onPipelineCloseout(event);
+    },
+  };
 
   private readonly spanExporter: SpanExporter;
   private readonly metricExporter: PushMetricExporter;
@@ -282,7 +353,7 @@ export class OtelVisualizer implements VisualizerPlugin {
   start(emitter: ConductorEventEmitter, context?: VisualizerStartContext): void {
     this.initializeProviders(context ?? this.legacyStartContext);
     this.emitter = emitter;
-    for (const type of otelEventTypes()) {
+    for (const type of otelTracedEventTypes()) {
       const handler: EventHandler = (event) => {
         // Synchronous, O(1): span/metric APIs enqueue to batch processors.
         this.handleEvent(event);
@@ -300,6 +371,11 @@ export class OtelVisualizer implements VisualizerPlugin {
     };
     process.on('SIGINT', this.sigHandler);
     process.on('SIGTERM', this.sigHandler);
+  }
+
+  /** Exposes the compile-checked routing surface for parity tests. */
+  handledEventTypes(): readonly OtelTracedEventType[] {
+    return Object.keys(this.eventHandlersByType) as OtelTracedEventType[];
   }
 
   /**
@@ -422,75 +498,10 @@ export class OtelVisualizer implements VisualizerPlugin {
 
   private handleEvent(event: ConductorEvent): void {
     if (!this.spanManager) return;
-    switch (event.type) {
-      case 'memory_setup':
-        this.metricsRecorder?.onMemorySetup(event);
-        break;
-      case 'step_started':
-        this.spanManager.onStepStarted(event);
-        break;
-      case 'step_completed':
-        // Provider attempts are authoritative; unmatched completions retain
-        // compatibility with older emitters that only populated this event.
-        this.pendingDispatch.set(event.step, this.dispatchMetering.observe(event));
-        this.spanManager.onStepCompleted(event);
-        // Cleanup: on the orphan path (no open span), onStepClose never fires and
-        // the entry would leak. onStepClose deletes the entry synchronously when it
-        // runs; if it did, this is a no-op. If it didn't (orphan), we clean up here.
-        this.pendingDispatch.delete(event.step);
-        break;
-      case 'step_failed':
-        this.spanManager.onStepFailed(event);
-        break;
-      case 'provider_attempt': {
-        const dispatch = this.dispatchMetering.observe(event);
-        if (dispatch) {
-          this.metricsRecorder?.onDispatch(
-            dispatch.step ?? event.step,
-            dispatch.tokenUsage,
-            dispatch.model,
-          );
-        }
-        break;
-      }
-      case 'feature_usage_total':
-        this.metricsRecorder?.onFeatureUsageTotal(event);
-        break;
-      case 'feature_cost_snapshot':
-        this.metricsRecorder?.onFeatureCostSnapshot(event);
-        break;
-      case 'step_retry':
-        this.spanManager.onStepRetry(event);
-        break;
-      case 'gate_verdict':
-        this.spanManager.onGateVerdict(event);
-        break;
-      case 'kickback':
-        this.spanManager.onKickback(event);
-        break;
-      case 'feature_complete':
-        this.spanManager.onFeatureComplete(event);
-        break;
-      case 'loop_halt':
-        this.spanManager.onLoopHalt(event);
-        break;
-      case 'build_progress':
-        this.spanManager.onBuildProgress(event);
-        break;
-      case 'unattributed_progress':
-        // Routine telemetry is intentionally tolerated without a span event.
-        break;
-      case 'build_no_progress':
-        this.spanManager.onBuildNoProgress(event);
-        break;
-      case 'build_stall':
-        this.spanManager.onBuildStall(event);
-        break;
-      case 'pipeline_closeout':
-        this.spanManager.onPipelineCloseout(event);
-        this.metricsRecorder?.onPipelineCloseout(event);
-        break;
-    }
+    const handler = this.eventHandlersByType[event.type as OtelTracedEventType] as (
+      event: ConductorEvent,
+    ) => void;
+    handler(event);
   }
 
   private initializeProviders(context: VisualizerStartContext): void {

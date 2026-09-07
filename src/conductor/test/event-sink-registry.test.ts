@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   EVENT_SINKS,
+  otelEventTypes,
+  otelTracedEventTypes,
   type OtelTracedEventType,
   type SinkDeclaration,
 } from '../src/engine/event-sinks.js';
@@ -17,8 +19,21 @@ const tracedEventType: OtelTracedEventType = 'loop_halt';
 const untracedEventType: OtelTracedEventType = 'gate_blocked';
 void tracedEventType;
 void untracedEventType;
+// @ts-expect-error -- daemon backlog is metric-owned, not visualizer-owned.
+const metricOnlyEventType: OtelTracedEventType = 'daemon_backlog_snapshot';
+void metricOnlyEventType;
 
 describe('event sink registry', () => {
+  it('keeps metrics-only events covered without subscribing the trace visualizer', () => {
+    const metricsOnly = [
+      'daemon_backlog_snapshot', 'feature_dispatch_started',
+      'feature_dispatch_ended', 'feature_shipped',
+    ];
+    expect(otelEventTypes()).toEqual(expect.arrayContaining(metricsOnly));
+    expect(otelTracedEventTypes()).toEqual(expect.not.arrayContaining(metricsOnly));
+    expect(otelTracedEventTypes()).toContain('step_started');
+  });
+
   it('renders and persists setup repair dispositions without audit or OTel subscriptions', () => {
     expect(EVENT_SINKS.setup_repair).toEqual({
       render: true,
