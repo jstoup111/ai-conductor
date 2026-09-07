@@ -849,6 +849,47 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(judge).not.toHaveBeenCalled();
   });
 
+  it('settles only the merged source of a resolved action case and re-adjudicates its unmerged sibling', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    // One resolved action case carrying two sources: the first merged, the
+    // second only acted. Settlement is per source, so the merged source is
+    // retired while its unmerged sibling recurs live and must reach the judge.
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-mixed-outcomes', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'One source of this case merged; the other did not.', resolution: 'resolved',
+        sources: [
+          { sourceId: buildReviewAdjudicationSourceId(acceptedSource), outcome: 'merged', recordedAt: '2026-09-06T00:00:00.000Z' },
+          { sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'acted', recordedAt: '2026-09-06T00:00:00.000Z' },
+        ],
+        effect: { id: 'effect-mixed', kind: 'action', status: 'applied', workOrderId: 'order-mixed' },
+      }],
+    });
+    const contexts: unknown[] = [];
+    const judge = vi.fn(async (context: unknown) => {
+      contexts.push(context);
+      // The unmerged sibling recurs against its own still-resolved case, which
+      // is the semantic-repeat regression the coordinator must be able to see.
+      return {
+        mode: 'case-v1' as const, domain: 'build_review' as const,
+        sourceOutcomes: [{ sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'acted' as const, caseRef: 'case-live' }],
+        cases: [{
+          caseRef: 'case-live', existingCaseId: 'case-mixed-outcomes', disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+          rationale: 'The unmerged sibling still needs a focused assertion.',
+          effect: { kind: 'action' as const, route: 'build' as const, tasks: [{ title: 'Repair the second test' }] },
+        }],
+      };
+    });
+
+    const result = await coordinateBuildReviewAdjudication({ ...input(root, judge), aggregate: mixedAggregate, generateId: sequentialIds('sibling') });
+
+    expect(judge).toHaveBeenCalledTimes(1);
+    expect(contexts[0]).toMatchObject({ currentFindings: [expect.objectContaining({ sourceId: buildReviewAdjudicationSourceId(liveSource) })] });
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-mixed-outcomes' });
+  });
+
   it('dispatches only the new source when another exact recurrence is settled', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);

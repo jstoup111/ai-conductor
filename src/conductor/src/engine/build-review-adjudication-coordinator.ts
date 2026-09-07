@@ -139,12 +139,20 @@ export async function coordinateBuildReviewAdjudication(input: {
    * a merged source is likewise settled even when its historical case acted.
    * This deliberately keys by the rubric-namespaced source id, not prose or
    * bare finding id, so a same-id finding in another rubric remains live.
+   *
+   * Settlement is per SOURCE, not per case. A resolved action case settles
+   * only the sources whose OWN outcome is `merged`; a sibling source that
+   * merely `acted` stays live and is re-adjudicated on recurrence. Testing
+   * the merge with `sources.some(...)` settled every source on the record,
+   * so one merged source silently retired its unmerged siblings.
    */
   const finalizedSourceIds = (cases: readonly RemediationCaseRecord[]): ReadonlySet<string> =>
     new Set(cases.flatMap((record) =>
-      record.resolution === 'resolved' && (record.disposition !== 'act' || record.sources.some((source) => source.outcome === 'merged'))
-        ? record.sources.map((source) => source.sourceId)
-        : [],
+      record.resolution !== 'resolved'
+        ? []
+        : record.disposition !== 'act'
+          ? record.sources.map((source) => source.sourceId)
+          : record.sources.filter((source) => source.outcome === 'merged').map((source) => source.sourceId),
     ));
   const fail = async (detail: string): Promise<BuildReviewAdjudicationCoordinatorResult> => {
     await input.emit?.({ type: 'remediation_adjudication_failed', domain: 'build_review', lapId: input.aggregate.lapId, reason: detail });
