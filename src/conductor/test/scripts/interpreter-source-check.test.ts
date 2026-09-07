@@ -23,6 +23,10 @@ describe('checkInterpreterSource', () => {
     ]);
   });
 
+  it('accepts a multiline single-quoted interpreter source', () => {
+    expect(checkInterpreterSource('multiline.sh', "node -e '\nconsole.log(process.argv[1])\n' -- \"$VALUE\"")).toEqual([]);
+  });
+
   it('does not treat source after a quoted heredoc body as a shell command', () => {
     expect(checkInterpreterSource('heredoc.sh', "python3 - <<'PY'\nnode -e \"$NOT_A_SHELL_COMMAND\"\nPY\nnode --eval='console.log(process.argv[1])' -- \"$VALUE\"")).toEqual([]);
   });
@@ -38,5 +42,9 @@ describe('checkInterpreterSource', () => {
     expect(checkInterpreterSource('queued.sh', "python3 - <<FIRST <<SECOND\nconstant\nFIRST\nprint($VALUE)\nSECOND\ncat <<'TEXT'\nnode -e \"$PHANTOM\"\nTEXT")).toEqual([
       expect.objectContaining({ line: 4, message: 'shell expansion in interpreter heredoc source' }),
     ]);
+  });
+
+  it('terminates after case-pattern separators at end of line', () => {
+    expect(checkInterpreterSource('case.sh', 'case "$name" in\n  conduct-ts)\n    true\n    ;;\nesac')).toEqual([]);
   });
 });

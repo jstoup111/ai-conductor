@@ -39,7 +39,7 @@ function commandsOnLine(line: string, lineNumber: number): Word[][] {
     while (/\s/.test(line[cursor] ?? '')) cursor += 1;
     if (cursor >= line.length || line[cursor] === '#') break;
     if (';|&'.includes(line[cursor])) {
-      while (';|&'.includes(line[cursor] ?? '')) cursor += 1;
+      while (cursor < line.length && ';|&'.includes(line[cursor])) cursor += 1;
       commands.push([]);
       continue;
     }
@@ -58,6 +58,14 @@ function heredocsOnLine(line: string, words: Word[], lineNumber: number): Heredo
     delimiter: match[2].replace(/["']/g, ''), expanding: !/["']/.test(match[2]), stripTabs: match[1] === '-',
     interpreter: Boolean(executable && /python3?$/.test(executable.text)), line: lineNumber,
   }));
+}
+
+function closesQuote(line: string, quote: "'" | '"'): boolean {
+  for (let index = 0; index < line.length; index += 1) {
+    if (line[index] === '\\') { index += 1; continue; }
+    if (line[index] === quote) return true;
+  }
+  return false;
 }
 
 /** A bounded lexical checker. Candidate shell/interpreter text is never run. */
@@ -84,6 +92,20 @@ export function checkInterpreterSource(sourceName: string, text: string): Interp
       const flag = args[option];
       const source = flag.text.startsWith('--eval=') ? { ...flag, text: flag.text.slice(7) } : args[option + 1];
       if (!source || !source.text || !source.closed) {
+        if (source?.openQuote) {
+          let continuation = index + 1;
+          let expanded = source.expandable.length > 0;
+          while (continuation < lines.length) {
+            if (source.openQuote !== "'" && findingsIn(lines[continuation]).length > 0) expanded = true;
+            if (closesQuote(lines[continuation], source.openQuote)) break;
+            continuation += 1;
+          }
+          if (continuation < lines.length) {
+            if (expanded) findings.push({ sourceName, line: source.line, message: 'shell expansion in interpreter command source' });
+            index = continuation;
+            continue;
+          }
+        }
         // A backslash-newline continues the same shell word. It is still
         // source, so inspect every physical continuation before deciding that
         // the quote is malformed.
