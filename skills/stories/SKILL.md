@@ -106,6 +106,11 @@ As a [role], I want [action] so that [outcome].
 - Given [precondition], when [dependency times out], then [specific graceful degradation]
 - Given [precondition], when [concurrent modification occurs], then [specific conflict resolution]
 
+Do not prefix criteria with ids. The engine derives them positionally as
+`S<story-heading-id>.<n>`, numbering happy paths then negative paths in one run — so the
+first negative path of Story 1 is `S1.3`, never `S1.N1`. An authored id the engine does
+not derive is unkeyable and halts `prd_audit`.
+
 ### Done When
 - [ ] [Concrete, verifiable output — e.g., POST /contacts returns 201 with contact JSON including `id`, `name`, `email`]
 - [ ] [Persistent side effect confirmed — e.g., contact row exists in database with correct attributes]
