@@ -1,5 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { checkInterpreterSource, type InterpreterSourceFinding } from './interpreter-source-check.js';
 import * as gitHooks from '../src/engine/git-hook-assets.js';
 import * as sessionHooks from '../src/engine/session-hook-assets.js';
@@ -23,6 +24,11 @@ export async function checkInventory(root: string, modules: Record<string, Recor
   for (const [moduleName, module] of Object.entries(modules)) {
     const scripts = Object.entries(module).filter(([, value]) => typeof value === 'string');
     if (scripts.length === 0) throw new Error(`${moduleName} generated-hook inventory is empty`);
+    for (const [exportName, value] of Object.entries(module)) {
+      if (typeof value !== 'string' && !(moduleName === 'git-hook-assets' && exportName === 'buildCommitMsgHook' && typeof module.COMMIT_MSG_HOOK === 'string')) {
+        throw new Error(`${moduleName}#${exportName} is an unclassified generated-hook export`);
+      }
+    }
     for (const [exportName, script] of scripts) findings.push(...checkInterpreterSource(`${moduleName}#${exportName}`, script as string));
   }
   return findings;
@@ -33,4 +39,4 @@ async function main(): Promise<void> {
   for (const finding of findings) console.error(`${finding.sourceName}:${finding.line}: ${finding.message}`);
   if (findings.length > 0) process.exitCode = 1;
 }
-void main();
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) void main();

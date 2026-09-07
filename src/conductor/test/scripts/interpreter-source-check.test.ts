@@ -26,4 +26,17 @@ describe('checkInterpreterSource', () => {
   it('does not treat source after a quoted heredoc body as a shell command', () => {
     expect(checkInterpreterSource('heredoc.sh', "python3 - <<'PY'\nnode -e \"$NOT_A_SHELL_COMMAND\"\nPY\nnode --eval='console.log(process.argv[1])' -- \"$VALUE\"")).toEqual([]);
   });
+
+  it('continues after shell command boundaries and detects special parameters', () => {
+    expect(checkInterpreterSource('compound.sh', 'true; node -e "console.log($?)" | python3 -c "print($0)"')).toEqual([
+      expect.objectContaining({ line: 1, message: 'shell expansion in interpreter command source' }),
+      expect.objectContaining({ line: 1, message: 'shell expansion in interpreter command source' }),
+    ]);
+  });
+
+  it('tracks every queued heredoc and never scans a non-interpreter body as shell', () => {
+    expect(checkInterpreterSource('queued.sh', "python3 - <<FIRST <<SECOND\nconstant\nFIRST\nprint($VALUE)\nSECOND\ncat <<'TEXT'\nnode -e \"$PHANTOM\"\nTEXT")).toEqual([
+      expect.objectContaining({ line: 4, message: 'shell expansion in interpreter heredoc source' }),
+    ]);
+  });
 });

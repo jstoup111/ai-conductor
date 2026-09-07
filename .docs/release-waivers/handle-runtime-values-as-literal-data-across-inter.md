@@ -1,3 +1,3 @@
-Waives: skill symlink targets
+Waives: skill symlink targets, hook wiring
 
-Rationale: The release-gate classifier maps every bin/install edit to skill symlink targets, but this diff only rewrites configure_permissions and configure_hooks to use fixed interpreter source with argv and explicit failure status. No skill symlink is added, removed, retargeted, or renamed; no CLI grammar, hook wiring, or settings schema changes.
+Rationale: The release-gate classifier maps every bin/install edit to skill symlink targets and this session-start hook edit to hook wiring, but this diff only rewrites configure_permissions and configure_hooks to use fixed interpreter source with argv and explicit failure status, and changes the session-start script's interpreter source and argv transport. No skill symlink is added, removed, retargeted, or renamed; the session-start edit adds, removes, retargets, and renames no hook registration, event, matcher, or timeout; no CLI grammar or settings schema changes.
