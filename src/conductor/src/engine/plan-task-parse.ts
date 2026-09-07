@@ -93,7 +93,7 @@ export const TASK_HEADER_PATTERN =
 
 const PATH_EXTENSIONS = /\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|yml|yaml|sh|rb|py|go|rs|html|css|scss|vue|toml)$/i;
 const BACKTICK_TOKEN = /`([^`\s]+)`/g;
-const STORY_LINE = /^[ \t]*\*\*Story:\*\*[ \t]*(?:(?:story|epic)\b[-\t ]+)?([A-Za-z0-9.-]+)/i;
+const STORY_LINE = /^[ \t]*\*\*Story:\*\*[ \t]*(?:(?:story|epic)\b[-\t ]+)?(n\/a|[A-Za-z0-9.-]+)/i;
 
 /** Returns unique story ids cited by leading `**Story:**` lines in a task block. */
 export function parsePlanTaskStoryIds(text: string): string[] {
