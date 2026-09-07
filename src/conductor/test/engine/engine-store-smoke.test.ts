@@ -33,15 +33,6 @@ import { publish } from '../../scripts/publish-engine.mjs';
 const REPO_ROOT = join(process.cwd(), '..', '..');
 const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');
 
-async function waitForFile(path: string, timeoutMs = 10_000, intervalMs = 25): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (existsSync(path)) return;
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  throw new Error(`waitForFile: ${path} did not appear within ${timeoutMs}ms`);
-}
-
 async function waitForFileContent(
   path: string,
   predicate: (content: string) => boolean,
@@ -181,8 +172,18 @@ describe('engine-store — real-binary #215 smoke (Task 8, FR-13)', () => {
         // 4. A's FIRST dynamic import happens only now (after the flip) —
         // trigger it and verify it resolved from A, not ENOENT.
         await writeFile(triggerFile, '1');
-        await waitForFile(resultFile);
-        const result = JSON.parse(await readFile(resultFile, 'utf-8'));
+        // `writeFile` creates/truncates the result before its bytes are
+        // observable, so file existence alone is not a completion signal.
+        // Wait for the complete JSON response written by the child process.
+        const resultContent = await waitForFileContent(resultFile, (content) => {
+          try {
+            const parsed: unknown = JSON.parse(content);
+            return typeof parsed === 'object' && parsed !== null && 'ok' in parsed;
+          } catch {
+            return false;
+          }
+        });
+        const result = JSON.parse(resultContent);
         expect(result.ok).toBe(true);
         expect(result.marker).toBe('A');
         expect(result.code).not.toBe('ENOENT');
