@@ -86,6 +86,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon-dispatched features now honor open repair obligations when no active plan path was recorded, instead of halting as evidence-complete. ([implementation PR #2411](https://github.com/jstoup111/ai-conductor/pull/2411)).
 - Daemon logs no longer print a duplicate, untagged copy of each gate verdict line. ([implementation PR #2412](https://github.com/jstoup111/ai-conductor/pull/2412)).
 - prd-audit and the as-built architecture review are read-only validators: they and their subagents never run tests or project code, write only their own verdict artifacts, and never end a turn with delegated work outstanding. ([implementation PR #2416](https://github.com/jstoup111/ai-conductor/pull/2416)).
+- Live-provider release smoke token caps can now be adjusted through a GitHub Actions repository variable. ([implementation PR #2432](https://github.com/jstoup111/ai-conductor/pull/2432)).
 
 ## [1.0.0] - 2026-08-31
 
