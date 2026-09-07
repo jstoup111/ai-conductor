@@ -200,7 +200,15 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
   }
 
   const rows: CoherenceRow[] = [];
-  for (const { cells, line } of tableRowLines[0]) {
+  const coherenceTableRows = [...tableRowLines[0]];
+  for (const tableRows of tableRowLines.slice(1)) {
+    const firstRowClass = tableRows[0]?.cells[0].trim().toLowerCase();
+    if (firstRowClass === 'criterion' || LEGACY_ROW_CLASSES.has(firstRowClass ?? '')) {
+      coherenceTableRows.push(...tableRows);
+    }
+  }
+
+  for (const { cells, line } of coherenceTableRows) {
     const rawRowClass = cells[0];
     const rowClass = rawRowClass.trim().toLowerCase();
     if (rowClass === 'criterion') {
