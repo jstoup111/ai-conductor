@@ -16,6 +16,7 @@ import type {
 } from './daemon-runner.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { prepareWorktree, runProjectTeardown } from './worktree-prepare.js';
+import { observeMemorySetup } from './memory-cli.js';
 import { makeProductionGh } from './pr-labels.js';
 import { ensureWorktree } from './worktree-shared.js';
 import { WorktreeLifecycleQueue } from './worktree.js';
@@ -182,6 +183,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
     // bin/setup (no-op if absent). Keeps the daemon stack-agnostic while letting
     // each project translate the namespace into its own shared/namespaced infra.
     prepareWorktree: async (wt, log, events, order) => {
+      await observeMemorySetup(wt.path, events);
       const baseSha = order?.baseSha ?? await resolveDaemonBaseSha(cfg.projectRoot, cfg.baseBranch);
       await prepareWorktree(wt.path, log ?? cfg.log, {
         verbose: cfg.verbose ?? false,
