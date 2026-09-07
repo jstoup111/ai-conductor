@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { scrubTmuxEnvironment } from '../execution/child-environment.js';
 import { join, relative, resolve } from 'node:path';
 
 import { execa } from 'execa';
@@ -148,7 +149,7 @@ async function runVitestWithReport(file: string, config: string): Promise<SmokeV
   // that nested child a fresh disposable temp parent rather than inheriting
   // the parent's run root (which the child's global teardown would otherwise
   // remove).
-  const childEnvironment: NodeJS.ProcessEnv = { ...process.env, TMPDIR: childTmpDirectory };
+  const childEnvironment: NodeJS.ProcessEnv = scrubTmuxEnvironment({ ...process.env, TMPDIR: childTmpDirectory });
   delete childEnvironment.AI_CONDUCTOR_TEST_TMP_ROOT;
   try {
     const result = await execa(

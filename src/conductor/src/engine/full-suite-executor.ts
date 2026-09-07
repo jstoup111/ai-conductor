@@ -1,6 +1,7 @@
 import { execa } from 'execa';
 import { constants as osConstants } from 'node:os';
 import { resolve } from 'node:path';
+import { scrubTmuxEnvironment } from '../execution/child-environment.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { TestSuiteConfig } from '../types/config.js';
 
@@ -335,7 +336,7 @@ export async function executeFullSuite(
   try {
     result = await runner(command, {
       cwd,
-      env: environment,
+      env: scrubTmuxEnvironment(environment),
       shell: true,
       timeoutMs,
     });

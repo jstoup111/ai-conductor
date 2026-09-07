@@ -39,6 +39,7 @@
 import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { scrubTmuxEnvironment } from '../../execution/child-environment.js';
 import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
 import { acquireScratchHome, releaseScratchHome } from './provider-scratch.js';
 export {
@@ -160,7 +161,7 @@ class ThrowawaySandbox implements SandboxBuildEnv {
     if (process.env.CLAUDE_CODE_OAUTH_TOKEN !== undefined) {
       env.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     }
-    return env as NodeJS.ProcessEnv;
+    return scrubTmuxEnvironment(env as NodeJS.ProcessEnv);
   }
 
   async teardown(): Promise<void> {
