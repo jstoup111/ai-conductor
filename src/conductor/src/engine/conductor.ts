@@ -1999,6 +1999,23 @@ export class Conductor {
     );
   }
 
+  /**
+   * Give a malformed resolved registry a terminal outcome instead of letting
+   * its refused resume entry fall through to the loop's markerless return.
+   */
+  private async haltBlockedResumeEntry(
+    resolution: Extract<RunnableResumeEntry, { kind: 'blocked' }>,
+  ): Promise<void> {
+    const prerequisites = resolution.unsatisfied
+      .map(({ step, status }) => `${step} (${status})`)
+      .join(', ');
+    const reason =
+      `resume entry for '${resolution.wantedStep}' cannot run: ` +
+      `unsatisfied prerequisite${resolution.unsatisfied.length === 1 ? '' : 's'}: ${prerequisites}`;
+    await this.writeHaltMarker(reason + '\n', 'needs-human');
+    await this.emitLoopHalt(reason);
+  }
+
   /** Emit through the existing spine while retaining the conductor's open execution state. */
   private emitExecutionEvent(event: ConductorEvent): Promise<void> {
     const start = event.type === 'step_started'
@@ -6242,6 +6259,9 @@ export class Conductor {
           }
         }
         startIndex = resolution.index;
+      } else {
+        await this.haltBlockedResumeEntry(resolution);
+        return;
       }
     }
 

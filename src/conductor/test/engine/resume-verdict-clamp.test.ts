@@ -33,7 +33,7 @@ vi.mock('../../src/engine/rebase.js', async () => {
   };
 });
 
-import type { ConductState, StepDefinition, StepName } from '../../src/types/index.js';
+import type { ConductState, StepDefinition, StepName, StepStatus } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -634,6 +634,9 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
       expect(log.find((entry) => entry.startsWith('run:'))).toBe('run:build');
       expect(log.filter((entry) => entry.startsWith('run:'))).not.toHaveLength(0);
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
     });
 
     it('reconciles from state when the verdict directory cannot be read', async () => {
@@ -684,6 +687,61 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       expect(await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).toMatch(
         /DECIDE entry refused.*resume-clamp.*plan/is,
       );
+    });
+  });
+
+  // ── Task 3: blocked resume entries have a durable terminal outcome ─────
+  describe('Task 3: blocked resume entries halt before the loop', () => {
+    it('writes and emits a needs-human halt naming the wanted step and blocked prerequisites', async () => {
+      const { runner, log } = trackingRunner(dir);
+      const haltReasons: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') haltReasons.push(event.reason);
+      });
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+      });
+      const haltBlockedResumeEntry = (conductor as unknown as {
+        haltBlockedResumeEntry: (resolution: {
+          kind: 'blocked';
+          wantedStep: StepName;
+          unsatisfied: Array<{ step: StepName; status: StepStatus }>;
+        }) => Promise<void>;
+      }).haltBlockedResumeEntry.bind(conductor);
+
+      await haltBlockedResumeEntry({
+        kind: 'blocked',
+        wantedStep: 'build_review',
+        unsatisfied: [
+          { step: 'build', status: 'failed' },
+          { step: 'test_suite', status: 'in_progress' },
+        ],
+      });
+
+      const marker = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
+      expect(marker).toContain("resume entry for 'build_review' cannot run");
+      expect(marker).toContain("build (failed)");
+      expect(marker).toContain("test_suite (in_progress)");
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('needs-human');
+      expect(haltReasons).toEqual([marker.trim()]);
+      expect(log.filter((entry) => entry.startsWith('run:'))).toHaveLength(0);
+    });
+
+    it('leaves no halt marker for a converged resume past the final step', async () => {
+      const seed = seedDoneThrough('finish');
+      seed.finish = 'done';
+      await writeState(statePath, seed as ConductState);
+      const { runner, log } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+      });
+
+      await conductor.run();
+
+      expect(log.filter((entry) => entry.startsWith('run:'))).toHaveLength(0);
+      await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
     });
   });
 
