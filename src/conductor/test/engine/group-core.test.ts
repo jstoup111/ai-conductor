@@ -1330,42 +1330,46 @@ describe("group-core: runGroupBranch per-branch stale-sweep isolation (Task 9)",
 
   it("sweeps ONLY the stale member's own marker, leaving the other member's fresh marker untouched", async () => {
     const dir = await mkdtemp(join(tmpdir(), "group-core-sweep-"));
-    await mkdir(join(dir, ".pipeline"), { recursive: true });
+    try {
+      await mkdir(join(dir, ".pipeline"), { recursive: true });
 
-    const sessionStartedAt = Date.now();
+      const sessionStartedAt = Date.now();
 
-    // Member A's marker (manual_test) predates this session — stale.
-    const staleMarker = join(dir, ".pipeline", "manual-test-results.md");
-    await writeFile(staleMarker, "stale content from a crashed prior run");
-    await utimes(staleMarker, new Date(sessionStartedAt - 60_000), new Date(sessionStartedAt - 60_000));
+      // Member A's marker (manual_test) predates this session — stale.
+      const staleMarker = join(dir, ".pipeline", "manual-test-results.md");
+      await writeFile(staleMarker, "stale content from a crashed prior run");
+      await utimes(staleMarker, new Date(sessionStartedAt - 60_000), new Date(sessionStartedAt - 60_000));
 
-    // Member B's marker (prd_audit) is fresh — written THIS session.
-    const freshMarker = join(dir, ".pipeline", "prd-audit.md");
-    await writeFile(freshMarker, "fresh content from this session");
-    await utimes(freshMarker, new Date(sessionStartedAt + 60_000), new Date(sessionStartedAt + 60_000));
+      // Member B's marker (prd_audit) is fresh — written THIS session.
+      const freshMarker = join(dir, ".pipeline", "prd-audit.md");
+      await writeFile(freshMarker, "fresh content from this session");
+      await utimes(freshMarker, new Date(sessionStartedAt + 60_000), new Date(sessionStartedAt + 60_000));
 
-    const memberA: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
-    const memberB: GroupMember = { name: "prd_audit" as unknown as string, skill: "prd-audit", outcome: makeSkippedOutcome() };
+      const memberA: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
+      const memberB: GroupMember = { name: "prd_audit" as unknown as string, skill: "prd-audit", outcome: makeSkippedOutcome() };
 
-    await runGroupBranch(
-      memberA,
-      {} as ConductState,
-      { stepRunner: okRunner(), projectRoot: dir, sessionStartedAt },
-      3,
-    );
-    await runGroupBranch(
-      memberB,
-      {} as ConductState,
-      { stepRunner: okRunner(), projectRoot: dir, sessionStartedAt },
-      3,
-    );
+      await runGroupBranch(
+        memberA,
+        {} as ConductState,
+        { stepRunner: okRunner(), projectRoot: dir, sessionStartedAt },
+        3,
+      );
+      await runGroupBranch(
+        memberB,
+        {} as ConductState,
+        { stepRunner: okRunner(), projectRoot: dir, sessionStartedAt },
+        3,
+      );
 
-    // A's stale marker was swept before dispatch.
-    await expect(stat(staleMarker)).rejects.toThrow();
+      // A's stale marker was swept before dispatch.
+      await expect(stat(staleMarker)).rejects.toThrow();
 
-    // B's fresh marker survived untouched.
-    const freshStat = await stat(freshMarker);
-    expect(freshStat).toBeTruthy();
+      // B's fresh marker survived untouched.
+      const freshStat = await stat(freshMarker);
+      expect(freshStat).toBeTruthy();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("does not spare a stale partial PRD-audit report when the dispatch state supplies its feature description", async () => {
