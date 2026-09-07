@@ -191,6 +191,9 @@ necessarily the repo default.
   dispatch. `grep ' via '` over the log answers "which provider ran this step" without inspecting
   process argv. A provider skipped from a cached availability result dispatches no process and is
   not logged; a fallback between providers still prints its own `⚠ PROVIDER FALLBACK` line.
+- **`· gate <step>: satisfied`** or **`· gate <step>: unsatisfied — <reason>`** states the
+  objective gate verdict. A satisfied line may include a reason; neither verdict line uses the
+  provider-completion check glyph, so it is distinct from the preceding dispatch attribution.
 - **`·   finish: total usage — <dispatches>, <cost>, <fresh> fresh + <cached> cached→<out> tok, <n> cost-unmetered (tokens counted, cost not), <n> unmetered`**
   is logged once,
   when the feature's `finish` step completes. `<fresh>` counts non-cached input tokens; `<cached>`

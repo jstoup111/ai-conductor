@@ -1,7 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
+import { Writable } from 'node:stream';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { TerminalSubscriber } from '../../src/ui/subscriber.js';
+import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
+import { createLiveRegion } from '../../src/ui/live-region.js';
 import type { ConductorEvent } from '../../src/types/index.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+
+class CaptureStream extends Writable {
+  chunks: string[] = [];
+
+  _write(chunk: Buffer | string, _encoding: string, callback: (error?: Error | null) => void): void {
+    this.chunks.push(chunk.toString());
+    callback();
+  }
+
+  output(): string {
+    return this.chunks.join('');
+  }
+}
 
 describe('TerminalSubscriber', () => {
   let emitter: ConductorEventEmitter;
@@ -92,5 +109,29 @@ describe('TerminalSubscriber', () => {
     await emitter.emit(event);
 
     expect(renderCallback).toHaveBeenCalledWith(event);
+  });
+
+  it('forwards satisfied gate verdicts from the event bus to the injected terminal renderer once', async () => {
+    const stream = new CaptureStream();
+    const terminalRenderer = new TerminalRenderer({
+      stateFilePath: '/tmp/test-state.json',
+      steps: ALL_STEPS,
+      readStateFn: async () => ({ ok: true, value: {} }),
+      liveRegion: createLiveRegion({ stream, forceTTY: false }),
+    });
+    const handle = vi.spyOn(terminalRenderer, 'handle');
+    subscriber = new TerminalSubscriber(emitter, renderCallback, terminalRenderer);
+    subscriber.start();
+    const event: ConductorEvent = {
+      type: 'gate_verdict', step: 'plan', satisfied: true, reason: 'covered',
+    };
+
+    await emitter.emit(event);
+
+    expect(renderCallback).toHaveBeenCalledOnce();
+    expect(renderCallback).toHaveBeenCalledWith(event);
+    expect(handle).toHaveBeenCalledOnce();
+    expect(handle).toHaveBeenCalledWith(event);
+    expect(stream.output()).toBe('  gate plan: satisfied — covered\n');
   });
 });

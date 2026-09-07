@@ -149,3 +149,11 @@ Task 2 -> Task 3
 Task 4 -> Task 5
 
 Task 1 and Task 4 have no dependencies and may run concurrently.
+
+### Task rem-as-built-rem-ab1-1: src/conductor/src/ui/subscriber.ts — deliver gate_verdict to exactly one interactive renderer: add 'gate_verdict' to the eventTypes array at subscriber.ts:23-55 AND to its matched counterpart, the secondary-renderer forwarding condition at subscriber.ts:58-66, editing both sides together (or deriving the forwarding set from one declared list) so the pair cannot drift; src/conductor/src/ui/create-renderer.ts has no gate_verdict case, so the dashboard callback stays silent and only TerminalRenderer prints the line. Prove the root-to-subscriber-to-renderer path in src/conductor/test/ui/subscriber.test.ts (or the ui test that owns TerminalSubscriber) by emitting a satisfied gate_verdict on a real ConductorEventEmitter through a started TerminalSubscriber built as src/conductor/src/engine/plugin-loader.ts:226-235 builds it, asserting the injected UIRenderer receives it exactly once and the satisfied line is rendered once; leave the existing halt_marker_write_failed, renderer_error and pipeline_tail_diagnostic forwarding assertions untouched.
+**Gate:** as-built
+**Rationale:** Conforming implementation drift, not an architecture change: the approved 003-ui-renderer-plugin-point fan-out stays authoritative and the fix is to make the interactive composition obey it, since src/conductor/src/ui/terminal-renderer.ts:267-276 renders a satisfied gate verdict but src/conductor/src/ui/subscriber.ts:23-55 never subscribes gate_verdict and src/conductor/src/ui/subscriber.ts:58-66 never forwards it, so the branch has no production caller; Task 4 requires the interactive line but its Files scope names only daemon-cli.ts and terminal-renderer.ts, so the subscriber wiring is appended here rather than bound to that task. Sibling sites of the same shape found and deliberately excluded because no plan task admits them: TerminalRenderer's kickback (terminal-renderer.ts:278-284), loop_halt (285-287) and loop_converged (291) branches are equally unforwarded by the same allowlist, and they predate this diff. Nothing is removed or relaxed by this task, so no completed task's coverage is at risk.
+**Governing clause:** Task 4
+**Parent task:** 4
+**Done when:**
+- Task 4 is satisfied by this task.
