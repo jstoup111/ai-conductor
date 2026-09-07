@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { formatRetryReason, formatProgressDelta } from '../../src/engine/format-retry-line.js';
+import { composeContainmentAdvisoryOutput } from '../../src/engine/per-task-commit-floor.js';
 
 describe('format-retry-line', () => {
   describe('formatRetryReason', () => {
@@ -55,6 +56,23 @@ describe('format-retry-line', () => {
       const result = formatRetryReason(input, 25);
       expect(result.length).toBeLessThanOrEqual(25);
       expect(result).toMatch(/…$/);
+    });
+
+    it.each([
+      ['a short review reason', 'review failed: missing coverage', 120],
+      ['a review reason that exceeds the retry budget', `review failed: ${'x'.repeat(160)}`, 120],
+    ])('keeps %s ahead of a containment advisory', (_caseName, reviewReason, maxLen) => {
+      const output = composeContainmentAdvisoryOutput(
+        reviewReason,
+        ['Advisory: containment check unresolved; hook state is unavailable.'],
+        false,
+      );
+
+      const result = formatRetryReason(output, maxLen);
+
+      expect(result.startsWith(reviewReason.slice(0, Math.max(0, maxLen - 1)))).toBe(true);
+      expect(result).not.toMatch(/^Advisory:/);
+      if (reviewReason.length > maxLen) expect(result).toMatch(/…$/);
     });
   });
 
