@@ -50,7 +50,6 @@ const tracedHandlerTable = {
   feature_complete: () => undefined,
   loop_halt: () => undefined,
   build_progress: () => undefined,
-  unattributed_progress: () => undefined,
   build_no_progress: () => undefined,
   build_stall: () => undefined,
   pipeline_closeout: () => undefined,
