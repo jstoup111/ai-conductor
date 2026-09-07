@@ -106,12 +106,14 @@ sequenceDiagram
 3. **Delimiting is machinery, not prompt discipline.** Armor lines with `sourceRef` and a
    digest are part of the text itself, so every downstream surface (claim JSON, claim record,
    staged outcomes) carries the boundary without each consumer being told to add it.
-4. **Audit on the live spine (ADR amendment 2026-09-07, D11-D12).**
+4. **Audit on the live spine, persist-only (ADR amendment 2026-09-07, D11-D13).**
    `intake_inbound_sanitized` is a new `ConductorEvent` variant declared in `EVENT_SINKS`. The
    engineer CLI owns no long-lived bus, so at `worktree --source-ref` time it builds one for the
    duration of the emit — a `ConductorEventEmitter` with an `EventPersister` attached to the
    canonical `<worktree>/.pipeline/events.jsonl` — exactly as `rewind.ts` does for
-   `operator_rewind`. No sidecar ledger; the occurrence is also echoed in the `claim` output and
-   on the claim record.
+   `operator_rewind`. The sink row is `render: false, persist: true` (D13): that emitter has no
+   renderer attached, so there is no live terminal or `daemon.log` line at emit time and the
+   occurrence is read back from the persisted spine. No sidecar ledger; the occurrence is also
+   echoed in the `claim` output and on the claim record.
 5. **Privilege narrowing is out of scope.** `--dangerously-skip-permissions` is untouched;
    filed as a separate intake so this boundary can land without a provider-launch change.

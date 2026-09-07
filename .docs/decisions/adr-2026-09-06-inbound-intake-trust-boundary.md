@@ -169,8 +169,22 @@ Constraints found by the sweep that the design must honor:
 > construction `engine/rewind.ts` already uses to put `operator_rewind` (also `render: true`,
 > also produced by a short-lived CLI) on the spine, so no new mechanism is introduced. The emit is
 > best-effort: a persistence failure prints on stderr and never fails worktree creation. The
-> `EVENT_SINKS` row is unchanged; every spine consumer — `EventPersister`, the terminal renderer
-> branch, the daemon-log branch — now reads a record a production path actually produces.
+> emit is **persist-only**: the CLI process owns no long-lived bus and no renderer is attached to
+> the emitter it builds, so there is no live terminal or daemon-log line at the moment of emit.
+> Consumers see the occurrence wherever the persisted spine is read — OTel exporters, dashboards,
+> and the daemon's own tailers of `<worktree>/.pipeline/events.jsonl`. See D13 for the sink row.
+>
+> **D13. The `EVENT_SINKS` row for `intake_inbound_sanitized` is `render: false, persist: true`.**
+> A `render: true` declaration asserts that a production path carries the occurrence to a live
+> renderer. For this event none does, and building one — a subscriber bridge, an IPC hop, or a
+> ledger replay from the short-lived CLI into the interactive or daemon emitter — is a structural
+> change this feature deliberately does not make. Declaring `render: false` keeps the sink registry
+> a truthful description of production (adr-2026-07-26-event-sink-registry-exhaustiveness) instead
+> of an aspiration, and supersedes D11's earlier "the `EVENT_SINKS` row is unchanged" clause. The
+> render branches that existed only to satisfy that stale declaration — the
+> `terminal-renderer.ts` case, its `TerminalSubscriber` forwarding entry, and the
+> `renderDaemonEventUnsafe` case — are removed with it, so no render branch survives without a
+> producer. Adding a live render path later requires its own ADR.
 >
 > **D12. The sidecar `<worktree>/.pipeline/intake-events.jsonl` is removed, not kept as a derived
 > view.** A repo-wide search found no reader, no tailer, and nothing deriving from it, so it was a
@@ -199,6 +213,10 @@ Constraints found by the sweep that the design must honor:
   the 2026-09-07 amendment (D11): the event is emitted on the live spine and persisted to the
   canonical `<worktree>/.pipeline/events.jsonl`. It remains outside OTel because its sink row
   declares `otel: false`, which is a sink policy, not a missing emitter.
+- The occurrence has no live render at emit time (D13). An operator watching a terminal or
+  `daemon.log` while `engineer worktree --source-ref` runs sees nothing; the record is found by
+  reading the persisted spine. This is the accepted cost of not building a bridge from a
+  short-lived CLI process into a long-lived renderer bus.
 - Issue bodies in `.docs/intake/<plan-stem>.md` now carry armor lines and may carry markers.
 
 ### Follow-up Actions

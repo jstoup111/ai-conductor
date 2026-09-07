@@ -63,12 +63,12 @@ As every consumer of `Envelope.text`, I want the untrusted region to begin and e
 - Given a sanitized envelope, when `compose claim` prints it, then the printed `text` still carries both armor lines.
 
 #### Negative Paths
-- Given an issue body that contains a line shaped like an armor line anywhere other than as a matching outer pair, when the adapter polls it, then that inner lookalike is neutralized as `[neutralized:armor-lookalike]` so only the engine's own armor lines delimit the region.
+- Given an issue body containing a line shaped like an armor line outside every fenced, indented, and quoted region and outside the matching outer pair, when the adapter polls it, then that lookalike is neutralized as `[neutralized:armor-lookalike]` while a lookalike inside a fenced, indented, or quoted region stays byte-identical, because only the outer pair is honored as a delimiter.
 - Given the seam's signature takes an already-parsed `WorkRef` rather than a string, when the adapter calls it with the reference it parsed for `sourceRef`, then the armor line's reference round-trips through `parseWorkRef` unchanged and an unparseable reference is unrepresentable at this boundary, so no capture-time throw or drop can occur.
 
 ### Done When
 - [ ] Armor lines are outside every Markdown section (no `#` prefix, no bullet), inert under every rule, and the digest is over the sanitized body only.
-- [ ] Tests cover equal/differing digests and the armor-lookalike rule.
+- [ ] Tests cover equal/differing digests and the armor-lookalike rule in both directions: neutralized in prose, byte-identical inside a fenced, indented, or quoted region.
 
 ## Story 4: The claim surface reports what was altered without changing what is claimable
 
@@ -100,7 +100,7 @@ As the operator, I want a durable record that an issue's text was neutralized, s
 
 #### Happy Path
 - Given a claim record with a non-empty `inbound`, when `compose worktree --source-ref` creates the per-idea worktree, then the CLI emits `intake_inbound_sanitized` on a live `ConductorEventEmitter` and `<worktree>/.pipeline/events.jsonl` contains one such record with `sourceRef`, `neutralizations`, `digest`, and `ts`, written by `EventPersister`.
-- Given the new event type, when the engine compiles, then `EVENT_SINKS` declares it `{ render: true, persist: true, audit: false, otel: false }` and the renderer prints a one-line summary when the event reaches a live emitter.
+- Given the new event type, when the engine compiles, then `EVENT_SINKS` declares it `{ render: false, persist: true, audit: false, otel: false }` and `EventPersister` is its only sink, because the short-lived CLI emitter reaches no live renderer.
 
 #### Negative Paths
 - Given a claim record with an empty neutralization list, when the worktree is created, then a record is still appended with an empty list, so absence of alteration is also recorded.

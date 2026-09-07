@@ -103,7 +103,7 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 
 **Steps:**
 
-1. Add failing tests: `sanitizeInboundText(text, workRef)` output begins with an armor line carrying `formatWorkRef(workRef)` and a sha256 hex digest of the sanitized body and ends with a matching closing armor line; equal bodies give equal digests and differing bodies differ; feeding the output back in returns byte-identical text with an empty neutralization list; an armor-shaped line inside the body (not a matching outer pair) becomes `[neutralized:armor-lookalike]`.
+1. Add failing tests: `sanitizeInboundText(text, workRef)` output begins with an armor line carrying `formatWorkRef(workRef)` and a sha256 hex digest of the sanitized body and ends with a matching closing armor line; equal bodies give equal digests and differing bodies differ; feeding the output back in returns byte-identical text with an empty neutralization list; an armor-shaped line in prose (not a matching outer pair) becomes `[neutralized:armor-lookalike]`, while an armor-shaped line inside a fenced, indented, or quoted region is left byte-identical.
 2. Verify RED.
 3. Implement: the signature takes a parsed `WorkRef` (from `src/conductor/src/engine/engineer/source-ref.ts`), so an unparseable reference is unrepresentable; detect a matching outer armor pair (digest verifies against the inner body) and return input unchanged; otherwise neutralize inner armor-shaped lines, compute the digest over the sanitized body, and wrap. Armor lines have no `#` or list prefix.
 4. Verify GREEN; commit `feat(intake): armor tracker-sourced text with sourceRef and digest`.
@@ -111,7 +111,7 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 **Done when:**
 - `sanitize-inbound.test.ts` proves the output begins and ends with armor lines carrying `formatWorkRef` output and a sha256 digest of the sanitized body, and that equal bodies give equal digests while differing bodies give differing digests.
 - `sanitize-inbound.test.ts` proves feeding sanitized output back in returns byte-identical text with an empty neutralization list.
-- `sanitize-inbound.test.ts` proves an inner armor-shaped line is replaced by `[neutralized:armor-lookalike]` while the outer pair is untouched.
+- `sanitize-inbound.test.ts` proves an armor-shaped line in prose is replaced by `[neutralized:armor-lookalike]` while one inside a fenced, indented, or quoted region and the outer pair are untouched.
 - `sanitizeInboundText` accepts a `WorkRef` parameter, not a string, and the armor line's reference round-trips through `parseWorkRef`.
 
 **Files likely touched:**
@@ -193,22 +193,20 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 
 **Steps:**
 
-1. Add failing tests: `event-sinks.test.ts` — `EVENT_SINKS.intake_inbound_sanitized` equals `{ render: true, persist: true, audit: false, otel: false }` and `PINNED_PERSISTED_EVENT_TYPES` includes it (update the pin deliberately); a `TerminalRenderer` test proves the event renders one line naming the `sourceRef` and the category counts.
+1. Add failing tests: `event-sinks.test.ts` — `EVENT_SINKS.intake_inbound_sanitized` equals `{ render: false, persist: true, audit: false, otel: false }` and `PINNED_PERSISTED_EVENT_TYPES` includes it (update the pin deliberately); `renderedEventTypes()` does not contain it.
 2. Verify RED (compile failure on the missing union member counts).
-3. Add the variant `{ type: 'intake_inbound_sanitized'; sourceRef: string; neutralizations: InboundNeutralization[]; digest: string }` to `ConductorEvent` in `src/conductor/src/types/events.ts`, the `EVENT_SINKS` row in `src/conductor/src/engine/event-sinks.ts`, and a `case` in the switch in `src/conductor/src/ui/terminal-renderer.ts`.
+3. Add the variant `{ type: 'intake_inbound_sanitized'; sourceRef: string; neutralizations: InboundNeutralization[]; digest: string }` to `ConductorEvent` in `src/conductor/src/types/events.ts` and the persist-only `EVENT_SINKS` row in `src/conductor/src/engine/event-sinks.ts`. No render branch is added: per adr-2026-09-06-inbound-intake-trust-boundary D13 the sole producer is a short-lived CLI emitter that reaches no renderer.
 4. Verify GREEN; commit `feat(events): intake_inbound_sanitized rides the spine`.
 
 **Done when:**
-- `event-sinks.test.ts` proves `EVENT_SINKS.intake_inbound_sanitized` is `{ render: true, persist: true, audit: false, otel: false }` and the pinned persisted-type set includes it.
-- A `TerminalRenderer` test proves the event renders exactly one line naming the `sourceRef` and each category with its count.
+- `event-sinks.test.ts` proves `EVENT_SINKS.intake_inbound_sanitized` is `{ render: false, persist: true, audit: false, otel: false }` and the pinned persisted-type set includes it.
+- `renderedEventTypes()` omits `intake_inbound_sanitized`, so no render sink is declared without a producer.
 - `src/conductor/src/types/events.ts` carries the `intake_inbound_sanitized` variant and the engine compiles.
 
 **Files likely touched:**
 - src/conductor/src/types/events.ts
 - src/conductor/src/engine/event-sinks.ts
-- src/conductor/src/ui/terminal-renderer.ts
 - src/conductor/test/engine/event-sinks.test.ts
-- src/conductor/test/ui/terminal-renderer.test.ts
 
 **Dependencies:** 1
 
@@ -359,7 +357,7 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 | Story 3 happy: Given an issue `owner/repo#12`, when the adapter polls it, then `Envelope.text` begins with an armor line naming `owner/repo#12` as produced by `formatWorkRef` and a sha256 digest of the sanitized body, and ends with a matching closing armor line. | 4 | "the output begins and ends with armor lines carrying `formatWorkRef` output and a sha256 digest of the sanitized body" | diff-local |
 | Story 3 happy: Given the same issue polled twice with the same body, when both envelopes are built, then the digests are equal; given the body changed between polls, then the digests differ. | 4 | "equal bodies give equal digests while differing bodies give differing digests" | diff-local |
 | Story 3 happy: Given a sanitized envelope, when `compose claim` prints it, then the printed `text` still carries both armor lines. | 7 | "the printed `text` still carries both armor lines" | diff-local |
-| Story 3 negative: Given an issue body that contains a line shaped like an armor line anywhere other than as a matching outer pair, when the adapter polls it, then that inner lookalike is neutralized as `[neutralized:armor-lookalike]` so only the engine's own armor lines delimit the region. | 4 | "an inner armor-shaped line is replaced by `[neutralized:armor-lookalike]` while the outer pair is untouched" | diff-local |
+| Story 3 negative: Given an issue body containing a line shaped like an armor line outside every fenced, indented, and quoted region and outside the matching outer pair, when the adapter polls it, then that lookalike is neutralized as `[neutralized:armor-lookalike]` while a lookalike inside a fenced, indented, or quoted region stays byte-identical, because only the outer pair is honored as a delimiter. | 4 | "an armor-shaped line in prose is replaced by `[neutralized:armor-lookalike]` while one inside a fenced, indented, or quoted region and the outer pair are untouched" | diff-local |
 | Story 3 negative: Given the seam's signature takes an already-parsed `WorkRef` rather than a string, when the adapter calls it with the reference it parsed for `sourceRef`, then the armor line's reference round-trips through `parseWorkRef` unchanged and an unparseable reference is unrepresentable at this boundary, so no capture-time throw or drop can occur. | 4 | "`sanitizeInboundText` accepts a `WorkRef` parameter, not a string, and the armor line's reference round-trips through `parseWorkRef`" | diff-local |
 | Story 4 happy: Given a sanitized envelope in the inbox, when `compose claim` serves it, then its JSON output carries `inbound: { neutralizations: [...], digest }` next to `text` and `sourceRef`. | 7 | "`compose claim` prints `inbound: { neutralizations, digest }`" | diff-local |
 | Story 4 happy: Given a claim, when the claim record is persisted, then the record for that `sourceRef` carries `inbound` next to `body`, and `loadClaimRecord` returns it. | 7 | "the persisted claim record carries `inbound` and `loadClaimRecord` returns it" | diff-local |
@@ -369,7 +367,7 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 | Story 4 negative: Given an envelope from a source that sets no `inbound` field (a chat-origin idea), when `parseEnvelope` runs, then the envelope is accepted with `inbound` undefined and no error. | 6 | "yields `undefined` when absent" | diff-local |
 | Story 4 negative: Given an envelope whose `inbound` field is malformed (for example `neutralizations` is a string), when `parseEnvelope` runs, then the field is dropped and the envelope is otherwise accepted, so a bad telemetry field never blocks a claim. | 6 | "drops a malformed value without throwing" | diff-local |
 | Story 5 happy: Given a claim record with a non-empty `inbound`, when `compose worktree --source-ref` creates the per-idea worktree, then the CLI emits `intake_inbound_sanitized` on a live `ConductorEventEmitter` and `<worktree>/.pipeline/events.jsonl` contains one such record with `sourceRef`, `neutralizations`, `digest`, and `ts`, written by `EventPersister`. | 9 | "holds one `intake_inbound_sanitized` record with `sourceRef`, `neutralizations`, `digest`, and `ts`" | diff-local |
-| Story 5 happy: Given the new event type, when the engine compiles, then `EVENT_SINKS` declares it `{ render: true, persist: true, audit: false, otel: false }` and the renderer prints a one-line summary when the event reaches a live emitter. | 8 | "`EVENT_SINKS.intake_inbound_sanitized` is `{ render: true, persist: true, audit: false, otel: false }`" | diff-local |
+| Story 5 happy: Given the new event type, when the engine compiles, then `EVENT_SINKS` declares it `{ render: false, persist: true, audit: false, otel: false }` and `EventPersister` is its only sink, because the short-lived CLI emitter reaches no live renderer. | 8 | "`EVENT_SINKS.intake_inbound_sanitized` is `{ render: false, persist: true, audit: false, otel: false }`" | diff-local |
 | Story 5 negative: Given a claim record with an empty neutralization list, when the worktree is created, then a record is still appended with an empty list, so absence of alteration is also recorded. | 9 | "including when the neutralization list is empty" | diff-local |
 | Story 5 negative: Given a chat-origin idea with no `sourceRef`, when the worktree is created, then no `intake_inbound_sanitized` event is emitted and no such record appears in `<worktree>/.pipeline/events.jsonl`. | 9 | "no `intake_inbound_sanitized` record is written for an idea without `sourceRef`" | diff-local |
 | Story 5 negative: Given the worktree's `.pipeline/` directory cannot be written, when persistence fails, then worktree creation still succeeds and the failure is reported on stderr rather than thrown. | 9 | "an unwritable `.pipeline/` directory still yields a successful worktree result with the failure on stderr" | diff-local |
@@ -386,6 +384,13 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks with no unbounded quality word left open
 - [ ] Dependencies are explicit and acyclic
+
+> **Superseded 2026-09-07 (as-built AB-1, operator decision).** Task
+> `rem-as-built-rem-adr-001` below wired `intake_inbound_sanitized` into `TerminalSubscriber` to
+> satisfy the then-declared `render: true` sink row. The operator resolved AB-1 as persist-only:
+> the sink row is now `render: false` (adr-2026-09-06-inbound-intake-trust-boundary D13) and the
+> renderer, subscriber, and daemon-log branches for this event are removed. The task's premise no
+> longer holds; it is retained for provenance and must not be re-executed.
 
 ### Task rem-as-built-rem-adr-001: src/conductor/src/ui/subscriber.ts — deliver intake_inbound_sanitized to TerminalRenderer.handle: add 'intake_inbound_sanitized' to the eventTypes array (:27-55) AND to its matched counterpart, the forwarding condition at :60-65 — the two lists must agree or the subscription renders nothing. Follow the existing halt_marker_write_failed/renderer_error pattern exactly so onRender still fires once and no second render path is introduced; do NOT touch src/conductor/src/daemon-cli.ts:2490-2495, which is the separate daemon.log sink and would double-render. Add a subscriber test in src/conductor/test/ui/subscriber.test.ts proving one emitted intake_inbound_sanitized reaches TerminalRenderer.handle exactly once; this adds coverage and preserves — does not replace — the TerminalRenderer line assertion Task 8's Done-when already delivered in src/conductor/test/ui/terminal-renderer.test.ts.
 **Gate:** as-built
