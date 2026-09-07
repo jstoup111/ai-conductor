@@ -193,7 +193,6 @@ export async function coordinateBuildReviewAdjudication(input: {
    * no action this lap, so it has no tasks to publish and must leave an
    * unrelated surviving case's existing order exactly as it found it.
    */
-  let judgeDispatched = false;
   const finalize = async (options: {
     readonly tasksByCaseId: ReadonlyMap<string, readonly { readonly title: string }[]>;
     readonly republishWorkOrder: boolean;
@@ -359,7 +358,7 @@ export async function coordinateBuildReviewAdjudication(input: {
         await input.emit?.({
           type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
           caseIds: settledCases.map((record) => record.id),
-          effectIds: judgeDispatched ? settledCases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]) : [],
+          effectIds: options.dispatchSkipped === true ? [] : settledCases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
         });
       }
       // The completion emission is itself awaited, so it is one more window in
@@ -485,7 +484,6 @@ export async function coordinateBuildReviewAdjudication(input: {
     operatorResolvedFindingIds: resolved, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => input.suppressedFindingIds?.has(source.findingId)).map(buildReviewAdjudicationSourceId)]), ...contextEvidence,
   });
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${freshContext.stop.code}`, { settleAbsentAttempted: true });
-  judgeDispatched = true;
   await input.emit?.({ type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId });
   let judgement: RemediationCaseJudgement;
   try { judgement = await input.judge(freshContext.context); } catch { return failUnlessAccepted('remediate judgement failed', { settleAbsentAttempted: true }); }

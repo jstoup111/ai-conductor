@@ -247,6 +247,31 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(judge).not.toHaveBeenCalled();
   });
 
+  it('preserves applied effect ids when an acceptance-terminal path bypasses the provider', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-durable', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The repair was applied before operator acceptance.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-09-06T00:00:00.000Z' }],
+        effect: { id: 'effect-durable', kind: 'action', status: 'applied', workOrderId: 'order-durable' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()),
+      operatorResolvedFindingIds: new Set([findingId]),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_completed', effectIds: ['effect-durable'],
+    }));
+  });
+
   it('refreshes one suppression through coordinator merge without pruning prior history or writing operator authority', async () => {
     const root = await projectRoot();
     const priorFindingId = 'finding-from-an-earlier-lap';
