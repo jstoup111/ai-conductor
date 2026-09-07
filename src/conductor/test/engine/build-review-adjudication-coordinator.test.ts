@@ -1047,6 +1047,25 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-mixed-outcomes' });
   });
 
+  it('keeps a merged source live while its applied action case remains open', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-open-action', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The repair was applied but the case is not resolved.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'merged', recordedAt: '2026-09-06T00:00:00.000Z' }],
+        effect: { id: 'effect-open-action', kind: 'action', status: 'applied', workOrderId: 'order-open-action' },
+      }],
+    });
+    const judge = vi.fn(async () => actionJudgement());
+
+    await coordinateBuildReviewAdjudication(input(root, judge));
+
+    expect(judge).toHaveBeenCalledOnce();
+  });
+
   it('dispatches only the new source when another exact recurrence is settled', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);

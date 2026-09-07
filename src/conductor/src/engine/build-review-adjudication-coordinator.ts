@@ -154,7 +154,7 @@ export async function coordinateBuildReviewAdjudication(input: {
     new Set(cases.flatMap((record) =>
       record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
         ? record.sources.map((source) => source.sourceId)
-        : record.effect.kind !== 'none' && record.effect.status === 'applied'
+        : record.resolution === 'resolved' && record.effect.kind !== 'none' && record.effect.status === 'applied'
           ? record.sources.filter((source) => source.outcome === 'merged').map((source) => source.sourceId)
           : [],
     ));

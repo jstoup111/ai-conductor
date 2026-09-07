@@ -9,6 +9,11 @@ import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-r
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
 
+vi.mock('../../src/engine/config.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/config.js')>(),
+  loadConfig: vi.fn(async () => ({ ok: true as const, config: {}, warnings: [] })),
+}));
+
 const lapId = parseBuildReviewLapId('lap-current')!;
 const finding = { concernKind: 'test-insensitive', summary: 'A changed test does not observe the behavior it should.', evidenceLocations: ['test/a.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } };
 const infrastructureAggregate = joinBuildReviewRubricOutcomes({
@@ -549,6 +554,38 @@ describe('build-review accept', () => {
   const testQualityIdentity = canonicalizeBuildReviewFindingIdentity({
     rubric: 'testQuality', contractVersion: 'v3', concernKind: testQualityFinding.concernKind, anchor: testQualityFinding.anchor,
   })!;
+
+  it('suppresses configured sub-floor findings in findings output and refuses to accept them', async () => {
+    const lowConfidenceFinding = { ...testQualityFinding, confidence: 60 };
+    const lowConfidenceAggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: {
+        testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [lowConfidenceFinding], verdict: 'FAIL' },
+      },
+    });
+    const print = vi.fn();
+    const store = { list: vi.fn(async () => ({ ok: true as const, records: [] })), append: vi.fn() };
+    const config = vi.fn(async () => ({ ok: true as const, config: { build_review: { rubrics: { testQuality: { min_confidence: 70 } } } }, warnings: [] }));
+    const shared = {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(lowConfidenceAggregate), createStore: () => store, loadConfig: config, print,
+    };
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, shared)).resolves.toBe(0);
+    expect(JSON.parse(print.mock.calls[0]![0] as string)).toMatchObject({
+      verdict: 'PASS', unresolvedFindingIds: [], suppressedFindingIds: [testQualityIdentity.id],
+    });
+
+    print.mockClear();
+    await expect(dispatchBuildReviewAccept(
+      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: testQualityIdentity.id, rationale: 'Accepted risk' },
+      { ...shared, isInteractive: true, resolveOperator: () => 'local-operator', appendEvent: vi.fn() },
+    )).resolves.toBe(1);
+    expect(config).toHaveBeenNthCalledWith(1, '/main/.worktrees/review-rubrics');
+    expect(config).toHaveBeenNthCalledWith(2, '/main/.worktrees/review-rubrics');
+    expect(store.append).not.toHaveBeenCalled();
+    expect(print).toHaveBeenCalledWith(expect.stringContaining('not actionable'));
+  });
 
   let root: string;
 

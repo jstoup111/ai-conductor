@@ -10,6 +10,8 @@ import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
 import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, readKickbackLedger, type KickbackGateEntry } from './kickback-ledger.js';
+import { loadConfig as loadConfigDefault, type ConfigResult } from './config.js';
+import { resolveBuildReviewConfig } from './resolved-config.js';
 import type { BuildReviewRubricId } from '../types/config.js';
 
 export interface BuildReviewFindingsCommand {
@@ -26,6 +28,7 @@ export interface BuildReviewFindingsDeps {
   readonly createStore?: (worktree: string) => DispositionStore;
   readonly readKickbackGateEntry?: (worktree: string) => Promise<Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'> | undefined>;
   readonly readMechanicalFaults?: (worktree: string) => Promise<number | undefined>;
+  readonly loadConfig?: (worktree: string) => Promise<ConfigResult>;
   readonly print?: (output: string) => void;
 }
 
@@ -163,6 +166,16 @@ type ResolvedCliFeature = {
   readonly feature: BuildReviewFeatureIdentity;
 };
 
+async function resolveCliMinConfidence(
+  worktree: string,
+  deps: Pick<BuildReviewFindingsDeps, 'loadConfig'>,
+): Promise<Partial<Record<BuildReviewRubricId, number>>> {
+  const loaded = await (deps.loadConfig ?? loadConfigDefault)(worktree);
+  if (!loaded.ok) throw new Error(loaded.error.message);
+  return Object.fromEntries(Object.entries(resolveBuildReviewConfig(loaded.config).rubrics)
+    .map(([id, policy]) => [id, policy.min_confidence]));
+}
+
 /** The CLI and live runner must address the same canonical feature state. */
 async function resolveCliFeature(
   command: Pick<BuildReviewFindingsCommand, 'feature'>,
@@ -198,12 +211,13 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
       ? await store.listReducedCoverage(feature)
       : { ok: true as const, records: [] as BuildReviewReducedCoverageDispositionRecord[] };
     if (!reducedCoverage.ok) throw new Error(reducedCoverage.message);
+    const minConfidence = await resolveCliMinConfidence(worktree, deps);
     const gateEntry = deps.readKickbackGateEntry
       ? await deps.readKickbackGateEntry(worktree)
       : deps.readMechanicalFaults
         ? { mechanicalFaults: await deps.readMechanicalFaults(worktree) }
         : (await readKickbackLedger(worktree)).gates.build_review;
-    const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records, reducedCoverage.records);
+    const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records, reducedCoverage.records, minConfidence);
     if (!effective) throw new Error('current findings are invalid');
     const accepted = acceptedDispositions(aggregate, feature, effective, records);
     const faults = exhaustedMechanicalFaults(aggregate, gateEntry?.mechanicalFaults ?? 0);
@@ -292,6 +306,7 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
   }
   const identity = currentFinding.identity;
   try {
+    const minConfidence = await resolveCliMinConfidence(worktree, deps);
     const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
     const appendInput = { feature, finding: identity, sourceLapId: requestedLap, summary: currentFinding.finding.summary, rationale: command.rationale.trim(), operator: operator.trim() };
     const unchanged = async (): Promise<boolean> => {
@@ -302,7 +317,7 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
     const appended = store.appendIfCurrent
       ? await store.appendIfCurrent(appendInput, async (records) => {
         if (!await unchanged()) return false;
-        const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records);
+        const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records, [], minConfidence);
         return effective?.unresolvedFindingIds.includes(identity.id) === true;
       })
       : await (async () => {
@@ -311,7 +326,7 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
         if (!await unchanged()) {
           return { ok: false as const, kind: 'invalid' as const, message: 'current review lap changed while waiting for disposition state' };
         }
-        const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records);
+        const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records, [], minConfidence);
         if (!effective || !effective.unresolvedFindingIds.includes(identity.id)) return { ok: false as const, kind: 'invalid' as const, message: 'finding is already accepted or not actionable' };
         return store.append(appendInput);
       })();
