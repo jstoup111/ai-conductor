@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { KickbackBudgetDispatch } from '../cli.js';
@@ -10,6 +10,7 @@ import { dispatchDaemonPark } from './daemon-park-cli.js';
 import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackLedger, readKickbackLedger, stageKickbackBudgetAdjustment, type KickbackBudgetAdjustment } from './kickback-ledger.js';
 import { kickbackBudgetView, renderKickbackBudgetView } from './kickback-budget-view.js';
 import { resolveMainRepoRoot, isOperatorParked } from './park-marker.js';
+import { isAcceptableOperatorRationale, resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { HALT_CLASS_MARKER } from './halt-marker.js';
 import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import { loadConfig } from './config.js';
@@ -35,22 +36,17 @@ async function defaultsFor(worktree: string): Promise<Record<string, number>> {
 export interface KickbackBudgetCliDeps {
   cwd?: string;
   isInteractive?: () => boolean;
-  resolveOperator?: () => string | undefined;
+  resolveOperator?: () => string | undefined | Promise<string | undefined>;
   print?: (message: string) => void;
   resolveMainRoot?: (cwd: string) => Promise<string>;
   appendEvent?: typeof appendCloseoutEvent;
 }
 
-async function resolveWorktree(feature: string, cwd: string, resolveMainRoot: (cwd: string) => Promise<string>): Promise<string | undefined> {
-  try {
-    const worktree = join(await resolveMainRoot(cwd), '.worktrees', feature);
-    return (await stat(worktree)).isDirectory() ? worktree : undefined;
-  } catch { return undefined; }
-}
-
 async function reconcilePendingAdjustments(worktree: string): Promise<void> {
   const ledger = await readKickbackLedger(worktree);
-  if (isUnreadableKickbackLedger(ledger)) throw new Error('ledger is unreadable');
+  // An unreadable ledger is reported by each caller's own unreadable branch, in
+  // its own words; reconciliation simply has nothing it may safely act on.
+  if (isUnreadableKickbackLedger(ledger)) return;
   let eventText = '';
   try { eventText = await readFile(join(worktree, '.pipeline', 'pipeline-events.jsonl'), 'utf8'); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('authorization event ledger is unreadable'); }
@@ -93,7 +89,8 @@ async function recordAuthorizationEvent(
 export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispatch, deps: KickbackBudgetCliDeps = {}): Promise<number> {
   const print = deps.print ?? console.log;
   const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(deps.cwd ?? process.cwd());
-  const worktree = await resolveWorktree(command.feature, deps.cwd ?? process.cwd(), deps.resolveMainRoot ?? resolveMainRepoRoot);
+  // D3: one shared named-worktree resolution, not a per-command copy.
+  const worktree = await resolveCliFeatureWorktree(command.feature, { cwd: deps.cwd, resolveMainRoot: deps.resolveMainRoot });
   if (!worktree) { print(`kickback-budget: feature '${command.feature}' is unavailable.`); return 1; }
   const reconcile = async (): Promise<number | undefined> => {
     try { await reconcilePendingAdjustments(worktree); return undefined; }
@@ -117,7 +114,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   if (!deps.isInteractive?.() && deps.isInteractive !== undefined || (deps.isInteractive === undefined && !process.stdin.isTTY)) {
     print('kickback-budget: mutations require an interactive local operator terminal.'); return 2;
   }
-  if (!command.gate || !GATES.has(command.gate) || !command.rationale?.trim()) { print('kickback-budget: invalid gate or rationale.'); return 2; }
+  if (!command.gate || !GATES.has(command.gate) || !command.rationale?.trim() || !isAcceptableOperatorRationale(command.rationale)) { print('kickback-budget: invalid gate or rationale.'); return 2; }
   // Mutations reconcile only after D3's argument/authority refusals, which must
   // leave the park and the ledger untouched.
   const refused = await reconcile();
@@ -145,13 +142,16 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const remediation = command.gate !== 'build_review';
     const currentLimit = remediation ? (entry.effectiveLapCap ?? defaults[command.gate]) : (entry.effectiveLimit ?? defaults[command.gate]);
     const currentConsumed = remediation ? (entry.laps ?? 0) : entry.cumulative;
-    const operator = deps.resolveOperator?.() ?? process.env.GITHUB_ACTOR;
+    // D3: machine-scoped identity through the approved user-config → GitHub
+    // chain. `GITHUB_ACTOR` is an environment variable any pipeline process can
+    // set, so it can never be the authority for an operator authorization.
+    const operator = (await (deps.resolveOperator?.() ?? resolveMachineOperatorIdentity(root)));
     if (!operator?.trim()) { print('kickback-budget: no approved operator identity is available.'); return 1; }
     const adjustment: KickbackBudgetAdjustment = {
       id: randomUUID(), kind: command.action, beforeConsumed: currentConsumed,
       afterConsumed: command.action === 'reset' ? 0 : currentConsumed,
       beforeLimit: currentLimit, afterLimit: command.action === 'raise' ? currentLimit + command.by! : currentLimit,
-      operator, rationale: command.rationale,
+      operator, rationale: command.rationale.trim(),
       timestamp: new Date().toISOString(), haltGeneration: entry.capEvidence.haltGeneration,
     };
     await stageKickbackBudgetAdjustment(worktree, command.gate, adjustment);

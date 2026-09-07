@@ -244,3 +244,87 @@ describe('kickback-budget accepts each gate\'s own cap halt class', () => {
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 });
+
+// Covers: task:11 — D3 authority contract: machine-scoped identity through the
+// approved user-config → GitHub chain, a bounded rationale, and one shared
+// named-worktree resolution rather than a per-command copy.
+describe('kickback-budget operator authority', () => {
+  const capEvidence = { gate: 'build_review', consumed: 6, limit: 5, latestReason: 'cap', haltGeneration: 'halt-1' };
+  const halted = async (): Promise<{ root: string; worktree: string }> => {
+    const fixture = await makeFeature({ version: 1, gates: { build_review: { ...baseEntry, capEvidence } } });
+    await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted');
+    await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'needs-human');
+    return fixture;
+  };
+
+  it('never accepts GITHUB_ACTOR as the operator identity', async () => {
+    const fixture = await halted();
+    const previous = process.env.GITHUB_ACTOR;
+    process.env.GITHUB_ACTOR = 'some-ci-robot';
+    try {
+      const output: string[] = [];
+      // No injected resolver: the command must reach the machine identity chain,
+      // which resolves nothing in this fixture, rather than trusting the env var.
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'build_review', by: 1, rationale: 'evidence', format: 'human' },
+        {
+          cwd: fixture.root, resolveMainRoot: async () => fixture.root, isInteractive: () => true,
+          print: (line) => output.push(line), appendEvent: () => {},
+          resolveOperator: async () => undefined,
+        },
+      )).toBe(1);
+      expect(output.join('\n')).toContain('no approved operator identity is available');
+      const entry = JSON.parse(await readFile(join(fixture.worktree, '.pipeline', 'kickback-ledger.json'), 'utf8')).gates.build_review;
+      expect(entry.effectiveLimit).toBeUndefined();
+      expect(entry.adjustments).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.GITHUB_ACTOR; else process.env.GITHUB_ACTOR = previous;
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a rationale beyond the durable bound before touching the park or ledger', async () => {
+    const { MAX_OPERATOR_RATIONALE_BYTES } = await import('../../src/engine/cli-operator-authority.js');
+    const fixture = await halted();
+    try {
+      await expectRefusalIsInert(
+        fixture,
+        {
+          kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'build_review', by: 1,
+          rationale: 'x'.repeat(MAX_OPERATOR_RATIONALE_BYTES + 1), format: 'human',
+        },
+        2,
+      );
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('accepts a rationale exactly at the bound', async () => {
+    const { MAX_OPERATOR_RATIONALE_BYTES } = await import('../../src/engine/cli-operator-authority.js');
+    const fixture = await halted();
+    try {
+      expect(await dispatchKickbackBudgetCommand(
+        {
+          kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'build_review', by: 1,
+          rationale: 'y'.repeat(MAX_OPERATOR_RATIONALE_BYTES), format: 'human',
+        },
+        {
+          cwd: fixture.root, resolveMainRoot: async () => fixture.root, isInteractive: () => true,
+          resolveOperator: () => 'operator', print: () => {}, appendEvent: () => {},
+        },
+      )).toBe(0);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('resolves the feature worktree through the shared resolver, which rejects a non-directory', async () => {
+    const { resolveCliFeatureWorktree } = await import('../../src/engine/cli-operator-authority.js');
+    const root = await mkdtemp(join(tmpdir(), 'kickback-budget-shared-resolve-'));
+    try {
+      await mkdir(join(root, '.worktrees'), { recursive: true });
+      await writeFile(join(root, '.worktrees', 'not-a-dir'), 'file');
+      expect(await resolveCliFeatureWorktree('not-a-dir', { cwd: root, resolveMainRoot: async () => root })).toBeUndefined();
+      expect(await resolveCliFeatureWorktree('absent', { cwd: root, resolveMainRoot: async () => root })).toBeUndefined();
+      await mkdir(join(root, '.worktrees', 'real'), { recursive: true });
+      expect(await resolveCliFeatureWorktree('real', { cwd: root, resolveMainRoot: async () => root })).toContain('real');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+});
