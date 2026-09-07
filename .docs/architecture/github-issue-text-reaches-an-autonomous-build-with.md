@@ -59,7 +59,8 @@ flowchart TD
 
   ENV --> CLAIM --> WT
   WT --> EVT["ConductorEvent intake_inbound_sanitized<br/>{ sourceRef, neutralizations, digest }<br/>declared in EVENT_SINKS"]
-  EVT --> LEDGER[("«worktree»/.pipeline/intake-events.jsonl<br/>single-writer sibling ledger, same schema<br/>exceptions A + B: CLI has no bus")]
+  EVT --> EMITTER["ConductorEventEmitter (built in-process)<br/>EventPersister attached — same construction as rewind.ts"]
+  EMITTER --> LEDGER[("«worktree»/.pipeline/events.jsonl<br/>the canonical spine ledger — no sidecar")]
 
   CLAIM --> HOST["Host DECIDE session (/composer or $composer)<br/>reads delimited region as evidence"]
 ```
@@ -90,7 +91,7 @@ sequenceDiagram
   C->>C: persist claim record { body, inbound }
   C->>H: { text, inbound } — untrusted region visible, alterations listed
   H->>C: worktree --source-ref
-  C->>C: append intake_inbound_sanitized to «worktree»/.pipeline/intake-events.jsonl
+  C->>C: emit intake_inbound_sanitized on the spine → «worktree»/.pipeline/events.jsonl
   H->>H: same DECIDE behavior as a neutrally worded issue
 ```
 
@@ -105,11 +106,12 @@ sequenceDiagram
 3. **Delimiting is machinery, not prompt discipline.** Armor lines with `sourceRef` and a
    digest are part of the text itself, so every downstream surface (claim JSON, claim record,
    staged outcomes) carries the boundary without each consumer being told to add it.
-4. **Audit on the spine, worktree-local sibling ledger by exceptions A + B.**
+4. **Audit on the live spine (ADR amendment 2026-09-07, D11-D12).**
    `intake_inbound_sanitized` is a new `ConductorEvent` variant declared in `EVENT_SINKS`. The
-   engineer CLI runs outside the daemon with no emitter, and the engineer dir is a cross-repo
-   directory with concurrent writers, so the record is appended at `worktree --source-ref`
-   time to `<worktree>/.pipeline/intake-events.jsonl` — the same shape as the hook-owned and
-   pipeline-owned sibling ledgers — and echoed in the `claim` output and on the claim record.
+   engineer CLI owns no long-lived bus, so at `worktree --source-ref` time it builds one for the
+   duration of the emit — a `ConductorEventEmitter` with an `EventPersister` attached to the
+   canonical `<worktree>/.pipeline/events.jsonl` — exactly as `rewind.ts` does for
+   `operator_rewind`. No sidecar ledger; the occurrence is also echoed in the `claim` output and
+   on the claim record.
 5. **Privilege narrowing is out of scope.** `--dangerously-skip-permissions` is untouched;
    filed as a separate intake so this boundary can land without a provider-launch change.

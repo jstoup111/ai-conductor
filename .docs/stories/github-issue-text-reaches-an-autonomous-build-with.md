@@ -99,18 +99,18 @@ As the operator, I want a durable record that an issue's text was neutralized, s
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a claim record with a non-empty `inbound`, when `compose worktree --source-ref` creates the per-idea worktree, then `<worktree>/.pipeline/intake-events.jsonl` contains one `intake_inbound_sanitized` record with `sourceRef`, `neutralizations`, `digest`, and `ts`, in the same shape `EventPersister` writes.
+- Given a claim record with a non-empty `inbound`, when `compose worktree --source-ref` creates the per-idea worktree, then the CLI emits `intake_inbound_sanitized` on a live `ConductorEventEmitter` and `<worktree>/.pipeline/events.jsonl` contains one such record with `sourceRef`, `neutralizations`, `digest`, and `ts`, written by `EventPersister`.
 - Given the new event type, when the engine compiles, then `EVENT_SINKS` declares it `{ render: true, persist: true, audit: false, otel: false }` and the renderer prints a one-line summary when the event reaches a live emitter.
 
 #### Negative Paths
 - Given a claim record with an empty neutralization list, when the worktree is created, then a record is still appended with an empty list, so absence of alteration is also recorded.
-- Given a chat-origin idea with no `sourceRef`, when the worktree is created, then no intake-events record is written and no file is created.
-- Given the worktree's `.pipeline/` directory cannot be written, when the append fails, then worktree creation still succeeds and the failure is reported on stderr rather than thrown.
-- Given two worktrees created for two different ideas, when both append, then each writes only its own `<worktree>/.pipeline/intake-events.jsonl` and neither touches the engineer directory or `.pipeline/events.jsonl`.
+- Given a chat-origin idea with no `sourceRef`, when the worktree is created, then no `intake_inbound_sanitized` event is emitted and no such record appears in `<worktree>/.pipeline/events.jsonl`.
+- Given the worktree's `.pipeline/` directory cannot be written, when persistence fails, then worktree creation still succeeds and the failure is reported on stderr rather than thrown.
+- Given two worktrees created for two different ideas, when both emit, then each record lands only in its own `<worktree>/.pipeline/events.jsonl` and neither touches the engineer directory nor any sidecar ledger.
 
 ### Done When
 - [ ] `intake_inbound_sanitized` is a member of the `ConductorEvent` union with a matching `EVENT_SINKS` entry.
-- [ ] The worktree case in `engineer-cli.ts` appends the record best-effort; tests cover the empty-list, no-sourceRef, and unwritable-directory paths.
+- [ ] The worktree case in `engineer-cli.ts` emits the event through a `ConductorEventEmitter` with `EventPersister` attached, best-effort, and writes no sidecar ledger; tests cover the empty-list, no-sourceRef, and persistence-failure paths.
 
 ## Story 6: Staged and committed intake outcomes are the sanitized text and still gate correctly
 

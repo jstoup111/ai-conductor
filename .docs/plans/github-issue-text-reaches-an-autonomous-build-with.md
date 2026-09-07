@@ -20,7 +20,7 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 - **One choke point.** `sanitizeInboundText(text, workRef)` in `src/conductor/src/engine/engineer/intake/sanitize-inbound.ts` is called only from `buildText()` in `intake/github-issues.ts`, after the existing emptiness check, on every emission path (poll, re-route, re-eligibility). It mirrors `sanitizeIntakeText` in `intake/sanitize.ts` — ordered high-precision rule table, categorized counts, pure and idempotent — but with a segmentation pass first (fenced/indented/quoted regions are `code` and never rewritten), following the fenced-block exclusion approach `adrApprovalStatus` in `engine/artifacts.ts` already uses. Rules replace only the matched prose, keeping list and heading prefixes, so `outcome-staging.ts` keeps parsing.
 - **Data shapes.** `InboundCategory` is a closed union of five members. `InboundSanitizeResult { text, neutralizations: {category, count}[], digest }`. `Envelope.inbound?` is additive and optional; `parseEnvelope` passes it through or drops a malformed value — never rejects on it. The seam takes a parsed `WorkRef` (parse-don't-validate), so an unparseable reference is unrepresentable and the claim-time fail-safe for malformed refs is untouched.
 - **Armor + idempotency.** Output is wrapped in two armor lines (canonical `formatWorkRef` reference + sha256 of the sanitized body). A matching outer pair whose digest verifies identifies already-sanitized input and returns it unchanged; any other armor-shaped line is an inner lookalike and is neutralized.
-- **Surface + spine.** `compose claim` prints `inbound` and `persistClaimRecord` stores it; `worktree --source-ref` appends `intake_inbound_sanitized` (declared in `EVENT_SINKS`, rendered by `TerminalRenderer`) to the worktree-local single-writer ledger `<worktree>/.pipeline/intake-events.jsonl`, best-effort, in the `EventPersister` line shape — the same construction as `appendHaltClearedRecord` in `daemon-deps.ts`. The engineer dir is never written beyond the existing claim record. The pinned persisted-type set in `event-sinks.test.ts` is updated deliberately.
+- **Surface + spine.** `compose claim` prints `inbound` and `persistClaimRecord` stores it; `worktree --source-ref` emits `intake_inbound_sanitized` (declared in `EVENT_SINKS`, rendered by `TerminalRenderer`) on a `ConductorEventEmitter` with an `EventPersister` attached to the canonical `<worktree>/.pipeline/events.jsonl`, best-effort — the same construction as the `operator_rewind` emit in `rewind.ts`. No sidecar ledger is written. The engineer dir is never written beyond the existing claim record. The pinned persisted-type set in `event-sinks.test.ts` is updated deliberately.
 - **Sequencing.** Module (1–4) → adapter wiring (5) in one chain; port field (6) and skill prose (12) are independent; claim surface (7) joins 5+6; event (8) joins 1; ledger append (9) joins 7+8; end-to-end and coherence pins (10, 11) last. `claimUnblocked`, `ClaimOutcome`, `createFileQueue`, and the claim decorator chain are byte-identical to `main`.
 
 ## Prerequisites
@@ -212,25 +212,26 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 
 **Dependencies:** 1
 
-### Task 9: worktree --source-ref appends the sanitization record to the worktree-local sibling ledger
+### Task 9: worktree --source-ref emits the sanitization event onto the live event spine
 **Story:** Story 5 — happy path 1; negative paths 1, 2, 3, 4
 **Type:** happy-path
 
 **Steps:**
 
-1. Add failing tests through the `engineer worktree` dispatch (fake registry + temp repo, matching the existing worktree CLI tests): with a claim record carrying `inbound`, `<worktree>/.pipeline/intake-events.jsonl` contains one `intake_inbound_sanitized` line with `sourceRef`, `neutralizations`, `digest`, and `ts`; an empty neutralization list still writes a record; no `sourceRef` writes nothing and creates no file; an unwritable `.pipeline/` leaves worktree creation successful with a stderr line; two worktrees write only their own file and the engineer dir and `.pipeline/events.jsonl` are untouched.
+1. Add failing tests through the `engineer worktree` dispatch (fake registry + temp repo, matching the existing worktree CLI tests): with a claim record carrying `inbound`, `<worktree>/.pipeline/events.jsonl` holds one `intake_inbound_sanitized` record with `sourceRef`, `neutralizations`, `digest`, and `ts`; an empty neutralization list still records; no `sourceRef` emits nothing; a `.pipeline/` that cannot be written leaves worktree creation successful with a stderr line; two worktrees each record only in their own ledger and no sidecar file is created.
 2. Verify RED.
-3. In the `worktree` case of `src/conductor/src/engine/engineer-cli.ts`, after `createEngineerWorktree`, load the claim record's `inbound` and append `{ ...event, ts }` (the `EventPersister` line shape) to `<worktreePath>/.pipeline/intake-events.jsonl` inside a try/catch that writes to stderr and never throws — the same best-effort shape as `appendHaltClearedRecord` in `src/conductor/src/engine/daemon-deps.ts`.
-4. Verify GREEN; commit `feat(compose): record intake_inbound_sanitized in the worktree sibling ledger`.
+3. In the `worktree` case of `src/conductor/src/engine/engineer-cli.ts`, after `createEngineerWorktree`, load the claim record's `inbound` and emit `{ type: 'intake_inbound_sanitized', sourceRef, neutralizations, digest }` on a `ConductorEventEmitter` with an `EventPersister` attached to `<worktreePath>/.pipeline/events.jsonl`, stopping the persister in a `finally` and reporting a persistence failure on stderr without throwing — the same construction as the `operator_rewind` emit in `src/conductor/src/engine/rewind.ts`. Delete the bespoke `intake-events.jsonl` append.
+4. Verify GREEN; commit `feat(intake): emit intake_inbound_sanitized on the live event spine`.
 
 **Done when:**
-- The worktree CLI test proves `<worktree>/.pipeline/intake-events.jsonl` holds one `intake_inbound_sanitized` line with `sourceRef`, `neutralizations`, `digest`, and `ts` when the claim record carries `inbound`, including when the neutralization list is empty.
-- The worktree CLI test proves no file is written for an idea without `sourceRef`, and an unwritable `.pipeline/` directory still yields a successful worktree result with the failure on stderr.
-- The worktree CLI test proves two worktrees each write only their own ledger and neither the engineer directory nor `.pipeline/events.jsonl` gains a record.
+- The worktree CLI test proves `<worktree>/.pipeline/events.jsonl` holds one `intake_inbound_sanitized` record with `sourceRef`, `neutralizations`, `digest`, and `ts` when the claim record carries `inbound`, including when the neutralization list is empty.
+- The worktree case emits `intake_inbound_sanitized` through a `ConductorEventEmitter` with `EventPersister` attached, and no `<worktree>/.pipeline/intake-events.jsonl` is created.
+- The worktree CLI test proves no `intake_inbound_sanitized` record is written for an idea without `sourceRef`, and the emit site catches persistence failures so an unwritable `.pipeline/` directory still yields a successful worktree result with the failure on stderr.
+- The worktree CLI test proves each worktree's record lands only in its own `.pipeline/events.jsonl` and no sidecar ledger is created.
 
 **Files likely touched:**
 - src/conductor/src/engine/engineer-cli.ts
-- src/conductor/test/engine/engineer-cli.test.ts
+- src/conductor/test/engine/engineer/engineer-cli-claim-record.test.ts
 
 **Dependencies:** 7, 8
 
@@ -313,7 +314,7 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 
 - After Task 5: a fake-`gh` poll yields sanitized, armored envelopes end-to-end through the adapter.
 - After Task 7: `compose claim` shows the boundary and summary to an operator.
-- After Task 9: the worktree carries the spine record; after Task 10 the staged outcomes are proven sanitized through the CLI entry point.
+- After Task 9: the worktree's canonical event ledger carries the spine record; after Task 10 the staged outcomes are proven sanitized through the CLI entry point.
 
 ## Architecture Obligation Coverage
 
@@ -326,6 +327,8 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 | adr-2026-09-06-inbound-intake-trust-boundary#D5 | task | task-6 | passes a well-formed `inbound` through, yields `undefined` when absent, and drops a malformed value without throwing |
 | adr-2026-09-06-inbound-intake-trust-boundary#D6 | task | task-7 | the persisted claim record carries `inbound` and `loadClaimRecord` returns it |
 | adr-2026-09-06-inbound-intake-trust-boundary#D7 | task | task-8, task-9 | holds one `intake_inbound_sanitized` line with `sourceRef`, `neutralizations`, `digest`, and `ts` |
+| adr-2026-09-06-inbound-intake-trust-boundary#D11 | task | task-9 | emits `intake_inbound_sanitized` through a `ConductorEventEmitter` with `EventPersister` attached |
+| adr-2026-09-06-inbound-intake-trust-boundary#D12 | task | task-9 | no `<worktree>/.pipeline/intake-events.jsonl` is created |
 | adr-2026-09-06-inbound-intake-trust-boundary#D8 | task | task-10, task-11 | no raw copy of the directive bullet exists under the worktree or the engineer directory |
 | adr-2026-09-06-inbound-intake-trust-boundary#D10 | task | task-11 | `checkOutcomeCoverage` reports a row whose quote is not the sanitized staged bullet as an outcome gap distinguishable from a missing row, and normalizes presentation only so a correctly authored row still passes |
 | adr-2026-09-06-inbound-intake-trust-boundary#D9 | no-change | none | The decision excludes build privilege; no task touches `--dangerously-skip-permissions`, `execution/claude-provider.ts`, `execution/session.ts`, or self-host containment. |
@@ -365,12 +368,12 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 | Story 4 negative: Given a set of pending envelopes, when they are sanitized, then `claimUnblocked` returns the identical ordered set of `sourceRef`s it returned for the unsanitized set. | 7 | "`claimUnblocked` returns the identical ordered `sourceRef` list for sanitized and unsanitized pending sets" | diff-local |
 | Story 4 negative: Given an envelope from a source that sets no `inbound` field (a chat-origin idea), when `parseEnvelope` runs, then the envelope is accepted with `inbound` undefined and no error. | 6 | "yields `undefined` when absent" | diff-local |
 | Story 4 negative: Given an envelope whose `inbound` field is malformed (for example `neutralizations` is a string), when `parseEnvelope` runs, then the field is dropped and the envelope is otherwise accepted, so a bad telemetry field never blocks a claim. | 6 | "drops a malformed value without throwing" | diff-local |
-| Story 5 happy: Given a claim record with a non-empty `inbound`, when `compose worktree --source-ref` creates the per-idea worktree, then `<worktree>/.pipeline/intake-events.jsonl` contains one `intake_inbound_sanitized` record with `sourceRef`, `neutralizations`, `digest`, and `ts`, in the same shape `EventPersister` writes. | 9 | "holds one `intake_inbound_sanitized` line with `sourceRef`, `neutralizations`, `digest`, and `ts`" | diff-local |
+| Story 5 happy: Given a claim record with a non-empty `inbound`, when `compose worktree --source-ref` creates the per-idea worktree, then the CLI emits `intake_inbound_sanitized` on a live `ConductorEventEmitter` and `<worktree>/.pipeline/events.jsonl` contains one such record with `sourceRef`, `neutralizations`, `digest`, and `ts`, written by `EventPersister`. | 9 | "holds one `intake_inbound_sanitized` record with `sourceRef`, `neutralizations`, `digest`, and `ts`" | diff-local |
 | Story 5 happy: Given the new event type, when the engine compiles, then `EVENT_SINKS` declares it `{ render: true, persist: true, audit: false, otel: false }` and the renderer prints a one-line summary when the event reaches a live emitter. | 8 | "`EVENT_SINKS.intake_inbound_sanitized` is `{ render: true, persist: true, audit: false, otel: false }`" | diff-local |
 | Story 5 negative: Given a claim record with an empty neutralization list, when the worktree is created, then a record is still appended with an empty list, so absence of alteration is also recorded. | 9 | "including when the neutralization list is empty" | diff-local |
-| Story 5 negative: Given a chat-origin idea with no `sourceRef`, when the worktree is created, then no intake-events record is written and no file is created. | 9 | "no file is written for an idea without `sourceRef`" | diff-local |
-| Story 5 negative: Given the worktree's `.pipeline/` directory cannot be written, when the append fails, then worktree creation still succeeds and the failure is reported on stderr rather than thrown. | 9 | "an unwritable `.pipeline/` directory still yields a successful worktree result with the failure on stderr" | diff-local |
-| Story 5 negative: Given two worktrees created for two different ideas, when both append, then each writes only its own `<worktree>/.pipeline/intake-events.jsonl` and neither touches the engineer directory or `.pipeline/events.jsonl`. | 9 | "two worktrees each write only their own ledger and neither the engineer directory nor `.pipeline/events.jsonl` gains a record" | diff-local |
+| Story 5 negative: Given a chat-origin idea with no `sourceRef`, when the worktree is created, then no `intake_inbound_sanitized` event is emitted and no such record appears in `<worktree>/.pipeline/events.jsonl`. | 9 | "no `intake_inbound_sanitized` record is written for an idea without `sourceRef`" | diff-local |
+| Story 5 negative: Given the worktree's `.pipeline/` directory cannot be written, when persistence fails, then worktree creation still succeeds and the failure is reported on stderr rather than thrown. | 9 | "an unwritable `.pipeline/` directory still yields a successful worktree result with the failure on stderr" | diff-local |
+| Story 5 negative: Given two worktrees created for two different ideas, when both emit, then each record lands only in its own `<worktree>/.pipeline/events.jsonl` and neither touches the engineer directory nor any sidecar ledger. | 9 | "each worktree's record lands only in its own `.pipeline/events.jsonl` and no sidecar ledger is created" | diff-local |
 | Story 6 happy: Given a claimed issue whose `## Desired outcome` bullets contain a directive-shaped bullet, when the worktree is created, then `.pipeline/intake-outcomes.md` carries the neutralized bullet and the `Source-Ref:` line, and no raw copy of the bullet exists anywhere under the worktree or the engineer directory. | 10 | "`.pipeline/intake-outcomes.md` carries the neutralized bullet and `Source-Ref:` line after poll → claim → worktree" | diff-local |
 | Story 6 happy: Given a spec authored against those staged bullets, when `land` runs the coherence gate, then every `outcome-N` row matches the staged bullet text and the gate passes. | 11 | "`runCoherenceGate` passes when every `outcome-N` row matches the sanitized staged bullets" | diff-local |
 | Story 6 negative: Given staged outcomes derived from a sanitized body, when a coherence row quotes the raw (pre-neutralization) bullet, then the gate rejects it as an unmatched outcome, confirming the sanitized text is the single authority. | 11 | "a row quoting the raw pre-neutralization bullet is rejected as an unmatched outcome" | diff-local |
