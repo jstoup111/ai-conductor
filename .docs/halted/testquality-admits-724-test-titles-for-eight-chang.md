@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-07T23:41:59.431Z
 Slug: testquality-admits-724-test-titles-for-eight-chang
 Class: needs-human
 Halting step: unknown
