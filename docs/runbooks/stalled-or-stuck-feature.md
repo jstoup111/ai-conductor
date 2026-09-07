@@ -1253,6 +1253,16 @@ completion evidence. If the run halts instead, use the stated refusal: an unread
 an unavailable post-admission commit boundary, or a task-status re-stage failure needs repair before
 the feature resumes. Do not clear a halt merely to retry unchanged state.
 
+A halt reading `remediation produced no dispatchable build work; the implicated task(s) are already
+evidence-complete` on a feature that plainly has an open obligation used to mean the obligation was
+being ignored: repair state was keyed on `engine-state.json`'s `activePlanPath`, which only the
+interactive plan step ever writes, so a daemon-dispatched, spec-landed feature had none and the old
+`Task:` trailer re-closed the re-staged task. Repair reads now resolve the plan through the same
+ladder the obligation writer uses (recorded path, then the slug-scoped convention). If the plan
+cannot be resolved at all while obligations exist, the refusal says `no active plan could be
+resolved` — restore the feature's `.docs/plans/<slug>.md` (its stem must equal the feature slug)
+rather than clearing the halt.
+
 **Verification:** the named task is dispatched in BUILD, and the repair closes only after current
 evidence and the governing review pass. A later, distinct finding creates a new repair boundary;
 restarting the conductor replays an admitted open repair rather than treating the earlier completion

@@ -232,6 +232,80 @@ describe('existing-task remediation re-stages work across the BUILD rewind', () 
     expect(heads).toContain(await git('rev-parse', 'HEAD'));
   });
 
+  it('dispatches the reopened owner on a daemon worktree that never recorded an activePlanPath', async () => {
+    // #1831/#2261 regression: a daemon-dispatched, spec-landed feature enters
+    // at build with DECIDE pre-done, so the interactive plan step's
+    // recordActivePlanPath never runs and engine-state.json carries no
+    // activePlanPath. The admitted obligation is still keyed by the
+    // convention-resolved plan, so a reader keyed on activePlanPath alone saw
+    // "no repair state", let the pre-boundary `Task: T1` trailer re-close the
+    // re-staged task, and the D1 no-op guard halted the feature as already
+    // evidence-complete instead of dispatching BUILD.
+    await writeFile(
+      join(projectRoot, '.pipeline', 'engine-state.json'),
+      JSON.stringify({}),
+    );
+    await git('init', '-q', '-b', 'main');
+    await writeFile(join(projectRoot, 'README.md'), 'baseline\n');
+    await git('add', 'README.md', '.docs/plans/plan-growth-existing-task-restage.md');
+    await git('commit', '-q', '-m', 'chore: baseline');
+    await git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    await writeFile(join(projectRoot, 'completed-task.txt'), 'the original task work\n');
+    await git('add', 'completed-task.txt');
+    await git('commit', '-q', '-m', 'feat: complete original task\n\nTask: T1');
+    await createProtectedArtifactSeal({
+      projectRoot,
+      baselineCommit: await git('rev-parse', 'HEAD'),
+    });
+
+    const dispatched: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        dispatched.push(step);
+        if (step === 'architecture_review_as_built') {
+          await writeFile(
+            join(projectRoot, '.pipeline', 'architecture-review-as-built.md'),
+            [
+              'Verdict: BLOCKED',
+              '',
+              '## Blocking Findings',
+              '| Finding | Class | Governing clause | Summary |',
+              '| --- | --- | --- | --- |',
+              '| ARCH-1 | REMEDIABLE | Task 1 | Repair the completed task |',
+            ].join('\n'),
+          );
+        } else if (step === 'remediate') {
+          await writeFile(
+            join(projectRoot, '.pipeline', 'remediation.json'),
+            JSON.stringify({
+              dispositions: [{
+                id: 'ARCH-1',
+                disposition: 'existing-task',
+                category: null,
+                rationale: 'Task 1 owns the current finding.',
+                tasks: [{ id: '1', title: 'Repair the completed task' }],
+              }],
+            }),
+          );
+        } else if (step === 'build') {
+          return { success: false, error: 'sentinel: stop after observing reopened BUILD dispatch' };
+        }
+        return { success: true };
+      }),
+    };
+
+    await makeConductor(
+      runner,
+      { architecture_review_as_built: { remediation: { enabled: true } } },
+      'architecture_review_as_built',
+    ).run();
+
+    expect(dispatched).toContain('build');
+    await expect(
+      readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8').catch(() => ''),
+    ).resolves.not.toContain('already evidence-complete');
+  });
+
   it('dispatches the bound authored task as pending without appending a replacement task', async () => {
     let pendingAtBuildDispatch = false;
     const dispatched: StepName[] = [];

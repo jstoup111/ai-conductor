@@ -7,6 +7,7 @@ import { execa } from 'execa';
 import {
   countResolvedTasks,
   resolveTaskIds,
+  resolveTaskIdsWithDiagnostics,
   haltMarkerExists,
   clearHaltMarker,
   haltMarkerPath,
@@ -406,6 +407,79 @@ describe('task-progress', () => {
       await writeFile(join(dir, 'repair.txt'), 'repair');
       await execa('git', ['add', '.'], { cwd: dir });
       await execa('git', ['commit', '-m', 'repair\n\nTask: T2'], { cwd: dir });
+
+      expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set(['2']));
+    });
+
+    it('keeps an open obligation authoritative when engine state records no activePlanPath', async () => {
+      // #1831/#2261: a daemon-dispatched feature never runs the plan step that
+      // records activePlanPath, so the obligation is keyed by the
+      // convention-resolved plan. Reading the repair section through
+      // activePlanPath alone reported "no repair state" and let the
+      // pre-boundary trailer re-close the re-staged task.
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'feature.md'), '### Task 2: repaired task\n');
+      await writeFile(
+        join(dir, '.pipeline', 'conduct-state.json'),
+        JSON.stringify({ feature_desc: 'feature' }),
+      );
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '2', status: 'completed' }],
+      }));
+      await writeFile(join(dir, 'old.txt'), 'old');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'old completion\n\nTask: 2'], { cwd: dir });
+      const boundary = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+
+      const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+      const admitted = await repairs.admitOrReplay('key-no-active-plan', {
+        id: 'reopened-round',
+        planPath: '.docs/plans/feature.md',
+        taskIds: ['T2'],
+        source: { findingId: 'finding-1', authority: 'build_review', instruction: 'repair it' },
+        baseline: { head: boundary, tree: 'tree-before-reopen', resolvedTaskIds: ['T2'] },
+      });
+      if (!admitted.ok) throw new Error(admitted.message);
+
+      const engineState = JSON.parse(
+        await readFile(join(dir, '.pipeline', 'engine-state.json'), 'utf-8'),
+      ) as Record<string, unknown>;
+      expect(engineState.activePlanPath).toBeUndefined();
+
+      expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set());
+    });
+
+    it('refuses the legacy union when obligations exist but no plan resolves', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '2', status: 'completed' }],
+      }));
+      const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+      const admitted = await repairs.admitOrReplay('key-unresolvable-plan', {
+        id: 'orphan-round',
+        planPath: '.docs/plans/feature.md',
+        taskIds: ['2'],
+        source: { findingId: 'finding-1', authority: 'build_review', instruction: 'repair it' },
+        baseline: { head: 'no-such-commit', tree: 'tree', resolvedTaskIds: [] },
+      });
+      if (!admitted.ok) throw new Error(admitted.message);
+
+      const resolution = await resolveTaskIdsWithDiagnostics(dir, ['2']);
+
+      expect(resolution.resolved).toEqual(new Set());
+      expect(resolution.unavailableReasons.get('2')).toContain('no active plan could be resolved');
+    });
+
+    it('leaves the legacy union alone when no obligation has ever been admitted', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({}));
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [{ id: '2', status: 'completed' }],
+      }));
 
       expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set(['2']));
     });
