@@ -53,10 +53,11 @@ async function reconcilePendingAdjustments(worktree: string): Promise<void> {
   for (const [gate, entry] of Object.entries(ledger.gates)) {
     const pending = entry.pendingAdjustment;
     if (!pending) continue;
-    const recorded = eventText.split('\n').some((line) => {
-      try { return (JSON.parse(line) as { adjustmentId?: unknown }).adjustmentId === pending.id; }
-      catch { return false; }
+    const records = eventText.split('\n').filter(Boolean).map((line) => {
+      try { return JSON.parse(line) as { adjustmentId?: unknown }; }
+      catch { throw new Error('authorization event ledger is unreadable'); }
     });
+    const recorded = records.some((event) => event.adjustmentId === pending.id);
     if (!recorded) await discardPendingKickbackBudgetAdjustment(worktree, gate, pending.id);
     else await applyKickbackBudgetAdjustment(worktree, gate, pending, defaults[gate] ?? 1);
   }

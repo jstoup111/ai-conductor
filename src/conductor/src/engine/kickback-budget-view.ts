@@ -18,8 +18,10 @@ export function kickbackBudgetView(entry: KickbackGateEntry | undefined, gate: s
   const consumed = remediation ? (entry?.laps ?? 0) : (entry?.cumulative ?? 0);
   return {
     gate, consumed, limit, remaining: Math.max(0, limit - consumed), latestReason: entry?.lastReason ?? '',
-    // A valid ledger with no history is a real empty history, not an unreadable one.
-    adjustments: entry?.adjustments ?? [],
+    // A missing entry is a fresh gate, hence an empty history.  An existing
+    // legacy entry without the recovery field cannot honestly be rendered as
+    // an empty audit trail.
+    adjustments: entry === undefined ? [] : (entry.adjustments ?? 'unavailable'),
     ...(remediation ? { laps: entry?.laps ?? 0, lapCap: limit } : { mechanicalFaults: entry?.mechanicalFaults ?? 0 }),
   };
 }
