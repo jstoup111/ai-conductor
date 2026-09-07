@@ -73,6 +73,26 @@ describe('renderDaemonEvent', () => {
     })).toEqual(['· ✋ manual_test status write refused: skipped → stale (restage ship tail after build kickback)']);
   });
 
+  it('renders every confidence-suppressed build-review finding', () => {
+    expect(lines({
+      type: 'build_review_outer_verdict', lapId: 'lap-current', rawVerdict: 'FAIL', effectiveVerdict: 'PASS',
+      suppressedFindings: [
+        { rubric: 'testQuality', findingId: 'sha256:one', confidence: 69, floor: 70 },
+        { rubric: 'testQuality', findingId: 'sha256:two', confidence: 40, floor: 50 },
+      ],
+    })).toEqual([
+      '· build_review suppressed testQuality:sha256:one (confidence 69 < floor 70)',
+      '· build_review suppressed testQuality:sha256:two (confidence 40 < floor 50)',
+    ]);
+  });
+
+  it('emits no build-review suppression lines when suppressed findings are absent or empty', () => {
+    expect(lines({ type: 'build_review_outer_verdict', lapId: 'lap-current', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' })).toEqual([]);
+    expect(lines({
+      type: 'build_review_outer_verdict', lapId: 'lap-current', rawVerdict: 'FAIL', effectiveVerdict: 'PASS', suppressedFindings: [],
+    })).toEqual([]);
+  });
+
   it('renders tail diagnostics without source record contents', () => {
     expect(lines({
       type: 'pipeline_tail_diagnostic', reason: 'malformed-line',

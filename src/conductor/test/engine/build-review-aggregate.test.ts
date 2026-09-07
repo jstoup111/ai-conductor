@@ -9,6 +9,7 @@ import {
   joinBuildReviewRubricOutcomes,
   parseBuildReviewAggregate,
 } from '../../src/engine/build-review-aggregate.js';
+import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 
 // Surviving coverage in test/engine/build-review-verdict.test.ts (gate wiring,
 // mechanical-fault lane, incomplete `results`) and test/build-review-compat.test.ts
@@ -29,6 +30,20 @@ const finding: BuildReviewFinding = {
   concernKind: 'test-insensitive', summary: 'The assertion passes against reverted production.', evidenceLocations: ['test/widget.test.ts:8'],
   anchor: { rubric: 'testQuality', locus: { path: 'test/widget.test.ts', contentHash: HASH, display: 'widget persists state' } },
 };
+
+function confidenceFinding(confidence: number | undefined, label: string): BuildReviewFinding {
+  return {
+    concernKind: 'test-insensitive', summary: `Finding ${label}`, evidenceLocations: [`test/${label}.test.ts:8`],
+    anchor: { rubric: 'testQuality', locus: { path: `test/${label}.test.ts`, contentHash: HASH, display: label } },
+    ...(confidence === undefined ? {} : { confidence }),
+  };
+}
+
+function findingId(value: BuildReviewFinding): string {
+  return canonicalizeBuildReviewFindingIdentity({
+    rubric: 'testQuality', contractVersion: 'v3', concernKind: value.concernKind, anchor: value.anchor,
+  })!.id;
+}
 
 function currentAggregate() {
   return joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: judged() } });
@@ -214,5 +229,45 @@ describe('build-review raw aggregate', () => {
     expect(parseBuildReviewAggregate({ ...aggregate, coverage: { testQuality: 'skipped' } })).toBeUndefined();
     expect(parseBuildReviewAggregate({ ...aggregate, findings: { testQuality: [] } })).toBeUndefined();
     expect(parseBuildReviewAggregate({ ...aggregate, reasons: [] })).toBeUndefined();
+  });
+
+  it('suppresses only findings below the configured confidence floor', () => {
+    const below = confidenceFinding(69, 'below-floor');
+    const at = confidenceFinding(70, 'at-floor');
+    const above = confidenceFinding(90, 'above-floor');
+    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: judged([below, at, above]) } });
+
+    expect(deriveEffectiveBuildReviewVerdict(aggregate, new Set(), [], { testQuality: 70 })).toMatchObject({
+      suppressedFindingIds: [findingId(below)],
+      unresolvedFindingIds: [findingId(at), findingId(above)],
+    });
+  });
+
+  it('passes when every finding is suppressed and never suppresses an unscored finding', () => {
+    const lower = confidenceFinding(20, 'lower');
+    const low = confidenceFinding(69, 'low');
+    const unscored = confidenceFinding(undefined, 'unscored');
+    const allSuppressed = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: judged([lower, low]) } });
+    const withUnscored = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: judged([lower, low, unscored]) } });
+
+    expect(deriveEffectiveBuildReviewVerdict(allSuppressed, new Set(), [], { testQuality: 70 })).toMatchObject({
+      rawVerdict: 'FAIL', verdict: 'PASS', unresolvedFindingIds: [], suppressedFindingIds: [findingId(lower), findingId(low)],
+    });
+    expect(deriveEffectiveBuildReviewVerdict(withUnscored, new Set(), [], { testQuality: 70 })).toMatchObject({
+      verdict: 'FAIL', suppressedFindingIds: [findingId(lower), findingId(low)], unresolvedFindingIds: [findingId(unscored)],
+    });
+  });
+
+  it('applies identical floor semantics through the dispositions entry point', () => {
+    const below = confidenceFinding(69, 'disposition-below');
+    const at = confidenceFinding(70, 'disposition-at');
+    const above = confidenceFinding(90, 'disposition-above');
+    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: judged([below, at, above]) } });
+    const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
+
+    expect(deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, [], [], { testQuality: 70 })).toMatchObject({
+      suppressedFindingIds: [findingId(below)],
+      unresolvedFindingIds: [findingId(at), findingId(above)],
+    });
   });
 });
