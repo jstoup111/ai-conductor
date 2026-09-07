@@ -324,20 +324,24 @@ async function patchEquivalentExclusion(
 
   const attribution = await git([
     'log',
-    '--format=%H',
+    '--format=%H%x00',
     '--name-only',
     '--no-renames',
+    '-z',
     `${mergeBaseSha}..HEAD`,
   ]);
-  if (attribution.exitCode !== 0) return undefined;
+  if (attribution.exitCode !== 0 || attribution.stdout === '') return undefined;
 
   const touchingCommits = new Map<string, Set<string>>();
-  const records = attribution.stdout.trimEnd().split(/\n{2,}/);
-  for (const record of records) {
-    if (record === '') continue;
-    const [sha, ...paths] = record.split('\n');
-    if (sha === undefined || !GIT_SHA.test(sha) || paths.some((path) => path === '' || path.startsWith(':'))) return undefined;
-    for (const path of paths) {
+  const tokens = attribution.stdout.split('\0');
+  for (let cursor = 0; cursor < tokens.length - 1;) {
+    const sha = tokens[cursor++];
+    // `%x00` terminates the SHA and `--name-only -z` terminates the pretty
+    // record, making the second empty token a required, unambiguous boundary.
+    if (sha === undefined || !GIT_SHA.test(sha) || tokens[cursor++] !== '') return undefined;
+    while (cursor < tokens.length - 1 && !(GIT_SHA.test(tokens[cursor]!) && tokens[cursor + 1] === '')) {
+      const path = tokens[cursor++]!.replace(/^\n/, '');
+      if (path === '' || path.startsWith(':')) return undefined;
       const commits = touchingCommits.get(path) ?? new Set<string>();
       commits.add(sha);
       touchingCommits.set(path, commits);

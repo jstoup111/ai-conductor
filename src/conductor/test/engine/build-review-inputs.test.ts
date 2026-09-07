@@ -894,8 +894,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           result: { stdout: '- 1234567 replayed upstream patch\n+ 7654321 novel feature work\n' },
         },
         {
-          match: ['log', '--format=%H', '--name-only', '--no-renames', 'abc1234..HEAD'],
-          result: { stdout: '1234567\nsrc/replayed.ts\nsrc/also-replayed.ts\n\n7654321\nsrc/novel.ts\n' },
+          match: ['log', '--format=%H%x00', '--name-only', '--no-renames', '-z', 'abc1234..HEAD'],
+          result: { stdout: '7654321\0\0\nsrc/novel.ts\0\u0031' + '234567\0\0\nsrc/replayed.ts\0src/also-replayed.ts\0' },
         },
         { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/src/novel.ts b/src/novel.ts\n+novel\n' } },
       ]);
@@ -966,8 +966,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
         { match: ['cherry', '-v', 'origin/main', 'HEAD'], result: { stdout: '- 1234567 replayed upstream patch\n' } },
         {
-          match: ['log', '--format=%H', '--name-only', '--no-renames', 'abc1234..HEAD'],
-          result: { stdout: '1234567\n:(glob)*\n' },
+          match: ['log', '--format=%H%x00', '--name-only', '--no-renames', '-z', 'abc1234..HEAD'],
+          result: { stdout: '1234567\0\0\n:(glob)*\0' },
         },
         { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/:\(glob\)\* b/:\(glob\)\*\n+replayed\n' } },
       ]);
@@ -984,6 +984,30 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(calls.some((call) => call[0] === 'cherry')).toBe(true);
       expect(calls.some((call) => call[0] === 'log')).toBe(true);
       expect(inputs.patchEquivalentExclusion).toBeUndefined();
+    });
+
+    // Covers: task:2
+    it('keeps a path reachable only through a merge commit graded', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['cherry', '-v', 'origin/main', 'HEAD'], result: { stdout: '- 1234567 merge replay\n' } },
+        // `git log --name-only` deliberately emits no paths for a merge
+        // record, so it cannot establish safe path ownership for exclusion.
+        {
+          match: ['log', '--format=%H%x00', '--name-only', '--no-renames', '-z', 'abc1234..HEAD'],
+          result: { stdout: '1234567\0\0' },
+        },
+        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/merge-only.ts b/merge-only.ts\n+resolved in merge\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(calls.find((call) => call[0] === 'diff')).toEqual([
+        'diff', 'abc1234..HEAD', '--', '.',
+        ...MACHINERY_AUTHORED_PATHS.map((path) => `:(exclude)${path}`),
+      ]);
+      expect(inputs.diff).toContain('merge-only.ts');
     });
 
     // The engine appends its own `### Task rem-*` blocks to the approved plan
@@ -1710,5 +1734,140 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       // semantics on `BuildReviewInputs.fresh`.
       expect(result.fresh).toBe(false);
     });
+  });
+
+  describe('real local Git fixture (patch-equivalent stale-base window)', () => {
+    let dir: string;
+    let planPath: string;
+
+    async function git(...args: string[]): Promise<string> {
+      const { stdout } = await execFileAsync('git', ['-C', dir, ...args]);
+      return stdout.trim();
+    }
+
+    async function commit(message: string): Promise<void> {
+      await git('add', '-A');
+      await git('commit', '-m', message);
+    }
+
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), 'build-review-patch-equivalent-'));
+      planPath = join(dir, 'plan.md');
+      await writeFile(planPath, '# Plan\n\n### Task 2: patch-equivalent grading\n', 'utf-8');
+      await execFileAsync('git', ['init', '-b', 'main', dir]);
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await git('config', 'commit.gpgsign', 'false');
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await mkdir(join(dir, 'removed'), { recursive: true });
+      await writeFile(join(dir, 'base.txt'), 'base\n');
+      await writeFile(join(dir, 'removed/equivalent.ts'), 'remove upstream equivalent\n');
+      await writeFile(join(dir, 'removed/novel.ts'), 'remove novel\n');
+      await commit('initial base');
+
+      await git('checkout', '-b', 'feature/patch-equivalent');
+      await writeFile(join(dir, 'equivalent.ts'), 'already upstream\n');
+      await writeFile(join(dir, 'shared.ts'), 'equivalent portion\n');
+      await writeFile(join(dir, 'test/equivalent.test.ts'), "// Covers: task:2\nit('equivalent test', () => {});\n");
+      await rm(join(dir, 'removed/equivalent.ts'));
+      await commit('replay upstream patch');
+
+      await writeFile(join(dir, 'novel.ts'), 'novel work\n');
+      await writeFile(join(dir, 'shared.ts'), 'equivalent portion\nnovel portion\n');
+      await writeFile(join(dir, 'test/novel.test.ts'), "// Covers: task:2\nit('novel test', () => {});\n");
+      await rm(join(dir, 'removed/novel.ts'));
+      await commit('novel feature work');
+
+      await writeFile(join(dir, 'variant.ts'), 'feature variant\n');
+      await commit('modified upstream variant');
+
+      await git('checkout', 'main');
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(join(dir, 'equivalent.ts'), 'already upstream\n');
+      await writeFile(join(dir, 'shared.ts'), 'equivalent portion\n');
+      await writeFile(join(dir, 'test/equivalent.test.ts'), "// Covers: task:2\nit('equivalent test', () => {});\n");
+      await rm(join(dir, 'removed/equivalent.ts'));
+      await commit('independently absorb replay');
+      await writeFile(join(dir, 'variant.ts'), 'upstream variant\n');
+      await commit('upstream variant');
+
+      await git('remote', 'add', 'origin', dir);
+      await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+      await git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+      await git('checkout', 'feature/patch-equivalent');
+    });
+
+    afterEach(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    function realGit(calls: string[][], failCherry = false): GitRunner {
+      return async (args) => {
+        calls.push(args);
+        if (failCherry && args[0] === 'cherry') return { exitCode: 1, stdout: '', stderr: 'probe failed' };
+        try {
+          const { stdout, stderr } = await execFileAsync('git', ['-C', dir, ...args]);
+          return { exitCode: 0, stdout, stderr };
+        } catch (err) {
+          const error = err as { code?: number; stdout?: string; stderr?: string };
+          return { exitCode: error.code ?? 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
+        }
+      };
+    }
+
+    async function assemble(calls: string[][], failCherry = false): Promise<BuildReviewFrozenInputs> {
+      return assembleInputs(realGit(calls, failCherry), planPath, {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' },
+        }),
+      });
+    }
+
+    // Covers: task:2
+    it('omits only equivalent paths from every derived graded input and uses read-only Git', async () => {
+      const calls: string[][] = [];
+      const inputs = await assemble(calls);
+      const projections = deriveBuildReviewRubricProjections({
+        lapId: parseBuildReviewLapId('patch-equivalent-fixture')!,
+        inputs,
+        testQuality: {
+          changedTestSelectors: inputs.sourceSnapshot.testQuality!.inScopeTests,
+          unresolvedMarkers: inputs.sourceSnapshot.testQuality!.unresolvedMarkers,
+          revertedProductionManifest: [], preflight: { classification: 'not-requested' },
+        },
+      });
+
+      expect(inputs.diff).not.toContain('equivalent.ts');
+      expect(inputs.diff).toContain('novel.ts');
+      expect(inputs.sourceSnapshot.changedTestTitles).toEqual([
+        { selector: 'test/novel.test.ts', titleText: 'novel test', staticExtractionFallback: false },
+      ]);
+      expect(inputs.sourceSnapshot.testQuality).toMatchObject({ inScopeTests: ['test/novel.test.ts'] });
+      expect(inputs.removalContext?.deletedFiles).toEqual(['removed/novel.ts']);
+      expect(projections.testQuality.changedFiles.map(({ path }) => path)).toEqual([
+        'novel.ts', 'removed/novel.ts', 'shared.ts', 'test/novel.test.ts', 'variant.ts',
+      ]);
+      expect(inputs.diff).toContain('shared.ts');
+      expect(inputs.diff).toContain('variant.ts');
+
+      const readOnlyCommands = new Set(['remote', 'symbolic-ref', 'rev-parse', 'ls-remote', 'merge-base', 'cherry', 'log', 'diff', 'show']);
+      expect(calls.every((args) => readOnlyCommands.has(args[0]!))).toBe(true);
+    });
+
+    it('fails closed to the mechanism-disabled graded diff when the probe fails', async () => {
+      const calls: string[][] = [];
+      const failedProbe = await assemble(calls, true);
+      const mergeBase = await git('merge-base', 'origin/main', 'HEAD');
+      const { stdout: disabledDiff } = await execFileAsync('git', [
+        '-C', dir, 'diff', `${mergeBase}..HEAD`, '--', '.',
+        ...MACHINERY_AUTHORED_PATHS.map((path) => `:(exclude)${path}`),
+      ]);
+
+      expect(failedProbe.diff).toBe(disabledDiff);
+      expect(failedProbe.diff).toContain('equivalent.ts');
+      expect(failedProbe.patchEquivalentExclusion).toBeUndefined();
+      expect(calls.find((args) => args[0] === 'log')).toBeUndefined();
+    });
+
   });
 });
