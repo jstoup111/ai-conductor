@@ -904,7 +904,9 @@ export function checkOrphanTasks(
 
     const detail = citedStoryIds.length > 0
       ? `Unbindable **Story:** reference: ${citedStoryIds.join(', ')}. Accepted spellings: story-N, Story N, bare N, epic-N.`
-      : undefined;
+      : !isSupportingType && (storyLineRaw === null || storyLineRaw.length === 0)
+        ? 'The story-reference line is absent.'
+        : undefined;
     gaps.push({ gapId: `task-${task.id}`, title: task.title, detail });
   }
 

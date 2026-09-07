@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:5
 // Test: coherence artifact parser (coherence-validator.ts)
 //
 // Covers parseCoherenceArtifact(text | null):
@@ -9,6 +9,7 @@
 //   - three distinct error kinds, never collapsed into one generic error
 // Covers checkOrphanTasks(storiesText, planText):
 //   - unbindable cited story references name the cited id and accepted spellings
+//   - absent and empty story-reference lines name their absence without inventing an id
 
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -1316,6 +1317,48 @@ describe('checkOrphanTasks', () => {
     expect(result.reason).toBe('orphan-task');
     expect(result.gaps).toHaveLength(1);
     expect(result.gaps[0].gapId).toBe('task-6');
+  });
+
+  it.each([
+    [
+      'has no **Story:** line',
+      `### Task 8: Missing story line
+**Type:** happy-path
+**Files:** src/missing-story-line.ts`,
+      'task-8',
+      'Missing story line',
+    ],
+    [
+      'has an empty **Story:** line',
+      `### Task 9: Empty story line
+**Story:**
+**Type:** happy-path
+**Files:** src/empty-story-line.ts`,
+      'task-9',
+      'Empty story line',
+    ],
+  ])('reports that the story-reference line is absent when a task %s', (_shape, task, gapId, title) => {
+    const result = validateCoherence({
+      rows: [],
+      outcomeBullets: [],
+      prdText: null,
+      storiesText: STORIES_TEXT,
+      planText: `# Plan
+
+${task}
+`,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const orphanGap = result.gaps.find((gap) => gap.layer === 'orphan-task');
+    expect(orphanGap).toEqual({
+      layer: 'orphan-task',
+      gapId,
+      artifact: 'plan',
+      item: `${title} — The story-reference line is absent.`,
+    });
+    expect(result.report).toContain(orphanGap?.item ?? '');
   });
 });
 
