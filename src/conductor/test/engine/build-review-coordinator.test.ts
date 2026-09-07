@@ -179,7 +179,7 @@ describe("build-review coordinator: registered dispatch", () => {
     });
     // The settled empty scope publishes its counts on the same event as a judged
     // settlement, so no-candidate laps are observable on the ordinary event path.
-    const emitted = emit.mock.calls.map(([event]) => event as { type: string });
+    const emitted = emit.mock.calls.map((call) => (call as unknown as unknown[])[0] as { type: string });
     expect(emitted.filter((event) => event.type === 'build_review_scope_summary')).toEqual([
       {
         type: 'build_review_scope_summary', rubric: 'testQuality', lapId: 'lap-current',
