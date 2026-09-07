@@ -1,5 +1,6 @@
 import type { ConductorEvent } from '../types/index.js';
 import { ConductorEventEmitter, type EventHandler } from './events.js';
+import { isForwardedFromFeature } from '../engine/event-persister.js';
 import type { UIRenderer, UISubscriber, UIEventHandler } from './types.js';
 
 export type { UISubscriber, UIEventHandler } from './types.js';
@@ -58,6 +59,12 @@ export class TerminalSubscriber implements UISubscriber {
     for (const type of eventTypes) {
       const handler: EventHandler = async (event) => {
         await this.onRender(event);
+        // A forwarded event has ALREADY been rendered, tagged, by its
+        // feature-scoped listeners (see beginFeatureRun in daemon-cli.ts).
+        // The daemon-wide `onRender` honours that marker and returns early;
+        // this second sink must honour it too, or every feature gate verdict
+        // prints a second, untagged copy in the daemon pane.
+        if (isForwardedFromFeature(event)) return;
         if (
           event.type === 'halt_marker_write_failed'
           || event.type === 'renderer_error'
