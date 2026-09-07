@@ -133,6 +133,13 @@ describe('remediation case store', () => {
       ...CASE_STATE,
       cases: [{ ...CASE_STATE.cases[0], sources: [CASE_STATE.cases[0].sources[0], CASE_STATE.cases[0].sources[0]] }],
     }, 'malformed-state'],
+    ['two suppression entries sharing one finding id', {
+      ...CASE_STATE,
+      suppressions: [
+        { findingId: 'finding-1', rubric: 'testQuality', summary: 'First copy.', confidence: 40, floor: 70, lastSeenLap: 'lap-first' },
+        { findingId: 'finding-1', rubric: 'testQuality', summary: 'Second copy.', confidence: 45, floor: 70, lastSeenLap: 'lap-second' },
+      ],
+    }, 'malformed-state'],
   ])('fails closed for %s', async (_description, state, reason) => {
     const projectRoot = await createProjectRoot();
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });

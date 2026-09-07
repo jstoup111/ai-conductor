@@ -246,6 +246,85 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(judge).not.toHaveBeenCalled();
   });
 
+  it('refreshes one suppression through coordinator merge without pruning prior history or writing operator authority', async () => {
+    const root = await projectRoot();
+    const priorFindingId = 'finding-from-an-earlier-lap';
+    const firstLap = {
+      findingId,
+      rubric: 'testQuality',
+      summary: 'Initial low-confidence finding.',
+      confidence: 40,
+      floor: 70,
+      lastSeenLap: 'lap-suppression-first',
+    } as const;
+    const refreshed = {
+      findingId,
+      rubric: 'testQuality',
+      summary: 'Refreshed low-confidence finding.',
+      confidence: 55,
+      floor: 70,
+      lastSeenLap: 'lap-suppression-second',
+    } as const;
+    const retained = {
+      findingId: priorFindingId,
+      rubric: 'testQuality',
+      summary: 'A prior suppression absent from this lap.',
+      confidence: 35,
+      floor: 70,
+      lastSeenLap: 'lap-earlier',
+    } as const;
+
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => { throw new Error('suppressed finding must not reach the judge'); }),
+      suppressions: [firstLap, retained],
+      suppressedFindingIds: new Set([findingId]),
+    })).resolves.toMatchObject({ ok: true, route: 'pass' });
+
+    const secondLapAggregate = joinBuildReviewRubricOutcomes({
+      lapId: 'lap-suppression-second' as never,
+      snapshotDigest: 'snapshot-suppression-second',
+      results: {
+        testQuality: {
+          kind: 'judged', rubric: 'testQuality', lapId: 'lap-suppression-second' as never, snapshotDigest: 'snapshot-suppression-second', contractVersion: 'v3', verdict: 'FAIL',
+          findings: [
+            {
+              concernKind: 'test-insensitive', summary: 'The changed test is insensitive.', evidenceLocations: ['test/example.test.ts:1'],
+              anchor: { rubric: 'testQuality', locus: { path: 'test/example.test.ts', contentHash: 'sha256:fixture', display: 'example test' } },
+            },
+            {
+              concernKind: 'test-insensitive', summary: 'An unrelated changed test is insensitive.', evidenceLocations: ['test/unrelated.test.ts:1'],
+              anchor: { rubric: 'testQuality', locus: { path: 'test/unrelated.test.ts', contentHash: 'sha256:unrelated', display: 'unrelated test' } },
+            },
+          ],
+        },
+      },
+    });
+    const unrelatedSource = projectBuildReviewAggregateSources(secondLapAggregate)![1]!;
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => ({
+        mode: 'case-v1', domain: 'build_review',
+        sourceOutcomes: [{ sourceId: buildReviewAdjudicationSourceId(unrelatedSource), outcome: 'acted', caseRef: 'case-unrelated' }],
+        cases: [{
+          caseRef: 'case-unrelated', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'The unrelated test needs an assertion.',
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the unrelated test' }] },
+        }],
+      })),
+      aggregate: secondLapAggregate,
+      suppressions: [refreshed],
+      suppressedFindingIds: new Set([findingId]),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    const persisted = await new RemediationCaseStore(root, feature).read();
+    expect(persisted).toMatchObject({
+      ok: true,
+      state: { suppressions: expect.arrayContaining([refreshed, retained]) },
+    });
+    if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
+    expect(persisted.state.suppressions?.filter((entry) => entry.findingId === findingId)).toEqual([refreshed]);
+    await expect(access(join(root, '.pipeline/build-review-dispositions.json'))).rejects.toThrow();
+  });
+
   it.each([
     ['at entry', 0],
     ['before dispatch', 1],
