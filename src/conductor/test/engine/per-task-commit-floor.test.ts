@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import {
+  composeContainmentAdvisoryOutput,
   runContainmentFloor,
   renderContainmentFloorReport,
 } from '../../src/engine/per-task-commit-floor.js';
@@ -402,5 +403,36 @@ describe('containment floor', () => {
       if (prior === undefined) delete process.env.CONDUCT_ENGINE_COMMIT;
       else process.env.CONDUCT_ENGINE_COMMIT = prior;
     }
+  });
+});
+
+describe('composeContainmentAdvisoryOutput', () => {
+  const advisoryLines = [
+    'Advisory: containment check unresolved; hook state is unavailable.',
+    'Advisory: containment-floor: hook-events ledger is unrecorded.',
+  ];
+
+  it.each([
+    ['a passing review', true, 'Advisory: containment check unresolved; hook state is unavailable.\nAdvisory: containment-floor: hook-events ledger is unrecorded.\n\nreview passed'],
+    ['a failing review', false, 'review failed\nwith a recognizable reason\n\nAdvisory: containment check unresolved; hook state is unavailable.\nAdvisory: containment-floor: hook-events ledger is unrecorded.'],
+  ])('puts advisories on the correct side of %s', (_caseName, success, expected) => {
+    const output = composeContainmentAdvisoryOutput(
+      success ? 'review passed' : 'review failed\nwith a recognizable reason',
+      advisoryLines,
+      success,
+    );
+
+    expect(output).toBe(expected);
+    expect(output.startsWith(success ? advisoryLines[0]! : 'review failed')).toBe(true);
+  });
+
+  it.each([true, false])('returns review output byte-for-byte when advisories are absent (%s)', (success) => {
+    expect(composeContainmentAdvisoryOutput('review\noutput\n', [], success)).toBe('review\noutput\n');
+  });
+
+  it.each([true, false])('handles empty review output (%s)', (success) => {
+    expect(composeContainmentAdvisoryOutput('', advisoryLines, success)).toBe(
+      success ? `${advisoryLines.join('\n')}\n\n` : `\n\n${advisoryLines.join('\n')}`,
+    );
   });
 });
