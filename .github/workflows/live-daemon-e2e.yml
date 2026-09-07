@@ -39,6 +39,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      DAEMON_E2E_LIVE_TOKEN_CAP: ${{ vars.DAEMON_E2E_LIVE_TOKEN_CAP || '300000' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -77,6 +78,7 @@ jobs:
             smoke_file: test/engine/daemon-e2e-live-codex.smoke.test.ts
     env:
       GH_TOKEN: ${{ github.token }}
+      DAEMON_E2E_LIVE_TOKEN_CAP: ${{ vars.DAEMON_E2E_LIVE_TOKEN_CAP || '300000' }}
     steps:
       - name: Check live-provider credentials
         env:
