@@ -24,6 +24,7 @@ import {
   type RebaseResolver,
   type GitRunner,
   featureCommitsPreserved,
+  formatFeatureCommitPreservationRejection,
   isBranchCurrent,
   rebaseStateActive,
   conflictedFiles,
@@ -485,13 +486,11 @@ export async function runAcceptanceGuards(
 
   // Guard 3: all feature commits (by subject) must be preserved
   const preserved = await featureCommitsPreserved(git, baseRef, subjectsBefore);
-  if (!preserved) {
-    const displaySubjects = subjectsBefore.slice(0, 3).join(', ');
-    const more = subjectsBefore.length > 3 ? `... (+${subjectsBefore.length - 3} more)` : '';
+  if (preserved.kind === 'rejected') {
     return {
       ok: false,
       guard: 'featureCommitsPreserved',
-      reason: `feature commit(s) lost during resolution: expected ${displaySubjects}${more}`,
+      reason: formatFeatureCommitPreservationRejection(preserved),
     };
   }
 

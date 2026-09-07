@@ -880,6 +880,32 @@ export type SupersessionVerdict =
     path: string | null;
   };
 
+export type FeatureCommitPreservationVerdict =
+  | { kind: 'preserved' }
+  | { kind: 'rejected'; missing: FeatureCommitPreservationFailure[] };
+
+export interface FeatureCommitPreservationFailure {
+  subject: string;
+  sha?: string;
+  cause: Extract<SupersessionVerdict, { kind: 'rejected' }>['cause']
+    | 'could not resolve pre-rebase commit';
+  path: string | null;
+}
+
+/** Render missing feature-commit evidence for the two acceptance-guard callers. */
+export function formatFeatureCommitPreservationRejection(
+  verdict: Extract<FeatureCommitPreservationVerdict, { kind: 'rejected' }>,
+): string {
+  const limit = 3;
+  const entries = verdict.missing.slice(0, limit).map(({ subject, sha, cause, path }) => {
+    const identity = sha ? ` (${sha.slice(0, 12)}; ` : ' (';
+    const evidence = path ? `${cause}: ${path}` : cause;
+    return `${subject}${identity}${evidence})`;
+  });
+  const more = verdict.missing.length > limit ? `; ... (+${verdict.missing.length - limit} more)` : '';
+  return `feature commit(s) lost during resolution: ${entries.join('; ')}${more}`;
+}
+
 /** Count each line of `content`, trimmed. Blank lines are not counted. */
 function lineCounts(content: string): Map<string, number> {
   const counts = new Map<string, number>();
@@ -998,25 +1024,31 @@ export async function supersededByBase(git: GitRunner, sha: string): Promise<Sup
  * the tip git recorded before replaying) and put through {@link supersededByBase}
  * before the guard reports loss. A subject that cannot be resolved fails closed.
  *
- * Empty `subjectsBefore` → true (nothing to lose).
+ * Empty `subjectsBefore` → preserved (nothing to lose).
  */
 export async function featureCommitsPreserved(
   git: GitRunner,
   baseRef: string,
   subjectsBefore: string[],
-): Promise<boolean> {
-  if (subjectsBefore.length === 0) return true;
+): Promise<FeatureCommitPreservationVerdict> {
+  if (subjectsBefore.length === 0) return { kind: 'preserved' };
   const r = await git(['log', '--format=%s', `${baseRef}..HEAD`]);
-  if (r.exitCode !== 0) return false;
+  if (r.exitCode !== 0) return {
+    kind: 'rejected',
+    missing: subjectsBefore.map((subject) => ({ subject, cause: 'could not resolve pre-rebase commit', path: null })),
+  };
   const currentSubjects = new Set(
     r.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0),
   );
   const missing = subjectsBefore.filter((s) => !currentSubjects.has(s));
-  if (missing.length === 0) return true;
+  if (missing.length === 0) return { kind: 'preserved' };
 
   // NUL-delimited so a subject containing whitespace still splits correctly.
   const pre = await git(['log', '--format=%H%x00%s', `${baseRef}..ORIG_HEAD`]);
-  if (pre.exitCode !== 0) return false;
+  if (pre.exitCode !== 0) return {
+    kind: 'rejected',
+    missing: missing.map((subject) => ({ subject, cause: 'could not resolve pre-rebase commit', path: null })),
+  };
   const shaBySubject = new Map<string, string>();
   for (const line of pre.stdout.split('\n')) {
     const [sha, subject] = line.split('\0');
@@ -1025,12 +1057,19 @@ export async function featureCommitsPreserved(
     if (!shaBySubject.has(subject.trim())) shaBySubject.set(subject.trim(), sha.trim());
   }
 
+  const rejected: FeatureCommitPreservationFailure[] = [];
   for (const subject of missing) {
     const sha = shaBySubject.get(subject);
-    if (!sha) return false;
-    if ((await supersededByBase(git, sha)).kind !== 'superseded') return false;
+    if (!sha) {
+      rejected.push({ subject, cause: 'could not resolve pre-rebase commit', path: null });
+      continue;
+    }
+    const supersession = await supersededByBase(git, sha);
+    if (supersession.kind === 'rejected') {
+      rejected.push({ subject, sha, cause: supersession.cause, path: supersession.path });
+    }
   }
-  return true;
+  return rejected.length === 0 ? { kind: 'preserved' } : { kind: 'rejected', missing: rejected };
 }
 
 /**
@@ -1143,11 +1182,12 @@ export async function resolveRebaseConflicts(
     }
 
     // FR-9: every pre-rebase feature commit subject must still be present.
-    if (!(await featureCommitsPreserved(git, onto, subjectsBefore))) {
+    const preserved = await featureCommitsPreserved(git, onto, subjectsBefore);
+    if (preserved.kind === 'rejected') {
       return {
         kind: 'conflict_halt',
         conflicts,
-        reason: 'rebase resolution dropped feature commit(s)',
+        reason: formatFeatureCommitPreservationRejection(preserved),
       };
     }
 
