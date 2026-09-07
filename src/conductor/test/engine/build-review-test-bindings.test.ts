@@ -84,6 +84,28 @@ it('unmarked', () => {});
     ]);
   });
 
+  it('keeps a duplicate sibling suite marker within its lexical suite occurrence', () => {
+    const result = bindings(`
+// Covers: S2.1
+describe('dup', () => {
+  it('child', () => {});
+});
+describe('dup', () => {
+  it('child', () => {});
+});
+`);
+
+    expect(result.bindings).toMatchObject([
+      {
+        kind: 'bound',
+        target: { titleChain: ['dup', 'child'], occurrence: 0 },
+        marker: { reference: { kind: 'criterion', id: 'S2.1' } },
+        owner: { kind: 'suite', declaration: { titleChain: ['dup'], occurrence: 0 } },
+      },
+      { kind: 'unbound', target: { titleChain: ['dup', 'child'], occurrence: 1 } },
+    ]);
+  });
+
   it('leaves a marker separated from a declaration by a statement as uncertain rather than lending it onward', () => {
     const result = bindings(`
 // Covers: S2.1
