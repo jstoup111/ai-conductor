@@ -1,4 +1,4 @@
-// Covers: S1.1, S1.2, S1.3, S1.4, S1.5, S2.1, S2.2, S2.3, S2.4
+// Covers: S1.1, S1.2, S1.3, S1.4, S1.5, S2.1, S2.2, S2.3, S2.4, task:1
 /**
  * Acceptance (RED) spec for the gated rebase-conflict resolution sub-loop.
  *
@@ -38,6 +38,7 @@ import {
   resolveRebaseConflicts,
   runGatedRebaseResolution,
   featureCommitsPreserved,
+  supersededByBase,
   type GitRunner,
   type ResolutionAttempt,
   type RebaseOutcome,
@@ -660,6 +661,92 @@ describe('engine/rebase — featureCommitsPreserved (real git)', () => {
   it('fails closed when the vanished commit cannot be resolved against the pre-rebase tip', async () => {
     const ok = await featureCommitsPreserved(makeGitRunner(repo), 'main', ['feat: never existed']);
     expect(ok).toBe(false);
+  });
+});
+
+describe('engine/rebase — supersededByBase rejection evidence (real git)', () => {
+  let repo: string;
+  const g = (args: string[]) => execFile('git', args, { cwd: repo });
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'superseded-by-base-'));
+    await initTestRepo(repo);
+    await writeFile(join(repo, 'a.ts'), 'base\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'init']);
+  });
+
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  it('reports an unreadable commit diff', async () => {
+    await expect(supersededByBase(makeGitRunner(repo), 'not-a-commit')).resolves.toEqual({
+      kind: 'rejected', cause: 'unreadable commit diff', path: null,
+    });
+  });
+
+  it('reports a binary commit diff with its path', async () => {
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'asset.bin'), Buffer.from([0, 1, 2]));
+    await g(['add', 'asset.bin']);
+    await g(['commit', '-q', '-m', 'feat: add binary asset']);
+    const { stdout: sha } = await g(['rev-parse', 'HEAD']);
+    await g(['checkout', '-q', 'main']);
+
+    await expect(supersededByBase(makeGitRunner(repo), sha.trim())).resolves.toEqual({
+      kind: 'rejected', cause: 'binary commit diff', path: 'asset.bin',
+    });
+  });
+
+  it('reports an empty commit diff', async () => {
+    await g(['checkout', '-q', '-b', 'feat']);
+    await g(['commit', '-q', '--allow-empty', '-m', 'feat: empty marker']);
+    const { stdout: sha } = await g(['rev-parse', 'HEAD']);
+    await g(['checkout', '-q', 'main']);
+
+    await expect(supersededByBase(makeGitRunner(repo), sha.trim())).resolves.toEqual({
+      kind: 'rejected', cause: 'empty commit diff', path: null,
+    });
+  });
+
+  it('reports a deletion whose file remains in the resulting tree', async () => {
+    await g(['checkout', '-q', '-b', 'feat']);
+    await g(['rm', '-q', 'a.ts']);
+    await g(['commit', '-q', '-m', 'feat: delete a']);
+    const { stdout: sha } = await g(['rev-parse', 'HEAD']);
+    await g(['checkout', '-q', 'main']);
+
+    await expect(supersededByBase(makeGitRunner(repo), sha.trim())).resolves.toEqual({
+      kind: 'rejected', cause: 'deleted file still present', path: 'a.ts',
+    });
+  });
+
+  it('reports added content absent from the resulting tree', async () => {
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'added.ts'), 'feature-only content\n');
+    await g(['add', 'added.ts']);
+    await g(['commit', '-q', '-m', 'feat: add content']);
+    const { stdout: sha } = await g(['rev-parse', 'HEAD']);
+    await g(['checkout', '-q', 'main']);
+
+    await expect(supersededByBase(makeGitRunner(repo), sha.trim())).resolves.toEqual({
+      kind: 'rejected', cause: 'added content absent', path: 'added.ts',
+    });
+  });
+
+  it('reports removed content that reappeared relative to the commit parent', async () => {
+    await writeFile(join(repo, 'a.ts'), 'keep\nremoved\n');
+    await g(['commit', '-q', '-am', 'seed removable content']);
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'keep\n');
+    await g(['commit', '-q', '-am', 'feat: remove content']);
+    const { stdout: sha } = await g(['rev-parse', 'HEAD']);
+    await g(['checkout', '-q', 'main']);
+
+    await expect(supersededByBase(makeGitRunner(repo), sha.trim())).resolves.toEqual({
+      kind: 'rejected', cause: 'removed content reappeared', path: 'a.ts',
+    });
   });
 });
 

@@ -870,6 +870,16 @@ interface DroppedFileEdit {
   removed: string[];
 }
 
+export type SupersessionVerdict =
+  | { kind: 'superseded' }
+  | {
+    kind: 'rejected';
+    cause: 'unreadable commit diff' | 'binary commit diff' | 'empty commit diff'
+      | 'deleted file still present' | 'added content absent'
+      | 'unreadable parent file' | 'removed content reappeared';
+    path: string | null;
+  };
+
 /** Count each line of `content`, trimmed. Blank lines are not counted. */
 function lineCounts(content: string): Map<string, number> {
   const counts = new Map<string, number>();
@@ -881,18 +891,26 @@ function lineCounts(content: string): Map<string, number> {
 }
 
 /** Split a `git show -U0` body into one record per file it touched. */
-function parseDroppedCommitDiff(diff: string): DroppedFileEdit[] | null {
+function parseDroppedCommitDiff(diff: string): DroppedFileEdit[] | { binaryPath: string | null } {
   const edits: DroppedFileEdit[] = [];
   let current: DroppedFileEdit | null = null;
+  let currentPath: string | null = null;
   let inHunk = false;
   for (const line of diff.split('\n')) {
     if (line.startsWith('diff --git ')) {
       current = { oldPath: null, newPath: null, added: [], removed: [] };
       edits.push(current);
+      currentPath = /^diff --git a\/.+ b\/(.+)$/.exec(line)?.[1] ?? null;
       inHunk = false;
       continue;
     }
-    if (line.startsWith('Binary files') || line.startsWith('GIT binary patch')) return null;
+    if (line.startsWith('Binary files')) {
+      const target = /^Binary files a\/.+ and b\/(.+) differ$/.exec(line)?.[1];
+      return { binaryPath: target ?? current?.newPath ?? current?.oldPath ?? currentPath };
+    }
+    if (line.startsWith('GIT binary patch')) {
+      return { binaryPath: current?.newPath ?? current?.oldPath ?? currentPath };
+    }
     if (current === null) continue;
     if (line.startsWith('@@')) {
       inHunk = true;
@@ -919,23 +937,23 @@ function parseDroppedCommitDiff(diff: string): DroppedFileEdit[] | null {
   return edits;
 }
 
-async function supersededByBase(git: GitRunner, sha: string): Promise<boolean> {
+export async function supersededByBase(git: GitRunner, sha: string): Promise<SupersessionVerdict> {
   // -U0: hunk bodies carry only the commit's own +/- lines, no context.
   const show = await git(['show', '--format=', '--unified=0', '--no-renames', sha]);
-  if (show.exitCode !== 0) return false;
+  if (show.exitCode !== 0) return { kind: 'rejected', cause: 'unreadable commit diff', path: null };
   const edits = parseDroppedCommitDiff(show.stdout);
-  if (edits === null) return false;
+  if (!Array.isArray(edits)) return { kind: 'rejected', cause: 'binary commit diff', path: edits.binaryPath };
   // A commit with no diff offers no evidence that its intent survives. Absence
   // of evidence is not supersession: fail closed and let the HALT stand.
-  if (edits.length === 0) return false;
+  if (edits.length === 0) return { kind: 'rejected', cause: 'empty commit diff', path: null };
 
   for (const edit of edits) {
     if (edit.newPath === null) {
       // The commit deleted the file: its intent survives only if HEAD has no
       // such file either.
-      if (edit.oldPath === null) return false;
+      if (edit.oldPath === null) return { kind: 'rejected', cause: 'unreadable commit diff', path: null };
       const stillThere = await git(['cat-file', '-e', `HEAD:${edit.oldPath}`]);
-      if (stillThere.exitCode === 0) return false;
+      if (stillThere.exitCode === 0) return { kind: 'rejected', cause: 'deleted file still present', path: edit.oldPath };
       continue;
     }
 
@@ -943,14 +961,14 @@ async function supersededByBase(git: GitRunner, sha: string): Promise<boolean> {
     if (head.exitCode !== 0) {
       // HEAD dropped the file. Anything the commit added is gone with it; a
       // pure deletion's intent is satisfied.
-      if (edit.added.length > 0) return false;
+      if (edit.added.length > 0) return { kind: 'rejected', cause: 'added content absent', path: edit.newPath };
       continue;
     }
     const headCounts = lineCounts(head.stdout);
 
     // Additions must be present at least as often as the commit introduced them.
     for (const [line, count] of lineCounts(edit.added.join('\n'))) {
-      if ((headCounts.get(line) ?? 0) < count) return false;
+      if ((headCounts.get(line) ?? 0) < count) return { kind: 'rejected', cause: 'added content absent', path: edit.newPath };
     }
 
     // Removals are judged against the commit's OWN parent, not by bare presence:
@@ -959,13 +977,13 @@ async function supersededByBase(git: GitRunner, sha: string): Promise<boolean> {
     if (edit.removed.length === 0) continue;
     const parentPath = edit.oldPath ?? edit.newPath;
     const parent = await git(['show', `${sha}^:${parentPath}`]);
-    if (parent.exitCode !== 0) return false;
+    if (parent.exitCode !== 0) return { kind: 'rejected', cause: 'unreadable parent file', path: parentPath };
     const parentCounts = lineCounts(parent.stdout);
     for (const [line, count] of lineCounts(edit.removed.join('\n'))) {
-      if ((headCounts.get(line) ?? 0) > (parentCounts.get(line) ?? 0) - count) return false;
+      if ((headCounts.get(line) ?? 0) > (parentCounts.get(line) ?? 0) - count) return { kind: 'rejected', cause: 'removed content reappeared', path: edit.newPath };
     }
   }
-  return true;
+  return { kind: 'superseded' };
 }
 
 /**
@@ -1010,7 +1028,7 @@ export async function featureCommitsPreserved(
   for (const subject of missing) {
     const sha = shaBySubject.get(subject);
     if (!sha) return false;
-    if (!(await supersededByBase(git, sha))) return false;
+    if ((await supersededByBase(git, sha)).kind !== 'superseded') return false;
   }
   return true;
 }
