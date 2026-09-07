@@ -1,3 +1,4 @@
+// Covers: task:1
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -46,6 +47,14 @@ function noExternalIo(): Pick<ConductorOptions, 'gh' | 'git' | 'runGh'> {
     git: vi.fn(async () => result),
     runGh: vi.fn(async () => result),
   };
+}
+
+async function terminalMarkerNames(root: string): Promise<string[]> {
+  return Promise.all(
+    ['HALT', 'HALT.class'].map(async (name) =>
+      readFile(join(root, '.pipeline', name), 'utf8').then(() => name).catch(() => undefined),
+    ),
+  ).then((names) => names.filter((name): name is string => name !== undefined));
 }
 
 describe('operator park boundary contract', () => {
@@ -186,12 +195,41 @@ describe('operator park boundary contract', () => {
 
     const result = await conductor.run();
 
-    expect({ result, runnerCalls: run.mock.calls }).toEqual({
+    expect({ result, runnerCalls: run.mock.calls, terminalMarkers: await terminalMarkerNames(projectRoot) }).toEqual({
       result: {
         kind: 'operator-parked',
         boundary: { kind: 'pre-first-unit' },
       },
       runnerCalls: [],
+      terminalMarkers: [],
+    });
+  });
+
+  it('parks before the first pending serial unit when the boundary reader rejects', async () => {
+    await writeState(statePath, stateWithPending('memory'));
+    const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => { throw new Error('park boundary unreadable'); },
+    });
+
+    const result = await conductor.run();
+
+    expect({ result, runnerCalls: run.mock.calls, terminalMarkers: await terminalMarkerNames(projectRoot) }).toEqual({
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'pre-first-unit' },
+      },
+      runnerCalls: [],
+      terminalMarkers: [],
     });
   });
 

@@ -6695,6 +6695,7 @@ export class Conductor {
     const emitAcceptanceRed = (ev: Extract<Parameters<typeof this.events.emit>[0], { type: 'acceptance_red' }>) =>
       emitTracked(ev).catch(() => undefined);
     let lastSettledUnit: SchedulingUnitRef | undefined;
+    let parkedAtOperatorBoundary = false;
     const stopAtOperatorParkBoundary =
       async (): Promise<OperatorParkedTermination | undefined> => {
         if (
@@ -6718,6 +6719,7 @@ export class Conductor {
         });
         process.off('SIGINT', sigintHandler);
         process.off('SIGTERM', sigterm);
+        parkedAtOperatorBoundary = true;
         return { kind: 'operator-parked', boundary };
       };
     try {
@@ -12435,6 +12437,7 @@ export class Conductor {
       // (checkpoint quit, recovery REPL) and the daemon never reads their markers.
       if (
         this.daemon &&
+        !parkedAtOperatorBoundary &&
         !(await this.markerExists(DONE_MARKER)) &&
         !(await this.markerExists(LOOP_HALT_MARKER))
       ) {
