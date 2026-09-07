@@ -373,11 +373,6 @@ export class OtelVisualizer implements VisualizerPlugin {
     process.on('SIGTERM', this.sigHandler);
   }
 
-  /** Exposes the compile-checked routing surface for parity tests. */
-  handledEventTypes(): readonly OtelTracedEventType[] {
-    return Object.keys(this.eventHandlersByType) as OtelTracedEventType[];
-  }
-
   /**
    * Force-close open spans, then shut down both providers after their final
    * exports. Idempotent — safe to call from signal handlers or
