@@ -709,6 +709,47 @@ describe('engine/rebase — featureCommitsPreserved (real git)', () => {
     }
   });
 
+  it('states how many further missing subjects the bound omitted', () => {
+    const verdict = {
+      kind: 'rejected' as const,
+      missing: [1, 2, 3, 4, 5].map((n) => ({
+        subject: `feat: lost change ${n}`,
+        cause: 'added content absent' as const,
+        path: `lost-${n}.ts`,
+      })),
+    };
+
+    const rendered = formatFeatureCommitPreservationRejection(verdict);
+
+    expect(rendered).toBe(formatFeatureCommitPreservationRejection(verdict));
+    expect(rendered.split('\n')).toHaveLength(1);
+    expect(rendered).toContain('feat: lost change 1');
+    expect(rendered).toContain('feat: lost change 2');
+    expect(rendered).toContain('feat: lost change 3');
+    expect(rendered).not.toContain('feat: lost change 4');
+    expect(rendered).not.toContain('feat: lost change 5');
+    expect(rendered.indexOf('feat: lost change 1')).toBeLessThan(rendered.indexOf('feat: lost change 2'));
+    expect(rendered.indexOf('feat: lost change 2')).toBeLessThan(rendered.indexOf('feat: lost change 3'));
+    expect(rendered).toContain('; and 2 more missing subject(s) omitted');
+  });
+
+  it('states no omitted count when every missing subject fits inside the bound', () => {
+    const verdict = {
+      kind: 'rejected' as const,
+      missing: [1, 2, 3].map((n) => ({
+        subject: `feat: lost change ${n}`,
+        cause: 'added content absent' as const,
+        path: `lost-${n}.ts`,
+      })),
+    };
+
+    const rendered = formatFeatureCommitPreservationRejection(verdict);
+
+    expect(rendered).toContain('feat: lost change 3');
+    expect(rendered).not.toContain('omitted');
+    expect(rendered).not.toContain('more');
+  });
+
   it('fails closed on a vanished empty commit, which offers no evidence of supersession', async () => {
     await g(['checkout', '-q', '-b', 'feat']);
     await g(['commit', '-q', '--allow-empty', '-m', 'feat: empty marker commit']);

@@ -918,7 +918,8 @@ export function formatFeatureCommitPreservationRejection(
     const evidence = path ? `${cause}: ${path}` : cause;
     return `${subject}${identity}${evidence})`;
   });
-  const more = verdict.missing.length > limit ? `; ... (+${verdict.missing.length - limit} more)` : '';
+  const omitted = verdict.missing.length - limit;
+  const more = omitted > 0 ? `; and ${omitted} more missing subject(s) omitted` : '';
   return `feature commit(s) lost during resolution: ${entries.join('; ')}${more}`;
 }
 
