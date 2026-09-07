@@ -1193,9 +1193,10 @@ describe('engine/conductor', () => {
     expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
     expect(haltReasons).toEqual([
       'build_review cumulative kickback cap exceeded:\n' +
-      'Kickback budget (build_review): 6/5 consumed; 0 remaining\n' +
-      'Latest reason: [testQuality] test-insensitive\n[testQuality] test-insensitive\n' +
-      'Adjustment history: none\nMechanical faults: 0',
+        'Kickback budget (build_review): 6/5 consumed; 0 remaining\n' +
+        'Latest reason: [testQuality] test-insensitive\n[testQuality] test-insensitive\n' +
+        'Adjustment history: unavailable\n' +
+        'Mechanical faults: 0',
     ]);
   });
 
@@ -1256,9 +1257,10 @@ describe('engine/conductor', () => {
 
     expect(haltReasons).toEqual([
       'build_review cumulative kickback cap exceeded:\n' +
-      'Kickback budget (build_review): 6/5 consumed; 0 remaining\n' +
-      'Latest reason: [testQuality] test-insensitive\n[testQuality] test-insensitive\n' +
-      'Adjustment history: none\nMechanical faults: 0',
+        'Kickback budget (build_review): 6/5 consumed; 0 remaining\n' +
+        'Latest reason: [testQuality] test-insensitive\n[testQuality] test-insensitive\n' +
+        'Adjustment history: unavailable\n' +
+        'Mechanical faults: 0',
     ]);
     expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toContain('cumulative kickback cap');
   });
