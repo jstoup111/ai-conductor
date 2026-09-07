@@ -431,8 +431,8 @@ async function pinScopeEvidence(
         candidate.affectedGroup.sharedSources.forEach(addSourceReference);
         candidate.affectedGroup.unchangedDescendantBodies.forEach(addSourceReference);
       }
-      if (candidate.affectedDependency) {
-        for (const dependency of [...candidate.affectedDependency.chain, ...candidate.affectedDependency.changedSources]) {
+      if (candidate.affectedDependencies) {
+        for (const effect of candidate.affectedDependencies) for (const dependency of [...effect.chain, ...effect.changedSources]) {
           add({ source: dependency.source });
         }
       }
