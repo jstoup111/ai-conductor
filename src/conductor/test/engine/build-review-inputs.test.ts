@@ -1,4 +1,4 @@
-// Covers: task:3, task:8
+// Covers: task:1, task:3, task:8
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -162,6 +162,25 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       await expect(assembleBuildReviewInputs(git, planPath)).rejects.toMatchObject({
         name: 'BuildReviewSourceReadError', kind: 'required-read-failed', path: 'plan.md',
+      } satisfies Partial<BuildReviewSourceReadError>);
+    });
+
+    it('rejects an unreadable plan-selected stories blob rather than assembling empty stories authority', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: '' } },
+        {
+          match: ['show', 'head123:plan.md'],
+          result: { stdout: '**Stories:** .docs/stories/selected.md\n\n### Task 1: source handling\n' },
+        },
+        { match: ['show', 'head123:.docs/stories/selected.md'], result: { exitCode: 128, stderr: 'x'.repeat(2_000) } },
+        { match: ['ls-tree', '-z', 'head123', '--', '.docs/stories/selected.md'], result: { stdout: '100644 blob selected\t.docs/stories/selected.md\0' } },
+      ]);
+
+      await expect(assembleBuildReviewInputs(git, planPath)).rejects.toMatchObject({
+        name: 'BuildReviewSourceReadError',
+        path: '.docs/stories/selected.md',
       } satisfies Partial<BuildReviewSourceReadError>);
     });
 

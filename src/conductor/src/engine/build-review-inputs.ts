@@ -259,10 +259,10 @@ async function engineAppendedPlanExclusion(
     source.readAtOptional(mergeBaseSha, pathspec),
     source.readAtOptional(headSha, pathspec),
   ]);
-  if (base === undefined || head === undefined) return [];
+  if (base.kind === 'absent' || head.kind === 'absent') return [];
   return isEngineAppendedRemediationAmendment(
-    Buffer.from(base, 'utf-8'),
-    Buffer.from(head, 'utf-8'),
+    Buffer.from(base.value, 'utf-8'),
+    Buffer.from(head.value, 'utf-8'),
     recorded,
   )
     ? [`:(exclude)${pathspec}`]
@@ -331,9 +331,8 @@ async function snapshotTestQualityScope(
   planBody: string,
 ): Promise<BuildReviewTestQualityScope> {
   const storiesPath = activeStoriesPath(planRepoPath, planBody);
-  const storiesBody = storiesPath === undefined
-    ? ''
-    : await source.readOptional(storiesPath) ?? '';
+  const storiesRead = storiesPath === undefined ? undefined : await source.readOptional(storiesPath);
+  const storiesBody = storiesRead?.kind === 'present' ? storiesRead.value : '';
   // Criterion ids are positional — derived from each story's Given/When/Then
   // bullets — because the stories skill never writes literal `S<n>.<m>` ids
   // into the artifact body. A literal grep here would resolve nothing but
@@ -671,11 +670,12 @@ async function pinScopeEvidence(
 
   const records = await Promise.all([...references.values()].map(async (reference) => {
     const commitSha = reference.source.side === 'base' ? mergeBaseSha : source.headSha;
-    const sourceText = await source.readAtOptional(commitSha, reference.source.fileName);
+    const sourceRead = await source.readAtOptional(commitSha, reference.source.fileName);
     // A missing optional base side (for example an added helper) has no
     // invented empty payload. The concrete candidate still retains its source
     // reference and later validation can classify unavailable evidence.
-    if (sourceText === undefined) return undefined;
+    if (sourceRead.kind === 'absent') return undefined;
+    const sourceText = sourceRead.value;
     const region = reference.region ?? { start: 0, end: sourceText.length };
     const content = sourceText.slice(region.start, region.end);
     return Object.freeze({
@@ -724,15 +724,19 @@ async function snapshotTypedTestScope(
   for (const path of paths) {
     const basePath = renamedFrom.get(path) ?? path;
     const changed = changeByPath.get(path);
-    const [baseText, headText] = await Promise.all([
+    const [baseRead, headRead] = await Promise.all([
       changed && changed.kind !== 'A'
-        ? source.readAtRequired(mergeBaseSha, basePath)
+        ? source.readAtRequired(mergeBaseSha, basePath).then((value) => ({ kind: 'present' as const, value }))
         : source.readAtOptional(mergeBaseSha, basePath),
-      changedPaths.has(path) ? source.readRequired(path) : source.readOptional(path),
+      changedPaths.has(path)
+        ? source.readRequired(path).then((value) => ({ kind: 'present' as const, value }))
+        : source.readOptional(path),
     ]);
     // A plan Files hint whose pinned HEAD source is absent is evidence of
     // nothing. Changed paths are required frozen evidence and reject above.
-    if (headText === undefined) continue;
+    if (headRead.kind === 'absent') continue;
+    const baseText = baseRead.kind === 'present' ? baseRead.value : undefined;
+    const headText = headRead.value;
     const input: BuildReviewTestScopeInput = {
       base: { source: { fileName: basePath, bytes: Buffer.from(baseText ?? '', 'utf-8') }, storiesText: storiesBody, planText: planBody },
       head: { source: { fileName: path, bytes: Buffer.from(headText, 'utf-8') }, storiesText: storiesBody, planText: planBody },
@@ -748,7 +752,10 @@ async function snapshotTypedTestScope(
 
   const dependencies = await discoverBuildReviewScopeDependencies({
     reader: {
-      read: (side, path) => source.readAtOptional(side === 'base' ? mergeBaseSha : source.headSha, path),
+      read: async (side, path) => {
+        const result = await source.readAtOptional(side === 'base' ? mergeBaseSha : source.headSha, path);
+        return result.kind === 'present' ? result.value : undefined;
+      },
     },
     changedTestPaths: initial.filter((file) => file.scope.changedDeclarations.length > 0).map((file) => file.path),
     planText: planBody,
@@ -920,9 +927,8 @@ export async function assembleBuildReviewInputs(
 
   const removalContext = deriveBuildReviewRemovals(diffResult.stdout);
   const storiesPath = activeStoriesPath(planRepoPath, planBody);
-  const storiesBody = storiesPath === undefined
-    ? ''
-    : await source.readOptional(storiesPath) ?? '';
+  const storiesRead = storiesPath === undefined ? undefined : await source.readOptional(storiesPath);
+  const storiesBody = storiesRead?.kind === 'present' ? storiesRead.value : '';
   const typedTestScope = await snapshotTypedTestScope(
     source,
     changes,
