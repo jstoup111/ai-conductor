@@ -26,7 +26,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -45,6 +45,7 @@ import {
   type RebaseOutcome,
   runTier1,
   conflictedFiles,
+  writeHalt,
 } from '../../src/engine/rebase.js';
 
 const execFile = promisify(execFileCb);
@@ -540,6 +541,12 @@ describe('engine/rebase — runGatedRebaseResolution (shared gate, real git)', (
       kind: 'conflict_halt',
       resumeShape: 'completed-rebase',
     });
+    if (out.kind === 'conflict_halt') {
+      await writeHalt(repo, out.conflicts, out.reason, undefined, out.resumeShape);
+    }
+    const halt = await readFile(join(repo, '.pipeline/HALT'), 'utf8');
+    expect(halt).toContain('Review the completed rebase and restore any missing feature content.');
+    expect(halt).not.toContain('git rebase --continue');
   });
 
   it('resolver throws → caught as {resolved:false}, short-circuits to HALT, onSettled(exhausted)', async () => {

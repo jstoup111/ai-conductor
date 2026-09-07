@@ -936,6 +936,28 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
   });
 
+  it('completed rebase that drops feature content writes completed-rebase recovery at the re-kick halt site', async () => {
+    await initConflictRepo();
+    await writeSentinel();
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      resolveAttempts: 3,
+      resolveConflict: async () => {
+        await git('rebase', '--skip');
+        return { resolved: true };
+      },
+    });
+
+    const halt = await readFile(join(dir, HALT_MARKER), 'utf8');
+    expect(res).toBe('halted');
+    expect(halt).toContain('Review the completed rebase and restore any missing feature content.');
+    expect(halt).not.toContain('git rebase --continue');
+  });
+
   // Task 12: Rekick call site ships capability-absent (fail-closed).
   // When a play-forward rebase touches code paths, the gates whose surface the
   // delta hits (build, manual_test) get unconditionally invalidated kickback
