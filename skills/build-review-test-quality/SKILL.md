@@ -10,7 +10,7 @@ phase: build
 
 Judge the Test Quality concern for one engine-managed `build_review` rubric branch. This is a
 judgement-only contract: the engine owns scope selection, evidence assembly, result validation,
-finding identity, dispositions, and the outer gate verdict.
+finding identity, the stamped result envelope, and the outer gate verdict.
 
 ## Input projection (v3)
 
@@ -57,12 +57,13 @@ supplied in-scope set are not this rubric's concern.
 
 ## Result contract (v3)
 
-Return exactly one JSON object with a required `findings` array and an optional
-`counterfactualSensitivity` field, plus a required `scopeResolutions` array. `scopeResolutions` has exactly one disposition for every supplied
-fallback candidate; it is `[]` when none are supplied. The engine owns the `judged` envelope and stamps its kind,
-rubric, contract version, lap identity, and snapshot identity after validating this
-findings-plus-optional-field payload. Return every independent finding; an empty array means no Test
-Quality concern was found. Each finding contains:
+Return exactly one provider payload JSON object with a required `findings` array, required
+`scopeResolutions` array, and optional `counterfactualSensitivity` field. `scopeResolutions` has
+exactly one source-grounded resolution for every supplied fallback candidate; it is `[]` when none
+are supplied. Do not return `kind`, `rubric`, `contractVersion`, `lapId`, `snapshotDigest`, or
+`verdict`: the engine stamps that `judged` envelope identity after validating this provider payload.
+Return every independent finding; an empty array means no Test Quality concern was found. Each
+provider payload has this shape:
 
 ```json
 {
@@ -117,8 +118,9 @@ The only disposition statuses are `resolved`, `out-of-scope`, or `indeterminate`
 - an actionable summary; and
 - concrete evidence locations from the supplied projection.
 
-The engine validates anchors, canonicalizes identities, and decides the branch and outer verdict.
-This skill does not read, write, apply, or decide a disposition.
+The engine validates anchors, canonicalizes identities, stamps the envelope, and decides the branch
+and outer verdict. This skill reports candidate resolutions only from supplied frozen authority; it
+does not read, write, or apply a disposition.
 
 ## Verification
 
@@ -131,4 +133,5 @@ This skill does not read, write, apply, or decide a disposition.
 `indeterminate`; resolved entries repeat only pinned source and obligation evidence.
 - [ ] `supports` is used only for an executed-example failure on reverted production or a
       reverted-production collection/load failure.
-- [ ] Findings omit tests outside the supplied in-scope projection and omit dispositions.
+- [ ] Findings omit tests outside the supplied in-scope projection; candidate resolutions use only
+      supplied frozen authority.

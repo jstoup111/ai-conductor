@@ -204,6 +204,13 @@ export function deriveBuildReviewScopeIncompleteFault(result: BuildReviewJudgedR
   ).join('; ').slice(0, 2_048);
   return Object.freeze({ rubric: result.rubric, reason: 'scope-incomplete', candidates: Object.freeze(candidates), detail });
 }
+/**
+ * The provider returns only this payload. The dispatch boundary stamps the
+ * judged envelope from the frozen projection before validation or persistence.
+ */
+export function renderBuildReviewProviderPayloadShape(_rubric: BuildReviewRubricId): string {
+  return '{ findings: [{ concernKind: "test-insensitive", summary: string, evidenceLocations: string[], anchor: { rubric: "testQuality", locus: { path: string, contentHash: string, display: string } } }], scopeResolutions: [{ candidateId: string, status: "resolved", sourceRegion: { path: string, startLine: number, endLine: number, contentHash: string, display: string }, obligationReferences: string[], associationReason: string } | { candidateId: string, status: "out-of-scope", exclusionReason: string } | { candidateId: string, status: "indeterminate", missingEvidenceReason: string }], counterfactualSensitivity?: "supports" | "indeterminate" | "not-applicable" }';
+}
 export function renderBuildReviewJudgedResultShape(_rubric: BuildReviewRubricId): string { return '{ kind: "judged", rubric: "testQuality", lapId: string, snapshotDigest: string, contractVersion: "v3", findings: [{ concernKind: "test-insensitive", summary: string, evidenceLocations: string[], anchor: { rubric: "testQuality", locus: { path: string, contentHash: string, display: string } } }] }'; }
 const MAX_REJECTION_PROBLEMS = 6;
 function candidateScopeResolutionProblems(value: unknown, context: BuildReviewCandidateScopeResolutionContext): readonly string[] {
