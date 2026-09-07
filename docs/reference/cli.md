@@ -920,7 +920,13 @@ event is written, so an interrupted command is reconciled exactly once on the ne
 The daemon consumes a matching authorization on its next loop iteration; it does not wait for an
 unrelated base-branch advance. Supported gates are `build_review`, `prd_audit`, and
 `architecture_review_as_built`. Inspect always lists all three gates; JSON renders an empty
-`adjustments` array for a valid gate with no adjustment history.
+`adjustments` array for a valid gate with no adjustment history. Inspect also performs that
+reconciliation, so it is safe as the first command after an interrupted `raise` or `reset`.
+
+The eligible live halt class is per gate: `build_review`'s cumulative convergence cap halts
+`needs-human`, while the `prd_audit` and `architecture_review_as_built` remediation-lap caps halt
+`kickback-cap`. A `raise` or `reset` naming a gate whose live halt carries the other class is
+refused and changes nothing.
 
 ## `ai-conductor decide-grant`
 

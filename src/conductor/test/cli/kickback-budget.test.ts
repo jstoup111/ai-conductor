@@ -182,3 +182,65 @@ describe('kickback-budget inspect reconciles an interrupted adjustment at comman
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
   });
 });
+
+// Covers: task:15 — the recovery-eligible halt class is per gate. The two
+// remediation-append cap terminals write `kickback-cap` (adr-2026-08-25 D4,
+// preserved by the 2026-09-05 amendment scoping D1 to build_review), so a
+// command that accepted only `needs-human` made their recovery unreachable.
+describe('kickback-budget accepts each gate\'s own cap halt class', () => {
+  const remediationLedger = (gate: string) => ({
+    version: 1,
+    gates: {
+      [gate]: {
+        ...baseEntry, laps: 1,
+        capEvidence: { gate, consumed: 1, limit: 1, latestReason: 'lap cap reached (1/1)', haltGeneration: 'halt-1' },
+      },
+    },
+  });
+
+  const raise = async (fixture: { root: string }, gate: string): Promise<number> =>
+    dispatchKickbackBudgetCommand(
+      { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate, by: 1, rationale: 'one more lap', format: 'human' },
+      {
+        cwd: fixture.root, resolveMainRoot: async () => fixture.root, isInteractive: () => true,
+        resolveOperator: () => 'operator', print: () => {}, appendEvent: () => {},
+      },
+    );
+
+  it.each(['prd_audit', 'architecture_review_as_built'])(
+    'authorizes a raise on %s behind a kickback-cap halt',
+    async (gate) => {
+      const fixture = await makeFeature(remediationLedger(gate));
+      try {
+        await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted');
+        await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'kickback-cap');
+        expect(await raise(fixture, gate)).toBe(0);
+        const entry = JSON.parse(await readFile(join(fixture.worktree, '.pipeline', 'kickback-ledger.json'), 'utf8')).gates[gate];
+        expect(entry.effectiveLapCap).toBe(2);
+        expect(entry.laps).toBe(1);
+        expect(entry.resumeAuthorization.consumed).toBe(false);
+      } finally { await rm(fixture.root, { recursive: true, force: true }); }
+    },
+  );
+
+  it('still refuses a remediation gate whose live halt is needs-human', async () => {
+    const fixture = await makeFeature(remediationLedger('prd_audit'));
+    try {
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted');
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'needs-human');
+      await expectRefusalIsInert(fixture, { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'prd_audit', by: 1, rationale: 'evidence', format: 'human' }, 1);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('still refuses build_review behind a kickback-cap halt', async () => {
+    const fixture = await makeFeature({
+      version: 1,
+      gates: { build_review: { ...baseEntry, capEvidence: { gate: 'build_review', consumed: 6, limit: 5, latestReason: 'cap', haltGeneration: 'halt-1' } } },
+    });
+    try {
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted');
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'kickback-cap');
+      await expectRefusalIsInert(fixture, { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'build_review', by: 1, rationale: 'evidence', format: 'human' }, 1);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+});
