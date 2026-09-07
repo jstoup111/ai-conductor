@@ -16,12 +16,22 @@ export async function shellFiles(root: string, directory: string): Promise<strin
   return paths;
 }
 
-export async function checkInventory(root: string, modules: Record<string, Record<string, unknown>> = { 'git-hook-assets': gitHooks, 'session-hook-assets': sessionHooks }): Promise<InterpreterSourceFinding[]> {
+type GeneratedModules = Record<string, Record<string, unknown>>;
+type ModuleLoader = () => Promise<GeneratedModules>;
+
+export async function checkInventory(
+  root: string,
+  modules: GeneratedModules = { 'git-hook-assets': gitHooks, 'session-hook-assets': sessionHooks },
+  loadModules?: ModuleLoader,
+): Promise<InterpreterSourceFinding[]> {
   const assets = [...await shellFiles(root, 'bin'), ...await shellFiles(root, 'hooks')].sort();
   if (assets.length === 0) throw new Error('interpreter-source inventory is empty');
   const findings: InterpreterSourceFinding[] = [];
   for (const asset of assets) findings.push(...checkInterpreterSource(relative(root, join(root, asset)), await readFile(join(root, asset), 'utf8')));
-  for (const [moduleName, module] of Object.entries(modules)) {
+  // Keep module acquisition explicit so a load failure cannot be mistaken for
+  // an empty/safe generated-hook inventory.
+  const loadedModules = loadModules ? await loadModules() : modules;
+  for (const [moduleName, module] of Object.entries(loadedModules)) {
     const scripts = Object.entries(module).filter(([, value]) => typeof value === 'string');
     if (scripts.length === 0) throw new Error(`${moduleName} generated-hook inventory is empty`);
     for (const [exportName, value] of Object.entries(module)) {

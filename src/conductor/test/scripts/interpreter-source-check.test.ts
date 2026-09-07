@@ -38,10 +38,30 @@ describe('checkInterpreterSource', () => {
     ]);
   });
 
+  it.each([
+    ['positional parameter', 'node --eval="console.log($1)"'],
+    ['special parameter', 'node --eval="console.log($-)"'],
+    ['command substitution', 'python3 -c "print($(date))"'],
+    ['backtick substitution', 'node -e "console.log(`id`)"'],
+    ['multiline eval assignment', 'node --eval="\nconsole.log($VALUE)\n"'],
+  ])('rejects every expansion form in direct interpreter source: %s', (_name, text) => {
+    expect(checkInterpreterSource('forms.sh', text)).toEqual([
+      expect.objectContaining({ sourceName: 'forms.sh', line: 1, message: 'shell expansion in interpreter command source' }),
+    ]);
+  });
+
+  it('accepts safe multiline double and single quoted source without inventing a nested command', () => {
+    expect(checkInterpreterSource('safe-multiline.sh', "node -e \"\nconsole.log(process.argv[1])\n\" -- \"$VALUE\"\nnode -e '\n$LITERAL\n'\ncat <<'TEXT'\nnode -e \"$PHANTOM\"\nTEXT")).toEqual([]);
+  });
+
   it('tracks every queued heredoc and never scans a non-interpreter body as shell', () => {
     expect(checkInterpreterSource('queued.sh', "python3 - <<FIRST <<SECOND\nconstant\nFIRST\nprint($VALUE)\nSECOND\ncat <<'TEXT'\nnode -e \"$PHANTOM\"\nTEXT")).toEqual([
       expect.objectContaining({ line: 4, message: 'shell expansion in interpreter heredoc source' }),
     ]);
+  });
+
+  it('accepts fully and partially quoted heredoc delimiters while retaining later queued bodies', () => {
+    expect(checkInterpreterSource('quoted-queued.sh', "python3 <<'FIRST' <<\"SECOND\"\nprint($LITERAL)\nFIRST\nnode -e \"$PHANTOM\"\nSECOND")).toEqual([]);
   });
 
   it.each([
