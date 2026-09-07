@@ -4,6 +4,12 @@ spec_hash: 7e2aa9ad18fdccbcd62e72f0955a2acb9b2d8beaf609dbe163dc1a1d5e904952
 pr: https://github.com/jstoup111/ai-conductor/pull/2403
 shipped: 2026-09-07
 engine_version: 20260907T120758Z-4f8bdec36946
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "docs/reference/cli.md:555 — the `forget` reference-table row was rewritten to document the new flag, its comment-then-close behavior, and its exit-1 refusal path; no plan task lists this file"
+    accepted: true
 ---
 
 ## Cost
