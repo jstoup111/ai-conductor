@@ -192,6 +192,7 @@ describe('live daemon E2E provider parity (#1264)', () => {
 
     // Cost: one shared cap policy governs every leg, honors the env override,
     // and rejects an over-cap spend even when the leg itself already failed.
+    expect(runBody.DEFAULT_LIVE_E2E_TOKEN_CAP).toBe(300000);
     expect(runBody.resolveLiveE2ETokenCap({ DAEMON_E2E_LIVE_TOKEN_CAP: '123' })).toBe(123);
     expect(runBody.resolveLiveE2ETokenCap({})).toBe(runBody.DEFAULT_LIVE_E2E_TOKEN_CAP);
     expect(() => runBody.assertTokenCap(11, 3, 10)).toThrow(/cap 10 exceeded.*observed 11.*unmetered results: 3/i);

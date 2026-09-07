@@ -86,9 +86,14 @@ via `test/fixtures/step-command-preflight.ts`. An unresolved skill fails before
 any provider dispatch or token spend. Each leg asserts the same successful
 terminal state (`DONE`, with no `HALT` or park marker), fixture commit, and
 `Task: 1` trailer, and reports its observed spend under the shared
-`DAEMON_E2E_LIVE_TOKEN_CAP` (default `100000`). On failure, both use the shared
+`DAEMON_E2E_LIVE_TOKEN_CAP` (default `300000`). On failure, both use the shared
 `dumpPipelineDiagnostics` helper to print the daemon log, halt reason, task
 status, task evidence, and park markers.
+
+CI sources that cap from the repository Actions variable named
+`DAEMON_E2E_LIVE_TOKEN_CAP`, falling back to `300000` when the variable is
+unset. Change the repository variable to recalibrate the release gate without
+editing the workflow; the same value continues to govern both provider legs.
 
 Each leg needs its matching binary and credential: `claude` with
 `CLAUDE_CODE_OAUTH_TOKEN`, or `codex` with `CODEX_API_KEY`. Set

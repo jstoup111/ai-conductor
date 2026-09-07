@@ -102,7 +102,7 @@ export interface LiveE2ERunBodyDependencies {
   readonly afterRunDaemon?: (worktreeDir: string) => Promise<void>;
 }
 
-export const DEFAULT_LIVE_E2E_TOKEN_CAP = 100000;
+export const DEFAULT_LIVE_E2E_TOKEN_CAP = 300000;
 
 /** Every descriptor enters through this shared cap policy. */
 export function resolveLiveE2ETokenCap(environment: NodeJS.ProcessEnv = process.env): number {
