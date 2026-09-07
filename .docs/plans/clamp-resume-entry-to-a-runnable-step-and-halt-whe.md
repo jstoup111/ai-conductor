@@ -12,6 +12,14 @@ Three bounded tasks deliver #1717 by reconciling the resume entry index against 
 
 ## Technical Approach
 
+> **Amended 2026-09-07 (operator decision, as-built AB-1):** the "blocked outcome" paragraph below
+> is superseded. Because every production-built registry preserves the earlier-prerequisite
+> invariant, the blocked branch was an unreachable production rung. The resolver is total (runnable
+> index only), the resume branch has no blocked handling, and the loop's existing gate refusal owns
+> reporting when a candidate's gate still refuses. Task 1 Done-when 2 and Task 3 are rewritten
+> accordingly; Task 3 becomes the removal of the dead branch.
+
+
 The defect is a conditional, not a missing predicate. In `Conductor.run`'s resume branch the candidate index comes from `findResumeIndex`; the verdict clamp and the backward prerequisite walk then run only inside the `earliestGateIdx < startIndex` guard. When the earliest verdict-unsatisfied gate is not strictly before the candidate — the two predicates agree, or the verdict read threw and no clamp is available — the candidate is handed to the loop unreconciled. The loop's very next act is `checkGate` on that step; when an earlier prerequisite is `pending`, `failed`, or `in_progress` the gate refuses, and because the existing halt at that site fires only when no unsatisfied prerequisite is `pending`, the run returns with no DONE or HALT marker. The daemon backstop parks it, and every re-kick reproduces the identical exit because nothing about the derivation changed. The in-loop tail selector already avoids this by applying the same walk unconditionally to its selection.
 
 Add one exported resolution helper beside the existing backward walk in the same engine module: given the resolved step list, the state, and a candidate index, it returns either a runnable entry index or a blocked outcome carrying the wanted step and each unsatisfied prerequisite paired with its recorded status. It introduces no third authority — it calls the existing bounded backward walk and then the existing entry-gate check, both of which read state only. A candidate past the last step is a terminal no-op resume and stays runnable, never blocked.
@@ -53,7 +61,7 @@ Tests follow the local test-design rules and the acceptance file that already ow
 
 **Done when:**
 1. The entry resolver returns the candidate unchanged when its gate passes, and returns the earliest dispatchable earlier prerequisite when the gate refuses.
-2. The entry resolver returns a blocked outcome naming the wanted step and each unsatisfied prerequisite with its recorded status when no earlier prerequisite can resolve the gate.
+2. The entry resolver returns the candidate itself when no earlier prerequisite can resolve the gate; it exposes no blocked outcome type.
 3. The entry resolver treats a candidate past the last step as a runnable no-op rather than a blocked outcome.
 4. The resolver introduces no satisfaction predicate of its own: it consumes only the existing bounded backward walk and the existing entry-gate check.
 
@@ -76,21 +84,20 @@ Tests follow the local test-design rules and the acceptance file that already ow
 4. A resume whose verdict directory cannot be read reconciles from step state alone and dispatches a step instead of ending with zero dispatches.
 5. A daemon resume reconciled onto an ungranted DECIDE-phase step ends on the existing decide-entry halt text with no step dispatched.
 
-### Task 3: Halt with the named blockage when no entry can be dispatched
+### Task 3: Remove the unreachable blocked-resume halt branch
 **Story:** Story 2
 **Type:** negative-path
 **Files:** src/conductor/src/engine/conductor.ts, src/conductor/test/engine/resume-verdict-clamp.test.ts
 **Dependencies:** 1
 
 **Steps:**
-1. Write failing tests for the halt path: invoke the resume branch's blocked handling with a blocked resolution and assert the halt marker file names the wanted step and each blocking prerequisite with its recorded status, that the needs-human class is used, that the loop-halt event carries the same reason, and that no step is dispatched; add assertions to a dispatchable resume fixture and to a past-the-end converged fixture that no halt marker file exists afterward.
-2. Verify the new cases fail (RED).
-3. Implement the blocked branch in the resume entry: render one reason sentence naming the step the resume wanted and each unsatisfied prerequisite with its recorded status, write it through the existing needs-human halt marker helper, emit it through the existing loop-halt event, and return before the loop starts. Reuse the neighboring halt paths' shape; add no new event type, marker file, or state field.
-4. Verify the new cases pass (GREEN), then run the repository's narrowest invocation for this test file plus the typecheck target that covers test files, and commit.
+1. Delete the resume branch's blocked handling (the private blocked-halt helper and its call site) and the resolver's blocked outcome variant, so the resolver returns a runnable index in every case per amended Task 1 Done-when 2.
+2. Remove the acceptance test that drove the blocked halt through the private helper; keep the dispatchable and past-the-end fixtures and add one acceptance case that a candidate whose gate still refuses after the walk reaches the loop's existing gate refusal (existing `gate_blocked` event / needs-human halt text), driven through the real conductor entry point.
+3. Run the repository's narrowest invocation for this test file plus the typecheck target that covers test files, and commit.
 
 **Done when:**
-1. A blocked entry resolution writes a needs-human halt marker naming the wanted step and each blocking prerequisite with its recorded status.
-2. A blocked entry resolution dispatches no step and ends the run through that halt rather than through a return that leaves no terminal marker.
+1. No blocked-resume halt helper, blocked outcome type, or resume-specific blocked marker text remains in the engine, and the resolver's return type is a runnable index.
+2. A resume whose candidate gate still refuses after the backward walk is reported by the loop's existing gate refusal with no resume-specific branch involved.
 3. A dispatchable resume fixture and a past-the-end converged resume fixture each leave no halt marker behind.
 
 ## Coverage Check
@@ -102,8 +109,8 @@ Tests follow the local test-design rules and the acceptance file that already ow
 | Story 1 happy: Given a resumed feature whose state-derived entry step's own gate already passes, when the conductor resumes, then it enters that same step and re-runs no earlier resolved step. | 1, 2 | "A resume whose derived entry gate already passes enters that same index and re-runs no earlier resolved step." | diff-local |
 | Story 1 negative: Given a resumed feature with no readable gate verdicts and an entry step its gate refuses, when the conductor resumes, then it reconciles the entry from step state alone and dispatches a step whose gate passes. | 2 | "A resume whose verdict directory cannot be read reconciles from step state alone and dispatches a step instead of ending with zero dispatches." | diff-local |
 | Story 1 negative: Given a daemon resume whose reconciliation moves the entry back onto a DECIDE-phase step with no operator grant, when the conductor resumes, then it halts through the existing decide-entry disposition and dispatches nothing. | 2 | "A daemon resume reconciled onto an ungranted DECIDE-phase step ends on the existing decide-entry halt text with no step dispatched." | diff-local |
-| Story 2 happy: Given a resume whose entry gate is still unsatisfied after backward reconciliation, when the conductor resumes, then it writes a terminal needs-human halt whose text names the step it wanted and every unsatisfied prerequisite with that prerequisite's recorded status. | 1, 3 | "A blocked entry resolution writes a needs-human halt marker naming the wanted step and each blocking prerequisite with its recorded status." | diff-local |
-| Story 2 happy: Given that same resume, when the conductor resumes, then it dispatches no step and ends through that halt rather than through a return that leaves no terminal marker. | 3 | "A blocked entry resolution dispatches no step and ends the run through that halt rather than through a return that leaves no terminal marker." | diff-local |
+| Story 2 happy: Given a resume whose entry gate is still unsatisfied after backward reconciliation, when the conductor resumes, then it enters that candidate step and the loop's existing entry-gate refusal reports the unsatisfied prerequisites through its existing `gate_blocked` event and needs-human halt; no resume-specific halt branch runs. | 1, 3 | "A resume whose candidate gate still refuses after the backward walk is reported by the loop's existing gate refusal with no resume-specific branch involved." | Covered |
+| Story 2 happy: Given that same resume, when the conductor resumes, then it dispatches no step before the loop's gate refusal and leaves no resume-specific marker of its own. | 3 | "No blocked-resume halt helper, blocked outcome type, or resume-specific blocked marker text remains in the engine, and the resolver's return type is a runnable index." | Covered |
 | Story 2 negative: Given a resume whose reconciled entry gate passes, when the conductor resumes, then no halt marker is written for the entry decision. | 3 | "A dispatchable resume fixture and a past-the-end converged resume fixture each leave no halt marker behind." | diff-local |
 | Story 2 negative: Given a resume whose derived entry is past the last step because the feature already converged, when the conductor resumes, then no halt marker is written and no step is dispatched. | 1, 3 | "A dispatchable resume fixture and a past-the-end converged resume fixture each leave no halt marker behind." | diff-local |
 
