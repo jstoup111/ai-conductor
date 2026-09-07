@@ -414,6 +414,10 @@ export async function coordinateBuildReviewRubrics(
     : (typedScope.targets?.length ?? 0) > 0;
   const hasConcreteCandidates = (typedScope?.candidates?.length ?? 0) > 0;
   if (input.config.enabled && testQualityPolicy?.enabled && !hasEstablishedTargets && !hasConcreteCandidates) {
+    // An empty scope is still a settled scope assessment: publish its counts and
+    // unresolved reasons on the same event as every judged settlement, so a
+    // production-only refactor or pure move is observable rather than silent.
+    await emitScopeSummary(input.emit, input);
     await input.emit?.({
       type: "build_review_outer_verdict",
       lapId: input.lapId,

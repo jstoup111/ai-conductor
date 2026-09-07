@@ -177,6 +177,17 @@ describe("build-review coordinator: registered dispatch", () => {
       reason: 'test_quality_empty_scope',
       unresolvedMarkers: [{ selector: 'test/legacy-selector.test.ts', reference: 'S99.1' }],
     });
+    // The settled empty scope publishes its counts on the same event as a judged
+    // settlement, so no-candidate laps are observable on the ordinary event path.
+    const emitted = emit.mock.calls.map(([event]) => event as { type: string });
+    expect(emitted.filter((event) => event.type === 'build_review_scope_summary')).toEqual([
+      {
+        type: 'build_review_scope_summary', rubric: 'testQuality', lapId: 'lap-current',
+        establishedTargetCount: 0, candidateCount: 0, unresolvedReasons: [],
+      },
+    ]);
+    expect(emitted.findIndex((event) => event.type === 'build_review_scope_summary'))
+      .toBeLessThan(emitted.findIndex((event) => event.type === 'build_review_outer_verdict'));
   });
 
   it("excludes a relocated refactor-preserving test from the grader and rejects a finding anchored there", async () => {
