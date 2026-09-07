@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-07T22:09:58.526Z
 Slug: enforce-the-plan-task-count-hard-stop-at-land
 Class: needs-human
 Halting step: prd_audit
