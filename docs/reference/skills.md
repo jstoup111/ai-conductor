@@ -366,7 +366,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   change set must have one Architecture
   Obligation Coverage disposition (`task`, `existing`, or `no-change`). Forty-one or more tasks is a
   hard stop; 21–40 warns. Every task carries a `Done when:` block with two to five nonblank, falsifiable
-  completion checks. Each changed cross-boundary behavior has exactly one integration-owning task whose
+  completion checks, each on one physical line and naming a mechanism plus its observable assertion
+  rather than merely restating the mapped criterion. Each changed cross-boundary behavior has exactly one integration-owning task whose
   checks state observable behavior through an appropriate project entry point; internal tasks do not
   each acquire an integration-test obligation. At land time, a missing, empty, underspecified, or oversized block rejects the
   whole spec; Markdown fenced-code examples do not count as task structure or checks. An unbounded
@@ -399,7 +400,13 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   accepted ADR to the stories that implement or must honor it, and independently judge every decision's
   plan-level Architecture Obligation Coverage disposition. The sixth row class, `criterion`,
   maps each exact extracted happy- or negative-path criterion to cited plan tasks in a six-cell row:
-  criterion text, task ids, verdict, a verbatim task-body quote, and `diff-local` or `outside-diff`.
+  criterion text, task ids, verdict, a verbatim `Done when` quote, and `diff-local` or `outside-diff`.
+- **Criterion achievability** — independently judges whether satisfying the cited task checks would
+  produce the Then-clause within approved architecture (§4g). Checks must establish a mechanism;
+  restating the outcome does not establish delivery. The pass sweeps approved ADRs in the change set
+  for binding constraints. An established inability to deliver is `fail`, explained with
+  `CANNOT-DELIVER:` prose below the table identifying the criterion, task, quoted check, and any
+  binding ADR decision. Criterion rows retain six cells; no Notes cell or new gap-id vocabulary is added.
 - **PRD ↔ stories tie-out** — the `fr` and `story` row classes are checked in both directions (SKILL.md
   §4e). Forward: no PRD `FR-N` without a citing story that a task covers. Reverse: no story citing an
   `FR-N` the PRD never declares, and no story citing no FR at all. Both directions are re-derived
@@ -408,7 +415,8 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   acceptance criteria contradict is `fail`, not `covered`. Story-versus-story contradictions stay with
   `conflict-check`; this skill compares each story against the PRD.
 - **Gate role** — blocking. It authors the artifact the land-time coherence gate validates. Verdicts are
-  exactly `covered`, `gap`, or `fail` — `fail` marks a row whose counterpart exists but contradicts it,
+  exactly `covered`, `gap`, or `fail` — `fail` marks a row whose counterpart exists but contradicts it
+  or whose cited task checks cannot deliver the criterion under approved architecture,
   which coverage alone cannot express. Criterion rows enforce that vocabulary mechanically; unknown
   values are malformed. The five legacy row classes retain affirmative-by-default parsing for backward
   compatibility. In an autonomous run an ambiguous row is marked `gap` and left for the fail-closed land
