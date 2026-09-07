@@ -1,9 +1,9 @@
-# Sequence: sub-floor action demoted to a filed deferral
+# Sequence: a sub-floor finding is suppressed and a settled finding skips the judge
 
 **Last updated:** 2026-09-06
-**Scope:** One build_review lap in which the adjudicator returns an `act` case whose confidence is
-below `build_review.adjudication.act_min_confidence`. Covers the demotion, the single filing, the
-spine record, and the resulting route. Companion to
+**Scope:** Two consecutive build_review laps for one feature. Lap one shows a sub-floor finding
+suppressed at the effective verdict and a surviving finding adjudicated and deferred. Lap two shows
+the deferred finding recurring by exact id and finalizing without a remediate dispatch. Companion to
 `.docs/architecture/operator-configurable-confidence-floor-for-acting-.md`.
 
 ## Diagram
@@ -11,70 +11,57 @@ spine record, and the resulting route. Companion to
 ```mermaid
 sequenceDiagram
   autonumber
-  participant C as Conductor
-  participant CO as AdjudicationCoordinator
-  participant P as remediate provider session
-  participant A as remediation-case-artifact
-  participant CFG as config build_review.adjudication
-  participant R as case reconciler + effects
-  participant GH as GitHub Issues
+  participant G as Rubric grader
+  participant P as finding parser
+  participant E as effective reducer
+  participant CFG as build_review.rubrics.«id».min_confidence
   participant S as Event spine
-  participant RD as reduceBuildReviewAdjudication
+  participant CO as AdjudicationCoordinator
+  participant ST as RemediationCaseStore
+  participant J as remediate provider session
 
-  C->>CO: coordinate lap «lapId»
-  CO->>P: judge(context)
-  P-->>CO: case-v1 result
-  CO->>A: readRemediationCaseJudgement
-  A->>A: validate confidence is integer 0-100
-  alt confidence out of range or not an integer
-    A-->>CO: reject invalid-case-confidence
-    CO-->>C: fail closed, lap halts
-  else valid
-    A-->>CO: judgement with case «caseRef» act, confidence «n»
-  end
-  CO->>CFG: read act_min_confidence («floor»)
-  alt «n» at or above «floor»
-    CO->>R: persist as action case (unchanged path)
-  else «n» below «floor», tracker deps absent
-    CO->>R: persist as action case, floor inert
-    CO->>S: emit demotion-skipped reason
-  else «n» below «floor», tracker deps present
-    CO->>CO: synthesize deferral title, body, exclusionRationale
-    CO->>R: persist as deferral case, not an action case
-    CO->>S: emit remediation event with demotion reason
-    R->>GH: fileIntakeIssue via Story 8 dedup marker
-    GH-->>R: issueUrl (filed once, repeat lap reuses the marker)
-    R-->>CO: deferral effect applied
-  end
-  CO->>RD: reduce over finalized case state
-  alt no build-eligible action case survives and mechanical healthy
-    RD-->>CO: route PASS, all findings have non-action outcomes
-    CO-->>C: build_review done, no kickback charged
-  else an action case survives
-    RD-->>CO: route BUILD
-    CO-->>C: kickback to BUILD for the surviving actions
-  end
-  CO-->>C: trace lists every demoted case with its confidence and the floor
+  Note over G,J: Lap one
+  G->>P: findings A (confidence 30) and B (confidence 90)
+  P->>P: range-check each confidence, absent allowed
+  P-->>E: judged result, verdict FAIL
+  E->>CFG: read floor («70»)
+  E->>E: A below floor, bucket suppressed. B at or above, bucket unresolved
+  E->>S: build_review_outer_verdict with suppressedFindings [A, 30, floor 70]
+  E-->>CO: effective FAIL, unresolved [B], suppressed [A]
+  CO->>ST: read prior cases
+  CO->>CO: live sources = [B] (A excluded, no finalized case for B)
+  CO->>J: judge(context with B only)
+  J-->>CO: case-v1, B is defer
+  CO->>ST: persist B as deferral case, effect applied
+  CO-->>E: route PASS, all findings have finalized non-action outcomes
+
+  Note over G,J: Lap two, B recurs with the same content-anchored id
+  G->>P: findings A (confidence 30) and B (confidence 90)
+  P-->>E: judged result, verdict FAIL
+  E->>E: A suppressed again, B unresolved
+  E-->>CO: effective FAIL, unresolved [B]
+  CO->>ST: read prior cases
+  ST-->>CO: B binds by exact id to a finalized deferral case
+  CO->>CO: live sources = [] after settled-recurrence predicate
+  CO->>S: remediation_adjudication_completed, settled case ids, no new effects
+  CO-->>E: finalize from durable state, route PASS, no dispatch
 ```
 
 ## Legend
 
-- **Steps 1-9 are unchanged** from the #2087 adjudication flow apart from the range check the
-  artifact reader now performs on `confidence`.
-- **The three-way alt is the whole feature.** At or above the floor nothing changes; below the
-  floor with no tracker the floor is deliberately inert so a lap can never be halted by a deferral
-  that cannot finalize; below the floor with a tracker the case becomes a deferral before it is
-  persisted.
-- **A demoted case charges no kickback and dispatches no BUILD work**, because it never becomes a
-  build-eligible action case in the reducer's view.
-- **Nothing is silently dropped.** Every demotion is visible three ways: the filed deferral issue,
-  the spine event carrying the demotion reason, and the per-lap adjudication trace that reaches
-  kickback and HALT evidence.
-- **«floor»** is `build_review.adjudication.act_min_confidence`, default `0`, at which the
-  comparison never fires and behavior is identical to today.
+- **Steps 1-7 are the suppression path.** A is dropped from the blocking set before build_review
+  fails on it and never reaches the coordinator; it is visible on the spine at step 6.
+- **Steps 8-13 are today's adjudication**, reduced to the surviving finding only.
+- **Steps 14-21 are the settled-recurrence fast-path.** The store already links B's exact id to a
+  finalized deferral, so the predicate empties the live set and the lap finalizes without paying a
+  provider session. The skipped dispatch is recorded at step 20 as a completed adjudication.
+- **Had B's id drifted at step 14**, it would not bind, the live set would be [B], and the judge
+  would run — that is the intended boundary of the predicate.
+- **Had A carried no confidence**, it would sit in unresolved and block like any other finding.
 
 ## Change Log
 
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-09-06 | Initial generation | Authored during DECIDE for jstoup111/ai-conductor#2383 |
+| 2026-09-06 | Rewritten for grader-side confidence and the settled-recurrence predicate | Operator revised the placement |

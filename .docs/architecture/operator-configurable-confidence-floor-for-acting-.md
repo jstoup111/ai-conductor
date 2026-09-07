@@ -1,102 +1,95 @@
-# Components: adjudicator confidence floor for build_review action
+# Components: grader confidence floor and settled-recurrence fast-path for build_review
 
 **Last updated:** 2026-09-06
-**Scope:** Proposed component boundaries for jstoup111/ai-conductor#2383: percentage confidence on
-the `case-v1` adjudicator record, and an operator floor that demotes a sub-floor `act` disposition
-to `defer` before the case is persisted as an action case. Extends the settled adjudicator
-architecture from #2033/#2087 in place; adds no new seam.
+**Scope:** Proposed component boundaries for jstoup111/ai-conductor#2383 as revised: per-finding
+grader confidence, an operator floor applied at the effective-verdict reducer before build_review
+fails, and a mechanical predicate that skips the remediate dispatch for exact-id recurrence of a
+settled finding. Extends the settled rubric and adjudicator architecture in place; adds no seam.
 
 ## Diagram
 
 ```mermaid
 graph TD
-  subgraph Judgement["LLM judgement (unchanged authority)"]
-    DISPATCH["Existing remediate dispatch<br/>one fresh provider session"]
-    RESULT["case-v1 result<br/>.pipeline/remediation.json<br/>per-case confidence: integer 0-100"]
+  subgraph Graders["Rubric judgement (contract extended)"]
+    SKILL["skills/build-review-«rubric»/SKILL.md<br/>v3 result contract<br/>optional confidence 0-100 per finding"]
+    GRADE["Rubric session<br/>provider supplies the number"]
   end
 
-  subgraph Contract["Contract validation (changed)"]
-    ARTIFACT["remediation-case-artifact.ts<br/>parseCaseRow<br/>confidence range check 0-100<br/>reason: invalid-case-confidence"]
-    STORE["remediation-case-store.ts<br/>same range check on durable state<br/>STORE_VERSION unchanged at v1"]
-    CTX["build-review-adjudication-context.ts<br/>carries the confidence type"]
+  subgraph Parse["Finding contract (changed)"]
+    DOMAIN["build-review-domain.ts<br/>finding parser<br/>range check, absent allowed"]
+    IDENT["build-review-finding-identity.ts<br/>identity hash<br/>confidence excluded"]
   end
 
   subgraph Config["Operator configuration (changed)"]
-    CFGKEY["config.ts<br/>build_review.adjudication<br/>enabled, act_min_confidence<br/>integer 0-100, default «0»"]
+    CFG["config.ts / resolved-config.ts<br/>build_review.rubrics.«id».min_confidence<br/>integer 0-100, default «0»"]
   end
 
-  subgraph Floor["Floor application (new, inside the coordinator)"]
-    TRACKERQ{"Deferral filable?<br/>tracker deps present"}
-    CMP{"disposition = act<br/>AND confidence &lt; floor"}
-    DEMOTE["Demote act to defer<br/>at judgement admission<br/>synthesize deferral title, body,<br/>exclusionRationale from<br/>caseRef, rationale, confidence"]
-    KEEP["Leave case unchanged"]
+  subgraph Effective["Effective verdict (changed)"]
+    RAW["Raw join<br/>unchanged"]
+    REDUCE["deriveEffectiveBuildReviewVerdict<br/>buckets: accepted, suppressed, unresolved<br/>only unresolved blocks"]
+    OPDISP["Operator accepted-risk state<br/>separate authority, unchanged"]
+    PASSQ{"unresolved empty?"}
   end
 
-  subgraph Downstream["Existing effect and route boundary (unchanged)"]
-    RECONCILE["remediation-case-reconciler.ts<br/>bind or stamp case identity"]
-    EFFECTS["remediation-case-effects.ts<br/>reserve, apply, fail"]
-    INTAKE["fileIntakeIssue<br/>Story 8 dedup marker<br/>files once"]
-    REDUCE["build-review-adjudication.ts<br/>reduceBuildReviewAdjudication<br/>no action case + healthy = PASS"]
-    BUDGET["kickback-ledger.ts<br/>demoted case charges nothing"]
+  subgraph Adjudication["Post-join judgement (predicate added)"]
+    COORD["coordinator<br/>sources minus accepted minus suppressed"]
+    STORE["RemediationCaseStore<br/>cases: never pruned<br/>+ suppression entries by finding id"]
+    SETTLED{"every live source<br/>binds by exact id to a<br/>finalized non-action case?"}
+    JUDGE["one remediate dispatch<br/>context + suppressed history"]
+    FINAL["finalize from durable state<br/>no dispatch"]
   end
 
-  subgraph Spine["Existing telemetry spine (extended by one field)"]
-    EMIT["ConductorEventEmitter"]
-    UNION["ConductorEvent union<br/>remediation event carries<br/>demotion reason"]
-    PERSIST["EventPersister"]
-    EVENTS[".pipeline/events.jsonl"]
-    TRACE["renderBuildReviewAdjudicationTrace<br/>one line per demoted case"]
+  subgraph Spine["Telemetry spine (extended by one field)"]
+    OUTER["build_review_outer_verdict<br/>+ suppressedFindings list"]
+    ADJ["remediation_adjudication_completed<br/>emitted for a skipped dispatch"]
+    LOG["daemon log projection<br/>existing render"]
   end
 
-  DISPATCH --> RESULT
-  RESULT --> ARTIFACT
-  ARTIFACT --> CMP
-  ARTIFACT --> CTX
-  RECONCILE --> STORE
-  CFGKEY --> CMP
-  CMP -->|no| KEEP
-  CMP -->|yes| TRACKERQ
-  TRACKERQ -->|no: floor inert| KEEP
-  TRACKERQ -->|yes| DEMOTE
-  KEEP --> RECONCILE
-  DEMOTE --> RECONCILE
-  RECONCILE --> EFFECTS
-  EFFECTS --> INTAKE
-  EFFECTS --> REDUCE
-  REDUCE --> BUDGET
-  DEMOTE --> EMIT
-  EMIT --> UNION
-  UNION --> PERSIST
-  PERSIST --> EVENTS
-  DEMOTE --> TRACE
+  SKILL --> GRADE
+  GRADE --> DOMAIN
+  DOMAIN --> IDENT
+  DOMAIN --> RAW
+  RAW --> REDUCE
+  CFG --> REDUCE
+  OPDISP --> REDUCE
+  REDUCE --> OUTER
+  COORD --> STORE
+  REDUCE --> PASSQ
+  PASSQ -->|yes: PASS| LOG
+  PASSQ -->|no| COORD
+  STORE --> SETTLED
+  COORD --> SETTLED
+  SETTLED -->|yes| FINAL
+  SETTLED -->|no| JUDGE
+  FINAL --> ADJ
+  OUTER --> LOG
+  ADJ --> LOG
 ```
 
 ## Legend
 
-- **Changed components** are `remediation-case-artifact.ts` (confidence becomes a validated
-  integer), `config.ts` (new `act_min_confidence` key), and the coordinator's `act` path (the new
-  Floor subgraph). Everything under Downstream is reached unchanged.
-- **The floor is bookkeeping, not judgement.** The provider supplies the number; the engine never
-  derives or adjusts it. The comparison is the only engine-side decision.
-- **Demotion happens at judgement admission, before reconciliation.** It cannot happen at the
-  effect-dispatch block: that block reads effect kinds the reconciler has already persisted, so a
-  late rewrite would desync the proposed case from its stored record and trip existing fail-fast
-  guards. Applying the floor deterministically before reconciliation is also what keeps the
-  deferral's `effect.id` stable across laps, which is what the Story 8 marker dedups on — an
-  inconsistently applied demotion would mint a new effect id per lap and file duplicate issues.
-  A demoted case is persisted as a deferral case, so
-  `reduceBuildReviewAdjudication` never sees a build-eligible action case for it. A lap whose
-  every action was demoted therefore reaches the existing PASS branch
-  (`build-review-adjudication.ts:85`) rather than deadlocking with nothing to fix.
-- **`TRACKERQ` keeps the floor inert where deferrals cannot finalize.** An unfinished effect routes
-  to HALT (`build-review-adjudication.ts:57`), and the tracker dependencies are conditional in
-  `conductor.ts`. With no tracker the `act` proceeds as today, so the floor can never convert a
-  passing or actionable lap into a halt.
-- **`reject` and `defer` are untouched.** Only the `act` branch consults the floor.
+- **Changed components:** the finding parser gains an optional range-checked `confidence`; the
+  identity hasher is explicitly untouched so the field never enters an id. The effective reducer gains
+  a `suppressed` bucket. The coordinator gains the settled-recurrence predicate. Config gains one
+  per-rubric key. One event member gains one additive field.
+- **Two independent cost stops.** Suppression stops a sub-floor finding *before* build_review fails,
+  so remediate is never dispatched for it. The settled-recurrence predicate stops a finding that
+  *did* reach remediate and was deferred, rejected, or merged from re-dispatching on the next lap.
+  Either alone leaves a spin; together nothing repeats without a reason.
+- **Operator authority stays separate.** `suppressed` and `accepted` are different buckets with
+  different authorities; the engine never writes a suppression into the operator disposition store.
+- **Absent confidence blocks.** A finding without the field lands in `unresolved`. The fail-safe
+  direction is cost, never silence.
+- **Nothing is forgotten.** Suppressions are written to the durable case store and enter the
+  judge's context as non-blocking history; the predicate reads that store and never prunes it, so
+  resolved cases and old suppressions remain available when rubrics later conflict.
+- **Exact-id only.** The predicate admits no fuzzy equivalence. A drifted id is a live source and
+  dispatches the judge, which is the judgement the adjudicator was built to make.
 
 ## Change Log
 
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-09-06 | Initial generation | Authored during DECIDE for jstoup111/ai-conductor#2383 |
-| 2026-09-06 | Corrected demotion seam to judgement admission; added case store and adjudication context as changed components | Source trace during architecture-review found the effect-dispatch block consumes already-reconciled effect kinds, and two further surfaces validate or carry the confidence type |
+| 2026-09-06 | Corrected demotion seam to judgement admission; added case store and adjudication context as changed components | Source trace during architecture-review |
+| 2026-09-06 | Rewritten: confidence moved from the adjudicator case record to the rubric finding; floor moved to the effective reducer; settled-recurrence predicate added | Operator revised the placement after review showed the adjudicator floor could not stop the per-lap remediate re-dispatch |

@@ -1,121 +1,80 @@
 # Conflict Report: Operator-configurable confidence floor for acting on build_review findings
 
 **Date:** 2026-09-06
-**Spec:** jstoup111/ai-conductor#2383
+**Spec:** jstoup111/ai-conductor#2383 (revised placement)
 **Stories scanned:** `.docs/stories/operator-configurable-confidence-floor-for-acting-.md` (Stories 1-8)
 **ADR corpus:** `repo_wide` (`.ai-conductor/config.yml:127`)
-**Result:** PASSED CLEAN after resolution — 2 blocking conflicts found and resolved, 0 remaining,
-0 degrading conflicts accepted.
+**Result:** PASSED CLEAN — 0 blocking conflicts, 0 degrading conflicts.
+
+> **Amended 2026-09-06 by #2383:** The first pass of this report, against the adjudicator-placed
+> design, found and resolved two blocking conflicts (a `cumulative`-unchanged assertion against the
+> convergence ADR's reset-on-PASS rule, and an unconditional demotion against the inert-floor story).
+> The operator then moved confidence to the rubric finding and the stories were rewritten. Neither
+> earlier conflict exists in the rewritten stories: no story asserts anything about `cumulative`,
+> and there is no tracker-dependent branch. This report reflects the current stories.
 
 ## ADR corpus accounting
 
 All 309 approved ADRs in `.docs/decisions/` were examined. None was excluded on supersession
-grounds: `adr-2026-08-29-build-review-remediate-case-adjudication` is only *partially* superseded
-(its successor states "All non-conflicting decisions, state/effect contracts, options, consequences,
-and limitations in the predecessor remain adopted"), so it was retained for comparison as the scope
-rule requires.
+grounds: `adr-2026-08-29-build-review-remediate-case-adjudication` is only partially superseded and
+was retained.
 
-**Narrowed in — subject overlaps these stories (8):**
+**Narrowed in — subject overlaps these stories (9):**
 
 | ADR filename stem | Overlapping subject |
 |---|---|
-| adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication | case dispositions, effects, routing |
-| adr-2026-08-29-build-review-remediate-case-adjudication | case schema, deferral effect, kickback rule |
+| adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication | lap classification, dispatch, case store, routing |
+| adr-2026-08-29-build-review-remediate-case-adjudication | case schema, source-complete validator, deferral effect, kickback rule |
+| adr-2026-08-13-stable-build-review-finding-dispositions | finding identity, operator accepted-risk store, effective reducer |
+| adr-2026-08-16-closed-build-review-finding-vocabularies | finding contract fields |
 | adr-2026-08-26-config-key-consumer-registry-and-dead-surface-removal | new config key obligations |
-| adr-2026-08-12-cumulative-build-review-convergence-bound | kickback count and cumulative bound |
-| adr-2026-07-26-event-sink-registry-exhaustiveness | new event members |
-| adr-2026-07-07-audit-trail-event-sink | event completeness invariant |
+| adr-2026-08-12-cumulative-build-review-convergence-bound | kickback accounting on PASS |
+| adr-2026-07-26-event-sink-registry-exhaustiveness | event members |
 | adr-2026-08-11-halt-events-ride-the-persisted-spine | additive event field pattern |
 | adr-2026-07-04-kickback-event-emission-and-log-prominence | kickback event rendering |
 
-**Narrowed out (301):** no subject overlap with confidence, adjudicator dispositions, kickback
-accounting, config keys, or the event spine. `adr-2026-08-16-closed-build-review-finding-vocabularies`
-is among these: it governs finding-*identity* vocabularies, and case-record confidence is not an
-identity field and enters no identity hash.
+**Narrowed out (300):** no subject overlap with rubric findings, the effective verdict, adjudication
+dispatch, config keys, or the event spine.
 
-## Conflict 1: A demoted-only lap both passes and leaves cumulative untouched
+## ADR-versus-story pairs examined
 
-**Stories involved:** Story 4 (A demoted finding costs no budget) vs ADR: cumulative convergence bound
-**Files:** [.docs/stories/operator-configurable-confidence-floor-for-acting-.md] vs [.docs/decisions/adr-2026-08-12-cumulative-build-review-convergence-bound.md]
-**Type:** contradiction
-**Severity:** blocking
-**ADR filename stem:** adr-2026-08-12-cumulative-build-review-convergence-bound
-**Story ID:** 4
-**ADR opposing sentence (verbatim):** "A `build_review` PASS is genuine convergence, so it resets `cumulative` to 0 (and leaves `count` alone)."
-**Story opposing sentence (verbatim):** "Given a lap whose only `act` case is demoted, when the lap settles, then the ledger's `cumulative` value is unchanged."
+| ADR | Story | Both directions hold | Grounding |
+|---|---|---|---|
+| adr-2026-08-13 decision 1 ("separate semantic identity from presentation evidence") | Story 2 | Yes | Story 2 keeps confidence out of the identity payload; the ADR's separation is honored, not changed |
+| adr-2026-08-13 decision 2 (accepted risk in a feature-scoped operator store) | Story 3, Story 5 | Yes | Story 3 asserts the disposition store is byte-identical after a suppressed lap; Story 5 asserts suppression entries never appear there |
+| adr-2026-08-16 (closed identity vocabularies) | Story 1 | Yes | Confidence is neither a vocabulary member nor an identity field; an engine-range-checked integer is an engine-verifiable value |
+| Predecessor D4 (source-complete validator rejects a missing current-finding outcome) | Story 5 | Yes | Story 5 places suppression entries in a section distinct from current sources, so no outcome is demanded — the validator's rule is untouched |
+| Predecessor D7 ("reuses that outcome after the current adjudication confirms the binding") | Story 6 | Yes, by amendment | D5.1 narrows the confirmation requirement to drifted ids only; Story 6 asserts a drifted id still dispatches. The ADR was amended in this pass; the story implements the amended text |
+| adr-2026-08-12 D2 (PASS resets `cumulative`) | Story 3, Story 7 | Yes | No story asserts `cumulative` is unchanged; Story 7 asserts only that a *skipped dispatch* leaves the ledger unchanged, which involves no PASS-time reset because the reset fires on the gate verdict, not inside the coordinator |
+| adr-2026-07-26 / adr-2026-07-07 (event registry exhaustiveness, audit completeness) | Story 4, Story 7 | Yes | No new event member: Story 4 adds a field to `build_review_outer_verdict`, Story 7 reuses `remediation_adjudication_completed` |
+| adr-2026-07-04 (kickback event reserved for backward moves) | Story 4 | Yes | Story 4 asserts no kickback event is attributable to a suppression |
 
-**Description:** Story 6 requires a lap whose every action was demoted to reach a PASS verdict. On
-that PASS the ADR's D2 resets `cumulative` to 0. Story 4 asserted `cumulative` is unchanged for
-exactly that lap. Both cannot hold: an implementation honoring D2 fails Story 4's assertion, and an
-implementation honoring Story 4 as written must suppress a reset the ADR requires. Story 4 overreached
-— its intent is that the demotion charges nothing, not that a pass stops resetting the bound.
+## Story-versus-story pairs examined
 
-**Resolution Options:**
-1. Narrow Story 4 to assert the demotion does not *increment* `cumulative`, and record that a pass
-   may still reset it under the existing D2 rule.
-2. Exempt demoted-only laps from the D2 reset, which requires a superseding ADR.
-3. Drop Story 6's PASS requirement so the reset never fires.
-
-**Recommendation:** Option 1 because it preserves the approved architectural decision and still
-delivers the operator-visible outcome — a demoted finding costs no budget.
-
-**Resolution applied:** Option 1, operator-selected. Story 4's criteria and its Done When now
-attribute any observed reset to the pre-existing convergence rule rather than to the demotion.
-
-## Conflict 2: Demotion asserted unconditionally while the floor is inert without a tracker
-
-**Stories involved:** Story 2 (A sub-floor action is demoted to a deferral) vs Story 5 (The floor is inert where a deferral cannot be filed)
-**Files:** [.docs/stories/operator-configurable-confidence-floor-for-acting-.md] (same file)
-**Type:** contradiction
-**Severity:** blocking
-**Story ID:** 2
-**Story 2 opposing sentence (verbatim):** "Given `act_min_confidence` is 70 and an adjudication returns an `act` case with confidence 40, when the lap is adjudicated, then that case is recorded as a `defer` case and no BUILD work order is published for it."
-**Story 5 opposing sentence (verbatim):** "Given no tracker repository can be resolved and `act_min_confidence` is 70, when an adjudication returns an `act` case with confidence 40, then the case remains an `act` case and publishes its BUILD work order as though no floor were set."
-
-**Description:** Story 2 stated the demotion with no tracker precondition, so its Given/When/Then is
-satisfied by a fixture with no tracker configured — where Story 5 requires the opposite outcome for
-identical inputs. Checked in both directions: fully satisfying Story 2 as written breaks Story 5, and
-fully satisfying Story 5 breaks Story 2 as written. The root is story phrasing, not the design — the
-implementation is unambiguous — so it resolves in stories rather than routing to architecture.
-
-**Resolution Options:**
-1. Add the "a tracker repository is resolvable" precondition to Story 2's demotion criteria, leaving
-   Story 5 the sole authority for the no-tracker branch.
-2. Merge Story 5 into Story 2 as a single story covering both branches.
-3. Restate Story 5 as a degrading exception rather than an acceptance criterion.
-
-**Recommendation:** Option 1 because it keeps each branch independently verifiable and preserves the
-inert-floor behavior as its own acceptance criterion.
-
-**Resolution applied:** Option 1, operator-selected. Story 2's demotion criteria and its Done When
-now carry the tracker precondition and defer the no-tracker branch to Story 5.
-
-## Pairs checked and found clean
-
-All 28 story pairs were tested in both directions. Beyond the two conflicts above, the pairs sharing
-a behavior, entity, field, or gate were:
+All 28 pairs tested in both directions. Pairs sharing a behavior, entity, field, or gate:
 
 | Pair | Shared surface | Both directions hold |
 |---|---|---|
-| 1 vs 8 | confidence value validation | Yes — Story 1 validates the artifact value, Story 8 validates the config floor; different inputs, no shared assertion |
-| 2 vs 3 | the demoted case's effect | Yes — Story 2 fixes the disposition, Story 3 the filing; neither constrains the other's outcome |
-| 3 vs 4 | effect id stability and budget | Yes — a stable effect id is what makes the no-charge idempotent; mutually reinforcing |
-| 3 vs 6 | unfinalized deferral | Yes — Story 3 requires a failed filing to be recorded failed, Story 6 requires such a lap to halt rather than pass; consistent |
-| 4 vs 6 | lap outcome for a demoted-only lap | Yes after Conflict 1's resolution |
-| 5 vs 6 | no-tracker lap | Yes — Story 5 keeps the case actionable, so Story 6's fully-demoted precondition is simply not met |
-| 6 vs 7 | evidence on a halting lap | Yes — Story 7 requires the demotion line to survive an unrelated halt, which Story 6 does not contradict |
-| 2 vs 7 | ordering of demotion and emission | Yes — both place the demotion before reconciliation |
+| 1 vs 2 | the confidence field | Yes — Story 1 validates the value, Story 2 keeps it out of identity; neither constrains the other |
+| 1 vs 3 | absent confidence | Yes — Story 1 accepts an absent field, Story 3 leaves it unresolved; the two describe parse and verdict of the same input consistently |
+| 3 vs 4 | the suppressed set | Yes — Story 3 produces it, Story 4 reports it |
+| 3 vs 5 | suppressed findings and the judge | Yes — Story 3 excludes them from current sources, Story 5 carries them as history; the two sections are disjoint by construction |
+| 3 vs 6 | what reaches the coordinator | Yes — suppression removes findings before the coordinator, settlement removes them inside it; a finding cannot be in both sets on one lap |
+| 5 vs 6 | the case store across laps | Yes — Story 5 writes suppression entries, Story 6's predicate is read-only; Story 6 asserts no prune, which Story 5 requires |
+| 6 vs 7 | the skipped dispatch | Yes — Story 6 decides the skip, Story 7 records it |
+| 3 vs 8 | the floor value | Yes — Story 8 validates and resolves it, Story 3 consumes the resolved value |
 
-No sequencing conflict exists: no story assumes it runs first, and the single ordering constraint
-(demotion precedes reconciliation) is asserted consistently by Stories 2 and 7.
+**Sequencing:** the only ordering constraint — suppression precedes lap classification, settlement
+precedes dispatch — is asserted consistently by Stories 3 and 6 and is the same order the amended ADR
+records.
 
-No resource contention exists: the stories add one config key and one additive event field, neither
-reusing an existing field for a second meaning.
+**Resource contention:** none. One config key and one additive event field, neither reusing an
+existing field for a second meaning; the store gains a new list rather than overloading `sources`.
 
-No oscillating conflict remains. Conflicts 1 and 2 each failed the two-directional test before
-resolution; both were rooted in story assertions rather than in the design, and neither required an
-architecture kickback.
+**Oscillation:** none found. The closest candidate — Story 3 excluding suppressed findings from
+sources while Story 5 requires the judge to see them — resolves because the context carries two
+distinct sections; satisfying either fully leaves the other intact.
 
 ## Re-check
 
-Re-ran the full scan after both resolutions. Zero blocking conflicts, zero degrading conflicts.
+Zero blocking conflicts, zero degrading conflicts. No review marker written.

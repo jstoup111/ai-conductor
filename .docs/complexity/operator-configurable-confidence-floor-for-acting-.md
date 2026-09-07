@@ -2,45 +2,37 @@
 
 Tier: M
 
-Rationale: Six coordinated production surfaces, none individually large, but they form one
-contract change that must land atomically.
+Rationale: Six coordinated production surfaces, none individually large, forming one contract change
+that must land atomically.
 
-> **Amended 2026-09-06 by #2383:** This assessment originally named four surfaces. A source trace
-> during architecture-review found two more — the durable case store validates the same enum, and
-> the adjudication context carries the type — and established that the floor must apply before
-> reconciliation rather than at the effect-dispatch block. The tier is unchanged at M; the surface
-> count and seam below are corrected.
+> **Amended 2026-09-06 by #2383:** The operator moved confidence from the adjudicator's case record
+> to the rubric finding after architecture-review established that the adjudicator placement could
+> not stop the per-lap remediate re-dispatch. The surface list below replaces the earlier one; the
+> tier is unchanged at M.
 
-- `src/conductor/src/engine/remediation-case-artifact.ts` — `RemediationCaseConfidence` becomes an
-  integer 0-100 with engine-validated range; the `invalid-case-confidence` rejection reason keeps
-  its name and gains the range case.
-- `src/conductor/src/engine/config.ts` — `build_review.adjudication` gains `act_min_confidence`
-  alongside `enabled` (key set at line 120, validator at line 266).
-- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — the floor is applied at
-  judgement admission, before `reconcileRemediationCases`. It cannot be applied at the effect
-  dispatch block (roughly lines 540-660): that block reads effect kinds the reconciler has already
-  persisted, so a late rewrite would desync `proposed.case.effect.kind` from the stored record and
-  trip the existing fail-fast guards.
-- `src/conductor/src/engine/remediation-case-store.ts` — the durable store validates the same
-  confidence enum (line 195) and persists it (lines 52, 207). `STORE_VERSION` stays at `v1`: the
-  adjudicator is enabled-gated and has produced no durable state, verified by finding zero
-  `.pipeline/remediation-cases.json` files across every worktree on 2026-09-06, so there is
-  nothing to migrate and a bump would only cost in-flight features a fail-closed halt.
-- `src/conductor/src/engine/build-review-adjudication-context.ts` — carries the confidence type
-  (line 24) into the adjudicator's context payload.
-- `src/conductor/src/types/events.ts` — the demotion is stamped on the remediation event spine so
-  it reaches the daemon log and lap evidence.
+- `src/conductor/src/engine/build-review-domain.ts` — `BuildReviewFinding` gains an optional
+  integer `confidence` 0-100, validated in the finding parser; out of range is a malformed result
+  like any other invalid field. It is deliberately absent from
+  `build-review-finding-identity.ts`, so it never enters the identity hash.
+- `src/conductor/src/engine/config.ts` and `resolved-config.ts` — per-rubric
+  `build_review.rubrics.<id>.min_confidence` (integer 0-100, default 0) joins the existing rubric
+  policy key set and validator, following the bounded-integer shape `build_review.maxParallel` uses.
+- `src/conductor/src/engine/build-review-aggregate.ts` (`deriveEffectiveBuildReviewVerdict`) — a
+  third `suppressed` bucket beside `accepted` and `unresolved`; the verdict formula is unchanged.
+- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — suppressed findings are
+  excluded from adjudication sources, and a settled-recurrence predicate skips the judge when every
+  live source binds by exact id to a finalized deferred, rejected, or merged case.
+- `src/conductor/src/types/events.ts` — `build_review_outer_verdict` gains an additive optional
+  suppression list; the coordinator's existing adjudication events carry the skipped dispatch.
+- `skills/build-review-test-quality/SKILL.md` — the v3 result contract states the field.
 
-Not Small: the change alters a machine-consumed contract and a routing decision, and the
-no-deadlock and no-tracker constraints are design decisions that need an architecture pass rather
-than a plan task. Not Large: no new subsystem, no new seam, no ADR-level decision expected — the
-adjudicator architecture is settled by the work #2087 landed, and this extends it in place.
+Not Small: the change alters a machine-consumed grader contract and two routing decisions, and the
+fail-safe-absent and exact-id-only constraints are design decisions that needed an architecture pass.
+Not Large: no new subsystem or seam; both changes extend settled components in place.
 
-Test blast radius: roughly 57 confidence enum-literal occurrences across 10 test files
-(`remediation-case-artifact`, `-effects`, `-reconciler`, `-store`, `-validator`,
-`build-review-adjudication`, `-coordinator`, `-context`, `conductor-build-review-adjudication`,
-`remediation-case-recovery.integration`). Large but mechanical, and it is fixture churn rather
-than new behavior.
+Test blast radius: the finding parser and effective-reducer tests gain cases; the coordinator tests
+gain the fast-path table. Because `confidence` is optional, the 26 test files that build findings
+need no fixture migration.
 
 Tier-required artifacts: architecture-diagram, lightweight architecture-review, conflict-check,
 coherence-check.

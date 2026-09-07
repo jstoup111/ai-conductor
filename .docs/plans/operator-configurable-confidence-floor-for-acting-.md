@@ -6,49 +6,50 @@
 
 ## Summary
 
-Replaces the adjudicator's `high | medium | low` confidence enum with an engine-validated integer
-0-100, and adds an operator floor that demotes a sub-floor `act` case to a filed `defer` before the
-case is reconciled. 18 tasks.
+Adds grader-reported confidence to build_review findings, an operator floor that suppresses sub-floor
+findings before the gate fails, durable suppression history for the judge, and a mechanical
+settled-recurrence predicate that skips the remediate dispatch for exact-id recurrence of a finalized
+finding. 16 tasks.
 
 ## Technical Approach
 
-The floor is bookkeeping applied to an LLM judgement, not a replacement for it: the provider supplies
-the number and the engine only compares it. Six production surfaces change, and the ordering between
-them is the design's load-bearing decision.
+Three mechanisms, each stopping a different spend, sequenced so each lands on settled types.
 
-- **Contract and state (Tasks 1-3).** `remediation-case-artifact.ts` retypes `confidence` and
-  range-validates it, keeping the existing `invalid-case-confidence` rejection reason so the failure
-  vocabulary is unchanged. `remediation-case-store.ts` applies the identical check on the durable
-  record, and `build-review-adjudication-context.ts` carries the retyped value. `STORE_VERSION` stays
-  at `v1`: the adjudicator is enabled-gated and has produced no durable state, verified by finding
-  zero remediation case stores across every worktree on 2026-09-06, so there is nothing to migrate
-  and a bump would only cost an in-flight feature a fail-closed halt.
-- **Configuration (Tasks 4-5).** `act_min_confidence` joins `enabled` in the `build_review.adjudication`
-  key set and validator, following the bounded-integer validation shape `build_review.maxParallel`
-  already uses in the same file. It resolves through the same path that already serves
-  `build_review.adjudication.enabled`. A consumer declaration lands in the same change, because the
-  config-key consumer registry's totality test fails any key that declares none.
-- **The floor itself (Tasks 6-7, 13).** The comparison runs at judgement admission, before
-  `reconcileRemediationCases`. It cannot run at the effect-dispatch block, which reads effect kinds
-  the reconciler has already persisted and guards on them; a late rewrite would desync the proposed
-  case from its stored record and trip those guards. Applying it before reconciliation is also what
-  makes a demoted case's effect id stable across laps, which the deferral's exact-marker dedup
-  depends on. When the tracker dependencies are absent the floor does not apply at all, because a
-  deferral that cannot file stays reserved and routes the lap to a halt.
-- **Effects and budget (Tasks 8-12).** A demoted case takes the existing deferral effect unchanged;
-  the engine synthesizes only its body text. The demotion path bypasses the kickback gate outright
-  rather than calling it for a zero charge, so neither `count` nor `cumulative` moves.
-- **Evidence (Tasks 16-17).** The demotion reason rides an additive optional field on an existing
-  remediation event member rather than a new member, which avoids the sink-declaration and
-  audit-mapping obligations a new member would carry. It is additionally rendered into the per-lap
-  adjudication trace.
-- **Fixture migration (Task 18).** Roughly 57 confidence literals across ten test files move from
-  enum strings to integers. Mechanical, but it is the bulk of the diff and is sequenced last so it
-  migrates against settled types.
+- **Contract (Tasks 1-4).** `BuildReviewFinding` gains optional integer `confidence`, range-checked
+  in the existing `finding()` parser so an out-of-range value is malformed like any other bad field.
+  The identity input in `build-review-finding-identity.ts` is deliberately untouched — a test pins
+  that two findings differing only in confidence share an id. The contract stays `v3`: absent means
+  blocking, so nothing old is mis-read, and no operator disposition is invalidated. The skill text
+  states the field; its digest change discards cached results on its own.
+- **Configuration (Tasks 5-6).** Per-rubric `min_confidence` joins the rubric policy key set and
+  validator, following the bounded-integer shape `build_review.maxParallel` already uses in
+  `config.ts`, and resolves into `ResolvedBuildReviewRubricPolicy`. A registry consumer declaration
+  lands in the same change.
+- **Suppression (Tasks 7-11).** `deriveEffectiveBuildReviewVerdict` gains a `suppressed` bucket
+  beside `accepted` and `unresolved`; the verdict formula is unchanged, so a fully-suppressed lap is
+  an effective PASS the conductor never routes into adjudication. On a mixed lap the coordinator is
+  handed the suppressed ids and excludes them from sources, the way it already excludes
+  operator-resolved ids — but as a separate input, never written to the disposition store.
+  `build_review_outer_verdict` gains an additive `suppressedFindings` list; it currently does not
+  render, so a daemon-log line is added for the non-empty case only.
+- **Persistence (Tasks 12-13).** The case store gains a suppression-entry list keyed by finding id,
+  written under the existing lease and never pruned. The adjudication context carries the entries
+  in a history section distinct from current sources, so the source-complete validator demands no
+  outcome for them.
+- **Settlement (Tasks 14-16).** After the second operator-resolution read and before
+  `dispatchSources` is frozen, the coordinator removes every live source whose exact id links to a
+  finalized non-action case. Empty live set finalizes from durable state and emits
+  `remediation_adjudication_completed` with the settled case ids; otherwise the dispatch proceeds
+  with the reduced set. The predicate reads the store and never writes it.
 
-The operator has an open intake (#2388) for per-rubric run scheduling, which will add keys under the
-same `build_review.*` block; keep this key's naming and validation shape consistent with the existing
-siblings so the two read coherently.
+Local pattern for Tasks 7 and 9: the operator-accepted path is the exemplar — a set of finding ids
+computed once, threaded to the coordinator as an input, never re-derived from artifacts. Preserve
+those traits for the suppressed set; the allowed variation is that suppression is engine authority
+and must stay in its own set. Search hints: `acceptedFindingIds`, `operatorResolvedFindingIds`,
+`allOperatorResolved`.
+
+The operator has an open intake (#2388) for per-rubric run scheduling under the same
+`build_review.rubrics.<id>.*` block; keep this key's shape consistent with its siblings.
 
 ## Prerequisites
 
@@ -56,106 +57,128 @@ siblings so the two read coherently.
 
 ## Tasks
 
-### Task 1: Range-validate integer confidence in the remediation artifact reader
+### Task 1: Parse an optional integer confidence on each finding
 **Story:** 1
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests asserting the reader accepts confidence 0, 72 and 100 and returns each unchanged, and rejects 101, -1, 72.5 and the string high with reason invalid-case-confidence.
+1. Write failing tests asserting the finding parser accepts confidence 0, 72 and 100 and returns each unchanged, accepts an absent confidence recording none, and treats 101, -1, 72.5 and a string as a malformed result.
 2. Verify tests fail (RED).
-3. Replace the confidence enum type with an integer, and replace the oneOf check in parseCaseRow with an integer range check that keeps the existing invalid-case-confidence reason.
+3. Add optional integer confidence to the finding type and range-check it in the parser, reusing the existing invalid-field path for rejection.
 4. Verify tests pass (GREEN).
-5. Commit with message: "feat(engine): range-validate integer adjudicator confidence".
+5. Commit with message: "feat(engine): parse optional grader confidence on build_review findings".
 
 **Done when:**
-- The reader accepts an integer confidence of 0, 72, and 100 and returns each unchanged on the parsed case.
-- The reader returns reason invalid-case-confidence for 101, for -1, for 72.5, and for a string confidence.
-- A case omitting confidence entirely is rejected by the existing exact-key check.
+- The finding parser accepts an integer confidence of 0, 72, and 100 and returns each unchanged on the parsed finding.
+- The finding parser accepts a finding with no confidence and records none.
+- The finding parser treats 101, -1, 72.5, and a string confidence as a malformed result through the existing invalid-field path.
 - No engine code path assigns, defaults, or adjusts a confidence value.
 
 **Files likely touched:**
-- `src/conductor/src/engine/remediation-case-artifact.ts` — confidence type and range validation
-- `src/conductor/test/engine/remediation-case-artifact.test.ts` — accept and reject cases
+- `src/conductor/src/engine/build-review-domain.ts` — finding type and parser
+- `src/conductor/test/engine/build-review-domain.test.ts` — accept and reject cases
 
 **Dependencies:** none
 
-### Task 2: Apply the identical range check to the durable case store
-**Story:** 1
+### Task 2: Keep confidence out of the finding identity
+**Story:** 2
 **Type:** negative-path
 
 **Steps:**
-1. Write a failing test asserting the store round-trips an integer confidence and rejects an out-of-range or non-integer persisted confidence as malformed state.
-2. Verify test fails (RED).
-3. Retype the stored confidence and replace its oneOf check with the same integer range check.
-4. Verify test passes (GREEN).
-5. Commit with message: "feat(engine): range-validate confidence on the durable case store".
+1. Write failing tests asserting two findings differing only in confidence share an id, a finding with and without confidence share an id, the canonical payload carries no confidence, a one-character anchor change yields a different id, and an operator disposition still binds after re-grading at a different confidence.
+2. Verify tests fail (RED).
+3. Confirm the identity input and canonical payload are unchanged; adjust only if the retype leaked.
+4. Verify tests pass (GREEN).
+5. Commit with message: "test(engine): confidence never enters build_review finding identity".
 
 **Done when:**
-- The durable case store parses an integer confidence 0 through 100 and round-trips it unchanged.
-- The durable case store rejects a persisted case whose confidence is out of range or non-integer as malformed state.
-- STORE_VERSION is unchanged at v1.
+- Two findings differing only in confidence share one identity id.
+- The canonical identity payload contains no confidence field.
+- A one-character anchor change yields a different id regardless of confidence.
+- An operator disposition recorded against a finding continues to bind after the finding is re-graded at a different confidence.
 
 **Files likely touched:**
-- `src/conductor/src/engine/remediation-case-store.ts` — stored confidence type and validation
-- `src/conductor/test/engine/remediation-case-store.test.ts` — round-trip and malformed cases
+- `src/conductor/test/engine/build-review-finding-identity.test.ts` — identity invariance
+- `src/conductor/test/engine/build-review-effective.test.ts` — disposition rebinding
 
 **Dependencies:** 1
 
-### Task 3: Carry the retyped confidence through the adjudication context
+### Task 3: State the confidence field in the grader contract
 **Story:** 1
 **Type:** infrastructure
 
 **Steps:**
-1. Write a failing typecheck-backed test asserting the context exposes an integer confidence.
+1. Write a failing test asserting a result shaped exactly as the skill text's JSON example, including confidence, parses.
 2. Verify test fails (RED).
-3. Retype the confidence field on the adjudication context.
-4. Verify test passes (GREEN) and the project typechecks.
-5. Commit with message: "refactor(engine): carry integer confidence through adjudication context".
+3. Add the optional integer confidence field to the v3 result contract JSON and its bullet list, stating its meaning and that omitting it leaves the finding blocking.
+4. Verify test passes (GREEN).
+5. Commit with message: "skill(build-review-test-quality): request grader confidence per finding".
 
 **Done when:**
-- The adjudication context declares confidence as an integer and the project typechecks.
-- No enum-valued confidence type remains exported from the engine.
+- The rubric result contract in the grader's skill text states the optional integer field and its meaning.
+- A result matching the skill text's JSON example parses with its confidence retained.
 
 **Files likely touched:**
-- `src/conductor/src/engine/build-review-adjudication-context.ts` — confidence type
-- `src/conductor/test/engine/build-review-adjudication-context.test.ts` — context shape
+- `skills/build-review-test-quality/SKILL.md` — result contract
+- `src/conductor/test/engine/build-review-domain.test.ts` — contract example parses
 
 **Dependencies:** 1
 
-### Task 4: Validate the act_min_confidence config key
+### Task 4: Prove a pre-contract cached result is discarded on skill change
+**Story:** 1
+**Type:** verification
+
+**Steps:**
+1. Write a test asserting a cached rubric result keyed to the old skill digest is discarded with reason skill-digest-mismatch once the skill text changes.
+2. Verify it passes against existing cache behavior.
+3. No implementation change expected.
+4. Record the verification.
+5. Commit with an empty commit carrying the task trailer and an evidence trailer.
+
+**Done when:**
+- A cached rubric result produced under the previous skill digest is discarded on skill-digest mismatch and the grader re-runs.
+
+**Files likely touched:**
+- `src/conductor/test/engine/build-review-cache.test.ts` — digest mismatch case
+
+**Verify-only:** yes
+
+**Dependencies:** 3
+
+### Task 5: Validate the per-rubric min_confidence key
 **Story:** 8
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests asserting the key is accepted at 0, 70 and 100, resolves to 0 when absent, and fails config load naming its exact path and range for 101, -5, 70.5 and the string 70, while a misspelled sibling still fails with the existing unknown-key error.
+1. Write failing tests asserting the key is accepted at 0, 70 and 100, resolves to 0 when absent, fails load naming its exact path and range for 101, -5, 70.5 and the string 70, and that a misspelled sibling fails with the existing unknown-key error.
 2. Verify tests fail (RED).
-3. Add the key to the build_review.adjudication key set and validate it as a bounded integer, following the shape build_review.maxParallel already uses in the same file.
+3. Add the key to the rubric policy key set and validator as a bounded integer, following the maxParallel shape, and carry it into the resolved rubric policy with default 0.
 4. Verify tests pass (GREEN).
-5. Commit with message: "feat(config): add build_review.adjudication.act_min_confidence".
+5. Commit with message: "feat(config): add build_review.rubrics.<id>.min_confidence".
 
 **Done when:**
-- The key is accepted at 0, 70 and 100 and resolves to the configured integer.
+- The key is accepted at 0, 70 and 100 and the resolved rubric policy carries the configured integer.
 - Config load fails with an error naming the exact key path and the permitted range 0 to 100 for 101, for -5, for 70.5, and for a string value.
-- A misspelled sibling key still fails with the existing unknown-key error naming the block.
+- A misspelled sibling key still fails with the existing unknown-key error naming the rubric policy block.
 - An absent key resolves to a floor of 0.
 
 **Files likely touched:**
 - `src/conductor/src/engine/config.ts` — key set entry and validator
-- `src/conductor/src/engine/resolved-config.ts` — resolved floor field
+- `src/conductor/src/engine/resolved-config.ts` — resolved policy field and default
 - `src/conductor/test/engine/config.test.ts` — accept and reject cases
 
 **Dependencies:** none
 
-### Task 5: Declare the key's production consumer in the config-key registry
+### Task 6: Declare the key's production consumer in the config-key registry
 **Story:** 8
 **Type:** infrastructure
 
 **Steps:**
-1. Run the registry totality test and observe it fail for the newly added key.
+1. Run the registry totality test and observe it fail for the new key.
 2. Verify failure (RED).
-3. Declare the key's production consumer beside the existing adjudication entries.
+3. Declare the key's consumer beside the existing rubric policy entries.
 4. Verify the totality test passes (GREEN).
-5. Commit with message: "chore(config): declare act_min_confidence consumer".
+5. Commit with message: "chore(config): declare min_confidence consumer".
 
 **Done when:**
 - The key declares a resolvable production consumer in the config-key consumer registry.
@@ -164,399 +187,332 @@ siblings so the two read coherently.
 **Files likely touched:**
 - `src/conductor/test/engine/config-consumer-registry.ts` — consumer declaration
 
-**Dependencies:** 4
+**Dependencies:** 5
 
-### Task 6: Demote a sub-floor action at judgement admission
-**Story:** 2
-**Type:** happy-path
-
-**Steps:**
-1. Write failing tests asserting that with a tracker resolvable and a floor of 70, an act case of confidence 40 is admitted as a defer case with a deferral effect, while confidence 70 and 95 are admitted unchanged, and that with no floor configured confidence 1 is admitted unchanged.
-2. Verify tests fail (RED).
-3. Apply the floor comparison at judgement admission, before reconcileRemediationCases, rewriting a sub-floor act case into a defer case carrying a deferral effect.
-4. Verify tests pass (GREEN).
-5. Commit with message: "feat(engine): demote sub-floor build_review actions to deferrals".
-
-**Done when:**
-- With a tracker resolvable and a floor of 70, an act case of confidence 40 is admitted as a defer case carrying a deferral effect and publishes no work order.
-- An act case whose confidence equals the floor, and one above it, are admitted unchanged as act cases.
-- With the floor absent, an act case of confidence 1 is admitted unchanged.
-- No action effect is ever reserved for a demoted case, and a lap demoting one of two act cases still admits the other as an action.
-
-**Files likely touched:**
-- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — floor comparison at admission
-- `src/conductor/test/engine/build-review-adjudication-coordinator.test.ts` — demotion cases
-
-**Dependencies:** 1, 4
-
-### Task 7: Prove the floor narrows and never promotes
-**Story:** 2
-**Type:** negative-path
-
-**Steps:**
-1. Write failing tests asserting a sub-floor defer case and a sub-floor reject case are admitted unchanged, and an above-floor defer case is never converted into an act case.
-2. Verify tests fail (RED).
-3. Constrain the demotion so it reads only act cases and can only produce defer.
-4. Verify tests pass (GREEN).
-5. Commit with message: "test(engine): confirm the confidence floor only narrows".
-
-**Done when:**
-- A defer case below the floor and a reject case below the floor are admitted identical to their input.
-- A defer case above the floor is never converted into an act case.
-- No code path raises a case disposition toward act.
-
-**Files likely touched:**
-- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — narrowing constraint
-- `src/conductor/test/engine/build-review-adjudication-coordinator.test.ts` — defer and reject cases
-
-**Dependencies:** 6
-
-### Task 8: Synthesize the demoted case's deferral body
+### Task 7: Add the suppressed bucket to the effective verdict reducer
 **Story:** 3
 **Type:** happy-path
 
 **Steps:**
-1. Write a failing test asserting a demoted case's filed body carries the case reference, the judgement rationale, the reported confidence, the applied floor, and the existing four intake sections.
-2. Verify test fails (RED).
-3. Synthesize the deferral title, body and exclusion rationale from the case, filing through the existing deferral effect and intake adapter.
-4. Verify test passes (GREEN).
-5. Commit with message: "feat(engine): synthesize deferral content for demoted findings".
-
-**Done when:**
-- A demoted case's deferral body contains its case reference, the judgement rationale, the reported confidence, and the applied floor.
-- The body carries the existing Observed, Impact, Desired outcome and Hypotheses sections.
-- Filing goes through the existing intake adapter, with no new filing path introduced.
-
-**Files likely touched:**
-- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — synthesized deferral content
-- `src/conductor/test/engine/build-review-adjudication-coordinator.test.ts` — body content
-
-**Dependencies:** 6
-
-### Task 9: File a demoted finding exactly once across laps
-**Story:** 3
-**Type:** negative-path
-
-**Steps:**
-1. Write failing tests asserting two consecutive laps demoting the same case produce the same effect id and reuse the existing issue by exact marker including when closed, and that two distinct demoted cases file two issues with distinct markers.
+1. Write failing tests asserting that with a floor of 70 a finding at 40 lands in a suppressed set and the verdict is PASS, findings at 70 and 95 are unresolved, a finding at 1 with no floor is unresolved, a finding with no confidence is unresolved, a mixed lap suppresses only the 40, and an uncovered infrastructure failure still fails the verdict.
 2. Verify tests fail (RED).
-3. Ensure the demotion is deterministic from confidence and floor alone and runs before reconciliation, so the case binds to the same effect id each lap.
+3. Read the per-rubric floor into the reducer and add a suppressed bucket beside accepted and unresolved, leaving the verdict formula unchanged. Follow the accepted-set pattern: one set, computed once, threaded as an input.
 4. Verify tests pass (GREEN).
-5. Commit with message: "fix(engine): keep demoted deferral effect ids stable across laps".
+5. Commit with message: "feat(engine): suppress sub-floor build_review findings at the effective verdict".
 
 **Done when:**
-- Two consecutive laps demoting the same case at the same floor produce an identical effect id.
-- The second lap reuses the existing issue by exact marker and files no duplicate, including when that issue has been closed.
-- Three consecutive demoting laps leave exactly one issue for the case.
-- Two distinct demoted cases on one lap file two issues with distinct markers.
+- The effective verdict reducer produces a suppressed set distinct from the accepted and unresolved sets, and only the unresolved set blocks.
+- A finding below its rubric's floor is suppressed; at or above it, or with no confidence, it is unresolved.
+- A lap mixing a sub-floor and an above-floor finding suppresses only the sub-floor one and fails on the other.
+- An uncovered infrastructure failure still fails the effective verdict when every content finding is suppressed.
 
 **Files likely touched:**
-- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — deterministic demotion before reconciliation
-- `src/conductor/test/engine/build-review-adjudication-coordinator.test.ts` — cross-lap dedup
+- `src/conductor/src/engine/build-review-aggregate.ts` — suppressed bucket
+- `src/conductor/src/engine/build-review-effective.ts` — floor input
+- `src/conductor/test/engine/build-review-effective.test.ts` — bucket cases
 
-**Dependencies:** 8
+**Dependencies:** 1, 5
 
-### Task 10: Record a failed deferral filing rather than passing around it
+### Task 8: Pass a fully suppressed lap through the conductor gate
+**Story:** 3
+**Type:** happy-path
+
+**Steps:**
+1. Write a failing integration test asserting a lap whose every finding is suppressed records build_review done with no remediate dispatch and no kickback charged.
+2. Verify test fails (RED).
+3. Thread the resolved floor into the conductor's effective-verdict call so the existing PASS branch is reached.
+4. Verify test passes (GREEN).
+5. Commit with message: "feat(conductor): a fully suppressed build_review lap passes without adjudication".
+
+**Done when:**
+- A lap whose every finding is suppressed passes the build_review gate with no remediate dispatch and no kickback charged.
+- The conductor never enters the adjudication branch for that lap.
+
+**Files likely touched:**
+- `src/conductor/src/engine/conductor.ts` — floor threaded into the effective-verdict call
+- `src/conductor/test/engine/conductor-build-review-adjudication.test.ts` — fully suppressed lap
+
+**Dependencies:** 7
+
+### Task 9: Exclude suppressed findings from adjudication sources
 **Story:** 3
 **Type:** negative-path
 
 **Steps:**
-1. Write a failing test asserting a demoted case whose filing fails leaves its effect recorded failed and the lap does not report a pass.
-2. Verify test fails (RED).
-3. Route a failed demoted filing through the existing failed-effect path.
-4. Verify test passes (GREEN).
-5. Commit with message: "fix(engine): record failed demoted deferral filings".
+1. Write failing tests asserting a mixed lap dispatches the judge with only the unresolved finding as a current source, and that the operator disposition store is byte-identical before and after the lap.
+2. Verify tests fail (RED).
+3. Pass the suppressed ids to the coordinator as their own input and subtract them from sources alongside, but separately from, operator-resolved ids. Search hints: operatorResolvedFindingIds, allOperatorResolved.
+4. Verify tests pass (GREEN).
+5. Commit with message: "feat(engine): keep suppressed findings out of adjudication sources".
 
 **Done when:**
-- A demoted case whose issue filing fails has its effect recorded as failed.
-- A lap containing a failed demoted filing does not report a clean pass.
+- On a mixed lap the adjudication sources exclude suppressed findings.
+- The operator disposition store is unchanged by a suppressed lap.
+- Suppressed ids reach the coordinator as an input distinct from operator-resolved ids.
 
 **Files likely touched:**
-- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — failed-effect routing
-- `src/conductor/test/engine/build-review-adjudication-coordinator.test.ts` — filing failure
+- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — suppressed input
+- `src/conductor/src/engine/conductor.ts` — pass suppressed ids
+- `src/conductor/test/engine/build-review-adjudication-coordinator.test.ts` — source exclusion and disposition store invariance
 
-**Dependencies:** 8
+**Dependencies:** 7
 
-### Task 11: Bypass the kickback gate for demoted cases
+### Task 10: Record suppressed findings on the outer verdict event
 **Story:** 4
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests asserting a lap whose only act case is demoted leaves count unchanged, does not increment cumulative, does not invoke the kickback gate for that case, and does not advance a feature toward its cumulative cap, while a mixed lap charges exactly one kickback.
+1. Write failing tests asserting the outer verdict event carries a suppressed-findings list with id, rubric, confidence and floor, two suppressions yield two entries, an empty lap yields none, no kickback event is attributable to a suppression, and the entries are stamped at derivation time.
 2. Verify tests fail (RED).
-3. Skip the kickback gate entirely on the demotion path rather than calling it with a zero charge.
+3. Add an additive optional suppressedFindings field to the existing outer verdict member and populate it at the existing emit site.
 4. Verify tests pass (GREEN).
-5. Commit with message: "feat(engine): demoted findings consume no kickback budget".
+5. Commit with message: "feat(engine): record suppressed findings on build_review_outer_verdict".
 
 **Done when:**
-- A lap whose only act case is demoted leaves count unchanged and does not invoke the kickback gate for that case.
-- The demotion does not increment cumulative; any reset observed on a passing lap comes from the existing pass-convergence rule.
-- A lap mixing a demoted case and a surviving act case charges exactly one kickback.
-- A feature one kickback below its cumulative cap is not advanced toward the cap by a demotion and does not halt.
+- The outer verdict event carries an additive suppressed-findings list with finding id, rubric, confidence, and floor for every suppressed finding.
+- A lap that suppresses nothing carries an absent or empty list.
+- A suppression is never emitted or rendered as a kickback event.
+- Entries are stamped when the effective verdict is derived, not reconstructed from stored state.
 
 **Files likely touched:**
-- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — kickback gate bypass
-- `src/conductor/test/engine/build-review-adjudication-coordinator.test.ts` — ledger assertions
+- `src/conductor/src/types/events.ts` — additive field
+- `src/conductor/src/engine/conductor.ts` — populate at emit
+- `src/conductor/test/engine/conductor-build-review-adjudication.test.ts` — event assertions
 
-**Dependencies:** 6
+**Dependencies:** 7
 
-### Task 12: Publish no BUILD work and emit no kickback for a demoted case
+### Task 11: Render suppressed findings in the daemon log
 **Story:** 4
-**Type:** negative-path
+**Type:** happy-path
 
 **Steps:**
-1. Write failing tests asserting a demoted case publishes no BUILD work order, does not re-dispatch BUILD, and contributes no kickback event to the lap's event stream.
-2. Verify tests fail (RED).
-3. Ensure the demotion path reaches neither the work-order publisher nor the kickback emitter.
-4. Verify tests pass (GREEN).
-5. Commit with message: "test(engine): demoted findings dispatch no BUILD work".
+1. Write a failing test asserting the daemon log projection emits one line per suppressed finding naming the finding, its confidence and the floor, and emits nothing for an outer verdict with no suppressions.
+2. Verify test fails (RED).
+3. Add a render projection for the outer verdict member that fires only when the suppressed list is non-empty, leaving the member's other rendering unchanged.
+4. Verify test passes (GREEN).
+5. Commit with message: "feat(daemon-log): render suppressed build_review findings".
 
 **Done when:**
-- No BUILD work order is published for a demoted case and BUILD is not re-dispatched for it.
-- The lap's event stream contains no kickback event attributable to a demoted case.
+- The daemon log projection of that event renders one line per suppressed finding.
+- An outer verdict with no suppressions renders no suppression line.
 
 **Files likely touched:**
-- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — work-order and emitter paths
-- `src/conductor/test/engine/build-review-adjudication-coordinator.test.ts` — work order and event assertions
+- `src/conductor/src/engine/event-sinks.ts` — render declaration
+- `src/conductor/src/ui/dashboard-text.ts` — projection
+- `src/conductor/test/engine/event-sinks.test.ts` — render case
 
-**Dependencies:** 11
+**Dependencies:** 10
 
-### Task 13: Make the floor inert when a deferral cannot be filed
+### Task 12: Persist suppression entries in the case store
+**Story:** 5
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests asserting a suppressed finding leaves a store entry keyed by its id with rubric, summary, confidence, floor and last-seen lap; recurrence updates the entry in place; entries survive laps where the finding is absent and survive resolution of a related case; and no entry appears in the operator disposition store.
+2. Verify tests fail (RED).
+3. Add an optional suppression-entry list to the store state, parsed as empty when absent, written by the coordinator under the existing lease and never pruned.
+4. Verify tests pass (GREEN).
+5. Commit with message: "feat(engine): persist suppressed build_review findings in the case store".
+
+**Done when:**
+- The case store persists one suppression entry per suppressed finding id, updated in place on recurrence and never pruned.
+- Resolved cases and suppression entries remain in the store across laps.
+- A suppression entry never appears in the operator disposition store.
+- An existing store with no suppression list parses with an empty list and STORE_VERSION stays at v1.
+
+**Files likely touched:**
+- `src/conductor/src/engine/remediation-case-store.ts` — suppression entries
+- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — write under lease
+- `src/conductor/test/engine/remediation-case-store.test.ts` — persistence cases
+
+**Dependencies:** 9
+
+### Task 13: Carry suppression history into the adjudication context
 **Story:** 5
 **Type:** negative-path
 
 **Steps:**
-1. Write failing tests asserting that with tracker dependencies absent a sub-floor act case keeps its act disposition and work order, reserves no deferral effect, takes the same route it would with the floor unset, and is demoted on a later lap once a tracker resolves.
+1. Write failing tests asserting the context carries suppression entries in a history section distinct from current sources, and that a case-v1 result giving those entries no outcome still validates.
 2. Verify tests fail (RED).
-3. Guard the floor comparison on the presence of the deferral dependencies, so it does not apply when a deferral could not finalize.
+3. Add the history section to the context assembler and confirm the source-complete validator reads only current sources.
 4. Verify tests pass (GREEN).
-5. Commit with message: "fix(engine): keep the confidence floor inert without a tracker".
+5. Commit with message: "feat(engine): show suppressed history to the build_review judge".
 
 **Done when:**
-- With tracker dependencies absent, a sub-floor act case keeps its act disposition and publishes its work order.
-- With tracker dependencies absent, no deferral effect is reserved for a sub-floor case, so nothing is left reserved across laps.
-- With tracker dependencies absent, the lap route is identical with the floor set and with it unset, and the lap does not halt on an unfinished deferral.
-- Inertness is recomputed each lap, so the same case is demoted on a later lap once a tracker resolves.
+- The adjudication context carries suppression entries in a history section distinct from current sources.
+- A judgement that assigns no outcome to a suppression entry still validates.
 
 **Files likely touched:**
-- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — dependency guard on the floor
-- `src/conductor/test/engine/build-review-adjudication-coordinator.test.ts` — absent-tracker cases
+- `src/conductor/src/engine/build-review-adjudication-context.ts` — history section
+- `src/conductor/test/engine/build-review-adjudication-context.test.ts` — section shape
+- `src/conductor/test/engine/remediation-case-validator.test.ts` — no outcome demanded
 
-**Dependencies:** 6
+**Dependencies:** 12
 
-### Task 14: Pass a lap whose every action was demoted
+### Task 14: Skip the judge for exact-id recurrence of a finalized finding
 **Story:** 6
 **Type:** happy-path
 
 **Steps:**
-1. Write a failing integration test asserting that a lap whose every act case is demoted, whose deferrals finalize and whose rubrics are healthy reaches a pass verdict without re-entering BUILD or halting, including a lap with three sub-floor cases.
-2. Verify test fails (RED).
-3. Confirm the demoted cases carry finalized deferral effects so the existing reducer reaches its pass branch, adjusting the admission path if any demoted case still presents as build-eligible.
-4. Verify test passes (GREEN).
-5. Commit with message: "test(engine): a fully demoted build_review lap passes".
+1. Write failing tests asserting that a finding whose exact id links to an applied deferral case, a rejected case, or a merged source on a finalized case is removed from the live set; an empty live set finalizes without dispatch; and a lap with one settled and one new finding dispatches with the new finding only.
+2. Verify tests fail (RED).
+3. After the second operator-resolution read and before dispatchSources is frozen, read the store and remove live sources that bind by exact id to a finalized non-action case; finalize from durable state when the set empties.
+4. Verify tests pass (GREEN).
+5. Commit with message: "feat(engine): settle exact-id recurrence of finalized build_review findings without dispatch".
 
 **Done when:**
-- A lap whose every act case was demoted, whose deferrals all finalized and whose rubrics are healthy reaches a pass verdict through the conductor's build_review gate.
-- That lap neither re-enters BUILD nor halts.
-- A lap with three sub-floor act cases files three deferrals and still passes.
+- A finding whose exact id links to a finalized deferred, rejected, or merged case is removed from the live source set before dispatch.
+- A lap whose live set is empty after settlement finalizes from durable state without dispatching the judge.
+- A lap with one settled and one new finding dispatches the judge with the new finding as its only current source.
 
 **Files likely touched:**
-- `src/conductor/test/engine/conductor-build-review-adjudication.test.ts` — fully demoted lap
-- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — admission adjustment if required
+- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — settlement predicate
+- `src/conductor/test/engine/build-review-adjudication-coordinator.test.ts` — settlement cases
 
-**Dependencies:** 9, 13
+**Dependencies:** 9
 
-### Task 15: Preserve the existing blockers on a demoted lap
+### Task 15: Keep unsettled findings live
 **Story:** 6
 **Type:** negative-path
 
 **Steps:**
-1. Write failing tests asserting a lap with an unfinalized deferral halts, a lap with an uncovered infrastructure failure follows the mechanical lane, and a lap retaining one act case routes to BUILD.
+1. Write failing tests asserting a one-character anchor change, a reserved deferral effect, and an open unattempted action case each leave the finding live and take today's route; that the predicate performs no store write; and that an unreadable store still fails closed.
 2. Verify tests fail (RED).
-3. Confirm the demotion changes none of these routes.
+3. Constrain the predicate to exact ids and finalized non-action cases, and keep it read-only.
 4. Verify tests pass (GREEN).
-5. Commit with message: "test(engine): demotion preserves existing build_review blockers".
+5. Commit with message: "test(engine): settlement admits only exact-id finalized findings".
 
 **Done when:**
-- A lap with an unfinalized deferral halts rather than passing.
-- A lap with a remaining uncovered infrastructure failure follows the mechanical lane rather than passing.
-- A lap retaining at least one act case routes to BUILD rather than passing.
+- A drifted id, a reserved or failed effect, and an open action case each leave the finding live.
+- The predicate performs no write to the case store.
+- An unreadable case store fails the lap closed exactly as before.
 
 **Files likely touched:**
-- `src/conductor/test/engine/conductor-build-review-adjudication.test.ts` — blocker routes
+- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — predicate bounds
+- `src/conductor/test/engine/build-review-adjudication-coordinator.test.ts` — negative cases
 
 **Dependencies:** 14
 
-### Task 16: Stamp the demotion reason on the event spine
+### Task 16: Record a skipped dispatch
 **Story:** 7
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests asserting each demotion emits its reason with the reported confidence and applied floor, a lap demoting nothing emits no reason, the reason is stamped at demotion time, and no kickback event carries it.
+1. Write failing tests asserting a skipped dispatch emits the completed-adjudication event with the settled case ids and an empty effect list, emits no started event, leaves the kickback ledger unchanged, renders each settled case in the trace, and shows a completed line in the daemon log.
 2. Verify tests fail (RED).
-3. Add an additive optional demotion field to an existing remediation event member and emit it through the coordinator's existing emit callback.
+3. Emit the existing completed event from the finalize-without-dispatch path.
 4. Verify tests pass (GREEN).
-5. Commit with message: "feat(engine): record build_review demotions on the event spine".
+5. Commit with message: "feat(engine): record skipped build_review adjudication dispatches".
 
 **Done when:**
-- Each demotion emits its reason on the persisted event spine, carrying the reported confidence and the applied floor.
-- A lap that demotes nothing emits no demotion reason on any event.
-- The demotion reason is stamped at demotion time rather than derived afterwards from stored case state.
-- The demotion is never emitted as a kickback event, and any new event member introduced instead declares its sink and its audit-trail mapping.
+- A skipped dispatch emits the completed-adjudication event with settled case ids and an empty effect list.
+- No started event is emitted for a skipped dispatch.
+- The kickback ledger is unchanged by a skipped dispatch.
+- The rendered trace lists each settled case with its finalized outcome, and the daemon log shows a completed adjudication line.
 
 **Files likely touched:**
-- `src/conductor/src/types/events.ts` — additive demotion field
-- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — emission
-- `src/conductor/test/engine/build-review-adjudication-coordinator.test.ts` — event assertions
+- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — emit on skip
+- `src/conductor/test/engine/build-review-adjudication-coordinator.test.ts` — event and ledger assertions
 
-**Dependencies:** 6
-
-### Task 17: Render demotions into the per-lap adjudication trace
-**Story:** 7
-**Type:** happy-path
-
-**Steps:**
-1. Write failing tests asserting the rendered trace carries one line per demoted case naming the case, its confidence and the floor, that two demotions render two lines, and that those lines appear in halt evidence.
-2. Verify tests fail (RED).
-3. Extend the adjudication trace renderer to include demoted cases.
-4. Verify tests pass (GREEN).
-5. Commit with message: "feat(engine): render demoted findings in the adjudication trace".
-
-**Done when:**
-- The rendered adjudication trace contains one line per demoted case naming the case, its confidence, and the applied floor.
-- A lap demoting two cases renders two distinct lines.
-- The demotion lines appear in the halt evidence when the lap halts for an unrelated reason.
-
-**Files likely touched:**
-- `src/conductor/src/engine/build-review-adjudication.ts` — trace rendering
-- `src/conductor/test/engine/build-review-adjudication.test.ts` — trace assertions
-
-**Dependencies:** 16
-
-### Task 18: Migrate the confidence fixtures across the affected test files
-**Story:** 1
-**Type:** refactor
-
-**Steps:**
-1. Run the engine test suite and observe the remaining enum-literal confidence fixtures fail to typecheck.
-2. Verify failure (RED).
-3. Replace every enum-valued confidence literal in the affected test files with a representative integer, preserving each test's original intent.
-4. Verify the suite passes (GREEN).
-5. Commit with message: "test(engine): migrate confidence fixtures to integers".
-
-**Done when:**
-- No enum-valued confidence literal remains in any engine test file or fixture.
-- The engine test suite passes.
-
-**Files likely touched:**
-- `src/conductor/test/engine/remediation-case-effects.test.ts` — confidence fixtures
-- `src/conductor/test/engine/remediation-case-reconciler.test.ts` — confidence fixtures
-- `src/conductor/test/engine/remediation-case-validator.test.ts` — confidence fixtures
-- `src/conductor/test/engine/build-review-adjudication.test.ts` — confidence fixtures
-- `src/conductor/test/integration/remediation-case-recovery.integration.test.ts` — confidence fixtures
-
-**Dependencies:** 1, 2, 3
+**Dependencies:** 14
 
 ## Task Dependency Graph
 
 ```text
-1 ──┬── 2 ──┐
-    ├── 3 ──┼── 18
-    └───────┘
-4 ── 5
-1,4 ── 6 ──┬── 7
-           ├── 8 ──┬── 9 ──┐
-           │       └── 10  │
-           ├── 11 ── 12    │
-           ├── 13 ─────────┴── 14 ── 15
-           └── 16 ── 17
+1 ──┬── 2
+    ├── 3 ── 4
+    └──┐
+5 ── 6 │
+1,5 ── 7 ──┬── 8
+           ├── 9 ──┬── 12 ── 13
+           │       └── 14 ──┬── 15
+           │                └── 16
+           └── 10 ── 11
 ```
 
 ## Integration Points
 
-- After Task 6: a sub-floor action is observably demoted through the coordinator.
-- After Task 9: the deferral files exactly once across repeated laps.
-- After Task 14: the full operator-visible outcome is exercised through the conductor's build_review
-  gate — the cross-boundary integration proof for this feature.
+- After Task 8: a fully suppressed lap observably passes the conductor's build_review gate — the
+  cross-boundary integration proof for suppression.
+- After Task 13: the judge observably receives suppression history.
+- After Task 16: a settled recurrence observably finalizes without a provider session and is
+  recorded on the spine — the integration proof for settlement.
 
 ## Coverage Check
 
 | Criterion | Task id(s) | Done when quote | Disposition |
 | --- | --- | --- | --- |
-| Story 1 happy: Given an adjudication result whose case carries `"confidence": 72`, when the engine reads the remediation artifact, then the case is accepted and its confidence is retained as the integer 72. | 1 | The reader accepts an integer confidence of 0, 72, and 100 and returns each unchanged on the parsed case. | diff-local |
-| Story 1 happy: Given an adjudication result whose case carries `"confidence": 0`, when the engine reads the remediation artifact, then the case is accepted, because 0 is a valid confidence and not an absent value. | 1 | The reader accepts an integer confidence of 0, 72, and 100 and returns each unchanged on the parsed case. | diff-local |
-| Story 1 happy: Given an adjudication result whose case carries `"confidence": 100`, when the engine reads the remediation artifact, then the case is accepted. | 1 | The reader accepts an integer confidence of 0, 72, and 100 and returns each unchanged on the parsed case. | diff-local |
-| Story 1 negative: Given a case carrying `"confidence": 101`, when the engine reads the remediation artifact, then the whole adjudication is rejected with reason `invalid-case-confidence` and no case is stamped. | 1 | The reader returns reason invalid-case-confidence for 101, for -1, for 72.5, and for a string confidence. | diff-local |
-| Story 1 negative: Given a case carrying `"confidence": -1`, when the engine reads the remediation artifact, then the whole adjudication is rejected with reason `invalid-case-confidence`. | 1 | The reader returns reason invalid-case-confidence for 101, for -1, for 72.5, and for a string confidence. | diff-local |
-| Story 1 negative: Given a case carrying `"confidence": 72.5`, when the engine reads the remediation artifact, then the whole adjudication is rejected with reason `invalid-case-confidence`, because confidence must be an integer. | 1 | The reader returns reason invalid-case-confidence for 101, for -1, for 72.5, and for a string confidence. | diff-local |
-| Story 1 negative: Given a case carrying `"confidence": "high"`, when the engine reads the remediation artifact, then the whole adjudication is rejected with reason `invalid-case-confidence`, because the enum form is no longer accepted. | 1 | The reader returns reason invalid-case-confidence for 101, for -1, for 72.5, and for a string confidence. | diff-local |
-| Story 1 negative: Given a case omitting `confidence` entirely, when the engine reads the remediation artifact, then the whole adjudication is rejected, because the key set is exact. | 1 | A case omitting confidence entirely is rejected by the existing exact-key check. | diff-local |
-| Story 1 negative: Given a durable case store record whose persisted confidence is out of range, when the store is read, then the read fails closed as malformed state rather than admitting the record. | 2 | The durable case store rejects a persisted case whose confidence is out of range or non-integer as malformed state. | diff-local |
-| Story 2 happy: Given a tracker repository is resolvable, `act_min_confidence` is 70, and an adjudication returns an `act` case with confidence 40, when the lap is adjudicated, then that case is recorded as a `defer` case and no BUILD work order is published for it. | 6 | With a tracker resolvable and a floor of 70, an act case of confidence 40 is admitted as a defer case carrying a deferral effect and publishes no work order. | diff-local |
-| Story 2 happy: Given `act_min_confidence` is 70 and an adjudication returns an `act` case with confidence 70, when the lap is adjudicated, then the case remains an `act` case, because the floor is a minimum and not an exclusive bound. | 6 | An act case whose confidence equals the floor, and one above it, are admitted unchanged as act cases. | diff-local |
-| Story 2 happy: Given `act_min_confidence` is 70 and an adjudication returns an `act` case with confidence 95, when the lap is adjudicated, then the case remains an `act` case and publishes its BUILD work order as today. | 6 | An act case whose confidence equals the floor, and one above it, are admitted unchanged as act cases. | diff-local |
-| Story 2 happy: Given `act_min_confidence` is left unset and an adjudication returns an `act` case with confidence 1, when the lap is adjudicated, then the case remains an `act` case, because the default floor of 0 never demotes. | 6 | With the floor absent, an act case of confidence 1 is admitted unchanged. | diff-local |
-| Story 2 happy: Given a tracker repository is resolvable and an adjudication returns both a sub-floor `act` case and an at-floor `act` case, when the lap is adjudicated, then only the sub-floor case is demoted and the other still publishes its work order. | 6 | No action effect is ever reserved for a demoted case, and a lap demoting one of two act cases still admits the other as an action. | diff-local |
-| Story 2 negative: Given a tracker repository is resolvable, `act_min_confidence` is 70, and an adjudication returns a `defer` case with confidence 40, when the lap is adjudicated, then the case is unchanged, because the floor never alters a case that is already deferred. | 7 | A defer case below the floor and a reject case below the floor are admitted identical to their input. | diff-local |
-| Story 2 negative: Given a tracker repository is resolvable, `act_min_confidence` is 70, and an adjudication returns a `reject` case with confidence 40, when the lap is adjudicated, then the case is unchanged, because the floor never alters a rejection. | 7 | A defer case below the floor and a reject case below the floor are admitted identical to their input. | diff-local |
-| Story 2 negative: Given `act_min_confidence` is 90 and an adjudication returns a `defer` case with confidence 95, when the lap is adjudicated, then the case remains deferred, because the engine may narrow an action but may never promote a deferral into an action. | 7 | A defer case above the floor is never converted into an act case. | diff-local |
-| Story 2 negative: Given a demoted case, when its stored record is read back, then its disposition is `defer` and its effect kind is `deferral`, with no residual action effect anywhere in the store. | 6 | No action effect is ever reserved for a demoted case, and a lap demoting one of two act cases still admits the other as an action. | diff-local |
-| Story 2 negative: Given a tracker repository is resolvable, `act_min_confidence` is 70, and an adjudication returns an `act` case with confidence 40, when the demotion is applied, then it happens before case reconciliation, so no action effect is ever reserved and later contradicted. | 6 | No action effect is ever reserved for a demoted case, and a lap demoting one of two act cases still admits the other as an action. | diff-local |
-| Story 3 happy: Given a sub-floor `act` case is demoted on a lap, when its deferral effect runs, then an intake issue is filed carrying the effect's hidden marker and a body with the existing Observed, Impact, Desired Outcomes and Hypotheses sections. | 8 | A demoted case's deferral body contains its case reference, the judgement rationale, the reported confidence, and the applied floor. | diff-local |
-| Story 3 happy: Given a demoted case whose deferral body is synthesized by the engine, when the issue is filed, then the body states the case reference, the judgement's rationale, the reported confidence, and the floor that demoted it. | 8 | A demoted case's deferral body contains its case reference, the judgement rationale, the reported confidence, and the applied floor. | diff-local |
-| Story 3 happy: Given a demoted case that was already filed on a previous lap, when the same case is demoted again on the next lap, then the existing issue is reused via its exact marker and no second issue is created. | 9 | The second lap reuses the existing issue by exact marker and files no duplicate, including when that issue has been closed. | diff-local |
-| Story 3 negative: Given a demoted case filed on lap one, when lap two demotes the same case and the prior issue has since been closed, then the closed issue is reused and no duplicate is filed. | 9 | The second lap reuses the existing issue by exact marker and files no duplicate, including when that issue has been closed. | diff-local |
-| Story 3 negative: Given a demoted case, when the same feature runs three consecutive laps that each demote it, then exactly one issue exists for it across all three laps. | 9 | Three consecutive demoting laps leave exactly one issue for the case. | diff-local |
-| Story 3 negative: Given a demoted case whose issue filing fails, when the lap settles, then the effect is recorded as failed and the lap does not report a clean pass around an unfiled finding. | 10 | A demoted case whose issue filing fails has its effect recorded as failed. | diff-local |
-| Story 3 negative: Given a demoted case, when its effect id is compared across two laps at the same floor and confidence, then the id is identical, because the demotion is deterministic and precedes reconciliation. | 9 | Two consecutive laps demoting the same case at the same floor produce an identical effect id. | diff-local |
-| Story 3 negative: Given two distinct sub-floor cases demoted on the same lap, when their deferrals are filed, then two separate issues exist with distinct markers and neither dedups against the other. | 9 | Two distinct demoted cases on one lap file two issues with distinct markers. | diff-local |
-| Story 4 happy: Given a lap whose only `act` case is demoted, when the lap settles, then the kickback ledger's `count` for `build_review` is unchanged from before the lap. | 11 | A lap whose only act case is demoted leaves count unchanged and does not invoke the kickback gate for that case. | diff-local |
-| Story 4 happy: Given a lap whose only `act` case is demoted, when the lap settles, then the demotion itself does not increment the ledger's `cumulative` value; a subsequent pass may still reset it to 0, which is the existing convergence rule and not an effect of the demotion. | 11 | The demotion does not increment cumulative; any reset observed on a passing lap comes from the existing pass-convergence rule. | diff-local |
-| Story 4 happy: Given a lap with one demoted case and one surviving `act` case, when the lap settles, then exactly one kickback is charged, for the surviving action only. | 11 | A lap mixing a demoted case and a surviving act case charges exactly one kickback. | diff-local |
-| Story 4 negative: Given a lap whose only `act` case is demoted, when the lap settles, then the kickback gate is not invoked at all for the demoted case, rather than invoked for a zero charge. | 11 | A lap whose only act case is demoted leaves count unchanged and does not invoke the kickback gate for that case. | diff-local |
-| Story 4 negative: Given a feature one kickback below its cumulative cap, when a lap demotes its only `act` case, then the demotion does not advance it toward the cap and it does not halt on budget exhaustion. | 11 | A feature one kickback below its cumulative cap is not advanced toward the cap by a demotion and does not halt. | diff-local |
-| Story 4 negative: Given a lap whose only `act` case is demoted, when the lap settles, then no BUILD work order is published and BUILD is not re-dispatched. | 12 | No BUILD work order is published for a demoted case and BUILD is not re-dispatched for it. | diff-local |
-| Story 4 negative: Given a demoted case, when the event stream for the lap is read, then it contains no `kickback` event attributable to that case. | 12 | The lap's event stream contains no kickback event attributable to a demoted case. | diff-local |
-| Story 5 happy: Given no tracker repository can be resolved and `act_min_confidence` is 70, when an adjudication returns an `act` case with confidence 40, then the case remains an `act` case and publishes its BUILD work order as though no floor were set. | 13 | With tracker dependencies absent, a sub-floor act case keeps its act disposition and publishes its work order. | diff-local |
-| Story 5 happy: Given a tracker repository is resolvable and `act_min_confidence` is 70, when an adjudication returns an `act` case with confidence 40, then the case is demoted, confirming the inert behavior is conditional and not permanent. | 13 | Inertness is recomputed each lap, so the same case is demoted on a later lap once a tracker resolves. | diff-local |
-| Story 5 negative: Given no tracker repository can be resolved, when a lap adjudicates a sub-floor `act` case, then the lap does not halt on an unfinished deferral effect. | 13 | With tracker dependencies absent, the lap route is identical with the floor set and with it unset, and the lap does not halt on an unfinished deferral. | diff-local |
-| Story 5 negative: Given no tracker repository can be resolved, when a lap adjudicates a sub-floor `act` case, then no deferral effect is reserved for it, so nothing is left in a reserved state across laps. | 13 | With tracker dependencies absent, no deferral effect is reserved for a sub-floor case, so nothing is left reserved across laps. | diff-local |
-| Story 5 negative: Given no tracker repository can be resolved, when a lap adjudicates a sub-floor `act` case, then the lap's route is identical to the route it would take with the floor unset. | 13 | With tracker dependencies absent, the lap route is identical with the floor set and with it unset, and the lap does not halt on an unfinished deferral. | diff-local |
-| Story 5 negative: Given the tracker becomes resolvable on a later lap, when the same sub-floor case is adjudicated again, then it is demoted on that lap, because inertness is evaluated per lap and not cached. | 13 | Inertness is recomputed each lap, so the same case is demoted on a later lap once a tracker resolves. | diff-local |
-| Story 6 happy: Given a lap whose every `act` case is demoted and whose rubrics are otherwise healthy, when the lap settles, then build_review passes and the step is recorded done. | 14 | A lap whose every act case was demoted, whose deferrals all finalized and whose rubrics are healthy reaches a pass verdict through the conductor's build_review gate. | diff-local |
-| Story 6 happy: Given a lap whose every `act` case is demoted, when the lap settles, then BUILD is not re-entered. | 14 | That lap neither re-enters BUILD nor halts. | diff-local |
-| Story 6 happy: Given a lap with three `act` cases all below the floor, when the lap settles, then all three are filed as deferrals and the lap still passes. | 14 | A lap with three sub-floor act cases files three deferrals and still passes. | diff-local |
-| Story 6 negative: Given a lap whose every `act` case is demoted, when the lap settles, then it does not halt with a route of `halt`, and specifically not on an unfinished-effect reason. | 14 | That lap neither re-enters BUILD nor halts. | diff-local |
-| Story 6 negative: Given a lap whose every `act` case is demoted but one deferral effect has not finalized, when the lap settles, then the lap halts rather than passing, because an unfinished effect still blocks a pass. | 15 | A lap with an unfinalized deferral halts rather than passing. | diff-local |
-| Story 6 negative: Given a lap whose every `act` case is demoted while an uncovered infrastructure failure remains, when the lap settles, then the lap follows the existing mechanical lane rather than passing, because content demotion does not clear an infrastructure blocker. | 15 | A lap with a remaining uncovered infrastructure failure follows the mechanical lane rather than passing. | diff-local |
-| Story 6 negative: Given a lap with one demoted case and one surviving `act` case, when the lap settles, then the lap routes to BUILD rather than passing. | 15 | A lap retaining at least one act case routes to BUILD rather than passing. | diff-local |
-| Story 7 happy: Given a case is demoted, when the lap's event stream is read, then it contains a remediation event carrying the demotion reason, including the reported confidence and the applied floor. | 16 | Each demotion emits its reason on the persisted event spine, carrying the reported confidence and the applied floor. | diff-local |
-| Story 7 happy: Given a case is demoted, when the lap's adjudication trace is rendered, then it contains a line naming the case, its confidence, and the floor that demoted it. | 17 | The rendered adjudication trace contains one line per demoted case naming the case, its confidence, and the applied floor. | diff-local |
-| Story 7 happy: Given a lap demotes two cases, when the trace is rendered, then both appear as separate lines. | 17 | A lap demoting two cases renders two distinct lines. | diff-local |
-| Story 7 negative: Given a case is demoted, when the event stream is read, then the demotion is not emitted as a `kickback` event, because no kickback was charged. | 16 | The demotion is never emitted as a kickback event, and any new event member introduced instead declares its sink and its audit-trail mapping. | diff-local |
-| Story 7 negative: Given a lap that demotes nothing, when its event stream is read, then no demotion reason appears on any event. | 16 | A lap that demotes nothing emits no demotion reason on any event. | diff-local |
-| Story 7 negative: Given a case is demoted, when the demotion record is inspected, then it is stamped at the time of demotion rather than reconstructed later from stored case state. | 16 | The demotion reason is stamped at demotion time rather than derived afterwards from stored case state. | diff-local |
-| Story 7 negative: Given a demoted case, when the lap subsequently halts for an unrelated reason, then the demotion line still appears in the halt evidence. | 17 | The demotion lines appear in the halt evidence when the lap halts for an unrelated reason. | diff-local |
-| Story 7 negative: Given the demotion record rides an existing event member, when a new event member is introduced instead, then that member declares its sink and appears in the audit-trail mapping, so event completeness is preserved. | 16 | The demotion is never emitted as a kickback event, and any new event member introduced instead declares its sink and its audit-trail mapping. | diff-local |
-| Story 8 happy: Given a project config setting `build_review.adjudication.act_min_confidence` to 70, when config loads, then it is accepted and the resolved value is 70. | 4 | The key is accepted at 0, 70 and 100 and resolves to the configured integer. | diff-local |
-| Story 8 happy: Given a project config that omits the key, when config loads, then the resolved value is 0 and no warning is produced. | 4 | An absent key resolves to a floor of 0. | diff-local |
-| Story 8 happy: Given a project config setting the key to 0, when config loads, then it is accepted and the floor never demotes. | 4 | The key is accepted at 0, 70 and 100 and resolves to the configured integer. | diff-local |
-| Story 8 happy: Given a project config setting the key to 100, when config loads, then it is accepted. | 4 | The key is accepted at 0, 70 and 100 and resolves to the configured integer. | diff-local |
-| Story 8 negative: Given a config setting the key to 101, when config loads, then loading fails with a validation error naming the exact `build_review.adjudication.act_min_confidence` path and its permitted range. | 4 | Config load fails with an error naming the exact key path and the permitted range 0 to 100 for 101, for -5, for 70.5, and for a string value. | diff-local |
-| Story 8 negative: Given a config setting the key to -5, when config loads, then loading fails with a validation error naming the exact path. | 4 | Config load fails with an error naming the exact key path and the permitted range 0 to 100 for 101, for -5, for 70.5, and for a string value. | diff-local |
-| Story 8 negative: Given a config setting the key to 70.5, when config loads, then loading fails with a validation error, because the value must be an integer. | 4 | Config load fails with an error naming the exact key path and the permitted range 0 to 100 for 101, for -5, for 70.5, and for a string value. | diff-local |
-| Story 8 negative: Given a config setting the key to the string "70", when config loads, then loading fails with a validation error, because the value must be an integer and is not coerced. | 4 | Config load fails with an error naming the exact key path and the permitted range 0 to 100 for 101, for -5, for 70.5, and for a string value. | diff-local |
-| Story 8 negative: Given a config setting a misspelled `act_min_confidance`, when config loads, then loading fails with the existing unknown-key error naming the `build_review.adjudication` block. | 4 | A misspelled sibling key still fails with the existing unknown-key error naming the block. | diff-local |
-| Story 8 negative: Given the config-key consumer registry, when its totality test runs, then `build_review.adjudication.act_min_confidence` declares a resolvable production consumer and the test passes. | 5 | The key declares a resolvable production consumer in the config-key consumer registry. | diff-local |
+| Story 1 happy: Given a rubric result whose finding carries `"confidence": 72`, when the engine parses the result, then the finding is accepted and its confidence is retained as the integer 72. | 1 | The finding parser accepts an integer confidence of 0, 72, and 100 and returns each unchanged on the parsed finding. | diff-local |
+| Story 1 happy: Given a rubric result whose finding carries `"confidence": 0`, when the engine parses the result, then the finding is accepted, because 0 is a valid confidence and not an absent value. | 1 | The finding parser accepts an integer confidence of 0, 72, and 100 and returns each unchanged on the parsed finding. | diff-local |
+| Story 1 happy: Given a rubric result whose finding carries `"confidence": 100`, when the engine parses the result, then the finding is accepted. | 1 | The finding parser accepts an integer confidence of 0, 72, and 100 and returns each unchanged on the parsed finding. | diff-local |
+| Story 1 happy: Given a rubric result whose finding omits `confidence`, when the engine parses the result, then the finding is accepted with no confidence recorded, because the field is optional. | 1 | The finding parser accepts a finding with no confidence and records none. | diff-local |
+| Story 1 negative: Given a finding carrying `"confidence": 101`, when the engine parses the result, then the whole rubric result is malformed and is handled exactly as a result with any other invalid finding field. | 1 | The finding parser treats 101, -1, 72.5, and a string confidence as a malformed result through the existing invalid-field path. | diff-local |
+| Story 1 negative: Given a finding carrying `"confidence": -1`, when the engine parses the result, then the whole rubric result is malformed. | 1 | The finding parser treats 101, -1, 72.5, and a string confidence as a malformed result through the existing invalid-field path. | diff-local |
+| Story 1 negative: Given a finding carrying `"confidence": 72.5`, when the engine parses the result, then the whole rubric result is malformed, because confidence must be an integer. | 1 | The finding parser treats 101, -1, 72.5, and a string confidence as a malformed result through the existing invalid-field path. | diff-local |
+| Story 1 negative: Given a finding carrying `"confidence": "high"`, when the engine parses the result, then the whole rubric result is malformed, because a string is not accepted. | 1 | The finding parser treats 101, -1, 72.5, and a string confidence as a malformed result through the existing invalid-field path. | diff-local |
+| Story 1 negative: Given a cached rubric result produced before the contract stated confidence, when the skill text has since changed, then the cached result is discarded on skill-digest mismatch and the grader re-runs under the current contract. | 4 | A cached rubric result produced under the previous skill digest is discarded on skill-digest mismatch and the grader re-runs. | diff-local |
+| Story 2 happy: Given two findings identical in rubric, contract version, concern kind and anchor but carrying confidence 30 and 90, when their identities are computed, then both produce the same finding id. | 2 | Two findings differing only in confidence share one identity id. | diff-local |
+| Story 2 happy: Given a finding with confidence 30 and the same finding with no confidence, when their identities are computed, then both produce the same finding id. | 2 | Two findings differing only in confidence share one identity id. | diff-local |
+| Story 2 negative: Given an operator disposition accepting a finding graded at confidence 90, when the next lap re-grades the same finding at confidence 40, then the disposition still binds and the finding is recorded as accepted. | 2 | An operator disposition recorded against a finding continues to bind after the finding is re-graded at a different confidence. | diff-local |
+| Story 2 negative: Given the canonical identity payload for a finding, when it is inspected, then it contains no confidence field. | 2 | The canonical identity payload contains no confidence field. | diff-local |
+| Story 2 negative: Given a finding whose anchor differs by one character from an accepted finding, when its identity is computed, then it produces a different id regardless of confidence, because confidence neither adds to nor substitutes for the anchor. | 2 | A one-character anchor change yields a different id regardless of confidence. | diff-local |
+| Story 3 happy: Given `build_review.rubrics.testQuality.min_confidence` is 70 and a lap's only finding carries confidence 40, when the effective verdict is derived, then the finding is placed in the suppressed set, the unresolved set is empty, and the effective verdict is PASS. | 7 | A finding below its rubric's floor is suppressed; at or above it, or with no confidence, it is unresolved. | diff-local |
+| Story 3 happy: Given the floor is 70 and a finding carries confidence 70, when the effective verdict is derived, then the finding is unresolved, because the floor is a minimum and not an exclusive bound. | 7 | A finding below its rubric's floor is suppressed; at or above it, or with no confidence, it is unresolved. | diff-local |
+| Story 3 happy: Given the floor is 70 and a finding carries confidence 95, when the effective verdict is derived, then the finding is unresolved and the effective verdict is FAIL, as today. | 7 | A finding below its rubric's floor is suppressed; at or above it, or with no confidence, it is unresolved. | diff-local |
+| Story 3 happy: Given the floor is unset and a finding carries confidence 1, when the effective verdict is derived, then the finding is unresolved, because the default floor of 0 never suppresses. | 7 | A finding below its rubric's floor is suppressed; at or above it, or with no confidence, it is unresolved. | diff-local |
+| Story 3 happy: Given the floor is 70 and a lap has findings at confidence 40 and 90, when the effective verdict is derived, then only the 40 is suppressed and the verdict is FAIL on the 90. | 7 | A lap mixing a sub-floor and an above-floor finding suppresses only the sub-floor one and fails on the other. | diff-local |
+| Story 3 negative: Given the floor is 70 and a finding omits confidence, when the effective verdict is derived, then the finding is unresolved, because an absent confidence is never suppressed. | 7 | A finding below its rubric's floor is suppressed; at or above it, or with no confidence, it is unresolved. | diff-local |
+| Story 3 negative: Given a lap whose every finding is suppressed, when the conductor evaluates the build_review gate, then it records the step done without dispatching remediate and without charging a kickback. | 8 | A lap whose every finding is suppressed passes the build_review gate with no remediate dispatch and no kickback charged. | diff-local |
+| Story 3 negative: Given a lap with one suppressed and one unresolved finding, when adjudication runs, then the judge's current sources contain only the unresolved finding. | 9 | On a mixed lap the adjudication sources exclude suppressed findings. | diff-local |
+| Story 3 negative: Given a suppressed finding, when the operator disposition store is read after the lap, then it is byte-identical to its state before the lap, because suppression never becomes operator authority. | 9 | The operator disposition store is unchanged by a suppressed lap. | diff-local |
+| Story 3 negative: Given a rubric with an uncovered infrastructure failure alongside a suppressed finding, when the effective verdict is derived, then the verdict is still FAIL on the infrastructure failure, because suppression clears content only. | 7 | An uncovered infrastructure failure still fails the effective verdict when every content finding is suppressed. | diff-local |
+| Story 4 happy: Given a finding is suppressed on a lap, when the lap's outer verdict event is read, then it carries a suppressed-findings list naming the finding id, its rubric, its reported confidence, and the floor applied. | 10 | The outer verdict event carries an additive suppressed-findings list with finding id, rubric, confidence, and floor for every suppressed finding. | diff-local |
+| Story 4 happy: Given two findings are suppressed on a lap, when the outer verdict event is read, then both appear as separate entries. | 10 | The outer verdict event carries an additive suppressed-findings list with finding id, rubric, confidence, and floor for every suppressed finding. | diff-local |
+| Story 4 happy: Given a finding is suppressed, when the daemon log for the lap is read, then a line names the suppressed finding and its confidence against the floor. | 11 | The daemon log projection of that event renders one line per suppressed finding. | diff-local |
+| Story 4 negative: Given a lap that suppresses nothing, when the outer verdict event is read, then its suppressed-findings list is absent or empty. | 10 | A lap that suppresses nothing carries an absent or empty list. | diff-local |
+| Story 4 negative: Given a finding is suppressed, when the event stream is read, then no kickback event is attributable to it. | 10 | A suppression is never emitted or rendered as a kickback event. | diff-local |
+| Story 4 negative: Given a suppressed finding, when its record is inspected, then it was stamped when the effective verdict was derived rather than reconstructed later from stored state. | 10 | Entries are stamped when the effective verdict is derived, not reconstructed from stored state. | diff-local |
+| Story 5 happy: Given a finding is suppressed on lap one, when the case store is read after the lap, then it holds a suppression entry keyed by the finding's id carrying its rubric, summary, confidence, floor, and the lap last seen. | 12 | The case store persists one suppression entry per suppressed finding id, updated in place on recurrence and never pruned. | diff-local |
+| Story 5 happy: Given a suppression entry exists and a later lap dispatches the judge, when the adjudication context is assembled, then the entry appears in a non-blocking history section separate from current sources. | 13 | The adjudication context carries suppression entries in a history section distinct from current sources. | diff-local |
+| Story 5 happy: Given a suppressed finding recurs on a later lap, when the case store is read, then its entry's last-seen lap is updated and no second entry is created. | 12 | The case store persists one suppression entry per suppressed finding id, updated in place on recurrence and never pruned. | diff-local |
+| Story 5 negative: Given a suppression entry exists, when the judge returns a case-v1 result that gives that entry no outcome, then the result is still valid, because suppression entries are not current sources and the source-complete validator does not demand an outcome for them. | 13 | A judgement that assigns no outcome to a suppression entry still validates. | diff-local |
+| Story 5 negative: Given a suppressed finding stops recurring, when later laps run, then its entry remains in the store and is not pruned. | 12 | The case store persists one suppression entry per suppressed finding id, updated in place on recurrence and never pruned. | diff-local |
+| Story 5 negative: Given a related case is resolved, when the store is read, then both the resolved case and every suppression entry remain present. | 12 | Resolved cases and suppression entries remain in the store across laps. | diff-local |
+| Story 5 negative: Given a suppression entry, when the operator disposition store is read, then the entry does not appear there. | 12 | A suppression entry never appears in the operator disposition store. | diff-local |
+| Story 6 happy: Given lap one deferred finding B and its deferral effect is applied, when lap two reports B with the identical content-anchored id, then the live source set is empty after operator resolution and settlement, and no remediate dispatch occurs. | 14 | A finding whose exact id links to a finalized deferred, rejected, or merged case is removed from the live source set before dispatch. | diff-local |
+| Story 6 happy: Given lap one rejected finding C, when lap two reports C with the identical id, then no remediate dispatch occurs. | 14 | A finding whose exact id links to a finalized deferred, rejected, or merged case is removed from the live source set before dispatch. | diff-local |
+| Story 6 happy: Given a finding was recorded with a merged source outcome on a finalized case, when it recurs with the identical id, then no remediate dispatch occurs. | 14 | A finding whose exact id links to a finalized deferred, rejected, or merged case is removed from the live source set before dispatch. | diff-local |
+| Story 6 happy: Given lap two reports settled finding B and new finding D, when adjudication runs, then the judge is dispatched with D as its only current source. | 14 | A lap with one settled and one new finding dispatches the judge with the new finding as its only current source. | diff-local |
+| Story 6 negative: Given lap one deferred finding B, when lap two reports B with an anchor that differs by one character, then B is a live source and the judge is dispatched, because only an exact id is settled. | 15 | A drifted id, a reserved or failed effect, and an open action case each leave the finding live. | diff-local |
+| Story 6 negative: Given lap one deferred finding B but its deferral effect is still reserved, when lap two reports B, then B is not settled and the lap follows the existing unfinished-effect route. | 15 | A drifted id, a reserved or failed effect, and an open action case each leave the finding live. | diff-local |
+| Story 6 negative: Given lap one produced an open action case for finding A that BUILD has not attempted, when lap two reports A, then A is not settled and the existing action route applies. | 15 | A drifted id, a reserved or failed effect, and an open action case each leave the finding live. | diff-local |
+| Story 6 negative: Given the settlement predicate runs, when the case store is read afterwards, then no case was written, resolved, or pruned by the predicate. | 15 | The predicate performs no write to the case store. | diff-local |
+| Story 6 negative: Given the case store is unreadable, when the settlement predicate would run, then the lap fails closed exactly as it does today for an unreadable store. | 15 | An unreadable case store fails the lap closed exactly as before. | diff-local |
+| Story 7 happy: Given the settlement predicate empties the live set, when the lap finalizes, then a remediation adjudication completed event is emitted for the lap carrying the settled case ids and no new effect ids. | 16 | A skipped dispatch emits the completed-adjudication event with settled case ids and an empty effect list. | diff-local |
+| Story 7 happy: Given a skipped dispatch, when the daemon log is read, then the lap shows a completed adjudication line rather than no adjudication line. | 16 | The rendered trace lists each settled case with its finalized outcome, and the daemon log shows a completed adjudication line. | diff-local |
+| Story 7 negative: Given the settlement predicate empties the live set, when the event stream is read, then no adjudication started event was emitted for a dispatch that did not happen. | 16 | No started event is emitted for a skipped dispatch. | diff-local |
+| Story 7 negative: Given the settlement predicate empties the live set, when the kickback ledger is read, then it is unchanged. | 16 | The kickback ledger is unchanged by a skipped dispatch. | diff-local |
+| Story 7 negative: Given a skipped dispatch, when the trace for the lap is rendered, then each settled case appears with its finalized outcome. | 16 | The rendered trace lists each settled case with its finalized outcome, and the daemon log shows a completed adjudication line. | diff-local |
+| Story 8 happy: Given a project config setting `build_review.rubrics.testQuality.min_confidence` to 70, when config loads, then it is accepted and the resolved rubric policy carries 70. | 5 | The key is accepted at 0, 70 and 100 and the resolved rubric policy carries the configured integer. | diff-local |
+| Story 8 happy: Given a project config that omits the key, when config loads, then the resolved floor is 0 and no warning is produced. | 5 | An absent key resolves to a floor of 0. | diff-local |
+| Story 8 happy: Given a project config setting the key to 0, when config loads, then it is accepted and nothing is ever suppressed. | 5 | The key is accepted at 0, 70 and 100 and the resolved rubric policy carries the configured integer. | diff-local |
+| Story 8 happy: Given a project config setting the key to 100, when config loads, then it is accepted. | 5 | The key is accepted at 0, 70 and 100 and the resolved rubric policy carries the configured integer. | diff-local |
+| Story 8 negative: Given a config setting the key to 101, when config loads, then loading fails with a validation error naming the exact `build_review.rubrics.testQuality.min_confidence` path and its permitted range. | 5 | Config load fails with an error naming the exact key path and the permitted range 0 to 100 for 101, for -5, for 70.5, and for a string value. | diff-local |
+| Story 8 negative: Given a config setting the key to -5, when config loads, then loading fails with a validation error naming the exact path. | 5 | Config load fails with an error naming the exact key path and the permitted range 0 to 100 for 101, for -5, for 70.5, and for a string value. | diff-local |
+| Story 8 negative: Given a config setting the key to 70.5, when config loads, then loading fails with a validation error, because the value must be an integer. | 5 | Config load fails with an error naming the exact key path and the permitted range 0 to 100 for 101, for -5, for 70.5, and for a string value. | diff-local |
+| Story 8 negative: Given a config setting the key to the string "70", when config loads, then loading fails with a validation error, because the value is not coerced. | 5 | Config load fails with an error naming the exact key path and the permitted range 0 to 100 for 101, for -5, for 70.5, and for a string value. | diff-local |
+| Story 8 negative: Given a config setting a misspelled `min_confidance`, when config loads, then loading fails with the existing unknown-key error naming the rubric policy block. | 5 | A misspelled sibling key still fails with the existing unknown-key error naming the rubric policy block. | diff-local |
+| Story 8 negative: Given the config-key consumer registry, when its totality test runs, then `build_review.rubrics.min_confidence` declares a resolvable production consumer and the test passes. | 6 | The key declares a resolvable production consumer in the config-key consumer registry. | diff-local |
 
 ## Architecture Obligation Coverage
 
 | Decision | Disposition | Task(s) | Evidence |
 | --- | --- | --- | --- |
-| adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication#D1 | no-change | none | D1 separates infrastructure-only laps from mixed laps. The confidence floor acts only on content cases already admitted to the post-join judgement and never reclassifies a lap, so the mixed-lap rule is untouched by this feature. |
-| adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication#D2 | no-change | none | D2 keeps one remediate dispatch owning the semantic fan-in. This feature adds no step, skill, provider member, or second adjudicator; the floor is applied to that single dispatch's output. |
-| adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication#D3 | task | task-14, task-15 | A lap retaining at least one act case routes to BUILD rather than passing. |
-| adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication#D4 | task | task-6, task-11, task-13, task-16 | With a tracker resolvable and a floor of 70, an act case of confidence 40 is admitted as a defer case carrying a deferral effect and publishes no work order. |
+| adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication#D1 | no-change | none | D1's lap classification is unchanged; D4 narrows the content-finding set before D1 reads it and D1's own rule imposes no implementation change here. |
+| adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication#D2 | no-change | none | One remediate dispatch still owns semantic fan-in; this feature adds no step, skill, provider member, or second adjudicator, and D5 only skips a dispatch that D2 would have made for an identical finalized outcome. |
+| adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication#D3 | no-change | none | Transition precedence after settlement is untouched; suppressed findings never become action cases and a settled lap finalizes on the existing pass branch. |
+| adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication#D4 | task | task-7, task-9, task-10, task-12 | The effective verdict reducer produces a suppressed set distinct from the accepted and unresolved sets, and only the unresolved set blocks. |
+| adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication#D5 | task | task-14, task-15, task-16 | A finding whose exact id links to a finalized deferred, rejected, or merged case is removed from the live source set before dispatch. |
 
 ## Verification
 
