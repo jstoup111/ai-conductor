@@ -59,8 +59,11 @@ export async function consumeResumeAuthorizations(deps: {
       );
       if (!match) continue;
       const [gate, entry] = match;
-      await deps.clearMarker(slug);
+      // Claim the one-shot authorization before clearing the halt.  A lease
+      // refusal must leave the feature halted; clearing first could otherwise
+      // resume it without a durable operator authorization.
       if (await consumeKickbackResumeAuthorization(path, gate, entry.resumeAuthorization!.adjustmentId)) {
+        await deps.clearMarker(slug);
         await deps.emit?.({ type: 'halt_cleared', cause: 'kickback-budget' });
         cleared.push(slug);
       }
