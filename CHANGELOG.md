@@ -83,6 +83,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Resumed runs now return to an earlier runnable prerequisite instead of stopping without dispatching work. ([implementation PR #2385](https://github.com/jstoup111/ai-conductor/pull/2385)).
 - Prevent the daemon from automatically resuming HALTs that require operator action. ([implementation PR #2398](https://github.com/jstoup111/ai-conductor/pull/2398)).
 - Scrub TMUX and TMUX_PANE from provider and test child environments so a spawned tmux command cannot target the daemon's own pane. ([implementation PR #2406](https://github.com/jstoup111/ai-conductor/pull/2406)).
+- Daemon-dispatched features now honor open repair obligations when no active plan path was recorded, instead of halting as evidence-complete. ([implementation PR #2411](https://github.com/jstoup111/ai-conductor/pull/2411)).
 
 ## [1.0.0] - 2026-08-31
 
