@@ -271,7 +271,7 @@ async function engineAppendedPlanExclusion(
   } catch {
     return [];
   }
-  // Both ends of the graded diff exactly: `<mergeBase>..HEAD`.
+  // Both ends of the graded diff exactly: `<mergeBase>..<frozen HEAD>`.
   const [base, head] = await Promise.all([
     source.readAtOptional(mergeBaseSha, pathspec),
     source.readAtOptional(headSha, pathspec),
@@ -314,10 +314,11 @@ function equivalentShaFor(
  */
 async function patchEquivalentExclusion(
   git: GitRunner,
-  baseRef: string,
+  baseTipSha: string,
   mergeBaseSha: string,
+  headSha: string,
 ): Promise<BuildReviewPatchEquivalentExclusion | undefined> {
-  const cherry = await git(['cherry', '-v', baseRef, 'HEAD']);
+  const cherry = await git(['cherry', '-v', baseTipSha, headSha]);
   if (cherry.exitCode !== 0) return undefined;
   const filteredCommits = patchEquivalentCommits(cherry.stdout);
   if (filteredCommits === undefined || filteredCommits.length === 0) return undefined;
@@ -328,7 +329,7 @@ async function patchEquivalentExclusion(
     '--name-only',
     '--no-renames',
     '-z',
-    `${mergeBaseSha}..HEAD`,
+    `${mergeBaseSha}..${headSha}`,
   ]);
   if (attribution.exitCode !== 0 || attribution.stdout === '') return undefined;
 
@@ -724,9 +725,17 @@ export async function assembleBuildReviewInputs(
 
   const baseRef = resolution.ref;
 
-  // Freeze the graded tree before any diff or source reads. Every later Git
-  // revision expression uses this immutable identity rather than the mutable
-  // symbolic HEAD/worktree.
+  // Freeze both revision identities before any dependent read. The symbolic
+  // labels can advance while this assembly is running; every source read below
+  // must therefore consume these immutable object names instead.
+  const baseTipResult = await git(['rev-parse', baseRef]);
+  const baseTipSha = baseTipResult.stdout.trim();
+  if (baseTipResult.exitCode !== 0 || !baseTipSha) {
+    throw new MergeBaseError(
+      `git rev-parse ${baseRef} failed: ${baseTipResult.stderr || 'no HEAD found'}`,
+      baseRef,
+    );
+  }
   const headResult = await git(['rev-parse', 'HEAD']);
   const liveHeadSha = headResult.stdout.trim();
   if (headResult.exitCode !== 0 || !liveHeadSha) {
@@ -739,11 +748,11 @@ export async function assembleBuildReviewInputs(
   const projectRoot = projectRootForPlan(planPath);
   const planRepoPath = safeRepoRelativePath(relative(projectRoot, planPath).replaceAll('\\', '/'));
 
-  const mergeBase = await git(['merge-base', baseRef, liveHeadSha]);
+  const mergeBase = await git(['merge-base', baseTipSha, liveHeadSha]);
   const mergeBaseSha = mergeBase.stdout.trim();
   if (mergeBase.exitCode !== 0 || !mergeBaseSha) {
     throw new MergeBaseError(
-      `git merge-base ${baseRef} HEAD failed: ${mergeBase.stderr || 'no merge base found'}`,
+      `git merge-base ${baseTipSha} ${liveHeadSha} failed: ${mergeBase.stderr || 'no merge base found'}`,
       baseRef,
     );
   }
@@ -755,7 +764,7 @@ export async function assembleBuildReviewInputs(
     planRepoPath,
     liveHeadSha,
   );
-  const equivalentExclusion = await patchEquivalentExclusion(git, baseRef, mergeBaseSha);
+  const equivalentExclusion = await patchEquivalentExclusion(git, baseTipSha, mergeBaseSha, liveHeadSha);
 
   const diffArgs = [
     '--',
