@@ -443,9 +443,9 @@ export async function settleRemediationRound(
 ): Promise<{ settled: boolean }> {
   return withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
-    requireReadableLedger(ledger);
     if (ledger.settlementReceipts?.[receiptId]) return { settled: false };
     const uniqueGates = [...new Set(gates)];
+    for (const gate of uniqueGates) requireReadableGate(ledger, gate);
     const nextGates = { ...ledger.gates };
     for (const gate of uniqueGates) {
       const current = nextGates[gate] ?? { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 };
@@ -522,14 +522,37 @@ function parseKickbackLedger(value: unknown): KickbackLedger | undefined {
   return unreadableGates.length > 0 ? unreadableLedger(normalized.gates, unreadableGates) : normalized;
 }
 
-/** True when durable budget state must not be used to authorize a mutation. */
+/**
+ * True when the ledger ENVELOPE could not be interpreted — an unsupported
+ * version, a corrupt document, or an unreadable file. adr-2026-08-31 decision 3
+ * reserves whole-ledger rejection for exactly that: one malformed gate entry
+ * never invalidates a sibling gate's counts, so a per-gate invalidity is
+ * reported by `isUnreadableKickbackGate` instead.
+ */
 export function isUnreadableKickbackLedger(ledger: KickbackLedger): boolean {
-  return ledger.unreadable === true;
+  return ledger.unreadable === true && ledger.unreadableGates === undefined;
+}
+
+/** True when THIS gate's durable state must not be used to authorize anything. */
+export function isUnreadableKickbackGate(ledger: KickbackLedger, gate: string): boolean {
+  return isUnreadableKickbackLedger(ledger) || (ledger.unreadableGates?.includes(gate) ?? false);
+}
+
+/** Every gate whose own entry failed validation, for reporting it as unavailable. */
+export function unreadableKickbackGates(ledger: KickbackLedger): readonly string[] {
+  return ledger.unreadableGates ?? [];
 }
 
 function requireReadableLedger(ledger: KickbackLedger): void {
   if (isUnreadableKickbackLedger(ledger)) {
-    throw new Error(`kickback ledger is unreadable${ledger.unreadableGates?.length ? ` (${ledger.unreadableGates.join(', ')})` : ''}`);
+    throw new Error('kickback ledger is unreadable');
+  }
+}
+
+function requireReadableGate(ledger: KickbackLedger, gate: string): void {
+  requireReadableLedger(ledger);
+  if (isUnreadableKickbackGate(ledger, gate)) {
+    throw new Error(`kickback ledger gate '${gate}' is unreadable`);
   }
 }
 
@@ -606,6 +629,35 @@ export async function readSuiteInfrastructureRetries(
   }
 }
 
+/**
+ * Re-attach, verbatim, any on-disk gate entry that failed validation and is not
+ * being rewritten. adr-2026-08-31 decision 4 forbids repairing, defaulting, or
+ * inferring a failed value; scoping invalidity to its own gate (decision 3)
+ * must therefore not silently erase that gate's durable record when a sibling
+ * gate is written. Runs under the ledger lease, so the read is not racy.
+ */
+async function withPreservedUnreadableGates(
+  ledgerPath: string,
+  ledger: KickbackLedger,
+): Promise<KickbackLedger> {
+  let stored: unknown;
+  try {
+    stored = JSON.parse(await readFile(ledgerPath, 'utf-8'));
+  } catch {
+    return ledger;
+  }
+  const gates = (stored as { gates?: unknown } | null)?.gates;
+  if (typeof gates !== 'object' || gates === null || Array.isArray(gates)) return ledger;
+  const preserved: Record<string, unknown> = {};
+  for (const [gate, entry] of Object.entries(gates as Record<string, unknown>)) {
+    if (gate in ledger.gates) continue;
+    if (normalizeKickbackGateEntry(entry) === undefined) preserved[gate] = entry;
+  }
+  return Object.keys(preserved).length === 0
+    ? ledger
+    : ({ ...ledger, gates: { ...ledger.gates, ...preserved } } as KickbackLedger);
+}
+
 /** Write the ledger atomically, so readers never observe a partially written file. */
 async function writeKickbackLedgerUnsafe(
   projectRoot: string,
@@ -620,7 +672,7 @@ async function writeKickbackLedgerUnsafe(
 
   await mkdir(ledgerDir, { recursive: true });
   try {
-    await writeFile(tempPath, JSON.stringify(ledger, null, 2));
+    await writeFile(tempPath, JSON.stringify(await withPreservedUnreadableGates(ledgerPath, ledger), null, 2));
     await rename(tempPath, ledgerPath);
   } catch (error) {
     await rm(tempPath, { force: true }).catch(() => {});
@@ -824,7 +876,7 @@ export async function bumpKickbackGateInLedger(
 ): Promise<BumpKickbackGateResult> {
   return withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
-    requireReadableLedger(ledger);
+    requireReadableGate(ledger, gate);
     const result = bumpKickbackGate(ledger.gates[gate], input);
     await writeKickbackLedgerUnsafe(projectRoot, {
       ...ledger,
@@ -841,9 +893,10 @@ export async function chargeBuildReviewEffectInLedger(
   input: BumpKickbackGateInput,
 ): Promise<ChargeBuildReviewEffectResult> {
   return withKickbackLedgerLease(projectRoot, async () => {
-    const read = await readKickbackLedgerResult(projectRoot);
-    if (read.kind === 'unreadable') return { status: 'unreadable', reason: read.reason };
-    const ledger = read.kind === 'ok' ? read.ledger : emptyLedger();
+    const ledger = await readKickbackLedger(projectRoot);
+    if (isUnreadableKickbackGate(ledger, 'build_review')) {
+      return { status: 'unreadable', reason: "kickback ledger gate 'build_review' is unreadable" };
+    }
     const result = chargeBuildReviewEffect(ledger.gates.build_review, effectId, input);
 
     if (result.status === 'charged') {
@@ -916,9 +969,10 @@ export async function bumpMechanicalFaultsInLedgerResult(
   fault?: KickbackLastMechanicalFault,
 ): Promise<BumpMechanicalFaultsInLedgerResult> {
   return withKickbackLedgerLease(projectRoot, async () => {
-    const result = await readKickbackLedgerResult(projectRoot);
-    if (result.kind === 'unreadable') return result;
-    const ledger = result.kind === 'ok' ? result.ledger : emptyLedger();
+    const ledger = await readKickbackLedger(projectRoot);
+    if (isUnreadableKickbackGate(ledger, gate)) {
+      return { kind: 'unreadable', reason: `kickback ledger gate '${gate}' is unreadable` };
+    }
     return { kind: 'ok', entry: await bumpMechanicalFaultsInLedgerFromLedger(projectRoot, ledger, gate, fault) };
   });
 }
@@ -934,7 +988,7 @@ export async function bumpMechanicalFaultsInLedger(
 ): Promise<KickbackGateEntry> {
   return withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
-    requireReadableLedger(ledger);
+    requireReadableGate(ledger, gate);
     return bumpMechanicalFaultsInLedgerFromLedger(projectRoot, ledger, gate, fault);
   });
 }
@@ -945,7 +999,7 @@ export async function bumpSuiteInfrastructureRetriesInLedger(
 ): Promise<KickbackGateEntry> {
   return withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
-    requireReadableLedger(ledger);
+    requireReadableGate(ledger, 'test_suite');
     const entry = ledger.gates.test_suite ?? {
       count: 0,
       cumulative: 0,
@@ -980,10 +1034,12 @@ export async function bumpSuiteInfrastructureRetriesInLedger(
 export async function updateKickbackLedger<T>(
   projectRoot: string,
   transaction: (ledger: KickbackLedger) => { ledger?: KickbackLedger; result: T } | Promise<{ ledger?: KickbackLedger; result: T }>,
+  gate?: string,
 ): Promise<T> {
   return withKickbackLedgerLease(projectRoot, async () => {
     const current = await readKickbackLedger(projectRoot);
-    requireReadableLedger(current);
+    if (gate === undefined) requireReadableLedger(current);
+    else requireReadableGate(current, gate);
     const { ledger, result } = await transaction(current);
     if (ledger !== undefined) await writeKickbackLedgerUnsafe(projectRoot, ledger);
     return result;
@@ -1009,7 +1065,7 @@ export async function recordRemediationGateLap(
 ): Promise<{ entry: KickbackGateEntry & { laps: number }; growth: PlanGrowthRecord | undefined }> {
   return withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
-    requireReadableLedger(ledger);
+    requireReadableGate(ledger, gate);
     const existing = ledger.gates[gate] ?? {
       count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
     };
@@ -1027,7 +1083,7 @@ export async function recordKickbackCapEvidence(
 ): Promise<KickbackGateEntry> {
   return withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
-    requireReadableLedger(ledger);
+    requireReadableGate(ledger, gate);
     const existing = ledger.gates[gate] ?? {
       count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
     };
@@ -1052,7 +1108,7 @@ export async function consumeKickbackResumeAuthorization(
 ): Promise<boolean> {
   return withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
-    requireReadableLedger(ledger);
+    requireReadableGate(ledger, gate);
     const entry = ledger.gates[gate];
     if (!entry?.resumeAuthorization || entry.resumeAuthorization.adjustmentId !== adjustmentId || entry.resumeAuthorization.consumed) return false;
     const next = { ...entry, resumeAuthorization: { ...entry.resumeAuthorization, consumed: true } };
@@ -1069,7 +1125,7 @@ export async function stageKickbackBudgetAdjustment(
 ): Promise<void> {
   await withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
-    requireReadableLedger(ledger);
+    requireReadableGate(ledger, gate);
     const entry = ledger.gates[gate];
     if (!entry?.capEvidence || entry.capEvidence.haltGeneration !== adjustment.haltGeneration) {
       throw new Error('current cap evidence is missing or no longer matches the live halt');
@@ -1092,7 +1148,7 @@ export async function discardPendingKickbackBudgetAdjustment(
 ): Promise<boolean> {
   return withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
-    requireReadableLedger(ledger);
+    requireReadableGate(ledger, gate);
     const entry = ledger.gates[gate];
     if (!entry?.pendingAdjustment || entry.pendingAdjustment.id !== adjustmentId) return false;
     await writeKickbackLedgerUnsafe(projectRoot, {
@@ -1111,7 +1167,7 @@ export async function applyKickbackBudgetAdjustment(
 ): Promise<KickbackGateEntry> {
   return withKickbackLedgerLease(projectRoot, async () => {
     const ledger = await readKickbackLedger(projectRoot);
-    requireReadableLedger(ledger);
+    requireReadableGate(ledger, gate);
     const entry = ledger.gates[gate];
     if (!entry?.capEvidence || entry.capEvidence.haltGeneration !== adjustment.haltGeneration) {
       throw new Error('current cap evidence is missing or no longer matches the live halt');

@@ -19,6 +19,9 @@ import {
   chargeBuildReviewEffectInLedger,
   bumpSuiteInfrastructureRetriesInLedger,
   creditKickbackGateLaps,
+  isUnreadableKickbackGate,
+  isUnreadableKickbackLedger,
+  unreadableKickbackGates,
   recordRemediationGateLap,
   updateKickbackLedger,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
@@ -647,6 +650,63 @@ describe('kickback-ledger', () => {
     const before = await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf-8');
     await expect(updateKickbackLedger(dir, () => ({ result: 'unchanged' }))).resolves.toBe('unchanged');
     expect(await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf-8')).toBe(before);
+  });
+
+  describe('one malformed gate never invalidates its siblings (adr-2026-08-31 decision 3)', () => {
+    const healthy = {
+      count: 1, cumulative: 1, treeHash: null, lastReason: 'cap',
+      priorVerdict: true, resolvedBefore: 0,
+    };
+
+    async function seedMixed(): Promise<void> {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline/kickback-ledger.json'),
+        JSON.stringify({ version: 1, gates: { build_review: healthy, prd_audit: { count: 'not-a-number' } } }),
+      );
+    }
+
+    it('reports the ledger readable and names only the malformed gate', async () => {
+      await seedMixed();
+      const ledger = await readKickbackLedger(dir);
+      expect(isUnreadableKickbackLedger(ledger)).toBe(false);
+      expect(unreadableKickbackGates(ledger)).toEqual(['prd_audit']);
+      expect(isUnreadableKickbackGate(ledger, 'prd_audit')).toBe(true);
+      expect(isUnreadableKickbackGate(ledger, 'build_review')).toBe(false);
+      expect(ledger.gates.build_review.cumulative).toBe(1);
+    });
+
+    it('lets a healthy sibling gate still be written', async () => {
+      await seedMixed();
+      await bumpKickbackGateInLedger(dir, 'build_review', {
+        treeHash: '0123456789abcdef0123456789abcdef01234567', resolvedCount: 0, reason: 'again',
+      });
+      expect((await readKickbackLedger(dir)).gates.build_review.cumulative).toBe(2);
+    });
+
+    it('preserves the malformed entry verbatim across a sibling write', async () => {
+      await seedMixed();
+      await bumpKickbackGateInLedger(dir, 'build_review', {
+        treeHash: '0123456789abcdef0123456789abcdef01234567', resolvedCount: 0, reason: 'again',
+      });
+      const stored = JSON.parse(await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf-8'));
+      expect(stored.gates.prd_audit).toEqual({ count: 'not-a-number' });
+    });
+
+    it('still refuses a write that names the malformed gate itself', async () => {
+      await seedMixed();
+      await expect(bumpKickbackGateInLedger(dir, 'prd_audit', {
+        treeHash: null, resolvedCount: 0, reason: 'nope',
+      })).rejects.toThrow(/prd_audit/);
+    });
+
+    it('still rejects the whole ledger when the ENVELOPE is uninterpretable', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({ version: 9, gates: {} }));
+      const ledger = await readKickbackLedger(dir);
+      expect(isUnreadableKickbackLedger(ledger)).toBe(true);
+      expect(isUnreadableKickbackGate(ledger, 'build_review')).toBe(true);
+    });
   });
 
   it('refuses a live foreign kickback-ledger lease without changing the ledger', async () => {

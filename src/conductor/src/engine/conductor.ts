@@ -271,8 +271,7 @@ import {
   bumpSuiteInfrastructureRetriesInLedger,
   readGrowth,
   readKickbackLedger,
-  isUnreadableKickbackLedger,
-  readKickbackLedgerResult,
+  isUnreadableKickbackGate,
   readSuiteInfrastructureRetries,
   recordGrowth,
   recordRemediationGateLap,
@@ -756,11 +755,12 @@ async function readRemediationGateAppendBudget(
     readKickbackLedger(projectRoot),
     readGrowth(projectRoot, growthCap),
   ]);
-  // A partial or corrupt ledger must not be mistaken for fresh remediation
-  // allowance: budget recovery is an explicit operator decision, not a
-  // best-effort fallback.
-  if (isUnreadableKickbackLedger(ledger)) {
-    throw new Error('kickback ledger is unreadable');
+  // A corrupt ledger must not be mistaken for fresh remediation allowance:
+  // budget recovery is an explicit operator decision, not a best-effort
+  // fallback. Scoped to THIS gate (adr-2026-08-31 decision 3) so a sibling
+  // gate's malformed entry does not halt a healthy one.
+  if (isUnreadableKickbackGate(ledger, gate)) {
+    throw new Error(`kickback ledger gate '${gate}' is unreadable`);
   }
   const priorLaps = (
     ledger.gates[gate] as (KickbackGateEntry & { laps?: number }) | undefined
@@ -6530,7 +6530,7 @@ export class Conductor {
           },
           result: undefined,
         };
-      });
+      }, sourceGate);
       // This producer/consumer hand-off is only for the immediately following
       // existing-task BUILD rewind; every other capture samples afresh. Each
       // participating gate consumes its own entry, so the other gates on a
@@ -6560,7 +6560,7 @@ export class Conductor {
           },
           result: entry,
         };
-      });
+      }, sourceGate);
       if (!ctx) return { halt: false };
       const [treeAfter, resolvedAfter] = await Promise.all([
         currentTreeHash(this.projectRoot),
@@ -10926,17 +10926,15 @@ export class Conductor {
                   // with an exact reduced-coverage decision as a live fault, so
                   // a content-complete PASS was unreachable.
                   const uncoveredInfrastructure = effective.effective.uncoveredInfrastructureFailureRubrics;
-                  const mechanicalLedger = await readKickbackLedgerResult(this.projectRoot);
-                  if (mechanicalLedger.kind === 'unreadable') {
-                    const reason = `build_review adjudication halted: ${mechanicalLedger.reason}`;
+                  const mechanicalLedger = await readKickbackLedger(this.projectRoot);
+                  if (isUnreadableKickbackGate(mechanicalLedger, 'build_review')) {
+                    const reason = `build_review adjudication halted: kickback ledger gate 'build_review' is unreadable`;
                     await this.writeHaltMarker(reason + '\n', 'needs-human');
                     await this.persistPendingStateChanges(state, 'persist conductor transition');
                     await this.emitLoopHalt(reason);
                     return;
                   }
-                  const mechanicalFaults = mechanicalLedger.kind === 'ok'
-                    ? mechanicalLedger.ledger.gates.build_review?.mechanicalFaults ?? 0
-                    : 0;
+                  const mechanicalFaults = mechanicalLedger.gates.build_review?.mechanicalFaults ?? 0;
                   const mechanical = uncoveredInfrastructure.length === 0
                     ? 'healthy'
                     : mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW ? 'halt' : 'retry';
@@ -12646,7 +12644,7 @@ export class Conductor {
                   },
                   result: true,
                 };
-              });
+              }, 'build_review');
               if (credited) {
                 convergenceCredit = { gate: target };
               }
