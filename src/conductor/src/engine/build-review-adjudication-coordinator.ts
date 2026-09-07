@@ -41,7 +41,9 @@ type OperatorRetirementTransition = {
 };
 
 export type BuildReviewAdjudicationCoordinatorResult =
-  | { readonly ok: true; readonly route: 'pass' | 'build' | 'mechanical-retry' | 'halt'; readonly detail: string; readonly trace: string; readonly remainingMechanical: boolean }
+  | { readonly ok: true; readonly route: 'pass' | 'build' | 'mechanical-retry' | 'halt'; readonly detail: string; readonly trace: string; readonly remainingMechanical: boolean;
+      /** True only when every live source was settled or suppressed before dispatch (D5), so the judge was skipped. */
+      readonly dispatchSkipped: boolean }
   | { readonly ok: false; readonly detail: string };
 
 
@@ -214,6 +216,8 @@ export async function coordinateBuildReviewAdjudication(input: {
     readonly settleAbsentAttempted?: boolean;
     /** A delivered failure remains this lap's one terminal lifecycle event. */
     readonly terminalFailureEmitted?: boolean;
+    /** Set only by the D5 exit: the judge was skipped because nothing live remained. */
+    readonly dispatchSkipped?: boolean;
   }): Promise<BuildReviewAdjudicationCoordinatorResult> => {
     if (options.settleAbsentAttempted) {
       const exitAttemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(input.projectRoot, input.feature);
@@ -373,6 +377,7 @@ export async function coordinateBuildReviewAdjudication(input: {
         ok: true, route: transition.route, detail: transition.reason,
         trace: `route: ${transition.route}\n${renderBuildReviewAdjudicationTrace(settledCases)}`,
         remainingMechanical: transition.remainingMechanical,
+        dispatchSkipped: options.dispatchSkipped === true,
       };
     }
     exitResolved = new Set([...exitResolved, ...latest]);
@@ -467,7 +472,7 @@ export async function coordinateBuildReviewAdjudication(input: {
   );
   if (currentSources.length === 0) {
     liveSourceIdsFor = () => new Set();
-    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, settleAbsentAttempted: true });
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, settleAbsentAttempted: true, dispatchSkipped: true });
   }
   // Frozen at dispatch: the exact source set the judge was asked about. Every
   // later authority read is a delta against this, never against the raw join.

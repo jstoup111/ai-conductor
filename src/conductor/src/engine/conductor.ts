@@ -10912,7 +10912,10 @@ export class Conductor {
                   }
                   if (adjudication.route === 'pass') {
                     await this.saveConductorStepStatus(state, step.name, 'done');
-                    this.log?.(adjudication.trace);
+                    // Story 7: the per-case trace explains a skipped dispatch. An
+                    // operator-resolved shortcut or a post-judge PASS was silent
+                    // before this feature and stays silent (prd-audit NC.3).
+                    if (adjudication.dispatchSkipped) this.log?.(adjudication.trace);
                     continue;
                   }
                   if (adjudication.route === 'build') {

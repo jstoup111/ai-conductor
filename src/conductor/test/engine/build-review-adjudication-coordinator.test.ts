@@ -243,7 +243,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       ...input(root, judge), operatorResolvedFindingIds: new Set([findingId]),
     });
 
-    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(result).toMatchObject({ ok: true, route: 'pass', dispatchSkipped: false });
     expect(judge).not.toHaveBeenCalled();
   });
 
@@ -1051,6 +1051,26 @@ describe('coordinateBuildReviewAdjudication', () => {
 
     expect(result).toMatchObject({ ok: true, route: 'build' });
     expect(judge).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a skipped dispatch only when every live source was already settled (NC.3)', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-finalized', domain: 'build_review', disposition: 'reject', priority: 'low', confidence: 'high',
+        rationale: 'The finding is already finalized.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'rejected', recordedAt: '2026-09-06T00:00:00.000Z' }],
+        effect: { kind: 'none' },
+      }],
+    });
+    const judge = vi.fn(async () => actionJudgement());
+
+    const result = await coordinateBuildReviewAdjudication({ ...input(root, judge) });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass', dispatchSkipped: true, trace: expect.stringContaining('case-finalized') });
+    expect(judge).not.toHaveBeenCalled();
   });
 
   it('adjudicates the unresolved remainder when the lap opens with a pre-existing acceptance', async () => {
