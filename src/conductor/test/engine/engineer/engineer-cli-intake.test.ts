@@ -1,9 +1,9 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 // `conduct-ts engineer poll` + `engineer forget` CLI primitives (Phase 9.3b, T22/T23).
 // FR-32 (poll-on-launch primitive) + FR-40 (manual forget). gh is injected — no network.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,10 +18,16 @@ import { parseEnvelope } from '../../../src/engine/engineer/intake/port.js';
 
 // ── fake gh: issue list + edit (label strip) ──────────────────────────────────
 
-function makeGh(issuesByRepo: Record<string, Array<{ number: number; title: string; body: string; labels?: string[] }>>) {
+function makeGh(
+  issuesByRepo: Record<string, Array<{ number: number; title: string; body: string; labels?: string[] }>>,
+  rejectOperation?: 'comment' | 'close',
+) {
   const calls: string[][] = [];
   const gh = async (args: string[], opts: { cwd: string }) => {
     calls.push(args);
+    if (args[0] === 'issue' && args[1] === rejectOperation) {
+      throw new Error(`${rejectOperation} rejected`);
+    }
     if (args[0] === 'issue' && args[1] === 'list') {
       const ri = args.indexOf('-R');
       const repo = ri >= 0 ? args[ri + 1] : opts.cwd;
@@ -189,6 +195,87 @@ describe('engineer forget (T23, FR-40)', () => {
     expect(calls).toEqual([
       ['api', '--method', 'DELETE', 'repos/o/a/issues/1/labels/engineer%3Ahandled'],
     ]);
+  });
+
+  it('refuses the drop when the audit comment is rejected, preserving the ledger entry', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+
+    const { gh, calls } = makeGh({}, 'comment');
+    const { err, opts } = captureOut();
+
+    const code = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'o/a#1', resolvedBy: 'o/a#2' },
+      opts({ gh }),
+    );
+
+    expect(code).not.toBe(0);
+    expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
+    expect(calls).toEqual([
+      ['issue', 'comment', '1', '-R', 'o/a', '--body', expect.any(String)],
+    ]);
+    expect(err.join('\n')).toContain('o/a#1');
+    expect(err.join('\n')).toContain('comment rejected');
+  });
+
+  it('refuses the drop when close is rejected and gives the manual recovery', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+
+    const { gh, calls } = makeGh({}, 'close');
+    const { err, opts } = captureOut();
+
+    const code = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'o/a#1', resolvedBy: 'o/a#2' },
+      opts({ gh }),
+    );
+
+    expect(code).not.toBe(0);
+    expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
+    expect(calls).toEqual([
+      ['issue', 'comment', '1', '-R', 'o/a', '--body', expect.any(String)],
+      ['issue', 'close', '1', '-R', 'o/a'],
+    ]);
+    expect(err.join('\n')).toMatch(/close (?:the )?issue by hand/i);
+    expect(err.join('\n')).toMatch(/rerun.*without.*--resolved-by/i);
+  });
+
+  it('refuses a non-GitHub source ref with the flag before calling the tracker or changing its ledger entry', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef: 'local-intake:42' });
+    const ledgerPath = join(engineerDir, 'ledger.json');
+    const before = await readFile(ledgerPath, 'utf-8');
+
+    const { gh, calls } = makeGh({});
+    const { opts } = captureOut();
+    const code = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'local-intake:42', resolvedBy: 'o/a#2' },
+      opts({ gh }),
+    );
+
+    expect(code).not.toBe(0);
+    expect(calls).toHaveLength(0);
+    expect(await ledger.known('github-issues', 'local-intake:42')).toBe(true);
+    expect(await readFile(ledgerPath, 'utf-8')).toBe(before);
+  });
+
+  it('refuses an absent ledger entry with the flag before calling the tracker or changing the ledger', async () => {
+    const ledger = createLedger(join(engineerDir, 'ledger.json'));
+    await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+    const ledgerPath = join(engineerDir, 'ledger.json');
+    const before = await readFile(ledgerPath, 'utf-8');
+
+    const { gh, calls } = makeGh({});
+    const { opts } = captureOut();
+    const code = await dispatchEngineer(
+      { kind: 'forget', sourceRef: 'o/a#9', resolvedBy: 'o/a#2' },
+      opts({ gh }),
+    );
+
+    expect(code).not.toBe(0);
+    expect(calls).toHaveLength(0);
+    expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
+    expect(await readFile(ledgerPath, 'utf-8')).toBe(before);
   });
 
   it('reports found:false for an absent ref without crashing or calling gh', async () => {

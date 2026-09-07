@@ -1300,21 +1300,51 @@ export async function dispatchEngineer(
 
       const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
       if (!entry) {
+        if (dispatch.resolvedBy) {
+          printErr(
+            `engineer forget: cannot record resolution for ${sourceRef}: no intake ledger entry; ` +
+            'rerun without --resolved-by to remove only the source label.',
+          );
+          return 1;
+        }
         print(JSON.stringify({ kind: 'forget', sourceRef, found: false }));
         return 0;
       }
 
       const parsedForget = parseSourceRef(sourceRef);
       const closed = Boolean(dispatch.resolvedBy && parsedForget);
+      if (dispatch.resolvedBy && !parsedForget) {
+        printErr(
+          `engineer forget: cannot record resolution for ${sourceRef}: it is not a GitHub issue reference; ` +
+          'rerun without --resolved-by to remove only the source label.',
+        );
+        return 1;
+      }
       if (dispatch.resolvedBy && parsedForget) {
         const tracker = createGithubTrackerClient(gh);
-        await tracker.commentOnIssue(
-          parsedForget.repo,
-          parsedForget.issue,
-          `Resolved by ${dispatch.resolvedBy}`,
-          process.cwd(),
-        );
-        await tracker.closeIssue(parsedForget.repo, String(parsedForget.issue), process.cwd());
+        try {
+          await tracker.commentOnIssue(
+            parsedForget.repo,
+            parsedForget.issue,
+            `Resolved by ${dispatch.resolvedBy}`,
+            process.cwd(),
+          );
+        } catch (err: unknown) {
+          printErr(
+            `engineer forget: failed to comment on ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
+            'ledger entry retained.',
+          );
+          return 1;
+        }
+        try {
+          await tracker.closeIssue(parsedForget.repo, String(parsedForget.issue), process.cwd());
+        } catch (err: unknown) {
+          printErr(
+            `engineer forget: failed to close ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
+            `close the issue by hand, then rerun \`engineer forget ${sourceRef}\` without --resolved-by.`,
+          );
+          return 1;
+        }
       }
 
       await ledger.forget(GITHUB_ISSUES_SOURCE, sourceRef);
