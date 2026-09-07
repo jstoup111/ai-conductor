@@ -488,7 +488,7 @@ describe('Story 5 / FR-4 — story coverage (story-<id>)', () => {
   it('happy: task references written as story-N bind at land without orphan or coverage gaps', async () => {
     const plan = PLAN
       .replace('**Story:** Story 1 (happy path — outcomes travel)', '**Story:** story-1 (happy path — outcomes travel)')
-      .replace('**Story:** Story 2 (happy path — stories map)', '**Story:** story-2 (happy path — stories map)');
+      .replace('**Story:** Story 2 (happy path — stories map)', '**Story:** Story-2 (happy path — stories map)');
     const wt = await seedWorktree('coherence demo', { plan });
 
     await expect(landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts())).resolves.toBeDefined();
