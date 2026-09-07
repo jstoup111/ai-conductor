@@ -4350,7 +4350,7 @@ TIER: M`,
     function scriptedGit(planRepoPath = 'plan.md') {
       const git = async (args: string[]) => {
         if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
-        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: 'head\n', stderr: '' };
+        if (args[0] === 'rev-parse') return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
         if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: 'M\u0000x\u0000', stderr: '' };
         if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/x b/x\n', stderr: '' };
@@ -4389,7 +4389,7 @@ TIER: M`,
     function scopedGit() {
       const git = async (args: string[]) => {
         if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
-        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: 'head\n', stderr: '' };
+        if (args[0] === 'rev-parse') return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
         if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: `M\u0000${SCOPED_SELECTOR}\u0000M\u0000${SCOPED_TEST}\u0000`, stderr: '' };
         if (args[0] === 'diff') return { exitCode: 0, stdout: `diff --git a/${SCOPED_SELECTOR} b/${SCOPED_SELECTOR}\ndiff --git a/${SCOPED_TEST} b/${SCOPED_TEST}\n`, stderr: '' };
@@ -4457,7 +4457,7 @@ TIER: M`,
     function scopedTestGit() {
       const git = async (args: string[]) => {
         if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
-        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: 'head\n', stderr: '' };
+        if (args[0] === 'rev-parse') return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
         if (args[0] === 'diff') {
           if (args.includes('--name-status')) {
