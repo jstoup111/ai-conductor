@@ -1,0 +1,13 @@
+# Track: Refuse daemon auto-resume of an operator-action halt class
+
+Track: technical
+
+Scope boundary: Small fix for #1713, approved by the operator on 2026-09-06 (delegated). Two daemon auto-resume paths that today bypass the HALT classification contract are made class-aware and are made to say which class blocked them: the progress-gated cross-dispatch re-kick, and the rate-limit episode-end halt sweep. The base-advance re-kick sweep already honours the contract and is not changed. Out of scope: stamping `lastResolvedCount` on every build-stall remediation exit, an engine-level pre-dispatch guard against an inherited halt, the misattributed `halt_cleared` cause, and any new operator recovery verb — those belong to #2132, which owns the wider audit.
+
+This is an engine dispatch-eligibility correction; acceptance criteria live in technical stories rather than a PRD.
+
+The operator-delegated decision on 2026-09-06 was to reuse the existing classification policy (`isOperatorActionHalt` over `readHaltClass`) at both sites rather than define a second eligibility matrix, and to leave `mechanical` and `legacy` dispositions re-kickable exactly as they are today.
+
+Scope check: A — consumer-facing (the daemon dispatch loop runs in every repository that installs the harness; #2132 observed this same defect in a consumer repository, so the mechanism exists outside this repo and the scope-check general-benefit reading and the mechanism test agree); B — n/a (no new skill); C — provider-agnostic (no provider, model, or host is named or branched on). No catalog registration and no `HARNESS.md` rule change is required: this changes engine behavior, not a behavioral rule.
+
+Verified foundation: `halt-marker.ts` classifies a read sidecar into `needs-human`, `mechanical`, `legacy`, `protected-artifact`, `plan-gap`, or `unclassified`, and `isOperatorActionHalt` already answers "only an operator may lift this" for that set, treating a missing or unreadable sidecar as `unclassified` and therefore blocking. `daemon-rekick.ts` consults exactly that pair before its base-advance clear and logs the disposition that skipped a slug. `daemon.ts`'s `pickEligible` re-admits a parked slug whose HALT is still live when `isProgressReKickEligible` returns true, and neither `isProgressReKickEligibleBounded` in `daemon.ts` nor the predicate `buildProgressReKickDeps` constructs in `daemon-cli.ts` reads the class at all. The `sweepEpisodeHalts` binding in `daemon-cli.ts` clears every stamped worktree's marker after checking only operator-park. `build_progress_halt.enabled` is `true` in this repository's own config and defaults to `true`, so the progress path is live wherever the block is configured.
