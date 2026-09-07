@@ -1,6 +1,5 @@
 import { writeFile, access, readFile, mkdir, rename, rm, symlink } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type {
@@ -104,6 +103,11 @@ import {
 } from './build-review-domain.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
 import { boundedHeadTailExcerpt, classifyTautologyPaths, deriveRemovalMaintenanceSelectors, materializeTautologyPreflight, type TautologyScopedRunResult } from './build-review-test-quality-preflight.js';
+import {
+  defaultBuildReviewScopedLauncher,
+  runBuildReviewScopedCommand,
+  type BuildReviewScopedLauncher,
+} from './build-review-scoped-run.js';
 import {
   CLAUDE_MODEL_POLICY,
   type ProviderModelPolicy,
@@ -504,6 +508,8 @@ export interface StepRunnerOptions {
   worktreeLifecycle?: WorktreeLifecycleQueue;
   /** Process-free test-suite-proof seam retained by the public build_review step. */
   buildReviewInputOptions?: BuildReviewInputOptions;
+  /** Test seam for the counterfactual scoped-command launcher. */
+  buildReviewScopedLauncher?: BuildReviewScopedLauncher;
   /**
    * Engine-owned rubric fan-out seam. It receives the single frozen snapshot
    * and resolved policy, and returns only after every branch has settled.
@@ -619,6 +625,7 @@ export class DefaultStepRunner implements StepRunner {
   private gitRunner: GitRunner;
   private planPathOverride?: string;
   private buildReviewInputOptions?: BuildReviewInputOptions;
+  private buildReviewScopedLauncher: BuildReviewScopedLauncher;
   private buildReviewCoordinator?: StepRunnerOptions['buildReviewCoordinator'];
   private buildReviewEffectiveResolver: typeof resolveEffectiveBuildReviewVerdict;
   private buildReviewArtifactReader: typeof readBuildReviewBranchArtifact;
@@ -680,6 +687,7 @@ export class DefaultStepRunner implements StepRunner {
     this.worktreeLifecycle = options?.worktreeLifecycle;
     this.planPathOverride = options?.planPath;
     this.buildReviewInputOptions = options?.buildReviewInputOptions;
+    this.buildReviewScopedLauncher = options?.buildReviewScopedLauncher ?? defaultBuildReviewScopedLauncher;
     this.buildReviewCoordinator = options?.buildReviewCoordinator;
     this.buildReviewEffectiveResolver = options?.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict;
     this.buildReviewArtifactReader = options?.buildReviewArtifactReader ?? readBuildReviewBranchArtifact;
@@ -2450,29 +2458,12 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   private async runScopedTautologyCommand(cwd: string, selectors: readonly string[], signal: AbortSignal): Promise<TautologyScopedRunResult> {
-    const template = this.config?.test_suite?.scoped_command;
-    if (!template || selectors.length === 0) return { kind: 'launch-error' as const, stdout: '', stderr: '' };
-    const command = template.replace('{selectors}', selectors.map((selector) => JSON.stringify(selector)).join(' '));
-    return new Promise<TautologyScopedRunResult>((resolve) => {
-      let stdout = '';
-      let stderr = '';
-      let settled = false;
-      const child = spawn('sh', ['-c', command], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
-      const finish = (value: TautologyScopedRunResult) => {
-        if (!settled) { settled = true; resolve(value); }
-      };
-      child.stdout.on('data', (chunk) => { stdout += String(chunk); });
-      child.stderr.on('data', (chunk) => { stderr += String(chunk); });
-      child.once('error', () => finish({ kind: 'launch-error', stdout, stderr }));
-      child.once('close', (code, receivedSignal) => {
-        if (receivedSignal) finish({ kind: 'signal', signal: receivedSignal, stdout, stderr });
-        else if (code === 0) finish({ exitCode: 0, stdout, stderr });
-        else finish({ kind: 'nonzero-exit', exitCode: code ?? 1, stdout, stderr });
-      });
-      signal.addEventListener('abort', () => {
-        child.kill('SIGTERM');
-        finish({ kind: 'timeout', stdout, stderr });
-      }, { once: true });
+    return runBuildReviewScopedCommand({
+      template: this.config?.test_suite?.scoped_command,
+      selectors,
+      cwd,
+      signal,
+      launcher: this.buildReviewScopedLauncher,
     });
   }
 
