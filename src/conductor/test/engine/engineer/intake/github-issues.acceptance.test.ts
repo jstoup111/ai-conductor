@@ -84,6 +84,21 @@ describe('FR-26 poll assigned issues across registered repos', () => {
     expect(await adapter.poll()).toEqual([]);
     expect(calls.length).toBe(0);
   });
+
+  it('captures all 45 assigned issues beyond the CLI default and does not duplicate them on a re-poll', async () => {
+    const state = baseState();
+    state.issuesByRepo = {
+      'o/a': Array.from({ length: 45 }, (_, index) => ({
+        repo: 'o/a', number: index + 1, title: `Issue ${index + 1}`, body: 'body',
+      })),
+    };
+    const { adapter } = await makeAdapter(state, [{ name: 'o/a', path: join(dir, 'a') }]);
+
+    const first = await adapter.poll();
+    expect(first).toHaveLength(45);
+    expect(new Set(first.map((envelope: any) => envelope.sourceRef))).toHaveLength(45);
+    expect(await adapter.poll()).toEqual([]);
+  });
 });
 
 describe('FR-28 empty issue rejected at capture', () => {
