@@ -252,6 +252,7 @@ describe("group-core: runAuxiliaryGroupBranch", () => {
       model_fallback_ladder: ["sonnet"],
       max_retries: 2,
       escalate: false,
+      min_confidence: 0,
     };
     const outcome: BuildReviewRubricResult = {
       kind: "skipped",
@@ -282,7 +283,7 @@ describe("group-core: runAuxiliaryGroupBranch", () => {
     const first = deferred<BuildReviewRubricResult>();
     const started: string[] = [];
     const policies: Record<"testQuality", ResolvedBuildReviewRubricPolicy> = {
-      testQuality: { enabled: true, llm_provider: "claude", model: "sonnet", effort: "medium", model_fallback_ladder: ["sonnet", "opus"], max_retries: 2, escalate: false },
+      testQuality: { enabled: true, llm_provider: "claude", model: "sonnet", effort: "medium", model_fallback_ladder: ["sonnet", "opus"], max_retries: 2, escalate: false, min_confidence: 0 },
     };
 
     const outcomesPromise = runAuxiliaryGroupBranches(

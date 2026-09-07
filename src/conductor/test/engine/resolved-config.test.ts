@@ -236,6 +236,7 @@ describe('engine/resolved-config', () => {
           model_fallback_ladder: string[];
           max_retries: number;
           escalate: boolean;
+          min_confidence: number;
         }>;
       };
 
@@ -253,6 +254,7 @@ describe('engine/resolved-config', () => {
             model_fallback_ladder: ['gpt-5.6-terra'],
             max_retries: 2,
             escalate: false,
+            min_confidence: 0,
           },
         },
       });

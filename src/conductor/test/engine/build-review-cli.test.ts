@@ -367,7 +367,7 @@ describe('build-review findings CLI', () => {
     expect(machineOutput.lastMechanicalFault).toEqual(fault);
     expect(Object.keys(machineOutput).sort()).toEqual([
       'acceptedDispositions', 'acceptedFindingIds', 'feature', 'infrastructureFailureRubrics', 'lapId', 'lastMechanicalFault',
-      'rawVerdict', 'skippedRubrics', 'snapshotDigest', 'unresolvedFindingIds', 'verdict',
+      'rawVerdict', 'skippedRubrics', 'snapshotDigest', 'suppressedFindingIds', 'unresolvedFindingIds', 'verdict',
     ]);
     expect(human).toHaveBeenCalledWith(expect.stringContaining(
       'Last mechanical fault: testQuality; cause: malformed-artifact; lap: lap-rejected; diagnostic: response omitted a verdict',
@@ -419,7 +419,7 @@ describe('build-review findings CLI', () => {
 
     expect(machine).toHaveBeenCalledWith(JSON.stringify({
       feature: 'review-rubrics', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', rawVerdict: 'PASS', verdict: 'PASS',
-      acceptedFindingIds: [], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], acceptedDispositions: [],
+      acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], acceptedDispositions: [],
     }));
     expect(JSON.parse(machine.mock.calls[0]![0])).not.toHaveProperty('lastMechanicalFault');
     expect(human).toHaveBeenCalledWith([

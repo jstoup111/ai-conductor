@@ -5523,6 +5523,7 @@ Task 1 → Task 2
             verdict: 'PASS' as const,
             acceptedFindingIds: [],
             unresolvedFindingIds: [],
+            suppressedFindingIds: [],
             skippedRubrics: [],
             infrastructureFailureRubrics: [],
             uncoveredInfrastructureFailureRubrics: [],

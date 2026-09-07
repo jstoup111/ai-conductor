@@ -2164,7 +2164,7 @@ export class DefaultStepRunner implements StepRunner {
       lapId,
       rawVerdict: aggregate.verdict,
       effectiveVerdict: effective.ok ? effective.effective.verdict : 'FAIL',
-      ...(effective.ok && effective.effective.suppressedFindingIds.length > 0 ? { suppressedFindings: effective.effective.suppressedFindingIds.flatMap((findingId) => {
+      ...(effective.ok && (effective.effective.suppressedFindingIds?.length ?? 0) > 0 ? { suppressedFindings: effective.effective.suppressedFindingIds.flatMap((findingId) => {
         const source = projectBuildReviewAggregateSources(aggregate)?.find((entry) => entry.findingId === findingId);
         return source?.confidence === undefined ? [] : [{ findingId, rubric: source.rubric, confidence: source.confidence, floor: config.rubrics[source.rubric].min_confidence }];
       }) } : {}),

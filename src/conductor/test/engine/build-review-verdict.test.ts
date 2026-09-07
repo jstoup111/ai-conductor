@@ -167,7 +167,7 @@ describe('engine/build-review verdict wiring contract', () => {
         feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
         effective: {
           rawVerdict: 'PASS' as const, verdict: 'PASS' as const,
-          acceptedFindingIds: [], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+          acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
         },
       }),
     })).resolves.toMatchObject({ done: true });
@@ -237,7 +237,7 @@ describe('engine/build-review verdict wiring contract', () => {
         feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
         effective: {
           rawVerdict: 'FAIL' as const, verdict: 'PASS' as const,
-          acceptedFindingIds: [id], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+          acceptedFindingIds: [id], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
         },
       }));
     await expect(checkGateCompletion(dir, 'build_review', {
@@ -264,7 +264,7 @@ describe('engine/build-review verdict wiring contract', () => {
         feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
         effective: {
           rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const,
-          acceptedFindingIds: ['sha256:accepted'], unresolvedFindingIds: ['sha256:unresolved-sibling'],
+          acceptedFindingIds: ['sha256:accepted'], unresolvedFindingIds: ['sha256:unresolved-sibling'], suppressedFindingIds: [],
           skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
         },
       }),
@@ -276,7 +276,7 @@ describe('engine/build-review verdict wiring contract', () => {
         feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
         effective: {
           rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const,
-          acceptedFindingIds: [], unresolvedFindingIds: [],
+          acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
           skippedRubrics: [], infrastructureFailureRubrics: ['testQuality'], uncoveredInfrastructureFailureRubrics: ['testQuality'],
         },
       }),
@@ -469,7 +469,7 @@ describe('engine/build-review verdict wiring contract', () => {
         feature: { version: 'v1' as const, repository: dir, feature: 'mixed-lap' },
         effective: {
           rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const,
-          acceptedFindingIds: [], unresolvedFindingIds: ['sha256:unresolved'],
+          acceptedFindingIds: [], unresolvedFindingIds: ['sha256:unresolved'], suppressedFindingIds: [],
           skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
         },
       }),
