@@ -7,7 +7,7 @@ import { appendCloseoutEvent } from './closeout-events.js';
 import { AuditTrailWriter } from './audit-trail.js';
 import { EventPersister } from './event-persister.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
-import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackLedger, readKickbackLedger, stageKickbackBudgetAdjustment, type KickbackBudgetAdjustment } from './kickback-ledger.js';
+import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackGate, isUnreadableKickbackLedger, readKickbackLedger, stageKickbackBudgetAdjustment, unreadableKickbackGates, type KickbackBudgetAdjustment } from './kickback-ledger.js';
 import { kickbackBudgetView, renderKickbackBudgetView } from './kickback-budget-view.js';
 import { resolveMainRepoRoot, isOperatorParked } from './park-marker.js';
 import { isAcceptableOperatorRationale, resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
@@ -53,7 +53,7 @@ async function reconcilePendingAdjustments(worktree: string): Promise<void> {
   const defaults = await defaultsFor(worktree);
   for (const [gate, entry] of Object.entries(ledger.gates)) {
     const pending = entry.pendingAdjustment;
-    if (!pending) continue;
+    if (!pending || isUnreadableKickbackGate(ledger, gate)) continue;
     const records = eventText.split('\n').filter(Boolean).map((line) => {
       try { return JSON.parse(line) as { adjustmentId?: unknown }; }
       catch { throw new Error('authorization event ledger is unreadable'); }
@@ -107,9 +107,18 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const ledger = await readKickbackLedger(worktree);
     if (isUnreadableKickbackLedger(ledger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
     const defaults = await defaultsFor(worktree);
-    const views = [...GATES].map((gate) => kickbackBudgetView(ledger.gates[gate], gate, defaults[gate]));
-    print(command.format === 'json' ? JSON.stringify({ feature: command.feature, gates: views }) : views.map((view) => renderKickbackBudgetView(ledger.gates[view.gate], view.gate, defaults[view.gate])).join('\n\n'));
-    return 0;
+    // adr-2026-08-31 decision 3: one malformed gate is reported as unavailable;
+    // its healthy siblings still render their authoritative values.
+    const unavailable = unreadableKickbackGates(ledger).filter((gate) => GATES.has(gate));
+    const readable = [...GATES].filter((gate) => !unavailable.includes(gate));
+    const views = readable.map((gate) => kickbackBudgetView(ledger.gates[gate], gate, defaults[gate]));
+    print(command.format === 'json'
+      ? JSON.stringify({ feature: command.feature, gates: views, ...(unavailable.length > 0 ? { unavailableGates: unavailable } : {}) })
+      : [
+        ...views.map((view) => renderKickbackBudgetView(ledger.gates[view.gate], view.gate, defaults[view.gate])),
+        ...unavailable.map((gate) => `${gate}: budget unavailable (durable entry failed validation)`),
+      ].join('\n\n'));
+    return unavailable.length > 0 ? 1 : 0;
   }
   if (!deps.isInteractive?.() && deps.isInteractive !== undefined || (deps.isInteractive === undefined && !process.stdin.isTTY)) {
     print('kickback-budget: mutations require an interactive local operator terminal.'); return 2;
@@ -120,7 +129,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   const refused = await reconcile();
   if (refused !== undefined) return refused;
   const ledger = await readKickbackLedger(worktree);
-  if (isUnreadableKickbackLedger(ledger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
+  if (isUnreadableKickbackGate(ledger, command.gate)) { print('kickback-budget: ledger is unreadable.'); return 1; }
   const entry = ledger.gates[command.gate];
   if (!entry?.capEvidence) { print('kickback-budget: no current cap evidence for that gate.'); return 1; }
   try { await readFile(join(worktree, '.pipeline', 'HALT'), 'utf8'); } catch { print('kickback-budget: feature is not currently halted.'); return 1; }

@@ -250,7 +250,7 @@ import {
   bumpSuiteInfrastructureRetriesInLedger,
   readGrowth,
   readKickbackLedger,
-  isUnreadableKickbackLedger,
+  isUnreadableKickbackGate,
   readSuiteInfrastructureRetries,
   recordGrowth,
   recordRemediationGateLap,
@@ -729,11 +729,12 @@ async function readRemediationGateAppendBudget(
     readKickbackLedger(projectRoot),
     readGrowth(projectRoot, growthCap),
   ]);
-  // A partial or corrupt ledger must not be mistaken for fresh remediation
-  // allowance: budget recovery is an explicit operator decision, not a
-  // best-effort fallback.
-  if (isUnreadableKickbackLedger(ledger)) {
-    throw new Error('kickback ledger is unreadable');
+  // A corrupt ledger must not be mistaken for fresh remediation allowance:
+  // budget recovery is an explicit operator decision, not a best-effort
+  // fallback. Scoped to THIS gate (adr-2026-08-31 decision 3) so a sibling
+  // gate's malformed entry does not halt a healthy one.
+  if (isUnreadableKickbackGate(ledger, gate)) {
+    throw new Error(`kickback ledger gate '${gate}' is unreadable`);
   }
   const priorLaps = (
     ledger.gates[gate] as (KickbackGateEntry & { laps?: number }) | undefined

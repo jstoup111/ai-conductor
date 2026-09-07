@@ -32,6 +32,7 @@ import { ALL_STEPS } from './steps.js';
 import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import {
   consumeKickbackResumeAuthorization,
+  isUnreadableKickbackGate,
   isUnreadableKickbackLedger,
   readKickbackLedger,
 } from './kickback-ledger.js';
@@ -199,7 +200,10 @@ export async function consumeResumeAuthorizations(
       if (isUnreadableKickbackLedger(ledger)) {
         throw new Error('kickback ledger is unreadable');
       }
-      const match = Object.entries(ledger.gates).find(([, entry]) =>
+      // adr-2026-08-31 decision 3: a malformed sibling gate never invalidates a
+      // healthy gate's authorization, but its own gate is never honored.
+      const match = Object.entries(ledger.gates).find(([gate, entry]) =>
+        !isUnreadableKickbackGate(ledger, gate) &&
         entry.capEvidence && entry.resumeAuthorization && !entry.resumeAuthorization.consumed &&
         entry.capEvidence.haltGeneration === entry.resumeAuthorization.haltGeneration,
       );

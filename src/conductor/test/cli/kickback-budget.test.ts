@@ -328,3 +328,53 @@ describe('kickback-budget operator authority', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });
+
+// Covers: task:7 — adr-2026-08-31 decision 3: one malformed gate never
+// invalidates a healthy sibling gate's operations.
+describe('kickback-budget scopes an invalid gate entry to its own gate', () => {
+  const healthy = { ...baseEntry, capEvidence: { gate: 'build_review', consumed: 6, limit: 5, latestReason: 'cap', haltGeneration: 'halt-1' } };
+  const mixed = { version: 1, gates: { build_review: healthy, prd_audit: { count: 'not-a-number' } } };
+
+  it('inspect renders the healthy gate and reports only the malformed one unavailable', async () => {
+    const fixture = await makeFeature(mixed);
+    try {
+      const output: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => output.push(line) },
+      )).toBe(1);
+      const parsed = JSON.parse(output[0]) as { gates: Array<{ gate: string }>; unavailableGates: string[] };
+      expect(parsed.unavailableGates).toEqual(['prd_audit']);
+      expect(parsed.gates.map((view) => view.gate)).toContain('build_review');
+      expect(parsed.gates.map((view) => view.gate)).not.toContain('prd_audit');
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('still authorizes a raise on the healthy gate', async () => {
+    const fixture = await makeFeature(mixed);
+    try {
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted');
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'needs-human');
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'build_review', by: 1, rationale: 'one more lap', format: 'human' },
+        {
+          cwd: fixture.root, resolveMainRoot: async () => fixture.root, isInteractive: () => true,
+          resolveOperator: () => 'operator', print: () => {}, appendEvent: () => {},
+        },
+      )).toBe(0);
+      const stored = JSON.parse(await readFile(join(fixture.worktree, '.pipeline', 'kickback-ledger.json'), 'utf8'));
+      expect(stored.gates.build_review.effectiveLimit).toBe(6);
+      // Never repaired, defaulted, or inferred (decision 4).
+      expect(stored.gates.prd_audit).toEqual({ count: 'not-a-number' });
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('still refuses a mutation naming the malformed gate', async () => {
+    const fixture = await makeFeature(mixed);
+    try {
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted');
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'kickback-cap');
+      await expectRefusalIsInert(fixture, { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'prd_audit', by: 1, rationale: 'evidence', format: 'human' }, 1);
+    } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+});
