@@ -202,6 +202,34 @@ describe('printGuide: bare `compose --help` lists the unclaim/requeue maintenanc
   });
 });
 
+describe('resolved intake forget help (Task 4)', () => {
+  it('explains that --resolved-by comments and closes only when the flag is supplied', async () => {
+    const out: string[] = [];
+    const code = await dispatchEngineer(
+      { kind: 'help', topic: 'forget' },
+      { print: (text) => out.push(text), printErr: () => {} },
+    );
+
+    expect(code).toBe(0);
+    const text = out.join('\n').toLowerCase();
+    expect(text).toContain('--resolved-by <reference>');
+    expect(text).toContain('comment');
+    expect(text).toContain('close');
+    expect(text).toMatch(/without.*--resolved-by.*does not close/i);
+  });
+
+  it('shows the optional --resolved-by form in the compose guide', async () => {
+    const out: string[] = [];
+    const code = await dispatchEngineer(
+      { kind: 'guide' },
+      { print: (text) => out.push(text), printErr: () => {} },
+    );
+
+    expect(code).toBe(0);
+    expect(out.join('\n')).toContain('compose forget <owner/repo#N> [--resolved-by <reference>]');
+  });
+});
+
 describe('regression guard: ENGINEER_SUBCOMMANDS and SUBCOMMAND_HELP stay in sync (#524)', () => {
   it('every entry in ENGINEER_SUBCOMMANDS has a non-empty SUBCOMMAND_HELP entry', () => {
     for (const sub of ENGINEER_SUBCOMMANDS) {
