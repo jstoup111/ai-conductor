@@ -255,11 +255,17 @@ export function buildReviewCandidateScopeResolutionContext(projection: BuildRevi
   for (const rawCandidate of rawCandidates) {
     const candidate = record(rawCandidate);
     const directRegion = record(candidate?.sourceRegion);
+    // Fallback candidates are frozen by Task 5/8 as a source identity, not
+    // merely a parser span.  Two files routinely have declarations at the
+    // same offsets, so matching only side/start/end can silently bind a
+    // candidate to another file's evidence and duplicate its candidate id.
+    const candidateSource = record(candidate?.source);
     const declaration = record(candidate?.declaration) ?? record(candidate?.diagnostic);
     const span = record(declaration?.span);
     const matchedEvidence = evidence.map(record).find((entry) => {
       const source = record(entry?.source); const region = record(entry?.region);
-      return source?.side === 'head' && region?.start === span?.start && region?.end === span?.end;
+      return source?.side === candidateSource?.side && source?.fileName === candidateSource?.fileName &&
+        region?.start === span?.start && region?.end === span?.end;
     });
     const evidenceSource = record(matchedEvidence?.source);
     const evidenceRegion = record(matchedEvidence?.region);
