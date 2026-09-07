@@ -1818,6 +1818,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
 describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
   let dir: string;
   const baseBranch = 'main';
+  const gitInvocations: string[][] = [];
 
   const git = async (args: string[]) => {
     const { stdout } = await execFile('git', args, { cwd: dir });
@@ -1851,6 +1852,11 @@ describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
     },
   });
 
+  const recordingGitRunner = async (args: string[]) => {
+    gitInvocations.push(args);
+    return execFile('git', args, { cwd: dir });
+  };
+
   const writeCorpus = async (count: number, includeCoherence = true) => {
     for (let index = 0; index < count; index += 1) {
       const slug = `2026-09-06-prefetch-${index}`;
@@ -1883,6 +1889,7 @@ describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
     await writeFile(join(dir, 'README.md'), 'init\n');
     await git(['add', 'README.md']);
     await git(['commit', '-q', '-m', 'init']);
+    gitInvocations.length = 0;
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
@@ -1899,39 +1906,50 @@ describe('engine/daemon-backlog — committed-tree prefetch (Task 3)', () => {
 
   it('uses a bounded number of batched blob reads as the committed corpus grows', async () => {
     await writeCorpus(4);
-    const invocations: number[] = [];
+    const invocations: string[][] = [];
     const runner: GitBlobBatchRunner = async (file, args, options) => {
-      invocations.push(1);
+      if (file === 'git') {
+        invocations.push(args);
+        gitInvocations.push(args);
+      }
       return execaCommand(file, args, options);
     };
+    gitInvocations.length = 0;
 
     await discoverBacklog(dir, undefined, undefined, {
-      treeSource: gitTreeSource(dir, baseBranch, { blobRunner: runner }),
+      treeSource: gitTreeSource(dir, baseBranch, { blobRunner: runner, gitRunner: recordingGitRunner }),
     });
     const smallCorpusCalls = invocations.length;
 
     await writeCorpus(300);
     invocations.length = 0;
+    gitInvocations.length = 0;
     await discoverBacklog(dir, undefined, undefined, {
-      treeSource: gitTreeSource(dir, baseBranch, { blobRunner: runner }),
+      treeSource: gitTreeSource(dir, baseBranch, { blobRunner: runner, gitRunner: recordingGitRunner }),
     });
 
     expect([smallCorpusCalls, invocations.length]).toEqual([1, 1]);
+    expect(gitInvocations.filter(([command]) => command === 'show')).toEqual([]);
   });
 
   it('reports absent in-subtree coherence and intake artifacts from the prefetched memo', async () => {
     await writeCorpus(3, false);
-    const invocations: number[] = [];
+    const invocations: string[][] = [];
     const runner: GitBlobBatchRunner = async (file, args, options) => {
-      invocations.push(1);
+      if (file === 'git') {
+        invocations.push(args);
+        gitInvocations.push(args);
+      }
       return execaCommand(file, args, options);
     };
+    gitInvocations.length = 0;
 
     const result = await discoverBacklog(dir, undefined, undefined, {
-      treeSource: gitTreeSource(dir, baseBranch, { blobRunner: runner }),
+      treeSource: gitTreeSource(dir, baseBranch, { blobRunner: runner, gitRunner: recordingGitRunner }),
     });
 
     expect([result.items.length, invocations.length]).toEqual([3, 1]);
+    expect(gitInvocations.filter(([command]) => command === 'show')).toEqual([]);
   });
 
   it('reads committed out-of-corpus files and rejects uncommitted ones', async () => {
