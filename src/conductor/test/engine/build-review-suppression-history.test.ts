@@ -1,5 +1,5 @@
 // Covers: task:12
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,7 +10,7 @@ import {
   persistBuildReviewSuppressions,
   projectBuildReviewSuppressionEntries,
 } from '../../src/engine/build-review-suppression-history.js';
-import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
+import { RemediationCaseStore, remediationCaseStorePath } from '../../src/engine/remediation-case-store.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -111,6 +111,8 @@ describe('persistBuildReviewSuppressions', () => {
     const root = await projectRoot();
 
     await expect(persistBuildReviewSuppressions({ projectRoot: root, feature, suppressions: [] })).resolves.toEqual({ ok: true });
+
+    await expect(access(remediationCaseStorePath(root))).rejects.toMatchObject({ code: 'ENOENT' });
 
     const persisted = await new RemediationCaseStore(root, feature).read();
     if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
