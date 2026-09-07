@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:5, task:6, task:8, task:10
+// Covers: task:2, task:3, task:4, task:5, task:6, task:8, task:10
 /**
  * T9: OtelVisualizer — provider/processor setup (off hot path).
  * T17: hot-path guard — emit() resolves promptly even when the transport blocks.
@@ -16,7 +16,10 @@ import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { createOtelVisualizer } from '../../../src/engine/otel/create-otel-visualizer.js';
-import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
+import {
+  OtelVisualizer,
+  type OtelEventHandlerTable,
+} from '../../../src/engine/otel/otel-visualizer.js';
 import { otelTracedEventTypes } from '../../../src/engine/event-sinks.js';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import {
@@ -32,6 +35,37 @@ class CapturingSpanExporter extends InMemorySpanExporter {
     return Promise.resolve();
   }
 }
+
+const tracedHandlerTable = {
+  step_started: () => undefined,
+  step_completed: () => undefined,
+  step_failed: () => undefined,
+  provider_attempt: () => undefined,
+  feature_usage_total: () => undefined,
+  feature_cost_snapshot: () => undefined,
+  step_retry: () => undefined,
+  gate_verdict: () => undefined,
+  kickback: () => undefined,
+  feature_complete: () => undefined,
+  loop_halt: () => undefined,
+  build_progress: () => undefined,
+  unattributed_progress: () => undefined,
+  build_no_progress: () => undefined,
+  build_stall: () => undefined,
+  pipeline_closeout: () => undefined,
+} satisfies OtelEventHandlerTable;
+
+const { loop_halt: _omittedTracedHandler, ...handlerTableMissingTracedType } = tracedHandlerTable;
+// @ts-expect-error a handler table must cover every sink-registry OTel type.
+const missingTracedHandler: OtelEventHandlerTable = handlerTableMissingTracedType;
+void missingTracedHandler;
+
+// @ts-expect-error a handler table cannot include an event the sink registry keeps off OTel.
+const handlerForUntracedType: OtelEventHandlerTable = {
+  ...tracedHandlerTable,
+  gate_blocked: () => undefined,
+};
+void handlerForUntracedType;
 
 describe('OtelVisualizer — T9: provider/processor setup', () => {
   let tempDir: string;
@@ -130,6 +164,68 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
       vis.start(freshEmitter);
 
       expect(new Set(on.mock.calls.map(([type]) => type))).toEqual(new Set(expectedEventTypes));
+      await vis.stop();
+    } finally {
+      vi.doUnmock('../../../src/engine/event-sinks.js');
+      vi.resetModules();
+    }
+  });
+
+  it('does not subscribe to or export telemetry for declared-untraced gate_blocked events', async () => {
+    const on = vi.spyOn(emitter, 'on');
+    const vis = new OtelVisualizer(
+      resolveOtelConfig(
+        { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+        pipelineDir,
+      ),
+      {
+        runId: 'test-untraced-gate-blocked',
+        feature: 'test-feature',
+        project: 'test-project',
+        spanExporter,
+        metricExporter,
+      },
+    );
+
+    vis.start(emitter);
+    await emitter.emit({ type: 'gate_blocked', step: 'build', reason: 'blocked' });
+    await vis.stop();
+
+    expect({
+      subscriptions: on.mock.calls.map(([type]) => type),
+      spans: spanExporter.getFinishedSpans(),
+      metrics: metricExporter.getMetrics(),
+    }).toEqual({ subscriptions: expect.not.arrayContaining(['gate_blocked']), spans: [], metrics: [] });
+  });
+
+  it('subscribes to gate_blocked when the mocked sink registry declares it traced', async () => {
+    vi.resetModules();
+    vi.doMock('../../../src/engine/event-sinks.js', () => ({
+      otelTracedEventTypes: () => ['gate_blocked'],
+    }));
+
+    try {
+      const { OtelVisualizer: FreshOtelVisualizer } = await import('../../../src/engine/otel/otel-visualizer.js');
+      const { ConductorEventEmitter: FreshConductorEventEmitter } = await import('../../../src/ui/events.js');
+      const freshEmitter = new FreshConductorEventEmitter();
+      const on = vi.spyOn(freshEmitter, 'on');
+      const vis = new FreshOtelVisualizer(
+        resolveOtelConfig(
+          { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+          pipelineDir,
+        ),
+        {
+          runId: 'test-traced-gate-blocked',
+          feature: 'test-feature',
+          project: 'test-project',
+          spanExporter,
+          metricExporter,
+        },
+      );
+
+      vis.start(freshEmitter);
+
+      expect(on.mock.calls.map(([type]) => type)).toContain('gate_blocked');
       await vis.stop();
     } finally {
       vi.doUnmock('../../../src/engine/event-sinks.js');
