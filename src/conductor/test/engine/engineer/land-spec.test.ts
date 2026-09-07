@@ -1,4 +1,4 @@
-// Covers: task:2, task:3
+// Covers: task:2, task:3, task:4
 // land-spec.test.ts — Story 2 (Slice B): landSpec fails CLOSED on unresolved
 // identity (adr-2026-07-01-machine-scoped-operator-identity, D3).
 //
@@ -285,6 +285,41 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
     expect(message).toContain('Track: technical; Tier: S');
     expect(message).toContain('Stories:\n- Story 1: Explain the landed decision\n- Story 2: Keep the commit evidence inert');
     expect(message).toContain('Tasks: 3\n- Task 1\n- Task 2\n- Task 3');
+  });
+});
+
+describe('Task 4: landSpec keeps degraded DECIDE artifacts landable', () => {
+  it('commits the unchanged subject without empty summary or stories sections', async () => {
+    const idea = 'dep bump';
+    const dir = await seedValidWorktree(idea);
+    await writeFile(
+      join(dir, '.docs', 'stories', 'dep-bump.md'),
+      '# Stories: dep bump\n\n**Status:** Accepted\n\nDecision prose without a story heading.\n',
+    );
+    await writeFile(
+      join(dir, '.docs', 'plans', 'dep-bump.md'),
+      [
+        '# Implementation Plan: dep bump',
+        '',
+        '**Stories:** .docs/stories/dep-bump.md',
+        '',
+        '### Task 1: Preserve degraded landing',
+        '',
+        '**Done when:**',
+        '- Given the artifact set, when it lands, then the commit succeeds.',
+        '- The subject remains unchanged.',
+        '',
+      ].join('\n'),
+    );
+
+    const gh: GhRunner = async () => ({ stdout: 'operator\n' });
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result).toEqual({ slug: 'dep-bump', branch: 'spec/dep-bump', repoPath: dir });
+    const message = await git(['log', '-1', '--format=%B'], dir);
+    expect(message.split('\n')[0]).toBe('spec: land authored artifacts for "dep bump" [engineer/land]');
+    expect(message).not.toContain('Summary:');
+    expect(message).not.toContain('Stories:');
   });
 });
 
