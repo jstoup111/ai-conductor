@@ -1325,7 +1325,7 @@ export async function dispatchEngineer(
         try {
           await tracker.commentOnIssue(
             parsedForget.repo,
-            parsedForget.issue,
+            Number(parsedForget.issue),
             `Resolved by ${dispatch.resolvedBy}`,
             process.cwd(),
           );
