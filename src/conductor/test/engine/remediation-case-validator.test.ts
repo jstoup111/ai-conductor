@@ -72,6 +72,24 @@ describe('remediation case graph validator', () => {
     });
   });
 
+  it('does not require an outcome for a suppressed finding kept out of the live source set', () => {
+    // Suppression history is judge context, not a current source. The caller
+    // passes only the live source ids to this validator, so the judgement must
+    // remain source-complete without assigning an outcome to the suppressed id.
+    const liveSourceIds = ['testQuality:live-finding'];
+    const judgement = {
+      mode: 'case-v1',
+      domain: 'build_review',
+      sourceOutcomes: [{ sourceId: 'testQuality:live-finding', outcome: 'rejected', caseRef: 'case-live' }],
+      cases: [{
+        caseRef: 'case-live', disposition: 'reject', priority: 'low',
+        rationale: 'The live finding is not actionable.', confidence: 'high', effect: { kind: 'none' },
+      }],
+    } as const satisfies RemediationCaseJudgement;
+
+    expect(validateRemediationCaseGraph(liveSourceIds, judgement)).toMatchObject({ ok: true });
+  });
+
   it.each([
     ['omitted source', {
       ...VALID_JUDGEMENT,
