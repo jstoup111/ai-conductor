@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:4, task:10, task:11
+// Covers: task:1, task:2, task:3, task:4, task:10, task:11
 /**
  * Covers: task:1, task:2, task:3, task:4, task:10
  * metrics.test.ts — unit tests for MetricsRecorder via OtelVisualizer.
@@ -817,7 +817,7 @@ describe('Task 3: dispatch metering classification', () => {
       tokenUsage: { input: 100, output: 50 },
     });
     await emitter.emit({ type: 'step_started', step: 'build', index: 3 });
-    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', actualProvider: 'claude' });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
@@ -841,7 +841,7 @@ describe('Task 4: unmetered close observability', () => {
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 3 });
-    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', actualProvider: 'claude' });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
@@ -863,10 +863,10 @@ describe('Task 4: unmetered close observability', () => {
   });
 });
 
-// ── Shipped-record / OTel cost parity ───────────────────────────────────────
+// ── Task 3: shipped-record / OTel dispatch parity ──────────────────────────
 
-describe.skip('superseded dispatch-cost parity with the shipped-record rollup', () => {
-  it('exports every invoked provider attempt exactly once, including failed attempts', async () => {
+describe('Task 3: shipped-record / OTel dispatch parity', () => {
+  it('keeps the exported dispatch total aligned with the persisted ledger and excludes provider-free closes', async () => {
     const persister = new EventPersister(join(pipelineDir, 'events.jsonl'), emitter);
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     persister.start();
@@ -874,23 +874,6 @@ describe.skip('superseded dispatch-cost parity with the shipped-record rollup', 
 
     try {
       await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
-      await emitter.emit({
-        type: 'provider_attempt',
-        step: 'build',
-        provider: 'claude',
-        outcome: 'failure',
-        invoked: true,
-        model: 'opus',
-        tokenUsage: { input: 10, output: 1, costUsd: 0.2, costSource: 'provider' },
-      });
-      await emitter.emit({
-        type: 'provider_attempt',
-        step: 'build',
-        provider: 'codex',
-        outcome: 'unavailable',
-        invoked: false,
-        model: 'gpt-5.6-terra',
-      });
       await emitter.emit({
         type: 'provider_attempt',
         step: 'build',
@@ -908,6 +891,18 @@ describe.skip('superseded dispatch-cost parity with the shipped-record rollup', 
         model: 'opus',
         tokenUsage: { input: 20, output: 2, costUsd: 0.3, costSource: 'provider' },
       });
+      await emitter.emit({
+        type: 'provider_attempt',
+        step: 'explore',
+        provider: 'codex',
+        outcome: 'failure',
+        invoked: true,
+        model: 'gpt-5.6-terra',
+      });
+      await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 1 });
+      await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+      await emitter.emit({ type: 'step_started', step: 'build_review', index: 2 });
+      await emitter.emit({ type: 'step_completed', step: 'build_review', status: 'done', unmetered: true });
       await emitter.emit({ type: 'feature_complete' });
     } finally {
       persister.stop();
@@ -915,22 +910,26 @@ describe.skip('superseded dispatch-cost parity with the shipped-record rollup', 
     }
 
     const rollup = await computeCostRollup(tempDir);
-    const otelCost = findMetric(metricExporter, 'conductor.step.cost')!.dataPoints
-      .reduce((sum, point) => sum + Number(point.value), 0);
     const otelDispatches = findMetric(metricExporter, 'conductor.step.dispatches')!.dataPoints
       .reduce((sum, point) => sum + Number(point.value), 0);
+    const bootstrapDispatches = findMetric(metricExporter, 'conductor.step.dispatches')!.dataPoints
+      .filter((point) => point.attributes['step'] === 'bootstrap');
+    const bootstrapDurations = findMetric(metricExporter, 'conductor.step.duration')!.dataPoints
+      .filter((point) => point.attributes['step'] === 'bootstrap');
 
-    expect({ otelCost, otelDispatches }).toEqual({
-      otelCost: rollup.costUsd,
-      otelDispatches: rollup.dispatches,
+    expect({ otelDispatches, rollupDispatches: rollup.dispatches }).toEqual({
+      otelDispatches: 2,
+      rollupDispatches: 2,
     });
     expect(rollup).toMatchObject({
-      costUsd: 0.5,
+      costUsd: 0.3,
       dispatches: 2,
-      tokens: { input: 30, output: 3 },
+      unmetered: { count: 1 },
+      tokens: { input: 20, output: 2 },
     });
+    expect(bootstrapDurations).toHaveLength(1);
+    expect(bootstrapDispatches).toHaveLength(0);
   });
-
 });
 
 describe('feature usage total cost export', () => {
