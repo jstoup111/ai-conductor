@@ -4,6 +4,13 @@ spec_hash: 8cb6a2a66727778ebd0defe8711b15ef55f60e87c94fff16dbe41a2e77459c95
 pr: https://github.com/jstoup111/ai-conductor/pull/2398
 shipped: 2026-09-07
 engine_version: 20260907T025756Z-de24783f71d8
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-07-28-total-halt-classification-legacy-boundary D2"
+    outcome: remediated
+    summary: "Both new read-side consumers auto-resume `legacy` HALTs without the required explicit compatibility log annotation."
 ---
 
 ## Cost
