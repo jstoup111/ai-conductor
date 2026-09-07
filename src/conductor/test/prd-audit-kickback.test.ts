@@ -2347,6 +2347,52 @@ describe('prd_audit kickback', () => {
   });
 
   /**
+   * The fourth shape in this family, and the one that halted
+   * `build-review-rubrics-need-a-post-join-adjudicator-` on 2026-09-04:
+   * `adr-2026-08-11-halt-events-ride-the-persisted-spine` numbers its decisions
+   * with the bold wrapping the number (`**1. Halt-class events persist.**`)
+   * rather than after it. `^\s*<n>\.` cannot step over the leading `**`, so a
+   * REMEDIABLE finding citing a real, APPROVED, genuinely-violated decision was
+   * uncitable and halted needs-human instead of routing to BUILD.
+   */
+  it('resolves a governing clause against a bold-wrapped numbered ADR decision', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-clause-bold-number-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    const adrStem = 'adr-2026-08-11-bold-numbered-architecture';
+    await Promise.all([
+      mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+      mkdir(join(root, '.docs', 'decisions'), { recursive: true }),
+    ]);
+    await writeFile(planPath, '### Task 1: Existing approved work\n');
+    await writeFile(join(root, '.docs', 'decisions', `${adrStem}.md`), [
+      '# ADR: Bold-numbered architecture',
+      '**Status:** APPROVED',
+      '',
+      '## Decision',
+      '',
+      '**1. Halt-class events persist.** `loop_halt` becomes `persist: true`.',
+      '',
+      '**2. `loop_halt` gains an optional `step`, stamped centrally.** One owned emit path.',
+      '',
+      '## Consequences',
+      '',
+      '- Something else entirely.',
+    ].join('\n'));
+
+    const plan = await readFile(planPath, 'utf8');
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 1`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} decision 1` });
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 2`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} decision 2` });
+    // Still fails closed: an absent decision, and `**1.` never matches `**12.`.
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 3`))
+      .resolves.toBeNull();
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 12`))
+      .resolves.toBeNull();
+  });
+
+  /**
    * Every REMEDIABLE clause authored in the wild backticks its stem
    * (`` `adr-x` + Decision 4 ``). The grammar is anchored on a bare identifier,
    * so the leading backtick failed the match before any ADR lookup ran and the

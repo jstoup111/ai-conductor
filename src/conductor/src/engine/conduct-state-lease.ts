@@ -175,6 +175,10 @@ export function createConductStateLease(
   async function recoverDeadOwner(): Promise<
     | { status: 'recovered'; ownerPid: number }
     | { status: 'occupied'; ownerPid?: number }
+    // `mkdir` succeeds before the owner metadata write. A peer that observes
+    // that short creation window must wait for the owner (or release), not
+    // misclassify a healthy concurrent writer as an ambiguous lease.
+    | { status: 'initializing' }
     | { status: 'vanished' }
     | { status: 'refused'; message: string }
   > {
@@ -182,6 +186,7 @@ export function createConductStateLease(
     try {
       serializedOwner = await filesystem.readOwner(ownerPath(leasePath));
     } catch (error) {
+      if (isMissing(error)) return { status: 'initializing' };
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
       return {
         status: 'refused',
@@ -326,8 +331,9 @@ export function createConductStateLease(
             };
           }
           // A vanished lease is unheld right now, so retry the creation without
-          // burning a retry delay. The wait budget checked above still bounds a
-          // pathological create/release cycle.
+          // burning a retry delay. An initializing lease is still live, but its
+          // owner write has not become visible yet; wait for it or its creator's
+          // cleanup. The wait budget still bounds both races.
           if (recovery.status === 'vanished') continue;
           try {
             await wait(Math.min(retryDelayMs, waitTimeoutMs - elapsedMs));

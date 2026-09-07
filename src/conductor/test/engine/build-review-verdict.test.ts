@@ -167,7 +167,7 @@ describe('engine/build-review verdict wiring contract', () => {
         feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
         effective: {
           rawVerdict: 'PASS' as const, verdict: 'PASS' as const,
-          acceptedFindingIds: [], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [],
+          acceptedFindingIds: [], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
         },
       }),
     })).resolves.toMatchObject({ done: true });
@@ -237,7 +237,7 @@ describe('engine/build-review verdict wiring contract', () => {
         feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
         effective: {
           rawVerdict: 'FAIL' as const, verdict: 'PASS' as const,
-          acceptedFindingIds: [id], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [],
+          acceptedFindingIds: [id], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
         },
       }));
     await expect(checkGateCompletion(dir, 'build_review', {
@@ -265,7 +265,7 @@ describe('engine/build-review verdict wiring contract', () => {
         effective: {
           rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const,
           acceptedFindingIds: ['sha256:accepted'], unresolvedFindingIds: ['sha256:unresolved-sibling'],
-          skippedRubrics: [], infrastructureFailureRubrics: [],
+          skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
         },
       }),
     })).resolves.toMatchObject({ done: false, routeClass: 'named-route', reason: expect.stringMatching(/unresolved.*unresolved-sibling/i) });
@@ -277,7 +277,7 @@ describe('engine/build-review verdict wiring contract', () => {
         effective: {
           rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const,
           acceptedFindingIds: [], unresolvedFindingIds: [],
-          skippedRubrics: [], infrastructureFailureRubrics: ['testQuality'],
+          skippedRubrics: [], infrastructureFailureRubrics: ['testQuality'], uncoveredInfrastructureFailureRubrics: ['testQuality'],
         },
       }),
     })).resolves.toMatchObject({ done: false, routeClass: 'named-route', reason: expect.stringMatching(/infrastructure.*testQuality/i) });
@@ -430,7 +430,7 @@ describe('engine/build-review verdict wiring contract', () => {
         effective: {
           rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const,
           acceptedFindingIds: [], unresolvedFindingIds: ['sha256:unresolved'],
-          skippedRubrics: [], infrastructureFailureRubrics: [],
+          skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
         },
       }),
       buildReviewArtifactReader: async (_root, rubric, lapId, snapshotDigest) => ({

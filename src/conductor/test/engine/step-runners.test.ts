@@ -3935,7 +3935,7 @@ TIER: M`,
             feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
             effective: {
               rawVerdict: 'FAIL' as const, verdict: 'PASS' as const, acceptedFindingIds: ['accepted'], unresolvedFindingIds: [],
-              skippedRubrics: [], infrastructureFailureRubrics: [],
+              skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
             },
           };
         }),

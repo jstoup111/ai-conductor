@@ -161,7 +161,7 @@ async function runEntry(
     env: {
       ...env,
       HOME: home,
-      PATH: `${join(fixture.root, 'bin')}:${process.env.PATH ?? '/usr/bin:/bin'}`,
+      PATH: `${join(fixture.root, 'bin')}:/usr/bin:/bin:${process.env.PATH ?? ''}`,
     },
     input: options.input ?? '',
   };

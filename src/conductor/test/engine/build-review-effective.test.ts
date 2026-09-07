@@ -148,6 +148,24 @@ describe('live build-review effective resolver', () => {
     ])).resolves.toMatchObject({ ok: true, effective: { verdict: 'FAIL' } });
   });
 
+  it('distinguishes an exactly covered infrastructure branch from an uncovered one', async () => {
+    const decision = reducedCoverageDecision('testQuality');
+    const fault = aggregate({ faults: { testQuality: 'provider-error' }, includeTestQualityFinding: false });
+    const resolver = (reducedCoverage: unknown[]) => resolveEffectiveBuildReviewVerdict(worktree, fault, {
+      ...identityDeps,
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), listReducedCoverage: async () => ({ ok: true as const, records: reducedCoverage as never }) }),
+    });
+
+    // Both branches still report the raw infrastructure failure; only the
+    // UNCOVERED projection may pin the gate to the mechanical lane.
+    await expect(resolver([])).resolves.toMatchObject({ ok: true, effective: {
+      infrastructureFailureRubrics: ['testQuality'], uncoveredInfrastructureFailureRubrics: ['testQuality'],
+    } });
+    await expect(resolver([decision])).resolves.toMatchObject({ ok: true, effective: {
+      infrastructureFailureRubrics: ['testQuality'], uncoveredInfrastructureFailureRubrics: [],
+    } });
+  });
+
   it('does not let finding acceptance and reduced coverage substitute for each other', async () => {
     const accepted = canonicalizeBuildReviewFindingIdentity({ ...testQualityFinding, rubric: 'testQuality', contractVersion: 'v3' })!;
     const findingAcceptance = { version: 'v1' as const, feature, finding: accepted, sourceLapId: lapId, summary: 'old prose', rationale: 'risk', operator: 'operator', acceptedAt: '2026-08-14T00:00:00.000Z' };

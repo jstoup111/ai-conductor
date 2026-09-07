@@ -146,6 +146,7 @@ describe('templates/ai-conductor-config.yml.template (issue #1010)', () => {
     expect(result.config.harness_version).toBe('>=0.99.0');
     expect(satisfiesVersion(installedVersion, result.config.harness_version ?? '')).toBe(true);
     expect(raw).toMatch(/testQuality:\n\s+enabled: false/);
+    expect(raw).toMatch(/adjudication:\n\s+enabled: true/);
     expect(raw).not.toMatch(/\b(?:tautology|scope|rootCause|completeness)\b/);
   });
 
@@ -197,6 +198,7 @@ describe('templates/project-config.yml.template', () => {
 
       expect(result.config.harness_version).toBe('>=0.99.0');
       expect(raw).toMatch(/testQuality:\n\s+enabled: false/);
+      expect(raw).toMatch(/adjudication:\n\s+enabled: true/);
       expect(raw).not.toMatch(/\b(?:tautology|scope|rootCause|completeness)\b/);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });

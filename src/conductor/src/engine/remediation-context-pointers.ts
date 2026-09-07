@@ -1,3 +1,6 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
 import type { BuildReviewFinding } from './build-review-domain.js';
 import {
   canonicalizeBuildReviewFindingIdentity,
@@ -9,6 +12,24 @@ type PriorLap = {
   readonly artifactPath: string;
   readonly findings: readonly { readonly findingRef: string; readonly finding: BuildReviewFinding }[];
 };
+
+/**
+ * The engine-recorded active plan path, or `null` when no plan is bound.
+ *
+ * Shared by the conductor's own pointer rendering and the build-review
+ * adjudication context, so both name the same plan contract.
+ */
+export async function readActivePlanPath(projectRoot: string): Promise<string | null> {
+  try {
+    const engineState = JSON.parse(
+      await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf-8'),
+    ) as Record<string, unknown>;
+    return typeof engineState.activePlanPath === 'string' ? engineState.activePlanPath : null;
+  } catch {
+    // Engine state doesn't exist or is invalid.
+    return null;
+  }
+}
 
 /** Renders concise plan locations for findings that name a plan task or an owned file. */
 export function planContractPointers(

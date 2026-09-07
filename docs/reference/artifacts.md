@@ -433,6 +433,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `bootstrap-detection.json`, `bootstrap-inventory.md` | Stack detection output | `bootstrap` skill |
 | `build-review.json` | `{ verdict: 'PASS'\|'FAIL', reasons?, findings?, rubric: { testQuality }, codeStamp? }`. A `rubric.<item>: true` means that item failed. A missing or malformed item fails closed; an unknown item (such as a retired rubric — `tautology`, `scope`, `rootCause`, `completeness`, `wiring`) is ignored, so a verdict written before the rubric consolidation still parses. | `build_review` step |
 | `build-review-regrade.json` | Per-feature-session regrade counter; bounds stale-mirage regrade to once per session | `build-review-disposition.ts` |
+| `build-review-work-order.json` | `{ version: 'v1', domain: 'build_review', feature, effectId, cases[], attemptedCaseIds? }`. The effect-bound, feature-local ordered BUILD work from a post-join adjudication; BUILD records `attemptedCaseIds` before dispatch so restart recovery and repeat detection remain durable. | build-review adjudication coordinator |
 | `build-stall-question.md` | Free-form stall question surfaced to the operator | `task-progress.ts` |
 | `documentation-delivery.json` | `{ version: 1, branch, prUrl, sourceRef }` with strict source-ref and PR-URL regexes and a staleness check | `documentation-delivery.ts` |
 | `fr-coverage.md` | Product-track FR-to-spec coverage table | `writing-system-tests` skill |
@@ -446,7 +447,8 @@ Agent-authored, engine-validated. Alphabetized.
 | `protected-artifact-seal.json` | See above | `protected-artifact-seal.ts` |
 | `rebase-residue.json` | `[{ sha, citingTaskIds[], reason }]` — citations a rebase could not translate | `rebase-translate.ts` |
 | `rebase-rewrites.json` | Pre-to-post rebase sha map, merged transitively; atomic temp plus rename | `rebase-translate.ts` |
-| `remediation.json` | Per-gap dispositions and tasks; the engine routes deterministically from it | `remediate` skill |
+| `remediation.json` | Legacy remediation output is per-gap dispositions and tasks. Post-join `build_review` adjudication writes the additive strict `{ mode: 'case-v1', domain: 'build_review', sourceOutcomes, cases }` form; the engine validates it before any case or effect state changes. | `remediate` skill |
+| `remediation-cases.json` | `{ version: 'v1', feature, cases[] }`. Feature-local post-join adjudication state: engine-stamped case identities, append-only source links, open/resolved status, and `none`, reserved, applied, or failed action/deferral effects. Reads and writes validate the feature identity and replace atomically under the conductor lease. | build-review adjudication coordinator |
 | `summary.json` | At least `{ tasks_completed: number }`; read tolerantly — missing or corrupt reads as 0 | `pipeline` skill |
 | `test-failures.md` | Failure detail consumed by the remediation flow | remediate flow |
 | `test-suite-environment.key` | Environment fingerprint for suite evidence | `full-suite-fingerprint.ts` |
@@ -673,7 +675,7 @@ no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` fo
 
 `ConductorEvent` defines **108 variants** across **107** event types (`self_host_containment_verdict`
 declares two variants — `contained: true`/`contained: false` — under one type). `EventPersister`
-subscribes to the **81** event types marked `persist: true` in `event-sinks.ts` and writes only
+subscribes to the **94** event types marked `persist: true` in `event-sinks.ts` and writes only
 those:
 
 `contained_live_checkout_drift`, `self_host_containment_verdict`, `containment_check_unresolved`,
@@ -683,6 +685,9 @@ those:
 `build_review_cache_hit`, `build_review_cache_discarded`, `build_review_rubric_infrastructure_failure`, `build_review_outer_verdict`,
 `build_review_stale_aggregate`,
 `build_review_disposition_version_invalidated`,
+`remediation_adjudication_started`, `remediation_adjudication_completed`, `remediation_adjudication_failed`,
+`remediation_case_reconciled`, `remediation_effect_reserved`, `remediation_effect_applied`,
+`remediation_effect_failed`, `remediation_semantic_repeat_halt`,
 `step_started`, `deprecated_step`, `step_completed`, `step_failed`, `step_refused`, `provider_attempt`,
 `provider_stream_progress`,
 `scratch_cleanup_reclaimed`, `scratch_cleanup_retained`, `scratch_cleanup_failed`,
@@ -705,6 +710,10 @@ change once a dispatch is proven contained, and the verdict event records whethe
 succeeded for each completed self-host dispatch. Both render to the terminal and daemon log and
 persist to this file; see [`live_containment`](configuration.md#harness_self_host) and the
 [live-boundary runbook](../runbooks/stalled-or-stuck-feature.md#live-boundary-violation-self-host-only).
+
+The remediation adjudication events are the durable lifecycle trace for post-join `build_review`
+handling. They identify the lap, case, and effect where applicable; they persist only to
+`.pipeline/events.jsonl`, not the daemon log, audit trail, or telemetry export.
 
 `step_status_write_refused` records a non-fatal state invariant: a step already marked `skipped`
 cannot be restaged as `stale`. It carries the status field, expected `skipped`, requested `stale`,
