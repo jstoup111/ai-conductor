@@ -341,11 +341,17 @@ export function describeBuildReviewDispatchedResultRejection(
   rubric: BuildReviewRubricId,
   projection: BuildReviewRubricProjection,
 ): string {
+  const scopeContext = buildReviewCandidateScopeResolutionContext(projection);
+  const source = record(candidate);
+  const scopeResolutions = source?.scopeResolutions === undefined
+    ? (scopeContext.candidates.length === 0 ? [] : undefined)
+    : parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext);
   return describeBuildReviewJudgedResultRejection(
     candidate,
     rubric,
     projection,
-    buildReviewFindingReferenceContext(projection),
+    buildReviewFindingReferenceContext(projection, scopeResolutions ?? []),
+    scopeContext,
   );
 }
 

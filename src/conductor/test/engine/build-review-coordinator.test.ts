@@ -5,6 +5,7 @@ import {
   classifyBuildReviewRubricBranches,
   buildReviewCandidateScopeResolutionContext,
   coordinateBuildReviewRubrics,
+  describeBuildReviewDispatchedResultRejection,
   stampBuildReviewDispatchedCandidate,
   type BuildReviewCoordinationInput,
   validateBuildReviewDispatchedResult,
@@ -686,6 +687,24 @@ describe("build-review coordinator: candidate scope resolutions", () => {
     changedFiles: [], changedTestSelectors: [], runnerSelectors: [], unresolvedMarkers: [], changedTestTitles: [],
     testScope: { candidates: [scopeCandidate] }, testSuiteProof: {}, revertedProductionManifest: [], preflight: { classification: "approved-exception", exception: "empty-test-set" },
   } as unknown as import('../../src/engine/build-review-projections.js').TestQualityProjection;
+
+  it('diagnoses invalid candidate authority before blaming an otherwise scoped finding anchor', () => {
+    const foreignResolution = {
+      candidateId: 'candidate-widget', status: 'resolved',
+      sourceRegion: { ...scopeRegion, startLine: 2, endLine: 2 },
+      obligationReferences: ['criterion:S5.1'], associationReason: 'This incorrectly points at a sibling.',
+    };
+    const candidate = stampBuildReviewDispatchedCandidate({
+      findings: [{
+        ...testQualityFinding('The sibling assertion can pass.'),
+        anchor: { rubric: 'testQuality', locus: { path: scopeRegion.path, contentHash: scopeRegion.contentHash, display: scopeRegion.display } },
+      }],
+      scopeResolutions: [foreignResolution],
+    }, 'testQuality', candidateProjection);
+
+    expect(validateBuildReviewDispatchedResult(candidate, 'testQuality', candidateProjection)).toBeUndefined();
+    expect(describeBuildReviewDispatchedResultRejection(candidate, 'testQuality', candidateProjection)).toContain('foreign sourceRegion or obligationReferences');
+  });
 
   it("revalidates a cache hit against current candidate and finding authority before reuse", async () => {
     const currentResolution = {

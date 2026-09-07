@@ -32,9 +32,8 @@ function bounded(value: string): string {
 
 const CANONICAL_REPO_PATH = /^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9.](?:[A-Za-z0-9._\/@+ -]*[A-Za-z0-9._\/@+-])?(?:\/[A-Za-z0-9.](?:[A-Za-z0-9._\/@+ -]*[A-Za-z0-9._\/@+-])?)*$/;
 
-// Keep source-reader paths no broader than persisted finding references. In
-// particular, a prose sentence that happens to contain a path is not a path.
-function isCanonicalRepoPath(path: string): boolean {
+/** Shared source/persisted path grammar; prose is never a repository path. */
+export function isCanonicalBuildReviewRepoRelativePath(path: string): boolean {
   if (!CANONICAL_REPO_PATH.test(path)) return false;
   if (!path.includes(' ')) return true;
   if (/[.,;:!?] |\.$|  /.test(path)) return false;
@@ -54,7 +53,7 @@ export function safeRepoRelativePath(path: string): string {
   if (
     normalized === '.' || normalized === '..' || normalized.startsWith('../')
     || normalized !== path || path.split('/').some((part) => part === '' || part === '.' || part === '..')
-    || !isCanonicalRepoPath(path)
+    || !isCanonicalBuildReviewRepoRelativePath(path)
   ) {
     throw new BuildReviewSourceReadError('invalid-path', path);
   }
