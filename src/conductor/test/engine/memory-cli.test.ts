@@ -147,6 +147,33 @@ describe('dispatchMemorySetup — .memory symlink creation (A14 live path)', () 
     expect(stat1.isSymbolicLink()).toBe(true);
   });
 
+  it('prints the migrating notice before migrating, so a failed migration keeps the breadcrumb', async () => {
+    const repo = await makeRepo('unwritable-cli', tmpDir);
+    await mkdir(join(repo, '.memory'));
+    await chmod(repo, 0o555);
+    const logged: string[] = [];
+    const errored: string[] = [];
+    const realLog = console.log;
+    const realError = console.error;
+    console.log = (...args: unknown[]) => { logged.push(args.join(' ')); };
+    console.error = (...args: unknown[]) => { errored.push(args.join(' ')); };
+
+    let code: number;
+    try {
+      code = await dispatchMemorySetup({ kind: 'setup', dir: repo });
+    } finally {
+      console.log = realLog;
+      console.error = realError;
+      await chmod(repo, 0o755);
+    }
+
+    expect(code).toBe(1);
+    expect(logged).toEqual([
+      `conduct memory setup: migrating existing .memory/ in ${repo}`,
+    ]);
+    expect(errored.some((line) => line.startsWith('conduct memory setup: failed: '))).toBe(true);
+  });
+
   it('returns 1 for a non-existent directory', async () => {
     const code = await dispatchMemorySetup({
       kind: 'setup',

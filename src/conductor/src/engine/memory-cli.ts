@@ -55,17 +55,31 @@ async function memoryPathState(projectDir: string): Promise<MemoryPathState> {
   }
 }
 
-/** Runs the idempotent setup branch without CLI output or exit-code mapping. */
-export async function setupMemoryStore(projectDir: string): Promise<'migrated' | 'ensured'> {
+export type MemorySetupBranch = 'migrated' | 'ensured';
+
+/**
+ * Runs the idempotent setup branch without CLI output or exit-code mapping.
+ *
+ * `onBranch` is invoked with the selected branch BEFORE that branch's work
+ * begins, so a caller that reports progress still reports it when the work
+ * then throws. Callers that only need the outcome ignore it and use the
+ * resolved value.
+ */
+export async function setupMemoryStore(
+  projectDir: string,
+  onBranch?: (branch: MemorySetupBranch) => void,
+): Promise<MemorySetupBranch> {
   if (!existsSync(projectDir)) {
     throw new Error(`directory does not exist: ${projectDir}`);
   }
 
   if (await memoryPathState(projectDir) === 'directory') {
+    onBranch?.('migrated');
     await migrateMemory(projectDir);
     return 'migrated';
   }
 
+  onBranch?.('ensured');
   await ensureMemoryStore(projectDir);
   return 'ensured';
 }
@@ -128,11 +142,13 @@ export async function dispatchMemorySetup(d: MemoryDispatch): Promise<number> {
   const projectDir = isAbsolute(rawDir) ? rawDir : resolvePath(process.cwd(), rawDir);
 
   try {
-    const branch = await setupMemoryStore(projectDir);
-    if (branch === 'migrated') {
-      // Real directory (pre-migration content) — migrate it.
-      console.log(`conduct memory setup: migrating existing .memory/ in ${projectDir}`);
-    }
+    await setupMemoryStore(projectDir, (branch) => {
+      if (branch === 'migrated') {
+        // Real directory (pre-migration content) — announce before migrating so
+        // the breadcrumb survives a migration failure.
+        console.log(`conduct memory setup: migrating existing .memory/ in ${projectDir}`);
+      }
+    });
     console.log(`conduct memory setup: .memory/ is ready at ${projectDir}`);
     return 0;
   } catch (e) {
