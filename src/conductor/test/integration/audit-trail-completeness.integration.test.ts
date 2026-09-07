@@ -771,7 +771,7 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
       build_review_reduced_coverage_accepted: { render: false, persist: false, audit: false, otel: false },
       build_review_disposition_refused: { render: false, persist: false, audit: false, otel: false },
       build_review_disposition_version_invalidated: { render: false, persist: true, audit: true, otel: false },
-      build_review_outer_verdict: { render: false, persist: true, audit: false, otel: false },
+      build_review_outer_verdict: { render: true, persist: true, audit: false, otel: false },
       remediation_adjudication_started: { render: false, persist: true, audit: false, otel: false },
       remediation_adjudication_completed: { render: false, persist: true, audit: false, otel: false },
       remediation_adjudication_failed: { render: false, persist: true, audit: false, otel: false },
