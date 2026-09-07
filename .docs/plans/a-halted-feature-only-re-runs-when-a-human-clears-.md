@@ -432,12 +432,36 @@ Bounded retries where retry is safe (validation-group member budget, a suite-inf
 
 **Dependencies:** 17
 
+### Task 20: Progress re-kick and episode-end recovery share the sweep's retention predicate
+**Story:** 3
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests: the progress re-kick eligibility predicate returns false for a worktree whose `HALT.class` reads `needs-human`, `plan-gap`, `kickback-cap`, `over-scope`, or is unreadable, and still returns true for a `mechanical` worktree with forward progress; the episode-end sweep leaves a `needs-human` stamped worktree halted and still clears a `mechanical` one.
+2. Verify RED (today both paths consult only task-count growth and operator park).
+3. Implement: extract the base-advance sweep's class-based retention decision into one exported predicate in `daemon-rekick.ts`, call it from `rekickSweep` in place of its inline block, and consult the same predicate from `buildProgressReKickDeps` and from the episode-end sweep in `daemon-cli.ts`.
+4. Verify GREEN; commit.
+
+**Done when:**
+- [ ] One exported retention predicate in `daemon-rekick.ts` is the only place an automatic path decides that a classified human halt is retained.
+- [ ] A daemon-cli test proves the progress re-kick predicate returns false for a retained halt class and true for a `mechanical` worktree with forward progress.
+- [ ] A daemon-cli test proves the episode-end sweep leaves a retained halt in place and still clears a `mechanical` one.
+- [ ] `rekickSweep` calls the shared predicate rather than its own inline class check, and its existing retention tests pass unchanged.
+
+**Files likely touched:**
+- src/conductor/src/engine/daemon-rekick.ts — shared retention predicate
+- src/conductor/src/daemon-cli.ts — progress re-kick and episode-end sweep
+- src/conductor/test/engine/daemon-rekick.test.ts — predicate tests
+- src/conductor/test/engine/daemon-cli-rekick-park-wiring.test.ts — path tests
+
+**Dependencies:** 6
+
 ## Task Dependency Graph
 
 ```
 1
 2 -> 3 -> 4
-5 -> 6
+5 -> 6 -> 20
 7 -> 8 -> 9 -> 10 -> 11 -> 12
                      11 -> 13 -> 14
                            13 -> 15 -> 16 -> 17 -> 18
