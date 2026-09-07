@@ -988,8 +988,19 @@ describe('kickback-ledger', () => {
           reason: 'the authorized final semantic failure',
         },
       );
+      const beyondEffectiveLimit = bumpKickbackGate(
+        { ...existingEntry, cumulative: 6, effectiveLimit: 6 },
+        {
+          treeHash: 'fedcba9876543210fedcba9876543210fedcba98',
+          resolvedCount: existingEntry.resolvedBefore,
+          reason: 'the authorized final semantic failure',
+        },
+      );
 
-      expect(atEffectiveLimit.cumulativeExhausted).toBe(false);
+      expect({
+        atEffectiveLimit: atEffectiveLimit.cumulativeExhausted,
+        beyondEffectiveLimit: beyondEffectiveLimit.cumulativeExhausted,
+      }).toEqual({ atEffectiveLimit: false, beyondEffectiveLimit: true });
     });
   });
 
