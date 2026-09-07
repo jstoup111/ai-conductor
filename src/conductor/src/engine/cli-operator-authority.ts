@@ -37,6 +37,12 @@ export interface CliFeatureWorktreeDeps {
   cwd?: string;
   resolveMainRoot?: (cwd: string) => Promise<string>;
   realpath?: (path: string) => Promise<string>;
+  /**
+   * Require the resolved path to be an existing directory. Callers whose own
+   * next step already proves the worktree exists (build-review resolves the
+   * feature identity from artifacts inside it) pass `false`.
+   */
+  verifyDirectory?: boolean;
 }
 
 /**
@@ -51,6 +57,7 @@ export async function resolveCliFeatureWorktree(
   try {
     const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(deps.cwd ?? process.cwd());
     const worktree = await (deps.realpath ?? realpathDefault)(join(root, '.worktrees', feature));
+    if (deps.verifyDirectory === false) return worktree;
     return (await stat(worktree)).isDirectory() ? worktree : undefined;
   } catch {
     return undefined;

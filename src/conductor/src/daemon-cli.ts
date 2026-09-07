@@ -156,11 +156,12 @@ import {
   clearMarker,
   clearHaltForResume,
   consumeResumeAuthorizations,
+  readRawHaltClass,
   recoverEpisodeHalts,
   resolveHaltRetention,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
-import { readHaltClass, HALT_CLASS_MARKER } from './engine/halt-marker.js';
+import { readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import { sweepMergeableLabels, type WatchEntry } from './engine/mergeable-sweep.js';
 import type { PrMergeState } from './engine/pr-labels.js';
@@ -567,7 +568,7 @@ export function buildProgressReKickDeps(
       // path, not only the base-advance sweep. Forward task progress is not
       // authority to re-dispatch a halt only an operator can resolve, so the
       // shared retention predicate is consulted before the progress compare.
-      const retention = await resolveHaltRetention(() => readHaltClass(slugRoot));
+      const retention = await resolveHaltRetention(() => readRawHaltClass(slugRoot));
       if (retention.retained) {
         log?.(`progress re-kick: ${slug} retained — halt disposition ${retention.haltClass}`);
         return false;
@@ -1638,7 +1639,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           isOperatorParked: isParkedDep,
           // Sealed Story 3: share the base-advance sweep's retention predicate
           // so an episode that coincided with a human halt cannot clear it.
-          readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)),
+          readHaltClass: (slug) => readRawHaltClass(join(worktreeBase, slug)),
           clearMarker: (slug) => clearMarker(join(worktreeBase, slug)),
           log,
         });
@@ -1832,13 +1833,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           // Same content-aware dedup the base-advance sweep uses: a shipped
           // feature has nothing to resume, so its authorization is left alone.
           isProcessed: makeIsProcessed(processedDir, gitTreeSource(projectRoot, baseBranch)),
-          readLiveHaltClass: async (slug) => {
-            try {
-              return await readFile(join(worktreeBase, slug, HALT_CLASS_MARKER), 'utf-8');
-            } catch {
-              return '';
-            }
-          },
+          readLiveHaltClass: (slug) => readRawHaltClass(join(worktreeBase, slug)),
           // adr-2026-08-29 D6: the canonical marker/presentation lifecycle plus
           // committed-record resolution, as ONE operation reporting `partial`.
           clearHalt: (slug) =>

@@ -149,13 +149,16 @@ describe('Task 20 — the progress re-kick predicate retains classified human ha
     }
   });
 
-  it('returns false when the class sidecar is absent (fails closed to unclassified)', async () => {
+  // An ABSENT sidecar is the one case that differs from the base-advance sweep:
+  // the progress path exists precisely to recover halts written without a
+  // class, and sealed Story 3 names four CLASSES, not the absence of one.
+  it('still returns true when the class sidecar is absent', async () => {
     const { buildProgressReKickDeps } = await import('../../src/daemon-cli.js');
     const worktreeBase = await mkdtemp(join(tmpdir(), 'progress-rekick-unreadable-'));
     try {
       await seedProgress(worktreeBase, 'feat', undefined);
       const deps = buildProgressReKickDeps({ build_progress_halt: { enabled: true } } as never, worktreeBase);
-      expect(await deps.isProgressReKickEligible!('feat')).toBe(false);
+      expect(await deps.isProgressReKickEligible!('feat')).toBe(true);
     } finally {
       await rm(worktreeBase, { recursive: true, force: true });
     }
@@ -220,7 +223,7 @@ describe('Task 20 — daemon-cli wires both paths through the shared predicate',
     const sweep = source.match(/sweepEpisodeHalts:\s*async\s*\([\s\S]*?\n\s{6}\},/);
     expect(sweep, 'expected a sweepEpisodeHalts binding').toBeTruthy();
     expect(sweep![0]).toMatch(/recoverEpisodeHalts\(/);
-    expect(sweep![0]).toMatch(/readHaltClass:\s*\(slug\)\s*=>\s*readHaltClass\(/);
+    expect(sweep![0]).toMatch(/readHaltClass:\s*\(slug\)\s*=>\s*readRawHaltClass\(/);
   });
 
   it('the progress re-kick predicate consults resolveHaltRetention', async () => {
