@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-07T11:33:05.211Z
 Slug: prevent-quoted-plan-paths-from-creating-false-ship
 Class: needs-human
 Halting step: prd_audit
