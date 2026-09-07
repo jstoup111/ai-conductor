@@ -49,24 +49,32 @@ interface Fixture {
   };
 }
 
+/** One measurement taken independently on each side of the same fixture. */
+export interface Sided {
+  readonly legacy: number;
+  readonly scoped: number;
+}
+
 export interface BuildReviewScopeComparison {
   readonly provenance: Fixture['provenance'];
   readonly legacy: { readonly projectedTitles: number };
   readonly scoped: { readonly changedBodies: number; readonly dispositions: Readonly<Record<string, string>> };
   readonly counts: {
-    readonly sourceReads: number;
+    /** Distinct blob reads each side performed through its own counting reader. */
+    readonly sourceReads: Sided;
     readonly declarations: number;
-    readonly targets: number;
-    readonly candidates: number;
+    /** Reviewer target records: every projected title on the old side. */
+    readonly targets: Sided;
+    readonly candidates: Sided;
     readonly sharedSources: number;
     readonly ambiguousCandidates: number;
   };
   /** Bytes of the two serialized reviewer projections, not provider-token measurements. */
-  readonly projectionBytes: { readonly legacy: number; readonly scoped: number };
+  readonly projectionBytes: Sided;
   /** Calls made to this entry point's fake dispatcher; ordinary runs use no real provider. */
   readonly dispatchCounts: { readonly legacy: number; readonly scoped: number; readonly realProviders: 0 };
   /** Observation only: no unit-test performance threshold is implied. */
-  readonly elapsedAnalysisMs: number;
+  readonly elapsedAnalysisMs: Sided;
   readonly retainedEvidence: { readonly shared: boolean; readonly ambiguous: boolean };
 }
 
@@ -180,9 +188,29 @@ function lastTitle(declaration: { readonly titleChain: readonly string[] }): str
   return declaration.titleChain.at(-1) ?? '';
 }
 
+/**
+ * The pre-change side: whole-file admission plus title enumeration. It reads
+ * the changed-path inventory and then each changed test file's HEAD blob
+ * through the supplied runner, so its source reads are counted on that
+ * runner rather than inferred from the scoped run.
+ */
+async function legacyProjectedTitles(git: GitRunner, headSha: string): Promise<readonly string[]> {
+  const inventory = await git(['diff', '--name-status', '-z', `${fixtureBase}...${headSha}`]);
+  const paths = inventory.stdout.split('\0').filter((entry) => entry.startsWith('test/'));
+  const titles: string[] = [];
+  for (const path of paths) {
+    const blob = await git(['show', `${headSha}:${path}`]);
+    if (blob.exitCode !== 0) continue;
+    titles.push(...analyzeTestDeclarations({ fileName: path, bytes: Buffer.from(blob.stdout) })
+      .declarations
+      .filter((declaration) => declaration.kind === 'test')
+      .map((declaration) => declaration.titleChain.join(' > ')));
+  }
+  return titles;
+}
+
 /** Runs the real frozen assembly and projection against only fixture-labelled blobs. */
 export async function compareBuildReviewScope(): Promise<BuildReviewScopeComparison> {
-  const startedAt = performance.now();
   const fixture = JSON.parse(await readFile(fixtureUrl, 'utf-8')) as Fixture;
   const sources = fixtureSources(fixture);
   const plan = planSource(fixture.feature.storiesPath);
@@ -193,7 +221,18 @@ export async function compareBuildReviewScope(): Promise<BuildReviewScopeCompari
     [`${fixtureBase}:${fixture.feature.testPath}`, sources.base],
     [`${fixtureHead}:${fixture.feature.testPath}`, sources.head],
   ]);
+  // The old side is measured over the same fixture through its own counting
+  // reader and timer, so neither source-read nor elapsed-time evidence is
+  // borrowed from the scoped run.
+  const legacyProcess = fakeGit(blobs);
+  const legacyStartedAt = performance.now();
+  const legacyTitles = await legacyProjectedTitles(legacyProcess.git, fixtureHead);
+  const legacyProjection = { changedTestTitles: legacyTitles } as unknown as BuildReviewProjectionJson;
+  const legacyBytes = Buffer.byteLength(canonicalJson(legacyProjection));
+  const elapsedLegacyMs = performance.now() - legacyStartedAt;
+
   const process = fakeGit(blobs);
+  const scopedStartedAt = performance.now();
   const inputs = await assembleBuildReviewInputs(process.git, `/portable/${fixture.feature.planPath}`, {
     inspectTestSuite: async () => ({
       status: 'CURRENT',
@@ -211,11 +250,6 @@ export async function compareBuildReviewScope(): Promise<BuildReviewScopeCompari
     } as Extract<FullSuiteInspectionResult, { status: 'CURRENT' }>),
   });
   const scope = inputs.sourceSnapshot.testScope!;
-  const legacyTitles = analyzeTestDeclarations({ fileName: fixture.feature.testPath, bytes: Buffer.from(sources.head) })
-    .declarations
-    .filter((declaration) => declaration.kind === 'test')
-    .map((declaration) => declaration.titleChain.join(' > '));
-  const legacyProjection = { changedTestTitles: legacyTitles } as unknown as BuildReviewProjectionJson;
   const testQuality = inputs.sourceSnapshot.testQuality!;
   const scopedProjection = deriveBuildReviewRubricProjections({
     lapId: parseBuildReviewLapId('portable-2231')!,
@@ -230,6 +264,7 @@ export async function compareBuildReviewScope(): Promise<BuildReviewScopeCompari
       } as never,
     },
   }).testQuality;
+  const elapsedScopedMs = performance.now() - scopedStartedAt;
   const dispatcher = new FakeDispatcher();
   dispatcher.dispatch('legacy', legacyProjection);
   dispatcher.dispatch('scoped', scopedProjection as unknown as BuildReviewProjectionJson);
@@ -251,19 +286,21 @@ export async function compareBuildReviewScope(): Promise<BuildReviewScopeCompari
     legacy: { projectedTitles: legacyTitles.length },
     scoped: { changedBodies: scope.changedDeclarations.length, dispositions },
     counts: {
-      sourceReads: process.sourceReads(),
+      sourceReads: { legacy: legacyProcess.sourceReads(), scoped: process.sourceReads() },
       declarations: scope.changedDeclarations.length,
-      targets: scope.targets.length,
-      candidates: scope.candidates.length,
+      // Whole-file admission projected every title as a reviewer target; the
+      // scoped side projects only established targets.
+      targets: { legacy: legacyTitles.length, scoped: scope.targets.length },
+      candidates: { legacy: 0, scoped: scope.candidates.length },
       sharedSources: scope.sharedSources.length,
       ambiguousCandidates: scope.candidates.filter((candidate) => candidate.reasons.includes('conflicting-associations')).length,
     },
     projectionBytes: {
-      legacy: Buffer.byteLength(canonicalJson(legacyProjection)),
+      legacy: legacyBytes,
       scoped: Buffer.byteLength(canonicalJson(scopedProjection as unknown as BuildReviewProjectionJson)),
     },
     dispatchCounts: { legacy: dispatcher.legacy, scoped: dispatcher.scoped, realProviders: 0 },
-    elapsedAnalysisMs: performance.now() - startedAt,
+    elapsedAnalysisMs: { legacy: elapsedLegacyMs, scoped: elapsedScopedMs },
     retainedEvidence: {
       shared: scope.sharedSources.length > 0,
       ambiguous: scope.candidates.some((candidate) => candidate.reasons.includes('conflicting-associations')),
