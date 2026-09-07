@@ -314,6 +314,8 @@ export type ConductorEvent =
       reason?: string;
       /** Unbound Covers declarations seen in the frozen test-quality scope. */
       unresolvedMarkers?: readonly { selector: string; reference: string }[];
+      /** Findings below the configured per-rubric confidence floor. */
+      suppressedFindings?: readonly { findingId: string; rubric: string; confidence: number; floor: number }[];
     }
   | {
       /** A post-join remediation judgement is about to run for one build-review lap. */

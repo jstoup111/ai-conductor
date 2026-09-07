@@ -100,6 +100,8 @@ export async function coordinateBuildReviewAdjudication(input: {
   readonly feature: BuildReviewFeatureIdentity;
   readonly aggregate: BuildReviewAggregate;
   readonly operatorResolvedFindingIds: ReadonlySet<string>;
+  /** Engine-owned sub-floor identities; never written to the operator store. */
+  readonly suppressedFindingIds?: ReadonlySet<string>;
   /** Re-reads the separate operator authority before every provider boundary. */
   readonly resolveOperatorResolvedFindingIds?: () => Promise<ReadonlySet<string>>;
   readonly mechanical: BuildReviewMechanicalState;
@@ -131,7 +133,7 @@ export async function coordinateBuildReviewAdjudication(input: {
    * which reads the store first.
    */
   const allOperatorResolved = (accepted: ReadonlySet<string>): boolean =>
-    sources.every((source) => accepted.has(source.findingId));
+    sources.every((source) => accepted.has(source.findingId) || input.suppressedFindingIds?.has(source.findingId));
   /**
    * A finalized non-action case is durable resolution for its exact source;
    * a merged source is likewise settled even when its historical case acted.
@@ -153,7 +155,7 @@ export async function coordinateBuildReviewAdjudication(input: {
   // are computed against the raw join. The two agree for every all-accepted lap,
   // and this is reassigned to the frozen set once one exists.
   let liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
-    new Set(sources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
+    new Set(sources.filter((source) => !accepted.has(source.findingId) && !input.suppressedFindingIds?.has(source.findingId)).map(buildReviewAdjudicationSourceId));
   /**
    * The single terminal exit: settle durable state, then choose a route from
    * what actually survived.
@@ -440,7 +442,7 @@ export async function coordinateBuildReviewAdjudication(input: {
   }
   const settledSourceIds = finalizedSourceIds(prior.state.cases);
   currentSources = sources.filter((source) =>
-    !resolved.has(source.findingId) && !settledSourceIds.has(buildReviewAdjudicationSourceId(source)),
+    !resolved.has(source.findingId) && !input.suppressedFindingIds?.has(source.findingId) && !settledSourceIds.has(buildReviewAdjudicationSourceId(source)),
   );
   if (currentSources.length === 0) {
     liveSourceIdsFor = () => new Set();
@@ -454,7 +456,7 @@ export async function coordinateBuildReviewAdjudication(input: {
     new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId));
   const freshContext = assembleBuildReviewAdjudicationContext({
     aggregate: input.aggregate, priorCases: prior.state.cases,
-    operatorResolvedFindingIds: resolved, excludedSourceIds: settledSourceIds, ...contextEvidence,
+    operatorResolvedFindingIds: resolved, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => input.suppressedFindingIds?.has(source.findingId)).map(buildReviewAdjudicationSourceId)]), ...contextEvidence,
   });
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${freshContext.stop.code}`, { settleAbsentAttempted: true });
   await input.emit?.({ type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId });

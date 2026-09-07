@@ -44,6 +44,16 @@ function titleHash(text: string): string {
 }
 
 describe('build-review domain', () => {
+  it('retains optional integer confidence and rejects values outside 0 through 100', () => {
+    for (const confidence of [0, 72, 100]) {
+      expect(parseBuildReviewJudgedResult(judged([finding({ confidence })]))?.findings[0]?.confidence).toBe(confidence);
+    }
+    expect(parseBuildReviewJudgedResult(judged([finding()]))?.findings[0]).not.toHaveProperty('confidence');
+    for (const confidence of [-1, 101, 72.5, 'high']) {
+      expect(parseBuildReviewJudgedResult(judged([finding({ confidence })]))).toBeUndefined();
+    }
+  });
+
   it('brands lap identities from the closed grammar', () => {
     expect(parseBuildReviewLapId('lap-20260813-01')).toBe('lap-20260813-01');
     expect(parseBuildReviewLapId('lap.x_y-Z9')).toBe('lap.x_y-Z9');

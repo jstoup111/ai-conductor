@@ -2547,6 +2547,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'build_review_cache_discarded':
       log(`${dot} ${chalk.yellow(`build_review cache discarded: ${event.rubric} (${event.reason}; cached ${event.cachedEngineStamp ?? 'pre-identity'} -> current ${event.currentEngineStamp})`)}`);
       break;
+    case 'build_review_outer_verdict':
+      for (const finding of event.suppressedFindings ?? []) {
+        log(`${dot} build_review suppressed ${finding.rubric}:${finding.findingId} (confidence ${finding.confidence} < floor ${finding.floor})`);
+      }
+      break;
     case 'contained_live_checkout_drift':
       log(`${dot} ${chalk.dim(`self-host contained; concurrent operator drift: ${event.summary}`)}`);
       break;

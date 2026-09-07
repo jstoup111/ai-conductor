@@ -33,6 +33,8 @@ export interface BuildReviewEffectiveResolverDeps {
   readonly emit?: (event: Extract<ConductorEvent, { type: 'build_review_disposition_version_invalidated' }>) => void | Promise<void>;
   /** Reports ignored legacy records supplied by a custom disposition store. */
   readonly log?: (message: string) => void;
+  /** Resolved operator floors, supplied by the live build-review runner. */
+  readonly minConfidence?: Partial<Record<import('../types/config.js').BuildReviewRubricId, number>>;
 }
 
 export type BuildReviewEffectiveResolution =
@@ -125,7 +127,7 @@ export async function resolveEffectiveBuildReviewVerdict(
   }
   let effective: BuildReviewEffectiveVerdict | undefined;
   try {
-    effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, dispositions, reducedCoverageRecords);
+    effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence);
   } catch {
     return { ok: false, reason: 'build-review disposition state is invalid' };
   }

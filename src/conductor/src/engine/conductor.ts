@@ -10845,6 +10845,7 @@ export class Conductor {
                     feature: effective.feature,
                     aggregate,
                     operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
+                    suppressedFindingIds: new Set(effective.effective.suppressedFindingIds),
                     resolveOperatorResolvedFindingIds,
                     mechanical,
                     chargeInput: {

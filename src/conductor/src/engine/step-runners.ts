@@ -82,7 +82,7 @@ import {
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { readBuildReviewCacheEntry, writeBuildReviewCacheEntry } from './build-review-cache.js';
 import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from './build-review-artifacts.js';
-import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
+import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
 import {
@@ -2157,12 +2157,17 @@ export class DefaultStepRunner implements StepRunner {
     }
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
+      minConfidence: Object.fromEntries(Object.entries(config.rubrics).map(([id, policy]) => [id, policy.min_confidence])),
     });
     await this.events?.emit({
       type: 'build_review_outer_verdict',
       lapId,
       rawVerdict: aggregate.verdict,
       effectiveVerdict: effective.ok ? effective.effective.verdict : 'FAIL',
+      ...(effective.ok && effective.effective.suppressedFindingIds.length > 0 ? { suppressedFindings: effective.effective.suppressedFindingIds.flatMap((findingId) => {
+        const source = projectBuildReviewAggregateSources(aggregate)?.find((entry) => entry.findingId === findingId);
+        return source?.confidence === undefined ? [] : [{ findingId, rubric: source.rubric, confidence: source.confidence, floor: config.rubrics[source.rubric].min_confidence }];
+      }) } : {}),
     });
     if (!effective.ok) {
       return { success: false, output: `${JSON.stringify(aggregate)}\n\nbuild_review disposition resolution failed: ${effective.reason}` };
@@ -2502,6 +2507,7 @@ export class DefaultStepRunner implements StepRunner {
       model_fallback_ladder: this.modelPolicy.modelFallbackLadder,
       max_retries: resolved.max_retries,
       escalate: resolved.escalate,
+      min_confidence: 0,
     };
     const entryFor = (
       claim: ReturnType<typeof assembleCoverageBindingClaims>[number],
