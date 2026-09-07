@@ -50,7 +50,6 @@ const tracedHandlerTable = {
   feature_complete: () => undefined,
   loop_halt: () => undefined,
   build_progress: () => undefined,
-  unattributed_progress: () => undefined,
   build_no_progress: () => undefined,
   build_stall: () => undefined,
   pipeline_closeout: () => undefined,
@@ -95,14 +94,6 @@ const tracedEventSamples: {
     reason: 'no_task_progress',
     resolvedBefore: 1,
     resolvedAfter: 1,
-  },
-  unattributed_progress: {
-    type: 'unattributed_progress',
-    step: 'build',
-    attempt: 1,
-    resolvedCount: 1,
-    headBefore: null,
-    headAfter: null,
   },
   step_retry: {
     type: 'step_retry',

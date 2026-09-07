@@ -359,7 +359,6 @@ describe('event sink subscriptions', () => {
       'loop_halt',
       'feature_complete',
       'build_progress',
-      'unattributed_progress',
       'build_no_progress',
       'build_stall',
       'pipeline_closeout',
