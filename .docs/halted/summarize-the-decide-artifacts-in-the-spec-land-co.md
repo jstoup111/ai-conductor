@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-07T11:55:27.898Z
 Slug: summarize-the-decide-artifacts-in-the-spec-land-co
 Class: needs-human
 Halting step: prd_audit
