@@ -1,7 +1,7 @@
 import { writeFile, access, readFile, mkdir, rename, rm, symlink } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type {
   InvokeOptions,
@@ -41,6 +41,7 @@ import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFa
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import {
   resolveFeaturePlanPath,
+  selectFeaturePlan,
   BUILD_REVIEW_VERDICT,
 } from './artifacts.js';
 import {
@@ -2584,7 +2585,21 @@ export class DefaultStepRunner implements StepRunner {
     });
     let planPath = this.planPathOverride;
     if (!planPath) {
-      planPath = await resolveFeaturePlanPath(this.projectDir, this.featureDesc || undefined);
+      const selection = await selectFeaturePlan(this.projectDir, this.featureDesc || undefined);
+      if (selection.kind === 'unresolvable') {
+        const feature = this.featureDesc || '(no feature description)';
+        const candidates = selection.candidates
+          .map((candidate) => basename(candidate, '.md'))
+          .join(', ');
+        return {
+          success: false,
+          refusal: {
+            kind: 'needs-human',
+            reason: `build_review cannot resolve a plan for feature "${feature}" among candidates: ${candidates}`,
+          },
+        };
+      }
+      if (selection.kind === 'resolved') planPath = selection.path;
     }
     if (!planPath) {
       return this.publishBuildReviewPass(

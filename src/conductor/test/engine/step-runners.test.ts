@@ -3796,6 +3796,90 @@ TIER: M`,
       );
     });
 
+    it('refuses an unresolvable plan corpus before publishing a verdict or dispatching a provider', async () => {
+      const invoke = vi.fn();
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'another-feature.md'), '# Another plan\n');
+      await writeFile(join(dir, '.docs', 'plans', 'unrelated-work.md'), '# Unrelated plan\n');
+      const runner = new DefaultStepRunner({ invoke }, 'session-1', dir, {
+        featureDesc: 'this-feature-has-no-plan',
+        gitRunner: scriptedGit(),
+        ...testQualityOptIn(),
+      });
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result).toMatchObject({
+        success: false,
+        refusal: {
+          kind: 'needs-human',
+          reason: expect.stringContaining('this-feature-has-no-plan'),
+        },
+      });
+      expect(result.refusal?.reason).toContain('another-feature');
+      expect(result.refusal?.reason).toContain('unrelated-work');
+      await expect(access(join(dir, '.pipeline', 'build-review.json'))).rejects.toThrow();
+      expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it('uses an explicit plan override over an otherwise unresolvable plan corpus', async () => {
+      const provider = createMockProvider();
+      const coordinate = vi.fn(async () => ({ success: true, output: 'reviewed explicit plan' }));
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'plans', 'another-feature.md'), '# Another plan\n');
+      await writeFile(join(dir, '.docs', 'plans', 'unrelated-work.md'), '# Unrelated plan\n');
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        featureDesc: 'this-feature-has-no-plan',
+        planPath,
+        gitRunner: scriptedGit(),
+        buildReviewCoordinator: coordinate,
+        ...currentBuildReviewProof(),
+      });
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true,
+        output: 'reviewed explicit plan',
+      });
+      expect(coordinate).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      { name: 'a singleton plan', plans: ['this-feature-has-no-plan.md'] },
+      { name: 'a stem-matched plan in a multi-plan corpus', plans: ['another-feature.md', 'this-feature-has-no-plan.md'] },
+    ])('reviews $name instead of empty-passing', async ({ plans }) => {
+      const provider = createMockProvider();
+      const coordinate = vi.fn(async () => ({ success: true, output: 'reviewed resolved plan' }));
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await Promise.all(plans.map((name) => writeFile(join(dir, '.docs', 'plans', name), '# Plan\n')));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        featureDesc: 'this-feature-has-no-plan',
+        gitRunner: scriptedGit(),
+        buildReviewCoordinator: coordinate,
+        ...currentBuildReviewProof(),
+      });
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true,
+        output: 'reviewed resolved plan',
+      });
+      expect(coordinate).toHaveBeenCalledOnce();
+      await expect(access(join(dir, '.pipeline', 'build-review.json'))).rejects.toThrow();
+    });
+
+    it('publishes the no-rubrics PASS when no plan files exist', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, { gitRunner: scriptedGit() });
+
+      await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
+        success: true,
+        output: expect.stringContaining('build_review_no_rubrics'),
+      });
+      await expect(readFile(join(dir, '.pipeline/build-review.json'), 'utf8')).resolves.toContain(
+        '"reason": "build_review_no_rubrics"',
+      );
+      expect(provider.invoke).not.toHaveBeenCalled();
+    });
+
     it('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run', async () => {
       const repository = await mkdtemp(join(tmpdir(), 'build-review-checkout-dependencies-'));
       const featureRoot = join(repository, '.worktrees', 'feature');
