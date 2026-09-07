@@ -168,6 +168,31 @@ describe('integration/autoresolve — resolution worktree lifecycle', () => {
     expect(sawFreshCheckout).toBe(true);
   });
 
+  it('recreates a transient worktree when its prior registration remains after the directory disappears', async () => {
+    const stalePath = join(dir, '.worktrees', 'resolve-widget');
+    await g(['worktree', 'add', '--detach', '-q', stalePath, 'feat/widget']);
+    await rm(stalePath, { recursive: true, force: true });
+
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    await expect(
+      autoresolve.withResolveWorktree('widget', 'feat/widget', dir, async () => ({ callback: 'returned' })),
+    ).resolves.toEqual({ callback: 'returned' });
+  });
+
+  it('recreates a fresh transient checkout when its prior registration and leftover directory remain', async () => {
+    const stalePath = join(dir, '.worktrees', 'resolve-widget');
+    await g(['worktree', 'add', '--detach', '-q', stalePath, 'feat/widget']);
+    await writeFile(join(stalePath, 'stale-garbage.txt'), 'leftover from a crashed attempt\n');
+
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    const result = await autoresolve.withResolveWorktree('widget', 'feat/widget', dir, async (worktreePath) => ({
+      branchTip: await readFile(join(worktreePath, 'feature.txt'), 'utf-8'),
+      leftover: await readFile(join(worktreePath, 'stale-garbage.txt'), 'utf-8').catch(() => null),
+    }));
+
+    expect(result).toEqual({ branchTip: 'branch tip content\n', leftover: null });
+  });
+
   it('never starts a second resolution worktree while one is in flight (serial guard, worktree story negative)', async () => {
     const autoresolve = await import('../../src/engine/autoresolve.js');
     let secondCallSeen = false;
