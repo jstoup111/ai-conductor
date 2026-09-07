@@ -359,6 +359,51 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       });
     });
 
+    it('keeps same-offset cross-file candidates bound to their own pinned source evidence', async () => {
+      const baseSource = [
+        '// Covers: task:8',
+        "describe('same', () => { beforeEach(() => seed('base')); it('same body', () => {}); });",
+      ].join('\n');
+      const headSource = baseSource.replace("seed('base')", "seed('head')");
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+          'diff --git a/test/alpha.test.ts b/test/alpha.test.ts',
+          '--- a/test/alpha.test.ts', '+++ b/test/alpha.test.ts', '+changed group title',
+          'diff --git a/test/beta.test.ts b/test/beta.test.ts',
+          '--- a/test/beta.test.ts', '+++ b/test/beta.test.ts', '+changed group title',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
+        { match: ['show', 'base123:test/alpha.test.ts'], result: { stdout: baseSource } },
+        { match: ['show', 'head123:test/alpha.test.ts'], result: { stdout: headSource } },
+        { match: ['show', 'base123:test/beta.test.ts'], result: { stdout: baseSource } },
+        { match: ['show', 'head123:test/beta.test.ts'], result: { stdout: headSource } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+      const candidates = inputs.sourceSnapshot.testScope?.candidates ?? [];
+      const evidence = inputs.sourceSnapshot.testScopeEvidence ?? [];
+
+      expect(candidates.map((candidate) => ({ source: candidate.source, reasons: candidate.reasons }))).toEqual([
+        {
+          source: { fileName: 'test/alpha.test.ts', side: 'head' },
+          reasons: ['affected-opted-in-group'],
+        },
+        {
+          source: { fileName: 'test/beta.test.ts', side: 'head' },
+          reasons: ['affected-opted-in-group'],
+        },
+      ]);
+      expect(candidates[0]?.declaration?.span).toEqual(candidates[1]?.declaration?.span);
+      for (const candidate of candidates) {
+        expect(evidence).toContainEqual(expect.objectContaining({
+          source: candidate.source,
+          region: candidate.declaration?.span,
+        }));
+      }
+    });
+
     it('refuses a missing pinned HEAD blob for a changed test instead of silently emptying scope', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
