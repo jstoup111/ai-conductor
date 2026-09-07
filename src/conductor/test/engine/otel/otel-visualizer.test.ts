@@ -20,7 +20,8 @@ import {
   OtelVisualizer,
   type OtelEventHandlerTable,
 } from '../../../src/engine/otel/otel-visualizer.js';
-import { otelTracedEventTypes } from '../../../src/engine/event-sinks.js';
+import { otelTracedEventTypes, type OtelTracedEventType } from '../../../src/engine/event-sinks.js';
+import type { ConductorEvent } from '../../../src/types/index.js';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import {
   InMemoryMetricExporter,
@@ -67,6 +68,88 @@ const handlerForUntracedType: OtelEventHandlerTable = {
 };
 void handlerForUntracedType;
 
+/**
+ * One representative event per traced type, keyed by a mapped record over
+ * `OtelTracedEventType`. The key set is the traced set *by construction*: a
+ * traced type with no sample fails as TS2741 and a sample for a type the sink
+ * table keeps untraced fails as TS2353. Every sample below is emitted on a real
+ * `ConductorEventEmitter` so the equality is proven through the production
+ * subscribe-and-dispatch path rather than through an accessor that only a test
+ * can call.
+ */
+const tracedEventSamples: {
+  [Type in OtelTracedEventType]: Extract<ConductorEvent, { type: Type }>;
+} = {
+  step_started: { type: 'step_started', step: 'build', index: 0 },
+  build_progress: { type: 'build_progress', step: 'build', resolved: 1, total: 3 },
+  build_no_progress: {
+    type: 'build_no_progress',
+    step: 'build',
+    quietMinutes: 5,
+    resolved: 1,
+    total: 3,
+  },
+  build_stall: {
+    type: 'build_stall',
+    step: 'build',
+    reason: 'no_task_progress',
+    resolvedBefore: 1,
+    resolvedAfter: 1,
+  },
+  unattributed_progress: {
+    type: 'unattributed_progress',
+    step: 'build',
+    attempt: 1,
+    resolvedCount: 1,
+    headBefore: null,
+    headAfter: null,
+  },
+  step_retry: {
+    type: 'step_retry',
+    step: 'build',
+    attempt: 2,
+    maxAttempts: 3,
+    reason: 'transient failure',
+  },
+  provider_attempt: {
+    type: 'provider_attempt',
+    step: 'build',
+    provider: 'claude',
+    outcome: 'success',
+    invoked: true,
+    model: 'test-model',
+  },
+  gate_verdict: { type: 'gate_verdict', step: 'build', satisfied: true },
+  kickback: { type: 'kickback', from: 'build_review', to: 'build', count: 1 },
+  pipeline_closeout: {
+    type: 'pipeline_closeout',
+    obligation: 'simplify',
+    startedAt: 1,
+    endedAt: 2,
+    ts: 2,
+  },
+  step_completed: { type: 'step_completed', step: 'build', status: 'done' },
+  step_failed: { type: 'step_failed', step: 'build', error: 'boom', retryCount: 0 },
+  feature_cost_snapshot: {
+    type: 'feature_cost_snapshot',
+    costUsd: 0,
+    costComplete: true,
+    byDimension: [],
+    tokensByDimension: [],
+  },
+  feature_usage_total: {
+    type: 'feature_usage_total',
+    dispatches: 1,
+    meteredDispatches: 1,
+    unmeteredDispatches: 0,
+    costUsd: 0,
+    inputTokens: 1,
+    outputTokens: 1,
+  },
+  feature_complete: { type: 'feature_complete' },
+  loop_halt: { type: 'loop_halt', step: 'build', reason: 'kickback cap' },
+};
+
 describe('OtelVisualizer — T9: provider/processor setup', () => {
   let tempDir: string;
   let pipelineDir: string;
@@ -87,8 +170,8 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
   });
 
   it('keeps untraced event types out of the OTel handler table', () => {
-    expect(otelEventTypes()).not.toContain('gate_blocked');
-    expect(new Set(otelEventTypes())).toEqual(new Set(Object.keys(tracedHandlerTable)));
+    expect(otelTracedEventTypes()).not.toContain('gate_blocked');
+    expect(new Set(otelTracedEventTypes())).toEqual(new Set(Object.keys(tracedHandlerTable)));
   });
 
   it('constructs without throwing given a valid enabled config with injected exporters', () => {
@@ -284,24 +367,50 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
     }
   });
 
-  it('handles exactly the event types derived by otelTracedEventTypes()', async () => {
+  it('routes every traced event type through the bus with no unhandled-type report', async () => {
+    // The sample table's keys are the traced set by construction (mapped record
+    // over OtelTracedEventType), and this asserts the compile-time set the
+    // handler table is bound to is the same set the visualizer subscribes from
+    // at runtime.
+    expect(new Set(Object.keys(tracedEventSamples))).toEqual(new Set(otelTracedEventTypes()));
+
     const resolved = resolveOtelConfig(
       { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
       pipelineDir,
     );
+    const warn = vi.fn();
     const vis = new OtelVisualizer(resolved, {
       runId: 'test-handler-coverage',
       feature: 'test-feature',
       project: 'test-project',
       spanExporter,
       metricExporter,
+      onWarning: warn,
     });
 
     vis.start(emitter);
 
-    expect(new Set(vis.handledEventTypes())).toEqual(new Set(otelTracedEventTypes()));
+    // Drive each traced type through the real subscribe-and-dispatch path. A
+    // traced type with no handler entry reports itself through onWarning (the
+    // sibling mocked-registry test proves that report is not vacuous), so zero
+    // warnings across the whole traced set means every traced type was routed.
+    for (const event of Object.values(tracedEventSamples)) {
+      await emitter.emit(event as ConductorEvent);
+    }
+
+    // The visualizer's warning seam is shared with SpanManager's own bounded
+    // notices (e.g. a terminal event with no open span), so scope the assertion
+    // to the unhandled-type report this criterion is about.
+    const unhandledReports = warn.mock.calls
+      .map(([msg]) => String(msg))
+      .filter((msg) => msg.includes('no handler for traced event type'));
+    expect(unhandledReports).toEqual([]);
 
     await vis.stop();
+
+    // Non-vacuity for the dispatch itself: the routed events produced real
+    // exported telemetry rather than being silently discarded.
+    expect(spanExporter.getFinishedSpans().length).toBeGreaterThan(0);
   });
 
   it('records a bus-emitted loop_halt as the halted root span outcome', async () => {
