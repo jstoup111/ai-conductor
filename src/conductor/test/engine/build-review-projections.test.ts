@@ -140,6 +140,7 @@ function scopedSource(overrides: {
       associationChanges: [],
     }],
     candidates: [{
+      source: { fileName: 'test/a.test.ts', side: 'head' },
       declaration,
       markers: [],
       associationChanges: [],
