@@ -1,3 +1,5 @@
+// Covers: task:4
+
 /**
  * Regression corpus for the retired discovery predicate and the shared
  * coherence parser. Both parser- and discovery-level tests consume this file
@@ -103,9 +105,8 @@ export const coherenceRegressionCorpus: readonly CoherenceCorpusFixture[] = [
     parserAccepted: true,
   },
   {
-    // Real shipped-artifact shape: the retired predicate accepts the first
-    // table, while the parser keeps scanning and rejects the later table.
-    // Discovery must reach processed dedup before structural parsing.
+    // Real shipped-artifact shape: accepted trailing prose after the mapping
+    // table must not change the artifact's acceptance.
     slug: 'decide-artifact-coherence-check',
     name: 'shipped second-table artifact',
     content: `| Row Class | Id | Cited Ids | Verdict | Quote |
@@ -117,6 +118,35 @@ export const coherenceRegressionCorpus: readonly CoherenceCorpusFixture[] = [
 | coherence parser | accepted |
 `,
     oracleAccepted: true,
+    parserAccepted: true,
+  },
+  {
+    slug: 'two-mapping-tables',
+    name: 'two mapping tables',
+    content: `| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| story | story:1 | outcome:1 | covered | fixture |
+
+| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| task | task:2 | story:1 | covered | fixture |
+`,
+    oracleAccepted: true,
+    parserAccepted: true,
+  },
+  {
+    slug: 'stranded-mapping-row',
+    name: 'stranded mapping row in prose table',
+    content: `| Row Class | Criterion | Cited Task Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a fixture | task:6 | covered | fixture | diff-local |
+
+| Topic | Notes |
+| --- | --- | --- |
+| Follow-up | This is ordinary prose. |
+| task | task:2 | story:1 | covered | fixture |
+`,
+    oracleAccepted: false,
     parserAccepted: false,
   },
   { slug: 'absent-artifact', name: 'absent artifact', content: null, oracleAccepted: false, parserAccepted: false },
