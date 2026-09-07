@@ -2695,6 +2695,10 @@ export class DefaultStepRunner implements StepRunner {
         trackingRefSha: inputs.trackingRefSha,
         remoteHeadSha: inputs.remoteHeadSha,
         fresh: inputs.fresh,
+        ...(inputs.patchEquivalentExclusion === undefined ? {} : {
+          filteredCommits: inputs.patchEquivalentExclusion.filteredCommits,
+          excludedPaths: inputs.patchEquivalentExclusion.excludedPaths,
+        }),
       };
       // Task 24: grading provenance rides the same fire-and-forget telemetry
       // path — the conductor emits `build_review_repair_context` from it.

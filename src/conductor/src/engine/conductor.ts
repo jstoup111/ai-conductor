@@ -1274,6 +1274,10 @@ export interface StepRunResult {
     trackingRefSha: string | null;
     remoteHeadSha: string | null;
     fresh: boolean;
+    /** Advisory commit records Git found patch-equivalent to the review base. */
+    filteredCommits?: readonly { readonly sha: string; readonly subject: string }[];
+    /** Advisory paths excluded from the graded diff by those commit records. */
+    excludedPaths?: readonly string[];
   };
   /**
    * Task 24 (rebase-invalidated-test-failures-never-reach-build): which of the
@@ -9071,6 +9075,12 @@ export class Conductor {
                 trackingRefSha: result.baseFreshness.trackingRefSha,
                 remoteHeadSha: result.baseFreshness.remoteHeadSha,
                 fresh: result.baseFreshness.fresh,
+                ...(result.baseFreshness.filteredCommits === undefined ? {} : {
+                  filteredCommits: result.baseFreshness.filteredCommits,
+                }),
+                ...(result.baseFreshness.excludedPaths === undefined ? {} : {
+                  excludedPaths: result.baseFreshness.excludedPaths,
+                }),
               });
             } catch {
               // Never block/fail build_review over telemetry emission.

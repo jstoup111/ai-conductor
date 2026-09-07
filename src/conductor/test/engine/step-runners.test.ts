@@ -1,3 +1,4 @@
+// Covers: task:3
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
@@ -4414,6 +4415,31 @@ TIER: M`,
       };
       return git;
     }
+    function equivalentScopedGit() {
+      const git = scopedGit();
+      return async (args: string[]) => {
+        if (args[0] === 'cherry') {
+          return { exitCode: 0, stdout: '- 1234567 replayed upstream patch\n', stderr: '' };
+        }
+        if (args[0] === 'log') {
+          return { exitCode: 0, stdout: '1234567\0\0\nsrc/replayed.ts\0', stderr: '' };
+        }
+        return git(args);
+      };
+    }
+    function failedPatchEquivalentProvenanceGit(diffCalls: string[][]) {
+      const git = scopedGit();
+      return async (args: string[]) => {
+        if (args[0] === 'cherry') {
+          return { exitCode: 0, stdout: '- 1234567 replayed upstream patch\n', stderr: '' };
+        }
+        if (args[0] === 'log') {
+          return { exitCode: 1, stdout: '', stderr: 'attribution unavailable' };
+        }
+        if (args[0] === 'diff') diffCalls.push(args);
+        return git(args);
+      };
+    }
     async function scopedPlan(path = planPath) {
       await writeFile(path, `# Plan\n\n### Task 1: Cover the thing\n**Files:** ${SCOPED_SELECTOR}\n`, 'utf-8');
     }
@@ -4589,6 +4615,61 @@ TIER: M`,
         trackingRefSha: null,
         remoteHeadSha: null,
         fresh: false,
+      });
+    });
+
+    it('carries patch-equivalent exclusions on baseFreshness', async () => {
+      await scopedPlan();
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
+      const runner = new DefaultStepRunner({ invoke }, 'session-1', dir, {
+        gitRunner: equivalentScopedGit(),
+        planPath,
+        ...testQualityOptIn(),
+        ...currentBuildReviewProof(),
+      });
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.baseFreshness).toMatchObject({
+        filteredCommits: [{ sha: '1234567', subject: 'replayed upstream patch' }],
+        excludedPaths: ['src/replayed.ts'],
+      });
+    });
+
+    it('leaves the build review result and graded diff unchanged when patch-equivalent provenance fails', async () => {
+      await scopedPlan();
+      const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
+      const baselineDiffCalls: string[][] = [];
+      const failedProvenanceDiffCalls: string[][] = [];
+      const baseline = new DefaultStepRunner({ invoke }, 'session-1', dir, {
+        gitRunner: async (args) => {
+          if (args[0] === 'diff') baselineDiffCalls.push(args);
+          return scopedGit()(args);
+        },
+        planPath,
+        ...testQualityOptIn(),
+        ...currentBuildReviewProof(),
+      });
+      const failedProvenance = new DefaultStepRunner({ invoke }, 'session-2', dir, {
+        gitRunner: failedPatchEquivalentProvenanceGit(failedProvenanceDiffCalls),
+        planPath,
+        ...testQualityOptIn(),
+        ...currentBuildReviewProof(),
+      });
+
+      const baselineResult = await baseline.run('build_review', emptyState);
+      const failedProvenanceResult = await failedProvenance.run('build_review', emptyState);
+
+      expect({
+        success: failedProvenanceResult.success,
+        output: failedProvenanceResult.output,
+        baseFreshness: failedProvenanceResult.baseFreshness,
+        diff: failedProvenanceDiffCalls,
+      }).toEqual({
+        success: baselineResult.success,
+        output: baselineResult.output,
+        baseFreshness: baselineResult.baseFreshness,
+        diff: baselineDiffCalls,
       });
     });
 
