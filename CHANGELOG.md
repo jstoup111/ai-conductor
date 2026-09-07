@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.1.0] - 2026-09-06
+## [1.1.0] - 2026-09-07
 
 ### Added
 
@@ -22,6 +22,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon runs can now process multiple features concurrently within a single repository. ([implementation PR #2075](https://github.com/jstoup111/ai-conductor/pull/2075)).
 - The daemon prints a startup warning whenever its effective concurrency exceeds 1, describing the extra rebase churn and spend to expect and how to return to serial dispatch. ([implementation PR #2240](https://github.com/jstoup111/ai-conductor/pull/2240)).
 - The daemon and engineer workflows now require GitHub CLI 2.73.0 or later and clearly report unsupported JSON fields. ([implementation PR #2243](https://github.com/jstoup111/ai-conductor/pull/2243)).
+- Adds durable post-join build-review remediation adjudication that classifies joined findings and safely routes follow-up work. ([implementation PR #2087](https://github.com/jstoup111/ai-conductor/pull/2087)).
 
 ### Changed
 
