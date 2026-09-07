@@ -1,9 +1,11 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  BUILD_REVIEW_SCOPED_KILL_GRACE_MS,
   runBuildReviewScopedCommand,
   type BuildReviewScopedChild,
+  type BuildReviewScopedEscalationScheduler,
   type BuildReviewScopedLauncher,
 } from '../../src/engine/build-review-scoped-run.js';
 
@@ -28,6 +30,19 @@ function fakeChild() {
     error: () => onError?.(),
     close: (code: number | null, signal: NodeJS.Signals | null = null) => onClose?.(code, signal),
   };
+}
+
+function fakeEscalationScheduler() {
+  let escalation: (() => void) | undefined;
+  const handle = {};
+  const scheduler: BuildReviewScopedEscalationScheduler = {
+    schedule: vi.fn((callback: () => void) => {
+      escalation = callback;
+      return handle;
+    }),
+    cancel: vi.fn(),
+  };
+  return { scheduler, fire: () => escalation?.(), handle };
 }
 
 describe('runBuildReviewScopedCommand', () => {
@@ -115,5 +130,77 @@ describe('runBuildReviewScopedCommand', () => {
       template, selectors, cwd: '/counterfactual', signal: new AbortController().signal, launcher,
     })).resolves.toEqual({ kind: 'launch-error', stdout: '', stderr: '' });
     expect(launcher).not.toHaveBeenCalled();
+  });
+
+  it('sends SIGTERM but waits for close before reporting an in-flight abort as a timeout', async () => {
+    const fake = fakeChild();
+    const escalation = fakeEscalationScheduler();
+    const controller = new AbortController();
+    let settled = false;
+    const run = runBuildReviewScopedCommand({
+      template: 'npm test -- {selectors}', selectors: ['test/term.test.ts'], cwd: '/counterfactual', signal: controller.signal,
+      launcher: () => fake.child, escalationScheduler: escalation.scheduler,
+    }).then((result) => { settled = true; return result; });
+
+    controller.abort();
+    await Promise.resolve();
+
+    expect(fake.child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    expect(escalation.scheduler.schedule).toHaveBeenCalledWith(expect.any(Function), BUILD_REVIEW_SCOPED_KILL_GRACE_MS);
+    expect(settled).toBe(false);
+    fake.close(0);
+
+    await expect(run).resolves.toEqual({ kind: 'timeout', stdout: '', stderr: '' });
+  });
+
+  it('escalates a child that does not close and reports the captured output as a timeout', async () => {
+    const fake = fakeChild();
+    const escalation = fakeEscalationScheduler();
+    const controller = new AbortController();
+    const run = runBuildReviewScopedCommand({
+      template: 'npm test -- {selectors}', selectors: ['test/kill.test.ts'], cwd: '/counterfactual', signal: controller.signal,
+      launcher: () => fake.child, escalationScheduler: escalation.scheduler,
+    });
+    fake.stdout('before abort');
+    fake.stderr('warning');
+    controller.abort();
+    escalation.fire();
+
+    await expect(run).resolves.toEqual({ kind: 'timeout', stdout: 'before abort', stderr: 'warning' });
+    expect(fake.child.kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
+    expect(fake.child.kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
+  });
+
+  it('cancels escalation without SIGKILL when the child closes during its grace period', async () => {
+    const fake = fakeChild();
+    const escalation = fakeEscalationScheduler();
+    const controller = new AbortController();
+    const run = runBuildReviewScopedCommand({
+      template: 'npm test -- {selectors}', selectors: ['test/graceful.test.ts'], cwd: '/counterfactual', signal: controller.signal,
+      launcher: () => fake.child, escalationScheduler: escalation.scheduler,
+    });
+
+    controller.abort();
+    fake.close(0);
+    escalation.fire();
+
+    await expect(run).resolves.toEqual({ kind: 'timeout', stdout: '', stderr: '' });
+    expect(escalation.scheduler.cancel).toHaveBeenCalledExactlyOnceWith(escalation.handle);
+    expect(fake.child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+  });
+
+  it('does not signal or replace an outcome when abort arrives after close', async () => {
+    const fake = fakeChild();
+    const controller = new AbortController();
+    const run = runBuildReviewScopedCommand({
+      template: 'npm test -- {selectors}', selectors: ['test/already-closed.test.ts'], cwd: '/counterfactual', signal: controller.signal,
+      launcher: () => fake.child,
+    });
+    fake.close(0);
+    await expect(run).resolves.toEqual({ exitCode: 0, stdout: '', stderr: '' });
+
+    controller.abort();
+
+    expect(fake.child.kill).not.toHaveBeenCalled();
   });
 });
