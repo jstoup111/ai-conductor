@@ -82,13 +82,18 @@ describe('build-review finding identity', () => {
     expect(new Set([base.id, ...variants.map((variant) => variant!.id)]).size).toBe(variants.length + 1);
   });
 
-  it('refuses formatted and traversal path references before minting an identity', () => {
+  it('refuses formatted, rephrased, or traversal path references before minting an identity', () => {
     const refused = [
-      ' test/widget.test.ts ', '`test/widget.test.ts`',
+      ' test/widget.test.ts ', '`test/widget.test.ts`', 'The affected test is test/widget.test.ts.',
+      'the affected test is test/widget.test.ts', 'test/widget.test.ts, see also test/other.test.ts',
       '/test/widget.test.ts', '../test/widget.test.ts', './test/widget.test.ts', 'test/../widget.test.ts',
     ].map((path) => canonicalizeBuildReviewFindingIdentity(finding({ path })));
 
-    expect(refused).toEqual(Array(6).fill(undefined));
+    expect(refused).toEqual(Array(9).fill(undefined));
+  });
+
+  it('admits a space-containing file name that is not prose (Story 8)', () => {
+    expect(canonicalizeBuildReviewFindingIdentity(finding({ path: 'test/space containing name.test.ts' }))).toBeDefined();
   });
 
   it('refuses a sibling finding when a scoped reference context authorizes only the resolved candidate', () => {
