@@ -30,8 +30,13 @@ describe('event sink registry', () => {
       'feature_dispatch_ended', 'feature_shipped',
     ];
     expect(otelEventTypes()).toEqual(expect.arrayContaining(metricsOnly));
-    expect(otelTracedEventTypes()).toEqual(expect.not.arrayContaining(metricsOnly));
+    for (const type of metricsOnly) expect(otelTracedEventTypes()).not.toContain(type);
     expect(otelTracedEventTypes()).toContain('step_started');
+  });
+
+  it('keeps unattributed progress off both OTel owners', () => {
+    expect(otelEventTypes()).not.toContain('unattributed_progress');
+    expect(otelTracedEventTypes()).not.toContain('unattributed_progress');
   });
 
   it('renders and persists setup repair dispositions without audit or OTel subscriptions', () => {

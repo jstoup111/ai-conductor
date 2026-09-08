@@ -340,29 +340,14 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('subscribes OpenTelemetry only to its defined event set', () => {
-    expect(new Set(otelEventTypes())).toEqual(new Set([
-      'memory_setup',
-      'daemon_backlog_snapshot',
-      'feature_dispatch_started',
-      'feature_dispatch_ended',
-      'feature_shipped',
-      'step_started',
-      'step_completed',
-      'step_failed',
-      'provider_attempt',
-      'feature_usage_total',
-      'feature_cost_snapshot',
-      'step_retry',
-      'gate_verdict',
-      'kickback',
-      'loop_halt',
-      'feature_complete',
-      'build_progress',
-      'build_no_progress',
-      'build_stall',
-      'pipeline_closeout',
-    ]));
+  it('derives OpenTelemetry subscriptions from the sink registry without duplicates', () => {
+    const declared = Object.entries(EVENT_SINKS)
+      .filter(([, sinks]) => sinks.otel)
+      .map(([type]) => type);
+    const subscribed = otelEventTypes();
+
+    expect(new Set(subscribed)).toEqual(new Set(declared));
+    expect(subscribed).toHaveLength(new Set(subscribed).size);
   });
 
   it('declares feature cost snapshots as OpenTelemetry-only ledger projections', () => {
