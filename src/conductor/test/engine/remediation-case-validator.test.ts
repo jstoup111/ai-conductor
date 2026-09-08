@@ -106,6 +106,7 @@ describe('remediation case graph validator', () => {
     expect(context).toMatchObject({ ok: true });
     if (!context.ok) throw new Error('expected suppression context to assemble');
     const liveSourceIds = context.context.currentFindings.map((source) => source.sourceId);
+    const suppressedSourceId = buildReviewAdjudicationSourceId(suppressedSource!);
     const judgement = {
       mode: 'case-v1',
       domain: 'build_review',
@@ -117,6 +118,7 @@ describe('remediation case graph validator', () => {
     } as const satisfies RemediationCaseJudgement;
 
     expect(liveSourceIds).toEqual([buildReviewAdjudicationSourceId(liveSource!)]);
+    expect(liveSourceIds).not.toContain(suppressedSourceId);
     expect(context.context.suppressionHistory).toHaveLength(1);
     expect(validateRemediationCaseGraph(liveSourceIds, judgement)).toMatchObject({ ok: true });
   });
