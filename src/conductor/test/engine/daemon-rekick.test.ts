@@ -2432,15 +2432,15 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     }))).toEqual([
       {
         gate: 'coverage_binding',
-        surface: ['<all runtime source>'],
-        deltaConsidered: ['src/sibling.ts'],
+        surface: ['src/task-1.ts', '<.docs/stories/|.docs/specs/>'],
+        deltaConsidered: [],
         basis: undefined,
       },
       { gate: 'build_review', surface: ['src/task-1.ts'], deltaConsidered: [], basis: undefined },
       {
         gate: 'prd_audit',
-        surface: ['<all runtime source>'],
-        deltaConsidered: ['src/sibling.ts'],
+        surface: ['src/task-1.ts', '<.docs/stories/|.docs/specs/>'],
+        deltaConsidered: [],
         basis: undefined,
       },
       { gate: 'architecture_review_as_built', surface: ['src/task-1.ts'], deltaConsidered: [], basis: undefined },

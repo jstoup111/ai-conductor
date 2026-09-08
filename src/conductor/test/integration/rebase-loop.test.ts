@@ -1097,14 +1097,13 @@ describe('integration/rebase-loop', () => {
         expect(archVerdict?.kickback).toBeUndefined();
 
         // Audit trail: a rebase_gate_preserved event per preserved gate, with
-        // a non-empty declared surface. The always-run PRD audit records the
-        // foreign runtime delta it considered, while the as-built review's
-        // own surface excludes that foreign file.
+        // a non-empty declared surface. The PRD-input gates exclude a foreign
+        // runtime delta just as the as-built review does.
         const prdPreserved = preserved.find((p) => p.gate === 'prd_audit');
         const archPreserved = preserved.find((p) => p.gate === 'architecture_review_as_built');
         expect(prdPreserved).toBeDefined();
         expect(prdPreserved!.surface.length).toBeGreaterThan(0);
-        expect(prdPreserved!.deltaConsidered).toEqual(['src/foreign-sibling.ts']);
+        expect(prdPreserved!.deltaConsidered).toEqual([]);
         expect(archPreserved).toBeDefined();
         expect(archPreserved!.surface.length).toBeGreaterThan(0);
         expect(archPreserved!.deltaConsidered).toEqual([]);
