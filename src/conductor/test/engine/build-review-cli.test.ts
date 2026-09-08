@@ -428,6 +428,31 @@ describe('build-review findings CLI', () => {
     ].join('\n'));
   });
 
+  it('does not publish uncovered scope routing state in machine findings output', async () => {
+    const scopeIncomplete = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot', results: {
+        testQuality: {
+          kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS',
+          scopeResolutions: [{
+            candidateId: 'candidate:setup', status: 'indeterminate',
+            sourceRegion: { path: 'test/a.test.ts', startLine: 2, endLine: 3, contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'setup binding' },
+            obligationReferences: ['story:S6.2'], missingEvidenceReason: 'the pinned binding is incomplete',
+          }],
+        },
+      },
+    });
+    const print = vi.fn();
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(scopeIncomplete), createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }), print,
+    })).resolves.toBe(0);
+
+    const output = JSON.parse(print.mock.calls[0]![0]);
+    expect(output).toMatchObject({ verdict: 'FAIL', scopeIncompleteRubrics: ['testQuality'] });
+    expect(output).not.toHaveProperty('uncoveredScopeIncompleteRubrics');
+  });
+
   it('uses the live runner canonical identity for both findings reads and acceptance writes through an alternate main root', async () => {
     const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
     const realpath = async (path: string) => path
