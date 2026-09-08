@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:2, task:3
 // land-spec.test.ts — Story 2 (Slice B): landSpec fails CLOSED on unresolved
 // identity (adr-2026-07-01-machine-scoped-operator-identity, D3).
 //
@@ -252,10 +252,10 @@ describe('landSpec ADR approval diagnostics (Task 6)', () => {
 describe('landSpec ADR citability gate (Task 6)', () => {
   const gh: GhRunner = async () => ({ stdout: 'operator\n' });
 
-  it('lands an added APPROVED ADR with a numbered decision', async () => {
+  it('lands an added APPROVED ADR with a canonical filename and numbered decision', async () => {
     const dir = await seedValidWorktree();
     await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
-    await writeFile(join(dir, '.docs', 'decisions', 'adr-citable.md'), APPROVED_CITABLE_ADR);
+    await writeFile(join(dir, '.docs', 'decisions', 'adr-2026-09-08-citable.md'), APPROVED_CITABLE_ADR);
 
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
@@ -286,6 +286,73 @@ describe('landSpec ADR citability gate (Task 6)', () => {
     await expect(
       landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
     ).rejects.toThrow(/no citable decision.*adr-existing\.md/i);
+  });
+});
+
+describe('Task 2: landSpec canonical ADR filename gate', () => {
+  const gh: GhRunner = async () => ({ stdout: 'operator\n' });
+
+  it('lands a newly introduced approved citable ADR with a canonical filename', async () => {
+    const dir = await seedValidWorktree();
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs', 'decisions', 'adr-2026-09-08-canonical.md'),
+      APPROVED_CITABLE_ADR,
+    );
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).resolves.toMatchObject({ slug: 'dep-bump' });
+  });
+
+  it('rejects a newly introduced approved citable ADR with a sequential filename', async () => {
+    const dir = await seedValidWorktree();
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs', 'decisions', 'adr-001-canonical.md'),
+      APPROVED_CITABLE_ADR,
+    );
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(
+      /adr-001-canonical\.md.*adr-YYYY-MM-DD-lowercase-hyphenated-slug\.md/i,
+    );
+  });
+
+  it('rejects a newly introduced approved citable ADR whose date is impossible', async () => {
+    const dir = await seedValidWorktree();
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs', 'decisions', 'adr-2026-02-29-impossible.md'),
+      APPROVED_CITABLE_ADR,
+    );
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/adr-2026-02-29-impossible\.md/i);
+  });
+
+  it('reports every non-canonical newly introduced ADR in one refusal', async () => {
+    const dir = await seedValidWorktree();
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await Promise.all([
+      writeFile(
+        join(dir, '.docs', 'decisions', 'adr-2026-09-08-canonical.md'),
+        APPROVED_CITABLE_ADR,
+      ),
+      writeFile(join(dir, '.docs', 'decisions', 'adr-001-first.md'), APPROVED_CITABLE_ADR),
+      writeFile(
+        join(dir, '.docs', 'decisions', 'adr-2026-02-29-second.md'),
+        APPROVED_CITABLE_ADR,
+      ),
+    ]);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(
+      /adr-001-first\.md[\s\S]*adr-2026-02-29-second\.md|adr-2026-02-29-second\.md[\s\S]*adr-001-first\.md/i,
+    );
   });
 });
 

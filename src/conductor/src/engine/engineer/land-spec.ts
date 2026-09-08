@@ -33,7 +33,7 @@
 //      branch is the worktree's branch — never deleted here.
 
 import { access, readdir, readFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { TargetPathMissingError } from './target.js';
@@ -41,6 +41,7 @@ import { AuthoringGuard } from './authoring-guard.js';
 import { slugify } from './spec-branch.js';
 import {
   adrApprovalStatus,
+  isCanonicalAdrFilename,
   isStoriesApproved,
   featureArtifactPatternsAreRecursive,
   parseAdrDecisions,
@@ -402,15 +403,44 @@ export async function landSpec(
       .map((path) => path.replaceAll('\\', '/'))
       .filter((path) => /^\.docs\/decisions\/adr-.*\.md$/i.test(path)),
   );
+  const defaultBranch = await deriveDefaultBranch(canonical);
+  const { stdout: mergeBaseOut } = await execFile(
+    'git',
+    ['merge-base', 'HEAD', defaultBranch],
+    { cwd: worktreePath },
+  );
+  const mergeBase = mergeBaseOut.trim();
+  const baseAdrPaths = new Set<string>();
+  try {
+    const { stdout } = await execFile(
+      'git',
+      ['ls-tree', '-r', '--name-only', mergeBase, '--', '.docs/decisions'],
+      { cwd: worktreePath },
+    );
+    for (const path of stdout.split('\n')) {
+      if (path !== '') baseAdrPaths.add(path.replaceAll('\\', '/'));
+    }
+  } catch {
+    // A missing tree is equivalent to no pre-existing ADRs.
+  }
   const unapprovedAdrs: Array<{ path: string; found: string | null }> = [];
   const uncitableAdrs: string[] = [];
+  const nonCanonicalNewAdrs: string[] = [];
   for (const adrFile of await listAdrFiles(decisionsDir)) {
+    const adrPath = relative(worktreePath, adrFile).replaceAll('\\', '/');
     const adrContent = await readFile(adrFile, 'utf-8');
     const approval = adrApprovalStatus(adrContent);
     if (!approval.approved) unapprovedAdrs.push({ path: adrFile, found: approval.found });
-    if (approval.approved && changedAdrPaths.has(relative(worktreePath, adrFile).replaceAll('\\', '/'))) {
+    if (approval.approved && changedAdrPaths.has(adrPath)) {
       const parsed = parseAdrDecisions(adrContent);
       if (parsed.kind !== 'decisions' || parsed.ids.size === 0) uncitableAdrs.push(adrFile);
+    }
+    if (
+      changedAdrPaths.has(adrPath) &&
+      !baseAdrPaths.has(adrPath) &&
+      !isCanonicalAdrFilename(basename(adrFile))
+    ) {
+      nonCanonicalNewAdrs.push(adrFile);
     }
   }
   if (unapprovedAdrs.length > 0) {
@@ -428,7 +458,12 @@ export async function landSpec(
         'Each added or changed APPROVED ADR must declare at least one citable decision before landing.',
     );
   }
-
+  if (nonCanonicalNewAdrs.length > 0) {
+    throw new Error(
+      `landSpec: newly added ADRs must use canonical filenames: ${nonCanonicalNewAdrs.join('; ')}. ` +
+        'Required format: adr-YYYY-MM-DD-lowercase-hyphenated-slug.md.',
+    );
+  }
   // 4e2. Coherence gate (DECIDE artifact coherence check): the traceability
   //     mapping (outcomes -> FRs -> stories -> tasks) authored by
   //     /coherence-check must be present, parseable, cross-checked against
