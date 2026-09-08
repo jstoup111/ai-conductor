@@ -79,6 +79,9 @@ export const defaultTmuxRunner: TmuxRunner = (args, opts) => {
         `Refusing to ${args[0]} real tmux session "${sessionName}": AI_CONDUCTOR_NO_REAL_EXEC=1 kill-switch is set.`
       );
     }
+    throw new Error(
+      `AI_CONDUCTOR_NO_REAL_EXEC=1 kill-switch refuses ${args[0]}: target was unresolved.`
+    );
   }
   const result = spawnSync('tmux', args, {
     stdio: opts.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],

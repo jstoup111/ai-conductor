@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, it, expect, vi } from 'vitest';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -831,6 +831,57 @@ describe('defaultTmuxRunner: AI_CONDUCTOR_NO_REAL_EXEC kill-switch guards real t
         inherit: false,
       });
       expect(result.code).not.toBe(0);
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+    }
+  });
+
+  it('refuses new-session without -s because its target is unresolved', async () => {
+    const runner = requireFn(await load(), 'defaultTmuxRunner');
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      expect(() => runner(['new-session', '-d', '-c', '/tmp', 'sleep 1'], { inherit: false }))
+        .toThrow(/AI_CONDUCTOR_NO_REAL_EXEC.*new-session.*target.*unresolved/i);
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+    }
+  });
+
+  it('refuses respawn-pane without -t because its target is unresolved', async () => {
+    const runner = requireFn(await load(), 'defaultTmuxRunner');
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      expect(() => runner(['respawn-pane', '-k', 'sleep 1'], { inherit: false }))
+        .toThrow(/AI_CONDUCTOR_NO_REAL_EXEC.*respawn-pane.*target.*unresolved/i);
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+    }
+  });
+
+  it.each([
+    ['new-session', ['new-session', '-d', '-s', '', '-c', '/tmp', 'sleep 1']],
+    ['respawn-pane', ['respawn-pane', '-k', '-t', '', 'sleep 1']],
+  ])('refuses %s with an empty target because it is unresolved', async (verb, args) => {
+    const runner = requireFn(await load(), 'defaultTmuxRunner');
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      expect(() => runner(args, { inherit: false }))
+        .toThrow(new RegExp(`AI_CONDUCTOR_NO_REAL_EXEC.*${verb}.*target.*unresolved`, 'i'));
     } finally {
       if (prevFlag === undefined) {
         delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
