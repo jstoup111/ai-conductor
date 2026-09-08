@@ -3701,6 +3701,172 @@ describe('FullSuiteVerifier', () => {
     });
   });
 
+  it('keeps a live recovery claim exclusive until lock acquisition times out', async () => {
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    const projectRoot = await makeConfiguredProject('full-suite-live-recovery-claim-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const claimPath = join(lockPath, 'recovery.json');
+    const existingClaim = JSON.stringify({
+      version: 1,
+      pid: 22,
+      token: 'live-recoverer',
+      claimedAt: '2026-09-07T11:59:59.999Z',
+    });
+    await writeProjectFile(lockPath, 'owner.json', JSON.stringify({
+      version: 1,
+      pid: 2_147_483_647,
+      token: 'dead-owner',
+      acquiredAt: '2026-09-07T11:00:00.000Z',
+    }));
+    await writeFile(claimPath, existingClaim, 'utf8');
+    await utimes(claimPath, new Date(now), new Date(now));
+    let executions = 0;
+
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      execute: async () => {
+        executions += 1;
+        throw new Error('must not execute while a live recovery claim holds the lock');
+      },
+      lock: {
+        waitTimeoutMs: 0,
+        clock: () => now,
+        processIsLive: (pid) => pid === 22,
+      },
+    }).ensure();
+
+    expect({
+      result,
+      executions,
+      claim: await readFile(claimPath, 'utf8'),
+    }).toEqual({
+      result: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to acquire full-suite verification lock within 0ms',
+      },
+      executions: 0,
+      claim: existingClaim,
+    });
+  });
+
+  it('keeps a fresh unparseable recovery claim exclusive without renaming it', async () => {
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    const projectRoot = await makeConfiguredProject('full-suite-fresh-unparseable-recovery-claim-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const claimPath = join(lockPath, 'recovery.json');
+    const existingClaim = 'not json';
+    await writeProjectFile(lockPath, 'owner.json', JSON.stringify({
+      version: 1,
+      pid: 2_147_483_647,
+      token: 'dead-owner',
+      acquiredAt: '2026-09-07T11:00:00.000Z',
+    }));
+    await writeFile(claimPath, existingClaim, 'utf8');
+    await utimes(claimPath, new Date(now), new Date(now));
+    let executions = 0;
+
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      execute: async () => {
+        executions += 1;
+        throw new Error('must not execute while an unparseable recovery claim is fresh');
+      },
+      lock: {
+        waitTimeoutMs: 0,
+        clock: () => now,
+        processIsLive: () => false,
+        unownedStaleMs: 100,
+      },
+    }).ensure();
+
+    expect({
+      result,
+      executions,
+      claim: await readFile(claimPath, 'utf8'),
+      lockEntries: await readdir(lockPath),
+    }).toEqual({
+      result: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to acquire full-suite verification lock within 0ms',
+      },
+      executions: 0,
+      claim: existingClaim,
+      lockEntries: ['owner.json', 'recovery.json'],
+    });
+  });
+
+  it('executes exactly once when two verifiers contend over an orphaned lock', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-orphaned-lock-processes-'));
+    scratches.push(projectRoot);
+    await writeProjectFile(projectRoot, '.gitignore', '.pipeline/\n');
+    await writeProjectFile(
+      projectRoot,
+      '.ai-conductor/config.yml',
+      'test_suite:\n  command: node suite.mjs\n  timeout_seconds: 10\n',
+    );
+    await writeProjectFile(projectRoot, 'src/app.ts', 'export const value = 1;\n');
+    await writeProjectFile(
+      projectRoot,
+      'suite.mjs',
+      [
+        "import { mkdir, writeFile } from 'node:fs/promises';",
+        "import { setTimeout as delay } from 'node:timers/promises';",
+        "await mkdir('.pipeline/launches', { recursive: true });",
+        "await writeFile(`.pipeline/launches/${process.pid}`, 'launched');",
+        'await delay(250);',
+        "console.log('all suites passed');",
+        '',
+      ].join('\n'),
+    );
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: projectRoot });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: projectRoot });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: projectRoot });
+    await execa('git', ['add', '.'], { cwd: projectRoot });
+    await execa('git', ['commit', '-q', '-m', 'fixture'], { cwd: projectRoot });
+    await writeProjectFile(
+      projectRoot,
+      '.pipeline/test-suite.lock/owner.json',
+      JSON.stringify({
+        version: 1,
+        pid: 2_147_483_647,
+        token: 'orphaned-owner',
+        acquiredAt: '2026-09-07T11:00:00.000Z',
+      }),
+    );
+
+    const resultPaths = [
+      join(projectRoot, '.pipeline/orphaned-caller-1.json'),
+      join(projectRoot, '.pipeline/orphaned-caller-2.json'),
+    ];
+    const invoke = (resultPath: string) => execa(
+      process.execPath,
+      [
+        '--import',
+        TSX_LOADER,
+        CONCURRENT_ENSURE_FIXTURE,
+        projectRoot,
+        resultPath,
+      ],
+      { cwd: CONDUCTOR_ROOT },
+    );
+    await Promise.all(resultPaths.map(invoke));
+    const results = await Promise.all(resultPaths.map(async (path) =>
+      JSON.parse(await readFile(path, 'utf8')) as { status: string }));
+    const launches = await readdir(join(projectRoot, '.pipeline/launches'));
+
+    expect({
+      statuses: results.map(({ status }) => status).sort(),
+      launches: launches.length,
+      persisted: await readFullSuiteEvidence(projectRoot),
+    }).toMatchObject({
+      statuses: ['EXECUTED', 'REUSED'],
+      launches: 1,
+      persisted: { usable: true, evidence: { outcome: 'PASS' } },
+    });
+  }, 20_000);
+
   it('recovers a provably dead owner but refuses a live verification lock', async () => {
     const makeLockedProject = async (pid: number, token: string) => {
       const projectRoot = await makeConfiguredProject('full-suite-verifier-lock-');
