@@ -59,6 +59,7 @@ describe('renderDaemonEvent: persisted BUILD member settlement', () => {
 describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', () => {
   beforeEach(() => {
     chalk.level = 0;
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-09-08T12:00:00.000Z'));
   });
 
   it('renders build_progress with step, N/total, current task, and feature slug', () => {
@@ -77,6 +78,42 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
     expect(line).toContain('21/21');
     expect(line).toContain('Wire watcher into conductor');
     expect(line).toContain('emit-intra-step-build-progress-and-stall-as-events');
+  });
+
+  it.each([
+    [7, 'last commit 7m ago'],
+    [9, 'last commit 9m ago'],
+  ])('renders a %im old commit against the render clock', (minutes, expectedAge) => {
+    const [line] = lines({
+      type: 'build_progress',
+      step: 'build',
+      resolved: 20,
+      total: 21,
+      currentTaskId: '21',
+      featureSlug: 'surface-commit-recency',
+      lastCommitAt: Date.now() - minutes * 60_000,
+    });
+
+    expect(line).toContain('21/21');
+    expect(line).toContain('surface-commit-recency');
+    expect(line).toContain(expectedAge);
+  });
+
+  it('omits the commit fragment from build_progress when no commit time is available', () => {
+    const [line] = lines({
+      type: 'build_progress',
+      step: 'build',
+      resolved: 20,
+      total: 21,
+      currentTaskId: '21',
+      currentTaskName: 'Name commit age',
+      featureSlug: 'surface-commit-recency',
+    });
+
+    expect(line).toContain('21/21');
+    expect(line).toContain('Name commit age');
+    expect(line).toContain('surface-commit-recency');
+    expect(line).not.toContain('last commit');
   });
 
   it('renders a minimal build_progress event (no currentTaskName/featureSlug) without throwing', () => {
@@ -156,6 +193,37 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
     });
     expect(line).toContain('1/18');
     expect(line).not.toContain('0/18');
+  });
+
+  it('renders the commit age beside the counter on a quiet build warning', () => {
+    const [line] = lines({
+      type: 'build_no_progress',
+      step: 'build',
+      quietMinutes: 15,
+      resolved: 20,
+      total: 21,
+      currentTaskId: '21',
+      lastCommitAt: Date.now() - 7 * 60_000,
+    });
+
+    expect(line).toContain('quiet 15m (21/21)');
+    expect(line).toContain('last commit 7m ago');
+  });
+
+  it('omits the commit fragment from a quiet build warning when no commit time is available', () => {
+    const [line] = lines({
+      type: 'build_no_progress',
+      step: 'build',
+      quietMinutes: 15,
+      resolved: 20,
+      total: 21,
+      currentTaskId: '21',
+      featureSlug: 'surface-commit-recency',
+    });
+
+    expect(line).toContain('quiet 15m (21/21)');
+    expect(line).toContain('surface-commit-recency');
+    expect(line).not.toContain('last commit');
   });
 
   it('marks build_no_progress with a distinct warning glyph under color', () => {

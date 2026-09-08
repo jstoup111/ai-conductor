@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import { access, mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { formatRetryReason, formatProgressDelta, displayBuildPosition } from './engine/format-retry-line.js';
+import { formatRetryReason, formatProgressDelta, displayBuildPosition, formatCommitAge } from './engine/format-retry-line.js';
 import {
   formatDiagnosticDuration,
   formatFeatureUsageTotal,
@@ -3038,7 +3038,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
           : '';
       const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
       const position = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId || event.currentTaskName));
-      log(`${dot} ${chalk.cyan('▶')} ${event.step} ${position}/${event.total}${task}${slug}`);
+      const commitAge = formatCommitAge(event.lastCommitAt, Date.now());
+      const commit = commitAge ? ` · last commit ${commitAge}` : '';
+      log(`${dot} ${chalk.cyan('▶')} ${event.step} ${position}/${event.total}${task}${slug}${commit}`);
       break;
     }
     case 'unattributed_progress': {
@@ -3054,8 +3056,10 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // the plain build_progress heartbeat above during a quiet episode.
       const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
       const position = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId));
+      const commitAge = formatCommitAge(event.lastCommitAt, Date.now());
+      const commit = commitAge ? ` · last commit ${commitAge}` : '';
       log(
-        `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} quiet ${event.quietMinutes}m (${position}/${event.total})`)}${slug}`,
+        `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} quiet ${event.quietMinutes}m (${position}/${event.total})${commit}`)}${slug}`,
       );
       break;
     }
