@@ -4,6 +4,12 @@ spec_hash: 05f0f12fcafe8103e218961429accf132633f5de8d07b19d188ebb0657b015e7
 pr: https://github.com/jstoup111/ai-conductor/pull/2463
 shipped: 2026-09-08
 engine_version: 20260907T120758Z-4f8bdec36946
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/acceptance/daemon-e2e-live-agent-tier.acceptance.test.ts:113,128 — commit fc236f701 renames the live-provider E2E acceptance case and replaces `not.toMatch(/exit 0/)` with two positive assertions about `.github/workflows/live-daemon-e2e.yml`; that file is named by no plan task and the workflow itself is unchanged in this range"
+    accepted: false
 ---
 
 ## Cost
