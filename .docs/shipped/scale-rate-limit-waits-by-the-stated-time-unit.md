@@ -4,6 +4,12 @@ spec_hash: 5e8bd8fec042f3af32bd99c4c50d43d7816194bced84ffaef56e31cd67708855
 pr: https://github.com/jstoup111/ai-conductor/pull/2456
 shipped: 2026-09-08
 engine_version: 20260907T120758Z-4f8bdec36946
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: ".github/workflows/live-daemon-e2e.yml:155-161 — commit 72c4bb447 `fix(ci): preserve live-provider gate success` restructures the live-provider gate's success branch from `exit 0` inside the `if` plus a trailing `exit 1` into an `if/else`; no plan task declares a `.github/` file and the change carries no `Scope:` trailer"
+    accepted: false
 ---
 
 ## Cost
