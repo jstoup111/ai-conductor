@@ -675,15 +675,6 @@ async function writeKickbackLedgerUnsafe(
   }
 }
 
-/** Write the ledger atomically while holding its feature-local mutation lease. */
-async function writeKickbackLedger(
-  projectRoot: string,
-  ledger: KickbackLedger,
-): Promise<void> {
-  requireReadableLedger(ledger);
-  await withKickbackLedgerLease(projectRoot, () => writeKickbackLedgerUnsafe(projectRoot, ledger));
-}
-
 /** Remove the ledger when a genuinely fresh feature session begins. */
 export async function clearKickbackLedger(projectRoot: string): Promise<void> {
   await withKickbackLedgerLease(projectRoot, async () => {
@@ -1057,7 +1048,7 @@ export async function bumpSuiteInfrastructureRetriesInLedger(
  *
  * adr-2026-08-29 D4 requires every ledger read-modify-write path to share the
  * bounded feature-local lease. Reading with `readKickbackLedger` and writing
- * with `writeKickbackLedger` takes the lease only for the write half, so a
+ * with a write-only leased wrapper takes the lease only for the write half, so a
  * concurrent operator adjustment landing in between is silently overwritten.
  * Callers that derive their next ledger from its current contents use this.
  *
@@ -1163,7 +1154,7 @@ export async function stageKickbackBudgetAdjustment(
     const entry = ledger.gates[gate];
     if (!entry) throw new Error('current cap evidence is missing or no longer matches the live halt');
     const adjustment = createAdjustment(entry);
-    if (!entry?.capEvidence || entry.capEvidence.haltGeneration !== adjustment.haltGeneration) {
+    if (!capEvidenceAgreesWithAdjustment(entry, gate, adjustment, undefined)) {
       throw new Error('current cap evidence is missing or no longer matches the live halt');
     }
     if (entry.pendingAdjustment && entry.pendingAdjustment.id !== adjustment.id) {
@@ -1206,7 +1197,7 @@ export async function applyKickbackBudgetAdjustment(
     const ledger = await readKickbackLedger(projectRoot);
     requireReadableGate(ledger, gate);
     const entry = ledger.gates[gate];
-    if (!entry?.capEvidence || entry.capEvidence.haltGeneration !== adjustment.haltGeneration) {
+    if (!entry || !capEvidenceAgreesWithAdjustment(entry, gate, adjustment, defaultLimit)) {
       throw new Error('current cap evidence is missing or no longer matches the live halt');
     }
     const alreadyApplied = entry.adjustments?.find((item) => item.id === adjustment.id);
@@ -1230,4 +1221,31 @@ export async function applyKickbackBudgetAdjustment(
     await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, gates: { ...ledger.gates, [gate]: next } });
     return next;
   });
+}
+
+/**
+ * D2's cap evidence is a snapshot of the exact budget the operator is
+ * authorizing.  Generation alone binds it to a halt, but cannot prove that a
+ * later gate update did not make its gate, count, or limit stale.  Both stage
+ * and apply use this one comparison so their lease-time eligibility cannot
+ * drift apart.
+ */
+function capEvidenceAgreesWithAdjustment(
+  entry: KickbackGateEntry,
+  gate: string,
+  adjustment: KickbackBudgetAdjustment,
+  defaultLimit: number | undefined,
+): boolean {
+  const evidence = entry.capEvidence;
+  if (!evidence || evidence.haltGeneration !== adjustment.haltGeneration || evidence.gate !== gate) return false;
+  const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
+  const currentConsumed = remediation ? (entry.laps ?? 0) : entry.cumulative;
+  const currentLimit = remediation
+    ? (entry.effectiveLapCap ?? defaultLimit ?? adjustment.beforeLimit)
+    : (entry.effectiveLimit ?? defaultLimit ?? adjustment.beforeLimit);
+  // Staging supplies adjustment values from this same entry. At apply, the
+  // values also reject a tampered/replayed authorization.
+  return currentLimit !== undefined &&
+    evidence.consumed === currentConsumed && evidence.limit === currentLimit &&
+    adjustment.beforeConsumed === currentConsumed && adjustment.beforeLimit === currentLimit;
 }

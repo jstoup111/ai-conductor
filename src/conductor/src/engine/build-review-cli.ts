@@ -10,7 +10,7 @@ import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { resolveCliFeatureWorktree } from './cli-operator-authority.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
-import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, readKickbackLedger, type KickbackGateEntry } from './kickback-ledger.js';
+import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, isUnreadableKickbackGate, readKickbackLedger, type KickbackGateEntry } from './kickback-ledger.js';
 import type { BuildReviewRubricId } from '../types/config.js';
 
 export interface BuildReviewFindingsCommand {
@@ -202,7 +202,13 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
       ? await deps.readKickbackGateEntry(worktree)
       : deps.readMechanicalFaults
         ? { mechanicalFaults: await deps.readMechanicalFaults(worktree) }
-        : (await readKickbackLedger(worktree)).gates.build_review;
+        : await (async () => {
+          const ledger = await readKickbackLedger(worktree);
+          if (isUnreadableKickbackGate(ledger, 'build_review')) {
+            throw new Error("kickback ledger gate 'build_review' is unreadable");
+          }
+          return ledger.gates.build_review;
+        })();
     const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records, reducedCoverage.records);
     if (!effective) throw new Error('current findings are invalid');
     const accepted = acceptedDispositions(aggregate, feature, effective, records);
@@ -378,8 +384,13 @@ export async function dispatchBuildReviewRecordReducedCoverage(
     }
     if (!feature) throw new Error('feature identity is unavailable');
     let stateRefusal: string | undefined;
-    const readMechanicalFaults = deps.readMechanicalFaults ?? (async (root: string) =>
-      (await readKickbackLedger(root)).gates.build_review?.mechanicalFaults);
+    const readMechanicalFaults = deps.readMechanicalFaults ?? (async (root: string) => {
+      const ledger = await readKickbackLedger(root);
+      if (isUnreadableKickbackGate(ledger, 'build_review')) {
+        throw new Error("kickback ledger gate 'build_review' is unreadable");
+      }
+      return ledger.gates.build_review?.mechanicalFaults;
+    });
     const appended = await (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree).appendReducedCoverageIfCurrent({
       feature,
       rubric,

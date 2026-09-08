@@ -33,6 +33,8 @@ import {
   readKickbackLedger,
   readSuiteInfrastructureRetries,
   refundBuildReviewKickback,
+  stageKickbackBudgetAdjustment,
+  applyKickbackBudgetAdjustment,
   type KickbackGateEntry,
   type KickbackLedger,
 } from '../../src/engine/kickback-ledger.js';
@@ -66,6 +68,32 @@ describe('kickback-ledger', () => {
 
   it('returns an empty ledger when the ledger file is absent', async () => {
     await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+  });
+
+  it.each([
+    ['gate', { gate: 'prd_audit' }],
+    ['consumed', { consumed: 4 }],
+    ['limit', { limit: 6 }],
+  ])('refuses a %s-mismatched cap snapshot at stage and apply without changing the ledger', async (_name, mismatch) => {
+    const adjustment = {
+      id: 'adjustment-1', kind: 'raise' as const, beforeConsumed: 5, afterConsumed: 5,
+      beforeLimit: 5, afterLimit: 6, operator: 'operator', rationale: 'review once more',
+      timestamp: '2026-09-08T00:00:00.000Z', haltGeneration: 'generation-1',
+    };
+    const ledger = {
+      version: 1 as const,
+      gates: {
+        build_review: {
+          count: 1, cumulative: 5, treeHash: null, lastReason: 'cap', priorVerdict: false, resolvedBefore: 0,
+          capEvidence: { gate: 'build_review', consumed: 5, limit: 5, latestReason: 'cap', haltGeneration: 'generation-1', ...mismatch },
+        },
+      },
+    };
+    await writeKickbackLedger(dir, ledger);
+    const before = await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf8');
+    await expect(stageKickbackBudgetAdjustment(dir, 'build_review', () => adjustment)).rejects.toThrow('current cap evidence');
+    await expect(applyKickbackBudgetAdjustment(dir, 'build_review', adjustment, 5)).rejects.toThrow('current cap evidence');
+    await expect(readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf8')).resolves.toBe(before);
   });
 
   describe('plan growth', () => {

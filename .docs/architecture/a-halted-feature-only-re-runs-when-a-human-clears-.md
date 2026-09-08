@@ -24,7 +24,7 @@ graph TD
 
   subgraph Marker["halt-marker (unchanged)"]
     WH["writeHaltMarker(root, body, class)"]
-    HALT["HALT + HALT.class<br/>needs-human, naming attempts spent"]
+    HALT["HALT + HALT.class<br/>needs-human (build_review) or kickback-cap (remediation)"]
   end
 
   subgraph Ledger["Kickback ledger (adr-2026-08-29 D1)"]
@@ -32,8 +32,8 @@ graph TD
   end
 
   subgraph CLI["Operator-only command family (D3)"]
-    RAISE["NEW: kickback-budget raise<br/>--feature «slug» --by N --rationale"]
-    RESET["NEW: kickback-budget reset<br/>--feature «slug» --rationale"]
+    RAISE["NEW: kickback-budget raise<br/>--feature «slug» --gate G --by N --rationale"]
+    RESET["NEW: kickback-budget reset<br/>--feature «slug» --gate G --rationale"]
     INSPECT["NEW: kickback-budget inspect<br/>one renderer (D8)"]
   end
 
