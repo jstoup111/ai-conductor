@@ -9,7 +9,11 @@ import { EventPersister } from '../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import type { ConductorEvent } from '../src/types/index.js';
 
-const gitProbe = vi.hoisted(() => ({ throws: false, commitTimeCalls: 0 }));
+const gitProbe = vi.hoisted(() => ({
+  throws: false,
+  commitTimeCalls: 0,
+  commitTimeFailure: undefined as undefined | 'throws' | 'non-zero' | 'unparseable',
+}));
 
 vi.mock('../src/engine/rebase.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../src/engine/rebase.js')>();
@@ -23,6 +27,15 @@ vi.mock('../src/engine/rebase.js', async (importOriginal) => {
         }
         if (args[0] === 'show' && args[1] === '-s' && args[2] === '--format=%ct') {
           gitProbe.commitTimeCalls += 1;
+          if (gitProbe.commitTimeFailure === 'throws') {
+            throw new Error('injected commit-time probe failure');
+          }
+          if (gitProbe.commitTimeFailure === 'non-zero') {
+            return { exitCode: 1, stdout: '', stderr: 'injected commit-time probe failure' };
+          }
+          if (gitProbe.commitTimeFailure === 'unparseable') {
+            return { exitCode: 0, stdout: 'not-a-timestamp', stderr: '' };
+          }
         }
         return git(args, opts);
       };
@@ -175,6 +188,7 @@ describe('BuildProgressWatcher change-driven emission', () => {
   afterEach(async () => {
     gitProbe.throws = false;
     gitProbe.commitTimeCalls = 0;
+    gitProbe.commitTimeFailure = undefined;
     vi.useRealTimers();
     await rm(dir, { recursive: true, force: true });
   });
@@ -393,6 +407,96 @@ describe('BuildProgressWatcher change-driven emission', () => {
       expect.objectContaining({ tickReason: 'heartbeat', lastCommitAt: headCommitAt }),
     ]);
     expect(gitProbe.commitTimeCalls).toBe(1);
+  });
+
+  it('keeps emitting task progress without a commit time when the project has no commits', async () => {
+    await writeTasks(5, 21);
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+
+    await tick(watcher);
+    watcher.stop();
+
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({ resolved: 5, total: 21, lastCommitAt: undefined }),
+    ]);
+  });
+
+  for (const failure of ['throws', 'non-zero', 'unparseable'] as const) {
+    it(`preserves the last commit time and emits when the commit-time probe ${failure}`, async () => {
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await writeTasks(5, 21);
+      await writeFile(join(dir, 'README.md'), 'initial');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+      const initialCommitAt = Number(
+        (await execa('git', ['show', '-s', '--format=%ct', 'HEAD'], { cwd: dir })).stdout,
+      ) * 1000;
+
+      const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+      await tick(watcher);
+      emitSpy.mockClear();
+
+      await writeFile(join(dir, 'README.md'), 'second');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'second commit'], { cwd: dir });
+      gitProbe.commitTimeFailure = failure;
+
+      await tick(watcher);
+      watcher.stop();
+
+      expect(buildProgressEvents()).toEqual([
+        expect.objectContaining({
+          tickReason: 'head-moved',
+          resolved: 5,
+          total: 21,
+          lastCommitAt: initialCommitAt,
+        }),
+      ]);
+    });
+  }
+
+  it('treats a commit with unchanged task rows as progress and re-arms the quiet episode', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeTasks(5, 21);
+    await writeFile(join(dir, 'README.md'), 'initial');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+
+    let clock = 0;
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      config: { build_progress: { quiet_minutes: 15 } },
+      now: () => clock,
+    });
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    clock += 16 * 60 * 1000;
+    await writeFile(join(dir, 'README.md'), 'second');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'second commit'], { cwd: dir });
+    const secondCommitAt = Number(
+      (await execa('git', ['show', '-s', '--format=%ct', 'HEAD'], { cwd: dir })).stdout,
+    ) * 1000;
+
+    await tick(watcher);
+    watcher.stop();
+
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({
+        tickReason: 'head-moved',
+        resolved: 5,
+        total: 21,
+        lastCommitAt: secondCommitAt,
+      }),
+    ]);
+    expect(emitSpy.mock.calls.map((call) => call[0]).filter((event) => event.type === 'build_no_progress')).toEqual([]);
   });
 
   it('keeps task-delta provenance when HEAD and the resolved count advance together', async () => {

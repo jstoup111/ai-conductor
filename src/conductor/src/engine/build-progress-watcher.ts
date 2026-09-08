@@ -329,12 +329,17 @@ export class BuildProgressWatcher {
 
     const previous = this.lastSnapshot;
     if (head && head !== this.lastCommitHead) {
-      const git = makeGitRunner(this.projectRoot);
-      const result = await git(['show', '-s', '--format=%ct', head]);
-      const commitSeconds = Number(result.stdout.trim());
-      if (result.exitCode === 0 && Number.isFinite(commitSeconds)) {
-        this.lastCommitHead = head;
-        this.lastCommitAt = commitSeconds * 1000;
+      try {
+        const git = makeGitRunner(this.projectRoot);
+        const result = await git(['show', '-s', '--format=%ct', head]);
+        const commitSeconds = Number(result.stdout.trim());
+        if (result.exitCode === 0 && Number.isFinite(commitSeconds)) {
+          this.lastCommitHead = head;
+          this.lastCommitAt = commitSeconds * 1000;
+        }
+      } catch {
+        // Commit time is display metadata: preserve the last observed value
+        // and continue to report the task/HEAD progress that this tick saw.
       }
     }
     // A failed probe is no observation, not evidence that HEAD changed. Keep
