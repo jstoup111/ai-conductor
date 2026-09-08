@@ -1,24 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-07T11:55:27.898Z
+Status: halted
 Slug: summarize-the-decide-artifacts-in-the-spec-land-co
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-summarize-the-decide-artifacts-in-the-spec-land-co
-Head SHA: c23804285f4723c353450241983130c156a7f23d
-Halted at: 2026-09-07T07:45:54.086Z
+Head SHA: 8714de5902e34fd21423f3332db7f3cba9191c14
+Halted at: 2026-09-08T13:18:19.317Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-2 (Story 2 negative path)
-
-Blocking findings:
-AB-1 (REMEDIABLE; Task 2): Copied `Task: <id>` summary lines with trailing horizontal whitespace survive the filter and become false task-routing evidence after Git message cleanup.
-AB-2 (DESIGN; Story 2 negative path): The sealed bare-subject outcome for empty/unparseable plan and stories conflicts with the approved approach's always-derivable track section; current production behavior chooses the track section without an approved precedence decision.
+Validation group "prd_audit" halted: needs human DECIDE — As-built review remediation cannot resolve governing clause(s): AB-1: adr-2026-08-04-decide-owned-amendment-of-accepted-artifacts decision 1. A REMEDIABLE row cites exactly one clause: an APPROVED ADR filename stem plus its decision number, or one task id from this feature's plan.
 ```
