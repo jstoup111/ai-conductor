@@ -209,7 +209,7 @@ it('resolves the grant to the main checkout .daemon store, never the worktree', 
 
 it('derives the same grant store path from a main root and feature slug', () => {
   expect(grantStorePath('/repo', 'my-feature')).toBe(
-    resolveGrantPath('/repo/.worktrees/my-feature'),
+    join('/repo', '.daemon', 'grants', 'my-feature.json'),
   );
 });
 
