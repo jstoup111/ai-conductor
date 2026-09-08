@@ -3,6 +3,8 @@ import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { EXTRA_MODEL_TABLE_ROWS } from '../../src/engine/model-table-metadata.js';
+import { buildExtraRows } from '../../src/tools/generate-model-table.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Generated ARCHITECTURE.md Model-Selection Table"
@@ -53,6 +55,10 @@ const MARKED_FIXTURE =
   PROSE_AFTER;
 
 const NO_MARKER_FIXTURE = PROSE_BEFORE + 'No generated-table markers anywhere in this doc.\n' + PROSE_AFTER;
+
+function renderRow(row: ReturnType<typeof buildExtraRows>[number]): string {
+  return `| ${row.name} | ${row.executionPath} | ${row.claudeModel} | ${row.claudeEffort} | ${row.codexModel} | ${row.codexEffort} | ${row.why} |`;
+}
 
 let dir: string;
 
@@ -269,4 +275,38 @@ describe('public CLI provider-labelled contract drift', () => {
     },
     30_000,
   );
+});
+
+describe('public CLI evaluator-row drift', () => {
+  it('rejects a hand-edited evaluator row rendered from mutated metadata', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'generate-model-table-evaluator-drift-'));
+    const file = join(dir, 'HARNESS.md');
+    const evaluator = EXTRA_MODEL_TABLE_ROWS.find((row) => row.name === 'evaluator');
+    expect(evaluator).toBeDefined();
+
+    const mutatedMetadata = EXTRA_MODEL_TABLE_ROWS.map((row) =>
+      row.name === 'evaluator'
+        ? { ...row, why: `${row.why} Hand-edited evaluator drift.` }
+        : row,
+    );
+    const renderedRows = buildExtraRows(EXTRA_MODEL_TABLE_ROWS);
+    const mutatedRows = buildExtraRows(mutatedMetadata);
+    const renderedEvaluator = renderedRows.find((row) => row.name === 'evaluator');
+    const mutatedEvaluator = mutatedRows.find((row) => row.name === 'evaluator');
+    expect(renderedEvaluator).toBeDefined();
+    expect(mutatedEvaluator).toBeDefined();
+
+    const committed = await readFile(join(harnessRoot, 'HARNESS.md'), 'utf8');
+    const originalRow = renderRow(renderedEvaluator!);
+    const handEditedRow = renderRow(mutatedEvaluator!);
+    expect(committed).toContain(originalRow);
+    await writeFile(file, committed.replace(originalRow, handEditedRow), 'utf8');
+
+    const result = await runCli({ harnessMdPath: file, mode: 'check' });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toContain('evaluator');
+    expect(result.message).toContain(`-${handEditedRow}`);
+    expect(result.message).toContain(`+${originalRow}`);
+  });
 });
