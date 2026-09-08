@@ -792,12 +792,12 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     // rubric events stay durable; externally-owned disposition events do not
     // re-enter events.jsonl when the closeout tail re-emits them.
     const buildReviewSinkExpectations = {
-      build_review_rubric_started: { render: false, persist: true, audit: false, otel: false },
-      build_review_rubric_result: { render: false, persist: true, audit: false, otel: false },
-      build_review_rubric_skipped: { render: false, persist: true, audit: false, otel: false },
-      build_review_cache_hit: { render: false, persist: true, audit: false, otel: false },
+      build_review_rubric_started: { render: true, persist: true, audit: false, otel: false },
+      build_review_rubric_result: { render: true, persist: true, audit: false, otel: false },
+      build_review_rubric_skipped: { render: true, persist: true, audit: false, otel: false },
+      build_review_cache_hit: { render: true, persist: true, audit: false, otel: false },
       build_review_scope_summary: { render: false, persist: true, audit: false, otel: false },
-      build_review_rubric_infrastructure_failure: { render: false, persist: true, audit: false, otel: false },
+      build_review_rubric_infrastructure_failure: { render: true, persist: true, audit: false, otel: false },
       build_review_scope_incomplete: { render: true, persist: true, audit: false, otel: false },
       build_review_mechanical_allowance_exhausted: { render: false, persist: true, audit: false, otel: false },
       build_review_disposition_accepted: { render: false, persist: false, audit: false, otel: false },

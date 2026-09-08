@@ -190,6 +190,11 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'build_review_cache_discarded',
+  'build_review_rubric_started',
+  'build_review_rubric_result',
+  'build_review_rubric_skipped',
+  'build_review_cache_hit',
+  'build_review_rubric_infrastructure_failure',
   'build_review_outer_verdict',
   'remediation_adjudication_completed',
   'operator_rewind',
