@@ -1209,7 +1209,7 @@ bare retry.
 
 1. Record the decision — this requires an interactive terminal and a resolvable local operator
    identity; it derives the closed infrastructure cause itself, so it refuses if the rubric is
-   not currently an exhausted infrastructure failure (already judged, unknown rubric, allowance
+   not currently an exhausted infrastructure failure or `scope-incomplete` outcome (already judged, unknown rubric, allowance
    not actually exhausted, a duplicate reduced-coverage record, or the lap/review has since gone
    stale):
    ```bash
