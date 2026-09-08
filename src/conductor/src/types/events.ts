@@ -11,6 +11,7 @@ import type {
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
 import type { SchedulingUnitRef } from './scheduling-unit.js';
+import type { LandGateRejectionIdentifier } from '../engine/engineer/land-spec.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
@@ -233,6 +234,14 @@ export type ConductorEvent =
       active: { state: 'exact' | 'partial' | 'unavailable'; activeMs?: number };
     }
   | { type: 'intake_inbound_sanitized'; sourceRef: string; neutralizations: import('../engine/engineer/intake/sanitize-inbound.js').InboundNeutralization[]; digest: string }
+  | {
+      type: 'land_gate_rejected';
+      gate: LandGateRejectionIdentifier;
+      reason: string;
+      project: string;
+      worktreePath: string;
+      sourceRef?: string;
+    }
   | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
   | {
       type: 'setup_repair';

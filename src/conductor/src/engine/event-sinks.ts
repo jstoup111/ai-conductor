@@ -19,6 +19,7 @@ export const EVENT_SINKS = {
   // path carries this occurrence to a live renderer. Persist-only keeps this
   // registry a description of production rather than an aspiration.
   intake_inbound_sanitized: { render: false, persist: true, audit: false, otel: false },
+  land_gate_rejected: { render: false, persist: true, audit: false, otel: false },
   operator_rewind: { render: true, persist: true, audit: true, otel: false },
   setup_repair: { render: true, persist: true, audit: false, otel: false },
   project_setup: { render: true, persist: true, audit: false, otel: false },
