@@ -1,6 +1,6 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { renderReport, ReportError, parseEvents, aggregateHalts, aggregateKickbacks, summarizeKickbacks } from '../../src/engine/report-renderer.js';
@@ -16,6 +16,27 @@ function makeEvent(event: Record<string, unknown>, ts: string): string {
 
 function makeLines(events: Array<{ event: Record<string, unknown>; ts: string }>): string {
   return events.map((e) => makeEvent(e.event, e.ts)).join('\n') + '\n';
+}
+
+/** Capture a feature tree's complete recursive listing and exact file bytes. */
+async function snapshotTree(directory: string, relativePath = ''): Promise<Array<{
+  path: string;
+  kind: 'directory' | 'file';
+  bytes?: Buffer;
+}>> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const snapshot: Array<{ path: string; kind: 'directory' | 'file'; bytes?: Buffer }> = [];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    const path = join(relativePath, entry.name);
+    const fullPath = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      snapshot.push({ path, kind: 'directory' });
+      snapshot.push(...await snapshotTree(fullPath, path));
+    } else {
+      snapshot.push({ path, kind: 'file', bytes: await readFile(fullPath) });
+    }
+  }
+  return snapshot;
 }
 
 describe('report-renderer', () => {
@@ -119,6 +140,28 @@ describe('report-renderer', () => {
     expect(report).toMatch(/BUILD re-entries:\s*1[\s\S]*build_review\s+build\s+1[\s\S]*finish\s+manual_test\s+1/);
   });
 
+  it('reads production-persisted kickbacks from distinct source gates without writing the feature directory', async () => {
+    const featureDir = join(tempDir, 'production-ledger');
+    const ledgerPath = join(featureDir, '.pipeline', 'events.jsonl');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(ledgerPath, events);
+    persister.start();
+    try {
+      await events.emit({ type: 'kickback', from: 'build_review', to: 'build', count: 1 });
+      await events.emit({ type: 'kickback', from: 'manual_test', to: 'build', count: 1 });
+      await events.emit({ type: 'kickback', from: 'manual_test', to: 'build', count: 2 });
+    } finally {
+      persister.stop();
+    }
+
+    const beforeRender = await snapshotTree(featureDir);
+    const report = renderReport(ledgerPath);
+    const afterRender = await snapshotTree(featureDir);
+
+    expect(report).toMatch(/manual_test\s+build\s+2[\s\S]*build_review\s+build\s+1/);
+    expect(afterRender).toEqual(beforeRender);
+  });
+
   it('renders kickback pairs in deterministic count, source, and target order', async () => {
     const records = [
       { event: { type: 'kickback', from: 'manual_test', to: 'build' }, ts: '2026-01-01T00:00:00.000Z' },
@@ -166,7 +209,7 @@ describe('report-renderer', () => {
     });
   });
 
-  it('ignores persisted kickback lines in timing and cost rollups', async () => {
+  it('keeps timing and cost rollups isolated while the report now reports persisted kickbacks', async () => {
     const baselineDir = join(tempDir, 'baseline');
     const kickbackDir = join(tempDir, 'with-kickback');
     const baseline = makeLines([
@@ -192,6 +235,9 @@ describe('report-renderer', () => {
     ];
 
     expect(kickbackResults).toEqual(baselineResults);
+    expect(renderReport(join(kickbackDir, '.pipeline', 'events.jsonl'))).toMatch(
+      /## Kickbacks[\s\S]*build_review\s+build\s+1/,
+    );
   });
 
   it('aggregates loop_halt records persisted through the event sink', async () => {
