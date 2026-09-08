@@ -410,6 +410,21 @@ export async function changedPathsBetween(
     .filter((l) => l.length > 0);
 }
 
+/**
+ * The paths contributed by a branch since it diverged from a base ref. A
+ * missing merge base is distinguishable from a successful, empty comparison.
+ */
+export async function changedPathsSinceMergeBase(
+  git: GitRunner,
+  baseRef: string,
+  branchRef: string,
+): Promise<string[] | null> {
+  const mergeBase = await git(['merge-base', baseRef, branchRef]);
+  const fromRef = mergeBase.stdout.trim();
+  if (mergeBase.exitCode !== 0 || !fromRef) return null;
+  return changedPathsBetween(git, fromRef, branchRef);
+}
+
 // ── Conflict inspection ──────────────────────────────────────────────────────
 
 /** Files git reports as unmerged (conflicted) during a paused rebase. */
