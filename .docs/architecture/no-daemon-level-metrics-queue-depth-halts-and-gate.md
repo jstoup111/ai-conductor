@@ -1,6 +1,6 @@
 # Components: Daemon-owned meter and daemon-level metrics
 
-**Last updated:** 2026-09-06
+**Last updated:** 2026-09-08
 **Scope:** Where metrics are recorded after #1937 — one long-lived `MeterProvider` and
 `MetricsRecorder` owned by the daemon process, shared by every per-dispatch OTel visualizer
 (which keeps owning spans), plus the daemon-scoped listener that turns backlog snapshots,
@@ -66,9 +66,12 @@ graph TD
 - **Forwarding** — every per-feature event is already re-emitted onto the daemon bus by the
   existing forwarding emitter; the copy is now tagged with its feature slug. Forwarded events are
   not re-persisted; the per-feature `events.jsonl` remains their ledger.
-- **Identity** — `service.instance.id = «project»/«worker»`; `worker` defaults to hostname and is
+- **Metric identity** — `service.instance.id = «project»/«worker»`; trace identity remains unchanged. `worker` defaults to hostname and is
   overridable by `otel.worker_name`. Backlog gauges report the same value from every worker of a
-  project (query with `max by (project)`); slots/inflight are per-worker (`sum`).
+  project (query with `max by (project)`); slots are per-worker (`sum`), while
+  `daemon.inflight` is the one feature-scoped daemon instrument and carries `feature`.
+- **Backlog age** — durable per-slug state-entry records retain their timestamp while state is
+  unchanged and replace it when the feature moves state; age never means first-ever discovery age.
 - **Interactive path** — no daemon; the visualizer (spans) and a `MetricsListener` with an
   interactive-owned meter attach to the run bus, so the recording code path is the same one and
   the exported instrument set is byte-identical to today.
@@ -82,3 +85,4 @@ graph TD
 | 2026-09-06 | Initial generation | DECIDE for #1937 (daemon-level metrics) |
 | 2026-09-06 | Added daemon EventPersister node | Plan update (architecture-review condition C6) |
 | 2026-09-06 | Listener records every metric; visualizer spans-only | Operator-directed revision for remote/ephemeral workers |
+| 2026-09-08 | Preserve trace identity; classify inflight as feature-scoped; measure state residence | Operator resolution of as-built AB-6, AB-7, AB-10 |

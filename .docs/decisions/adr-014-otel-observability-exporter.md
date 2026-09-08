@@ -307,6 +307,18 @@ Relevant existing facts (evidence):
 >    stay within Decision 4: bounded in-memory work, no I/O; the snapshot's counts are computed by
 >    the discovery pass that already ran, before the event is emitted.
 
+> **Amended 2026-09-08 by #1937 (as-built decisions AB-6, AB-7, AB-10):** “traces are
+> unaffected” in Decision 7 is literal: the trace Resource, including its existing
+> `service.instance.id`, remains byte-identical to the pre-feature trace Resource. Decision 8's
+> prohibition on `feature` for daemon-level instruments does not apply to
+> `conductor.daemon.inflight`: despite its daemon namespace, each point describes one in-flight
+> feature and is therefore feature-scoped, as Decision 9 and Story 3 require. All other
+> `conductor.daemon.*` instruments remain feature-free. Backlog age measures residence in the
+> reported state, not time since first-ever discovery: durable per-slug state records the current
+> state and the time that state was entered, preserves that timestamp while the state is unchanged,
+> and replaces it on a state transition. This keeps oldest eligible/waiting/blocked/gated/parked age
+> truthful when a feature moves between states.
+
 ## Consequences
 
 **Positive**

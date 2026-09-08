@@ -683,6 +683,19 @@ Independent starts: Tasks 1, 3, 9. Task 8 (monotonic counters) needs the full re
 - [ ] Dependencies are explicit and acyclic
 - [ ] No terminal catch-all validation task
 
+## Amendment 2026-09-08 — as-built identity, inflight scope, and backlog state age
+
+The operator resolved as-built DESIGN findings AB-6, AB-7, and AB-10 as follows. Task 4 must leave
+the trace Resource byte-identical to its pre-feature shape, including the existing trace
+`service.instance.id`; only the metric Resource is re-keyed to project/worker. Task 5 treats
+`conductor.daemon.inflight` as the sole feature-scoped `conductor.daemon.*` instrument and attaches
+the in-flight slug as `feature`; every other daemon instrument remains feature-free. Task 10 replaces
+the immutable first-ever-discovery marker with durable per-slug `{ state, enteredAt }` state: repeat
+discovery in the same state preserves `enteredAt`, while a transition replaces it, and oldest age is
+computed from residence in each current state. The component and sequence diagrams and Stories 2–3
+carry the same corrected contracts. Existing tests are amended or extended in their owning tasks;
+no new telemetry channel or provider-specific path is introduced.
+
 ### Task rem-prd-audit-rem-flush-1: src/conductor/src/engine/otel/wire.ts:66-88 — return an additional `flush()` alongside `stop()` from wireDaemonOtel that awaits meterProvider.forceFlush() WITHOUT calling shutdown(), and call it from the per-dispatch teardown in src/conductor/src/daemon-cli.ts:1161-1167 (where the dispatch visualizer and feature persister are stopped) so a stopping dispatch flushes its final points while the shared daemon meter stays alive for other in-flight features; leave the shutdown path at wire.ts:85-87 and daemon-cli.ts:2452-2454 byte-identical so Task 7's 'forceFlush() and shutdown() exactly once each on daemon shutdown' assertion still passes, and add a test asserting flush() calls forceFlush once and shutdown zero times and that a second feature still exports conductor.step.duration afterwards
 **Gate:** prd-audit
 **Rationale:** The daemon MeterProvider is force-flushed only inside stop() at src/conductor/src/engine/otel/wire.ts:85-87, reached only from daemon shutdown at src/conductor/src/daemon-cli.ts:2452-2454, while per-dispatch teardown at src/conductor/src/daemon-cli.ts:1161-1167 stops the spans-only visualizer and the feature persister and never touches the daemon meter, so a stopping dispatch's final points can be lost if the daemon dies before the next periodic export. The approved architecture already decides this behavior (the feature sequence diagram requires flush-without-shutdown at feature stop, and the sealed Story 1 negative criterion states it), so no architectural decision is open and this is conforming implementation drift, not architectural-clarity. It is the one gap no existing plan task's Done when admits: task 6's clauses cover only that a metrics:false visualizer constructs no MeterProvider and that spans still flush, and task 7's only flush clause is 'daemon shutdown ... forceFlush() and shutdown() exactly once each' — neither admits a per-dispatch flush seam — so this routes to build with one appended task rather than existing-task. Sibling sweep: the interactive wiring at wire.ts:91-124 owns its own meter for a single run and shuts it down once via the idempotent stopped guard at wire.ts:123, so it has no analogous mid-life flush seam and is deliberately excluded. No assertion is removed: the task explicitly preserves task 7's shutdown-path flush/shutdown counts and the existing span-flush tests.
