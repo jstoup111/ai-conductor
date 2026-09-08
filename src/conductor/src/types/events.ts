@@ -594,7 +594,7 @@ export type ConductorEvent =
       step: StepName;
       attempt: number;
       decision: 'rerun' | 'route';
-      signal?: 'named-route' | 'identical-repeat' | 'unretryable-inputs' | 'stale-run-identity';
+      signal?: 'named-route' | 'identical-repeat' | 'unretryable-inputs' | 'stale-run-identity' | 'terminal-refusal';
       unchangedInput?: string;
     }
   | { type: 'checkpoint_reached'; step: StepName }
