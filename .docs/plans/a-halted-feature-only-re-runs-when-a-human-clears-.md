@@ -374,6 +374,8 @@ Bounded retries where retry is safe (validation-group member budget, a suite-inf
 **Story:** 7
 **Type:** happy-path
 
+> **Amended 2026-09-08 by #2190:** Task 17's `halt_cleared` evidence requirement is satisfied by routing the occurrence through its declared feature audit consumer. It does not authorize deriving `TerminalSubscriber`'s interactive event list from `EVENT_SINKS.render`; that registry governs daemon rendering, while the terminal subscriber retains its intentionally explicit list. This correction records the operator's refusal of NC.3 after remediation language incorrectly treated the audit sink and UI subscriber as counterpart lists.
+
 **Steps:**
 1. Write failing tests in the daemon-rekick suite for `consumeResumeAuthorizations`: a halted worktree with a valid unconsumed authorization matching `capEvidence.haltGeneration` and no park is cleared (marker, class sidecar, presentation) via the existing clear path, the authorization is marked consumed under the lease, a `halt_cleared` event with cause `kickback-budget` is emitted, and the REKICK sentinel exists; a stale generation, an operator park, a `partial` presentation clear, and an unreadable ledger each retain the halt, leave the authorization unconsumed, and dispatch nothing. Wire it in `daemon-cli.ts` beside the rekick sweep binding and prove per-iteration invocation in the wiring suite.
 2. Verify RED.

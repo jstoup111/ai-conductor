@@ -1,7 +1,6 @@
 import type { ConductorEvent } from '../types/index.js';
 import { ConductorEventEmitter, type EventHandler } from './events.js';
 import { isForwardedFromFeature } from '../engine/event-persister.js';
-import { renderedEventTypes } from '../engine/event-sinks.js';
 import type { UIRenderer, UISubscriber, UIEventHandler } from './types.js';
 
 export type { UISubscriber, UIEventHandler } from './types.js';
@@ -26,7 +25,7 @@ export class TerminalSubscriber implements UISubscriber {
     // Dashboard renders are event-driven. No periodic refresh — the sticky
     // live region is updated when conductor state changes. A polling refresh
     // would accumulate stale frames in the scrollback.
-    const eventTypes: ConductorEvent['type'][] = [...new Set<ConductorEvent['type']>([
+    const eventTypes: ConductorEvent['type'][] = [
       'step_started',
       'step_completed',
       'step_failed',
@@ -55,8 +54,7 @@ export class TerminalSubscriber implements UISubscriber {
       'renderer_error',
       'pipeline_tail_diagnostic',
       'gate_verdict',
-      ...renderedEventTypes(),
-    ])];
+    ];
 
     for (const type of eventTypes) {
       const handler: EventHandler = async (event) => {
