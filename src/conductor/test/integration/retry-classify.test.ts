@@ -1,3 +1,4 @@
+// Covers: task:6
 /**
  * Acceptance specs for the rerun-vs-route retry classifier (#646).
  *
@@ -39,6 +40,8 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { StepName } from '../../src/types/index.js';
 
 // ── shared fixtures ───────────────────────────────────────────────────────
@@ -134,14 +137,14 @@ describe('integration/retry-classify (#646)', () => {
 
   function collect() {
     const retryDecisions: Array<Record<string, unknown>> = [];
-    const stepRetries: Array<{ step: string; attempt: number }> = [];
+    const stepRetries: Array<{ step: string; attempt: number; reason: string }> = [];
     const kickbacks: Array<{ from: string; to: string }> = [];
     let halted = false;
     events.on('retry_decision' as never, ((e: Record<string, unknown>) => {
       retryDecisions.push(e);
     }) as never);
     events.on('step_retry', (e) => {
-      if (e.type === 'step_retry') stepRetries.push({ step: e.step, attempt: e.attempt });
+      if (e.type === 'step_retry') stepRetries.push({ step: e.step, attempt: e.attempt, reason: e.reason });
     });
     events.on('kickback', (e) => {
       if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
@@ -151,6 +154,90 @@ describe('integration/retry-classify (#646)', () => {
     });
     return { retryDecisions, stepRetries, kickbacks, halted: () => halted };
   }
+
+  // ── Task 6: refusal output preserves the operator diagnostic ───────────
+
+  it('Task 6: a does-not-assert coverage-binding refusal carries its reason as output', async () => {
+    const featureDesc = 'coverage-binding-refusal-output';
+    const planPath = join(dir, 'plan.md');
+    const refusalProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: async () => ({
+        success: true,
+        output: '{"verdict":"does-not-assert","missingAssertion":"No check requires the record."}',
+        exitCode: 0,
+      }),
+    };
+    await mkdir(join(dir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(planPath, '### Task 1: Bind the claim\n**Done when:**\n- The service writes an audit record.\n');
+    await writeFile(
+      join(dir, '.docs', 'coherence', `${featureDesc}.md`),
+      '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n' +
+      '| --- | --- | --- | --- | --- | --- |\n' +
+      '| criterion | The service emits five records | task-1 | covered | "writes an audit record" | diff-local |\n',
+    );
+    const runner = new DefaultStepRunner(refusalProvider, 'coverage-refusal-output', dir, {
+      featureDesc,
+      planPath,
+      config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+
+    expect(result.success).toBe(false);
+    expect(result.refusal).toMatchObject({ kind: 'needs-human' });
+    expect(result.output).toBe(result.refusal?.reason);
+    expect(result.output?.trim()).not.toBe('');
+  });
+
+  it('Task 6: conductor records the coverage-binding refusal reason rather than a no-output diagnostic', async () => {
+    const featureDesc = 'coverage-binding-refusal-last-error';
+    const planPath = join(dir, 'plan.md');
+    const refusalProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: async () => ({
+        success: true,
+        output: '{"verdict":"does-not-assert","missingAssertion":"No check requires the record."}',
+        exitCode: 0,
+      }),
+    };
+    await seedTailAt(statePath, 'coverage_binding');
+    await mkdir(join(dir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(planPath, '### Task 1: Bind the claim\n**Done when:**\n- The service writes an audit record.\n');
+    await writeFile(
+      join(dir, '.docs', 'coherence', `${featureDesc}.md`),
+      '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n' +
+      '| --- | --- | --- | --- | --- | --- |\n' +
+      '| criterion | The service emits five records | task-1 | covered | "writes an audit record" | diff-local |\n',
+    );
+    const runner = new DefaultStepRunner(refusalProvider, 'coverage-refusal-last-error', dir, {
+      featureDesc,
+      planPath,
+      config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    const { stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 2,
+      fromStep: 'coverage_binding',
+      config: {
+        coverage_binding: { judge: { enabled: true } },
+        retry_routing: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    expect(stepRetries).toHaveLength(1);
+    expect(stepRetries[0]?.reason).toContain('coverage_binding refused: cited Done when checks do not assert the criterion.');
+    expect(stepRetries[0]?.reason).not.toMatch(/produced no output/);
+  });
 
   // ── Story 1: as-built BLOCKED stops on try 1 ────────────────────────────
 
