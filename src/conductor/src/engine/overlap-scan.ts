@@ -6,7 +6,7 @@
 // real implementation, one task at a time, per the plan's TDD cycle.
 
 import type { GitRunner } from './rebase.js';
-import { resolveBase, changedPathsBetween } from './rebase.js';
+import { resolveBase, changedPathsSinceMergeBase } from './rebase.js';
 import type { BlockerResolver, IssueRef } from './blocker-resolver.js';
 
 export interface SeamOverlap {
@@ -158,7 +158,11 @@ export async function runOverlapScan(args: RunOverlapScanArgs): Promise<OverlapR
   const seamOverlaps: SeamOverlap[] = [];
   for (const branch of branches) {
     try {
-      const changed = await changedPathsBetween(git, base.ref, branch);
+      const changed = await changedPathsSinceMergeBase(git, base.ref, branch);
+      if (changed === null) {
+        skipNotes.push(`skipped merge-base comparison for branch ${branch}: no merge base`);
+        continue;
+      }
       const files = intersectFiles(candidateFiles, changed);
       if (files.length > 0) {
         seamOverlaps.push({ branch, files });

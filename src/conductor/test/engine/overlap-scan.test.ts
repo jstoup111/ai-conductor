@@ -1,3 +1,4 @@
+// Covers: task:2
 import { describe, it, expect } from 'vitest';
 
 import { enumerateUnmergedBranches, intersectFiles, blockerSweep, runOverlapScan, renderReport } from '../../src/engine/overlap-scan.js';
@@ -177,12 +178,14 @@ describe('engine/overlap-scan — runOverlapScan (Task 4)', () => {
       },
       { match: ['rev-list', '--count', 'main..spec/feature-a'], result: { stdout: '2\n' } },
       { match: ['rev-list', '--count', 'main..spec/feature-b'], result: { stdout: '1\n' } },
+      { match: ['merge-base', 'main', 'spec/feature-a'], result: { stdout: 'fork-a\n' } },
+      { match: ['merge-base', 'main', 'spec/feature-b'], result: { stdout: 'fork-b\n' } },
       {
-        match: ['diff', '--name-only', 'main', 'spec/feature-a'],
+        match: ['diff', '--name-only', 'fork-a', 'spec/feature-a'],
         result: { stdout: 'src/foo.ts\nsrc/bar.ts\n' },
       },
       {
-        match: ['diff', '--name-only', 'main', 'spec/feature-b'],
+        match: ['diff', '--name-only', 'fork-b', 'spec/feature-b'],
         result: { stdout: 'src/baz.ts\n' },
       },
     ]);
@@ -206,6 +209,32 @@ describe('engine/overlap-scan — runOverlapScan (Task 4)', () => {
     expect(result.blockers).toEqual([{ repo: 'org/repo', number: 'A' }]);
     expect(result.indeterminate).toEqual([]);
     expect(calls).toEqual(['org/repo#42']);
+  });
+
+  it('reports only paths contributed by the branch after its merge base', async () => {
+    const { git, calls } = fakeGit([
+      { match: ['remote'], result: { stdout: '' } },
+      { match: ['for-each-ref'], result: { stdout: 'spec/sibling\n' } },
+      { match: ['rev-list', '--count', 'main..spec/sibling'], result: { stdout: '1\n' } },
+      { match: ['merge-base', 'main', 'spec/sibling'], result: { stdout: 'fork\n' } },
+      {
+        match: ['diff', '--name-only', 'fork', 'spec/sibling'],
+        result: { stdout: 'branch-only.ts\n' },
+      },
+    ]);
+    const { resolver } = fakeResolver({ kind: 'unblocked' });
+
+    const result = await runOverlapScan({
+      candidateFiles: ['base-advanced.ts', 'branch-only.ts'],
+      git,
+      resolver,
+      localBase: 'main',
+    });
+
+    expect(result.seamOverlaps).toEqual([
+      { branch: 'spec/sibling', files: ['branch-only.ts'] },
+    ]);
+    expect(calls).not.toContainEqual(['diff', '--name-only', 'main', 'spec/sibling']);
   });
 
   it('returns empty overlaps and blockers for a clean input', async () => {
@@ -261,6 +290,9 @@ describe('engine/overlap-scan — runOverlapScan advisory degradation (Task 5)',
       if (args[0] === 'rev-list') {
         return { exitCode: 0, stdout: '1\n', stderr: '' };
       }
+      if (args[0] === 'merge-base') {
+        return { exitCode: 0, stdout: `fork-${args[2]}\n`, stderr: '' };
+      }
       if (args[0] === 'diff' && args.includes('spec/feature-a')) {
         throw new Error('diff blew up for feature-a');
       }
@@ -283,13 +315,36 @@ describe('engine/overlap-scan — runOverlapScan advisory degradation (Task 5)',
     expect(result.skipNotes.some((n) => n.includes('spec/feature-a'))).toBe(true);
   });
 
+  it('records one advisory note and no overlap when a branch has no merge base', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: '' } },
+      { match: ['for-each-ref'], result: { stdout: 'spec/unrelated\n' } },
+      { match: ['rev-list', '--count', 'main..spec/unrelated'], result: { stdout: '1\n' } },
+      { match: ['merge-base', 'main', 'spec/unrelated'], result: { exitCode: 1 } },
+    ]);
+    const { resolver } = fakeResolver({ kind: 'unblocked' });
+
+    const result = await runOverlapScan({
+      candidateFiles: ['src/foo.ts'],
+      git,
+      resolver,
+      localBase: 'main',
+    });
+
+    expect(result.seamOverlaps).toEqual([]);
+    expect(result.skipNotes).toEqual([
+      'skipped merge-base comparison for branch spec/unrelated: no merge base',
+    ]);
+  });
+
   it('still returns seam overlaps when the blocker sweep throws', async () => {
     const { git } = fakeGit([
       { match: ['remote'], result: { stdout: '' } },
       { match: ['for-each-ref'], result: { stdout: 'spec/feature-a\n' } },
       { match: ['rev-list', '--count', 'main..spec/feature-a'], result: { stdout: '1\n' } },
+      { match: ['merge-base', 'main', 'spec/feature-a'], result: { stdout: 'fork-a\n' } },
       {
-        match: ['diff', '--name-only', 'main', 'spec/feature-a'],
+        match: ['diff', '--name-only', 'fork-a', 'spec/feature-a'],
         result: { stdout: 'src/foo.ts\n' },
       },
     ]);
