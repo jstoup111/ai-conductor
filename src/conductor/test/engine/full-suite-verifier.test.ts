@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,7 @@ import {
 } from '../../src/engine/full-suite-evidence.js';
 import type { FullSuiteExecutionResult } from '../../src/engine/full-suite-executor.js';
 import {
+  classifyFullSuiteRecoveryClaim,
   deriveFullSuiteScopedSelection,
   FullSuiteVerifier,
 } from '../../src/engine/full-suite-verifier.js';
@@ -135,6 +136,112 @@ afterEach(async () => {
 });
 
 describe('FullSuiteVerifier', () => {
+  it('classifies existing recovery claims by liveness and bounded age', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-recovery-claim-classification-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const claimPath = join(lockPath, 'recovery.json');
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    const staleThresholdMs = 1_000;
+    const inspect = () => classifyFullSuiteRecoveryClaim(lockPath, {
+      clock: () => now,
+      processIsLive: (pid) => pid === 22,
+      unownedStaleMs: staleThresholdMs,
+    });
+
+    await writeProjectFile(lockPath, 'recovery.json', JSON.stringify({
+      version: 1,
+      pid: 11,
+      token: 'dead-claimant',
+      claimedAt: '2026-09-07T11:59:59.900Z',
+    }));
+    await utimes(claimPath, new Date(now), new Date(now));
+    const deadClaim = await inspect();
+
+    await writeFile(claimPath, JSON.stringify({
+      version: 1,
+      pid: 22,
+      token: 'live-claimant',
+      claimedAt: '2026-09-07T11:59:59.900Z',
+    }));
+    await utimes(claimPath, new Date(now), new Date(now));
+    const liveFreshClaim = await inspect();
+
+    await writeFile(claimPath, 'not json');
+    await utimes(claimPath, new Date(now), new Date(now));
+    const unparseableFreshClaim = await inspect();
+    await utimes(claimPath, new Date(now - staleThresholdMs), new Date(now - staleThresholdMs));
+    const unparseableStaleClaim = await inspect();
+
+    await writeFile(claimPath, JSON.stringify({ version: 1, pid: 0 }));
+    await utimes(claimPath, new Date(now - staleThresholdMs), new Date(now - staleThresholdMs));
+    const invalidStaleClaim = await inspect();
+
+    await rm(claimPath);
+    const vanishedClaim = await inspect();
+
+    expect({
+      deadClaim,
+      liveFreshClaim,
+      unparseableFreshClaim,
+      unparseableStaleClaim,
+      invalidStaleClaim,
+      vanishedClaim,
+    }).toEqual({
+      deadClaim: { status: 'ORPHANED' },
+      liveFreshClaim: { status: 'OCCUPIED' },
+      unparseableFreshClaim: { status: 'OCCUPIED' },
+      unparseableStaleClaim: { status: 'ORPHANED' },
+      invalidStaleClaim: { status: 'ORPHANED' },
+      vanishedClaim: { status: 'VANISHED' },
+    });
+  });
+
+  it('reports recovery-claim read, liveness, and age probe failures', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-recovery-claim-errors-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const claimPath = join(lockPath, 'recovery.json');
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    await mkdir(claimPath, { recursive: true });
+    const readFailure = await classifyFullSuiteRecoveryClaim(lockPath, {
+      clock: () => now,
+      processIsLive: () => false,
+      unownedStaleMs: 1_000,
+    });
+    await rm(claimPath, { recursive: true });
+    await writeFile(claimPath, JSON.stringify({
+      version: 1,
+      pid: 22,
+      token: 'live-claimant',
+      claimedAt: '2026-09-07T11:59:59.900Z',
+    }));
+    const livenessFailure = await classifyFullSuiteRecoveryClaim(lockPath, {
+      clock: () => now,
+      processIsLive: () => { throw new Error('liveness denied'); },
+      unownedStaleMs: 1_000,
+    });
+    await writeFile(claimPath, 'not json');
+    const ageFailure = await classifyFullSuiteRecoveryClaim(lockPath, {
+      clock: () => { throw new Error('clock denied'); },
+      processIsLive: () => false,
+      unownedStaleMs: 1_000,
+    });
+
+    expect({ readFailure, livenessFailure, ageFailure }).toEqual({
+      readFailure: expect.objectContaining({
+        status: 'FAILED',
+        message: expect.stringContaining('recovery claim'),
+      }),
+      livenessFailure: expect.objectContaining({
+        status: 'FAILED',
+        message: expect.stringContaining('recovery claim'),
+      }),
+      ageFailure: expect.objectContaining({
+        status: 'FAILED',
+        message: expect.stringContaining('recovery claim'),
+      }),
+    });
+  });
+
   it('derives changed test paths as scoped selectors', async () => {
     const gitCalls: string[][] = [];
 

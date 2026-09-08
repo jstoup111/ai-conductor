@@ -236,6 +236,12 @@ interface FullSuiteLockRecoveryClaim {
   claimedAt: string;
 }
 
+export type FullSuiteRecoveryClaimClassification =
+  | { status: 'ORPHANED' }
+  | { status: 'OCCUPIED' }
+  | { status: 'VANISHED' }
+  | { status: 'FAILED'; message: string };
+
 interface FullSuiteLockHandle {
   release: () => Promise<{ ok: true } | { ok: false; message: string }>;
 }
@@ -280,6 +286,79 @@ function parseLockOwner(serialized: string | null): FullSuiteLockOwner | null {
   } catch {
     return null;
   }
+}
+
+function isLockRecoveryClaim(value: unknown): value is FullSuiteLockRecoveryClaim {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return record.version === 1 &&
+    Number.isInteger(record.pid) &&
+    (record.pid as number) > 0 &&
+    typeof record.token === 'string' &&
+    record.token.length > 0 &&
+    typeof record.claimedAt === 'string' &&
+    !Number.isNaN(Date.parse(record.claimedAt));
+}
+
+function parseLockRecoveryClaim(serialized: string | null): FullSuiteLockRecoveryClaim | null {
+  if (serialized === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(serialized);
+    return isLockRecoveryClaim(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function classifyFullSuiteRecoveryClaim(
+  lockPath: string,
+  options: Required<Pick<FullSuiteLockOptions, 'clock' | 'processIsLive'>> & {
+    unownedStaleMs: number;
+  },
+): Promise<FullSuiteRecoveryClaimClassification> {
+  const claimPath = join(lockPath, FULL_SUITE_LOCK_RECOVERY_CLAIM);
+  let serialized: string;
+  try {
+    serialized = await readFile(claimPath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { status: 'VANISHED' };
+    }
+    return {
+      status: 'FAILED',
+      message: `Unable to read full-suite recovery claim: ${lockErrorMessage(error)}`,
+    };
+  }
+
+  const claim = parseLockRecoveryClaim(serialized);
+  if (claim !== null) {
+    let claimIsLive: boolean;
+    try {
+      claimIsLive = options.processIsLive(claim.pid);
+    } catch (error) {
+      return {
+        status: 'FAILED',
+        message: `Unable to verify full-suite recovery claim liveness: ${lockErrorMessage(error)}`,
+      };
+    }
+    if (!claimIsLive) return { status: 'ORPHANED' };
+  }
+
+  let ageMs: number;
+  try {
+    ageMs = options.clock() - (await stat(claimPath)).mtimeMs;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { status: 'VANISHED' };
+    }
+    return {
+      status: 'FAILED',
+      message: `Unable to inspect full-suite recovery claim: ${lockErrorMessage(error)}`,
+    };
+  }
+  return ageMs < options.unownedStaleMs
+    ? { status: 'OCCUPIED' }
+    : { status: 'ORPHANED' };
 }
 
 function defaultProcessIsLive(pid: number): boolean {
