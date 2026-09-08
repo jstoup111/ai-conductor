@@ -1221,30 +1221,60 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(Object.keys(byGate).sort()).toEqual(
       ['coverage_binding', 'prd_audit', 'architecture_review_as_built'].sort(),
     );
-    // prd_audit now has a document-input surface as well as feature runtime,
-    // so its non-enumerable declaration uses the broad surface sentinel.
-    expect(byGate.prd_audit.surface).toEqual(['<all runtime source>']);
-    expect(byGate.coverage_binding.surface).toEqual(['<all runtime source>']);
+    expect(byGate.prd_audit.surface).toEqual([
+      'src/feature.ts',
+      '<.docs/stories/|.docs/specs/>',
+    ]);
+    expect(byGate.coverage_binding.surface).toEqual([
+      'src/feature.ts',
+      '<.docs/stories/|.docs/specs/>',
+    ]);
     // The as-built review remains feature-runtime scoped; its test path is
     // excluded from the declared source surface.
     expect(byGate.architecture_review_as_built.surface).toEqual(['src/feature.ts']);
-    // The widened PRD input declaration observes the complete relevant delta;
-    // neither path is a declared story/PRD input, so classification still
-    // preserves the audit despite retaining the diagnostic context.
-    expect(byGate.prd_audit.deltaConsidered).toEqual([
-      'src/feature.test.ts',
-      'src/foreign.ts',
-    ]);
-    expect(byGate.coverage_binding.deltaConsidered).toEqual([
-      'src/feature.test.ts',
-      'src/foreign.ts',
-    ]);
+    expect(byGate.prd_audit.deltaConsidered).toEqual([]);
+    expect(byGate.coverage_binding.deltaConsidered).toEqual([]);
     // The as-built review only considers feature runtime source and sees no
     // matching delta.
     expect(byGate.architecture_review_as_built.deltaConsidered).toEqual([]);
     // Invalidated gates must not appear in the preserved set.
     expect(byGate.build_review).toBeUndefined();
     expect(byGate.manual_test).toBeUndefined();
+  });
+
+  it('emits only feature runtime and declared document inputs for PRD-input gates', async () => {
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: [
+        'src/feature.ts',
+        'src/foreign.ts',
+        '.docs/stories/feature.md',
+        '.docs/specs/feature.md',
+        'docs/unrelated.md',
+      ],
+      featureSurface: ['src/feature.ts'],
+    };
+    const events = new ConductorEventEmitter();
+    const invalidated: Array<{ gate: string; matchedPaths: string[] }> = [];
+    events.on('rebase_gate_invalidated', (event) => {
+      if (event.type === 'rebase_gate_invalidated') invalidated.push(event);
+    });
+
+    await emitGateInvalidationEvents(events, outcome, true);
+
+    const byGate = Object.fromEntries(invalidated.map((event) => [event.gate, event.matchedPaths]));
+    expect(byGate.coverage_binding).toEqual([
+      'src/feature.ts',
+      '.docs/stories/feature.md',
+      '.docs/specs/feature.md',
+    ]);
+    expect(byGate.prd_audit).toEqual([
+      'src/feature.ts',
+      '.docs/stories/feature.md',
+      '.docs/specs/feature.md',
+    ]);
+    expect(byGate.prd_audit).not.toContain('src/foreign.ts');
+    expect(byGate.prd_audit).not.toContain('docs/unrelated.md');
   });
 
   it('preserves a within-budget test-suite PASS through the rebase-preserved event', async () => {

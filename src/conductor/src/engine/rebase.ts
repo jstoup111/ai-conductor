@@ -10,11 +10,8 @@ import { withEngineCommitEnv } from './engine-commit-env.js';
 import { saveStepStatus } from './state.js';
 import {
   classifyGateInvalidation,
-  featureTestPaths,
-  partitionDelta,
   GATE_SURFACE,
-  isRuntimeSourcePath,
-  isTestPath,
+  projectGateSurfaces,
 } from './gate-invalidation.js';
 import { ALL_STEPS } from './steps.js';
 import type { ProviderAttributionMetadata } from './provider-execution.js';
@@ -1519,7 +1516,9 @@ export async function recordRebaseStepCompletion(
  *
  * For invalidated gates, `matchedPaths` carries only the delta paths that
  * justify invalidating THIS specific gate, per its `GATE_SURFACE` kind:
- *   - 'feature-runtime' (prd_audit, architecture_review_as_built): featureSrc.
+ *   - 'feature-runtime' (architecture_review_as_built): featureSrc.
+ *   - 'feature-runtime-or-prd-inputs' (coverage_binding, prd_audit): feature
+ *     runtime paths plus declared stories/PRD document inputs.
  *   - 'feature-codetest' (build_review): featureSrc ∪ the feature's own test
  *     paths.
  *   - 'all-runtime' (manual_test): featureSrc ∪ foreignSrc.
@@ -1531,8 +1530,9 @@ export async function recordRebaseStepCompletion(
  * the (empty, by construction) intersection with the delta — a preserved
  * gate still has a real declared surface, it simply wasn't hit. For
  * 'feature-runtime' kind this is `F ∩ runtime` (the feature's own runtime
- * paths) and for 'feature-codetest' it is `F ∩ (runtime ∪ test)`; for
- * 'all-runtime'/'any-codetest' kind — whose declared surface is
+ * paths), for 'feature-codetest' it is `F ∩ (runtime ∪ test)`, and for
+ * 'feature-runtime-or-prd-inputs' it also declares the document prefixes;
+ * for 'all-runtime'/'any-codetest' kind — whose declared surface is
  * the whole runtime tree and isn't a finite path list derivable from this
  * rebase's delta — a descriptive sentinel is used instead.
  * `deltaConsidered` carries the same per-kind matched-path computation as
@@ -1577,45 +1577,15 @@ export async function emitGateInvalidationEvents(
     outcome.featureSurface,
     ranManualTest,
   );
-  const { test, featureSrc, foreignSrc } = partitionDelta(
-    outcome.changedCodePaths,
-    outcome.featureSurface,
-  );
-
-  const featureTest = featureTestPaths(outcome.changedCodePaths, outcome.featureSurface);
+  const projections = projectGateSurfaces(outcome.changedCodePaths, outcome.featureSurface);
   const preservationBases = new Map(preverifiedPreserved.map(({ gate, basis }) => [gate, basis]));
-
-  const matchedPathsFor = (gate: string): string[] => {
-    const surface = GATE_SURFACE[gate];
-    return surface === 'feature-runtime'
-      ? featureSrc
-      : surface === 'feature-codetest'
-        ? [...featureSrc, ...featureTest]
-        : surface === 'all-runtime'
-          ? [...featureSrc, ...foreignSrc]
-          : [...test, ...featureSrc, ...foreignSrc];
-  };
-
-  // Declared dependency surface (what the gate depends on) — distinct from
-  // matchedPathsFor's delta-intersection. Non-empty even when the gate is
-  // preserved (it always has real inputs; it just wasn't hit this rebase).
-  const featureRuntimeSurface = outcome.featureSurface.filter(isRuntimeSourcePath);
-  const featureCodeTestSurface = outcome.featureSurface.filter(
-    (p) => isRuntimeSourcePath(p) || isTestPath(p),
-  );
-  const declaredSurfaceFor = (gate: string): string[] => {
-    const surface = GATE_SURFACE[gate];
-    if (surface === 'feature-runtime') return featureRuntimeSurface;
-    if (surface === 'feature-codetest') return featureCodeTestSurface;
-    return ['<all runtime source>'];
-  };
 
   for (const gate of invalidated) {
     if (preservationBases.has(gate as StepName)) continue;
     await events.emit({
       type: 'rebase_gate_invalidated',
       gate: gate as StepName,
-      matchedPaths: matchedPathsFor(gate),
+      matchedPaths: projections[GATE_SURFACE[gate]!].matchedPaths,
     });
   }
 
@@ -1623,8 +1593,8 @@ export async function emitGateInvalidationEvents(
     await events.emit({
       type: 'rebase_gate_preserved',
       gate: gate as StepName,
-      surface: declaredSurfaceFor(gate),
-      deltaConsidered: matchedPathsFor(gate),
+      surface: projections[GATE_SURFACE[gate]!].declaredSurface,
+      deltaConsidered: projections[GATE_SURFACE[gate]!].matchedPaths,
       ...(preservationBases.has(gate as StepName)
         ? { basis: preservationBases.get(gate as StepName)! }
         : {}),
