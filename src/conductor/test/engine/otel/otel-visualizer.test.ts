@@ -323,7 +323,7 @@ describe('Task 5: visualizer identity wiring', () => {
     };
   }
 
-  it('derives the metric project basename and shares the run resource identity with spans', async () => {
+  it('derives a worker-stable metric identity while traces remain feature-scoped', async () => {
     const exported = await exportStepMetric('nested-feature');
 
     expect({
@@ -332,7 +332,7 @@ describe('Task 5: visualizer identity wiring', () => {
       metricInstanceId: exported.metricResource.attributes['service.instance.id'],
     }).toEqual({
       dataPoint: { step: 'build', project: 'nested-project', worker: 'unknown', feature: 'nested-feature' },
-      spanInstanceId: 'nested-project/unknown',
+      spanInstanceId: 'nested-project/nested-feature',
       metricInstanceId: 'nested-project/unknown',
     });
   });
