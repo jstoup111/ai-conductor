@@ -9570,7 +9570,7 @@ export class Conductor {
             lastError =
               coverageBindingPayloadReason !== undefined
                 ? `coverage-binding judge infrastructure failure: ${coverageBindingPayloadReason}`
-                : runnerOutput ??
+                : runnerOutput ?? result.refusal?.reason ??
               `Step '${step.name}' produced no output — the step runner exited without a result ` +
                 `(the grader/subprocess likely failed to start or died before writing a verdict)`;
             retryHint = `Previous attempt failed: ${lastError}. Finish the work now.`;

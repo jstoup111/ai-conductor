@@ -533,6 +533,36 @@ describe('integration/retry-classify (#646)', () => {
     expect(stepRetries[0]?.reason).not.toMatch(/produced no output/);
   });
 
+  it('Task 6: conductor records an interface-valid refusal reason when its output is omitted', async () => {
+    const refusalReason = 'coverage binding needs a human decision';
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async () => ({
+        success: false,
+        refusal: { kind: 'needs-human', reason: refusalReason },
+      }),
+    };
+    const { stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 2,
+      fromStep: 'coverage_binding',
+      config: { retry_routing: { enabled: false } } as never,
+    });
+
+    await conductor.run();
+
+    expect(stepRetries).toHaveLength(1);
+    expect(stepRetries[0]?.reason).toContain(refusalReason);
+    expect(stepRetries[0]?.reason).not.toMatch(/produced no output/);
+  });
+
   // ── Task 7: refusal output does not displace other diagnostics ─────────
 
   it('Task 7: a blank non-refusal result keeps the produced-no-output diagnostic', async () => {
