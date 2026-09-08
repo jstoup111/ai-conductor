@@ -4843,6 +4843,19 @@ describe('engine/artifacts', () => {
       expect(r).toEqual({ decision: 'rerun' });
     });
 
+    // Covers: task:1
+    it('routes a needs-human terminal refusal before consulting retry signals', () => {
+      const r = classifyRetryDecision({
+        step: 'build',
+        completion: { done: false },
+        attempt: 1,
+        inputsUnchanged: false,
+        terminalRefusal: 'needs-human',
+      });
+
+      expect(r).toEqual({ decision: 'route', signal: 'terminal-refusal' });
+    });
+
     it('routes a typed unretryable input failure on attempt 1', () => {
       const r = classifyRetryDecision({
         step: 'build_review',

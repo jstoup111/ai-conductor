@@ -5057,7 +5057,10 @@ const RETRY_CLASSIFY_STEPS: ReadonlySet<StepName> = new Set<StepName>([
 
 export type RetryDecision =
   | { decision: 'rerun'; signal?: 'stale-run-identity' }
-  | { decision: 'route'; signal: 'named-route' | 'identical-repeat' | 'unretryable-inputs' };
+  | {
+      decision: 'route';
+      signal: 'named-route' | 'identical-repeat' | 'unretryable-inputs' | 'terminal-refusal';
+    };
 
 /**
  * Pure, synchronous rerun-vs-route classifier for the SHIP-tail verdict steps
@@ -5080,8 +5083,21 @@ export function classifyRetryDecision(input: {
   inputsUnchanged: boolean;
   prdAuditNonClean?: boolean;
   unretryableInputs?: { retryAfterStep: StepName };
+  terminalRefusal?: 'seal' | 'needs-human' | 'validation-verdict';
 }): RetryDecision {
-  const { step, completion, attempt, priorReason, inputsUnchanged, prdAuditNonClean, unretryableInputs } = input;
+  const {
+    step,
+    completion,
+    attempt,
+    priorReason,
+    inputsUnchanged,
+    prdAuditNonClean,
+    unretryableInputs,
+    terminalRefusal,
+  } = input;
+  if (terminalRefusal === 'needs-human') {
+    return { decision: 'route', signal: 'terminal-refusal' };
+  }
   if (!RETRY_CLASSIFY_STEPS.has(step)) return { decision: 'rerun' };
 
   if (unretryableInputs) return { decision: 'route', signal: 'unretryable-inputs' };
