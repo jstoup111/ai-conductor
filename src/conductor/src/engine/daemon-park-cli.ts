@@ -10,10 +10,13 @@
 
 import { existsSync, writeSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
-import { writeOperatorPark, removeOperatorPark, isOperatorParked } from './park-marker.js';
+import { join } from 'node:path';
+import {
+  isOperatorParked,
+  removeOperatorPark,
+  resolveMainRepoRootStrict,
+  writeOperatorPark,
+} from './park-marker.js';
 import { resetNoEvidenceAttempts } from './task-evidence.js';
 import { removeWorktree } from './worktree-shared.js';
 import { runProjectTeardown } from './worktree-prepare.js';
@@ -23,7 +26,6 @@ import { detectAutoResume } from './auto-resume.js';
 import type { ReconcileMergedParkOutcome } from './park-reconciliation.js';
 import type { GitRunner, GhRunner } from './pr-labels.js';
 
-const execFile = promisify(execFileCb);
 const SINGLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 
 /**
@@ -38,19 +40,8 @@ export async function resolveMainRepoRoot(
 ): Promise<{ root: string } | { error: string }> {
   const NOT_A_PROJECT_ERROR =
     "not inside a conduct project — run 'daemon park <slug>' from the project root or any directory inside it";
-  try {
-    const { stdout } = await execFile('git', ['rev-parse', '--git-common-dir'], {
-      cwd: startCwd,
-    });
-    const raw = stdout.trim();
-    if (!raw) {
-      return { error: NOT_A_PROJECT_ERROR };
-    }
-    const absoluteCommonDir = isAbsolute(raw) ? raw : resolve(startCwd, raw);
-    return { root: dirname(absoluteCommonDir) };
-  } catch {
-    return { error: NOT_A_PROJECT_ERROR };
-  }
+  const root = await resolveMainRepoRootStrict(startCwd);
+  return root ? { root } : { error: NOT_A_PROJECT_ERROR };
 }
 
 export type DaemonParkDispatch =

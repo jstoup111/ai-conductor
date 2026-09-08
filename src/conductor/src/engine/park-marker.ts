@@ -10,7 +10,7 @@
 // conductor, the dashboard, and the daemon loop.
 
 import { mkdir, open, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -28,6 +28,24 @@ export const OPERATOR_PARKED_SUBDIR = 'parked';
  * Prevents repeated git invocations for the same directory.
  */
 const resolveMainRepoRootCache = new Map<string, Promise<string>>();
+
+/**
+ * Resolve the main repository root from an in-repository directory, returning
+ * null when the directory is outside a Git repository. Unlike the lenient
+ * resolver below, this deliberately does not cache or fall back to startDir:
+ * callers that must refuse a write need to distinguish failure from a root.
+ */
+export async function resolveMainRepoRootStrict(startDir: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFile('git', ['rev-parse', '--git-common-dir'], { cwd: startDir });
+    const gitCommonDir = stdout.trim();
+    if (!gitCommonDir) return null;
+
+    return dirname(isAbsolute(gitCommonDir) ? gitCommonDir : resolve(startDir, gitCommonDir));
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Resolve the main repository root from any directory within a git repository
