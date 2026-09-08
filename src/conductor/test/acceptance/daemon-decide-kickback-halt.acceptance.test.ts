@@ -24,7 +24,6 @@ import {
 } from '../../src/engine/halt-marker.js';
 import {
   readKickbackLedger,
-  writeKickbackLedger,
   MAX_KICKBACKS_PER_GATE,
   KICKBACK_LEDGER_PATH,
 } from '../../src/engine/kickback-ledger.js';
@@ -836,3 +835,5 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
     });
   });
 });
+
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

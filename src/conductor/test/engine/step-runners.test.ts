@@ -31,7 +31,7 @@ import { scanInheritedState } from '../../src/engine/daemon-dashboard.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
 import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
-import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 function createMockProvider(): LLMProvider {
@@ -4837,3 +4837,5 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     );
   });
 });
+
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

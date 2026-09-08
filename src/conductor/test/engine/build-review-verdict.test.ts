@@ -20,8 +20,7 @@ import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import {
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   readKickbackLedger,
-  writeKickbackLedger,
-} from '../../src/engine/kickback-ledger.js';
+  } from '../../src/engine/kickback-ledger.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
 import type { BuildReviewFrozenInputs } from '../../src/engine/build-review-inputs.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
@@ -670,3 +669,5 @@ describe('engine/build-review stale-lap FAIL discard (daemon kickback guard)', (
     await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf8')).resolves.toBeTruthy();
   });
 });
+
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

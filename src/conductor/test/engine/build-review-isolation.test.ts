@@ -18,7 +18,7 @@ import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
-import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW } from '../../src/engine/kickback-ledger.js';
 
 vi.mock('../../src/engine/build-review-coordinator.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/build-review-coordinator.js')>(),
@@ -257,7 +257,7 @@ describe('build_review input isolation', () => {
       }),
     });
 
-    await writeKickbackLedger(dir, {
+    await(dir, {
       version: 1,
       gates: {
         build_review: {
@@ -273,3 +273,5 @@ describe('build_review input isolation', () => {
     );
   });
 });
+
+import { } from '../kickback-ledger-test-support.js';

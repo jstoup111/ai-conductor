@@ -22,7 +22,7 @@ import {
   REKICK_SENTINEL,
 } from '../../src/engine/daemon-rekick.js';
 import type { HaltDisposition } from '../../src/engine/halt-marker.js';
-import { writeKickbackLedger, readKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { join as pjoin } from 'node:path';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
@@ -63,6 +63,7 @@ describe('consumeResumeAuthorizations', () => {
     worktreePath: () => worktree,
     isOperatorParked: async () => false,
     readLiveHaltClass: async () => 'needs-human',
+    readLiveHaltGeneration: async () => 'g1',
     clearHalt: async () => 'confirmed' as const,
     ...over,
   });
@@ -165,6 +166,18 @@ describe('consumeResumeAuthorizations', () => {
     });
     try {
       await expect(consumeResumeAuthorizations(base(worktree, {})as never)).resolves.toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('retains an authorization when a newer same-class halt replaced its cap marker', async () => {
+    const { root, worktree } = await seed();
+    try {
+      await expect(consumeResumeAuthorizations(base(worktree, {
+        readLiveHaltGeneration: async () => 'g2',
+      }) as never)).resolves.toEqual([]);
+      expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -2461,3 +2474,5 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     expect(build?.kickback?.from).toBe('rebase');
   });
 });
+
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

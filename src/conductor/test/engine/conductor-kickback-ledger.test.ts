@@ -13,8 +13,7 @@ import {
   KICKBACK_LEDGER_PATH,
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   readKickbackLedger,
-  writeKickbackLedger,
-} from '../../src/engine/kickback-ledger.js';
+  } from '../../src/engine/kickback-ledger.js';
 import { RUBRIC_FAILURE_DETAIL_CAP_BYTES } from '../../src/engine/step-runners.js';
 import { HALT_MARKER, readHaltClass } from '../../src/engine/halt-marker.js';
 import { writeState } from '../../src/engine/state.js';
@@ -903,3 +902,5 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     expect(otherGateKickback.cumulativeCount).toBeUndefined();
   });
 });
+
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

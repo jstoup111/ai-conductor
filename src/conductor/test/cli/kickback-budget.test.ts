@@ -97,7 +97,7 @@ describe('kickback-budget refusal ladder', () => {
     const fixture = await makeFeature(ledger);
     try {
       if (name === 'ineligible halt class') {
-        await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted');
+        await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted\nKickback halt generation: halt-1');
         await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'mechanical');
       }
       await expectRefusalIsInert(fixture, { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'build_review', by: 1, rationale: 'evidence', format: 'human' }, code);
@@ -214,7 +214,7 @@ describe('kickback-budget accepts each gate\'s own cap halt class', () => {
     async (gate) => {
       const fixture = await makeFeature(remediationLedger(gate));
       try {
-        await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted');
+        await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted\nKickback halt generation: halt-1');
         await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'kickback-cap');
         expect(await raise(fixture, gate)).toBe(0);
         const entry = JSON.parse(await readFile(join(fixture.worktree, '.pipeline', 'kickback-ledger.json'), 'utf8')).gates[gate];
@@ -228,7 +228,7 @@ describe('kickback-budget accepts each gate\'s own cap halt class', () => {
   it('still refuses a remediation gate whose live halt is needs-human', async () => {
     const fixture = await makeFeature(remediationLedger('prd_audit'));
     try {
-      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted');
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted\nKickback halt generation: halt-1');
       await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'needs-human');
       await expectRefusalIsInert(fixture, { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'prd_audit', by: 1, rationale: 'evidence', format: 'human' }, 1);
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
@@ -240,7 +240,7 @@ describe('kickback-budget accepts each gate\'s own cap halt class', () => {
       gates: { build_review: { ...baseEntry, capEvidence: { gate: 'build_review', consumed: 6, limit: 5, latestReason: 'cap', haltGeneration: 'halt-1' } } },
     });
     try {
-      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted');
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted\nKickback halt generation: halt-1');
       await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'kickback-cap');
       await expectRefusalIsInert(fixture, { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'build_review', by: 1, rationale: 'evidence', format: 'human' }, 1);
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
@@ -254,7 +254,7 @@ describe('kickback-budget operator authority', () => {
   const capEvidence = { gate: 'build_review', consumed: 6, limit: 5, latestReason: 'cap', haltGeneration: 'halt-1' };
   const halted = async (): Promise<{ root: string; worktree: string }> => {
     const fixture = await makeFeature({ version: 1, gates: { build_review: { ...baseEntry, capEvidence } } });
-    await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted');
+    await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted\nKickback halt generation: halt-1');
     await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'needs-human');
     return fixture;
   };
@@ -389,7 +389,7 @@ describe('kickback-budget scopes an invalid gate entry to its own gate', () => {
   it('still authorizes a raise on the healthy gate', async () => {
     const fixture = await makeFeature(mixed);
     try {
-      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted');
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted\nKickback halt generation: halt-1');
       await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'needs-human');
       expect(await dispatchKickbackBudgetCommand(
         { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'build_review', by: 1, rationale: 'one more lap', format: 'human' },
@@ -408,7 +408,7 @@ describe('kickback-budget scopes an invalid gate entry to its own gate', () => {
   it('still refuses a mutation naming the malformed gate', async () => {
     const fixture = await makeFeature(mixed);
     try {
-      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted');
+      await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted\nKickback halt generation: halt-1');
       await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'kickback-cap');
       await expectRefusalIsInert(fixture, { kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'prd_audit', by: 1, rationale: 'evidence', format: 'human' }, 1);
     } finally { await rm(fixture.root, { recursive: true, force: true }); }

@@ -91,8 +91,7 @@ import {
   creditKickbackGateLaps,
   MAX_SUITE_INFRASTRUCTURE_RETRIES,
   readKickbackLedger,
-  writeKickbackLedger,
-} from '../../src/engine/kickback-ledger.js';
+  } from '../../src/engine/kickback-ledger.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { appendTimingSection, renderShippedRecord } from '../../src/engine/shipped-record.js';
@@ -1195,7 +1194,7 @@ describe('engine/conductor', () => {
       'build_review cumulative kickback cap exceeded:\n' +
         'Kickback budget (build_review): 6/5 consumed; 0 remaining\n' +
         'Latest reason: [testQuality] test-insensitive\n[testQuality] test-insensitive\n' +
-        'Adjustment history: none\n' +
+        'Adjustment history: unavailable\n' +
         'Mechanical faults: 0',
     ]);
   });
@@ -1259,7 +1258,7 @@ describe('engine/conductor', () => {
       'build_review cumulative kickback cap exceeded:\n' +
         'Kickback budget (build_review): 6/5 consumed; 0 remaining\n' +
         'Latest reason: [testQuality] test-insensitive\n[testQuality] test-insensitive\n' +
-        'Adjustment history: none\n' +
+        'Adjustment history: unavailable\n' +
         'Mechanical faults: 0',
     ]);
     expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toContain('cumulative kickback cap');
@@ -18185,3 +18184,5 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
     },
   );
 });
+
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

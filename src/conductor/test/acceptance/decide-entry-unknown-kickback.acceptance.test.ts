@@ -10,8 +10,7 @@ import {
   MAX_KICKBACKS_PER_GATE,
   KICKBACK_LEDGER_PATH,
   readKickbackLedger,
-  writeKickbackLedger,
-} from '../../src/engine/kickback-ledger.js';
+  } from '../../src/engine/kickback-ledger.js';
 import {
   cleanupDecideEntryFixture,
   conductorFor,
@@ -160,3 +159,5 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
     expect(halt).not.toMatch(/could not be established/i);
   });
 });
+
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

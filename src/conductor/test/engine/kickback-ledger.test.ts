@@ -33,7 +33,6 @@ import {
   readKickbackLedger,
   readSuiteInfrastructureRetries,
   refundBuildReviewKickback,
-  writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
 } from '../../src/engine/kickback-ledger.js';
@@ -1272,3 +1271,5 @@ describe('kickback-ledger', () => {
     expect(after.gates.prd_audit.effectiveLapCap).toBe(3);
   });
 });
+
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

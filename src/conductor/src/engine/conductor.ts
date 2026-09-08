@@ -4480,7 +4480,7 @@ export class Conductor {
             :
               `growth cap reached (${prdAuditBudget.growth.added}/${prdAuditBudget.growthCap} appended; ` +
               `${prdAuditBudget.growthTaskCount} requested, ${prdAuditBudget.growth.remaining} remaining)`;
-          await recordKickbackCapEvidence(this.projectRoot, 'prd_audit', {
+          const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'prd_audit', {
             consumed: prdAuditBudget.priorLaps,
             limit: prdAuditBudget.lapCap,
             latestReason: capReason,
@@ -4496,7 +4496,7 @@ export class Conductor {
             // same way the as-built and shared-growth exits do; the helper
             // yields '' unless an as-built BLOCKED report actually participates.
             detail: `prd_audit remediation ${capReason} before appending fix tasks. `
-              + `Findings: ${findingList}.`
+              + `Findings: ${findingList}.\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}`
               + renderAsBuiltBlockedFindingDetail(asBuiltReport),
           };
         }
@@ -4509,7 +4509,7 @@ export class Conductor {
             :
               `shared plan-growth allowance exhausted (${asBuiltBudget.growth.added}/${asBuiltBudget.growthCap} appended; ` +
               `${asBuiltBudget.growthTaskCount} requested, ${asBuiltBudget.growth.remaining} remaining)`;
-          await recordKickbackCapEvidence(this.projectRoot, 'architecture_review_as_built', {
+          const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'architecture_review_as_built', {
             consumed: asBuiltBudget.priorLaps,
             limit: asBuiltBudget.lapCap,
             latestReason: capReason,
@@ -4518,7 +4518,7 @@ export class Conductor {
             kind: 'halt',
             haltClass: KICKBACK_CAP_HALT_CLASS,
             detail:
-              `architecture_review_as_built remediation ${capReason} before appending fix tasks. Findings:` +
+              `architecture_review_as_built remediation ${capReason} before appending fix tasks. Findings:\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}` +
               renderAsBuiltBlockedFindingDetail(asBuiltReport),
           };
         }
@@ -11187,12 +11187,15 @@ export class Conductor {
                       'build_review',
                       MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
                     );
-                  await recordKickbackCapEvidence(this.projectRoot, 'build_review', {
+                  const capEntry = await recordKickbackCapEvidence(this.projectRoot, 'build_review', {
                     consumed: kickback.entry.cumulative,
                     limit: kickback.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
                     latestReason: kickback.entry.lastReason,
                   });
-                  const markerResult = await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  const markerResult = await this.writeHaltMarker(
+                    `${reason}\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}\n`,
+                    'needs-human',
+                  );
                   if (markerResult.status === 'failed') {
                     this.log?.(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`);
                   }

@@ -619,22 +619,9 @@ export async function readKickbackLedger(projectRoot: string): Promise<KickbackL
 export async function readSuiteInfrastructureRetries(
   projectRoot: string,
 ): Promise<number | 'unreadable'> {
-  try {
-    const parsed: unknown = JSON.parse(
-      await readFile(join(projectRoot, KICKBACK_LEDGER_PATH), 'utf-8'),
-    );
-    // This reader owns only test_suite's counter.  A malformed sibling must
-    // not turn a healthy lane into an unreadable whole ledger.
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return 'unreadable';
-    const envelope = parsed as Record<string, unknown>;
-    if (envelope.version !== 1 || typeof envelope.gates !== 'object' || envelope.gates === null || Array.isArray(envelope.gates)) return 'unreadable';
-    const entry = (envelope.gates as Record<string, unknown>).test_suite;
-    if (entry === undefined) return 0;
-    if (!isKickbackGateEntry(entry)) return 'unreadable';
-    return entry.suiteInfrastructureRetries ?? 0;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 0 : 'unreadable';
-  }
+  const ledger = await readKickbackLedger(projectRoot);
+  if (isUnreadableKickbackGate(ledger, 'test_suite')) return 'unreadable';
+  return ledger.gates.test_suite?.suiteInfrastructureRetries ?? 0;
 }
 
 /**
@@ -689,7 +676,7 @@ async function writeKickbackLedgerUnsafe(
 }
 
 /** Write the ledger atomically while holding its feature-local mutation lease. */
-export async function writeKickbackLedger(
+async function writeKickbackLedger(
   projectRoot: string,
   ledger: KickbackLedger,
 ): Promise<void> {

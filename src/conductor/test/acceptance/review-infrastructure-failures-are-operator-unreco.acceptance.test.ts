@@ -41,8 +41,7 @@ import { HALT_CLASS_MARKER, HALT_MARKER, readHaltClass } from '../../src/engine/
 import {
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
   readKickbackLedger,
-  writeKickbackLedger,
-} from '../../src/engine/kickback-ledger.js';
+  } from '../../src/engine/kickback-ledger.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
@@ -380,3 +379,5 @@ describe('Covers: FR-8, S10.1 — an exhausted mechanical build-review fault is 
     expect(halt).not.toContain('record-reduced-coverage');
   });
 });
+
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

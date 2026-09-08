@@ -4,6 +4,9 @@ import { join } from 'node:path';
 
 import type { KickbackBudgetDispatch } from '../cli.js';
 import { appendCloseoutEvent } from './closeout-events.js';
+import { EventPersister } from './event-persister.js';
+import { AuditTrailWriter } from './audit-trail.js';
+import { ConductorEventEmitter } from '../ui/events.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
 import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackGate, isUnreadableKickbackLedger, readKickbackLedger, stageKickbackBudgetAdjustment, unreadableKickbackGates, type KickbackBudgetAdjustment } from './kickback-ledger.js';
 import { kickbackBudgetView, renderKickbackBudgetView } from './kickback-budget-view.js';
@@ -37,6 +40,28 @@ export interface KickbackBudgetCliDeps {
   print?: (message: string) => void;
   resolveMainRoot?: (cwd: string) => Promise<string>;
   appendEvent?: typeof appendCloseoutEvent;
+}
+
+/**
+ * The operator CLI is outside a running conductor, so it appends the durable
+ * cross-process record and immediately projects that same event through its
+ * declared sinks. CloseoutEventTail recognizes the canonical projection and
+ * will not replay it later.
+ */
+async function appendAuthorizationEvent(
+  worktree: string,
+  event: Extract<ConductorEvent, { type: 'kickback_budget_adjustment_authorized' }>,
+  appendEvent?: typeof appendCloseoutEvent,
+): Promise<void> {
+  if (appendEvent) return appendEvent(worktree, event);
+  appendCloseoutEvent(worktree, event);
+  const events = new ConductorEventEmitter();
+  const persister = new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events);
+  const audit = new AuditTrailWriter(worktree, { throwOnWriteFailure: true });
+  persister.start();
+  audit.subscribe(events);
+  await events.emit(event);
+  persister.stop();
 }
 
 async function reconcilePendingAdjustments(worktree: string): Promise<void> {
@@ -118,6 +143,9 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     if (result !== 0) { print(`kickback-budget: could not park '${command.feature}'.`); return 1; }
   }
   const ownsPark = !parked;
+  let staged = false;
+  let committed = false;
+  let liveHaltGeneration = '';
   try {
     const defaults = await defaultsFor(worktree);
     const remediation = gate !== 'build_review';
@@ -139,26 +167,37 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
         operator, rationale, timestamp: new Date().toISOString(), haltGeneration: entry.capEvidence.haltGeneration,
       };
     }, async () => {
-      try { await readFile(join(worktree, '.pipeline', 'HALT'), 'utf8'); } catch { throw new Error('feature is not currently halted'); }
+      let haltBody: string;
+      try { haltBody = await readFile(join(worktree, '.pipeline', 'HALT'), 'utf8'); } catch { throw new Error('feature is not currently halted'); }
       const liveHaltClass = (await readFile(join(worktree, HALT_CLASS_MARKER), 'utf8')).trim();
       if (liveHaltClass !== RECOVERABLE_CAP_HALT_CLASS_BY_GATE[gate]) throw new Error('live halt is not eligible for recovery');
+      const current = await readKickbackLedger(worktree);
+      liveHaltGeneration = current.gates[gate]?.capEvidence?.haltGeneration ?? '';
+      if (!liveHaltGeneration || !haltBody.includes(`Kickback halt generation: ${liveHaltGeneration}`)) {
+        throw new Error('live halt no longer matches current cap evidence');
+      }
     });
+    staged = true;
     const event: Extract<ConductorEvent, { type: 'kickback_budget_adjustment_authorized' }> = {
       type: 'kickback_budget_adjustment_authorized', adjustmentId: adjustment.id, gate, kind: adjustment.kind,
       feature: command.feature, operator: adjustment.operator, rationale: adjustment.rationale,
       beforeConsumed: adjustment.beforeConsumed, afterConsumed: adjustment.afterConsumed,
       beforeLimit: adjustment.beforeLimit, afterLimit: adjustment.afterLimit, ts: adjustment.timestamp,
     };
-    await (deps.appendEvent ?? appendCloseoutEvent)(worktree, event);
+    await appendAuthorizationEvent(worktree, event, deps.appendEvent);
     const applied = await applyKickbackBudgetAdjustment(worktree, gate, adjustment, defaults[gate]);
+    committed = true;
     print(`${renderKickbackBudgetView(applied, gate, defaults[gate])}${parked ? '\nFeature remains parked; unpark it when ready.' : ''}`);
     return 0;
   } catch (error) {
     print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1;
   } finally {
-    // The command owns only the temporary park it created above.  Its purpose
-    // is quiescence while staging/applying the adjustment, not a durable park
-    // on a rejected authorization; a pre-existing operator park is retained.
-    if (ownsPark) await dispatchDaemonPark({ kind: 'unpark', slug: command.feature }, { cwd: root, out: () => {} });
+    // Pre-stage refusals have left no durable change and release the temporary
+    // park. Once staged, retain it until the adjustment is fully observable.
+    if (ownsPark && (!staged || committed)) {
+      await dispatchDaemonPark({ kind: 'unpark', slug: command.feature }, { cwd: root, out: () => {} });
+    } else if (ownsPark) {
+      print(`kickback-budget: adjustment is staged but incomplete; feature remains parked. Reconcile or unpark '${command.feature}' explicitly after recovery.`);
+    }
   }
 }

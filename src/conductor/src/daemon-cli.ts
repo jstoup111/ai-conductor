@@ -179,6 +179,7 @@ import {
   clearHaltForResume,
   consumeResumeAuthorizations,
   readRawHaltClass,
+  readKickbackHaltGeneration,
   recoverEpisodeHalts,
   resolveHaltRetention,
   type RekickSweepDeps,
@@ -2172,6 +2173,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           // feature has nothing to resume, so its authorization is left alone.
           isProcessed: makeIsProcessed(processedDir, gitTreeSource(projectRoot, baseBranch)),
           readLiveHaltClass: (slug) => readRawHaltClass(join(worktreeBase, slug)),
+          readLiveHaltGeneration: (slug) => readKickbackHaltGeneration(join(worktreeBase, slug)),
           // adr-2026-08-29 D6: the canonical marker/presentation lifecycle plus
           // committed-record resolution, as ONE operation reporting `partial`.
           clearHalt: (slug) =>
@@ -2186,13 +2188,19 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               cleanupPresentation: (prUrl) =>
                 cleanupHaltPresentation(ownerGh, projectRoot, prUrl, log, undefined, { preserveDraft: true }),
               resolveCommittedRecord: async (worktreePath, feature) => {
-                await supersedeHaltRecord(worktreePath, feature, 'kickback-budget');
+                return supersedeHaltRecord(worktreePath, feature, 'kickback-budget');
               },
               log,
             }),
-          // Feature events are installed by the normal per-feature runner;
-          // this daemon boundary intentionally emits only after durable consume.
-          emit: (event) => events.emit(event),
+          // A halted feature has no active per-feature runner. Project this
+          // exact global occurrence through the feature's declared audit sink
+          // before forwarding it to the daemon-global bus.
+          emit: async (slug, event) => {
+            const featureEvents = new ConductorEventEmitter();
+            new AuditTrailWriter(join(worktreeBase, slug)).subscribe(featureEvents);
+            await featureEvents.emit(event);
+            await events.emit(event);
+          },
           log,
         });
       },

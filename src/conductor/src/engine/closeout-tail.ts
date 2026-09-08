@@ -1,10 +1,24 @@
 import { readFile } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { ExternalPipelineEvent } from './closeout-events.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
 const PIPELINE_CLOSEOUT_LEDGER = '.pipeline/pipeline-events.jsonl';
+const CANONICAL_EVENTS_LEDGER = '.pipeline/events.jsonl';
+
+function isAlreadyProjected(projectRoot: string, event: ExternalPipelineEvent): boolean {
+  if (event.type !== 'kickback_budget_adjustment_authorized') return false;
+  const path = join(projectRoot, CANONICAL_EVENTS_LEDGER);
+  if (!existsSync(path)) return false;
+  return readFileSync(path, 'utf8').split('\n').some((line) => {
+    try {
+      const parsed = JSON.parse(line) as { type?: unknown; adjustmentId?: unknown };
+      return parsed.type === event.type && parsed.adjustmentId === event.adjustmentId;
+    } catch { return false; }
+  });
+}
 
 type TailRecord =
   | { kind: 'event'; event: ExternalPipelineEvent }
@@ -62,6 +76,7 @@ class CloseoutTailReader {
 export class CloseoutEventTail {
   private readonly reader: CloseoutTailReader;
   private readonly events: ConductorEventEmitter;
+  private readonly projectRoot: string;
   private interval: ReturnType<typeof setInterval> | null = null;
   private inFlight: Promise<void> | null = null;
 
@@ -74,6 +89,7 @@ export class CloseoutEventTail {
     events: ConductorEventEmitter;
     readLedger?: (path: string) => Promise<Buffer>;
   }) {
+    this.projectRoot = projectRoot;
     this.reader = new CloseoutTailReader(projectRoot, readLedger);
     this.events = events;
   }
@@ -92,6 +108,7 @@ export class CloseoutEventTail {
   private async pollOnce(): Promise<void> {
     for (const record of await this.reader.read()) {
       if (record.kind === 'event') {
+        if (isAlreadyProjected(this.projectRoot, record.event)) continue;
         await this.events.emit(record.event);
       } else {
         await this.events.emit({

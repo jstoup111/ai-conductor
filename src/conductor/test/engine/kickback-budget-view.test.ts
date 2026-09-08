@@ -31,10 +31,10 @@ describe('kickback budget view', () => {
     expect(rendered).toContain('Mechanical faults: 1');
   });
 
-  it('reports an empty history for an existing never-adjusted entry', () => {
+  it('reports a legacy entry with no recovery history as unavailable', () => {
     const legacy = { count: 1, cumulative: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 };
-    expect(kickbackBudgetView(legacy, 'build_review', 5).adjustments).toEqual([]);
-    expect(renderKickbackBudgetView(legacy, 'build_review', 5)).toContain('Adjustment history: none');
+    expect(kickbackBudgetView(legacy, 'build_review', 5).adjustments).toBe('unavailable');
+    expect(renderKickbackBudgetView(legacy, 'build_review', 5)).toContain('Adjustment history: unavailable');
   });
 
   it('inspects every gate through the CLI and keeps JSON aligned with the rendered gates', async () => {
@@ -59,7 +59,7 @@ describe('kickback budget view', () => {
       expect(json).toHaveLength(1);
       const parsed = JSON.parse(json[0]) as { gates: Array<{ gate: string; adjustments: unknown }> };
       expect(parsed.gates.map((view) => view.gate)).toEqual(['build_review', 'prd_audit', 'architecture_review_as_built']);
-      expect(parsed.gates.find((view) => view.gate === 'build_review')?.adjustments).toEqual([]);
+      expect(parsed.gates.find((view) => view.gate === 'build_review')?.adjustments).toBe('unavailable');
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }

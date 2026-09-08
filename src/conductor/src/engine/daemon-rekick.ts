@@ -105,6 +105,16 @@ export async function readRawHaltClass(worktreePath: string): Promise<string> {
   }
 }
 
+/** Identity embedded in cap HALT bodies, binding authorization to that marker. */
+export async function readKickbackHaltGeneration(worktreePath: string): Promise<string> {
+  try {
+    const body = await readFile(join(worktreePath, HALT_MARKER), 'utf-8');
+    return /^Kickback halt generation: ([^\s]+)$/m.exec(body)?.[1] ?? '';
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Episode-end recovery (Task 20): clear exactly the halts an outage episode
  * caused. Operator intent wins first, then the shared retention predicate — an
@@ -202,9 +212,11 @@ export interface ConsumeResumeAuthorizationsDeps {
   isProcessed?: (slug: string) => Promise<boolean>;
   /** Raw `.pipeline/HALT.class` text for the live halt, or '' when absent. */
   readLiveHaltClass: (slug: string) => Promise<string>;
+  /** Generation embedded in the live cap marker, or '' when absent. */
+  readLiveHaltGeneration: (slug: string) => Promise<string>;
   /** Clear the halt as one operation; `partial` retains it. */
   clearHalt: (slug: string) => Promise<ResumeHaltClearResult>;
-  emit?: (event: { type: 'halt_cleared'; cause: 'kickback-budget' }) => void | Promise<void>;
+  emit?: (slug: string, event: { type: 'halt_cleared'; cause: 'kickback-budget' }) => void | Promise<void>;
   log?: (message: string) => void;
 }
 
@@ -263,11 +275,16 @@ export async function consumeResumeAuthorizations(
         );
         continue;
       }
+      const liveGeneration = (await deps.readLiveHaltGeneration(slug)).trim();
+      if (liveGeneration !== entry.capEvidence!.haltGeneration) {
+        deps.log?.(`kickback-budget ${slug}: retained — live halt generation does not match authorization`);
+        continue;
+      }
       // Repair-then-clear, then consume. A `partial` clear leaves the halt and
       // the authorization exactly as they were, so the next iteration retries.
       if ((await deps.clearHalt(slug)) === 'partial') continue;
       if (await consumeKickbackResumeAuthorization(path, gate, entry.resumeAuthorization!.adjustmentId)) {
-        await deps.emit?.({ type: 'halt_cleared', cause: 'kickback-budget' });
+        await deps.emit?.(slug, { type: 'halt_cleared', cause: 'kickback-budget' });
         cleared.push(slug);
       }
     } catch (error) { deps.log?.(`kickback-budget ${slug}: retained (${errMsg(error)})`); }

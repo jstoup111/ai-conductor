@@ -25,7 +25,7 @@ import {
   renderOverScopeDecisionBlock,
 } from '../src/engine/accepted-widenings.js';
 import { parsePrdAuditReport } from '../src/engine/artifacts.js';
-import { readGrowth, readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
+import { readGrowth, readKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
 import { readState, writeState } from '../src/engine/state.js';
 import type { ConductState, StepName } from '../src/types/index.js';
@@ -189,7 +189,7 @@ async function createPrdAuditRemediationFixture(input: {
     ].join('\n'),
   );
   if (input.priorLaps !== undefined) {
-    await writeKickbackLedger(root, {
+    await(root, {
       version: 1,
       gates: {
         prd_audit: {
@@ -321,7 +321,7 @@ async function createAsBuiltRemediationCapFixture(input: {
     || input.priorGrowthAdded !== undefined
     || input.prdAuditPriorLaps !== undefined
   ) {
-    await writeKickbackLedger(root, {
+    await(root, {
       version: 1,
       gates: {
         ...(input.priorLaps === undefined
@@ -1042,7 +1042,7 @@ describe('prd_audit kickback', () => {
       '### Task 1: authored', '### Task 2: authored', '### Task rem-prd: recorded prd addition',
     ].join('\n'));
     await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
-    await writeKickbackLedger(root, {
+    await(root, {
       version: 1,
       gates: {},
       growth: { authored: 2, added: 1, byGate: { prd_audit: 1 } },
@@ -1499,7 +1499,7 @@ describe('prd_audit kickback', () => {
       count: 1, cumulative: 1, treeHash: 'prd-tree', lastReason: 'prior prd audit',
       priorVerdict: true, resolvedBefore: 1, laps: 1,
     };
-    await writeKickbackLedger(root, {
+    await(root, {
       version: 1,
       gates: { build_review: buildReview, prd_audit: prdAudit },
       growth: { authored: 4, added: 0, byGate: {} },
@@ -2502,3 +2502,5 @@ describe('prd_audit kickback', () => {
     }
   });
 });
+
+import { } from './kickback-ledger-test-support.js';
