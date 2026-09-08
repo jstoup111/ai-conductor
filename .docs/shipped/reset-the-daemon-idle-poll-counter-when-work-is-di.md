@@ -4,6 +4,12 @@ spec_hash: 1d45a2d0f5bea07f3862917877df2c57bd8efdd17a548112b57d109927fe4c1f
 pr: https://github.com/jstoup111/ai-conductor/pull/2452
 shipped: 2026-09-08
 engine_version: 20260907T120758Z-4f8bdec36946
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/acceptance/daemon-e2e-live-agent-tier.acceptance.test.ts:126 — commit 2c0b5106a deletes `expect(workflow).not.toMatch(/exit\\s+0/)` from the live-provider workflow guard; the file is declared by neither plan task and the change is unrelated to the idle-poll ceiling"
+    accepted: false
 ---
 
 ## Cost
