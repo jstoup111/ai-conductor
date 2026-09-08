@@ -18,14 +18,12 @@ export function kickbackBudgetView(entry: KickbackGateEntry | undefined, gate: s
   const consumed = remediation ? (entry?.laps ?? 0) : (entry?.cumulative ?? 0);
   return {
     gate, consumed, limit, remaining: Math.max(0, limit - consumed), latestReason: entry?.lastReason ?? '',
-    // A missing entry is a fresh gate, hence an empty history.  An existing
-    // legacy entry without the recovery field cannot honestly be rendered as
-    // an empty audit trail.
-    // A pre-recovery entry has neither history nor an effective budget field;
-    // its history cannot honestly be inferred as empty.
+    // Current-schema entries stamp `adjustmentsKnown` when they first consume
+    // budget, so an absent history is an authoritative empty array. Older
+    // entries retain the unavailable diagnostic.
     adjustments: entry?.adjustmentsUnavailable || (
       entry !== undefined && entry.adjustments === undefined &&
-      entry.effectiveLimit === undefined && entry.effectiveLapCap === undefined
+      entry.adjustmentsKnown !== true
     ) ? 'unavailable' : (entry?.adjustments ?? []),
     ...(remediation ? { laps: entry?.laps ?? 0, lapCap: limit } : { mechanicalFaults: entry?.mechanicalFaults ?? 0 }),
   };

@@ -39,7 +39,7 @@ describe('kickback budget view', () => {
 
   it('inspects every gate through the CLI and keeps JSON aligned with the rendered gates', async () => {
     const fixture = await makeFeature({ version: 1, gates: {
-      build_review: { count: 1, cumulative: 2, treeHash: null, lastReason: 'review', priorVerdict: true, resolvedBefore: 0 },
+      build_review: { count: 1, cumulative: 2, adjustmentsKnown: true, treeHash: null, lastReason: 'review', priorVerdict: true, resolvedBefore: 0 },
       prd_audit: { count: 1, cumulative: 1, laps: 1, treeHash: null, lastReason: 'audit', priorVerdict: true, resolvedBefore: 0 },
       architecture_review_as_built: { count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 },
     } });
@@ -59,7 +59,7 @@ describe('kickback budget view', () => {
       expect(json).toHaveLength(1);
       const parsed = JSON.parse(json[0]) as { gates: Array<{ gate: string; adjustments: unknown }> };
       expect(parsed.gates.map((view) => view.gate)).toEqual(['build_review', 'prd_audit', 'architecture_review_as_built']);
-      expect(parsed.gates.find((view) => view.gate === 'build_review')?.adjustments).toBe('unavailable');
+      expect(parsed.gates.find((view) => view.gate === 'build_review')?.adjustments).toEqual([]);
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }

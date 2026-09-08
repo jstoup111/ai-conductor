@@ -271,6 +271,7 @@ import {
   bumpSuiteInfrastructureRetriesInLedger,
   readGrowth,
   readKickbackLedger,
+  isUnreadableKickbackLedger,
   refundBuildReviewKickback,
   isUnreadableKickbackGate,
   readSuiteInfrastructureRetries,
@@ -2372,11 +2373,13 @@ export class Conductor {
     RecordedAsBuiltRemediationFinding
   >();
 
-  private async reloadPendingAsBuiltRemediationFindings(): Promise<void> {
+  private async reloadPendingAsBuiltRemediationFindings(): Promise<string | undefined> {
     const ledger = await readKickbackLedger(this.projectRoot);
+    if (isUnreadableKickbackLedger(ledger)) return 'kickback ledger is unreadable';
     for (const finding of ledger.pendingAsBuiltRemediationFindings ?? []) {
       this.pendingAsBuiltRemediationFindings.set(finding.finding, finding);
     }
+    return undefined;
   }
 
   private async persistPendingAsBuiltRemediationFindings(): Promise<void> {
@@ -2397,7 +2400,8 @@ export class Conductor {
   }
 
   private async projectPendingAsBuiltRemediationFindings(): Promise<string | undefined> {
-    await this.reloadPendingAsBuiltRemediationFindings();
+    const unreadable = await this.reloadPendingAsBuiltRemediationFindings();
+    if (unreadable) return unreadable;
     if (this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
     const [reportPath] = await findArtifactFilesForStep(
       this.projectRoot,
@@ -4556,7 +4560,10 @@ export class Conductor {
         });
         if (appendResult.success) {
           appendAttempted = true;
-          await this.reloadPendingAsBuiltRemediationFindings();
+          const unreadable = await this.reloadPendingAsBuiltRemediationFindings();
+          if (unreadable) {
+            return { kind: 'halt', haltClass: 'needs-human', detail: unreadable };
+          }
           let appendedAsBuiltFinding = false;
           for (const gap of appendGaps) {
             if (!gap.tasks?.length) continue;
@@ -4649,7 +4656,8 @@ export class Conductor {
       );
     }
     if (boundExistingAsBuiltFindings.size > 0) {
-      await this.reloadPendingAsBuiltRemediationFindings();
+      const unreadable = await this.reloadPendingAsBuiltRemediationFindings();
+      if (unreadable) return { kind: 'halt', haltClass: 'needs-human', detail: unreadable };
       for (const finding of boundExistingAsBuiltFindings.values()) {
         this.pendingAsBuiltRemediationFindings.set(finding.finding, finding);
       }
@@ -9477,6 +9485,18 @@ export class Conductor {
             // loop below.
             if (step.name === 'build_review') {
               const ledger = await readKickbackLedger(this.projectRoot);
+              if (isUnreadableKickbackLedger(ledger)) {
+                const reason = 'build_review halted: kickback ledger is unreadable; budget enforcement requires human recovery.';
+                state[step.name] = 'failed';
+                await this.haltSerialExecution({
+                  reason,
+                  haltClass: 'needs-human',
+                  persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
+                });
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
               const mechanicalEntry = ledger.gates.build_review;
               const aggregateRaw = await readFile(
                 join(this.projectRoot, BUILD_REVIEW_VERDICT),
@@ -9696,8 +9716,20 @@ export class Conductor {
             // configured with fewer generic retries; its final attempt
             // materializes the aggregate needed for the operator recovery.
             if (step.name === 'build_review') {
-              const mechanicalFaults = (await readKickbackLedger(this.projectRoot))
-                .gates.build_review?.mechanicalFaults ?? 0;
+              const ledger = await readKickbackLedger(this.projectRoot);
+              if (isUnreadableKickbackLedger(ledger)) {
+                const reason = 'build_review halted: kickback ledger is unreadable; budget enforcement requires human recovery.';
+                state[step.name] = 'failed';
+                await this.haltSerialExecution({
+                  reason,
+                  haltClass: 'needs-human',
+                  persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
+                });
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+              const mechanicalFaults = ledger.gates.build_review?.mechanicalFaults ?? 0;
               if (
                 result.currentLapMechanicalFault === true &&
                 mechanicalFaults > 0 &&

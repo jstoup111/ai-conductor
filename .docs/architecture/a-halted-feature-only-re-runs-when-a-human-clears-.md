@@ -82,8 +82,9 @@ graph TD
 - Green — new by this feature. Red — explicitly excluded; these halts stay fail-closed and are
   never retried, by adr-2026-08-17, adr-2026-06-30, adr-2026-07-26, adr-2026-08-05.
 - «…» — variable segment placeholder.
-- No new dispatch state, marker, timer, or grant store. `pickEligible`, `rekickSweep`, and
-  `HALT.class` are unchanged (adr-2026-08-05 §4, adr-2026-07-28 D2).
+- No new dispatch state, marker, timer, or grant store. `pickEligible` and `HALT.class` remain
+  unchanged; `rekickSweep` is the shared halt-retention seam used by base-advance, progress, and
+  episode-end recovery (adr-2026-08-05 §4, adr-2026-07-28 D2).
 - The CLI never clears a halt (08-29 D6; adr-2026-08-03 D6). It records an authorization in the
   ledger; the daemon boundary consumes it and clears through the existing atomic clear.
 - The `mechanical` class is unchanged in meaning; three writers move to `needs-human` because a

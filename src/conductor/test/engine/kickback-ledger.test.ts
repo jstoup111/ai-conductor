@@ -369,6 +369,27 @@ describe('kickback-ledger', () => {
     });
   });
 
+  it('rejects malformed pending remediation findings as a whole-ledger failure and round-trips valid findings', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: { build_review: { count: 1, cumulative: 1, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 } },
+      pendingAsBuiltRemediationFindings: [{ finding: 'missing-required-fields' }],
+    }));
+    expect(isUnreadableKickbackLedger(await readKickbackLedger(dir))).toBe(true);
+
+    const findings = [{
+      gate: 'architecture_review_as_built' as const,
+      finding: 'ARCH-1',
+      class: 'REMEDIABLE' as const,
+      governingClause: 'adr-2026-08-25 decision 7',
+      summary: 'repair durable projection',
+      outcome: 'remediated' as const,
+    }];
+    await writeKickbackLedger(dir, { version: 1, gates: {}, pendingAsBuiltRemediationFindings: findings });
+    expect((await readKickbackLedger(dir)).pendingAsBuiltRemediationFindings).toEqual(findings);
+  });
+
   it('invalidates only the gate whose effective limit is malformed', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({

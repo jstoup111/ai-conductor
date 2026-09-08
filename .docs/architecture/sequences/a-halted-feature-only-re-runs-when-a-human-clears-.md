@@ -44,8 +44,8 @@ sequenceDiagram
   participant C as Conductor
 
   O->>K: kickback-budget raise --feature «slug» --gate G --by N --rationale "…"
+  K->>P: establish or reuse park quiescence (D4)
   K->>K: interactive-terminal gate + machine-scoped identity (D3)
-  K->>P: establish park quiescence (D4)
   K->>LG: stage adjustment {kind raise, by N, rationale, generation} (D5)
   K->>S: kickback_budget_adjustment_authorized {adjustmentId, gate, kind, operator, before/after} (D7)
   K->>LG: apply: effectiveLimit + N, history appended (D1/D2)

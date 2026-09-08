@@ -531,6 +531,25 @@ describe('engine/conductor', () => {
       expect((await readKickbackLedger(dir)).pendingAsBuiltRemediationFindings).toBeUndefined();
     });
 
+    it('refuses pending as-built projection when its ledger is unreadable', async () => {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+        version: 1,
+        gates: {},
+        pendingAsBuiltRemediationFindings: [{ finding: 'malformed' }],
+      }));
+      const conductor = new Conductor({
+        stateFilePath: join(dir, '.pipeline', 'conduct-state.json'),
+        stepRunner: createMockStepRunner(),
+        events: new ConductorEventEmitter(),
+        projectRoot: dir,
+      });
+
+      await expect((conductor as unknown as {
+        projectPendingAsBuiltRemediationFindings: () => Promise<string | undefined>;
+      }).projectPendingAsBuiltRemediationFindings()).resolves.toContain('kickback ledger is unreadable');
+    });
+
     it('halts an existing-task lap at the as-built lap cap without naming plan growth', async () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });

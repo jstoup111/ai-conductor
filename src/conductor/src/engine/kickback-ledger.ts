@@ -65,6 +65,8 @@ export interface KickbackGateEntry {
   effectiveLapCap?: number;
   /** Completed operator-authorized budget changes. */
   adjustments?: KickbackBudgetAdjustment[];
+  /** Current-schema marker: an absent history is authoritatively empty. */
+  adjustmentsKnown?: true;
   /** Read-only marker retained when a persisted adjustment history is malformed. */
   adjustmentsUnavailable?: boolean;
   /** A staged adjustment awaiting its audit event and durable application. */
@@ -512,6 +514,15 @@ function parseKickbackLedger(value: unknown): KickbackLedger | undefined {
       return [[gate, normalized]];
     }),
   );
+  // These are ledger-level enforcement records. Silently omitting either
+  // creates fresh allowance or loses a durable remediation finding.
+  if (ledger.growth !== undefined && !isPlanGrowthRecord(ledger.growth)) {
+    return unreadableLedger(normalizeKickbackLedger({ version: 1, gates }).gates);
+  }
+  if (
+    ledger.pendingAsBuiltRemediationFindings !== undefined &&
+    !isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
+  ) return unreadableLedger(normalizeKickbackLedger({ version: 1, gates }).gates);
   const parsed: PersistedKickbackLedger = {
     version: 1,
     gates,
@@ -571,7 +582,8 @@ export async function readKickbackLedgerResult(projectRoot: string): Promise<Kic
 
   try {
     const parsed: unknown = JSON.parse(await readFile(ledgerPath, 'utf-8'));
-    if (isKickbackLedger(parsed)) return { kind: 'ok', ledger: normalizeKickbackLedger(parsed) };
+    const ledger = parseKickbackLedger(parsed);
+    if (ledger && !isUnreadableKickbackLedger(ledger)) return { kind: 'ok', ledger };
 
     if (typeof parsed === 'object' && parsed !== null && (parsed as { version?: unknown }).version !== 1) {
       return { kind: 'unreadable', reason: 'kickback ledger has an unsupported version' };
@@ -586,29 +598,22 @@ export async function readKickbackLedgerResult(projectRoot: string): Promise<Kic
 /** Read durable state while retaining valid sibling gates for diagnostics. */
 export async function readKickbackLedger(projectRoot: string): Promise<KickbackLedger> {
   const ledgerPath = join(projectRoot, KICKBACK_LEDGER_PATH);
-  try {
-    const parsed: unknown = JSON.parse(await readFile(ledgerPath, 'utf-8'));
-    const ledger = parseKickbackLedger(parsed);
-    if (ledger) {
-      if (ledger.unreadable) console.warn(`[kickback-ledger] corrupt ledger gate entry at ${ledgerPath}; retaining sibling counts`);
-      return ledger;
+  const result = await readKickbackLedgerResult(projectRoot);
+  if (result.kind === 'ok') {
+    if (result.ledger.unreadable) {
+      console.warn(`[kickback-ledger] corrupt ledger gate entry at ${ledgerPath}; retaining sibling counts`);
     }
-    if (typeof parsed === 'object' && parsed !== null && (parsed as { version?: unknown }).version !== 1) {
-      console.warn(`[kickback-ledger] unsupported ledger version at ${ledgerPath}`);
-      return unreadableLedger();
-    }
-
-    console.warn(`[kickback-ledger] corrupt ledger at ${ledgerPath}`);
-    return unreadableLedger();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      console.warn(
-        `[kickback-ledger] unable to read ledger at ${ledgerPath}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return unreadableLedger();
-    }
+    return result.ledger;
   }
-  return emptyLedger();
+  if (result.kind === 'absent') return emptyLedger();
+  if (result.reason.includes('unsupported version')) {
+    console.warn(`[kickback-ledger] unsupported ledger version at ${ledgerPath}`);
+  } else if (result.reason.startsWith('kickback ledger is unreadable:')) {
+    console.warn(`[kickback-ledger] unable to read ledger at ${ledgerPath}: ${result.reason.slice('kickback ledger is unreadable: '.length)}`);
+  } else {
+    console.warn(`[kickback-ledger] corrupt ledger at ${ledgerPath}`);
+  }
+  return unreadableLedger();
 }
 
 /**
@@ -809,6 +814,7 @@ export function bumpKickbackGate(
     // checked, then clears it back to true after that single use.
     priorVerdict: true,
     resolvedBefore: input.resolvedCount,
+    adjustmentsKnown: true,
   };
   const madeProgress =
     previous.treeHash !== input.treeHash || input.resolvedCount > previous.resolvedBefore;
@@ -816,6 +822,7 @@ export function bumpKickbackGate(
 
   const nextEntry: KickbackGateEntry = {
     ...previous,
+    ...(entry === undefined ? { adjustmentsKnown: true as const } : {}),
     count: nextCount,
     cumulative: previous.cumulative + 1,
     treeHash: input.treeHash,
@@ -1030,9 +1037,11 @@ export async function bumpSuiteInfrastructureRetriesInLedger(
       lastReason: '',
       priorVerdict: true,
       resolvedBefore: 0,
+      adjustmentsKnown: true,
     };
     const nextEntry: KickbackGateEntry = {
       ...entry,
+      adjustmentsKnown: true,
       suiteInfrastructureRetries: (entry.suiteInfrastructureRetries ?? 0) + 1,
     };
     await writeKickbackLedgerUnsafe(projectRoot, {
@@ -1211,6 +1220,7 @@ export async function applyKickbackBudgetAdjustment(
     const raised = adjustment.kind === 'raise' ? adjustment.afterLimit : beforeLimit;
     const next: KickbackGateEntry = {
       ...entry,
+      adjustmentsKnown: true,
       ...(remediation
         ? { effectiveLapCap: raised, laps: adjustment.kind === 'reset' ? 0 : entry.laps ?? 0 }
         : { effectiveLimit: raised, cumulative: adjustment.kind === 'reset' ? 0 : entry.cumulative }),
