@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RED acceptance specs for "Generated HARNESS.md Model-Selection Table"
+// RED acceptance specs for "Generated ARCHITECTURE.md Model-Selection Table"
 // (.docs/stories/generated-model-table.md, TS-2 happy path 3 + negative path 1).
 //
 // These drive the CLI's PUBLIC in-process entry point (the same one
@@ -65,7 +65,7 @@ describe('Generator write mode rewrites only the marked region (TS-2)', () => {
     'happy path: write regenerates the region, then an immediate check is idempotent (exit 0)',
     async () => {
       dir = await mkdtemp(join(tmpdir(), 'generate-model-table-acceptance-'));
-      const file = join(dir, 'HARNESS.md');
+      const file = join(dir, 'ARCHITECTURE.md');
       await writeFile(file, MARKED_FIXTURE, 'utf8');
 
       const writeResult = await runCli({ harnessMdPath: file, mode: 'write' });
@@ -100,7 +100,7 @@ describe('Generator write mode rewrites only the marked region (TS-2)', () => {
     'negative path: missing BEGIN/END markers is a hard error and the file is left untouched',
     async () => {
       dir = await mkdtemp(join(tmpdir(), 'generate-model-table-acceptance-'));
-      const file = join(dir, 'HARNESS.md');
+      const file = join(dir, 'ARCHITECTURE.md');
       await writeFile(file, NO_MARKER_FIXTURE, 'utf8');
       const before = await readFile(file, 'utf8');
 
@@ -121,9 +121,9 @@ describe('public CLI provider-labelled contract drift', () => {
     'reports a useful diff for every representative provider-labelled table mutation',
     async () => {
       dir = await mkdtemp(join(tmpdir(), 'generate-model-table-provider-drift-'));
-      const fixtureHarness = join(dir, 'HARNESS.md');
+      const fixtureHarness = join(dir, 'ARCHITECTURE.md');
 
-      const committed = await readFile(join(harnessRoot, 'HARNESS.md'), 'utf8');
+      const committed = await readFile(join(harnessRoot, 'ARCHITECTURE.md'), 'utf8');
       const lines = committed.split('\n');
       const beginIndex = lines.indexOf('<!-- BEGIN GENERATED: model-selection-table -->');
       const endIndex = lines.indexOf('<!-- END GENERATED: model-selection-table -->');
@@ -249,7 +249,7 @@ describe('public CLI provider-labelled contract drift', () => {
           seeded: document !== committed,
           driftExit: result.exitCode === 1,
           unifiedDiff:
-            /^--- a\/.*HARNESS\.md$/m.test(output) && /^\+\+\+ b\/.*HARNESS\.md$/m.test(output),
+            /^--- a\/.*ARCHITECTURE\.md$/m.test(output) && /^\+\+\+ b\/.*ARCHITECTURE\.md$/m.test(output),
           usefulDatum:
             Boolean(restored) &&
             output.includes(`+${restored}`) &&

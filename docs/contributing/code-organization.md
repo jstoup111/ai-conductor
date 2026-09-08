@@ -131,7 +131,7 @@ triggers `process.exit` or stdio side effects.
 
 | File | Generates |
 | --- | --- |
-| `generate-model-table.ts` | The HARNESS.md model-selection table, from `engine/provider-model-policy.ts` and `engine/model-table-metadata.ts`. |
+| `generate-model-table.ts` | The ARCHITECTURE.md model-selection table, from `engine/provider-model-policy.ts` and `engine/model-table-metadata.ts`. |
 | `generate-docs-guard-hook.ts` | `hooks/claude/docs-guard.sh`, from `engine/session-hook-assets.ts`. |
 | `generate-docs-guard-hook-main.ts` | The direct-execution shell for the above. |
 

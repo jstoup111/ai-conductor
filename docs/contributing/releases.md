@@ -306,4 +306,5 @@ PR never shows two contradictory ones. It is also strictly downstream of validat
 invalid disposition fails the check and leaves labels untouched, and a label-apply failure
 (auth, rate limit, network) is logged but never fails the required check.
 
-All work happens on a feature branch; never commit directly to `main`.
+All work happens in an isolated git worktree on a feature branch. Create both before making
+changes; a feature branch in the primary checkout is not sufficient. Never commit directly to `main`.

@@ -7,7 +7,7 @@ nav_order: 5
 # Model and effort resolution
 
 How the engine picks a model, a reasoning effort, a retry budget, and a review mode for every step, and
-how those values stay in sync with the table in `HARNESS.md`. Source-ordered: engine steps follow
+how those values stay in sync with the table in `ARCHITECTURE.md`. Source-ordered: engine steps follow
 `StepName` declaration order, not alphabetical order.
 
 ## Precedence chain
@@ -303,9 +303,9 @@ Change one thing — add `defaults: { model: sonnet }` — and step 3 stops at l
 step runs on `sonnet` (a Claude name, on a Codex provider) and the L-tier promotion never applies. Model
 names are not enum-checked at any point.
 
-## Keeping HARNESS.md in sync
+## Keeping ARCHITECTURE.md in sync
 
-The model-selection table in `HARNESS.md` is generated, not hand-written. Regenerate it with:
+The model-selection table in `ARCHITECTURE.md` is generated, not hand-written. Regenerate it with:
 
 ```bash
 bin/generate-model-table
@@ -325,7 +325,7 @@ Exit codes (`generate-model-table.ts:396-398`): `0` ok, `1` drift (check mode on
 marker error.
 
 The region is delimited by `<!-- BEGIN GENERATED: model-selection-table -->` and
-`<!-- END GENERATED: model-selection-table -->`, each alone on its line (`HARNESS.md:147` and `:198`). A
+`<!-- END GENERATED: model-selection-table -->`, each alone on its line (in `ARCHITECTURE.md`). A
 missing, duplicated, or out-of-order marker throws a `MarkerError` and leaves the document untouched
 (`generate-model-table.ts:49-89`).
 
