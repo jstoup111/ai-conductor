@@ -15,13 +15,13 @@ that I can make the whole scope decision in one pass.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a prd-audit verdict with three OVER_SCOPE findings whose intent relation is outside-visible and no prior decisions, when the conductor halts, then the halt body contains one fenced `over-scope-decisions` JSON array with exactly three entries, each `{criterion, summary, relation, decision: "pending"}`
+- Given a prd-audit verdict with three OVER_SCOPE findings whose intent relation is outside-visible and no prior decisions, when the conductor halts, then the halt body contains one fenced `over-scope-decisions` JSON array with exactly three entries, each carrying criterion, original summary, relation, pending decision, and an engine-stamped original-offer reference
 - Given the same verdict, when the halt body is rendered, then it also contains human prose naming the blocking criteria and the operator lever (edit each `decision` to `accept` or `refuse` with a `rationale`, then clear)
 - Given the halt fires on the concurrent SHIP-join path instead of the serial tail, when the halt body is rendered, then it is byte-identical in structure to the serial-tail rendering (both sites call the shared helper)
 
 #### Negative Paths
 - Given a verdict with one outside-visible finding and one unaccepted outside-harmless finding, when the halt renders, then the decision block contains only the outside-visible criterion and the outside-harmless finding is never offered
-- Given a verdict where every OVER_SCOPE finding is within intent or already decided, when routing runs, then no over-scope halt is written
+- Given a verdict where every OVER_SCOPE finding is within intent or currently accepted and no defect remains, when routing runs, then no over-scope halt is written
 - Given a verdict with an outside-visible finding that already has a recorded accept decision, when the halt set is computed, then that criterion is excluded and, if nothing else blocks, no halt occurs
 
 ### Done When
@@ -46,7 +46,7 @@ multi-finding audit costs one round trip instead of N.
 #### Negative Paths
 - Given a cleared body whose entries are all still `decision: "pending"`, when the harvest runs, then nothing is recorded and the halt re-fires with the same blocking set
 - Given a recording write that fails (e.g. unwritable `.pipeline/`), when the harvest runs, then the failure never throws into the conductor's halt/clear seam and the defect is surfaced via a spine event
-- Given the same cleared body harvested twice (duplicate wake), when the second harvest runs, then no duplicate decision entries are created (idempotent by criterion)
+- Given the same cleared body harvested twice (duplicate wake), when the second harvest runs, then no duplicate decision entries are created (idempotent by original offer/entry identity; replay never overrides a later explicit decision)
 
 ### Done When
 - [ ] Wholesale parser reads the full fenced array from `HALT.cleared`; only explicit accept/refuse entries with non-empty rationale are recorded
@@ -83,8 +83,8 @@ same halt never reappears unchanged and refusal is not re-litigated every lap.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a recorded refuse decision for criterion S5.2 and no other blocking findings, when the conductor re-halts, then the halt body names S5.2 as refused — rework required — and offers no decision entry for it
-- Given one refused criterion and one new undecided outside-visible finding, when the halt renders, then the refused criterion appears in the refused prose and only the new finding appears in the decision block
+- Given a recorded refuse decision for criterion S5.2 and no other blocking findings, when the conductor re-halts, then the halt body names S5.2 as refused — rework required — and offers an explicit revise-decision entry tied to the existing refusal with no default acceptance
+- Given one refused criterion and one new undecided outside-visible finding, when the halt renders, then the refused criterion appears in the refused prose and the new finding has a pending entry while any explicit revision entry for the refusal names the prior decision
 - Given a refused criterion that the next prd-audit report no longer flags OVER_SCOPE, when routing runs, then the stale refusal has no effect and does not block
 
 #### Negative Paths
@@ -92,7 +92,7 @@ same halt never reappears unchanged and refusal is not re-litigated every lap.
 - Given a refused criterion, when the identical report and refusal recur across laps over an unchanged tree, then the existing convergence bound still terminates the run rather than looping unboundedly
 
 ### Done When
-- [ ] The shared blocking predicate treats refused criteria as blocking-but-already-decided: they block the gate, are excluded from the decision block, and are named in the refused prose
+- [ ] The shared blocking predicate treats refused criteria as blocking-but-already-decided: they block the gate, are named in the refused prose, and may have an explicit revision entry tied to the prior decision rather than a fresh pending acceptance
 - [ ] prd_audit completion predicate in `artifacts.ts` and `routePrdAuditOverScope` consume the same single predicate
 - [ ] Tests cover refused-only halt text, mixed refused+new halt, and stale-refusal mootness
 
@@ -119,27 +119,27 @@ intent is never silently discarded and acceptance is never fabricated.
 - [ ] Partial validity is per-entry: valid entries record, defective entries refuse
 - [ ] Tests cover all four defect classes plus the unrelated-halt no-op
 
-## Story 6: Old formats are removed and read as absent
+## Story 6: Existing decisions survive upgrade and invalid history is explicit
 
-**Requirement:** D5
+**Requirement:** D5 as amended by #2429
 
-As a harness owner, I want exactly one marker format and one record shape so that the clear path
-has a single grammar (operator-authorized pre-v1 break, no compatibility).
+As an operator, I want supported existing decisions retained and unsupported or corrupt records identified so upgrade cannot silently erase my authority.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the shipped codebase, when searched, then `OVER_SCOPE_ACCEPT:` rendering and its single-match reader no longer exist in production code
-- Given an `.pipeline/accepted-widenings.json` in the old `entries` shape, when the tolerant reader loads it, then it reads as absent (no decisions) without throwing
+- Given valid version-1 decisions and fenced legacy cleared entries, when migration runs, then the original evidence and decisions are retained with their attribution and ordering
+- Given a legacy decision whose current finding is reworded, when captured, then the original decision persists before its current binding is judged
 
 #### Negative Paths
-- Given a `HALT.cleared` body carrying only an old single-line `OVER_SCOPE_ACCEPT:` marker, when the harvest runs, then nothing is recorded and the feature re-halts in the new block format
-- Given a decisions file with unparseable JSON, when read, then the reader returns absent without throwing and the conductor proceeds to re-halt normally
+- Given an old entries-shaped store or retired single-line marker, when recovery reads it, then it names the unsupported format and preserves the source instead of silently treating it as absent
+- Given unparseable decision JSON, when read, then the corruption is named, the source is preserved, and completion is blocked rather than treating history as empty
+- Given ambiguous legacy equivalence or interrupted migration, when recovery resumes, then no invented binding or duplicate decision grants approval
 
 ### Done When
-- [ ] Old marker constant, renderer, and reader are deleted; grep of production source finds no `OVER_SCOPE_ACCEPT:`
-- [ ] Reader validates the new shape strictly; any non-conforming store reads as absent
-- [ ] Tests cover old-shape store, old-form cleared body, and corrupt JSON
+- [ ] Supported record inventories retain original evidence, attribution, ordering, and decisions after migration
+- [ ] Recovery distinguishes absent, unsupported, corrupt, and ambiguous legacy state without overwriting source evidence
+- [ ] Restart can complete an interrupted supported migration without duplicating authority
 
 ## Story 7: Decisions ride the event spine and project into the record
 

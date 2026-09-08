@@ -19,6 +19,8 @@ representable state: the candidate's `accepted: false` field is written but neve
    `outside-visible`, and no durable decision for its criterion. Both conductor halt sites and
    `routePrdAuditOverScope` share this predicate; a non-blocking finding is never offered.
 
+   > **Amended 2026-09-07 by #2429:** Blocking decisions now use the shared effective classification of adr-2026-09-07-durable-prd-widening-decision-reconciliation D8; refusals remain blocking and NC authority follows validated case relationships, while story-criterion authority remains criterion-based.
+
 2. **One fenced decision block, all blocking findings.** The halt body (composed and passed to
    `writeHaltMarker` — never written directly, per adr-2026-07-28 D5) carries one fenced
    ```` ```json over-scope-decisions ```` block: an array with one entry per blocking finding —
@@ -29,11 +31,15 @@ representable state: the candidate's `accepted: false` field is written but neve
    body — inverting the sidecar-for-machine-data pattern (adr-2026-08-05 build-settle D7) —
    because the operator must *author* the decisions, which no engine-written sidecar affords.
 
+   > **Amended 2026-09-07 by #2429:** New offers persist original source/case provenance before rendering an editable decision block; explicit offer references accompany the human-editable decision and rationale under adr-2026-09-07-durable-prd-widening-decision-reconciliation D3. This extends the operator handoff without using report prose as identity.
+
 3. **Wholesale reader; `pending` is inert.** On the next prd_audit lap the conductor parses the
    `HALT.cleared` block wholesale. Only explicit `decision: "accept"` or `"refuse"` entries with
    a non-empty `rationale` are recorded. `pending` (or absent decision) records nothing — so a
    machine clear (daemon rekick rename, rewind, reseal `--clear-halt`) can never mint an
    acceptance or refusal (adr-2026-08-19 D6 anti-laundering).
+
+   > **Amended 2026-09-07 by #2429:** Capture validates against the original offer before current-report reconciliation and can run at PRD entry as well as routing. Replay cannot override a later decision. Pending and machine clears remain inert; see adr-2026-09-07-durable-prd-widening-decision-reconciliation D3-D4.
 
 4. **Durable decisions, one record, format overwritten in place.** `.pipeline/accepted-widenings.json`
    keeps `version: 1` but its schema is redefined: `decisions: [{ criterion, summary,
@@ -68,6 +74,8 @@ representable state: the candidate's `accepted: false` field is written but neve
    > mismatch path fails toward a re-ask, never a mis-applied decision. Boundary: prd-audit
    > no-owner scope findings only — no precedent for other finding-identity schemas.
 
+   > **Amended 2026-09-07 by #2429:** Use version-2 operator decisions and domain-tagged case history under adr-2026-09-07-durable-prd-widening-decision-reconciliation D1-D4. Preserve valid version-1 rows and legacy cleared decisions. Corruption is a named recovery condition, not absence. NC wording/ordinal changes enter source-complete judgment; a validated same-case relationship retains authority. Explicit supersession governs reversals.
+
 5. **No backwards compatibility (operator-authorized pre-v1 break).** The single-line
    `OVER_SCOPE_ACCEPT:` marker, its single-match reader, and the old record shape are removed
    in the same change. An old-shape store or an old-form `HALT.cleared` body reads as absent.
@@ -75,6 +83,8 @@ representable state: the candidate's `accepted: false` field is written but neve
    read-and-upgrade-in-place pattern (adr-2026-07-26 protected-artifact-seal-rebaseline D4):
    the feature is not live for any consumer, and the operator explicitly accepted that any
    in-flight old-form state is lost (2026-08-24).
+
+   > **Amended 2026-09-07 by #2429:** The pre-v1 loss policy is historical and does not authorize loss on this migration. Preserve supported version-1 decisions and fenced legacy clears; name unsupported retired formats and recovery, under adr-2026-09-07-durable-prd-widening-decision-reconciliation D4.
 
 6. **Refusal semantics.** A refused criterion still blocks the gate, but the next halt is a
    changed body: it names the refused criteria as "refused — rework required" and offers
@@ -84,10 +94,14 @@ representable state: the candidate's `accepted: false` field is written but neve
    one-owner-per-review-question; adr-2026-08-22 done-when-evidence D: plan-gap-shaped halts).
    The same halt with the same blocking set never reappears unchanged after a decided clear.
 
+   > **Amended 2026-09-07 by #2429:** A currently refused finding remains blocking and creates no repair task. It may expose an explicit revise-decision entry naming the prior decision, with no default acceptance; an old clear cannot reverse it. See adr-2026-09-07-durable-prd-widening-decision-reconciliation D3 and D8.
+
 7. **Fail-closed evidentiary defects.** A malformed block, an entry naming a criterion the
    audit did not flag, or an accept/refuse without rationale is an evidentiary defect
    (adr-2026-08-24 evidentiary-defects-are-not-waivable): nothing is recorded, a spine event
    names the defect, and the re-halt states what was unreadable — never a silent null.
+
+   > **Amended 2026-09-07 by #2429:** A changed current key or summary does not invalidate a valid original decision. Defects are checked against original provenance, and valid sibling decisions may persist while defects remain visible blockers. See adr-2026-09-07-durable-prd-widening-decision-reconciliation D3-D4 and D9.
 
 8. **Spine events.** Recording a decision emits a new `ConductorEvent` (declared in the total
    `EVENT_SINKS` registry, adr-2026-07-26); the re-halt rides the existing `loop_halt` path.
@@ -97,6 +111,8 @@ representable state: the candidate's `accepted: false` field is written but neve
    silently disappearing). The prd_audit gate surface already invalidates on feature-runtime
    change; the decisions file participates in `classifyPrdAuditGaps`'s clean computation so an
    accepted widening changes routing on the next lap (adr-2026-07-13 D1).
+
+   > **Amended 2026-09-07 by #2429:** Routing, projection, completion, and ship rendering consume the same current validated binding and decision revision; no reader re-derives NC identity from prose. Reconciliation occurrences ride the existing event spine under adr-2026-09-07-durable-prd-widening-decision-reconciliation D8-D9.
 
 ## Consequences
 
