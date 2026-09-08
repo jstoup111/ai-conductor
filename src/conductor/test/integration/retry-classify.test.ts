@@ -376,6 +376,7 @@ describe('integration/retry-classify (#646)', () => {
     await conductor.run();
 
     expect(dispatches).toBe(3);
+    expect(retryDecisions).toHaveLength(0);
     expect(retryDecisions).not.toContainEqual(expect.objectContaining({ signal: 'terminal-refusal' }));
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(`${refusalReason}\n`);
     await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('protected-artifact');

@@ -5064,8 +5064,9 @@ export type RetryDecision =
 
 /**
  * Pure, synchronous rerun-vs-route classifier for the SHIP-tail verdict steps
- * (issue #646). Out of scope steps (e.g. `build`) always rerun. In scope,
- * signal (a) "named-route" fires when the step has a real, fresh, non-passing
+ * (issue #646). A terminal refusal is classified before the eligible-step
+ * check, so callers must keep out-of-scope steps such as `build` from this
+ * helper. In scope, signal (a) "named-route" fires when the step has a real, fresh, non-passing
  * decision to route on — `completion.routeClass === 'named-route'` for the
  * review steps, or `prdAuditNonClean` for prd_audit — regardless of attempt
  * number. Signal (b) "identical-repeat" fires only when the retry has already

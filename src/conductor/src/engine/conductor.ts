@@ -9645,7 +9645,7 @@ export class Conductor {
             // owns its retry policy.
             const retryRoutingEnabled =
               this.config.retry_routing?.enabled ?? RETRY_ROUTING_DEFAULTS.enabled;
-            if (result.refusal !== undefined && retryRoutingEnabled) {
+            if (result.refusal !== undefined && retryRoutingEnabled && step.name !== 'build') {
               const retryDecision = classifyRetryDecision({
                 step: step.name,
                 completion: { done: false },
