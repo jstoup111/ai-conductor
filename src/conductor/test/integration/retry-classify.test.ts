@@ -1,4 +1,4 @@
-// Covers: task:3, task:6, task:7
+// Covers: task:3, task:4, task:6, task:7
 /**
  * Acceptance specs for the rerun-vs-route retry classifier (#646).
  *
@@ -271,6 +271,65 @@ describe('integration/retry-classify (#646)', () => {
       signal: 'terminal-refusal',
     }));
     expect(stepRetries).toHaveLength(0);
+  });
+
+  // ── Task 4: non-refusal results keep the ordinary retry policy ─────────
+
+  it('Task 4: retries an ordinary failure through its full budget without terminal-refusal routing', async () => {
+    let dispatches = 0;
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async () => {
+        dispatches++;
+        return { success: false, output: 'provider exited 1' };
+      },
+    };
+    const { retryDecisions, stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 3,
+      fromStep: 'coverage_binding',
+    });
+
+    await conductor.run();
+
+    expect(dispatches).toBe(3);
+    expect(stepRetries).toHaveLength(2);
+    expect(retryDecisions).not.toContainEqual(expect.objectContaining({ signal: 'terminal-refusal' }));
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toMatch(
+      /coverage_binding.*retries exhausted/,
+    );
+  });
+
+  it('Task 4: a successful step emits no terminal-refusal retry decision', async () => {
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async (step) => step === 'coverage_binding'
+        ? { success: true, output: 'bound coverage' }
+        : { success: false, output: 'stop after the success observation' },
+    };
+    const { retryDecisions } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+      fromStep: 'coverage_binding',
+    });
+
+    await conductor.run();
+
+    expect(retryDecisions).not.toContainEqual(expect.objectContaining({ signal: 'terminal-refusal' }));
   });
 
   // ── Task 6: refusal output preserves the operator diagnostic ───────────
