@@ -5095,7 +5095,7 @@ export function classifyRetryDecision(input: {
     unretryableInputs,
     terminalRefusal,
   } = input;
-  if (terminalRefusal === 'needs-human') {
+  if (terminalRefusal === 'needs-human' || terminalRefusal === 'validation-verdict') {
     return { decision: 'route', signal: 'terminal-refusal' };
   }
   if (!RETRY_CLASSIFY_STEPS.has(step)) return { decision: 'rerun' };
