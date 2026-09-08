@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-08T18:04:59.389Z
 Slug: no-daemon-level-metrics-queue-depth-halts-and-gate
 Class: needs-human
 Halting step: prd_audit
