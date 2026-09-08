@@ -4,6 +4,12 @@ spec_hash: cb223a9eb93ea40823dfeb8db1b21c23cf5c775e36131640eef5e439b2d04d96
 pr: https://github.com/jstoup111/ai-conductor/pull/2460
 shipped: 2026-09-08
 engine_version: 20260907T120758Z-4f8bdec36946
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/acceptance/daemon-e2e-live-agent-tier.acceptance.test.ts:128 — commit 2aa990f72 replaces the live-workflow assertion `not.toMatch(/exit\\s+0/)` with a positive grep-for-success match; unrelated to evaluator routing, named by no plan task or story"
+    accepted: false
 ---
 
 ## Cost
