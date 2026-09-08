@@ -33,7 +33,7 @@ export interface BuildReviewScopedEscalationScheduler {
 const defaultBuildReviewScopedEscalationScheduler: BuildReviewScopedEscalationScheduler = {
   schedule(callback, delayMs) {
     const timer = setTimeout(callback, delayMs);
-    timer.unref();
+    timer.unref(); // portability-ok: detaches the bounded escalation timer from process exit; child close still settles the run
     return timer;
   },
   cancel(handle) {
