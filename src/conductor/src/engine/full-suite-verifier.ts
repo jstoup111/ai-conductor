@@ -316,17 +316,33 @@ export async function classifyFullSuiteRecoveryClaim(
     unownedStaleMs: number;
   },
 ): Promise<FullSuiteRecoveryClaimClassification> {
+  return (await inspectFullSuiteRecoveryClaim(lockPath, options)).classification;
+}
+
+interface FullSuiteRecoveryClaimInspection {
+  classification: FullSuiteRecoveryClaimClassification;
+  serialized?: string;
+}
+
+async function inspectFullSuiteRecoveryClaim(
+  lockPath: string,
+  options: Required<Pick<FullSuiteLockOptions, 'clock' | 'processIsLive'>> & {
+    unownedStaleMs: number;
+  },
+): Promise<FullSuiteRecoveryClaimInspection> {
   const claimPath = join(lockPath, FULL_SUITE_LOCK_RECOVERY_CLAIM);
   let serialized: string;
   try {
     serialized = await readFile(claimPath, 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { status: 'VANISHED' };
+      return { classification: { status: 'VANISHED' } };
     }
     return {
-      status: 'FAILED',
-      message: `Unable to read full-suite recovery claim: ${lockErrorMessage(error)}`,
+      classification: {
+        status: 'FAILED',
+        message: `Unable to read full-suite recovery claim: ${lockErrorMessage(error)}`,
+      },
     };
   }
 
@@ -337,11 +353,13 @@ export async function classifyFullSuiteRecoveryClaim(
       claimIsLive = options.processIsLive(claim.pid);
     } catch (error) {
       return {
-        status: 'FAILED',
-        message: `Unable to verify full-suite recovery claim liveness: ${lockErrorMessage(error)}`,
+        classification: {
+          status: 'FAILED',
+          message: `Unable to verify full-suite recovery claim liveness: ${lockErrorMessage(error)}`,
+        },
       };
     }
-    if (!claimIsLive) return { status: 'ORPHANED' };
+    if (!claimIsLive) return { classification: { status: 'ORPHANED' }, serialized };
   }
 
   let ageMs: number;
@@ -349,16 +367,21 @@ export async function classifyFullSuiteRecoveryClaim(
     ageMs = options.clock() - (await stat(claimPath)).mtimeMs;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { status: 'VANISHED' };
+      return { classification: { status: 'VANISHED' } };
     }
     return {
-      status: 'FAILED',
-      message: `Unable to inspect full-suite recovery claim: ${lockErrorMessage(error)}`,
+      classification: {
+        status: 'FAILED',
+        message: `Unable to inspect full-suite recovery claim: ${lockErrorMessage(error)}`,
+      },
     };
   }
-  return ageMs < options.unownedStaleMs
-    ? { status: 'OCCUPIED' }
-    : { status: 'ORPHANED' };
+  return {
+    classification: ageMs < options.unownedStaleMs
+      ? { status: 'OCCUPIED' }
+      : { status: 'ORPHANED' },
+    serialized,
+  };
 }
 
 function defaultProcessIsLive(pid: number): boolean {
@@ -458,9 +481,11 @@ async function removeOwnedRecoveryClaim(
 
 async function stealOrphanedRecoveryClaim(
   lockPath: string,
+  expectedClaim: string,
 ): Promise<
   | { status: 'RECLAIMED' }
   | { status: 'VANISHED' }
+  | { status: 'OCCUPIED' }
   | { status: 'FAILED'; message: string }
 > {
   const claimPath = join(lockPath, FULL_SUITE_LOCK_RECOVERY_CLAIM);
@@ -476,6 +501,28 @@ async function stealOrphanedRecoveryClaim(
       status: 'FAILED',
       message: `Unable to reclaim stale full-suite recovery claim: ${lockErrorMessage(error)}`,
     };
+  }
+  let stolenClaim: string;
+  try {
+    stolenClaim = await readFile(stolenPath, 'utf8');
+  } catch (error) {
+    return {
+      status: 'FAILED',
+      message: `Unable to verify reclaimed full-suite recovery claim: ${lockErrorMessage(error)}`,
+    };
+  }
+  if (stolenClaim !== expectedClaim) {
+    try {
+      await writeFile(claimPath, stolenClaim, { encoding: 'utf8', flag: 'wx' });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return { status: 'OCCUPIED' };
+      return {
+        status: 'FAILED',
+        message: `Unable to restore replacement full-suite recovery claim: ${lockErrorMessage(error)}`,
+      };
+    }
+    await rm(stolenPath).catch(() => undefined);
+    return { status: 'OCCUPIED' };
   }
   await rm(stolenPath).catch(() => undefined);
   return { status: 'RECLAIMED' };
@@ -516,14 +563,22 @@ async function quarantineClaimedStaleLock(
       };
     }
 
-    const classification = await classifyFullSuiteRecoveryClaim(lockPath, options);
+    const inspection = await inspectFullSuiteRecoveryClaim(lockPath, options);
+    const { classification } = inspection;
     if (classification.status === 'FAILED') {
       return { status: 'FAILED', message: classification.message };
     }
     if (classification.status === 'OCCUPIED') return { status: 'OCCUPIED' };
     if (classification.status === 'ORPHANED') {
-      const reclaimed = await stealOrphanedRecoveryClaim(lockPath);
+      if (inspection.serialized === undefined) {
+        return {
+          status: 'FAILED',
+          message: 'Unable to verify reclaimed full-suite recovery claim',
+        };
+      }
+      const reclaimed = await stealOrphanedRecoveryClaim(lockPath, inspection.serialized);
       if (reclaimed.status === 'FAILED') return reclaimed;
+      if (reclaimed.status === 'OCCUPIED') return reclaimed;
     }
     try {
       await writeFile(claimPath, serializedClaim, { encoding: 'utf8', flag: 'wx' });

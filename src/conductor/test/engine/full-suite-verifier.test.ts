@@ -3581,6 +3581,59 @@ describe('FullSuiteVerifier', () => {
     }
   });
 
+  it('keeps a replacement recovery claim when it changes after orphan classification', async () => {
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    const projectRoot = await makeConfiguredProject('full-suite-replacement-recovery-claim-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const claimPath = join(lockPath, 'recovery.json');
+    const orphanClaim = JSON.stringify({
+      version: 1,
+      pid: 2_147_483_646,
+      token: 'dead-recoverer',
+      claimedAt: '2026-09-07T11:59:59.999Z',
+    });
+    const replacementClaim = JSON.stringify({
+      version: 1,
+      pid: 22,
+      token: 'live-recoverer',
+      claimedAt: '2026-09-07T12:00:00.000Z',
+    });
+    await writeProjectFile(lockPath, 'owner.json', JSON.stringify({
+      version: 1,
+      pid: 2_147_483_647,
+      token: 'dead-owner',
+      acquiredAt: '2026-09-07T11:00:00.000Z',
+    }));
+    await writeFile(claimPath, orphanClaim, 'utf8');
+    let executions = 0;
+
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      execute: async () => {
+        executions += 1;
+        throw new Error('must not execute while a replacement claim holds the lock');
+      },
+      lock: {
+        waitTimeoutMs: 0,
+        clock: () => now,
+        processIsLive: (pid) => {
+          if (pid === 2_147_483_646) writeFileSync(claimPath, replacementClaim, 'utf8');
+          return pid === 22;
+        },
+      },
+    }).ensure();
+
+    expect({ result, executions, claim: await readFile(claimPath, 'utf8') }).toEqual({
+      result: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to acquire full-suite verification lock within 0ms',
+      },
+      executions: 0,
+      claim: replacementClaim,
+    });
+  });
+
   it('takes a vanished orphaned recovery claim only once during stale-lock recovery', async () => {
     const now = Date.parse('2026-09-07T12:00:00.000Z');
     const projectRoot = await makeConfiguredProject('full-suite-vanished-recovery-claim-');
