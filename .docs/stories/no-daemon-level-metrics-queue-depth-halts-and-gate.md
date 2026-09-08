@@ -91,8 +91,8 @@ As an operator, I want feature starts, halts (by class and step), and ships as c
 - Given feature S ships, when the shipped record is landed, then conductor.feature.shipped{feature=S} increments by 1
 
 #### Negative Paths
-- Given a halt whose HALT.class sidecar is missing, unreadable, or holds an unrecognized value, when it is recorded, then haltClass carries the existing disposition value unclassified, never an invented label and never an empty string
-- Given a halt from a build older than the class sidecar, when it is recorded, then haltClass carries the existing disposition value legacy
+- Given a halt whose HALT.class sidecar is unreadable or holds an unrecognized value, when it is recorded, then haltClass carries the existing disposition value unclassified, never an invented label and never an empty string
+- Given HALT exists and HALT.class is absent, including for a halt from a build older than the class sidecar, when it is recorded, then haltClass carries the existing disposition value legacy
 - Given a halt whose sidecar holds kickback-cap or over-scope (the two operator-owned classes the conductor writes beyond the base HaltClass union), when it is recorded, then haltClass carries that value verbatim rather than folding it to unclassified, so operator-attention halts are never miscounted as unknown
 - Given a feature is operator-parked, when metrics are exported, then it appears in conductor.daemon.backlog{state=parked} and increments neither conductor.feature.halts nor conductor.feature.shipped
 - Given the daemon resumes a feature whose worktree already exists and which was not halted, when the dispatch begins, then kind is resume, not initial and not rekick
