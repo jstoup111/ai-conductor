@@ -117,7 +117,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const result = await dispatchDaemonPark({ kind: 'park', slug: command.feature }, { cwd: root, out: () => {} });
     if (result !== 0) { print(`kickback-budget: could not park '${command.feature}'.`); return 1; }
   }
-  let committed = false;
+  const ownsPark = !parked;
   try {
     const defaults = await defaultsFor(worktree);
     const remediation = gate !== 'build_review';
@@ -151,12 +151,14 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     };
     await (deps.appendEvent ?? appendCloseoutEvent)(worktree, event);
     const applied = await applyKickbackBudgetAdjustment(worktree, gate, adjustment, defaults[gate]);
-    committed = true;
     print(`${renderKickbackBudgetView(applied, gate, defaults[gate])}${parked ? '\nFeature remains parked; unpark it when ready.' : ''}`);
     return 0;
   } catch (error) {
     print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1;
   } finally {
-    if (!parked && committed) await dispatchDaemonPark({ kind: 'unpark', slug: command.feature }, { cwd: root, out: () => {} });
+    // The command owns only the temporary park it created above.  Its purpose
+    // is quiescence while staging/applying the adjustment, not a durable park
+    // on a rejected authorization; a pre-existing operator park is retained.
+    if (ownsPark) await dispatchDaemonPark({ kind: 'unpark', slug: command.feature }, { cwd: root, out: () => {} });
   }
 }
