@@ -332,6 +332,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       const inputs = await assembleBuildReviewInputs(git, planPath);
 
+      expect(inputs.sourceSnapshot.testScope?.candidates).toHaveLength(1);
       expect(inputs.sourceSnapshot.testScope).toMatchObject({
         targets: [],
         candidates: [{
