@@ -4,6 +4,40 @@ import { otelEventTypes, type OtelEventType } from '../event-sinks.js';
 import { forwardedFeatureOf } from '../event-persister.js';
 import { MetricsRecorder } from './metrics.js';
 
+type OtelEvent = Extract<ConductorEvent, { type: OtelEventType }>;
+
+/** Kept as a closed map so a new OTel sink cannot silently lack a projection. */
+const METRICS_HANDLERS: Record<OtelEventType, true> = {
+  daemon_backlog_snapshot: true,
+  feature_dispatch_started: true,
+  feature_dispatch_ended: true,
+  feature_shipped: true,
+  step_started: true,
+  step_completed: true,
+  step_failed: true,
+  provider_attempt: true,
+  feature_usage_total: true,
+  feature_cost_snapshot: true,
+  step_retry: true,
+  feature_complete: true,
+  build_stall: true,
+  build_progress: true,
+  build_no_progress: true,
+  pipeline_closeout: true,
+  gate_verdict: true,
+  kickback: true,
+  loop_halt: true,
+  unattributed_progress: true,
+};
+
+function metricsHandledEventTypes(): OtelEventType[] {
+  return Object.keys(METRICS_HANDLERS) as OtelEventType[];
+}
+
+function assertNeverEvent(event: never): never {
+  throw new Error(`unhandled OTel event: ${(event as { type?: string }).type ?? 'unknown'}`);
+}
+
 /** The single event-fed metrics projection used by daemon and interactive runs. */
 export class MetricsListener {
   private readonly handlers: Array<[ConductorEvent['type'], EventHandler]> = [];
@@ -19,7 +53,7 @@ export class MetricsListener {
 
   start(emitter: ConductorEventEmitter): void {
     this.emitter = emitter;
-    for (const type of otelEventTypes()) {
+    for (const type of metricsHandledEventTypes()) {
       const handler: EventHandler = (event) => { try { this.handle(event as OtelEvent); } catch { /* metrics are best effort */ } };
       this.handlers.push([type, handler]);
       emitter.on(type, handler);
@@ -88,37 +122,10 @@ export class MetricsListener {
       case 'feature_complete': { const metric = this.feature(event); const slug = this.featureOf(event); if (metric) { metric.onRunClose('complete'); if (slug) this.terminal.add(slug); } break; }
       case 'loop_halt': { const metric = this.feature(event); const slug = this.featureOf(event); if (metric) { metric.onRunClose('halted'); if (slug) this.terminal.add(slug); } break; }
       case 'provider_attempt': case 'build_progress': case 'build_no_progress': case 'unattributed_progress': break;
-      // `ConductorEvent` also has extension-shaped variants whose type is not
-      // narrowed by Extract<>.  The closed METRICS_HANDLERS map below—not an
-      // impossible `never` assertion over that wider union—is the enforcement
-      // that every declared OTel sink has a projection.
-      default: break;
+      // The event union has an extension-shaped member, so TypeScript cannot
+      // narrow this switch to `never` by itself.  The closed map used by
+      // start() above proves every OTel sink reaches one of these cases.
+      default: return assertNeverEvent(event as never);
     }
   }
 }
-
-type OtelEvent = Extract<ConductorEvent, { type: OtelEventType }>;
-
-/** Kept as a closed map so a new OTel sink cannot silently lack a projection. */
-const METRICS_HANDLERS: Record<OtelEventType, true> = {
-  daemon_backlog_snapshot: true,
-  feature_dispatch_started: true,
-  feature_dispatch_ended: true,
-  feature_shipped: true,
-  step_started: true,
-  step_completed: true,
-  step_failed: true,
-  provider_attempt: true,
-  feature_usage_total: true,
-  feature_cost_snapshot: true,
-  step_retry: true,
-  feature_complete: true,
-  build_stall: true,
-  build_progress: true,
-  build_no_progress: true,
-  pipeline_closeout: true,
-  gate_verdict: true,
-  kickback: true,
-  loop_halt: true,
-  unattributed_progress: true,
-};
