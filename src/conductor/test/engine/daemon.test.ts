@@ -1,4 +1,4 @@
-// Covers: task:1, task:4
+// Covers: task:1, task:2, task:4
 import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -889,6 +889,67 @@ describe('engine/daemon — runDaemon', () => {
       stoppedReason: 'idle_timeout',
       sleepsAtDispatch: 2,
       hadFullPostDispatchIdleBudget: true,
+    });
+  });
+
+  it('counts a permanently halted backlog item as an idle poll', async () => {
+    let slept = 0;
+    const started: string[] = [];
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      isHalted: async () => true,
+      runFeature: async (item) => {
+        started.push(item.slug);
+        return { slug: item.slug, status: 'done' };
+      },
+      sleep: async () => {
+        slept++;
+      },
+    };
+
+    const res = await runDaemon(deps, {
+      concurrency: 1,
+      once: false,
+      maxIdlePolls: 3,
+    });
+
+    expect({ stoppedReason: res.stoppedReason, slept, started }).toEqual({
+      stoppedReason: 'idle_timeout',
+      slept: 3,
+      started: [],
+    });
+  });
+
+  it('counts a candidate parked after selection without restarting the idle budget', async () => {
+    let slept = 0;
+    const started: string[] = [];
+    let parkChecksThisPoll = 0;
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      // Selection sees an eligible item, but the immediate pre-dispatch guard
+      // observes its park marker. Reset after each idle poll to repeat the race.
+      isParked: async () => ++parkChecksThisPoll === 2,
+      runFeature: async (item) => {
+        started.push(item.slug);
+        return { slug: item.slug, status: 'done' };
+      },
+      sleep: async () => {
+        slept++;
+        if (slept > 3) throw new Error('rejected dispatch exceeded idle budget');
+        parkChecksThisPoll = 0;
+      },
+    };
+
+    const res = await runDaemon(deps, {
+      concurrency: 1,
+      once: false,
+      maxIdlePolls: 3,
+    });
+
+    expect({ stoppedReason: res.stoppedReason, slept, started }).toEqual({
+      stoppedReason: 'idle_timeout',
+      slept: 3,
+      started: [],
     });
   });
 
