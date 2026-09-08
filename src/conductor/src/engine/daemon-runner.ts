@@ -30,9 +30,10 @@ import {
   type ShipmentEvidenceResult,
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
-import { writeHaltMarker } from './halt-marker.js';
+import { readHaltSidecarClassification, writeHaltMarker } from './halt-marker.js';
 import { deferredAutoParkHaltPresentation } from './auto-park-halt.js';
 import type { OperatorParkedTermination } from './conductor.js';
+import { computeTimingRollup } from './timing-rollup.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -63,16 +64,24 @@ export interface WorktreeOutcome {
 export interface FeatureWorktree {
   path: string;
   branch: string;
+  wasExisting?: boolean;
 }
 
 export interface FeatureRunScope {
   events: ConductorEventEmitter;
+  /** Daemon bus for lifecycle records that must enter the daemon ledger. */
+  rootEvents?: ConductorEventEmitter;
   providerExecution: ProviderExecutionContext;
   /** Per-dispatch identity supplied by the daemon entry point when available. */
   sessionId?: string;
   /** Immutable logger that attributes runner-owned output to this feature. */
   log?: (message: string) => void;
   stop: () => void | Promise<void>;
+}
+
+export function classifyDispatchKind({ wasExisting, rekickSignal }: { wasExisting: boolean; rekickSignal: boolean }): 'initial' | 'resume' | 'rekick' {
+  if (rekickSignal) return 'rekick';
+  return wasExisting ? 'resume' : 'initial';
 }
 
 /**
@@ -389,11 +398,43 @@ export function makeRunFeature(
       const rekick = await readFile(join(worktree.path, '.pipeline', 'REKICK'), 'utf8')
         .then(() => true)
         .catch(() => false);
-      await featureRun?.events.emit({
+      await (featureRun?.rootEvents ?? featureRun?.events)?.emit({
         type: 'feature_dispatch_started',
         slug: item.slug,
-        kind: rekick ? 'rekick' : 'resume',
+        kind: classifyDispatchKind({ wasExisting: worktree.wasExisting ?? false, rekickSignal: rekick }),
       });
+      const endDispatch = async (
+        outcome: 'complete' | 'halted' | 'terminated',
+      ): Promise<void> => {
+        const event: Extract<import('../types/events.js').ConductorEvent, { type: 'feature_dispatch_ended' }> = {
+          type: 'feature_dispatch_ended', slug: item.slug, outcome,
+        };
+        if (outcome === 'halted') {
+          event.haltClass = await readHaltSidecarClassification(worktree!.path);
+          event.step = await readFile(join(worktree!.path, '.pipeline', 'phase-active'), 'utf8')
+            .then((value) => /^step: (.+)$/m.exec(value)?.[1] ?? 'unknown')
+            .catch(() => 'unknown');
+        }
+        await (featureRun?.rootEvents ?? featureRun?.events)?.emit(event);
+      };
+      const emitShipped = async (): Promise<void> => {
+        const runStartedAt = await readFile(join(worktree!.path, '.pipeline', 'conduct-state.json'), 'utf8')
+          .then((raw) => {
+            const state = JSON.parse(raw) as { run_started_at?: unknown };
+            return typeof state.run_started_at === 'number' && Number.isFinite(state.run_started_at)
+              ? state.run_started_at : undefined;
+          })
+          .catch(() => undefined);
+        const rollup = await computeTimingRollup(worktree!.path);
+        await (featureRun?.rootEvents ?? featureRun?.events)?.emit({
+          type: 'feature_shipped', slug: item.slug, ...(runStartedAt === undefined ? {} : { runStartedAt }),
+          active: rollup.state === 'measured'
+            ? { state: 'exact', activeMs: rollup.activeMs }
+            : rollup.state === 'partial'
+              ? { state: 'partial', ...(rollup.activeMs === undefined ? {} : { activeMs: rollup.activeMs }) }
+              : { state: 'unavailable' },
+        });
+      };
       providerExecution =
         featureRun?.providerExecution ?? deps.providerExecution?.();
       // Prepare the worktree before the build: write WORKTREE_NAMESPACE and run
@@ -479,6 +520,7 @@ export function makeRunFeature(
         featureRun?.sessionId,
       );
       if (conductorTermination?.kind === 'operator-parked') {
+        await endDispatch('terminated');
         return {
           slug: item.slug,
           status: 'parked',
@@ -520,6 +562,8 @@ export function makeRunFeature(
           // `.daemon/processed/` ledger marker written above.
 
           featureLog(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
+          await emitShipped();
+          await endDispatch('complete');
           const terminalEffects = await runTerminalEffects({
             ...(outcome.prUrl ? {
               cleanupHaltPresentation: { prUrl: outcome.prUrl },
@@ -577,6 +621,7 @@ export function makeRunFeature(
 
         await deps.teardownWorktree(worktree, true);
         featureLog(`✋ ${item.slug} false-ship halted — worktree kept (${reason})`);
+        await endDispatch('halted');
         const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog);
         return {
           slug: item.slug,
@@ -588,7 +633,7 @@ export function makeRunFeature(
       }
 
       if (outcome.halted) {
-        await featureRun?.events.emit({ type: 'feature_dispatch_ended', slug: item.slug, outcome: 'halted' });
+        await endDispatch('halted');
         await deps.teardownWorktree(worktree, true); // keep for the human
         featureLog(`✋ ${item.slug} halted — worktree kept (${outcome.reason ?? 'see .pipeline/HALT'})`);
         const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog);
@@ -619,6 +664,7 @@ export function makeRunFeature(
       events: featureRun?.events,
               });
       await deps.teardownWorktree(worktree, true);
+      await endDispatch('terminated');
       const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog);
       return {
         slug: item.slug,
@@ -649,6 +695,11 @@ export function makeRunFeature(
       }
       if (worktree) {
         await deps.teardownWorktree(worktree, true).catch(() => {});
+      }
+      if (worktree && featureRun) {
+        await (featureRun.rootEvents ?? featureRun.events).emit({
+          type: 'feature_dispatch_ended', slug: item.slug, outcome: 'terminated',
+        });
       }
       return {
         slug: item.slug,

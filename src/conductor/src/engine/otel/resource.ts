@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import { resourceFromAttributes, type Resource } from '@opentelemetry/resources';
@@ -71,7 +72,7 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
     'service.instance.id': `${projectName}/${workerName}`,
     'conductor.project': project,
     'conductor.worker': workerName,
-    'host.name': workerName,
+    'host.name': resolveHostName(),
   });
 
   return resourceFromAttributes({
@@ -80,6 +81,14 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
     'conductor.run.id': ctx.runId ?? resolveRunId(ctx.pipelineDir),
     'conductor.engine.version': normalizeIdentity(ctx, 'engineVersion'),
   });
+}
+
+function resolveHostName(): string {
+  try {
+    return hostname() || 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 function normalizeIdentity(ctx: ResourceContext, key: 'branch' | 'engineVersion'): string {

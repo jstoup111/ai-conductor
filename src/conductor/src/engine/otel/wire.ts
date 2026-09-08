@@ -66,7 +66,7 @@ export function wireOtelVisualizer(
 export function wireDaemonOtel(
   config: HarnessConfig,
   context: { mainRoot: string; projectName: string; workerName?: string; rootEvents: ConductorEventEmitter },
-): { stop: () => Promise<void> } | null {
+): { flush: () => Promise<void>; stop: () => Promise<void> } | null {
   const resolved = resolveOtelConfig(config, join(context.mainRoot, '.pipeline'));
   if (!resolved.enabled) return null;
   const exporters = buildExporters(resolved);
@@ -84,7 +84,12 @@ export function wireDaemonOtel(
   }));
   listener.start(context.rootEvents);
   let stopped: Promise<void> | undefined;
-  return { stop: () => stopped ??= (async () => { listener.stop(); await provider.forceFlush(); await provider.shutdown(); })() };
+  return {
+    // A feature dispatch can finish long before the daemon.  Flush the shared
+    // meter at that boundary, but keep it alive for every other dispatch.
+    flush: () => provider.forceFlush(),
+    stop: () => stopped ??= (async () => { listener.stop(); await provider.forceFlush(); await provider.shutdown(); })(),
+  };
 }
 
 /** Interactive meter: the same event-fed projection as the daemon, scoped to one feature. */

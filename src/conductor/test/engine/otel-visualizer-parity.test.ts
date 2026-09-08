@@ -7,6 +7,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { otelEventTypes } from '../../src/engine/event-sinks.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
+import { metricsHandledEventTypes } from '../../src/engine/otel/metrics-listener.js';
 
 function makeVisualizer(feature: string, spanExporter: InMemorySpanExporter): OtelVisualizer {
   return new OtelVisualizer(
@@ -29,6 +30,10 @@ function features(exporter: InMemorySpanExporter): string[] {
 }
 
 describe('OtelVisualizer concurrent dispatch parity (Task 25)', () => {
+  it('keeps MetricsListener coverage exhaustive for every OTel sink declaration', () => {
+    expect(new Set(metricsHandledEventTypes())).toEqual(new Set(otelEventTypes()));
+  });
+
   it('flushes two feature-scoped buses concurrently without crossing spans, while both subscribe from the sink registry', async () => {
     const alphaEmitter = new ConductorEventEmitter();
     const betaEmitter = new ConductorEventEmitter();

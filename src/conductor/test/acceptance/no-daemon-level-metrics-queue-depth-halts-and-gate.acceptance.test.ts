@@ -18,6 +18,7 @@ const buildExporters = vi.hoisted(() => vi.fn());
 vi.mock('../../src/engine/otel/transport.js', () => ({ buildExporters }));
 
 interface DaemonOtelScope {
+  flush(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -176,6 +177,25 @@ async function emitExitedDispatch(
 }
 
 describe('daemon-level metrics acceptance', () => {
+  it('flushes a completed dispatch without shutting down the shared daemon meter', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'daemon-metrics-flush-'));
+    roots.push(root);
+    const daemon = await createDaemonMeter(root);
+
+    await emitExitedDispatch(root, daemon.events, 'feature-a', 'initial');
+    await daemon.scope.flush();
+    expect(pointValue(daemon.exporter, 'conductor.run.outcomes', {
+      project: 'project-p', worker: 'worker-w', feature: 'feature-a', outcome: 'halted',
+    })).toBe(1);
+
+    await emitExitedDispatch(root, daemon.events, 'feature-b', 'rekick');
+    await daemon.scope.flush();
+    expect(pointValue(daemon.exporter, 'conductor.run.outcomes', {
+      project: 'project-p', worker: 'worker-w', feature: 'feature-b', outcome: 'halted',
+    })).toBe(1);
+    await daemon.scope.stop();
+  });
+
   it('keeps feature counters monotonic across exited dispatches and resets only with the daemon process', async () => {
     const root = await mkdtemp(join(tmpdir(), 'daemon-metrics-monotonic-'));
     roots.push(root);
