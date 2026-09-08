@@ -1,6 +1,7 @@
 name: release-pr-maintenance
 
 on:
+  workflow_dispatch: {}
   pull_request:
     types: [closed]
 
@@ -13,8 +14,9 @@ permissions:
 jobs:
   release-pr-maintenance:
     if: >-
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.head.ref != 'automation/release-pr'
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       github.event.pull_request.head.ref != 'automation/release-pr')
     runs-on: ubuntu-latest
     concurrency:
       group: release-pr-maintenance
@@ -22,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v5

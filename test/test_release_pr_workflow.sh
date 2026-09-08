@@ -22,11 +22,12 @@ if rg -q 'copy the entry into CHANGELOG\.md|edit `CHANGELOG\.md`|edit `VERSION`'
   exit 1
 fi
 
-# Release PR maintenance is App-authenticated and only runs for merged
-# implementation PRs.  It must serialize all generated-branch mutations.
+# Release PR maintenance is App-authenticated and runs manually or for merged
+# implementation PRs. It must serialize all generated-branch mutations.
 grep -q 'types: \[closed\]' "$WORKFLOW"
-rg -U -q "if:\s*>-?\n\s*github\.event\.pull_request\.merged == true" "$WORKFLOW"
-rg -U -q "github\.event\.pull_request\.head\.ref != 'automation/release-pr'" "$WORKFLOW"
+grep -q '^  workflow_dispatch: {}$' "$WORKFLOW"
+rg -U -q "github\.event_name == 'workflow_dispatch'" "$WORKFLOW"
+rg -U -q "github\.event\.pull_request\.merged == true[\\s\\S]*github\.event\.pull_request\.head\.ref != 'automation/release-pr'" "$WORKFLOW"
 grep -q 'actions/create-github-app-token@v2' "$WORKFLOW"
 grep -q 'app-id: \${{ secrets.RELEASE_PR_APP_ID }}' "$WORKFLOW"
 grep -q 'private-key: \${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}' "$WORKFLOW"

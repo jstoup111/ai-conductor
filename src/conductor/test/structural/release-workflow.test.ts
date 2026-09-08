@@ -132,6 +132,24 @@ describe('structural: release workflow', () => {
     );
   });
 
+  it('admits manual release-PR maintenance while preserving merged-PR filtering', async () => {
+    const source = await readFile(resolve(REPO_ROOT, '.github/workflows/release-pr.yml'), 'utf8');
+    const workflow = job(loadYaml(source), 'release PR workflow');
+    const triggers = job(workflow.on, 'release PR workflow triggers');
+    const jobs = job(workflow.jobs, 'release PR workflow jobs');
+    const maintenance = job(jobs['release-pr-maintenance'], 'release PR maintenance job');
+    const checkout = (maintenance.steps as Array<Record<string, unknown>>)
+      .find((step) => step.uses === 'actions/checkout@v5');
+
+    expect(triggers.workflow_dispatch).toEqual({});
+    expect(job(triggers.pull_request, 'closed pull-request trigger').types).toEqual(['closed']);
+    expect(String(maintenance.if)).toMatch(
+      /github\.event_name\s*==\s*'workflow_dispatch'[\s\S]*github\.event\.pull_request\.merged\s*==\s*true[\s\S]*github\.event\.pull_request\.head\.ref\s*!=\s*'automation\/release-pr'/,
+    );
+    expect(job(checkout?.with, 'checkout inputs').ref)
+      .toBe('${{ github.event.pull_request.merge_commit_sha || github.sha }}');
+  });
+
   it('wires the stable branch through a create-or-fast-forward GitHub ref adapter', async () => {
     const source = await readFile(resolve(REPO_ROOT, '.github/workflows/release.yml'), 'utf8');
     const workflow = job(loadYaml(source), 'release workflow');
