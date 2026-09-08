@@ -1286,9 +1286,14 @@ export async function runDaemon(
   // fixes #598 Task 15's regression where both independently invoked
   // `isSuppressed`, double-firing `suppression-checked` for a single boundary.
   let staleAlreadyHandledByPreflight = false;
+  let latestBlocked = {
+    paused: false,
+    build_auth_missing: false,
+    gh_version: false,
+    episode_active: false,
+  };
 
   while (true) {
-    const tickStartedAt = now();
     if (deps.shouldStop?.()) {
       log('[daemon] teardown requested — draining in-flight, no new dispatch');
       stopReason = 'signal_teardown';
@@ -1311,11 +1316,27 @@ export async function runDaemon(
     stopReason = ceilingHit();
     if (stopReason) break;
 
-    let paused = false;
-    let buildAuthMissing = false;
-    let ghVersionBlocked = false;
-    let episodeActive = false;
+    let paused = latestBlocked.paused;
+    let buildAuthMissing = latestBlocked.build_auth_missing;
+    let ghVersionBlocked = latestBlocked.gh_version;
+    let episodeActive = latestBlocked.episode_active;
     let next: BacklogItem | undefined;
+
+    const emitTick = async (): Promise<void> => {
+      if (!deps.onTick) return;
+      const snapshot = await deps.getDiscoverySnapshot?.(claims.listParked());
+      deps.onTick({
+        counts: { eligible: snapshot?.counts.eligible ?? 0, waiting: snapshot?.counts.waiting ?? 0,
+          blocked: snapshot?.counts.blocked ?? 0, gated: snapshot?.counts.gated ?? 0,
+          parked: snapshot?.counts.parked ?? claims.listParked().length },
+        oldestAgeSeconds: snapshot?.oldestAgeSeconds ?? {},
+        slots: { busy: inFlight.size, free: Math.max(0, concurrency - inFlight.size) },
+        inFlight: workers.map((worker) => worker.slug),
+        blocked: { paused, build_auth_missing: buildAuthMissing, gh_version: ghVersionBlocked, episode_active: episodeActive },
+        pollDurationMs: snapshot?.pollDurationMs ?? 0,
+      });
+    };
+
     // Fill the pool while slots are free.
     if (inFlight.size < concurrency && (!maintenance.isDraining() || maintenance.isDrained())) {
       // FR-1 (Task 11): re-poll the pause predicate every iteration (including
@@ -1325,18 +1346,15 @@ export async function runDaemon(
       // A drain reaches this same boundary at zero active claims, but must not
       // select a replacement item before its pending restart action runs.
       paused = maintenance.isDraining() || (await checkPaused());
-
-      // Task 13 (FR-6): re-poll the build-auth credential gate every
-      // iteration, same cadence as `checkPaused`. Missing → no NEW item is
-      // picked this tick; in-flight work is unaffected. Non-blocking: the
-      // loop still services watchers/waker/idle-poll bookkeeping below.
       buildAuthMissing = await checkBuildAuthMissing();
       ghVersionBlocked = await checkGhVersionFloor();
-
-      // Task 7: Rate-limit episode gate. When an episode is active, skip new
-      // feature dispatch to avoid thundering herd. In-flight features remain
-      // untouched. Optional dep: absence or inactive episode → proceed normally.
       episodeActive = deps.rateLimitEpisode?.active?.() ?? false;
+      latestBlocked = {
+        paused,
+        build_auth_missing: buildAuthMissing,
+        gh_version: ghVersionBlocked,
+        episode_active: episodeActive,
+      };
 
       // First-in-backlog-order eligible item (Task 14: `pickEligible` consumes
       // only `items`, never `waiting`, so a dependency-gated spec never causes
@@ -1383,19 +1401,7 @@ export async function runDaemon(
         }
       }
 
-      if (deps.onTick) {
-        const snapshot = await deps.getDiscoverySnapshot?.(claims.listParked());
-        deps.onTick({
-          counts: { eligible: snapshot?.counts.eligible ?? 0, waiting: snapshot?.counts.waiting ?? 0,
-            blocked: snapshot?.counts.blocked ?? 0, gated: snapshot?.counts.gated ?? 0,
-            parked: snapshot?.counts.parked ?? claims.listParked().length },
-          oldestAgeSeconds: snapshot?.oldestAgeSeconds ?? {},
-          slots: { busy: inFlight.size, free: Math.max(0, concurrency - inFlight.size) },
-          inFlight: workers.map((worker) => worker.slug),
-          blocked: { paused, build_auth_missing: buildAuthMissing, gh_version: ghVersionBlocked, episode_active: episodeActive },
-          pollDurationMs: snapshot?.pollDurationMs ?? 0,
-        });
-      }
+      await emitTick();
 
       if (next) {
         // Before starting a feature, ensure the running engine matches current
@@ -1645,17 +1651,10 @@ export async function runDaemon(
     }
 
     if (inFlight.size >= concurrency && deps.onTick) {
-      const snapshot = await deps.getDiscoverySnapshot?.(claims.listParked());
-      deps.onTick({
-        counts: { eligible: snapshot?.counts.eligible ?? 0, waiting: snapshot?.counts.waiting ?? 0,
-          blocked: snapshot?.counts.blocked ?? 0, gated: snapshot?.counts.gated ?? 0,
-          parked: snapshot?.counts.parked ?? claims.listParked().length },
-        oldestAgeSeconds: snapshot?.oldestAgeSeconds ?? {},
-        slots: { busy: inFlight.size, free: Math.max(0, concurrency - inFlight.size) },
-        inFlight: workers.map((worker) => worker.slug),
-        blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
-        pollDurationMs: snapshot?.pollDurationMs ?? 0,
-      });
+      // A busy pool still discovers once per pass so the snapshot is current,
+      // rather than replaying the last free-slot discovery with a stale age.
+      await deps.discoverBacklog({ refresh: false });
+      await emitTick();
     }
 
     // Observe restart conditions only after the claim attempt. A drain begun

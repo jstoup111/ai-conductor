@@ -72,6 +72,58 @@ async function applyTerminalEffects(projectRoot: string, outcome: FeatureOutcome
 }
 
 describe('engine/daemon — runDaemon', () => {
+  it('refreshes the snapshot once on a full-pool pass without re-probing dispatch gates', async () => {
+    let release: ((outcome: FeatureOutcome) => void) | undefined;
+    let stop = false;
+    let observedBusyTick: (() => void) | undefined;
+    const busyTick = new Promise<void>((resolve) => { observedBusyTick = resolve; });
+    const discoverBacklog = vi.fn(async () => [{ slug: 'full-pool' }]);
+    const getDiscoverySnapshot = vi.fn(async () => ({
+      counts: { eligible: 1, waiting: 2, blocked: 3, gated: 4, parked: 5 },
+      oldestAgeSeconds: { eligible: 9 },
+      pollDurationMs: 17,
+    }));
+    const ticks: Array<{ busy: number; blocked: Record<string, boolean>; pollDurationMs: number }> = [];
+    let pauseChecks = 0;
+    let authChecks = 0;
+    let ghChecks = 0;
+    let episodeChecks = 0;
+
+    const daemon = runDaemon({
+      discoverBacklog,
+      getDiscoverySnapshot,
+      isPaused: async () => ++pauseChecks > 1,
+      isBuildAuthMissing: async () => ++authChecks > 1,
+      getGhVersionFloorDiagnostic: async () => ++ghChecks > 1 ? 'gh too old' : null,
+      rateLimitEpisode: {
+        active: () => ++episodeChecks > 1,
+        enter: () => {},
+        clear: async () => {},
+        nextWaitSeconds: () => 0,
+      },
+      runFeature: async () => new Promise<FeatureOutcome>((resolve) => { release = resolve; }),
+      onTick: (snapshot) => {
+        ticks.push({ busy: snapshot.slots.busy, blocked: snapshot.blocked, pollDurationMs: snapshot.pollDurationMs });
+        if (snapshot.slots.busy === 1) {
+          stop = true;
+          observedBusyTick?.();
+        }
+      },
+      shouldStop: () => stop,
+      sleep: async () => {},
+    }, { concurrency: 1, once: false, idlePollMs: 0 });
+
+    await busyTick;
+    release?.({ slug: 'full-pool', status: 'done' });
+    await daemon;
+
+    expect(discoverBacklog).toHaveBeenCalledTimes(2);
+    expect(ticks).toEqual([
+      { busy: 0, blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false }, pollDurationMs: 17 },
+      { busy: 1, blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false }, pollDurationMs: 17 },
+    ]);
+  });
+
   it('applies setup-triage auto-park requests only after collecting the executor outcome', async () => {
     const terminalEffects: FeatureOutcome[] = [];
 
