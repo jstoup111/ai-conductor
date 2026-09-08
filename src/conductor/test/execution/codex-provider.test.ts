@@ -1,3 +1,4 @@
+// Covers: task:4
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -284,9 +285,24 @@ describe('CodexProvider', () => {
         expected: { rateLimited: true, usageExhausted: true, waitSeconds: 900 },
       },
       {
+        name: 'exhaustion with an hour retry-after scales the parsed wait',
+        stderr: 'usage limit reached; retry after 2 hours',
+        expected: { rateLimited: true, usageExhausted: true, waitSeconds: 7200 },
+      },
+      {
         name: 'a transient 429 keeps its parsed short wait and is not exhaustion',
         stderr: 'Error 429: rate limit exceeded; retry after 45 seconds',
         expected: { rateLimited: true, usageExhausted: undefined, waitSeconds: 45 },
+      },
+      {
+        name: 'a transient throttle with a minute retry-after scales the parsed wait',
+        stderr: 'Error 429: rate limit exceeded; retry after 90 minutes',
+        expected: { rateLimited: true, usageExhausted: undefined, waitSeconds: 5400 },
+      },
+      {
+        name: 'a transient throttle with an unrecognized retry unit keeps the fallback',
+        stderr: 'Error 429: rate limit exceeded; retry after 3 fortnights',
+        expected: { rateLimited: true, usageExhausted: undefined, waitSeconds: 300 },
       },
       {
         name: 'a transient throttle without retry-after keeps the 300s default',

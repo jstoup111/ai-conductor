@@ -23,6 +23,7 @@ import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 import { enforceFreshSessionOptions } from './fresh-session.js';
 import { scrubTmuxEnvironment } from './child-environment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
+import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
 
@@ -202,8 +203,11 @@ export function parseCodexJsonl(stdout: string): {
 }
 
 function parseWaitSeconds(output: string, fallbackSeconds = 300): number {
-  const match = output.match(/(?:retry|try again)\s*(?:after|in)?\s*(\d+)\s*(?:seconds?|secs?|s)\b/i);
-  return match ? Number(match[1]) : fallbackSeconds;
+  const match = output.match(new RegExp(
+    `(?:retry|try again)\\s*(?:after|in)?\\s*(\\d+)\\s*(${rateLimitDurationUnitAlternation})\\b`,
+    'i',
+  ));
+  return match ? scaleRateLimitDurationSeconds(Number(match[1]), match[2]) ?? fallbackSeconds : fallbackSeconds;
 }
 
 export class CodexProvider implements LLMProvider {
