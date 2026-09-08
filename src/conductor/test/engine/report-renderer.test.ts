@@ -175,7 +175,11 @@ describe('report-renderer', () => {
 
     const kickbackSection = (path: string) => renderReport(path).split('\n\n## Build Review Metrics')[0];
 
-    expect(kickbackSection(eventsPath)).toBe(kickbackSection(reorderedPath));
+    const sharedSection = kickbackSection(eventsPath);
+    expect(sharedSection).toBe(kickbackSection(reorderedPath));
+    expect(sharedSection).toMatch(
+      /build_review\s+build\s+2[\s\S]*finish\s+manual_test\s+1[\s\S]*manual_test\s+build\s+1/,
+    );
   });
 
   it('orders kickback summaries by descending occurrences, source, then target', () => {
