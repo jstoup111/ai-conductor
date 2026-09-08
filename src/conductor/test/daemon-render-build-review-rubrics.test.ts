@@ -35,4 +35,23 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
       type: 'build_review_cache_hit', rubric: 'testQuality', lapId: 'lap-12345678',
     })).toEqual(['·   build_review [lap-1234] testQuality cache hit']);
   });
+
+  it('keeps starts from separate laps distinguishable', () => {
+    const first = lines({
+      type: 'build_review_rubric_started', rubric: 'testQuality', lapId: 'first-lap-1234',
+    });
+    const second = lines({
+      type: 'build_review_rubric_started', rubric: 'testQuality', lapId: 'second-lap-5678',
+    });
+
+    expect(first).toEqual(['·   build_review [first-la] testQuality started']);
+    expect(second).toEqual(['·   build_review [second-l] testQuality started']);
+    expect(first).not.toEqual(second);
+  });
+
+  it('renders a short lap identifier in full', () => {
+    expect(lines({
+      type: 'build_review_rubric_started', rubric: 'testQuality', lapId: 'lap',
+    })).toEqual(['·   build_review [lap] testQuality started']);
+  });
 });
