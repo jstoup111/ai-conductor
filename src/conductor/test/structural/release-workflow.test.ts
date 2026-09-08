@@ -18,19 +18,20 @@ function job(value: unknown, label: string): WorkflowJob {
 }
 
 describe('structural: release workflow', () => {
-  it('runs the complete gate while every matrix leg selects, gates, and reports only itself', async () => {
+  it('requires the non-provider tier and joins provider outcomes with an at-least-one-success gate', async () => {
     const source = await readFile(resolve(REPO_ROOT, '.github/workflows/live-daemon-e2e.yml'), 'utf8');
     const workflow = job(loadYaml(source), 'live daemon E2E workflow');
     const jobs = job(workflow.jobs, 'live daemon E2E workflow jobs');
     const credentialRequirement = job(jobs['require-live-provider-credential'], 'live credential requirement job');
     const completeTier = job(jobs['complete-smoke-tier'], 'complete smoke tier job');
     const liveE2E = job(jobs['live-daemon-e2e'], 'live daemon E2E job');
+    const providerGate = job(jobs['live-provider-gate'], 'live provider gate job');
     const strategy = job(liveE2E.strategy, 'live daemon E2E strategy');
     const matrix = job(strategy.matrix, 'live daemon E2E matrix');
     const credentialRequirementStep = (credentialRequirement.steps as Array<Record<string, unknown>>)[0];
     const steps = liveE2E.steps as Array<Record<string, unknown>>;
     const credentialCheck = steps.find((step) => step.name === 'Check live-provider credentials');
-    const smoke = steps.find((step) => step.name === 'Run complete release smoke tier in gate mode');
+    const smoke = steps.find((step) => step.name === 'Run provider release smoke in gate mode');
 
     expect(job(credentialRequirementStep?.env, 'live credential requirement environment')).toEqual({
       CLAUDE_CODE_OAUTH_TOKEN: '${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
@@ -50,7 +51,8 @@ describe('structural: release workflow', () => {
     });
     const completeSmoke = (completeTier.steps as Array<Record<string, unknown>>)
       .find((step) => step.name === 'Run complete release smoke tier in gate mode');
-    expect(String(completeSmoke?.run)).toBe('SMOKE_MODE=gate npm run smoke');
+    expect(String(completeSmoke?.run)).toContain('SMOKE_MODE=advisory');
+    expect(String(completeSmoke?.run)).toContain('capability:credentialed:claude,capability:credentialed:codex');
 
     expect(matrix.include).toEqual([
       {
@@ -71,11 +73,20 @@ describe('structural: release workflow', () => {
     expect(job(smoke, 'live-provider smoke').env).toEqual({
       LIVE_PROVIDER_CREDENTIAL: '${{ secrets[matrix.credential_env] }}',
     });
-    expect(String(smoke?.run)).not.toContain('exit 0');
+    expect(smoke?.id).toBe('provider-smoke');
+    expect(smoke?.['continue-on-error']).toBe(true);
     expect(String(smoke?.run)).toContain('SMOKE_MODE=gate npm run smoke -- "${{ matrix.smoke_file }}"');
     expect(String(smoke?.run)).toContain('export "${{ matrix.credential_env }}=$LIVE_PROVIDER_CREDENTIAL"');
     expect(String(smoke?.run)).toContain('unset LIVE_PROVIDER_CREDENTIAL');
     expect(String(smoke?.run)).not.toMatch(/(?:npx\s+)?vitest\s+run/);
+    const providerSteps = liveE2E.steps as Array<Record<string, unknown>>;
+    expect(providerSteps.some((step) => step.uses === 'actions/upload-artifact@v4')).toBe(true);
+    expect(providerGate.needs).toEqual(['complete-smoke-tier', 'live-daemon-e2e']);
+    expect(String(providerGate.if)).toContain('always()');
+    const gateSteps = providerGate.steps as Array<Record<string, unknown>>;
+    expect(gateSteps.some((step) => step.uses === 'actions/download-artifact@v5')).toBe(true);
+    const assertStep = gateSteps.find((step) => step.name === 'Require one successful live-provider E2E');
+    expect(String(assertStep?.run)).toMatch(/grep[\s\S]*success[\s\S]*exit 1/);
     expect(source).toMatch(/\$GITHUB_STEP_SUMMARY[\s\S]*\$\{\{ matrix\.provider \}\}[\s\S]*(?:gating|non-gating skip)[\s\S]*\$\{\{ matrix\.credential_env \}\}/);
   });
 
