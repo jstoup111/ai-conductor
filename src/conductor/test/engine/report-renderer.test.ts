@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -45,6 +45,43 @@ describe('report-renderer', () => {
   it('renders absent build-review data safely', async () => {
     await writeFile(eventsPath, '', 'utf8');
     expect(renderReport(eventsPath)).toContain('## Build Review Metrics\nNo build-review metrics recorded');
+  });
+
+  it('renders an explicit empty Kickbacks state for an empty ledger', async () => {
+    await writeFile(eventsPath, '', 'utf8');
+
+    const report = renderReport(eventsPath);
+    const kickbackSection = report.split('\n\n## Build Review Metrics')[0];
+
+    expect(kickbackSection).toContain('## Kickbacks\n\nNo kickbacks recorded');
+    expect(kickbackSection).not.toContain('Source Gate');
+  });
+
+  it('renders an explicit empty Kickbacks state when the ledger has no kickback events', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'step_completed', step: 'build' }, ts: '2026-01-01T00:00:00.000Z' },
+    ]), 'utf8');
+
+    expect(renderReport(eventsPath)).toContain('## Kickbacks\n\nNo kickbacks recorded');
+  });
+
+  it('retains malformed kickbacks with em-dash source and target placeholders', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'kickback', from: 42, to: null }, ts: '2026-01-01T00:00:00.000Z' },
+    ]), 'utf8');
+
+    expect(renderReport(eventsPath)).toMatch(/Total occurrences:\s*1[\s\S]*—\s+—\s+1/);
+  });
+
+  it('renders malformed and well-formed kickback occurrences together', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'kickback', from: false, to: {} }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'kickback', from: 'build_review', to: 'build' }, ts: '2026-01-01T00:00:01.000Z' },
+    ]), 'utf8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toMatch(/Total occurrences:\s*2[\s\S]*—\s+—\s+1[\s\S]*build_review\s+build\s+1/);
   });
 
   it('renders each kickback occurrence, BUILD re-entries, and source-target attribution before build-review metrics', async () => {

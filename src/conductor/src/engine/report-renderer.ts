@@ -279,6 +279,9 @@ export function renderReport(eventsJsonlPath: string): string {
 
 function renderKickbacks(events: ParsedEvent[]): string {
   const summary = summarizeKickbacks(aggregateKickbacks(events));
+  if (summary.totalOccurrences === 0) {
+    return '## Kickbacks\n\nNo kickbacks recorded';
+  }
   const lines = [
     '## Kickbacks',
     '',
@@ -290,8 +293,8 @@ function renderKickbacks(events: ParsedEvent[]): string {
   ];
   for (const kickback of summary.pairs) {
     lines.push(padRow([
-      kickback.from,
-      kickback.to,
+      kickback.from || '—',
+      kickback.to || '—',
       String(kickback.occurrences),
       kickback.kickbackOutcome ?? '—',
     ]));
