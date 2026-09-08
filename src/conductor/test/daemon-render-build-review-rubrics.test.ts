@@ -100,4 +100,56 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
       ],
     })).toEqual(['·   build_review [lap-1234] outer verdict: PASS — unresolved markers: 2']);
   });
+
+  it('renders an infrastructure failure with its reason and optional excerpt', () => {
+    expect(lines({
+      type: 'build_review_rubric_infrastructure_failure', rubric: 'testQuality', lapId: 'lap-12345678',
+      reason: 'scoped run timed out', excerpt: 'timed out after 30 seconds',
+    })).toEqual([
+      '·   build_review [lap-1234] testQuality infrastructure failure: scoped run timed out — timed out after 30 seconds',
+    ]);
+    expect(lines({
+      type: 'build_review_rubric_infrastructure_failure', rubric: 'testQuality', lapId: 'lap-12345678',
+      reason: 'scoped run timed out',
+    })).toEqual(['·   build_review [lap-1234] testQuality infrastructure failure: scoped run timed out']);
+  });
+
+  it('keeps infrastructure failure distinct from judged failure in plain text', () => {
+    const infrastructure = lines({
+      type: 'build_review_rubric_infrastructure_failure', rubric: 'testQuality', lapId: 'lap-12345678',
+      reason: 'scoped run timed out',
+    });
+    const judged = lines({
+      type: 'build_review_rubric_result', rubric: 'testQuality', lapId: 'lap-12345678', verdict: 'FAIL',
+    });
+
+    expect(infrastructure).not.toEqual(judged);
+    expect(infrastructure[0]).toContain('infrastructure failure');
+  });
+
+  it('renders every rubric event without serializing its payload', () => {
+    const events: ConductorEvent[] = [
+      { type: 'build_review_rubric_started', rubric: 'testQuality', lapId: 'lap-12345678' },
+      { type: 'build_review_cache_hit', rubric: 'testQuality', lapId: 'lap-12345678' },
+      { type: 'build_review_rubric_result', rubric: 'testQuality', lapId: 'lap-12345678', verdict: 'PASS' },
+      { type: 'build_review_rubric_skipped', rubric: 'testQuality', lapId: 'lap-12345678', reason: 'disabled' },
+      { type: 'build_review_rubric_infrastructure_failure', rubric: 'testQuality', lapId: 'lap-12345678', reason: 'timeout' },
+      { type: 'build_review_outer_verdict', lapId: 'lap-12345678', rawVerdict: 'PASS', effectiveVerdict: 'PASS' },
+    ];
+
+    for (const event of events) {
+      expect(lines(event)).toHaveLength(1);
+      expect(lines(event)[0]).not.toContain('{');
+    }
+  });
+
+  it('does not mutate a frozen rubric event', () => {
+    const event = Object.freeze({
+      type: 'build_review_rubric_started' as const, rubric: 'testQuality', lapId: 'lap-12345678',
+    });
+    const before = JSON.stringify(event);
+
+    expect(() => lines(event)).not.toThrow();
+    expect(JSON.stringify(event)).toBe(before);
+  });
 });

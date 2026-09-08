@@ -2671,6 +2671,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] outer verdict: ${event.effectiveVerdict}${raw}${reason}${unresolvedMarkers}`);
       break;
     }
+    case 'build_review_rubric_infrastructure_failure': {
+      const excerpt = event.excerpt ? ` — ${event.excerpt}` : '';
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} infrastructure failure: ${event.reason}${excerpt}`);
+      break;
+    }
     case 'contained_live_checkout_drift':
       log(`${dot} ${chalk.dim(`self-host contained; concurrent operator drift: ${event.summary}`)}`);
       break;
