@@ -1,3 +1,4 @@
+// Covers: task:2
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Writable } from 'node:stream';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -99,6 +100,41 @@ describe('createRenderer', () => {
   it('renders dashboard_refresh even when no step event has fired', async () => {
     await renderer({ type: 'dashboard_refresh' });
     expect(stream.output()).toContain('Conductor: Add login');
+  });
+
+  it('renders a loop halt reason', async () => {
+    await renderer({ type: 'loop_halt', reason: 're-open cap reached' });
+    expect(stream.output()).toContain('loop halted: re-open cap reached');
+  });
+
+  it('renders a kickback origin, target, and count', async () => {
+    await renderer({ type: 'kickback', from: 'build_review', to: 'build', count: 2 });
+    expect(stream.output()).toContain('kickback: build_review re-opened build (×2)');
+  });
+
+  it('renders gate-loop convergence', async () => {
+    await renderer({ type: 'loop_converged' });
+    expect(stream.output()).toContain('gate loop converged');
+  });
+
+  it('renders an unsatisfied gate step and reason', async () => {
+    await renderer({ type: 'gate_verdict', step: 'build_review', satisfied: false, reason: 'evidence is stale' });
+    expect(stream.output()).toContain('gate build_review: unsatisfied — evidence is stale');
+  });
+
+  it('does not render a satisfied gate verdict', async () => {
+    await renderer({ type: 'gate_verdict', step: 'build_review', satisfied: true });
+    expect(stream.output()).toBe('');
+  });
+
+  it('renders a kickback with omitted evidence', async () => {
+    await renderer({ type: 'kickback', from: 'build_review', to: 'build', count: 1 });
+    expect(stream.output()).toContain('kickback: build_review re-opened build (×1)');
+  });
+
+  it('renders an unsatisfied gate with an omitted reason', async () => {
+    await renderer({ type: 'gate_verdict', step: 'build_review', satisfied: false });
+    expect(stream.output()).toContain('gate build_review: unsatisfied');
   });
 
   it('writes pipeline closeout details to the live region', async () => {

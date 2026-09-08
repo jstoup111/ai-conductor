@@ -303,6 +303,31 @@ export function createRenderer(
           ),
         );
         break;
+
+      case 'gate_verdict':
+        if (!event.satisfied) {
+          region.log(
+            chalk.dim(`  gate ${event.step}: unsatisfied${event.reason ? ` — ${event.reason}` : ''}`),
+          );
+        }
+        break;
+
+      case 'kickback':
+        region.log(
+          chalk.yellow(
+            `  ↩ kickback: ${event.from} re-opened ${event.to}${event.evidence ? ` — ${event.evidence}` : ''} (×${event.count})`,
+          ),
+        );
+        break;
+
+      case 'loop_halt':
+        region.log(chalk.red(`  ✋ loop halted: ${event.reason}`));
+        break;
+
+      case 'loop_converged':
+        region.log(chalk.green('  ✓ gate loop converged'));
+        break;
+
     }
   };
 }
