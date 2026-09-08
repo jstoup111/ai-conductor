@@ -4,17 +4,6 @@ spec_hash: a7fe47d408dc191dc48554f5c740fd0625a467dd90d13e93d49231853dc4dd6d
 pr: https://github.com/jstoup111/ai-conductor/pull/2444
 shipped: 2026-09-08
 engine_version: 20260907T120758Z-4f8bdec36946
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.1
-    summary: "docs/runbooks/stalled-or-stuck-feature.md:556 — new \"Full-suite verification lock remains occupied\" runbook section, a file the plan does not declare and whose amendment the plan explicitly says is not owed"
-    accepted: true
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.2
-    summary: "src/conductor/test/acceptance/daemon-e2e-live-agent-tier.acceptance.test.ts:126 — narrows an unrelated #1124 acceptance assertion over .github/workflows/live-daemon-e2e.yml, which is unchanged in this branch"
-    accepted: false
 ---
 
 ## Cost
@@ -23,10 +12,10 @@ output: 164976
 cache_read: 30603938
 cache_creation: 514977
 cost_usd: 22.9111
-dispatches: 27
+dispatches: 28
 retries: 2
 halts: 2
-unmetered: count: 7, duration_ms: 0
+unmetered: count: 8, duration_ms: 0
 cost_unmetered: count: 0
 providers:
   codex: input: 1677207, output: 107379, cache_read: 26813568, cache_creation: 0, cost_usd: 12.2367, dispatches: 14, cost_unmetered: 0
