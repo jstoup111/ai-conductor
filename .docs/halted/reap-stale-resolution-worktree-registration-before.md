@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-08T15:08:18.392Z
 Slug: reap-stale-resolution-worktree-registration-before
 Class: needs-human
 Halting step: build
