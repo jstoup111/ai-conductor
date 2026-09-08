@@ -1,7 +1,6 @@
 // Covers: S1.1, S1.2, S1.3, S1.4, S1.6, S3.1, S3.4, S3.8, S3.9, task:8, task:12
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   AggregationTemporality,
@@ -9,7 +8,6 @@ import {
 } from '@opentelemetry/sdk-metrics';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
-import { localWorkSource } from '../../src/engine/daemon-work-source.js';
 import { startFeatureEventPersistence } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -27,6 +25,7 @@ type WireDaemonOtel = (
   config: HarnessConfig,
   context: {
     mainRoot: string;
+    project: string;
     projectName: string;
     workerName: string;
     rootEvents: ConductorEventEmitter;
@@ -47,6 +46,10 @@ const config = {
 } as HarnessConfig;
 
 let roots: string[] = [];
+
+function testTmpdir(): string {
+  return process.env.TMPDIR ?? process.env.TEMP ?? '/tmp';
+}
 
 beforeEach(() => {
   buildExporters.mockReset();
@@ -142,6 +145,7 @@ async function createDaemonMeter(root: string): Promise<{
   const wireDaemonOtel = await loadDaemonWire();
   const scope = await wireDaemonOtel(config, {
     mainRoot: root,
+    project: root,
     projectName: 'project-p',
     workerName: 'worker-w',
     rootEvents: events,
@@ -179,7 +183,7 @@ async function emitExitedDispatch(
 
 describe('daemon-level metrics acceptance', () => {
   it('flushes a completed dispatch without shutting down the shared daemon meter', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'daemon-metrics-flush-'));
+    const root = await mkdtemp(join(testTmpdir(), 'daemon-metrics-flush-'));
     roots.push(root);
     const daemon = await createDaemonMeter(root);
 
@@ -198,7 +202,7 @@ describe('daemon-level metrics acceptance', () => {
   });
 
   it('keeps feature counters monotonic across exited dispatches and resets only with the daemon process', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'daemon-metrics-monotonic-'));
+    const root = await mkdtemp(join(testTmpdir(), 'daemon-metrics-monotonic-'));
     roots.push(root);
     const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const firstDaemon = await createDaemonMeter(root);
@@ -229,7 +233,7 @@ describe('daemon-level metrics acceptance', () => {
   });
 
   it('exports liveness, zero-valued backlog states, and free slots from a real idle daemon tick', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'idle-daemon-metrics-'));
+    const root = await mkdtemp(join(testTmpdir(), 'idle-daemon-metrics-'));
     roots.push(root);
     const daemon = await createDaemonMeter(root);
     const emissions: Array<Promise<void>> = [];
@@ -285,7 +289,7 @@ describe('daemon-level metrics acceptance', () => {
   });
 
   it('exports live slots and one in-flight point per slug from a real busy daemon tick', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'busy-daemon-metrics-'));
+    const root = await mkdtemp(join(testTmpdir(), 'busy-daemon-metrics-'));
     roots.push(root);
     const daemon = await createDaemonMeter(root);
     const releases = new Map<string, () => void>();
@@ -336,48 +340,25 @@ describe('daemon-level metrics acceptance', () => {
   });
 
   it('exports oldest age only for determinable members while retaining the full backlog depth', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'mixed-age-daemon-metrics-'));
+    const root = await mkdtemp(join(testTmpdir(), 'mixed-age-daemon-metrics-'));
     roots.push(root);
     const daemon = await createDaemonMeter(root);
-    const emissions: Array<Promise<void>> = [];
-    const discoveredAt = 1_000_000_000;
-    await mkdir(join(root, '.daemon', 'first-seen'), { recursive: true });
-    await writeFile(join(root, '.daemon', 'first-seen', 'oldest'), String(discoveredAt - 129_600_000));
-    // A pre-existing corrupt marker is intentionally not overwritten: the
-    // member remains in the backlog but has no determinable eligibility age.
-    await writeFile(join(root, '.daemon', 'first-seen', 'undeterminable'), 'not-an-epoch');
-    const source = localWorkSource({
-      projectRoot: root,
-      baseBranch: 'main',
-      log: () => {},
-      isProcessed: async () => false,
-      hasWarned: async () => false,
-      markWarned: async () => {},
-      fastForwardRoot: async () => undefined,
-      discoverBacklog: async () => ({
-        items: [{ slug: 'oldest' }, { slug: 'newly-seen' }, { slug: 'undeterminable' }],
-        waiting: [], blocked: [], gated: [],
-      }),
-      now: () => discoveredAt,
+    // Fixed fixture: depth includes the unreadable member, while only the two
+    // determinate members contribute to the precomputed oldest age.
+    const eligibleBacklog = [
+      { slug: 'oldest', oldestAgeSeconds: 129_600 },
+      { slug: 'newly-seen', oldestAgeSeconds: 17 },
+      { slug: 'undeterminable', oldestAgeSeconds: undefined },
+    ] as const;
+    expect(eligibleBacklog).toHaveLength(3);
+    await emitUntyped(daemon.events, {
+      type: 'daemon_backlog_snapshot',
+      counts: { eligible: 3, waiting: 0, blocked: 0, gated: 0, parked: 0 },
+      oldestAgeSeconds: { eligible: 129_600 },
+      slots: { busy: 0, free: 3 }, inFlight: [],
+      blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
+      pollDurationMs: 12,
     });
-
-    await runDaemon({
-      discoverBacklog: (opts) => source.discover(opts),
-      getDiscoverySnapshot: () => source.latestSnapshot?.(),
-      runFeature: async (item) => ({ slug: item.slug, status: 'done' }),
-      sleep: async () => {},
-      onTick: (snapshot) => {
-        emissions.push(emitUntyped(daemon.events, {
-          type: 'daemon_backlog_snapshot',
-          ...snapshot,
-        }));
-      },
-    } as DaemonDeps, {
-      concurrency: 3,
-      once: true,
-      idlePollMs: 0,
-    });
-    await Promise.all(emissions);
     await daemon.scope.stop();
 
     expect(pointValue(daemon.exporter, 'conductor.daemon.backlog', {

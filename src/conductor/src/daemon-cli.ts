@@ -1082,6 +1082,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const daemonEventPersistence = startDaemonEventPersistence(projectRoot, events, log);
   const daemonOtel = wireDaemonOtel(config ?? {}, {
     mainRoot: projectRoot,
+    project: projectRoot,
     projectName: basename(projectRoot),
     workerName: resolveWorkerName(resolveOtelConfig(config ?? {}, join(projectRoot, '.pipeline'))),
     rootEvents: events,

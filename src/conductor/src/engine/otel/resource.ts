@@ -58,7 +58,9 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
 
   const traceStable = {
     'service.name': SERVICE_NAME,
-    'service.instance.id': `${projectName}/${workerName}`,
+    // Trace identity intentionally remains feature scoped.  Metrics use the
+    // stable project/worker identity below.
+    'service.instance.id': `${projectName}/${feature}`,
     'conductor.feature': feature,
     'conductor.project': project,
     'conductor.branch': branch,
@@ -77,7 +79,6 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
 
   return resourceFromAttributes({
     ...traceStable,
-    'conductor.worker': workerName,
     'conductor.run.id': ctx.runId ?? resolveRunId(ctx.pipelineDir),
     'conductor.engine.version': normalizeIdentity(ctx, 'engineVersion'),
   });

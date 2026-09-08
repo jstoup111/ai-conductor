@@ -16,6 +16,7 @@ import { readFirstSeen, recordFirstSeen } from './first-seen-marker.js';
 export interface DiscoverySnapshot {
   counts: Record<'eligible' | 'waiting' | 'blocked' | 'gated', number>;
   oldestAgeSeconds: Partial<Record<'eligible' | 'waiting' | 'blocked' | 'gated', number>>;
+  pollDurationMs?: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -152,6 +153,7 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
   return {
     latestSnapshot: () => latest,
     async discover({ refresh }) {
+      const discoveredAt = (deps.now ?? Date.now)();
       if (refresh) await deps.fastForwardRoot(deps.projectRoot, deps.log);
       // Resolve the daemon owner FRESH this pass (no cross-pass cache) so a
       // reconfigured identity takes effect immediately (FR-14). Absent thunk →
@@ -206,25 +208,26 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
       await deps.onGatedDiscovered?.(gated);
 
       const states = { eligible: items, waiting, blocked, gated } as const;
-      const seenAt = deps.now ?? Date.now;
       const membersWithSlugs = Object.values(states).flat().filter(
         (item): item is BacklogItem | WaitingItem | BlockedSpecItem | Extract<GatedItem, { kind: 'spec' }> => 'slug' in item,
       );
-      await Promise.all(membersWithSlugs.map((item) => recordFirstSeen(deps.projectRoot, item.slug, seenAt())));
+      await Promise.all(Object.entries(states).flatMap(([state, members]) => members
+        .filter((item): item is BacklogItem | WaitingItem | BlockedSpecItem | Extract<GatedItem, { kind: 'spec' }> => 'slug' in item)
+        .map((item) => recordFirstSeen(deps.projectRoot, item.slug, state, discoveredAt))));
       const oldestAgeSeconds = Object.fromEntries(await Promise.all(
         Object.entries(states).map(async ([state, members]) => {
           const ages = (await Promise.all(members.filter(
             (member): member is BacklogItem | WaitingItem | BlockedSpecItem | Extract<GatedItem, { kind: 'spec' }> => 'slug' in member,
           ).map(async (member) => {
             const firstSeen = await readFirstSeen(deps.projectRoot, member.slug);
-            return firstSeen === undefined ? undefined : Math.max(0, (seenAt() - firstSeen) / 1_000);
+            return firstSeen?.state !== state ? undefined : Math.max(0, (discoveredAt - firstSeen.enteredAt) / 1_000);
           }))).filter((age): age is number => age !== undefined);
           return [state, ages.length === 0 ? undefined : Math.max(...ages)];
         }),
       ).then((entries) => entries.filter(([, age]) => age !== undefined))) as DiscoverySnapshot['oldestAgeSeconds'];
       latest = {
         counts: { eligible: items.length, waiting: waiting.length, blocked: blocked.length, gated: gated.length },
-        oldestAgeSeconds,
+        oldestAgeSeconds, pollDurationMs: Math.max(0, (deps.now ?? Date.now)() - discoveredAt),
       };
       await deps.onBacklogDiscovered?.(latest);
 

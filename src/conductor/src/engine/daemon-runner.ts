@@ -34,6 +34,7 @@ import { readHaltSidecarClassification, writeHaltMarker } from './halt-marker.js
 import { deferredAutoParkHaltPresentation } from './auto-park-halt.js';
 import type { OperatorParkedTermination } from './conductor.js';
 import { computeTimingRollup } from './timing-rollup.js';
+import { readState } from './state.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -386,11 +387,15 @@ export function makeRunFeature(
     let featureRun: FeatureRunScope | undefined;
     let featureLog = log;
     let providerExecution: ProviderExecutionContext | undefined;
+    let endDispatch: ((outcome: 'complete' | 'halted' | 'terminated') => Promise<void>) | undefined;
+    let dispatchEnded = false;
+    let haltingStep: string | undefined;
     try {
       // The worktree is cut from the fast-forwarded default branch, so the vetted
       // stories+plan are already committed in it — no materialization/copy needed.
       worktree = await deps.createWorktree(item.slug);
       featureRun = await deps.beginFeatureRun?.(worktree, item);
+      featureRun?.events.on('loop_halt', (event) => { if (event.type === 'loop_halt') haltingStep = event.step; });
       featureLog = featureRun?.log ?? log;
       // The re-kick sentinel is durable dispatcher state.  A newly created
       // worktree has neither it nor prior pipeline state; an existing scope
@@ -403,28 +408,24 @@ export function makeRunFeature(
         slug: item.slug,
         kind: classifyDispatchKind({ wasExisting: worktree.wasExisting ?? false, rekickSignal: rekick }),
       });
-      const endDispatch = async (
+      endDispatch = async (
         outcome: 'complete' | 'halted' | 'terminated',
       ): Promise<void> => {
+        if (dispatchEnded) return;
+        dispatchEnded = true;
         const event: Extract<import('../types/events.js').ConductorEvent, { type: 'feature_dispatch_ended' }> = {
           type: 'feature_dispatch_ended', slug: item.slug, outcome,
         };
         if (outcome === 'halted') {
           event.haltClass = await readHaltSidecarClassification(worktree!.path);
-          event.step = await readFile(join(worktree!.path, '.pipeline', 'phase-active'), 'utf8')
-            .then((value) => /^step: (.+)$/m.exec(value)?.[1] ?? 'unknown')
-            .catch(() => 'unknown');
+          event.step = haltingStep ?? 'unknown';
         }
         await (featureRun?.rootEvents ?? featureRun?.events)?.emit(event);
       };
       const emitShipped = async (): Promise<void> => {
-        const runStartedAt = await readFile(join(worktree!.path, '.pipeline', 'conduct-state.json'), 'utf8')
-          .then((raw) => {
-            const state = JSON.parse(raw) as { run_started_at?: unknown };
-            return typeof state.run_started_at === 'number' && Number.isFinite(state.run_started_at)
-              ? state.run_started_at : undefined;
-          })
-          .catch(() => undefined);
+        const state = await readState(join(worktree!.path, '.pipeline', 'conduct-state.json'));
+        const runStartedAt = state.ok && typeof state.value.run_started_at === 'number' && Number.isFinite(state.value.run_started_at)
+          ? state.value.run_started_at : undefined;
         const rollup = await computeTimingRollup(worktree!.path);
         await (featureRun?.rootEvents ?? featureRun?.events)?.emit({
           type: 'feature_shipped', slug: item.slug, ...(runStartedAt === undefined ? {} : { runStartedAt }),
@@ -696,17 +697,14 @@ export function makeRunFeature(
       if (worktree) {
         await deps.teardownWorktree(worktree, true).catch(() => {});
       }
-      if (worktree && featureRun) {
-        await (featureRun.rootEvents ?? featureRun.events).emit({
-          type: 'feature_dispatch_ended', slug: item.slug, outcome: 'terminated',
-        });
-      }
+      await endDispatch?.('terminated');
       return {
         slug: item.slug,
         status: 'error',
         reason,
       };
     } finally {
+      await endDispatch?.('terminated');
       await featureRun?.stop();
     }
   };

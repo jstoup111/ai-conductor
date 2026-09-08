@@ -65,7 +65,7 @@ export function wireOtelVisualizer(
 /** Daemon-lifetime meter: one recorder/listener survives feature process exits. */
 export function wireDaemonOtel(
   config: HarnessConfig,
-  context: { mainRoot: string; projectName: string; workerName?: string; rootEvents: ConductorEventEmitter },
+  context: { mainRoot: string; project: string; projectName: string; workerName?: string; rootEvents: ConductorEventEmitter },
 ): { flush: () => Promise<void>; stop: () => Promise<void> } | null {
   const resolved = resolveOtelConfig(config, join(context.mainRoot, '.pipeline'));
   if (!resolved.enabled) return null;
@@ -76,7 +76,7 @@ export function wireDaemonOtel(
     exportIntervalMillis: 60_000,
   });
   const provider = new MeterProvider({ resource: buildResource({
-    pipelineDir: join(context.mainRoot, '.pipeline'), project: context.projectName,
+    pipelineDir: join(context.mainRoot, '.pipeline'), project: context.project,
     projectName: resolved.projectName ?? context.projectName ?? basename(context.mainRoot), workerName,
   }, 'metrics'), readers: [reader] });
   const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('conductor', '1.0.0'), {

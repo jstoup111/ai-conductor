@@ -88,7 +88,7 @@ describe('buildResource', () => {
     expect(resource.attributes['conductor.run.id']).toBe('fixed-id');
   });
 
-  it('uses the resolved project and worker as service.instance.id while retaining trace attributes', async () => {
+  it('keeps trace identity feature-scoped while retaining trace attributes', async () => {
     const configured = buildResource({
       pipelineDir,
       feature: 'explicit-feature',
@@ -121,31 +121,28 @@ describe('buildResource', () => {
     ]).toEqual([
       {
         'service.name': 'ai-conductor',
-        'service.instance.id': 'configured-project/configured-worker',
+        'service.instance.id': 'configured-project/explicit-feature',
         'conductor.run.id': 'explicit-run-id',
         'conductor.feature': 'explicit-feature',
         'conductor.project': '/workspace/explicit-project',
-        'conductor.worker': 'configured-worker',
         'conductor.branch': 'not-supplied',
         'conductor.engine.version': 'not-supplied',
       },
       {
         'service.name': 'ai-conductor',
-        'service.instance.id': 'persisted-project/persisted-worker',
+        'service.instance.id': 'persisted-project/persisted-feature',
         'conductor.run.id': 'persisted-run-id',
         'conductor.feature': 'persisted-feature',
         'conductor.project': '/workspace/persisted-project',
-        'conductor.worker': 'persisted-worker',
         'conductor.branch': 'not-supplied',
         'conductor.engine.version': 'not-supplied',
       },
       {
         'service.name': 'ai-conductor',
-        'service.instance.id': 'unknown/unknown',
+        'service.instance.id': 'unknown/f',
         'conductor.run.id': 'run-1',
         'conductor.feature': 'f',
         'conductor.project': 'p',
-        'conductor.worker': 'unknown',
         'conductor.branch': 'not-supplied',
         'conductor.engine.version': 'not-supplied',
       },
@@ -155,7 +152,6 @@ describe('buildResource', () => {
         'conductor.run.id': 'run-2',
         'conductor.feature': 'unknown',
         'conductor.project': 'p',
-        'conductor.worker': 'unknown',
         'conductor.branch': 'not-supplied',
         'conductor.engine.version': 'not-supplied',
       },
@@ -177,7 +173,7 @@ describe('buildResource', () => {
       });
     }).not.toThrow();
 
-    expect(resource!.attributes['service.instance.id']).toBe('project-a/worker-a');
+    expect(resource!.attributes['service.instance.id']).toBe('project-a/feature-a');
     expect(resource!.attributes['conductor.run.id']).toMatch(/\S/);
   });
 
@@ -194,7 +190,7 @@ describe('buildResource', () => {
     const runId = resource.attributes['conductor.run.id'] as string;
 
     expect(runId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
-    expect(resource.attributes['service.instance.id']).toBe('project-b/worker-b');
+    expect(resource.attributes['service.instance.id']).toBe('project-b/feature-b');
     expect(resource.attributes['service.instance.id']).not.toContain(runId);
   });
 
@@ -268,12 +264,12 @@ describe('buildResource', () => {
       expect(resource.attributes['conductor.engine.version']).toBe('20260828T000000Z-abc');
     });
 
-    it('both scopes carry the same service.instance.id and service.name', () => {
+    it('uses worker identity only for the metric scope', () => {
       const metrics = buildResource(ctx(), 'metrics');
       const traces = buildResource(ctx(), 'traces');
 
       expect(metrics.attributes['service.instance.id']).toBe('project-a/worker-a');
-      expect(traces.attributes['service.instance.id']).toBe(metrics.attributes['service.instance.id']);
+      expect(traces.attributes['service.instance.id']).toBe('project-a/feature-a');
       expect(metrics.attributes['service.name']).toBe('ai-conductor');
       expect(traces.attributes['service.name']).toBe('ai-conductor');
     });
