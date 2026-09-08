@@ -62,7 +62,7 @@ export function reduceBuildReviewAdjudication(input: {
     return {
       route: 'build',
       remainingMechanical: input.mechanical !== 'healthy',
-      reason: input.mechanical === 'healthy' ? 'applied action effect' : 'applied action effect with retained infrastructure blocker',
+      reason: input.mechanical === 'healthy' ? 'applied action effect' : 'applied action effect with retained coverage blocker',
     };
   }
   // An open applied action that covers no current source is not benign
@@ -77,10 +77,10 @@ export function reduceBuildReviewAdjudication(input: {
     };
   }
   if (input.mechanical === 'halt') {
-    return { route: 'halt', remainingMechanical: true, reason: 'uncovered build-review infrastructure failure' };
+    return { route: 'halt', remainingMechanical: true, reason: 'uncovered build-review coverage failure' };
   }
   if (input.mechanical === 'retry') {
-    return { route: 'mechanical-retry', remainingMechanical: true, reason: 'build-review infrastructure retry is pending' };
+    return { route: 'mechanical-retry', remainingMechanical: true, reason: 'build-review coverage retry is pending' };
   }
   return { route: 'pass', remainingMechanical: false, reason: 'all current findings have finalized non-action outcomes' };
 }

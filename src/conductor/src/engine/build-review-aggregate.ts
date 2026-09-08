@@ -77,6 +77,13 @@ export interface BuildReviewEffectiveVerdict {
    * content-complete PASS unreachable (adr-2026-08-29 D3.3).
    */
   readonly uncoveredInfrastructureFailureRubrics: readonly BuildReviewRubricId[];
+  /**
+   * The subset of `scopeIncompleteRubrics` with no exact current operator
+   * reduced-coverage decision. This is the scope counterpart to uncovered
+   * infrastructure and is the mechanical routing authority for that fault.
+   * Present from the live reducer; optional for existing injected resolver fakes.
+   */
+  readonly uncoveredScopeIncompleteRubrics?: readonly BuildReviewRubricId[];
   /** Present from the live reducer; optional for existing injected resolver fakes. */
   readonly scopeIncompleteRubrics?: readonly BuildReviewRubricId[];
 }
@@ -353,7 +360,7 @@ export function deriveEffectiveBuildReviewVerdict(
   const infrastructure: BuildReviewRubricId[] = [];
   const uncoveredInfrastructure: BuildReviewRubricId[] = [];
   const scopeIncomplete: BuildReviewRubricId[] = [];
-  let uncoveredScopeIncompleteCount = 0;
+  const uncoveredScopeIncomplete: BuildReviewRubricId[] = [];
   let judgedCount = 0;
   for (const rubric of RUBRICS) {
     const result = aggregate.results[rubric];
@@ -376,7 +383,7 @@ export function deriveEffectiveBuildReviewVerdict(
       scopeIncomplete.push(rubric);
       if (!reducedCoverage.some((decision) => matchesBuildReviewReducedCoverageDisposition(
         decision.feature, { rubric, reason: scopeFault.reason }, [decision],
-      ))) uncoveredScopeIncompleteCount += 1;
+      ))) uncoveredScopeIncomplete.push(rubric);
     }
     for (const finding of result.findings) {
       const identity = canonicalizeBuildReviewFindingIdentity({
@@ -388,10 +395,11 @@ export function deriveEffectiveBuildReviewVerdict(
   }
   return Object.freeze({
     rawVerdict: aggregate.verdict,
-    verdict: judgedCount > 0 && unresolved.length === 0 && uncoveredInfrastructure.length === 0 && uncoveredScopeIncompleteCount === 0 ? 'PASS' : 'FAIL',
+    verdict: judgedCount > 0 && unresolved.length === 0 && uncoveredInfrastructure.length === 0 && uncoveredScopeIncomplete.length === 0 ? 'PASS' : 'FAIL',
     acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved),
     skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
     uncoveredInfrastructureFailureRubrics: Object.freeze(uncoveredInfrastructure),
+    uncoveredScopeIncompleteRubrics: Object.freeze(uncoveredScopeIncomplete),
     ...(scopeIncomplete.length > 0 ? { scopeIncompleteRubrics: Object.freeze(scopeIncomplete) } : {}),
   });
 }

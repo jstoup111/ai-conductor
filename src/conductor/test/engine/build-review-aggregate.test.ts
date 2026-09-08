@@ -61,6 +61,7 @@ describe('build-review raw aggregate', () => {
     expect(parseBuildReviewAggregate(aggregate)).toEqual(aggregate);
     expect(deriveEffectiveBuildReviewVerdict(aggregate)).toMatchObject({
       verdict: 'FAIL', unresolvedFindingIds: [expect.any(String)], scopeIncompleteRubrics: ['testQuality'],
+      uncoveredScopeIncompleteRubrics: ['testQuality'],
     });
   });
 
@@ -83,10 +84,14 @@ describe('build-review raw aggregate', () => {
 
     expect(deriveEffectiveBuildReviewVerdictWithDispositions(
       joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: scopeOnly } }), feature, [], coverage,
-    )).toMatchObject({ verdict: 'PASS', scopeIncompleteRubrics: ['testQuality'], unresolvedFindingIds: [] });
+    )).toMatchObject({
+      verdict: 'PASS', scopeIncompleteRubrics: ['testQuality'], uncoveredScopeIncompleteRubrics: [], unresolvedFindingIds: [],
+    });
     expect(deriveEffectiveBuildReviewVerdictWithDispositions(
       joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: scopeAndFinding } }), feature, [], coverage,
-    )).toMatchObject({ verdict: 'FAIL', scopeIncompleteRubrics: ['testQuality'], unresolvedFindingIds: [expect.any(String)] });
+    )).toMatchObject({
+      verdict: 'FAIL', scopeIncompleteRubrics: ['testQuality'], uncoveredScopeIncompleteRubrics: [], unresolvedFindingIds: [expect.any(String)],
+    });
   });
 
   it.each(['wiring', 'scope', 'rootCause', 'completeness', 'causalIntegrity', 'tautology'] as const)(
@@ -182,6 +187,7 @@ describe('build-review raw aggregate', () => {
     expect(deriveEffectiveBuildReviewVerdict(aggregate)).toEqual({
       rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [],
       skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+      uncoveredScopeIncompleteRubrics: [],
     });
   });
 

@@ -207,11 +207,14 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     if (!effective) throw new Error('current findings are invalid');
     const accepted = acceptedDispositions(aggregate, feature, effective, records);
     const faults = exhaustedMechanicalFaults(aggregate, gateEntry?.mechanicalFaults ?? 0);
-    // `uncoveredInfrastructureFailureRubrics` is an engine routing projection,
-    // not part of this command's published machine contract; the operator
-    // already sees coverage through `Infrastructure failures` and the
-    // reduced-coverage decisions themselves. Keep the payload byte-stable.
-    const { uncoveredInfrastructureFailureRubrics: _uncovered, ...reported } = effective;
+    // Uncovered coverage projections are engine-routing-only. The operator
+    // already sees coverage through the rendered failures and reduced-coverage
+    // decisions, so keep this command's published machine contract byte-stable.
+    const {
+      uncoveredInfrastructureFailureRubrics: _uncoveredInfrastructure,
+      uncoveredScopeIncompleteRubrics: _uncoveredScopeIncomplete,
+      ...reported
+    } = effective;
     const output = {
       feature: command.feature, lapId: aggregate.lapId, snapshotDigest: aggregate.snapshotDigest, ...reported, acceptedDispositions: accepted,
       ...(gateEntry?.lastMechanicalFault === undefined ? {} : { lastMechanicalFault: gateEntry.lastMechanicalFault }),

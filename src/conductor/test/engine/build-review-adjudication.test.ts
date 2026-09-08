@@ -39,7 +39,15 @@ describe('reduceBuildReviewAdjudication', () => {
 
   it('retains the infrastructure blocker on a mixed action lap', () => {
     expect(reduceBuildReviewAdjudication(reducerInput({ cases: [action()], mechanical: 'retry' })))
-      .toMatchObject({ route: 'build', remainingMechanical: true });
+      .toMatchObject({ route: 'build', remainingMechanical: true, reason: 'applied action effect with retained coverage blocker' });
+  });
+
+  it.each([
+    ['retry', 'mechanical-retry', 'build-review coverage retry is pending'],
+    ['halt', 'halt', 'uncovered build-review coverage failure'],
+  ] as const)('names a retained %s scope blocker as coverage', (mechanical, route, reason) => {
+    expect(reduceBuildReviewAdjudication(reducerInput({ currentSourceIds: [], cases: [], mechanical })))
+      .toMatchObject({ route, reason });
   });
 
   it('halts rather than passing when current source coverage is incomplete or contradictory', () => {
