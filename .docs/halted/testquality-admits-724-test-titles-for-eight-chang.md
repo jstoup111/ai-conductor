@@ -1,20 +1,26 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-07T23:41:59.431Z
+Status: halted
 Slug: testquality-admits-724-test-titles-for-eight-chang
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: rebase
+Phase: SHIP
 Branch: feat/daemon-testquality-admits-724-test-titles-for-eight-chang
-Head SHA: 3436a6bf7b4bfbb0ef880e0e5a5038a3110154fe
-Halted at: 2026-09-07T20:24:50.214Z
+Head SHA: 89f8568291d9048422a81b97dad260d4ae23d1ee
+Halted at: 2026-09-08T04:11:58.620Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-step 'build_review' cannot make progress: its inputs cannot change on a re-dispatch. Re-run 'test_suite' before retrying 'build_review'.
+rebase conflict — parked for human resolution
+rebase resolution dropped feature commit(s)
+Conflicted files: src/conductor/src/engine/build-review-inputs.ts, src/conductor/src/engine/build-review-scope-source.ts, src/conductor/test/engine/build-review-inputs.test.ts, src/conductor/test/engine/build-review-scope-source.test.ts
+
+Resume procedure:
+  1. Resolve the conflicts in the listed file(s).
+  2. git rebase --continue
+  3. rm .pipeline/HALT
+  4. Re-queue the feature for the daemon.
 ```
