@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.1.0] - 2026-09-07
+## [1.1.0] - 2026-09-08
 
 ### Added
 
@@ -36,6 +36,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The pre-BUILD coverage-binding judge (`coverage_binding.judge.enabled`) is now on by default. ([implementation PR #2116](https://github.com/jstoup111/ai-conductor/pull/2116)).
 - The as-built architecture review now follows an explicit context budget (bounded diff/log/search reads, no re-reading policy text) to avoid mid-review compaction. ([implementation PR #2379](https://github.com/jstoup111/ai-conductor/pull/2379)).
 - The as-built architecture review and prd-audit now delegate evidence gathering to host-native subagents and grade from bounded digests, keeping the reviewer's context for judgement. ([implementation PR #2380](https://github.com/jstoup111/ai-conductor/pull/2380)).
+- Release publication now requires one successful live-provider E2E instead of every configured provider. ([implementation PR #2438](https://github.com/jstoup111/ai-conductor/pull/2438)).
 
 ### Fixed
 
