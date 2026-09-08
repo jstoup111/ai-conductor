@@ -14,7 +14,7 @@ import {
 } from '../../src/engine/full-suite-evidence.js';
 import type { FullSuiteExecutionResult } from '../../src/engine/full-suite-executor.js';
 import {
-  classifyFullSuiteRecoveryClaim,
+  inspectFullSuiteRecoveryClaim,
   deriveFullSuiteScopedSelection,
   FullSuiteVerifier,
 } from '../../src/engine/full-suite-verifier.js';
@@ -142,11 +142,11 @@ describe('FullSuiteVerifier', () => {
     const claimPath = join(lockPath, 'recovery.json');
     const now = Date.parse('2026-09-07T12:00:00.000Z');
     const staleThresholdMs = 1_000;
-    const inspect = () => classifyFullSuiteRecoveryClaim(lockPath, {
+    const inspect = async () => (await inspectFullSuiteRecoveryClaim(lockPath, {
       clock: () => now,
       processIsLive: (pid) => pid === 22,
       unownedStaleMs: staleThresholdMs,
-    });
+    })).classification;
 
     await writeProjectFile(lockPath, 'recovery.json', JSON.stringify({
       version: 1,
@@ -202,11 +202,11 @@ describe('FullSuiteVerifier', () => {
     const claimPath = join(lockPath, 'recovery.json');
     const now = Date.parse('2026-09-07T12:00:00.000Z');
     await mkdir(claimPath, { recursive: true });
-    const readFailure = await classifyFullSuiteRecoveryClaim(lockPath, {
+    const readFailure = (await inspectFullSuiteRecoveryClaim(lockPath, {
       clock: () => now,
       processIsLive: () => false,
       unownedStaleMs: 1_000,
-    });
+    })).classification;
     await rm(claimPath, { recursive: true });
     await writeFile(claimPath, JSON.stringify({
       version: 1,
@@ -214,17 +214,17 @@ describe('FullSuiteVerifier', () => {
       token: 'live-claimant',
       claimedAt: '2026-09-07T11:59:59.900Z',
     }));
-    const livenessFailure = await classifyFullSuiteRecoveryClaim(lockPath, {
+    const livenessFailure = (await inspectFullSuiteRecoveryClaim(lockPath, {
       clock: () => now,
       processIsLive: () => { throw new Error('liveness denied'); },
       unownedStaleMs: 1_000,
-    });
+    })).classification;
     await writeFile(claimPath, 'not json');
-    const ageFailure = await classifyFullSuiteRecoveryClaim(lockPath, {
+    const ageFailure = (await inspectFullSuiteRecoveryClaim(lockPath, {
       clock: () => { throw new Error('clock denied'); },
       processIsLive: () => false,
       unownedStaleMs: 1_000,
-    });
+    })).classification;
 
     expect({ readFailure, livenessFailure, ageFailure }).toEqual({
       readFailure: expect.objectContaining({

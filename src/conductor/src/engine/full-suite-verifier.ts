@@ -310,21 +310,12 @@ function parseLockRecoveryClaim(serialized: string | null): FullSuiteLockRecover
   }
 }
 
-export async function classifyFullSuiteRecoveryClaim(
-  lockPath: string,
-  options: Required<Pick<FullSuiteLockOptions, 'clock' | 'processIsLive'>> & {
-    unownedStaleMs: number;
-  },
-): Promise<FullSuiteRecoveryClaimClassification> {
-  return (await inspectFullSuiteRecoveryClaim(lockPath, options)).classification;
-}
-
 interface FullSuiteRecoveryClaimInspection {
   classification: FullSuiteRecoveryClaimClassification;
   serialized?: string;
 }
 
-async function inspectFullSuiteRecoveryClaim(
+export async function inspectFullSuiteRecoveryClaim(
   lockPath: string,
   options: Required<Pick<FullSuiteLockOptions, 'clock' | 'processIsLive'>> & {
     unownedStaleMs: number;
