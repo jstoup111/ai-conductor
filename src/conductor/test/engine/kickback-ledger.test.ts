@@ -169,18 +169,20 @@ describe('kickback-ledger', () => {
     });
   });
 
-  it('returns an empty ledger and warns when the ledger JSON is corrupt', async () => {
+  it('returns an unreadable ledger and warns when the ledger JSON is corrupt', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline/kickback-ledger.json'), 'not valid json {');
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+    const ledger = await readKickbackLedger(dir);
+    expect(ledger).toEqual({ version: 1, gates: {} });
+    expect(isUnreadableKickbackLedger(ledger)).toBe(true);
     expect(warnSpy).toHaveBeenCalled();
 
     warnSpy.mockRestore();
   });
 
-  it('treats a ledger with an unsupported version as absent', async () => {
+  it('returns an unreadable ledger for an unsupported version', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(
       join(dir, '.pipeline/kickback-ledger.json'),
@@ -189,10 +191,26 @@ describe('kickback-ledger', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
-      await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+      const ledger = await readKickbackLedger(dir);
+      expect(ledger).toEqual({ version: 1, gates: {} });
+      expect(isUnreadableKickbackLedger(ledger)).toBe(true);
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('unsupported ledger version'),
       );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('returns an unreadable ledger when durable-state reading fails for a reason other than ENOENT', async () => {
+    await mkdir(join(dir, '.pipeline', 'kickback-ledger.json'), { recursive: true });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      const ledger = await readKickbackLedger(dir);
+      expect(ledger).toEqual({ version: 1, gates: {} });
+      expect(isUnreadableKickbackLedger(ledger)).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('unable to read ledger'));
     } finally {
       warnSpy.mockRestore();
     }
@@ -474,7 +492,9 @@ describe('kickback-ledger', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
-      await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+      const ledger = await readKickbackLedger(dir);
+      expect(ledger).toEqual({ version: 1, gates: {} });
+      expect(isUnreadableKickbackGate(ledger, 'build_review')).toBe(true);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('corrupt ledger'));
     } finally {
       warnSpy.mockRestore();
@@ -501,7 +521,9 @@ describe('kickback-ledger', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
-      await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+      const ledger = await readKickbackLedger(dir);
+      expect(ledger).toEqual({ version: 1, gates: {} });
+      expect(isUnreadableKickbackGate(ledger, 'build_review')).toBe(true);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('corrupt ledger'));
     } finally {
       warnSpy.mockRestore();
