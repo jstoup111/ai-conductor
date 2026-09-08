@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-08T14:58:24.891Z
 Slug: reclaim-orphaned-full-suite-lock-recovery-claims
 Class: needs-human
 Halting step: build_review
