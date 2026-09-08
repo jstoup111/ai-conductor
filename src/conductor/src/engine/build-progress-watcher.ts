@@ -332,8 +332,9 @@ export class BuildProgressWatcher {
       try {
         const git = makeGitRunner(this.projectRoot);
         const result = await git(['show', '-s', '--format=%ct', head]);
-        const commitSeconds = Number(result.stdout.trim());
-        if (result.exitCode === 0 && Number.isFinite(commitSeconds)) {
+        const commitTimeOutput = result.stdout.trim();
+        const commitSeconds = Number(commitTimeOutput);
+        if (result.exitCode === 0 && commitTimeOutput && Number.isFinite(commitSeconds)) {
           this.lastCommitHead = head;
           this.lastCommitAt = commitSeconds * 1000;
         }

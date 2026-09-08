@@ -12,7 +12,7 @@ import type { ConductorEvent } from '../src/types/index.js';
 const gitProbe = vi.hoisted(() => ({
   throws: false,
   commitTimeCalls: 0,
-  commitTimeFailure: undefined as undefined | 'throws' | 'non-zero' | 'unparseable',
+  commitTimeFailure: undefined as undefined | 'throws' | 'non-zero' | 'unparseable' | 'blank',
 }));
 
 vi.mock('../src/engine/rebase.js', async (importOriginal) => {
@@ -35,6 +35,9 @@ vi.mock('../src/engine/rebase.js', async (importOriginal) => {
           }
           if (gitProbe.commitTimeFailure === 'unparseable') {
             return { exitCode: 0, stdout: 'not-a-timestamp', stderr: '' };
+          }
+          if (gitProbe.commitTimeFailure === 'blank') {
+            return { exitCode: 0, stdout: ' \n', stderr: '' };
           }
         }
         return git(args, opts);
@@ -421,7 +424,26 @@ describe('BuildProgressWatcher change-driven emission', () => {
     ]);
   });
 
-  for (const failure of ['throws', 'non-zero', 'unparseable'] as const) {
+  it('keeps commit time absent when the first successful commit-time probe is blank', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeTasks(5, 21);
+    await writeFile(join(dir, 'README.md'), 'initial');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+    gitProbe.commitTimeFailure = 'blank';
+
+    const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
+    await tick(watcher);
+    watcher.stop();
+
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({ resolved: 5, total: 21, lastCommitAt: undefined }),
+    ]);
+  });
+
+  for (const failure of ['throws', 'non-zero', 'unparseable', 'blank'] as const) {
     it(`preserves the last commit time and emits when the commit-time probe ${failure}`, async () => {
       await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
