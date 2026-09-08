@@ -71,4 +71,33 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
     expect(line).not.toContain('FAIL');
     expect(line).not.toContain('failure');
   });
+
+  it('names an agreeing outer verdict once', () => {
+    expect(lines({
+      type: 'build_review_outer_verdict', lapId: 'lap-12345678', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+    })).toEqual(['·   build_review [lap-1234] outer verdict: PASS']);
+  });
+
+  it('names both outer verdicts when the effective verdict differs', () => {
+    expect(lines({
+      type: 'build_review_outer_verdict', lapId: 'lap-12345678', rawVerdict: 'FAIL', effectiveVerdict: 'PASS',
+    })).toEqual(['·   build_review [lap-1234] outer verdict: PASS (raw: FAIL)']);
+  });
+
+  it('includes an outer verdict reason only when supplied', () => {
+    expect(lines({
+      type: 'build_review_outer_verdict', lapId: 'lap-12345678', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+      reason: 'no enabled rubrics',
+    })).toEqual(['·   build_review [lap-1234] outer verdict: PASS — no enabled rubrics']);
+  });
+
+  it('includes the unresolved-marker count only when supplied', () => {
+    expect(lines({
+      type: 'build_review_outer_verdict', lapId: 'lap-12345678', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
+      unresolvedMarkers: [
+        { selector: 'test/a.test.ts', reference: 'task:1' },
+        { selector: 'test/b.test.ts', reference: 'task:2' },
+      ],
+    })).toEqual(['·   build_review [lap-1234] outer verdict: PASS — unresolved markers: 2']);
+  });
 });

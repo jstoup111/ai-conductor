@@ -2662,6 +2662,15 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'build_review_rubric_skipped':
       log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} skipped: ${event.reason}`);
       break;
+    case 'build_review_outer_verdict': {
+      const raw = event.rawVerdict === event.effectiveVerdict ? '' : ` (raw: ${event.rawVerdict})`;
+      const reason = event.reason ? ` — ${event.reason}` : '';
+      const unresolvedMarkers = event.unresolvedMarkers
+        ? ` — unresolved markers: ${event.unresolvedMarkers.length}`
+        : '';
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] outer verdict: ${event.effectiveVerdict}${raw}${reason}${unresolvedMarkers}`);
+      break;
+    }
     case 'contained_live_checkout_drift':
       log(`${dot} ${chalk.dim(`self-host contained; concurrent operator drift: ${event.summary}`)}`);
       break;
