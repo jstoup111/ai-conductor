@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-08T13:10:50.709Z
 Slug: a-halted-feature-only-re-runs-when-a-human-clears-
 Class: needs-human
 Halting step: unknown
