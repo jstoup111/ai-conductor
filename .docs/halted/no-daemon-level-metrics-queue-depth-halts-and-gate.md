@@ -2,17 +2,17 @@
 
 Status: halted
 Slug: no-daemon-level-metrics-queue-depth-halts-and-gate
-Class: plan-gap
-Halting step: prd_audit
-Phase: SHIP
+Class: needs-human
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-no-daemon-level-metrics-queue-depth-halts-and-gate
-Head SHA: 5295b8f20584e254069e0be9cb13667d61557bdb
-Halted at: 2026-09-08T22:19:25.890Z
+Head SHA: baf273cf3038c8f430b7c1accbd2063317678f41
+Halted at: 2026-09-08T23:55:43.779Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome
+build_review adjudication halted: case store malformed-state
 ```
