@@ -1,4 +1,6 @@
 /**
+ * Covers: Story 1, Task 4
+ *
  * FR-9 — daemon self-restart on tmux respawn: production wiring coverage.
  *
  * The existing suites cover isolated pieces in mocked/injected form:
@@ -45,6 +47,7 @@ import {
 } from '../../src/engine/daemon-tmux.js';
 import { buildDaemonModeOptions } from '../../src/index.js';
 import type { DaemonCommandOptions } from '../../src/engine/daemon-command.js';
+import { listDaemonSessions } from '../tmux-leak-guard.js';
 
 let workDirs: string[] = [];
 
@@ -93,12 +96,15 @@ describe('FR-9 — queued restart fires against a real tmux session', () => {
 
       const projectRoot = await freshDir();
       const suffix = randomBytes(4).toString('hex');
-      const name = `test-wiring-${suffix}`;
+      const name = `cc-daemon-restart-wiring-${suffix}`;
       const dummyCommand = 'bash -c "while true; do echo BOOT_$$; sleep 1; done"';
+      const prevNoRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
 
       try {
         await newDetachedSession(name, dummyCommand, projectRoot);
         expect(await realHasSession(name)).toBe(true);
+        expect(listDaemonSessions()).toContain(name);
         await setRemainOnExit(name);
 
         // Real marker mechanism: `.daemon/RESTART-PENDING` via restart-marker.ts.
@@ -132,7 +138,14 @@ describe('FR-9 — queued restart fires against a real tmux session', () => {
         expect(await realHasSession(name)).toBe(true);
       } finally {
         await killSession(name);
+        if (prevNoRealExec === undefined) {
+          delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+        } else {
+          process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevNoRealExec;
+        }
       }
+
+      expect(listDaemonSessions()).not.toContain(name);
     },
     30_000,
   );
