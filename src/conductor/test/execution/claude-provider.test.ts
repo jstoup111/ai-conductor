@@ -1,3 +1,4 @@
+// Covers: task:2
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
 import { PassThrough } from 'node:stream';
@@ -1530,6 +1531,19 @@ describe('ClaudeProvider', () => {
     });
 
     describe('rate-limit waitSeconds parsing', () => {
+      it('reports an exact two-hour wait from rate-limited output', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: '',
+          stderr: 'Error: rate limit exceeded, try again in 2 hours',
+          exitCode: 1,
+          failed: true,
+        } as any);
+
+        const result = await provider.invoke(baseOptions);
+
+        expect(result).toMatchObject({ rateLimited: true, waitSeconds: 7200 });
+      });
+
       it('parses waitSeconds from rate-limited output with reset time (happy path)', async () => {
         mockExeca.mockResolvedValue({
           stdout: '',
