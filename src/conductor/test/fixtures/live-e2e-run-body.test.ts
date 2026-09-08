@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:4
+// Covers: task:1, task:2, task:4, task:5
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -12,6 +12,7 @@ import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-agg
 import { buildReviewDispositionStorePath } from '../../src/engine/build-review-dispositions.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
+import { writeOperatorPark } from '../../src/engine/park-marker.js';
 import { dumpPipelineDiagnostics } from './daemon-e2e-diagnostics.js';
 import { LIVE_E2E_PROVIDERS, type LiveE2EProviderDescriptor } from './live-e2e-providers.js';
 import type { LiveE2ERunBodyDependencies } from './live-e2e-run-body.js';
@@ -138,6 +139,30 @@ describe('live E2E linked-worktree fixture seeding', () => {
       await rm(fixtureRoot, { recursive: true, force: true });
     }
     expect(terminal).toBe(true);
+  });
+
+  it('denies terminal success when the production park writer parks the linked-worktree fixture', async () => {
+    const fixtureRoot = await mkdtemp(`${tmpdir()}/live-e2e-parked-`);
+    let observed: Record<string, boolean> | undefined;
+    try {
+      const { hasSuccessfulTerminalState, seedLiveE2EFixture } = await import('./live-e2e-run-body.js') as {
+        hasSuccessfulTerminalState: (worktreeDir: string, slug: string) => Promise<boolean>;
+        seedLiveE2EFixture: (root: string, slug: string) => Promise<{ mainCheckoutDir: string; projectDir: string }>;
+      };
+      const slug = 'daemon-e2e-live';
+      const seeded = await seedLiveE2EFixture(fixtureRoot, slug);
+      await mkdir(join(seeded.projectDir, '.pipeline'), { recursive: true });
+      await writeFile(join(seeded.projectDir, '.pipeline/DONE'), 'completed\n');
+      await writeOperatorPark(seeded.projectDir, slug);
+      observed = {
+        terminal: await hasSuccessfulTerminalState(seeded.projectDir, slug),
+        mainMarker: existsSync(join(seeded.mainCheckoutDir, '.daemon/parked', slug)),
+        worktreeMarker: existsSync(join(seeded.projectDir, '.daemon/parked', slug)),
+      };
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+    expect(observed).toEqual({ terminal: false, mainMarker: true, worktreeMarker: false });
   });
 });
 
