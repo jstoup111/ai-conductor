@@ -2601,6 +2601,10 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
   }
 }
 
+function buildReviewLapTag(lapId: string): string {
+  return lapId.slice(0, 8);
+}
+
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
@@ -2645,6 +2649,12 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'remediation_adjudication_completed':
       log(`${dot} build_review adjudication completed (${event.caseIds.length} settled case${event.caseIds.length === 1 ? '' : 's'})`);
+      break;
+    case 'build_review_rubric_started':
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} started`);
+      break;
+    case 'build_review_cache_hit':
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} cache hit`);
       break;
     case 'contained_live_checkout_drift':
       log(`${dot} ${chalk.dim(`self-host contained; concurrent operator drift: ${event.summary}`)}`);
