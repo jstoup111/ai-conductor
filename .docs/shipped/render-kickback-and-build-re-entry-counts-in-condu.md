@@ -4,6 +4,18 @@ spec_hash: da97c75035c070e6e7ca6fa7bf442c3af5301a69055b4f6eca37b2e019cfdd57
 pr: https://github.com/jstoup111/ai-conductor/pull/2451
 shipped: 2026-09-08
 engine_version: 20260907T120758Z-4f8bdec36946
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: ".github/workflows/live-daemon-e2e.yml:153 — the `live-provider-gate` success branch was rewritten from `if grep -Rqx success …; then echo …; exit 0; fi` plus a trailing failure path into `if ! grep -Rqx success …; then echo …; exit 1; fi` plus a trailing success echo; unplanned CI-only edit, no plan task lists this file and commit 080fdd2c carries no `Scope:` or `Task:` trailer"
+    accepted: false
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "Task 4"
+    outcome: remediated
+    summary: "The artifacts reference and stalled-feature runbook still claim the report renders no kickback table, contradicting the shipped renderer and Task 4's required documentation outcome."
 ---
 
 ## Cost
