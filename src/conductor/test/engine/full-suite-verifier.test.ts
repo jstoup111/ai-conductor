@@ -3581,6 +3581,126 @@ describe('FullSuiteVerifier', () => {
     }
   });
 
+  it('takes a vanished orphaned recovery claim only once during stale-lock recovery', async () => {
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    const projectRoot = await makeConfiguredProject('full-suite-vanished-recovery-claim-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const claimPath = join(lockPath, 'recovery.json');
+    await writeProjectFile(lockPath, 'owner.json', JSON.stringify({
+      version: 1,
+      pid: 2_147_483_647,
+      token: 'dead-owner',
+      acquiredAt: '2026-09-07T11:00:00.000Z',
+    }));
+    await writeFile(claimPath, JSON.stringify({
+      version: 1,
+      pid: 2_147_483_646,
+      token: 'vanishing-recoverer',
+      claimedAt: '2026-09-07T11:59:59.999Z',
+    }), 'utf8');
+    let executions = 0;
+    const livenessProbes: number[] = [];
+
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true as const,
+        fingerprint: {
+          digest: 'sha256:vanished-recovery-claim',
+          headSha: 'vanished-recovery-claim-head',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
+      }),
+      execute: async () => {
+        executions += 1;
+        return {
+          ok: true as const,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-09-07T12:00:00.000Z',
+          endedAt: '2026-09-07T12:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0 as const,
+          stdout: 'passed\n',
+          stderr: '',
+        };
+      },
+      lock: {
+        waitTimeoutMs: 0,
+        clock: () => now,
+        processIsLive: (pid) => {
+          livenessProbes.push(pid);
+          if (pid === 2_147_483_646) rmSync(claimPath);
+          return false;
+        },
+      },
+    }).ensure();
+
+    expect({
+      result: result.status,
+      executions,
+      livenessProbes,
+      lockExists: await readdir(join(projectRoot, '.pipeline'))
+        .then((entries) => entries.includes('test-suite.lock')),
+    }).toEqual({
+      result: 'EXECUTED',
+      executions: 1,
+      livenessProbes: [2_147_483_647, 2_147_483_646],
+      lockExists: false,
+    });
+  });
+
+  it('fails closed when recovery-claim classification cannot probe liveness', async () => {
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    const projectRoot = await makeConfiguredProject('full-suite-recovery-claim-probe-failure-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const claimPath = join(lockPath, 'recovery.json');
+    const existingClaim = JSON.stringify({
+      version: 1,
+      pid: 2_147_483_646,
+      token: 'unprobeable-recoverer',
+      claimedAt: '2026-09-07T11:59:59.999Z',
+    });
+    await writeProjectFile(lockPath, 'owner.json', JSON.stringify({
+      version: 1,
+      pid: 2_147_483_647,
+      token: 'dead-owner',
+      acquiredAt: '2026-09-07T11:00:00.000Z',
+    }));
+    await writeFile(claimPath, existingClaim, 'utf8');
+    let executions = 0;
+
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      execute: async () => {
+        executions += 1;
+        throw new Error('must not execute after a recovery-claim probe failure');
+      },
+      lock: {
+        waitTimeoutMs: 0,
+        clock: () => now,
+        processIsLive: (pid) => {
+          if (pid === 2_147_483_646) throw new Error('liveness denied');
+          return false;
+        },
+      },
+    }).ensure();
+
+    expect({
+      result,
+      executions,
+      claim: await readFile(claimPath, 'utf8'),
+    }).toEqual({
+      result: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to verify full-suite recovery claim liveness: liveness denied',
+      },
+      executions: 0,
+      claim: existingClaim,
+    });
+  });
+
   it('recovers a provably dead owner but refuses a live verification lock', async () => {
     const makeLockedProject = async (pid: number, token: string) => {
       const projectRoot = await makeConfiguredProject('full-suite-verifier-lock-');

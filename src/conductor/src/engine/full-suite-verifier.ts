@@ -584,26 +584,34 @@ async function quarantineClaimedStaleLock(
       readFile(join(quarantine, FULL_SUITE_LOCK_RECOVERY_CLAIM), 'utf8'),
     ]);
   } catch (error) {
+    const released = await removeOwnedRecoveryClaim(quarantine, serializedClaim);
+    const detail =
+      `Unable to verify stale full-suite lock ownership: ${lockErrorMessage(error)}`;
     return {
       status: 'FAILED',
-      message: `Unable to verify stale full-suite lock ownership: ${lockErrorMessage(error)}`,
+      message: released.ok ? detail : `${detail}; ${released.message}`,
     };
   }
   if (
     quarantinedOwner !== expectedOwner ||
     quarantinedClaim !== serializedClaim
   ) {
+    const released = await removeOwnedRecoveryClaim(quarantine, serializedClaim);
     return {
       status: 'FAILED',
-      message: 'Full-suite lock ownership changed during stale recovery',
+      message: released.ok
+        ? 'Full-suite lock ownership changed during stale recovery'
+        : released.message,
     };
   }
   try {
     await rm(quarantine, { recursive: true });
   } catch (error) {
+    const released = await removeOwnedRecoveryClaim(quarantine, serializedClaim);
+    const detail = `Unable to remove stale full-suite lock: ${lockErrorMessage(error)}`;
     return {
       status: 'FAILED',
-      message: `Unable to remove stale full-suite lock: ${lockErrorMessage(error)}`,
+      message: released.ok ? detail : `${detail}; ${released.message}`,
     };
   }
   return { status: 'RECOVERED' };
