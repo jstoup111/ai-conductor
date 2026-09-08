@@ -111,3 +111,5 @@ agree.
 | criterion | Story 8 negative: Given the interactive listener owns its meter, when the run stops, then meterProvider.shutdown() is called exactly once | task-19 | covered | "the interactive listener's meter receives `shutdown()` exactly once on stop" | diff-local |
 
 > **Amended 2026-09-08 by #1937:** The two Story 4 halt-classification mappings above are superseded by the accepted story wording: unreadable or unrecognized sidecars derive `unclassified`; an absent `HALT.class` with `HALT` present derives `legacy`. Task 14 covers both derivations.
+
+> **Amended 2026-09-08 by operator resolution of AB-4:** The preceding amendment is superseded by the approved ADR's fail-closed boundary. The first Story 4 mapping includes absent sidecars and derives `unclassified`; the second covers a pre-boundary halt explicitly stamped `legacy` by the one-time migration. Task 14 owns the implementation and proof for both mappings.

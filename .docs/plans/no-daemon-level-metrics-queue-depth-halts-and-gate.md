@@ -709,6 +709,8 @@ no new telemetry channel or provider-specific path is introduced.
 
 > **Amended 2026-09-08 by #1937:** The two Story 4 halt-classification rows in the Coverage Check are superseded by the accepted story wording: unreadable or unrecognized sidecars derive `unclassified`; an absent `HALT.class` with `HALT` present derives `legacy`.
 
+> **Amended 2026-09-08 by operator resolution of AB-4:** The preceding amendment is superseded to conform to `adr-2026-07-28-total-halt-classification-legacy-boundary` D2-D3. Task 14 treats an absent, unreadable, or unrecognized `HALT.class` as `unclassified`; `legacy` is reported only when the one-time migration has explicitly stamped that value into the sidecar. Task 14 must repair `readHaltSidecarClassification` (or reuse the conforming read path) and cover both the absent-sidecar fail-closed case and the explicitly stamped legacy case.
+
 ## Amendment 2026-09-08 — daemon stall identity
 
 The operator confirmed ADR-014 Decision 8's existing identity contract: `conductor.daemon.inflight`
