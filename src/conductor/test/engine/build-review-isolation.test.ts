@@ -257,7 +257,7 @@ describe('build_review input isolation', () => {
       }),
     });
 
-    await(dir, {
+    await writeKickbackLedger(dir, {
       version: 1,
       gates: {
         build_review: {
@@ -274,4 +274,4 @@ describe('build_review input isolation', () => {
   });
 });
 
-import { } from '../kickback-ledger-test-support.js';
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

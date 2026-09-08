@@ -619,7 +619,7 @@ describe('as-built SHIP routing', () => {
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
     await seedSerialAsBuilt(dir, statePath);
     if (input.priorLap) {
-      await(dir, {
+      await writeKickbackLedger(dir, {
         version: 1,
         gates: {
           architecture_review_as_built: {
@@ -785,7 +785,7 @@ describe('as-built SHIP routing', () => {
       ),
     ]);
     if (input.priorLap) {
-      await(dir, {
+      await writeKickbackLedger(dir, {
         version: 1,
         gates: {
           architecture_review_as_built: {
@@ -1121,4 +1121,4 @@ describe('as-built SHIP routing', () => {
   });
 });
 
-import { } from './kickback-ledger-test-support.js';
+import { writeKickbackLedger } from './kickback-ledger-test-support.js';

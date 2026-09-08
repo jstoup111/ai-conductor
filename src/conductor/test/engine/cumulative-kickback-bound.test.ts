@@ -131,7 +131,7 @@ describe('cumulative build-review kickback bound', () => {
 
   it('still applies the per-tree cap while the cumulative bound is disabled', async () => {
     const baseline = await runFailLaps({ cumulativeBoundEnabled: false, changedTrees: false, laps: 1 });
-    await(dir, {
+    await writeKickbackLedger(dir, {
       version: 1,
       gates: {
         build_review: {
@@ -164,7 +164,7 @@ describe('cumulative build-review kickback bound', () => {
       priorVerdict: true,
       resolvedBefore: 7,
     };
-    await(dir, { version: 1, gates: { build_review: semanticEntry } });
+    await writeKickbackLedger(dir, { version: 1, gates: { build_review: semanticEntry } });
     let mixedLap = false;
     vi.mocked(coordinateBuildReviewRubrics).mockImplementation(async (): Promise<BuildReviewCoordination> => ({
       kind: 'ready',
@@ -291,4 +291,4 @@ describe('cumulative build-review kickback bound', () => {
   });
 });
 
-import { } from '../kickback-ledger-test-support.js';
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
