@@ -59,7 +59,28 @@ describe('kickback budget view', () => {
       expect(json).toHaveLength(1);
       const parsed = JSON.parse(json[0]) as { gates: Array<{ gate: string; adjustments: unknown }> };
       expect(parsed.gates.map((view) => view.gate)).toEqual(['build_review', 'prd_audit', 'architecture_review_as_built']);
-      expect(parsed.gates.every((view) => 'adjustments' in view)).toBe(true);
+      expect(parsed.gates.find((view) => view.gate === 'build_review')?.adjustments).toEqual([]);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a malformed adjustment history explicitly unavailable in JSON', async () => {
+    const fixture = await makeFeature({ version: 1, gates: {
+      build_review: {
+        count: 1, cumulative: 2, treeHash: null, lastReason: 'review', priorVerdict: true,
+        resolvedBefore: 0, adjustments: [{ id: 'missing-required-attribution' }],
+      },
+    } });
+    try {
+      const output: string[] = [];
+      expect(await dispatchKickbackBudgetCommand(
+        { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'json' },
+        { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => output.push(line) },
+      )).toBe(0);
+
+      const parsed = JSON.parse(output[0]) as { gates: Array<{ gate: string; adjustments: unknown }> };
+      expect(parsed.gates.find((view) => view.gate === 'build_review')?.adjustments).toBe('unavailable');
     } finally {
       await rm(fixture.root, { recursive: true, force: true });
     }
