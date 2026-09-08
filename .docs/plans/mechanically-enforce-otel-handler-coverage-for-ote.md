@@ -35,6 +35,24 @@ is preserved — the row stays, only its `otel` value changes) and names `unattr
 `unattributed_progress`. `.docs/architecture/2026-06-28-otel-observability.md` lists no traced
 membership either and is unchanged. This feature has no coherence artifact.
 
+## Amendment 2026-09-08 — registry-derived sink regression contract (PG-2)
+
+The PRD audit recorded PLAN_GAP **PG-2** after Task 2 changed the traced membership: the existing
+engine sink test pinned a literal list of OTel event names, but Task 2 did not own that file. Task 2
+now also owns `src/conductor/test/engine/event-sinks.test.ts` and replaces that brittle fixture with
+a registry-derived contract: `otelEventTypes()` must return every and only `EVENT_SINKS` row whose
+`otel` flag is true, with no duplicates. The test deliberately pins neither a member count nor a
+literal member list, so adding a correctly classified event cannot create unrelated maintenance.
+The explicit `unattributed_progress` exclusion remains covered by the amended Task 2 behavior tests.
+
+The as-built review also identified the later ADR-014 Decision 7 requirement that metrics move to a
+dispatcher-owned `MetricsListener` and visualizers become spans-only. That architecture is already
+owned by the accepted and active `no-daemon-level-metrics-queue-depth-halts-and-gate` plan; this
+feature must integrate after that feature rather than duplicate its provider/listener machinery.
+After that dependency lands, this feature's derived handler-coverage mechanism applies to the
+resulting OTel consumer boundary and its final as-built review must verify Decision 7 on the rebased
+implementation.
+
 ## Technical Approach
 
 `EVENT_SINKS` is annotated `Record<ConductorEvent['type'], SinkDeclaration>`, which widens each `otel` value to `boolean` and erases the per-type literal. Re-declare it as `as const satisfies Record<ConductorEvent['type'], SinkDeclaration>` so the literal `true`/`false` survives, then export a type alias that filters the table's keys by `otel extends true`. This changes no runtime value: `eventTypesFor` still keys into the same object and the four accessors return the same members. The pattern is already established in this engine — `live-e2e-providers.ts`, `config.ts`, `model-table-metadata.ts` and `closeout-cli.ts` all use `as const satisfies`. The readonly properties `as const` introduces stay assignable to the mutable `SinkDeclaration`, so the existing registry test's `@ts-expect-error` on a table missing one declaration continues to hold.
