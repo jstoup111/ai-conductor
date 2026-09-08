@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:4
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -119,6 +119,25 @@ describe('live E2E linked-worktree fixture seeding', () => {
     } finally {
       await rm(fixtureRoot, { recursive: true, force: true });
     }
+  });
+
+  it('reports success for a completed unparked linked worktree through the production park reader', async () => {
+    const fixtureRoot = await mkdtemp(`${tmpdir()}/live-e2e-terminal-`);
+    let terminal: boolean | undefined;
+    try {
+      const { hasSuccessfulTerminalState, seedLiveE2EFixture } = await import('./live-e2e-run-body.js') as {
+        hasSuccessfulTerminalState: (worktreeDir: string, slug: string) => Promise<boolean>;
+        seedLiveE2EFixture: (root: string, slug: string) => Promise<{ projectDir: string }>;
+      };
+      const slug = 'daemon-e2e-live';
+      const seeded = await seedLiveE2EFixture(fixtureRoot, slug);
+      await mkdir(join(seeded.projectDir, '.pipeline'), { recursive: true });
+      await writeFile(join(seeded.projectDir, '.pipeline/DONE'), 'completed\n');
+      terminal = await hasSuccessfulTerminalState(seeded.projectDir, slug);
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+    expect(terminal).toBe(true);
   });
 });
 

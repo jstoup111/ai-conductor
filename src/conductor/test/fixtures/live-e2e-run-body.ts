@@ -14,6 +14,7 @@ import type {
 } from '../../src/execution/llm-provider.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import { runDaemon } from '../../src/engine/daemon.js';
+import { isOperatorParked } from '../../src/engine/park-marker.js';
 import { resolveProviderModelPolicy } from '../../src/engine/provider-model-policy.js';
 import { DefaultStepRunner, type StepRunnerOptions } from '../../src/engine/step-runners.js';
 import type { ProviderHome } from '../../src/engine/self-host/provider-home.js';
@@ -398,10 +399,10 @@ export function withLiveE2EFailureDiagnostics<T>(
   return runWithLiveE2EFailureDiagnostics(() => worktreeDir, credentialValues, run);
 }
 
-async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Promise<boolean> {
+export async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Promise<boolean> {
   return existsSync(join(worktreeDir, '.pipeline/DONE')) &&
     !existsSync(join(worktreeDir, '.pipeline/HALT')) &&
-    !existsSync(join(worktreeDir, `.daemon/parked/${slug}`));
+    !await isOperatorParked(worktreeDir, slug);
 }
 
 function assertLiveE2ERunIsNotHalted(worktreeDir: string): void {
