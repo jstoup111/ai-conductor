@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:6, task:7
+// Covers: task:3, task:4, task:5, task:6, task:7
 /**
  * Acceptance specs for the rerun-vs-route retry classifier (#646).
  *
@@ -330,6 +330,122 @@ describe('integration/retry-classify (#646)', () => {
     await conductor.run();
 
     expect(retryDecisions).not.toContainEqual(expect.objectContaining({ signal: 'terminal-refusal' }));
+  });
+
+  // ── Task 5: seal refusals retain their ordinary retry behavior ─────────
+
+  async function seedBuildOnly(): Promise<void> {
+    await seedTailAt(statePath, 'build');
+    const { ALL_STEPS } = await import('../../src/engine/steps.js');
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+    let afterBuild = false;
+    for (const step of ALL_STEPS) {
+      if (afterBuild) state[step.name] = 'done';
+      if (step.name === 'build') afterBuild = true;
+    }
+    await writeState(statePath, state as ConductState);
+  }
+
+  it('Task 5: a persistent seal refusal consumes all retries and keeps the protected-artifact halt', async () => {
+    const refusalReason = 'protected plan changed outside the authorized task';
+    let dispatches = 0;
+    await seedBuildOnly();
+    const runner: StepRunner = {
+      run: async () => {
+        dispatches++;
+        return {
+          success: false,
+          output: refusalReason,
+          refusal: { kind: 'seal', reason: refusalReason },
+        };
+      },
+    };
+    const { retryDecisions } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 3,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    expect(dispatches).toBe(3);
+    expect(retryDecisions).not.toContainEqual(expect.objectContaining({ signal: 'terminal-refusal' }));
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(`${refusalReason}\n`);
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('protected-artifact');
+  });
+
+  it('Task 5: a seal refusal that clears on attempt two completes without a halt', async () => {
+    let dispatches = 0;
+    await seedBuildOnly();
+    const runner: StepRunner = {
+      run: async () => {
+        dispatches++;
+        return dispatches === 1
+          ? {
+              success: false,
+              output: 'protected plan changed outside the authorized task',
+              refusal: { kind: 'seal', reason: 'protected plan changed outside the authorized task' },
+            }
+          : { success: true, output: 'build completed after reseal' };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 3,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    expect(dispatches).toBe(2);
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+    expect(state.build).toBe('done');
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('Task 5: a seal refusal writes its protected marker after attempt two', async () => {
+    const refusalReason = 'protected plan changed outside the authorized task';
+    let dispatches = 0;
+    await seedBuildOnly();
+    const runner: StepRunner = {
+      run: async () => {
+        dispatches++;
+        return {
+          success: false,
+          output: refusalReason,
+          refusal: { kind: 'seal', reason: refusalReason },
+        };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 2,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    expect(dispatches).toBe(2);
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('protected-artifact');
   });
 
   // ── Task 6: refusal output preserves the operator diagnostic ───────────
