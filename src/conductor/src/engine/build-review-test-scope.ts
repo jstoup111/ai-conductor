@@ -669,7 +669,8 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
       if (!diagnosticChanged(diagnostic, baseAnalysis.diagnostics, baseText, headText)) continue;
       const applicableMarkers = headUncertainMarkers
         .map((binding) => binding.marker)
-        .filter((marker) => marker.span.end <= diagnostic.span.start);
+        .filter((marker) => marker.span.end <= diagnostic.span.start
+          || (diagnostic.span.start <= marker.span.start && marker.span.end <= diagnostic.span.end));
       if (applicableMarkers.length === 0) continue;
       candidates.push(candidate(
         candidateSource,

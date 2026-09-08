@@ -270,6 +270,75 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(evidence).toMatchObject({ startLine: 2, endLine: 2 });
     });
 
+    it('selects a changed hash-marked unsupported-language spec but not an unchanged one', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+          'diff --git a/spec/example_spec.rb b/spec/example_spec.rb',
+          '--- a/spec/example_spec.rb', '+++ b/spec/example_spec.rb', '+changed expectation',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
+        { match: ['show', 'head123:spec/example_spec.rb'], result: { stdout: '# Covers: task:8\n# changed expectation\n' } },
+      ]);
+
+      await assembleBuildReviewInputs(git, planPath);
+
+      expect(calls).toContainEqual(['show', 'head123:spec/example_spec.rb']);
+      expect(calls).not.toContainEqual(['show', 'head123:spec/unchanged_spec.rb']);
+    });
+
+    it('selects a changed marked unsupported-language spec as one source-bound uncertainty candidate', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+          'diff --git a/spec/example_spec.rb b/spec/example_spec.rb',
+          '--- a/spec/example_spec.rb', '+++ b/spec/example_spec.rb', '+changed expectation',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
+        { match: ['show', 'base123:spec/example_spec.rb'], result: { stdout: '// Covers: task:8\n# base expectation\n' } },
+        { match: ['show', 'head123:spec/example_spec.rb'], result: { stdout: '// Covers: task:8\n# changed expectation\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(calls).toContainEqual(['show', 'head123:spec/example_spec.rb']);
+      expect(calls).not.toContainEqual(['show', 'head123:spec/unchanged_spec.rb']);
+      expect(inputs.sourceSnapshot.testScope?.candidates).toHaveLength(1);
+      expect(inputs.sourceSnapshot.testScope).toMatchObject({
+        targets: [],
+        candidates: [{
+          source: { fileName: 'spec/example_spec.rb', side: 'head' },
+          reasons: ['unsupported-declaration'],
+          diagnostic: { reason: 'unsupported-source-language' },
+          markers: [{ reference: { kind: 'task', id: '8' } }],
+        }],
+      });
+      expect(inputs.sourceSnapshot.testQuality?.counterfactualFileSelectors).toEqual(['spec/example_spec.rb']);
+    });
+
+    it('retains uncertainty but creates no candidate for an unmarked unsupported-language spec', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+          'diff --git a/spec/example_spec.rb b/spec/example_spec.rb',
+          '--- a/spec/example_spec.rb', '+++ b/spec/example_spec.rb', '+changed expectation',
+        ].join('\n') } },
+        { match: ['show', 'base123:spec/example_spec.rb'], result: { stdout: '# base expectation\n' } },
+        { match: ['show', 'head123:spec/example_spec.rb'], result: { stdout: '# changed expectation\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(inputs.sourceSnapshot.testScope).toMatchObject({
+        targets: [],
+        candidates: [],
+        notes: [{ kind: 'declaration-uncertainty', diagnostic: { reason: 'unsupported-source-language' } }],
+      });
+    });
+
     it('projects a bound changed target by content identity without admitting an unbound changed sibling in its file', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,

@@ -320,7 +320,9 @@ function activeStoriesPath(planRepoPath: string, planBody: string): string | und
 }
 
 function isTestPath(path: string): boolean {
-  return /(?:^|\/)(?:test|tests)\//.test(path) || /\.(?:test|spec)\.[cm]?[jt]sx?$/i.test(path);
+  return /(?:^|\/)(?:test|tests)\//.test(path)
+    || /(?:^|\/)(?:__tests__|tests?|spec)\/.*\.(?:test|spec)\.[^/]+$|\.(?:test|spec)\.[^/]+$/i.test(path)
+    || /(?:^|\/)(?:__tests__|tests?|spec)\/.*(?:_test|_spec)\.[^/]+$/i.test(path);
 }
 
 function markerReferenceForScope(reference: { readonly kind: string; readonly id: string }): string {
