@@ -18,6 +18,25 @@ function evaluatorModelSelectionBlock(skill: string): string {
   return match![1];
 }
 
+function pipelineEvaluatorScalingTable(skill: string): {
+  frequencyCells: string[];
+  override: string | undefined;
+} {
+  const match = skill.match(
+    /^\| Tier \| Intermediate batches \| Final batch \| Intermediate model \| Final model \|\n\|[-| ]+\|\n((?:\|.*\n){3})\n(?<override>\*\*Risk-domain override:\*\*.*)$/m,
+  );
+  expect(match, 'expected the evaluator scaling table and its risk-domain override').not.toBeNull();
+
+  return {
+    frequencyCells: match![1]
+      .trim()
+      .split('\n')
+      .flatMap((row) => row.split('|').slice(2, 4).map((cell) => cell.trim()))
+      .filter((cell, index, cells) => cells.indexOf(cell) === index),
+    override: match!.groups?.override,
+  };
+}
+
 describe('code-review evaluator model routing (Task 3)', () => {
   it('offers only the default and risk-domain top-tier choices', () => {
     const selection = evaluatorModelSelectionBlock(readSkill('code-review'));
@@ -49,5 +68,18 @@ describe('code-review evaluator model routing (Task 3)', () => {
       .filter((line) => /model="[^"]+"/.test(line) && !line.includes('Claude Code'));
 
     expect(unscopedModelLines).toEqual([]);
+  });
+});
+
+describe('pipeline evaluator model routing (Task 4)', () => {
+  it('preserves evaluation frequency while elevating risk-domain batches', () => {
+    const scaling = pipelineEvaluatorScalingTable(readSkill('pipeline'));
+
+    expect(scaling).toMatchObject({
+      frequencyCells: ['Skipped', 'Always', 'Every 8 tasks', 'Every 4 tasks'],
+      override: expect.stringMatching(
+        /concurrency.*state mutation.*security.*auth.*money.*Claude Code Fable.*top Claude tier/i,
+      ),
+    });
   });
 });
