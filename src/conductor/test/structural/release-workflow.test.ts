@@ -150,6 +150,40 @@ describe('structural: release workflow', () => {
       .toBe('${{ github.event.pull_request.merge_commit_sha || github.sha }}');
   });
 
+  it('shares job-level serialization and App credentials across release-PR triggers', async () => {
+    const source = await readFile(resolve(REPO_ROOT, '.github/workflows/release-pr.yml'), 'utf8');
+    const workflow = job(loadYaml(source), 'release PR workflow');
+    const triggers = job(workflow.on, 'release PR workflow triggers');
+    const permissions = job(workflow.permissions, 'release PR workflow permissions');
+    const jobs = job(workflow.jobs, 'release PR workflow jobs');
+    const maintenance = job(jobs['release-pr-maintenance'], 'release PR maintenance job');
+    const concurrency = job(maintenance.concurrency, 'release PR maintenance concurrency');
+    const steps = maintenance.steps as Array<Record<string, unknown>>;
+    const appToken = steps.find((step) => step.id === 'app-token');
+    const maintenanceScript = steps.find((step) => step.uses === 'actions/github-script@v9');
+
+    expect(triggers.workflow_dispatch).toEqual({});
+    expect(workflow.concurrency).toBeUndefined();
+    expect(Object.keys(jobs)).toEqual(['release-pr-maintenance']);
+    expect(concurrency).toEqual({
+      group: 'release-pr-maintenance',
+      'cancel-in-progress': false,
+    });
+
+    expect(appToken?.if).toBeUndefined();
+    expect(maintenanceScript?.if).toBeUndefined();
+    expect(job(maintenanceScript?.with, 'release PR maintenance script inputs')['github-token'])
+      .toBe('${{ steps.app-token.outputs.token }}');
+    expect(job(maintenanceScript?.env, 'release PR maintenance script environment').RELEASE_PR_APP_TOKEN)
+      .toBe('${{ steps.app-token.outputs.token }}');
+
+    expect(permissions).toEqual({
+      contents: 'read',
+      'pull-requests': 'read',
+    });
+    expect(Object.values(permissions)).not.toContain('write');
+  });
+
   it('wires the stable branch through a create-or-fast-forward GitHub ref adapter', async () => {
     const source = await readFile(resolve(REPO_ROOT, '.github/workflows/release.yml'), 'utf8');
     const workflow = job(loadYaml(source), 'release workflow');
