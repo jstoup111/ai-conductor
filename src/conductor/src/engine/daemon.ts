@@ -1427,6 +1427,9 @@ export async function runDaemon(
         // the selection→dispatch race opened by the rebuild/restart await above.
         const dispatched = await guardedDispatch(next);
         if (dispatched) {
+          // The ceiling counts consecutive empty polls. A started feature begins
+          // a new idle episode; a rejected dispatch deliberately falls through.
+          idlePolls = 0;
           continue; // try to fill another slot before awaiting
         }
         // Parked between selection and here: fall through to the idle/await

@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:1, task:4
 import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -851,6 +851,47 @@ describe('engine/daemon — runDaemon', () => {
     expect(slept).toBeGreaterThan(0);
   });
 
+  it('restarts the idle-poll ceiling after dispatching work found before the ceiling', async () => {
+    const maxIdlePolls = 3;
+    let slept = 0;
+    let sleepsAtDispatch: number | undefined;
+    let workAppeared = false;
+    const deps: DaemonDeps = {
+      // Two empty polls leave the count below the ceiling, then one feature
+      // appears; every poll after dispatch is empty.
+      discoverBacklog: async () => {
+        if (!workAppeared && slept === 2) {
+          workAppeared = true;
+          return items(1);
+        }
+        return [];
+      },
+      runFeature: async (item) => {
+        sleepsAtDispatch = slept;
+        return { slug: item.slug, status: 'done' };
+      },
+      sleep: async () => {
+        slept++;
+      },
+    };
+
+    const res = await runDaemon(deps, {
+      concurrency: 1,
+      once: false,
+      maxIdlePolls,
+    });
+
+    expect({
+      stoppedReason: res.stoppedReason,
+      sleepsAtDispatch,
+      hadFullPostDispatchIdleBudget: slept - sleepsAtDispatch! >= maxIdlePolls,
+    }).toEqual({
+      stoppedReason: 'idle_timeout',
+      sleepsAtDispatch: 2,
+      hadFullPostDispatchIdleBudget: true,
+    });
+  });
+
   it('idle-polls an empty backlog and stops at maxIdlePolls', async () => {
     let slept = 0;
     const deps: DaemonDeps = {
@@ -1607,6 +1648,7 @@ describe('engine/daemon — runDaemon', () => {
 
       const halted = new Set<string>();
       let dispatches = 0;
+      let watchRegistered = false;
       const watchCalls: Array<{ slug: string; onCleared: () => void }> = [];
 
       const deps: DaemonDeps = {
@@ -1624,13 +1666,15 @@ describe('engine/daemon — runDaemon', () => {
         },
         watchHaltCleared: (slug, onCleared) => {
           // Capture the callback per slug
+          watchRegistered = true;
           watchCalls.push({ slug, onCleared });
           return () => {};
         },
         sleep: async () => {
-          // Never-resolving sleep: if the daemon waits for this after parking,
-          // the test times out. Event-driven re-dispatch should bypass this.
-          await new Promise(() => {});
+          // Busy polls settle until the parked worker's watcher is registered.
+          // The parked idle wait must instead be released by the event; later
+          // post-dispatch idle polls resolve so the ceiling can stop the run.
+          if (watchRegistered && dispatches === 1) await new Promise(() => {});
         },
       };
 
@@ -1673,6 +1717,7 @@ describe('engine/daemon — runDaemon', () => {
 
       const halted = new Set<string>();
       const events: string[] = [];
+      let watchRegistered = false;
 
       const deps: DaemonDeps = {
         discoverBacklog: staticBacklog(items(1)),
@@ -1690,6 +1735,7 @@ describe('engine/daemon — runDaemon', () => {
         },
         watchHaltCleared: (slug, onCleared) => {
           // Trigger clear immediately (simulating file watch)
+          watchRegistered = true;
           setTimeout(() => {
             events.push('onCleared:fired');
             halted.delete(slug);
@@ -1698,10 +1744,10 @@ describe('engine/daemon — runDaemon', () => {
           return () => {};
         },
         sleep: async () => {
-          // Sleep is invoked as a race arm per commit a9963d73, but never resolves.
-          // dispatch:2 occurring proves the wake arm (waker.armed()) unblocked the race.
+          // The parked idle wait never resolves; dispatch:2 proves the wake
+          // arm (waker.armed()) unblocked it. Later idle polls may resolve.
           events.push('sleep:started');
-          await new Promise(() => {});
+          if (watchRegistered && !events.includes('dispatch:2')) await new Promise(() => {});
         },
       };
 
@@ -2698,10 +2744,10 @@ describe('engine/daemon — runDaemon', () => {
         },
         sleep: async () => {
           events.push('sleep:started');
-          // Dummy sleep never resolves — only the waker (armed by the
-          // watcher firing) can unblock the idle race, per the existing
-          // watchHaltCleared precedent (commit a9963d73).
-          await new Promise(() => {});
+          // While credentials are missing only the waker (armed by the
+          // watcher firing) can unblock the idle race. Post-dispatch polling
+          // resolves so the ceiling can stop the run.
+          if (missing) await new Promise(() => {});
         },
       };
 
