@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -79,6 +79,46 @@ describe('live E2E linked-worktree fixture seeding', () => {
         dispositionStateExists: false,
         fixtureRemoved: true,
       });
+  });
+
+  it('rejects an occupied linked-worktree path before provider setup or dispatch', async () => {
+    const fixtureRoot = await mkdtemp(`${tmpdir()}/live-e2e-occupied-`);
+    const slug = 'daemon-e2e-live';
+    const targetPath = join(fixtureRoot, 'main', '.worktrees', slug);
+    const provisionProviderHome = vi.fn();
+    const preflight = vi.fn();
+    const createProvider = vi.fn();
+    try {
+      await mkdir(targetPath, { recursive: true });
+      await writeFile(join(targetPath, 'leftover.txt'), 'occupied\n');
+      const { runLiveE2ERunBody } = await import('./live-e2e-run-body.js') as {
+        runLiveE2ERunBody: (
+          descriptor: LiveE2EProviderDescriptor,
+          tokenCap?: number,
+          dependencies?: LiveE2ERunBodyDependencies,
+        ) => Promise<void>;
+      };
+      const failure = await runLiveE2ERunBody({
+        id: 'codex', binaryName: 'codex', credentialEnvVar: 'CODEX_API_KEY', createProvider,
+        assertCredentialAvailable: () => {},
+      } as unknown as LiveE2EProviderDescriptor, 1, {
+        binaryAvailable: () => true, fixtureRoot, provisionProviderHome, preflight,
+      }).then(() => undefined, (error: unknown) => error);
+
+      expect({
+        message: failure instanceof Error ? failure.message : String(failure),
+        providerConstructions: createProvider.mock.calls.length,
+        providerHomes: provisionProviderHome.mock.calls.length,
+        preflights: preflight.mock.calls.length,
+      }).toMatchObject({
+        message: expect.stringContaining(targetPath),
+        providerConstructions: 0,
+        providerHomes: 0,
+        preflights: 0,
+      });
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
   });
 });
 

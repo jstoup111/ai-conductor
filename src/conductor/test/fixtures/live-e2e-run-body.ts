@@ -95,6 +95,8 @@ type LiveProviderPreflight = (homeDir: string, providerKey?: string) => Promise<
 
 export interface LiveE2ERunBodyDependencies {
   readonly binaryAvailable?: (binaryName: string) => boolean;
+  /** Test-only fixture root, retained so a failure can exercise real Git topology. */
+  readonly fixtureRoot?: string;
   readonly provisionProviderHome?: typeof provisionLiveProviderHome;
   readonly preflight?: LiveProviderPreflight;
   /** Test-only fixture seam around the real daemon invocation. */
@@ -233,7 +235,12 @@ export async function seedLiveE2EFixture(fixtureRoot: string, slug: string): Pro
   await execa('git', ['commit', '-m', 'test: seed live daemon E2E fixture', '-m', 'Task: T0'], { cwd: mainCheckoutDir });
   const { stdout: seedSha } = await execa('git', ['rev-parse', 'HEAD'], { cwd: mainCheckoutDir });
   await mkdir(join(mainCheckoutDir, '.worktrees'), { recursive: true });
-  await execa('git', ['worktree', 'add', '-b', `feature/${slug}`, projectDir], { cwd: mainCheckoutDir });
+  try {
+    await execa('git', ['worktree', 'add', '-b', `feature/${slug}`, projectDir], { cwd: mainCheckoutDir });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes(projectDir)) throw error;
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\nlinked worktree target: ${projectDir}`);
+  }
   return { mainCheckoutDir, projectDir, seedSha: seedSha.trim() };
 }
 
@@ -421,7 +428,7 @@ export async function runLiveE2ERunBody(
     return await runWithLiveE2EFailureDiagnostics(() => worktreeDir, [credential ?? ''], async () => {
     assertLiveProviderBinary(descriptor, dependencies.binaryAvailable);
     assertLiveProviderCredential(descriptor, credential);
-    fixtureRoot = await mkdtemp(join(tmpdir(), 'daemon-e2e-live-'));
+    fixtureRoot = dependencies.fixtureRoot ?? await mkdtemp(join(tmpdir(), 'daemon-e2e-live-'));
     const fixture = await seedLiveE2EFixture(fixtureRoot, slug);
     const liveWorktreeDir = fixture.projectDir;
     worktreeDir = liveWorktreeDir;
