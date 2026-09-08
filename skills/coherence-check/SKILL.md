@@ -22,8 +22,9 @@ layer. That engagement is distinct from the ADR row pool: deleted ADRs produce n
 deletion-only change has no ADR row to author.
 
 **Correctness gate:** a row's verdict (`covered` / `gap` / `fail`) is a judgment call, not
-a mechanical grep. Coverage and consistency are separate questions: a counterpart can
-exist and still contradict what it implements (§4d). Per the `/verify-claims` protocol, ground every verdict in the actual
+a mechanical grep. Coverage, consistency, and achievability are separate questions: a counterpart
+can exist and still contradict what it implements (§4d), or be compatible with a criterion without
+delivering it (§4g). Per the `/verify-claims` protocol, ground every verdict in the actual
 cited text — do not mark a row covered on the assumption that a plausible-looking
 counterpart id exists; confirm it against the real artifact file.
 
@@ -121,20 +122,22 @@ validator parses and the same vocabulary the coherence-waiver mechanism consumes
 
 - **covered** — the cited id has ≥1 real counterpart id (confirmed to exist in the
   counterpart's own artifact file, not merely referenced) **and** nothing in that
-  counterpart contradicts it (§4d).
+  counterpart contradicts it (§4d); a criterion row must also establish achievability (§4g).
 - **gap** — the cited id has zero counterparts, or its only counterpart is itself
   transitively uncovered (e.g. a story maps to a task, but that task cites no story
   back, or the coverage table claims a task id that does not exist in the task tree).
 - **fail** — the cited id *has* a real counterpart, but the two **contradict** each
-  other (§4d). Coverage is satisfied here; consistency is not. Recording it as `gap`
+  other (§4d), or the cited task checks cannot deliver the criterion under the approved
+  architecture (§4g). Coverage is satisfied here; consistency or achievability is not. Recording it as `gap`
   would misdescribe it and send the reader hunting for a missing artifact that is in
   fact present and wrong.
 
 **The exact strings matter more than they look.** The land-time validator treats
-`gap`, `missing`, `uncovered`, and `fail` as blocking, and **every other string as
-affirmative**. An invented verdict — "partial", "contradiction", "n/a", "pending" —
-therefore does not fail loudly; it *silently passes the gate*. That is why a
-contradiction is recorded as `fail` rather than as a new word that reads more
+`gap`, `missing`, `uncovered`, and `fail` as blocking for legacy rows, and **every other string as
+affirmative**. Criterion rows instead reject any verdict outside `covered`, `gap`, and `fail`.
+An invented verdict — "partial", "contradiction", "n/a", "pending" — can therefore
+*silently pass the legacy gate* or make a criterion row malformed. That is why a
+contradiction or achievability failure is recorded as `fail` rather than as a new word that reads more
 precisely: `fail` is already in the blocking set and already flows into the gap list a
 waiver can cite. A row that is genuinely not applicable (e.g. the FR row class on a
 technical-track spec) is omitted entirely, never given a placeholder verdict.
@@ -173,9 +176,17 @@ and verify that the quoted text comes from one of those checks.
 
 A **fail** row uses the same id form as its row class (`outcome-<n>`, `fr-<N>`,
 `story-<id>`, `task-<id>`, `adr-<stem>`) — the id identifies *which* row, and the
-verdict says what is wrong with it. Prefix its Notes with `CONTRADICTS:` and name the
+verdict says what is wrong with it. For a contradiction, prefix its Notes with `CONTRADICTS:` and name the
 counterpart id and the specific opposing text, so a reader can adjudicate without
 re-deriving the finding.
+
+Use `CANNOT-DELIVER:` for an achievability failure (§4g). Criterion rows have exactly six cells
+and no Notes cell: keep their exact criterion text, task ids, verdict, verbatim `Done when` quote,
+and disposition intact. Put the explanation in a prose paragraph directly below the table, naming
+the criterion, cited task id, quoted check, and any binding ADR decision. Do not add a seventh cell,
+append commentary to the quote, or create another table for these notes. This prefix is explanatory
+prose, not a verdict, disposition, gap id, or correction-layer routing signal; the existing criterion
+`fail` verdict supplies the blocking result. Do not invent an achievability-specific gap-id form.
 
 ### 4d. Consistency Pass — Contradiction and Oscillation
 
@@ -185,7 +196,7 @@ A row where the counterpart exists but *opposes* what it implements is **`fail`*
 `covered` — the mapping is complete and wrong.
 
 After establishing coverage, re-read each covered row and ask whether the counterpart
-actually delivers the thing, or contradicts it. Two shapes matter:
+opposes what it implements. Criterion achievability is a separate question (§4g). Two shapes matter:
 
 **Static contradiction** — the two cannot both hold. An FR requires a field be
 immutable after creation while a task adds an edit endpoint for it; an outcome demands
@@ -211,6 +222,13 @@ Ground every `fail` in the specific opposing text from both artifacts, per the
 verify-claims protocol in Section 5. "These feel like they might conflict" is not a
 finding. If a suspected contradiction cannot be grounded in quoted text, surface it as
 an assumption for the operator rather than recording a verdict either way.
+
+**Preserved-behavior sweep.** For a criterion promising unchanged behavior, compatibility, or a
+default-mode no-op, compare that scenario with every task check that introduces a side effect on the
+same path, including logging, emitted events, writes, and dispatches. A new effect with no condition
+excluding the preserved scenario can defeat the promise even when its own task serves a different
+story. Name the exact protected observable and conflicting check; do not infer preservation merely
+from a separate regression-test task. Use §5 if the artifacts do not establish that the paths overlap.
 
 When a contradiction is confirmed, amend the artifact during this DECIDE pass — do not
 defer it to BUILD. Follow the accepted-artifact amendment convention the sibling DECIDE
@@ -270,6 +288,58 @@ vocabulary, real task citations, and exact Done-when evidence. Do not duplicate 
 This skill owns the judgement the engine cannot compute: whether that real evidence actually fulfills the
 architecture obligation.
 
+### 4g. Achievability Pass
+
+For every criterion row, ask: **given only what the cited task's `Done when` checks actually assert,
+and the approved architecture that constrains it, would satisfying them produce the criterion's
+Then-clause?** Related work and compatible wording do not establish delivery. When multiple tasks
+are cited, judge their checks together; do not require each task to deliver the whole criterion
+independently, or assume an unstated connection between them.
+
+§4d asks whether the task **opposes** the criterion; §4g asks whether the task is **compatible with
+the criterion and still does not reach it**. For the criterion "the gate rejects an unsigned
+artifact," a task adding a bypass flag is a §4d failure. A task whose checks require only logging a
+warning, allowing the unsigned artifact through, is a §4g failure: all its checks can pass without
+rejection.
+
+A cited task that cannot deliver the criterion is **`fail`**, not `covered` or `gap`. The counterpart
+exists and coverage is satisfied; what is wrong is that its promised behavior does not work. Use the
+existing verdict so the validator blocks it, and explain the failure with `CANNOT-DELIVER:` prose
+below the table per §4c.
+
+Apply these detection heuristics:
+
+- **Mechanism-vs-restatement.** If the cited check merely paraphrases the Then-clause instead of
+  naming the code path, state change, or check that produces it, achievability is unestablished: the
+  task asserts the outcome without establishing how it delivers it. Surface this uncertainty per
+  §5 rather than crediting it. A named mechanism still needs to yield the criterion; its name alone
+  is not proof. Do not fill missing obligations from Steps prose or presumed BUILD work.
+- **Constraint sweep.** Re-read the criterion against each approved ADR in the current change set.
+  If the task could deliver it only by violating an approved decision, mark the criterion row `fail`.
+  The explanation must name the `adr-<stem>`, decision id, and binding decision text. Preserve §4f's
+  separate architecture-obligation judgement and its existing row pool.
+- **Representable outcomes.** When the approved design uses a closed set of states, result values,
+  or reasons, walk each required happy and negative scenario through the cited checks and identify
+  the legal value that represents its actual outcome. Include required absence, skip, and no-change
+  cases: reporting that an operation ran cannot deliver a criterion saying it did not run. A set
+  whose permitted values cannot express a required outcome is `fail`, even if the producer and
+  consumer agree on the same incomplete set. Quote the scenario and binding set; do not demand a
+  distinct value per scenario when an existing value represents it truthfully, or invent scenarios
+  outside the accepted criteria. Unspecified value meanings remain an assumption under §5.
+- **Input-boundary proof.** If checks operate on a prepared input, normalized status, or exported
+  subset, trace the required scenario to the check that produces that input from the actual source.
+  A helper that correctly handles `invalid` does not establish that malformed source data becomes
+  `invalid`; matching a registry to an exported subset does not establish that the subset includes
+  everything the criterion quantifies over. Identify the decoding/validation or enumeration boundary
+  and its owning task check. Consider required error exits too: a later reporter cannot supply a
+  promised result if the planned earlier refusal never reaches it. Credit existing evidence and
+  sibling tasks, and distinguish a demonstrated bypass (`fail`) from an unspecified connection (§5).
+
+Ground each finding in the exact criterion and cited `Done when` text, with the binding ADR decision
+where applicable. "This task feels thin" is not a finding. If the artifacts do not settle
+achievability, surface the uncertainty as an assumption under §5: interactive runs wait for operator
+confirmation; autonomous runs record `gap`. Never turn an unconfirmed assumption into a pass.
+
 ## 5. Semantic-Judging Instructions (verify-claims protocol)
 
 Per `/verify-claims`, this skill is a **verifier/judge** role: it renders a verdict
@@ -312,13 +382,19 @@ per row and must never assert "covered" that it has not actually confirmed.
 - [ ] `.docs/coherence/<plan-stem>.md` filename stem matches the plan's filename stem exactly
 - [ ] All five row classes present where applicable (outcome/fr/adr omitted only when genuinely not required)
 - [ ] Every verdict is exactly `covered`, `gap`, or `fail` — no invented verdict strings
-      (an invented string is treated as affirmative by the validator and silently passes)
+      (legacy rows can silently pass them; criterion rows reject them as malformed)
 - [ ] §4d consistency pass run over every covered row; contradictions recorded as `fail`
       with `CONTRADICTS:` notes quoting the opposing text from both artifacts
+- [ ] Preserved/default-mode behavior compared with new side effects on the same path across tasks
 - [ ] §4e PRD↔stories tie-out checked in BOTH directions — no FR without a story, and no
       story citing a phantom FR or citing no FR at all
 - [ ] §4f architecture-decision mappings judged semantically; every `task`, `existing`, or
       `no-change` disposition actually satisfies its cited ADR decision
+- [ ] §4g achievability judged for every criterion from cited `Done when` checks and approved
+      architecture; mechanism-vs-restatement, ADR constraints, representable outcomes, and input boundaries checked
+- [ ] Established inability to deliver recorded as `fail`; unsettled achievability handled under §5
+- [ ] Each achievability failure has `CANNOT-DELIVER:` prose below the table naming the criterion,
+      task id, quoted check, and any binding ADR and decision id; six-cell rows and quotes stay intact
 - [ ] Every story's cited FR confirmed to be actually delivered by that story's scenarios —
       a correct citation that the acceptance criteria contradict is `fail`, not `covered`
 - [ ] Story-vs-story conflicts left to `/conflict-check`; this artifact reports story-vs-PRD only

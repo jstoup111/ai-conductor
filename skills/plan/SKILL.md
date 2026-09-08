@@ -116,9 +116,8 @@ mark a removal task `Verify-only:` merely to document that absence.
 5. Commit with message: "[descriptive message]"
 
 **Done when:**
-- [2-5 enumerated, falsifiable checks — see 3c and 3d. Each is a definite yes/no a
-  zero-context reviewer can evaluate: a named test that passes, a command and
-  its expected output, a concrete property of the diff.]
+- [Falsifiable check naming the mechanism and observable assertion — see 3c and 3d.]
+- [Second falsifiable check; use 2-5 checks, each on one physical line.]
 
 **Files likely touched:**
 - [file path] — [what changes]
@@ -211,6 +210,29 @@ Each check must be **falsifiable**: a zero-context reviewer evaluates it to a de
 without appealing to an ideal. Name the test and what it asserts, the command and its expected
 output, or the concrete diff property. "The guard is robust" is not a check; "the guard rejects the
 three drift fixtures listed in Steps and exits non-zero" is.
+
+Each check must be verifiable against a **named mechanism** — the function, file, gate, or state
+transition whose existence or behavior it asserts. State what that mechanism does to produce the
+mapped acceptance criterion's Then-clause; paraphrasing the Then-clause alone does not establish
+delivery. For example: "the artifact admission gate returns a rejection for an unsigned artifact
+before persistence, as asserted by the unsigned-artifact test." A test name alone is insufficient:
+name the behavior it verifies. Existing mechanisms remain valid for `Verify-only:` tasks, and internal
+tasks retain the lower-layer scope allowed by §3d.
+
+For a preserved/default-mode behavior, make the relevant checks bound any new side effects on that
+path to their intended conditions. For a closed result/state/reason set, ensure the checks can
+represent each required scenario's actual outcome, including required absence or no-op cases. An
+existing value may cover several scenarios when its meaning fits; do not invent extra states or
+broaden the accepted criteria to fill a speculative case. Resolve any conflict with an approved
+decision during DECIDE rather than leaving BUILD to widen the set or choose which promise wins.
+
+When a check uses normalized inputs or an enumerated subset, name the owning check that establishes
+how source data reaches that representation and how the enumeration covers the criterion's scope.
+An invalid-input fixture or a self-consistent subset alone does not prove that boundary. Reuse a
+sibling task's proof when it owns the boundary; do not add duplicate integration tasks.
+
+Keep each `Done when:` bullet on one physical line. A wrapped continuation ends the parsed block,
+so later checks can disappear from the land-time count and quoted evidence can lose its grounding.
 
 **Unbounded quality words are banned unless immediately closed.** An outcome stated as
 "fail-closed", "comprehensive", "robust", "hardened", "both directions", or any similar unbounded
@@ -486,6 +508,8 @@ any code is written. The full flow from here is:
 - [ ] The plan has no terminal catch-all task that re-validates the completed feature
 - [ ] Tasks are 2-5 minute granularity
 - [ ] Each task has specific test and implementation descriptions
+- [ ] Every `Done when:` check names a mechanism and its observable assertion, rather than merely
+      restating the mapped criterion; each bullet occupies one physical line
 - [ ] Dependencies are declared and acyclic
 - [ ] `ai-conductor plan-protected-targets .docs/plans/<feature>.md` passes with no task/path
       violations; no task targets another feature's sealed artifact
