@@ -39,7 +39,7 @@ As a telemetry consumer running several projects and possibly several workers pe
 #### Happy Path
 - Given project P and a worker whose resolved name is W, when the daemon exports metrics, then the metric Resource carries service.name=ai-conductor, service.instance.id=P/W, conductor.project, conductor.worker=W, and host.name equal to the OS hostname
 - Given a per-feature instrument such as conductor.step.duration for feature S, when it is exported, then its data point carries project=P, worker=W, and feature=S as attributes
-- Given a daemon-level instrument such as conductor.daemon.backlog, when it is exported, then its data point carries project=P and worker=W and no feature attribute
+- Given a daemon-level instrument other than conductor.daemon.inflight, such as conductor.daemon.backlog, when it is exported, then its data point carries project=P and worker=W and no feature attribute; conductor.daemon.inflight is feature-scoped and carries the in-flight slug as feature
 - Given otel.worker_name is set to a non-blank value in .ai-conductor/config.yml, when the daemon exports, then W is that trimmed value; given it is absent or blank, then W is the OS hostname
 
 #### Negative Paths
@@ -61,7 +61,7 @@ As an operator, I want to see whether the backlog is growing, draining, or stuck
 #### Happy Path
 - Given a running daemon with an empty backlog and no dispatch in flight, when a metrics export occurs, then conductor.daemon.up reads 1 and conductor.daemon.backlog{state} has a data point for each of eligible, waiting, blocked, gated, and parked (each 0)
 - Given discovery finds 3 eligible, 2 waiting, 1 blocked, 4 gated specs and 2 operator-parked features, when the tick's snapshot is exported, then conductor.daemon.backlog reads 3, 2, 1, 4, 2 for those states respectively
-- Given the oldest eligible spec became eligible 36 hours ago, when the snapshot is exported, then conductor.daemon.backlog.oldest_age{state=eligible} reads approximately 129600 seconds
+- Given the oldest eligible spec entered the eligible state 36 hours ago, when the snapshot is exported, then conductor.daemon.backlog.oldest_age{state=eligible} reads approximately 129600 seconds, regardless of when that spec was first discovered in another state
 - Given daemon concurrency is 3 and 2 features are in flight, when the snapshot is exported, then conductor.daemon.slots{state=busy} reads 2, conductor.daemon.slots{state=free} reads 1, and conductor.daemon.inflight{feature} reads 1 for each of the two in-flight slugs
 - Given a discovery pass took 840 ms, when the snapshot is exported, then conductor.daemon.poll.duration has one observation of 840 ms
 
@@ -71,6 +71,7 @@ As an operator, I want to see whether the backlog is growing, draining, or stuck
 - Given the daemon is hard-killed, when the backend's next scrape interval passes, then conductor.daemon.up stops being reported (the series goes stale) rather than continuing to read 1
 - Given a backlog state has no members, when the snapshot is exported, then that state's data point reads 0 rather than being absent, so dashboards never show a gap for an empty state
 - Given the backlog contains an eligible spec whose eligibility timestamp cannot be determined, when oldest_age is computed, then that spec is excluded from the age and the count still includes it
+- Given a discovered feature changes backlog state, when the next snapshot is computed, then its age starts from that state transition rather than its first-ever discovery; repeated discovery in the same state preserves the existing state-entry timestamp
 
 ### Done When
 - [ ] An acceptance test starts the daemon loop with OTel enabled, an empty backlog, and no dispatch, and asserts conductor.daemon.up, all five conductor.daemon.backlog states, and both conductor.daemon.slots states are exported

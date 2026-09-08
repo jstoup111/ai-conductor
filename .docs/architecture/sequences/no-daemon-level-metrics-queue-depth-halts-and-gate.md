@@ -1,6 +1,6 @@
 # Sequence: Daemon lifetime with a shared meter and daemon-level metrics
 
-**Last updated:** 2026-09-06
+**Last updated:** 2026-09-08
 **Scope:** One daemon process from start to stop — idle ticks emitting backlog gauges with no
 dispatch, a feature dispatch recording onto the shared meter, a halt, a re-dispatch, and a ship.
 Source: #1937.
@@ -27,9 +27,9 @@ sequenceDiagram
     end
 
     loop every poll tick (idle or busy)
-        D->>D: discoverBacklog → items/waiting/blocked/gated + parked + slots
+        D->>D: discoverBacklog → items/waiting/blocked/gated + parked + slots; stamp state-entry transitions
         D->>L: daemon_backlog_snapshot (counts, oldest ages, slots, blocked reasons, poll ms)
-        L->>M: daemon.backlog«state», oldest_age, slots, inflight, blocked_reason, poll.duration, up=1
+        L->>M: daemon.backlog«state», oldest_age since state entry, slots, inflight«feature», blocked_reason, poll.duration, up=1
         M--)O: periodic export (60 s) — series exist with no dispatch
     end
 
