@@ -264,6 +264,7 @@ describe('engine/worktree', () => {
         expect(created).toEqual({
           path: join(lifecycleRoot, '.worktrees', slugA),
           branch: `feat/daemon-${slugA}`,
+          wasExisting: false,
         });
         const registrations = await git(lifecycleRoot, 'worktree', 'list', '--porcelain');
         expect(registrations).toContain(`worktree ${created.path}`);
