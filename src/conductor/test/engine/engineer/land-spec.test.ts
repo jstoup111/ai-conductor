@@ -356,6 +356,66 @@ describe('Task 2: landSpec canonical ADR filename gate', () => {
   });
 });
 
+describe('Task 3: landSpec canonical ADR filename gate merge-base exemptions', () => {
+  const gh: GhRunner = async () => ({ stdout: 'operator\n' });
+
+  it('lands a new canonical ADR while legacy sequential ADRs inherited from main remain exempt', async () => {
+    await mkdir(join(repoPath, '.docs', 'decisions'), { recursive: true });
+    await Promise.all([
+      writeFile(join(repoPath, '.docs', 'decisions', 'adr-001-legacy.md'), APPROVED_CITABLE_ADR),
+      writeFile(join(repoPath, '.docs', 'decisions', 'adr-0002-legacy.md'), APPROVED_CITABLE_ADR),
+    ]);
+    await git(['add', '.docs/decisions']);
+    await git(['commit', '-m', 'add legacy sequential ADRs']);
+
+    const dir = await seedValidWorktree();
+    await writeFile(
+      join(dir, '.docs', 'decisions', 'adr-2026-09-08-new-decision.md'),
+      APPROVED_CITABLE_ADR,
+    );
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).resolves.toMatchObject({ slug: 'dep-bump' });
+  });
+
+  it('lands after a merge-base-existing sequential ADR is modified and committed in the worktree', async () => {
+    await mkdir(join(repoPath, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'decisions', 'adr-001-legacy.md'), APPROVED_CITABLE_ADR);
+    await git(['add', '.docs/decisions/adr-001-legacy.md']);
+    await git(['commit', '-m', 'add legacy sequential ADR']);
+
+    const dir = await seedValidWorktree();
+    const adrPath = join(dir, '.docs', 'decisions', 'adr-001-legacy.md');
+    await writeFile(adrPath, `${APPROVED_CITABLE_ADR}\nUpdated while preserving citation.\n`);
+    await git(['add', '.docs/decisions/adr-001-legacy.md'], dir);
+    await git(['commit', '-m', 'update legacy sequential ADR'], dir);
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).resolves.toMatchObject({ slug: 'dep-bump' });
+  });
+
+  it('reports approval before filename canonicality for a newly introduced draft sequential ADR', async () => {
+    const dir = await seedValidWorktree();
+    await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'decisions', 'adr-001-unapproved.md'), DRAFT_ADR);
+
+    let caught: Error | null = null;
+    try {
+      await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
+    } catch (error) {
+      caught = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toMatch(
+      /adr-001-unapproved\.md.*DRAFT.*ADRs are not approved|ADRs are not approved.*adr-001-unapproved\.md.*DRAFT/i,
+    );
+    expect(caught!.message).not.toContain('canonical filenames');
+  });
+});
+
 describe('landSpec ADR citability gate negatives (Task 7)', () => {
   const gh: GhRunner = async () => ({ stdout: 'operator\n' });
 
