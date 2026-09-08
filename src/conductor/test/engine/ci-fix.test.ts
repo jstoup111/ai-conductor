@@ -384,6 +384,7 @@ describe('ci-fix: isEligibleForCiFix terminal-CI-state gate', () => {
       conclusion?: string | null;
       state?: string | null;
       name?: string;
+      context?: string;
     }>,
   ): PrMergeState {
     return {
@@ -465,6 +466,52 @@ describe('ci-fix: isEligibleForCiFix terminal-CI-state gate', () => {
       expect(result.reason).toContain('checks-not-terminal');
     },
   );
+
+  it('a pending commit status with context but no name → identifies its context in the refusal', async () => {
+    const state = stateWithChecks([
+      { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+      { state: 'PENDING', context: 'deploy-preview' },
+    ]);
+
+    const result = await isEligibleForCiFix(entry, state, config, NOW);
+
+    expect(result.reason).toContain('deploy-preview');
+  });
+
+  it('a pending entry with no identifier → uses the existing placeholder in the refusal', async () => {
+    const state = stateWithChecks([
+      { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+      { state: 'PENDING' },
+    ]);
+
+    const result = await isEligibleForCiFix(entry, state, config, NOW);
+
+    expect(result.reason).toContain('(unnamed check)');
+  });
+
+  it('a pending entry with whitespace-only identifiers → uses the existing placeholder in the refusal', async () => {
+    const state = stateWithChecks([
+      { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+      { state: 'PENDING', name: '  ', context: '\t' },
+    ]);
+
+    const result = await isEligibleForCiFix(entry, state, config, NOW);
+
+    expect(result.reason).toContain('(unnamed check)');
+  });
+
+  it('all completed entries → eligible without a deferral log', async () => {
+    const state = stateWithChecks([
+      { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+      { state: 'SUCCESS' },
+    ]);
+    const logs: string[] = [];
+
+    const result = await isEligibleForCiFix(entry, state, config, NOW, (message) => logs.push(message));
+
+    expect(result).toEqual({ eligible: true });
+    expect(logs).toEqual([]);
+  });
 
   it('a check run with neither conclusion nor reported state → ineligible(checks-not-terminal)', async () => {
     const state = stateWithChecks([

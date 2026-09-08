@@ -193,7 +193,7 @@ export function nonTerminalCheckNames(
       // No conclusion or reported state recorded yet → the run has not finished.
       return conclusion.length === 0 && state.length === 0;
     })
-    .map((check) => check.name?.trim() || '(unnamed check)');
+    .map((check) => check.name?.trim() || check.context?.trim() || '(unnamed check)');
 }
 
 /**
