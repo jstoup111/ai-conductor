@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { displayBuildPosition } from '../src/engine/format-retry-line';
+import { displayBuildPosition, formatCommitAge } from '../src/engine/format-retry-line';
 
 describe('displayBuildPosition', () => {
   it('returns 1 for the first in-progress task', () => {
@@ -34,5 +34,29 @@ describe('displayBuildPosition', () => {
 
   it('returns 0 for empty/no-data build', () => {
     expect(displayBuildPosition(0, 0, false)).toBe(0);
+  });
+});
+
+describe('formatCommitAge', () => {
+  const now = Date.parse('2026-09-08T12:00:00.000Z');
+
+  it('returns an empty fragment when no commit timestamp is available', () => {
+    expect(formatCommitAge(undefined, now)).toBe('');
+  });
+
+  it('renders commits younger than one minute', () => {
+    expect(formatCommitAge(now - 30_000, now)).toBe('<1m ago');
+  });
+
+  it('renders commits younger than one hour in minutes', () => {
+    expect(formatCommitAge(now - 7 * 60_000, now)).toBe('7m ago');
+  });
+
+  it('renders commits one hour or older in hours and minutes', () => {
+    expect(formatCommitAge(now - 125 * 60_000, now)).toBe('2h 5m ago');
+  });
+
+  it('clamps future timestamps to a zero-length age', () => {
+    expect(formatCommitAge(now + 5 * 60_000, now)).toBe('<1m ago');
   });
 });
