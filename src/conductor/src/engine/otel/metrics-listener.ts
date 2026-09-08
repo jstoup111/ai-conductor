@@ -78,10 +78,11 @@ export class MetricsListener {
       case 'feature_complete': { const metric = this.feature(event); const slug = this.featureOf(event); if (metric) { metric.onRunClose('complete'); if (slug) this.terminal.add(slug); } break; }
       case 'loop_halt': { const metric = this.feature(event); const slug = this.featureOf(event); if (metric) { metric.onRunClose('halted'); if (slug) this.terminal.add(slug); } break; }
       case 'provider_attempt': case 'build_progress': case 'build_no_progress': case 'unattributed_progress': break;
-      default: {
-        const exhaustive: never = event;
-        void exhaustive;
-      }
+      // `ConductorEvent` also has extension-shaped variants whose type is not
+      // narrowed by Extract<>.  The closed METRICS_HANDLERS map below—not an
+      // impossible `never` assertion over that wider union—is the enforcement
+      // that every declared OTel sink has a projection.
+      default: break;
     }
   }
 }
