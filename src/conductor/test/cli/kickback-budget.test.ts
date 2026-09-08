@@ -253,7 +253,7 @@ describe('kickback-budget accepts each gate\'s own cap halt class', () => {
 describe('kickback-budget operator authority', () => {
   const capEvidence = { gate: 'build_review', consumed: 6, limit: 5, latestReason: 'cap', haltGeneration: 'halt-1' };
   const halted = async (): Promise<{ root: string; worktree: string }> => {
-    const fixture = await makeFeature({ version: 1, gates: { build_review: { ...baseEntry, capEvidence } } });
+    const fixture = await makeFeature({ version: 1, gates: { build_review: { ...baseEntry, cumulative: 6, capEvidence } } });
     await writeFile(join(fixture.worktree, '.pipeline', 'HALT'), 'halted\nKickback halt generation: halt-1');
     await writeFile(join(fixture.worktree, '.pipeline', 'HALT.class'), 'needs-human');
     return fixture;
@@ -368,7 +368,7 @@ describe('kickback-budget operator authority', () => {
 // Covers: task:7 — adr-2026-08-31 decision 3: one malformed gate never
 // invalidates a healthy sibling gate's operations.
 describe('kickback-budget scopes an invalid gate entry to its own gate', () => {
-  const healthy = { ...baseEntry, capEvidence: { gate: 'build_review', consumed: 6, limit: 5, latestReason: 'cap', haltGeneration: 'halt-1' } };
+  const healthy = { ...baseEntry, cumulative: 6, capEvidence: { gate: 'build_review', consumed: 6, limit: 5, latestReason: 'cap', haltGeneration: 'halt-1' } };
   const mixed = { version: 1, gates: { build_review: healthy, prd_audit: { count: 'not-a-number' } } };
 
   it('inspect renders the healthy gate and reports only the malformed one unavailable', async () => {
