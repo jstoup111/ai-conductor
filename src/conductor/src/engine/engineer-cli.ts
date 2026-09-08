@@ -26,7 +26,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRegistryReader } from './registry.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo } from './engineer/target.js';
-import { landSpec } from './engineer/land-spec.js';
+import { classifyLandGateRejection, landSpec } from './engineer/land-spec.js';
+import { EventPersister } from './event-persister.js';
+import { ConductorEventEmitter } from '../ui/events.js';
 import { loadConfig } from './config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
@@ -1001,6 +1003,25 @@ export async function dispatchEngineer(
         // report WHERE it is so retention is actionable, not silent clutter.
         printErr(`engineer land: ${msg}`);
         printErr(`engineer land: worktree kept for inspection at "${worktree}".`);
+        try {
+          const rejection = classifyLandGateRejection(err);
+          const events = new ConductorEventEmitter();
+          const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'events.jsonl'), events);
+          persister.start();
+          try {
+            await events.emitOrThrow({
+              type: 'land_gate_rejected',
+              ...rejection,
+              project: target.name,
+              worktreePath: worktree,
+              ...(sourceRef ? { sourceRef } : {}),
+            });
+          } finally {
+            persister.stop();
+          }
+        } catch (recordingError) {
+          printErr(`engineer land: could not record rejection event: ${recordingError instanceof Error ? recordingError.message : String(recordingError)}`);
+        }
         return 1;
       }
 

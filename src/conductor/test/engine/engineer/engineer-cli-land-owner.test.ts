@@ -8,7 +8,7 @@
 // loadConfig → landSpec) with an injected gh (no network) and assert the marker.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
@@ -322,6 +322,34 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     const marker = await showOnBranch(result.branch, `.docs/intake/${result.slug}.md`);
     expect(marker).toContain('Owner: bob');
 
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
+  it('persists an unapproved-stories rejection to the target ledger without changing the CLI failure', async () => {
+    const worktree = await seedWorktree();
+    await writeFile(join(worktree, '.docs', 'stories', 'dep-bump.md'), '# Stories: dep bump\n');
+    const fakeHome = await makeUserHome('spec_owner: bob\n');
+    const { err, opts } = captureOpts({ gh: async () => ({ stdout: 'unused\n' }) });
+
+    const code = await withHome(fakeHome, () => dispatchEngineer(
+      { kind: 'land', project: 'alpha', idea: 'dep bump', worktree, sourceRef: 'owner/repo#12' },
+      opts,
+    ));
+
+    expect(code).toBe(1);
+    expect(err.join('\n')).toContain('stories artifact is not approved');
+    expect(err).toContain(`engineer land: worktree kept for inspection at "${worktree}".`);
+    const ledger = await readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8');
+    const events = ledger.trim().split('\n').map((line) => JSON.parse(line) as Record<string, string>);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'land_gate_rejected',
+      gate: 'stories-not-approved',
+      project: 'alpha',
+      worktreePath: worktree,
+      sourceRef: 'owner/repo#12',
+    });
+    expect(events[0].reason).toContain('stories artifact is not approved');
     await rm(fakeHome, { recursive: true, force: true });
   });
 
