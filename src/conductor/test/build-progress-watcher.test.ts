@@ -9,7 +9,7 @@ import { EventPersister } from '../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import type { ConductorEvent } from '../src/types/index.js';
 
-const gitProbe = vi.hoisted(() => ({ throws: false }));
+const gitProbe = vi.hoisted(() => ({ throws: false, commitTimeCalls: 0 }));
 
 vi.mock('../src/engine/rebase.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('../src/engine/rebase.js')>();
@@ -20,6 +20,9 @@ vi.mock('../src/engine/rebase.js', async (importOriginal) => {
       return async (args: string[], opts?: { input?: string }) => {
         if (gitProbe.throws && args[0] === 'rev-parse' && args[1] === 'HEAD') {
           throw new Error('injected HEAD probe failure');
+        }
+        if (args[0] === 'show' && args[1] === '-s' && args[2] === '--format=%ct') {
+          gitProbe.commitTimeCalls += 1;
         }
         return git(args, opts);
       };
@@ -171,6 +174,7 @@ describe('BuildProgressWatcher change-driven emission', () => {
 
   afterEach(async () => {
     gitProbe.throws = false;
+    gitProbe.commitTimeCalls = 0;
     vi.useRealTimers();
     await rm(dir, { recursive: true, force: true });
   });
@@ -352,6 +356,43 @@ describe('BuildProgressWatcher change-driven emission', () => {
     expect(last.commitCount).toBe(1);
     expect(last.tickReason).toBe('head-moved');
     expect(last.headMoved).toBe(true);
+  });
+
+  it('carries the HEAD committer time on the first tick, then reuses it on heartbeat without a second Git probe', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeTasks(5, 21);
+    await writeFile(join(dir, 'README.md'), 'hello');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+    const headCommitAt = Number((await execa('git', ['show', '-s', '--format=%ct', 'HEAD'], { cwd: dir })).stdout) * 1000;
+
+    let clock = 0;
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      config: { build_progress: { heartbeat_minutes: 5 } },
+      now: () => clock,
+    });
+    watcher.start();
+
+    await tick(watcher);
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({ lastCommitAt: headCommitAt }),
+    ]);
+    expect(gitProbe.commitTimeCalls).toBe(1);
+    emitSpy.mockClear();
+
+    clock += 5 * 60 * 1000;
+    await tick(watcher);
+    watcher.stop();
+
+    expect(buildProgressEvents()).toEqual([
+      expect.objectContaining({ tickReason: 'heartbeat', lastCommitAt: headCommitAt }),
+    ]);
+    expect(gitProbe.commitTimeCalls).toBe(1);
   });
 
   it('keeps task-delta provenance when HEAD and the resolved count advance together', async () => {
@@ -771,6 +812,7 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
   });
 
   afterEach(async () => {
+    gitProbe.commitTimeCalls = 0;
     vi.useRealTimers();
     await rm(dir, { recursive: true, force: true });
   });
@@ -833,6 +875,31 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
     expect(e.resolved).toBe(5);
     expect(e.total).toBe(21);
     expect(e.featureSlug).toBe('my-feature');
+  });
+
+  it('carries the HEAD committer time on a quiet warning', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeTasks(5, 21);
+    await writeFile(join(dir, 'README.md'), 'hello');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+    const headCommitAt = Number((await execa('git', ['show', '-s', '--format=%ct', 'HEAD'], { cwd: dir })).stdout) * 1000;
+
+    let clock = 0;
+    const watcher = makeWatcher(() => clock);
+    watcher.start();
+    await tick(watcher);
+    emitSpy.mockClear();
+
+    clock += 16 * 60 * 1000;
+    await tick(watcher);
+    watcher.stop();
+
+    expect(noProgressEvents()).toEqual([
+      expect.objectContaining({ lastCommitAt: headCommitAt }),
+    ]);
   });
 
   it('re-arms after a change, firing again on a later quiet episode', async () => {

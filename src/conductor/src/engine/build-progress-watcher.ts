@@ -222,6 +222,8 @@ export class BuildProgressWatcher {
   private readonly now: () => number;
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastSnapshot: TickSnapshot | null = null;
+  private lastCommitHead: string | undefined;
+  private lastCommitAt: number | undefined;
   private lastEmitAt: number | null = null;
   private stopped = false;
   private pending: Promise<void> | null = null;
@@ -326,6 +328,15 @@ export class BuildProgressWatcher {
     }
 
     const previous = this.lastSnapshot;
+    if (head && head !== this.lastCommitHead) {
+      const git = makeGitRunner(this.projectRoot);
+      const result = await git(['show', '-s', '--format=%ct', head]);
+      const commitSeconds = Number(result.stdout.trim());
+      if (result.exitCode === 0 && Number.isFinite(commitSeconds)) {
+        this.lastCommitHead = head;
+        this.lastCommitAt = commitSeconds * 1000;
+      }
+    }
     // A failed probe is no observation, not evidence that HEAD changed. Keep
     // the last known value so a transient Git failure cannot manufacture a
     // change-driven tick or overwrite the comparison baseline.
@@ -372,6 +383,7 @@ export class BuildProgressWatcher {
             resolved,
             total,
             currentTaskId: snapshot.currentTaskId,
+            lastCommitAt: this.lastCommitAt,
             featureSlug: this.featureSlug,
           });
         }
@@ -395,6 +407,7 @@ export class BuildProgressWatcher {
           commitCount: undefined,
           tickReason: 'heartbeat',
           headMoved: false,
+          lastCommitAt: this.lastCommitAt,
           noEvidenceAttempts,
           featureSlug: this.featureSlug,
         });
@@ -450,6 +463,7 @@ export class BuildProgressWatcher {
       // landed alongside it.
       tickReason: taskDelta ? 'task-delta' : 'head-moved',
       headMoved,
+      lastCommitAt: this.lastCommitAt,
       noEvidenceAttempts,
       featureSlug: this.featureSlug,
     });
