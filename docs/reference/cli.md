@@ -572,6 +572,12 @@ modified.` The ledger itself is left untouched for repair. See
 > checks only the exit code will read a malformed invocation as success. Check for the expected JSON on
 > stdout instead. Tracked in [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
 
+`compose land` keeps amendments to artifacts that already existed at the branch's merge base
+under their original feature names. Those amendments remain in the commit and applicable ADR/coherence
+checks, but cannot replace the current feature's required artifacts. New paths, including rename
+destinations, must still satisfy the current feature's naming contract. Commit tracked amendments
+before invoking land; its clean-worktree guard remains in force.
+
 > **Known limitation.** `compose land --help` states that land pushes the branch and opens the spec
 > PR. It does not — `land` only commits spec artifacts onto `spec/<slug>`; opening the PR is
 > `compose handoff`. Run `handoff` after `land` or no PR is ever created. Tracked in
