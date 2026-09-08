@@ -420,6 +420,42 @@ describe('CodexProvider', () => {
     })]);
   });
 
+  it('returns usage observed in the live stream when retained terminal stdout omits usage', async () => {
+    const stdout = new PassThrough();
+    let resolveProcess: (result: { stdout: string; stderr: string; exitCode: number }) => void;
+    let resolveStarted: () => void;
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const process = Object.assign(new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
+      resolveProcess = resolve;
+    }), { stdout, kill: vi.fn() });
+    provider = new CodexProvider(vi.fn(async () => readyDoctorResult()), 'codex', undefined, () => {
+      resolveStarted!();
+      return process as any;
+    });
+
+    const invocation = provider.invoke({
+      ...baseOptions,
+      streamConsumer: {
+        onProviderStream: vi.fn(),
+        close: vi.fn(),
+      },
+    });
+    await started;
+    stdout.write(`${JSON.stringify({
+      type: 'turn.completed',
+      usage: { input_tokens: 17, cached_input_tokens: 5, output_tokens: 7 },
+    })}\n`);
+    const retainedTerminal = JSON.stringify({ type: 'turn.completed' });
+    resolveProcess!({ stdout: retainedTerminal, stderr: '', exitCode: 0 });
+
+    await expect(invocation).resolves.toMatchObject({
+      success: true,
+      tokenUsage: { input: 12, cacheRead: 5, output: 7, numTurns: 1 },
+    });
+  });
+
   it('checks a current permit before readiness and immediately before the injected subprocess factory', async () => {
     const callOrder: string[] = [];
     const runDoctor = vi.fn(async () => {
