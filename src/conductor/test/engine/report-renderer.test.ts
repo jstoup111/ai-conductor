@@ -1,8 +1,9 @@
+// Covers: task:1
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { renderReport, ReportError, parseEvents, aggregateHalts, aggregateKickbacks } from '../../src/engine/report-renderer.js';
+import { renderReport, ReportError, parseEvents, aggregateHalts, aggregateKickbacks, summarizeKickbacks } from '../../src/engine/report-renderer.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { computeCostRollup } from '../../src/engine/cost-rollup.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
@@ -46,7 +47,89 @@ describe('report-renderer', () => {
     expect(renderReport(eventsPath)).toContain('## Build Review Metrics\nNo build-review metrics recorded');
   });
 
-  it('ignores persisted kickback lines in report, timing, and cost rollups', async () => {
+  it('renders each kickback occurrence, BUILD re-entries, and source-target attribution before build-review metrics', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'kickback', from: 'build_review', to: 'build', evidence: 'fix the report', count: 9, kickback_outcome: 'older outcome' }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'kickback', from: 'build_review', to: 'build', evidence: 'fix the report again', count: 10, kickback_outcome: 'latest outcome' }, ts: '2026-01-01T00:00:01.000Z' },
+    ]), 'utf8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toMatch(/## Kickbacks[\s\S]*Total occurrences:\s*2[\s\S]*BUILD re-entries:\s*2[\s\S]*build_review\s+build\s+2\s+latest outcome/);
+    expect(report.indexOf('## Kickbacks')).toBeLessThan(report.indexOf('## Build Review Metrics'));
+  });
+
+  it('renders a source-gate row for each distinct build target pair', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'kickback', from: 'build_review', to: 'build' }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'kickback', from: 'manual_test', to: 'build' }, ts: '2026-01-01T00:00:01.000Z' },
+      { event: { type: 'kickback', from: 'prd_audit', to: 'build' }, ts: '2026-01-01T00:00:02.000Z' },
+    ]), 'utf8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toMatch(/build_review\s+build\s+1[\s\S]*manual_test\s+build\s+1[\s\S]*prd_audit\s+build\s+1/);
+  });
+
+  it('renders non-build targets without counting them as BUILD re-entries', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'kickback', from: 'build_review', to: 'build' }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'kickback', from: 'finish', to: 'manual_test' }, ts: '2026-01-01T00:00:01.000Z' },
+    ]), 'utf8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toMatch(/BUILD re-entries:\s*1[\s\S]*build_review\s+build\s+1[\s\S]*finish\s+manual_test\s+1/);
+  });
+
+  it('renders kickback pairs in deterministic count, source, and target order', async () => {
+    const records = [
+      { event: { type: 'kickback', from: 'manual_test', to: 'build' }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'kickback', from: 'build_review', to: 'build' }, ts: '2026-01-01T00:00:01.000Z' },
+      { event: { type: 'kickback', from: 'build_review', to: 'build' }, ts: '2026-01-01T00:00:02.000Z' },
+      { event: { type: 'kickback', from: 'finish', to: 'manual_test' }, ts: '2026-01-01T00:00:03.000Z' },
+    ];
+    const reorderedPath = join(tempDir, 'reordered-events.jsonl');
+    await writeFile(eventsPath, makeLines(records), 'utf8');
+    await writeFile(reorderedPath, makeLines([...records].reverse()), 'utf8');
+
+    const kickbackSection = (path: string) => renderReport(path).split('\n\n## Build Review Metrics')[0];
+
+    expect(kickbackSection(eventsPath)).toBe(kickbackSection(reorderedPath));
+  });
+
+  it('orders kickback summaries by descending occurrences, source, then target', () => {
+    expect(summarizeKickbacks([
+      { from: 'manual_test', to: 'build', count: 1 },
+      { from: 'prd_audit', to: 'build', count: 1 },
+      { from: 'build_review', to: 'build', count: 1 },
+      { from: 'build_review', to: 'build', count: 1 },
+      { from: 'prd_audit', to: 'acceptance_specs', count: 1 },
+    ]).pairs).toEqual([
+      { from: 'build_review', to: 'build', occurrences: 2 },
+      { from: 'manual_test', to: 'build', occurrences: 1 },
+      { from: 'prd_audit', to: 'acceptance_specs', occurrences: 1 },
+      { from: 'prd_audit', to: 'build', occurrences: 1 },
+    ]);
+  });
+
+  it('retains the latest recorded kickback outcome for a source-target pair', () => {
+    expect(summarizeKickbacks([
+      { from: 'build_review', to: 'build', count: 1, kickbackOutcome: 'older outcome' },
+      { from: 'build_review', to: 'build', count: 1, kickbackOutcome: 'latest outcome' },
+    ])).toEqual({
+      totalOccurrences: 2,
+      buildReentries: 2,
+      pairs: [{
+      from: 'build_review',
+      to: 'build',
+      occurrences: 2,
+      kickbackOutcome: 'latest outcome',
+      }],
+    });
+  });
+
+  it('ignores persisted kickback lines in timing and cost rollups', async () => {
     const baselineDir = join(tempDir, 'baseline');
     const kickbackDir = join(tempDir, 'with-kickback');
     const baseline = makeLines([
@@ -63,12 +146,10 @@ describe('report-renderer', () => {
     }));
 
     const baselineResults = [
-      renderReport(join(baselineDir, '.pipeline', 'events.jsonl')),
       await computeTimingRollup(baselineDir),
       await computeCostRollup(baselineDir),
     ];
     const kickbackResults = [
-      renderReport(join(kickbackDir, '.pipeline', 'events.jsonl')),
       await computeTimingRollup(kickbackDir),
       await computeCostRollup(kickbackDir),
     ];
