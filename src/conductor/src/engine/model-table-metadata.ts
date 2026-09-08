@@ -218,9 +218,9 @@ const EXTRA_MODEL_TABLE_ROW_INPUTS: Array<
   {
     name: 'evaluator',
     claudeModel:
-      'sonnet (value objects, pure functions, config, infra) / opus (concurrency, state mutation, security, auth, finance)',
+      'sonnet (default) / fable (concurrency, state mutation, security, auth, money)',
     claudeEffort: '',
-    why: 'Right-sized by batch content.',
+    why: 'A single risk-domain criterion protects higher-stakes batches from weaker evaluation.',
   },
   {
     name: 'code-review',

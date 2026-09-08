@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -216,6 +217,20 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
     });
 
     expect(violations).toEqual([]);
+  });
+
+  it('routes the evaluator through the default-or-risk-domain two-way switch', () => {
+    const evaluator = EXTRA_MODEL_TABLE_ROWS.find((row) => row.name === 'evaluator');
+
+    expect(evaluator).toMatchObject({
+      name: 'evaluator',
+      executionPath: 'supported-host interactive',
+      claudeModel: 'sonnet (default) / fable (concurrency, state mutation, security, auth, money)',
+      claudeEffort: '',
+      codexModel: 'inherits model from the Codex session or spawned-agent configuration',
+      codexEffort: 'inherits effort from the Codex session or spawned-agent configuration',
+      why: expect.stringMatching(/single risk-domain criterion/i),
+    });
   });
 
   it('registers the canonical composer at the Opus tier and keeps engineer as its compatibility delegate', () => {
