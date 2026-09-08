@@ -1006,7 +1006,7 @@ describe('kickback-ledger', () => {
     });
   });
 
-  it('treats a malformed test-suite infrastructure retry counter as unreadable', async () => {
+  it('treats a malformed test-suite infrastructure retry counter as unreadable without invalidating a sibling gate', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
       version: 1,
@@ -1020,10 +1020,22 @@ describe('kickback-ledger', () => {
           priorVerdict: false,
           resolvedBefore: 7,
         },
+        build_review: {
+          count: 1,
+          cumulative: 2,
+          treeHash: null,
+          lastReason: 'healthy sibling',
+          priorVerdict: true,
+          resolvedBefore: 0,
+        },
       },
     }));
 
     await expect(readSuiteInfrastructureRetries(dir)).resolves.toBe('unreadable');
+    const ledger = await readKickbackLedger(dir);
+    expect(isUnreadableKickbackGate(ledger, 'test_suite')).toBe(true);
+    expect(isUnreadableKickbackGate(ledger, 'build_review')).toBe(false);
+    expect(ledger.gates.build_review).toMatchObject({ count: 1, cumulative: 2 });
   });
 
   it('reads a healthy test_suite retry counter despite a malformed sibling gate', async () => {
