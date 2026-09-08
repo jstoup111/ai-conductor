@@ -166,7 +166,13 @@ export interface PrMergeState {
   hasFailingOrPendingChecks: boolean;
   labels: string[];
   checksOutcome: 'failed' | 'pending' | 'green' | 'none';
-  statusCheckRollup?: Array<{ status?: string | null; conclusion?: string | null; name?: string }>;
+  statusCheckRollup?: Array<{
+    status?: string | null;
+    conclusion?: string | null;
+    state?: string | null;
+    name?: string;
+    context?: string;
+  }>;
   /**
    * True when the PR is still a draft (not ready for review). Optional so
    * existing constructors/fixtures stay valid; absent is read as "not draft".

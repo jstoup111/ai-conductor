@@ -164,26 +164,34 @@ const NON_TERMINAL_CHECK_STATES = new Set([
 /**
  * Names of the rollup entries that have not reached a terminal state.
  *
- * A check is non-terminal when its `status` is a queued/running state, when its
- * `conclusion` is one (some commit-status rollups report `PENDING` there), or
- * when it carries no conclusion at all — the same "still running" signal
+ * A check is non-terminal when its `status`, `conclusion`, or reported `state`
+ * is queued/running. It is also non-terminal when it carries neither a
+ * conclusion nor a reported state — the same "still running" signal
  * `pr-labels.ts#isCheckFailingOrPending` uses.
  *
  * An absent/empty rollup yields an empty list: no rollup detail is no evidence
  * of a running check, so the caller's gate must not block on it.
  */
 export function nonTerminalCheckNames(
-  rollup?: Array<{ status?: string | null; conclusion?: string | null; name?: string }> | null,
+  rollup?: Array<{
+    status?: string | null;
+    conclusion?: string | null;
+    state?: string | null;
+    name?: string;
+    context?: string;
+  }> | null,
 ): string[] {
   if (!rollup || rollup.length === 0) return [];
   return rollup
     .filter((check) => {
       const status = (check.status ?? '').toUpperCase();
       const conclusion = (check.conclusion ?? '').toUpperCase();
+      const state = (check.state ?? '').toUpperCase();
       if (NON_TERMINAL_CHECK_STATES.has(status)) return true;
       if (NON_TERMINAL_CHECK_STATES.has(conclusion)) return true;
-      // No conclusion recorded yet → the run has not finished.
-      return conclusion.length === 0;
+      if (NON_TERMINAL_CHECK_STATES.has(state)) return true;
+      // No conclusion or reported state recorded yet → the run has not finished.
+      return conclusion.length === 0 && state.length === 0;
     })
     .map((check) => check.name?.trim() || '(unnamed check)');
 }
