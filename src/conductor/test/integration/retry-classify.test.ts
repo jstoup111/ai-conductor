@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:5, task:6, task:7
+// Covers: task:3, task:4, task:5, task:6, task:7, task:8
 /**
  * Acceptance specs for the rerun-vs-route retry classifier (#646).
  *
@@ -586,6 +586,85 @@ describe('integration/retry-classify (#646)', () => {
     expect(stepRetries[0]?.reason).toBe(
       'coverage-binding judge infrastructure failure: judge payload was malformed',
     );
+  });
+
+  // ── Task 8: retry_routing kill switch restores ordinary retries ─────────
+
+  it('Task 8: disabled retry routing consumes the full refusal retry budget', async () => {
+    const refusalReason = 'coverage binding needs a human decision';
+    let dispatches = 0;
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async () => {
+        dispatches++;
+        return {
+          success: false,
+          output: refusalReason,
+          refusal: { kind: 'needs-human', reason: refusalReason },
+        };
+      },
+    };
+    const { retryDecisions, stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 3,
+      fromStep: 'coverage_binding',
+      config: { retry_routing: { enabled: false } } as never,
+    });
+
+    await conductor.run();
+
+    expect(dispatches).toBe(3);
+    expect(retryDecisions).not.toContainEqual(expect.objectContaining({ signal: 'terminal-refusal' }));
+    expect(stepRetries).toHaveLength(2);
+    for (const retry of stepRetries) expect(retry.reason).toContain(refusalReason);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(`${refusalReason}\n`);
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
+  it('Task 8: omitted retry routing keeps terminal-refusal routing enabled by default', async () => {
+    const refusalReason = 'coverage binding needs a human decision';
+    let dispatches = 0;
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async () => {
+        dispatches++;
+        return {
+          success: false,
+          output: refusalReason,
+          refusal: { kind: 'needs-human', reason: refusalReason },
+        };
+      },
+    };
+    const { retryDecisions, stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 3,
+      fromStep: 'coverage_binding',
+    });
+
+    await conductor.run();
+
+    expect(dispatches).toBe(1);
+    expect(retryDecisions).toContainEqual(expect.objectContaining({
+      step: 'coverage_binding',
+      attempt: 1,
+      decision: 'route',
+      signal: 'terminal-refusal',
+    }));
+    expect(stepRetries).toHaveLength(0);
   });
 
   // ── Story 1: as-built BLOCKED stops on try 1 ────────────────────────────
