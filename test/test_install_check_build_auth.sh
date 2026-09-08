@@ -47,7 +47,7 @@ mkdir -p "$HARNESS_DIR/bin" "$HARNESS_DIR/src/conductor/dist"
 cp "$SOURCE_HARNESS_DIR/bin/install" "$HARNESS_DIR/bin/install"
 cp -R "$SOURCE_HARNESS_DIR/bin/lib" "$HARNESS_DIR/bin/lib"
 cp -R "$SOURCE_HARNESS_DIR/skills" "$HARNESS_DIR/skills"
-cp "$SOURCE_HARNESS_DIR/HARNESS.md" "$HARNESS_DIR/HARNESS.md"
+cp "$SOURCE_HARNESS_DIR/HARNESS.md" "$SOURCE_HARNESS_DIR/ARCHITECTURE.md" "$HARNESS_DIR/"
 printf '%s\n' '# placeholder bundle for --check' > "$HARNESS_DIR/src/conductor/dist/index.js"
 cat > "$HARNESS_DIR/bin/ai-conductor" <<'EOF'
 #!/usr/bin/env bash
@@ -78,6 +78,8 @@ for skill_file in "$HARNESS_DIR"/skills/*/SKILL.md; do
 done
 ln -s "$HARNESS_DIR/HARNESS.md" "$FAKE_HOME/.claude/skills/HARNESS.md"
 ln -s "$HARNESS_DIR/HARNESS.md" "$FAKE_HOME/.agents/skills/HARNESS.md"
+ln -s "$HARNESS_DIR/ARCHITECTURE.md" "$FAKE_HOME/.claude/skills/ARCHITECTURE.md"
+ln -s "$HARNESS_DIR/ARCHITECTURE.md" "$FAKE_HOME/.agents/skills/ARCHITECTURE.md"
 
 STUB_BIN="${TMP_ROOT}/stubbin"
 mkdir -p "$STUB_BIN"
