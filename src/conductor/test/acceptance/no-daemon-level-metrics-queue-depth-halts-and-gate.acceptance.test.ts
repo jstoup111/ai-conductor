@@ -1,6 +1,6 @@
 // Covers: S1.1, S1.2, S1.3, S1.4, S1.6, S3.1, S3.4, S3.8, S3.9, task:8, task:12
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   AggregationTemporality,
@@ -8,6 +8,7 @@ import {
 } from '@opentelemetry/sdk-metrics';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
+import { localWorkSource } from '../../src/engine/daemon-work-source.js';
 import { startFeatureEventPersistence } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -163,6 +164,7 @@ async function createDaemonMeter(
 ): Promise<{
   events: ConductorEventEmitter;
   exporter: InMemoryMetricExporter;
+  listenerInvocations: ConductorEvent['type'][];
   scope: DaemonOtelScope;
 }> {
   const exporter = metricExporter;
@@ -171,6 +173,24 @@ async function createDaemonMeter(
     metricExporter: exporter,
   });
   const events = new ConductorEventEmitter();
+  const listenerInvocations: ConductorEvent['type'][] = [];
+  type Handler = Parameters<ConductorEventEmitter['on']>[1];
+  const wrappedHandlers = new Map<Handler, Handler>();
+  const realOn = events.on.bind(events);
+  const realOff = events.off.bind(events);
+  vi.spyOn(events, 'on').mockImplementation((type, handler) => {
+    const wrapped: Handler = (event) => {
+      listenerInvocations.push(event.type);
+      return handler(event);
+    };
+    wrappedHandlers.set(handler, wrapped);
+    realOn(type, wrapped);
+  });
+  vi.spyOn(events, 'off').mockImplementation((type, handler) => {
+    const wrapped = wrappedHandlers.get(handler) ?? handler;
+    realOff(type, wrapped);
+    wrappedHandlers.delete(handler);
+  });
   const wireDaemonOtel = await loadDaemonWire();
   const scope = await wireDaemonOtel(config, {
     mainRoot: root,
@@ -180,7 +200,7 @@ async function createDaemonMeter(
     rootEvents: events,
   });
   expect(scope, 'enabled OTel must construct the daemon-owned meter').not.toBeNull();
-  return { events, exporter, scope: scope! };
+  return { events, exporter, listenerInvocations, scope: scope! };
 }
 
 async function emitExitedDispatch(
@@ -331,6 +351,9 @@ describe('daemon-level metrics acceptance', () => {
       maxIdlePolls: 1,
     });
     await Promise.all(emissions);
+    const snapshotInvocations = daemon.listenerInvocations
+      .filter((type) => type === 'daemon_backlog_snapshot').length;
+    expect(snapshotInvocations).toBeGreaterThan(0);
     await daemon.scope.stop();
 
     expect(pointValue(daemon.exporter, 'conductor.daemon.up', {
@@ -348,7 +371,6 @@ describe('daemon-level metrics acceptance', () => {
       project: 'project-p', worker: 'worker-w', state: 'free',
     })).toBe(3);
 
-    const upBeforeDetachedEmission = metricPoints(daemon.exporter, 'conductor.daemon.up').length;
     await emitUntyped(daemon.events, {
       type: 'daemon_backlog_snapshot',
       counts: { eligible: 0, waiting: 0, blocked: 0, gated: 0, parked: 0 },
@@ -358,7 +380,8 @@ describe('daemon-level metrics acceptance', () => {
       blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
       pollDurationMs: 0,
     });
-    expect(metricPoints(daemon.exporter, 'conductor.daemon.up')).toHaveLength(upBeforeDetachedEmission);
+    expect(daemon.listenerInvocations
+      .filter((type) => type === 'daemon_backlog_snapshot')).toHaveLength(snapshotInvocations);
   });
 
   it('exports live slots and one in-flight point per slug from a real busy daemon tick', async () => {
@@ -440,25 +463,36 @@ describe('daemon-level metrics acceptance', () => {
     const root = await mkdtemp(join(testTmpdir(), 'mixed-age-daemon-metrics-'));
     roots.push(root);
     const daemon = await createDaemonMeter(root);
-    // Fixed fixture: depth includes the unreadable member, while only the two
-    // determinate members contribute to the precomputed oldest age.
-    const fixedBacklogFixture = [
-      { slug: 'oldest', oldestAgeSeconds: 129_600 },
-      { slug: 'newly-seen', oldestAgeSeconds: 17 },
-      { slug: 'undeterminable', oldestAgeSeconds: undefined },
-    ] as const;
-    expect(fixedBacklogFixture).toEqual([
-      { slug: 'oldest', oldestAgeSeconds: 129_600 },
-      { slug: 'newly-seen', oldestAgeSeconds: 17 },
-      { slug: 'undeterminable', oldestAgeSeconds: undefined },
-    ]);
+    const observedAt = 129_600_000;
+    const firstSeenDir = join(root, '.daemon', 'first-seen');
+    await mkdir(firstSeenDir, { recursive: true });
+    await writeFile(join(firstSeenDir, 'oldest'), JSON.stringify({ state: 'eligible', enteredAt: 0 }));
+    await writeFile(join(firstSeenDir, 'newly-seen'), JSON.stringify({
+      state: 'eligible', enteredAt: observedAt - 17_000,
+    }));
+    await mkdir(join(firstSeenDir, 'undeterminable'));
+    const source = localWorkSource({
+      projectRoot: root,
+      baseBranch: 'main',
+      log: vi.fn(),
+      isProcessed: vi.fn().mockResolvedValue(false),
+      hasWarned: vi.fn().mockResolvedValue(false),
+      markWarned: vi.fn().mockResolvedValue(undefined),
+      fastForwardRoot: vi.fn().mockResolvedValue(undefined),
+      discoverBacklog: vi.fn().mockResolvedValue({
+        items: [{ slug: 'oldest' }, { slug: 'newly-seen' }, { slug: 'undeterminable' }],
+        waiting: [], blocked: [], gated: [],
+      }),
+      now: () => observedAt,
+    });
+    await source.discover({ refresh: false });
+    const snapshot = await source.snapshot?.([]);
+    expect(snapshot).toBeDefined();
     await emitUntyped(daemon.events, {
       type: 'daemon_backlog_snapshot',
-      counts: { eligible: 3, waiting: 0, blocked: 0, gated: 0, parked: 0 },
-      oldestAgeSeconds: { eligible: 129_600 },
+      ...snapshot!,
       slots: { busy: 0, free: 3 }, inFlight: [],
       blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
-      pollDurationMs: 12,
     });
     await daemon.scope.stop();
 
