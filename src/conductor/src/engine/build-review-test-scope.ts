@@ -277,18 +277,7 @@ export function unavailableBuildReviewTestScope(
   error: unknown,
 ): BuildReviewTestScope {
   const text = sourceText(input.head.source);
-  const ids = coversResolutionIds(input.head.storiesText, input.head.planText);
-  const markers: CoversMarker[] = [];
-  const markerPattern = /\bCovers\s*:\s*[^\r\n]*/g;
-  for (const match of text.matchAll(markerPattern)) {
-    const start = match.index ?? 0;
-    for (const reference of parseCoversMarkers(match[0])) {
-      if (resolvesCoversReference(reference, ids)) markers.push(Object.freeze({
-        span: Object.freeze({ start, end: start + match[0].length }),
-        reference,
-      }));
-    }
-  }
+  const markers = resolvableSourceMarkers(input.head);
   const diagnostic = Object.freeze({
     reason: 'syntax-diagnostic' as const,
     span: Object.freeze({ start: 0, end: text.length }),
@@ -305,6 +294,28 @@ export function unavailableBuildReviewTestScope(
     affectedGroups: Object.freeze([]),
     sharedSources: Object.freeze([]),
   });
+}
+
+/**
+ * Unsupported source languages have no TypeScript comment trivia, but their
+ * Covers grammar remains text-only. Keep those resolvable markers available
+ * to the same source-bound uncertainty path as an analyzer outage.
+ */
+function resolvableSourceMarkers(input: BuildReviewTestBindingsInput): readonly CoversMarker[] {
+  const text = sourceText(input.source);
+  const ids = coversResolutionIds(input.storiesText, input.planText);
+  const markers: CoversMarker[] = [];
+  const markerPattern = /\bCovers\s*:\s*[^\r\n]*/g;
+  for (const match of text.matchAll(markerPattern)) {
+    const start = match.index ?? 0;
+    for (const reference of parseCoversMarkers(match[0])) {
+      if (resolvesCoversReference(reference, ids)) markers.push(Object.freeze({
+        span: Object.freeze({ start, end: start + match[0].length }),
+        reference,
+      }));
+    }
+  }
+  return Object.freeze(markers);
 }
 
 const SETUP_HOOKS = new Set(['beforeEach', 'afterEach', 'beforeAll', 'afterAll']);
@@ -539,7 +550,14 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
   const candidates: UncertainBuildReviewTestScopeCandidate[] = [];
   const notes: BuildReviewTestScopeNote[] = [];
   const headUncertainMarkers = associations.head.bindings
-    .filter((binding): binding is Extract<BuildReviewTestBinding, { kind: 'uncertain-association' }> => binding.kind === 'uncertain-association');
+    .filter((binding): binding is Extract<BuildReviewTestBinding, { kind: 'uncertain-association' }> => binding.kind === 'uncertain-association')
+    .map((binding) => binding.marker);
+  const headCandidateMarkers = uniqueMarkers([
+    ...headUncertainMarkers,
+    ...(headAnalysis.diagnostics.some((diagnostic) => diagnostic.reason === 'unsupported-source-language')
+      ? resolvableSourceMarkers(input.head)
+      : []),
+  ]);
   const affectedGroups = derivedAffectedGroups(
     input.base,
     input.head,
@@ -555,7 +573,7 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
     const unresolved = headBindings.filter((binding): binding is UnresolvedCoversMarker => binding.kind === 'unresolved-reference');
     const associationChanges = changedAssociationFor(associations.changes, declaration);
     const localUncertainMarkers = potentiallyApplicableUncertainMarkers(
-      headUncertainMarkers.map((binding) => binding.marker),
+      headCandidateMarkers,
       declaration,
       changedDeclarations,
       headAnalysis.diagnostics,
@@ -662,13 +680,12 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
   // A parser diagnostic becomes a candidate only with both pinned source
   // change and concrete marker evidence.  It remains source-bound rather than
   // fabricating an executable declaration or admitting sibling tests.
-  if (headUncertainMarkers.length > 0) {
+  if (headCandidateMarkers.length > 0) {
     const baseText = new TextDecoder('utf-8').decode(input.base.source.bytes);
     const headText = new TextDecoder('utf-8').decode(input.head.source.bytes);
     for (const diagnostic of headAnalysis.diagnostics) {
       if (!diagnosticChanged(diagnostic, baseAnalysis.diagnostics, baseText, headText)) continue;
-      const applicableMarkers = headUncertainMarkers
-        .map((binding) => binding.marker)
+      const applicableMarkers = headCandidateMarkers
         .filter((marker) => marker.span.end <= diagnostic.span.start
           || (diagnostic.span.start <= marker.span.start && marker.span.end <= diagnostic.span.end));
       if (applicableMarkers.length === 0) continue;

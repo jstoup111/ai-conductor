@@ -280,12 +280,26 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         ].join('\n') } },
         { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
         { match: ['show', 'head123:spec/example_spec.rb'], result: { stdout: '# Covers: task:8\n# changed expectation\n' } },
+        { match: ['show', 'head123:spec/unchanged_spec.rb'], result: { stdout: '# Covers: task:8\n# unchanged expectation\n' } },
       ]);
 
-      await assembleBuildReviewInputs(git, planPath);
+      const inputs = await assembleBuildReviewInputs(git, planPath);
 
       expect(calls).toContainEqual(['show', 'head123:spec/example_spec.rb']);
       expect(calls).not.toContainEqual(['show', 'head123:spec/unchanged_spec.rb']);
+      expect(inputs.sourceSnapshot.testScope?.targets).toEqual([]);
+      expect(inputs.sourceSnapshot.testScope?.candidates).toHaveLength(1);
+      expect(inputs.sourceSnapshot.testScope).toMatchObject({
+        candidates: [{
+          source: { fileName: 'spec/example_spec.rb', side: 'head' },
+          reasons: ['unsupported-declaration'],
+          diagnostic: { reason: 'unsupported-source-language' },
+          markers: [{ reference: { kind: 'task', id: '8' } }],
+        }],
+      });
+      expect(inputs.sourceSnapshot.testQuality?.counterfactualFileSelectors).toEqual(['spec/example_spec.rb']);
+      expect(inputs.sourceSnapshot.testScope?.candidates.some(({ source }) => source.fileName === 'spec/unchanged_spec.rb')).toBe(false);
+      expect(inputs.sourceSnapshot.testScope?.targets.some(({ source }) => source.fileName === 'spec/unchanged_spec.rb')).toBe(false);
     });
 
     it('selects a changed marked unsupported-language spec as one source-bound uncertainty candidate', async () => {
@@ -299,6 +313,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
         { match: ['show', 'base123:spec/example_spec.rb'], result: { stdout: '// Covers: task:8\n# base expectation\n' } },
         { match: ['show', 'head123:spec/example_spec.rb'], result: { stdout: '// Covers: task:8\n# changed expectation\n' } },
+        { match: ['show', 'head123:spec/unchanged_spec.rb'], result: { stdout: '// Covers: task:8\n# unchanged expectation\n' } },
       ]);
 
       const inputs = await assembleBuildReviewInputs(git, planPath);
@@ -316,6 +331,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         }],
       });
       expect(inputs.sourceSnapshot.testQuality?.counterfactualFileSelectors).toEqual(['spec/example_spec.rb']);
+      expect(inputs.sourceSnapshot.testScope?.candidates.some(({ source }) => source.fileName === 'spec/unchanged_spec.rb')).toBe(false);
+      expect(inputs.sourceSnapshot.testScope?.targets.some(({ source }) => source.fileName === 'spec/unchanged_spec.rb')).toBe(false);
     });
 
     it('retains a marker-only unsupported Go test as a source-bound uncertainty candidate', async () => {
