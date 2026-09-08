@@ -295,16 +295,25 @@ describe('readHaltSidecarClassification', () => {
     if (root) await rm(root, { recursive: true, force: true });
   });
 
-  it('distinguishes a pre-sidecar HALT from absent and unknown sidecars', async () => {
+  it('fails closed for absent and unreadable sidecars while preserving stamped classifications', async () => {
     root = await mkdtemp(join(tmpdir(), 'halt-sidecar-'));
     await mkdir(join(root, '.pipeline'), { recursive: true });
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
     await actual.writeFile(join(root, HALT_MARKER), 'old halt', 'utf8');
-    await expect(readHaltSidecarClassification(root)).resolves.toBe('legacy');
+    await expect(readHaltSidecarClassification(root)).resolves.toBe('unclassified');
     await actual.writeFile(join(root, HALT_CLASS_MARKER), 'kickback-cap', 'utf8');
     await expect(readHaltSidecarClassification(root)).resolves.toBe('kickback-cap');
     await actual.writeFile(join(root, HALT_CLASS_MARKER), 'mechanical', 'utf8');
     await expect(readHaltSidecarClassification(root)).resolves.toBe('mechanical');
+    await actual.writeFile(join(root, HALT_CLASS_MARKER), 'legacy', 'utf8');
+    await expect(readHaltSidecarClassification(root)).resolves.toBe('legacy');
+    await actual.writeFile(join(root, HALT_CLASS_MARKER), 'over-scope', 'utf8');
+    await expect(readHaltSidecarClassification(root)).resolves.toBe('over-scope');
+
+    const fs = await import('node:fs/promises');
+    const unreadable = vi.spyOn(fs, 'readFile').mockRejectedValueOnce(new Error('permission denied'));
+    await expect(readHaltSidecarClassification(root)).resolves.toBe('unclassified');
+    unreadable.mockRestore();
   });
 });
 

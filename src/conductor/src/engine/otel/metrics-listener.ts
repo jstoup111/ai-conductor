@@ -5,38 +5,7 @@ import { forwardedFeatureOf } from '../event-persister.js';
 import { MetricsRecorder } from './metrics.js';
 
 type OtelEvent = Extract<ConductorEvent, { type: OtelEventType }>;
-
-/** Kept as a closed map so a new OTel sink cannot silently lack a projection. */
-const METRICS_HANDLERS: Record<OtelEventType, true> = {
-  daemon_backlog_snapshot: true,
-  feature_dispatch_started: true,
-  feature_dispatch_ended: true,
-  feature_shipped: true,
-  step_started: true,
-  step_completed: true,
-  step_failed: true,
-  provider_attempt: true,
-  feature_usage_total: true,
-  feature_cost_snapshot: true,
-  step_retry: true,
-  feature_complete: true,
-  build_stall: true,
-  build_progress: true,
-  build_no_progress: true,
-  pipeline_closeout: true,
-  gate_verdict: true,
-  kickback: true,
-  loop_halt: true,
-  unattributed_progress: true,
-};
-
-function metricsHandledEventTypes(): OtelEventType[] {
-  return Object.keys(METRICS_HANDLERS) as OtelEventType[];
-}
-
-function assertNeverEvent(event: never): never {
-  throw new Error(`unhandled OTel event: ${(event as { type?: string }).type ?? 'unknown'}`);
-}
+type MetricsHandler = (listener: MetricsListener, event: OtelEvent) => void;
 
 /** The single event-fed metrics projection used by daemon and interactive runs. */
 export class MetricsListener {
@@ -51,10 +20,70 @@ export class MetricsListener {
     private readonly featureName?: string,
   ) {}
 
+  /** The handler table is the source of truth for both subscription and projection. */
+  static readonly METRICS_HANDLERS: Record<OtelEventType, MetricsHandler> = {
+    daemon_backlog_snapshot: (listener, event) => listener.recorder.onDaemonBacklog(event as Extract<OtelEvent, { type: 'daemon_backlog_snapshot' }>),
+    feature_dispatch_started: (listener, event) => {
+      const dispatch = event as Extract<OtelEvent, { type: 'feature_dispatch_started' }>;
+      listener.recorder.forFeature(dispatch.slug).onFeatureDispatch(dispatch.kind);
+      listener.terminal.delete(dispatch.slug);
+    },
+    feature_dispatch_ended: (listener, event) => {
+      const dispatch = event as Extract<OtelEvent, { type: 'feature_dispatch_ended' }>;
+      const metric = listener.recorder.forFeature(dispatch.slug);
+      if (!listener.terminal.has(dispatch.slug)) metric.onRunClose(dispatch.outcome);
+      if (dispatch.outcome === 'halted' && dispatch.haltClass && dispatch.step) metric.onFeatureHalt(dispatch.haltClass, dispatch.step);
+      listener.terminal.delete(dispatch.slug);
+      listener.starts.delete(dispatch.slug);
+    },
+    feature_shipped: (listener, event) => {
+      const shipped = event as Extract<OtelEvent, { type: 'feature_shipped' }>;
+      const metric = listener.recorder.forFeature(shipped.slug);
+      metric.onFeatureShipped();
+      metric.onFeatureDuration(typeof shipped.runStartedAt === 'number' ? Math.max(0, listener.now() - shipped.runStartedAt) : undefined, shipped.active.state === 'exact' ? shipped.active.activeMs : undefined);
+    },
+    step_started: (listener, event) => {
+      const step = event as Extract<OtelEvent, { type: 'step_started' }>;
+      const slug = listener.featureOf(step);
+      if (slug) {
+        const featureStarts = listener.starts.get(slug) ?? new Map<string, number>();
+        featureStarts.set(step.step, listener.now());
+        listener.starts.set(slug, featureStarts);
+      }
+    },
+    step_completed: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_completed' }>),
+    step_failed: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_failed' }>),
+    provider_attempt: () => {},
+    feature_usage_total: (listener, event) => listener.feature(event)?.onFeatureUsageTotal(event as Extract<OtelEvent, { type: 'feature_usage_total' }>),
+    feature_cost_snapshot: (listener, event) => listener.feature(event)?.onFeatureCostSnapshot(event as Extract<OtelEvent, { type: 'feature_cost_snapshot' }>),
+    step_retry: (listener, event) => {
+      const retry = event as Extract<OtelEvent, { type: 'step_retry' }>;
+      listener.feature(retry)?.onRetry(retry.step);
+    },
+    feature_complete: (listener, event) => listener.closeFeature(event, 'complete'),
+    build_stall: (listener, event) => listener.recorder.onStall((event as Extract<OtelEvent, { type: 'build_stall' }>).reason),
+    build_progress: () => {},
+    build_no_progress: () => {},
+    pipeline_closeout: (listener, event) => listener.feature(event)?.onPipelineCloseout(event as Extract<OtelEvent, { type: 'pipeline_closeout' }>),
+    gate_verdict: (listener, event) => {
+      const verdict = event as Extract<OtelEvent, { type: 'gate_verdict' }>;
+      listener.feature(verdict)?.onGateVerdict(verdict.step, verdict.satisfied ? 'pass' : 'fail');
+    },
+    kickback: (listener, event) => {
+      const kickback = event as Extract<OtelEvent, { type: 'kickback' }>;
+      listener.feature(kickback)?.onKickback(kickback.from, kickback.to);
+    },
+    loop_halt: (listener, event) => listener.closeFeature(event, 'halted'),
+    unattributed_progress: () => {},
+  };
+
   start(emitter: ConductorEventEmitter): void {
     this.emitter = emitter;
-    for (const type of metricsHandledEventTypes()) {
-      const handler: EventHandler = (event) => { try { this.handle(event as OtelEvent); } catch { /* metrics are best effort */ } };
+    const missing = missingMetricsHandlerTypes();
+    if (missing.length > 0) throw new Error(`MetricsListener lacks handlers for OTel event type(s): ${missing.join(', ')}`);
+    for (const type of otelEventTypes()) {
+      const projection = MetricsListener.METRICS_HANDLERS[type];
+      const handler: EventHandler = (event) => { try { projection(this, event as OtelEvent); } catch { /* metrics are best effort */ } };
       this.handlers.push([type, handler]);
       emitter.on(type, handler);
     }
@@ -75,57 +104,30 @@ export class MetricsListener {
       ?? (('slug' in event && typeof event.slug === 'string') ? event.slug : undefined)
       ?? this.featureName;
   }
-  private handle(event: ConductorEvent): void {
-    switch (event.type) {
-      case 'daemon_backlog_snapshot': this.recorder.onDaemonBacklog(event); break;
-      case 'feature_dispatch_started': this.recorder.forFeature(event.slug).onFeatureDispatch(event.kind); this.terminal.delete(event.slug); break;
-      case 'feature_dispatch_ended': {
-        const metric = this.recorder.forFeature(event.slug);
-        if (!this.terminal.has(event.slug)) metric.onRunClose(event.outcome);
-        if (event.outcome === 'halted' && event.haltClass && event.step) metric.onFeatureHalt(event.haltClass, event.step);
-        this.terminal.delete(event.slug);
-        this.starts.delete(event.slug);
-        break;
-      }
-      case 'feature_shipped': {
-        const metric = this.recorder.forFeature(event.slug); metric.onFeatureShipped();
-        metric.onFeatureDuration(typeof event.runStartedAt === 'number' ? Math.max(0, this.now() - event.runStartedAt) : undefined, event.active.state === 'exact' ? event.active.activeMs : undefined);
-        break;
-      }
-      case 'step_started': {
-        const slug = this.featureOf(event);
-        if (slug) {
-          const featureStarts = this.starts.get(slug) ?? new Map<string, number>();
-          featureStarts.set(event.step, this.now());
-          this.starts.set(slug, featureStarts);
-        }
-        break;
-      }
-      case 'step_retry': this.feature(event)?.onRetry(event.step); break;
-      case 'step_completed': case 'step_failed': {
-        const slug = this.featureOf(event); const metric = this.feature(event);
-        if (slug && metric) {
-          const featureStarts = this.starts.get(slug);
-          const start = featureStarts?.get(event.step);
-          if (start !== undefined) metric.onStepClose(event.step, Math.max(0, this.now() - start), 0, event.type === 'step_completed' ? event.tokenUsage : undefined, event.type === 'step_completed' ? event.model : undefined);
-          featureStarts?.delete(event.step);
-          if (featureStarts?.size === 0) this.starts.delete(slug);
-        }
-        break;
-      }
-      case 'feature_cost_snapshot': this.feature(event)?.onFeatureCostSnapshot(event); break;
-      case 'feature_usage_total': this.feature(event)?.onFeatureUsageTotal(event); break;
-      case 'pipeline_closeout': this.feature(event)?.onPipelineCloseout(event); break;
-      case 'gate_verdict': this.feature(event)?.onGateVerdict(event.step, event.satisfied ? 'pass' : 'fail'); break;
-      case 'kickback': this.feature(event)?.onKickback(event.from, event.to); break;
-      case 'build_stall': this.recorder.onStall(event.reason); break;
-      case 'feature_complete': { const metric = this.feature(event); const slug = this.featureOf(event); if (metric) { metric.onRunClose('complete'); if (slug) this.terminal.add(slug); } break; }
-      case 'loop_halt': { const metric = this.feature(event); const slug = this.featureOf(event); if (metric) { metric.onRunClose('halted'); if (slug) this.terminal.add(slug); } break; }
-      case 'provider_attempt': case 'build_progress': case 'build_no_progress': case 'unattributed_progress': break;
-      // The event union has an extension-shaped member, so TypeScript cannot
-      // narrow this switch to `never` by itself.  The closed map used by
-      // start() above proves every OTel sink reaches one of these cases.
-      default: return assertNeverEvent(event as never);
+  private closeFeature(event: OtelEvent, outcome: 'complete' | 'halted'): void {
+    const metric = this.feature(event);
+    const slug = this.featureOf(event);
+    if (metric) {
+      metric.onRunClose(outcome);
+      if (slug) this.terminal.add(slug);
     }
   }
+  private onStepClose(event: Extract<OtelEvent, { type: 'step_completed' | 'step_failed' }>): void {
+    const slug = this.featureOf(event);
+    const metric = this.feature(event);
+    if (!slug || !metric) return;
+    const featureStarts = this.starts.get(slug);
+    const start = featureStarts?.get(event.step);
+    if (start !== undefined) metric.onStepClose(event.step, Math.max(0, this.now() - start), 0, event.type === 'step_completed' ? event.tokenUsage : undefined, event.type === 'step_completed' ? event.model : undefined);
+    featureStarts?.delete(event.step);
+    if (featureStarts?.size === 0) this.starts.delete(slug);
+  }
+}
+
+/** Lists OTel sink rows that lack a real listener projection. */
+export function missingMetricsHandlerTypes(
+  types: readonly OtelEventType[] = otelEventTypes(),
+  handlers: Partial<Record<OtelEventType, MetricsHandler>> = MetricsListener.METRICS_HANDLERS,
+): OtelEventType[] {
+  return types.filter((type) => typeof handlers[type] !== 'function');
 }

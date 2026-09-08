@@ -32,6 +32,25 @@ type WireDaemonOtel = (
   },
 ) => DaemonOtelScope | null | Promise<DaemonOtelScope | null>;
 
+interface InteractiveOtelScope {
+  name: string;
+  start(): void;
+  stop(): Promise<void>;
+}
+
+type WireInteractiveOtelMetrics = (
+  config: HarnessConfig,
+  context: {
+    pipelineDir: string;
+    project: string;
+    feature: string;
+    runId: string;
+    branch: string | undefined;
+    engineVersion: string | undefined;
+  },
+  events: ConductorEventEmitter,
+) => InteractiveOtelScope | null;
+
 interface DaemonTickSnapshot {
   counts: Record<'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked', number>;
   oldestAgeSeconds: Partial<Record<'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked', number>>;
@@ -68,6 +87,13 @@ async function loadDaemonWire(): Promise<WireDaemonOtel> {
     candidate,
     'daemon startup must expose the daemon-lifetime OTel wiring boundary',
   ).toBeTypeOf('function');
+  return candidate!;
+}
+
+async function loadInteractiveWire(): Promise<WireInteractiveOtelMetrics> {
+  const module = await import('../../src/engine/otel/wire.js');
+  const candidate = (module as unknown as { wireInteractiveOtelMetrics?: WireInteractiveOtelMetrics }).wireInteractiveOtelMetrics;
+  expect(candidate, 'interactive startup must expose the interactive-owned metric wiring boundary').toBeTypeOf('function');
   return candidate!;
 }
 
@@ -131,12 +157,15 @@ function latestMetricPointsWithAttributes(
   );
 }
 
-async function createDaemonMeter(root: string): Promise<{
+async function createDaemonMeter(
+  root: string,
+  metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
+): Promise<{
   events: ConductorEventEmitter;
   exporter: InMemoryMetricExporter;
   scope: DaemonOtelScope;
 }> {
-  const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  const exporter = metricExporter;
   buildExporters.mockReturnValueOnce({
     spanExporter: new InMemorySpanExporter(),
     metricExporter: exporter,
@@ -165,6 +194,7 @@ async function emitExitedDispatch(
   const dispatch = startFeatureEventPersistence(worktree, daemonEvents);
   await emitUntyped(daemonEvents, { type: 'feature_dispatch_started', slug, kind });
   await dispatch.events.emit({ type: 'step_started', step: 'build', index: 0 });
+  await dispatch.events.emit({ type: 'step_completed', step: 'build', status: 'done' });
   await dispatch.events.emit({
     type: 'step_retry',
     step: 'build',
@@ -199,6 +229,49 @@ describe('daemon-level metrics acceptance', () => {
       project: 'project-p', worker: 'worker-w', feature: 'feature-b', outcome: 'halted',
     })).toBe(1);
     await daemon.scope.stop();
+  });
+
+  it('contains rejecting and hanging metric lifecycle calls without losing the next dispatch', async () => {
+    const root = await mkdtemp(join(testTmpdir(), 'daemon-metrics-lifecycle-'));
+    roots.push(root);
+    const daemonExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    vi.spyOn(daemonExporter, 'forceFlush').mockRejectedValueOnce(new Error('flush rejected'));
+    const daemon = await createDaemonMeter(root, daemonExporter);
+    const daemonErrors: string[] = [];
+    daemon.events.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') daemonErrors.push(event.error);
+    });
+
+    await emitExitedDispatch(root, daemon.events, 'first', 'initial');
+    await expect(daemon.scope.flush()).resolves.toBeUndefined();
+
+    await emitExitedDispatch(root, daemon.events, 'second', 'initial');
+    await expect(daemon.scope.flush()).resolves.toBeUndefined();
+    expect(metricPointsWithAttributes(daemonExporter, 'conductor.step.duration', {
+      project: 'project-p', worker: 'worker-w', feature: 'second', step: 'build',
+    })).toHaveLength(1);
+    expect(daemonErrors).toEqual(['[otel] metric export failed: flush rejected']);
+    await daemon.scope.stop();
+
+    const interactiveExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    vi.spyOn(interactiveExporter, 'shutdown').mockImplementation(() => new Promise<void>(() => {}));
+    buildExporters.mockReturnValueOnce({
+      spanExporter: new InMemorySpanExporter(),
+      metricExporter: interactiveExporter,
+    });
+    const interactiveEvents = new ConductorEventEmitter();
+    const interactiveErrors: string[] = [];
+    interactiveEvents.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') interactiveErrors.push(event.error);
+    });
+    const wireInteractiveOtelMetrics = await loadInteractiveWire();
+    const interactive = wireInteractiveOtelMetrics(config, {
+      pipelineDir: join(root, '.pipeline'), project: root, feature: 'interactive', runId: 'run-1',
+      branch: 'feat/interactive', engineVersion: 'test',
+    }, interactiveEvents);
+    expect(interactive).not.toBeNull();
+    await expect(interactive!.stop()).resolves.toBeUndefined();
+    expect(interactiveErrors).toEqual(['[otel] metric export failed: metric lifecycle timed out']);
   });
 
   it('keeps feature counters monotonic across exited dispatches and resets only with the daemon process', async () => {
@@ -369,12 +442,16 @@ describe('daemon-level metrics acceptance', () => {
     const daemon = await createDaemonMeter(root);
     // Fixed fixture: depth includes the unreadable member, while only the two
     // determinate members contribute to the precomputed oldest age.
-    const eligibleBacklog = [
+    const fixedBacklogFixture = [
       { slug: 'oldest', oldestAgeSeconds: 129_600 },
       { slug: 'newly-seen', oldestAgeSeconds: 17 },
       { slug: 'undeterminable', oldestAgeSeconds: undefined },
     ] as const;
-    expect(eligibleBacklog).toHaveLength(3);
+    expect(fixedBacklogFixture).toEqual([
+      { slug: 'oldest', oldestAgeSeconds: 129_600 },
+      { slug: 'newly-seen', oldestAgeSeconds: 17 },
+      { slug: 'undeterminable', oldestAgeSeconds: undefined },
+    ]);
     await emitUntyped(daemon.events, {
       type: 'daemon_backlog_snapshot',
       counts: { eligible: 3, waiting: 0, blocked: 0, gated: 0, parked: 0 },

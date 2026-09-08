@@ -266,8 +266,8 @@ export async function readHaltClass(worktreePath: string): Promise<HaltDispositi
 }
 
 /**
- * Classify a HALT for telemetry.  Unlike the re-kick reader, a HALT without a
- * sidecar is an old-format marker and is therefore deliberately `legacy`.
+ * Classify a HALT for telemetry. Missing, unreadable, and invalid sidecars
+ * fail closed as `unclassified`; only the migration may stamp `legacy`.
  */
 export async function readHaltSidecarClassification(worktreePath: string): Promise<HaltDisposition> {
   const haltPath = join(worktreePath, HALT_MARKER);
@@ -283,11 +283,12 @@ export async function readHaltSidecarClassification(worktreePath: string): Promi
       contents === 'mechanical' ||
       contents === 'kickback-cap' ||
       contents === 'over-scope' ||
+      contents === 'legacy' ||
       contents === PROTECTED_ARTIFACT_HALT_CLASS ||
       contents === PLAN_GAP_HALT_CLASS
     ) return contents;
     return 'unclassified';
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'legacy' : 'unclassified';
+  } catch {
+    return 'unclassified';
   }
 }

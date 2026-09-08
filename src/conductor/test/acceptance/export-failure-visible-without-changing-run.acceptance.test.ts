@@ -83,6 +83,18 @@ function failingMetricExporter(): PushMetricExporter {
   };
 }
 
+function rejectingLifecycleMetricExporter(): PushMetricExporter {
+  return {
+    export(_metrics: ResourceMetrics, callback: (result: ExportResult) => void): void {
+      callback({ code: ExportResultCode.SUCCESS });
+    },
+    async forceFlush(): Promise<void> {
+      throw new Error('flush rejected');
+    },
+    async shutdown(): Promise<void> {},
+  };
+}
+
 let dirs: string[] = [];
 
 afterEach(async () => {
@@ -171,6 +183,23 @@ function terminalVerdicts(events: ConductorEvent[]): Array<Record<string, unknow
 }
 
 describe('acceptance: failed telemetry export is visible without changing daemon outcome', () => {
+  it('contains a rejected daemon per-dispatch flush and preserves the dispatch outcome', async () => {
+    const result = await runExportDaemon(rejectingLifecycleMetricExporter());
+    const lifecycleWarnings = result.events.filter((event): event is Extract<ConductorEvent, { type: 'renderer_error' }> =>
+      event.type === 'renderer_error' && event.error === '[otel] metric export failed: flush rejected',
+    );
+
+    expect(lifecycleWarnings).toHaveLength(1);
+    expect(result.outcome).toEqual({
+      slug: 'feature-a',
+      status: 'halted',
+      reason: 'test dispatch complete',
+    });
+    expect(terminalVerdicts(result.events)).toEqual([
+      { type: 'step_completed', step: 'build', status: 'done' },
+    ]);
+  });
+
   it('logs and persists one matching otel failure across repeated export attempts', async () => {
     vi.useFakeTimers();
     const failed = await runExportDaemon(failingMetricExporter());

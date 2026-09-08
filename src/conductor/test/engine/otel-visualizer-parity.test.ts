@@ -5,7 +5,7 @@ import { InMemorySpanExporter, type ReadableSpan } from '@opentelemetry/sdk-trac
 import { tmpdir } from 'node:os';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { otelEventTypes } from '../../src/engine/event-sinks.js';
-import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
+import { MetricsListener, missingMetricsHandlerTypes } from '../../src/engine/otel/metrics-listener.js';
 import { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
@@ -77,6 +77,14 @@ describe('OtelVisualizer concurrent dispatch parity (Task 25)', () => {
     listener.start(emitter);
 
     expect(new Set(on.mock.calls.map(([type]) => type))).toEqual(new Set(otelEventTypes()));
+    expect(
+      missingMetricsHandlerTypes(),
+      `MetricsListener lacks handlers for OTel event type(s): ${missingMetricsHandlerTypes().join(', ')}`,
+    ).toEqual([]);
     listener.stop();
+  });
+
+  it('names a declared OTel sink that lacks a real listener handler', () => {
+    expect(missingMetricsHandlerTypes(['kickback'], {})).toEqual(['kickback']);
   });
 });

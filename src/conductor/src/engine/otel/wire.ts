@@ -22,6 +22,32 @@ import { buildExporters } from './transport.js';
 import { MetricsRecorder } from './metrics.js';
 import { MetricsListener } from './metrics-listener.js';
 
+const METRIC_LIFECYCLE_TIMEOUT_MS = 250;
+
+/** Keeps metric lifecycle I/O from turning a collector failure into a run failure. */
+function guardMetricLifecycle(events: ConductorEventEmitter): (operation: () => Promise<void>) => Promise<void> {
+  let warned = false;
+  return async (operation) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        operation(),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error('metric lifecycle timed out')), METRIC_LIFECYCLE_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (error) {
+      if (!warned) {
+        warned = true;
+        const detail = error instanceof Error ? error.message : String(error);
+        await events.emit({ type: 'renderer_error', rendererName: 'otel', error: `[otel] metric export failed: ${detail}` }).catch(() => {});
+      }
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  };
+}
+
 /**
  * Identity resolution results required at supported OTel start boundaries.
  * Explicit `undefined` records an attempted resolution that did not succeed.
@@ -83,12 +109,13 @@ export function wireDaemonOtel(
     project: resolved.projectName ?? context.projectName ?? 'unknown', worker: workerName,
   }));
   listener.start(context.rootEvents);
+  const settleMetricLifecycle = guardMetricLifecycle(context.rootEvents);
   let stopped: Promise<void> | undefined;
   return {
     // A feature dispatch can finish long before the daemon.  Flush the shared
     // meter at that boundary, but keep it alive for every other dispatch.
-    flush: () => provider.forceFlush(),
-    stop: () => stopped ??= (async () => { listener.stop(); await provider.forceFlush(); await provider.shutdown(); })(),
+    flush: () => settleMetricLifecycle(() => provider.forceFlush()),
+    stop: () => stopped ??= (async () => { listener.stop(); await settleMetricLifecycle(() => provider.forceFlush()); await settleMetricLifecycle(() => provider.shutdown()); })(),
   };
 }
 
@@ -121,11 +148,12 @@ export function wireInteractiveOtelMetrics(
     context.feature,
   );
   listener.start(events);
+  const settleMetricLifecycle = guardMetricLifecycle(events);
   let stopped: Promise<void> | undefined;
   return {
     name: 'otel-metrics',
     start: () => {},
-    stop: () => stopped ??= (async () => { listener.stop(); await provider.forceFlush(); await provider.shutdown(); })(),
+    stop: () => stopped ??= (async () => { listener.stop(); await settleMetricLifecycle(() => provider.forceFlush()); await settleMetricLifecycle(() => provider.shutdown()); })(),
   };
 }
 

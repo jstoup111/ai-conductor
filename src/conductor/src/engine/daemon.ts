@@ -1654,6 +1654,16 @@ export async function runDaemon(
       // A busy pool still discovers once per pass so the snapshot is current,
       // rather than replaying the last free-slot discovery with a stale age.
       await deps.discoverBacklog({ refresh: false });
+      paused = maintenance.isDraining() || (await checkPaused());
+      buildAuthMissing = await checkBuildAuthMissing();
+      ghVersionBlocked = await checkGhVersionFloor();
+      episodeActive = deps.rateLimitEpisode?.active?.() ?? false;
+      latestBlocked = {
+        paused,
+        build_auth_missing: buildAuthMissing,
+        gh_version: ghVersionBlocked,
+        episode_active: episodeActive,
+      };
       await emitTick();
     }
 

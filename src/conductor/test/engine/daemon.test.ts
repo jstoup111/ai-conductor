@@ -72,7 +72,7 @@ async function applyTerminalEffects(projectRoot: string, outcome: FeatureOutcome
 }
 
 describe('engine/daemon — runDaemon', () => {
-  it('refreshes the snapshot once on a full-pool pass without re-probing dispatch gates', async () => {
+  it('refreshes the snapshot and all dispatch gates on a full-pool pass', async () => {
     let release: ((outcome: FeatureOutcome) => void) | undefined;
     let stop = false;
     let observedBusyTick: (() => void) | undefined;
@@ -120,8 +120,14 @@ describe('engine/daemon — runDaemon', () => {
     expect(discoverBacklog).toHaveBeenCalledTimes(2);
     expect(ticks).toEqual([
       { busy: 0, blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false }, pollDurationMs: 17 },
-      { busy: 1, blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false }, pollDurationMs: 17 },
+      { busy: 1, blocked: { paused: true, build_auth_missing: true, gh_version: true, episode_active: true }, pollDurationMs: 17 },
     ]);
+    expect({ pauseChecks, authChecks, ghChecks, episodeChecks }).toEqual({
+      pauseChecks: 2,
+      authChecks: 2,
+      ghChecks: 2,
+      episodeChecks: 2,
+    });
   });
 
   it('applies setup-triage auto-park requests only after collecting the executor outcome', async () => {
