@@ -2656,6 +2656,12 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'build_review_cache_hit':
       log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} cache hit`);
       break;
+    case 'build_review_rubric_result':
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} ${event.verdict}`);
+      break;
+    case 'build_review_rubric_skipped':
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} skipped: ${event.reason}`);
+      break;
     case 'contained_live_checkout_drift':
       log(`${dot} ${chalk.dim(`self-host contained; concurrent operator drift: ${event.summary}`)}`);
       break;

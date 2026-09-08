@@ -54,4 +54,21 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
       type: 'build_review_rubric_started', rubric: 'testQuality', lapId: 'lap',
     })).toEqual(['·   build_review [lap] testQuality started']);
   });
+
+  it.each(['PASS', 'FAIL'] as const)('states a judged %s result', (verdict) => {
+    expect(lines({
+      type: 'build_review_rubric_result', rubric: 'testQuality', lapId: 'lap-12345678', verdict,
+    })).toEqual([`·   build_review [lap-1234] testQuality ${verdict}`]);
+  });
+
+  it('renders a neutral skip with its reason verbatim', () => {
+    const [line] = lines({
+      type: 'build_review_rubric_skipped', rubric: 'testQuality', lapId: 'lap-12345678',
+      reason: 'disabled by configuration',
+    });
+
+    expect(line).toBe('·   build_review [lap-1234] testQuality skipped: disabled by configuration');
+    expect(line).not.toContain('FAIL');
+    expect(line).not.toContain('failure');
+  });
 });
