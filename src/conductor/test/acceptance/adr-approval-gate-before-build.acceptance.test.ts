@@ -1,3 +1,4 @@
+// Covers: task:4
 // Acceptance specs for adr-approval-gate-before-build (#662).
 //
 // These specs drive every live production call site of the approval derivation:
@@ -113,7 +114,7 @@ async function seedLandWorktree(adrs: Record<string, string>): Promise<string> {
 describe('land uses the declaration-aware approval signal', () => {
   it('landSpec accepts APPROVED when a later sentence merely illustrates Status: DRAFT', async () => {
     const worktree = await seedLandWorktree({
-      'adr-demo.md': [
+      'adr-2026-09-08-demo.md': [
         '# ADR',
         '',
         'Status: APPROVED',
