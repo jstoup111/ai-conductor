@@ -51,12 +51,11 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
     expect(source).toMatch(/progressReKickDispatchCeiling\s*:/);
   });
 
-  it('runDaemon deps thread readHaltClass against the same worktreeBase/slug join as the base-advance sweep', async () => {
+  it('the progress re-kick predicate consults the raw halt class before comparing task progress', async () => {
     const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
-    const runDaemonDeps = source.slice(source.indexOf('const result = await runDaemon('));
 
-    expect(runDaemonDeps).toMatch(
-      /readHaltClass\s*:\s*\(slug\)\s*=>\s*readHaltClass\(join\(worktreeBase,\s*slug\)\)/,
+    expect(source).toMatch(
+      /resolveHaltRetention\(\(\)\s*=>\s*readRawHaltClass\(slugRoot\)\)/,
     );
   });
 

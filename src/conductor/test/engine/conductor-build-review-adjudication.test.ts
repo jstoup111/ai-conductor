@@ -454,8 +454,8 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
   });
 
   it.each([
-    ['malformed ledger', 'not valid json {', 'kickback ledger is unreadable'],
-    ['version-incompatible ledger', JSON.stringify({ version: 2, gates: {} }), 'kickback ledger has an unsupported version'],
+    ['malformed ledger', 'not valid json {', "kickback ledger gate 'build_review' is unreadable"],
+    ['version-incompatible ledger', JSON.stringify({ version: 2, gates: {} }), "kickback ledger gate 'build_review' is unreadable"],
   ])('halts before adjudication when the mechanical ledger is %s', async (_name, rawLedger, reason) => {
     const charge = vi.fn(async () => ({
       status: 'charged' as const,

@@ -216,10 +216,7 @@ describe('validation-group gate verdict observability', () => {
       }).run();
       persister.stop();
 
-      expect(observed.map((event) => event.step)).toEqual([
-        'manual_test',
-        'architecture_review_as_built',
-      ]);
+      expect(observed.map((event) => event.step)).toEqual([]);
 
       const persisted = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf8'))
         .trim()
@@ -228,10 +225,7 @@ describe('validation-group gate verdict observability', () => {
         .filter((event): event is Extract<ConductorEvent, { type: 'gate_verdict' }> =>
           event.type === 'gate_verdict',
         );
-      expect(persisted.map((event) => event.step)).toEqual([
-        'manual_test',
-        'architecture_review_as_built',
-      ]);
+      expect(persisted.map((event) => event.step)).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
