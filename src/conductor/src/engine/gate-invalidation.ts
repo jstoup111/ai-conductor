@@ -49,7 +49,7 @@ export type GateSurfaceKind =
   | 'all-runtime'
   | 'any-codetest';
 
-const PRD_AUDIT_DOCUMENT_INPUT_PREFIXES = ['.docs/stories/', '.docs/specs/'];
+export const PRD_AUDIT_DOCUMENT_INPUT_PREFIXES = ['.docs/stories/', '.docs/specs/'] as const;
 
 function isPrdAuditDocumentInput(path: string): boolean {
   return PRD_AUDIT_DOCUMENT_INPUT_PREFIXES.some((prefix) => path.startsWith(prefix));
@@ -131,6 +131,51 @@ export function featureTestPaths(D: string[], F: string[]): string[] {
   return D.filter((path) => isTestPath(path) && featureSet.has(path));
 }
 
+export interface GateSurfaceProjection {
+  matchedPaths: string[];
+  declaredSurface: string[];
+}
+
+/**
+ * The one projection shared by classification and rebase event payloads.
+ * Every `GateSurfaceKind` receives its own matched delta and declared
+ * dependency surface, making a new kind a type error until it is explicit.
+ */
+export function projectGateSurfaces(
+  D: string[],
+  F: string[],
+): Record<GateSurfaceKind, GateSurfaceProjection> {
+  const { test, featureSrc, foreignSrc } = partitionDelta(D, F);
+  const featureTest = featureTestPaths(D, F);
+  const featureRuntimeSurface = F.filter(isRuntimeSourcePath);
+  const featureCodeTestSurface = F.filter((path) => isRuntimeSourcePath(path) || isTestPath(path));
+  const prdAuditDocumentInputs = D.filter(isPrdAuditDocumentInput);
+  const documentInputDeclaration = `<${PRD_AUDIT_DOCUMENT_INPUT_PREFIXES.join('|')}>`;
+
+  return {
+    'feature-runtime': {
+      matchedPaths: featureSrc,
+      declaredSurface: featureRuntimeSurface,
+    },
+    'feature-codetest': {
+      matchedPaths: [...featureSrc, ...featureTest],
+      declaredSurface: featureCodeTestSurface,
+    },
+    'feature-runtime-or-prd-inputs': {
+      matchedPaths: [...featureSrc, ...prdAuditDocumentInputs],
+      declaredSurface: [...featureRuntimeSurface, documentInputDeclaration],
+    },
+    'all-runtime': {
+      matchedPaths: [...featureSrc, ...foreignSrc],
+      declaredSurface: ['<all runtime source>'],
+    },
+    'any-codetest': {
+      matchedPaths: [...test, ...featureSrc, ...foreignSrc],
+      declaredSurface: ['<all code or test paths>'],
+    },
+  };
+}
+
 /**
  * Preserve/invalidate decision table for the post-rebase judged tail
  * (ADR-2026-07-20). `D` is the rebase delta (`changedCodePaths`), `F` is the
@@ -160,9 +205,7 @@ export function classifyGateInvalidation(
   F: string[],
   ranManualTest: boolean,
 ): { preserved: string[]; invalidated: string[] } {
-  const { test, featureSrc, foreignSrc } = partitionDelta(D, F);
-  const featureTest = featureTestPaths(D, F);
-  const prdAuditDocumentInputs = D.filter(isPrdAuditDocumentInput);
+  const projections = projectGateSurfaces(D, F);
   const preserved: string[] = [];
   const invalidated: string[] = [];
 
@@ -171,24 +214,7 @@ export function classifyGateInvalidation(
       continue;
     }
 
-    let isPreserved: boolean;
-    switch (surface) {
-      case 'feature-runtime':
-        isPreserved = featureSrc.length === 0;
-        break;
-      case 'feature-codetest':
-        isPreserved = featureSrc.length === 0 && featureTest.length === 0;
-        break;
-      case 'feature-runtime-or-prd-inputs':
-        isPreserved = featureSrc.length === 0 && prdAuditDocumentInputs.length === 0;
-        break;
-      case 'all-runtime':
-        isPreserved = featureSrc.length === 0 && foreignSrc.length === 0;
-        break;
-      case 'any-codetest':
-        isPreserved = test.length === 0 && featureSrc.length === 0 && foreignSrc.length === 0;
-        break;
-    }
+    const isPreserved = projections[surface].matchedPaths.length === 0;
 
     (isPreserved ? preserved : invalidated).push(gate);
   }

@@ -8,6 +8,7 @@ import {
   GATE_SURFACE,
   isRuntimeSourcePath,
   partitionDelta,
+  projectGateSurfaces,
 } from '../../src/engine/gate-invalidation.js';
 
 describe('gate-invalidation path predicates', () => {
@@ -149,6 +150,44 @@ describe('classifyGateInvalidation', () => {
     expect(result.invalidated.sort()).toEqual(
       ['test_suite', 'manual_test'].sort(),
     );
+  });
+});
+
+describe('projectGateSurfaces', () => {
+  it('projects every kind used by the gate map without a fallback', () => {
+    const D = [
+      'src/feature.ts',
+      'src/foreign.ts',
+      'src/feature.test.ts',
+      '.docs/stories/feature.md',
+      '.docs/specs/feature.md',
+      'docs/unrelated.md',
+    ];
+    const F = ['src/feature.ts', 'src/feature.test.ts'];
+
+    const projection = projectGateSurfaces(D, F);
+
+    expect(Object.keys(projection).sort()).toEqual([...new Set(Object.values(GATE_SURFACE))].sort());
+    expect(projection['feature-runtime']).toEqual({
+      matchedPaths: ['src/feature.ts'],
+      declaredSurface: ['src/feature.ts'],
+    });
+    expect(projection['feature-codetest']).toEqual({
+      matchedPaths: ['src/feature.ts', 'src/feature.test.ts'],
+      declaredSurface: ['src/feature.ts', 'src/feature.test.ts'],
+    });
+    expect(projection['feature-runtime-or-prd-inputs']).toEqual({
+      matchedPaths: ['src/feature.ts', '.docs/stories/feature.md', '.docs/specs/feature.md'],
+      declaredSurface: ['src/feature.ts', '<.docs/stories/|.docs/specs/>'],
+    });
+    expect(projection['all-runtime']).toEqual({
+      matchedPaths: ['src/feature.ts', 'src/foreign.ts'],
+      declaredSurface: ['<all runtime source>'],
+    });
+    expect(projection['any-codetest']).toEqual({
+      matchedPaths: ['src/feature.test.ts', 'src/feature.ts', 'src/foreign.ts'],
+      declaredSurface: ['<all code or test paths>'],
+    });
   });
 });
 
