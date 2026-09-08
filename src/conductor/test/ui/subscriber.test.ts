@@ -1,12 +1,17 @@
+// Covers: task:1
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { Writable } from 'node:stream';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { TerminalSubscriber } from '../../src/ui/subscriber.js';
+import {
+  FORWARDED_TO_TERMINAL_RENDERER_EVENT_TYPES,
+  TerminalSubscriber,
+} from '../../src/ui/subscriber.js';
 import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
 import { createLiveRegion } from '../../src/ui/live-region.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { startFeatureEventPersistence } from '../../src/engine/event-persister.js';
+import { renderedEventTypes } from '../../src/engine/event-sinks.js';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -48,6 +53,44 @@ describe('TerminalSubscriber', () => {
 
     expect(renderCallback).toHaveBeenCalledOnce();
     expect(renderCallback).toHaveBeenCalledWith(event);
+  });
+
+  it('subscribes to every event declared renderable by the sink registry', () => {
+    const on = vi.spyOn(emitter, 'on');
+
+    subscriber.start();
+
+    const subscribedTypes = on.mock.calls.map(([type]) => type);
+    expect(subscribedTypes).toEqual(expect.arrayContaining(renderedEventTypes()));
+  });
+
+  it('preserves subscriptions for explicitly non-renderable dashboard events', () => {
+    const on = vi.spyOn(emitter, 'on');
+
+    subscriber.start();
+
+    const subscribedTypes = on.mock.calls.map(([type]) => type);
+    expect(subscribedTypes).toEqual(expect.arrayContaining([
+      'checkpoint_reached',
+      'recovery_needed',
+      'dashboard_refresh',
+      'tier_skip',
+      'config_skip',
+      'gate_blocked',
+      'feature_complete',
+      'auto_heal',
+      'mode_skip',
+      'parallel_failure',
+    ]));
+  });
+
+  it('declares exactly the event types forwarded to the terminal renderer', () => {
+    expect(FORWARDED_TO_TERMINAL_RENDERER_EVENT_TYPES).toEqual([
+      'halt_marker_write_failed',
+      'renderer_error',
+      'pipeline_tail_diagnostic',
+      'gate_verdict',
+    ]);
   });
 
   it('unsubscribes on stop()', async () => {

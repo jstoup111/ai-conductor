@@ -1,11 +1,32 @@
 import type { ConductorEvent } from '../types/index.js';
 import { ConductorEventEmitter, type EventHandler } from './events.js';
+import { renderedEventTypes } from '../engine/event-sinks.js';
 import { isForwardedFromFeature } from '../engine/event-persister.js';
 import type { UIRenderer, UISubscriber, UIEventHandler } from './types.js';
 
 export type { UISubscriber, UIEventHandler } from './types.js';
 /** @deprecated use UIEventHandler */
 export type RenderCallback = UIEventHandler;
+
+export const NON_RENDERABLE_DASHBOARD_EVENT_TYPES: readonly ConductorEvent['type'][] = [
+  'checkpoint_reached',
+  'recovery_needed',
+  'dashboard_refresh',
+  'tier_skip',
+  'config_skip',
+  'gate_blocked',
+  'feature_complete',
+  'auto_heal',
+  'mode_skip',
+  'parallel_failure',
+];
+
+export const FORWARDED_TO_TERMINAL_RENDERER_EVENT_TYPES: readonly ConductorEvent['type'][] = [
+  'halt_marker_write_failed',
+  'renderer_error',
+  'pipeline_tail_diagnostic',
+  'gate_verdict',
+];
 
 export class TerminalSubscriber implements UISubscriber {
   private eventEmitter: ConductorEventEmitter;
@@ -25,36 +46,10 @@ export class TerminalSubscriber implements UISubscriber {
     // Dashboard renders are event-driven. No periodic refresh — the sticky
     // live region is updated when conductor state changes. A polling refresh
     // would accumulate stale frames in the scrollback.
-    const eventTypes: ConductorEvent['type'][] = [
-      'step_started',
-      'step_completed',
-      'step_failed',
-      'step_retry',
-      'checkpoint_reached',
-      'recovery_needed',
-      'dashboard_refresh',
-      'tier_skip',
-      'config_skip',
-      'gate_blocked',
-      'rate_limit',
-      'session_reset',
-      'credentials_park_progress',
-      'feature_complete',
-      'auto_heal',
-      'mode_skip',
-      'build_progress',
-      'unattributed_progress',
-      'build_no_progress',
-      'pipeline_closeout',
-      'build_stall',
-      'provider_fallback',
-      'session_policy',
-      'feature_usage_total',
-      'halt_marker_write_failed',
-      'renderer_error',
-      'pipeline_tail_diagnostic',
-      'gate_verdict',
-    ];
+    const eventTypes = new Set([
+      ...renderedEventTypes(),
+      ...NON_RENDERABLE_DASHBOARD_EVENT_TYPES,
+    ]);
 
     for (const type of eventTypes) {
       const handler: EventHandler = async (event) => {
@@ -65,12 +60,7 @@ export class TerminalSubscriber implements UISubscriber {
         // this second sink must honour it too, or every feature gate verdict
         // prints a second, untagged copy in the daemon pane.
         if (isForwardedFromFeature(event)) return;
-        if (
-          event.type === 'halt_marker_write_failed'
-          || event.type === 'renderer_error'
-          || event.type === 'pipeline_tail_diagnostic'
-          || event.type === 'gate_verdict'
-        ) {
+        if (FORWARDED_TO_TERMINAL_RENDERER_EVENT_TYPES.includes(event.type)) {
           await this.terminalRenderer?.handle(event);
         }
       };
