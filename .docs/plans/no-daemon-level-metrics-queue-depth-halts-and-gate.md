@@ -394,6 +394,9 @@ events by one listener, so the design holds when dispatch moves to a service wit
 
 **Steps:**
 1. Write failing test: `readHaltSidecarClassification(worktree)` returns each of the eight values for a sidecar holding it, `legacy` for a pre-sidecar HALT (HALT present, no HALT.class, legacy marker semantics as `readHaltClass` defines), and `unclassified` for missing, unreadable, or unknown content; at dispatch end for a halted feature the daemon emits the halt classification alongside the `loop_halt` step onto the root bus and `conductor.feature.halts{feature=S, haltClass, step=build_review}` reads 1; when `halt_record_written` fails but `loop_halt` was emitted, the counter still increments
+
+> **Amended 2026-09-08 by #1937:** When `HALT` exists, an absent `HALT.class` is `legacy`; `unclassified` applies when the sidecar is unreadable or contains an unrecognized value. The pre-sidecar and deleted-sidecar histories are indistinguishable on disk, so this feature preserves legacy reporting without adding a timestamp, migration marker, or parallel telemetry channel.
+
 2. Verify test fails (RED)
 3. Implement: `readHaltSidecarClassification` in `halt-marker.ts` (a sibling of `readHaltClass`; `readHaltClass` and re-kick behavior unchanged); in `daemon-runner.ts` at the halted-dispatch end read the classification and emit it on the root bus as an additive optional `sidecarClass` field on the forwarded `loop_halt` (or a daemon-side wrapper event carrying `{ slug, haltClass, step }`); listener records `conductor.feature.halts`
 4. Verify test passes (GREEN)
@@ -703,3 +706,5 @@ no new telemetry channel or provider-specific path is introduced.
 **Parent task:** 6
 **Done when:**
 - S1.5 is satisfied by this task.
+
+> **Amended 2026-09-08 by #1937:** The two Story 4 halt-classification rows in the Coverage Check are superseded by the accepted story wording: unreadable or unrecognized sidecars derive `unclassified`; an absent `HALT.class` with `HALT` present derives `legacy`.
