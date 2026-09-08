@@ -1902,7 +1902,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       onTick: (snapshot) => {
         void events.emit({ type: 'daemon_backlog_snapshot', ...snapshot });
       },
-      getDiscoverySnapshot: () => workSource.latestSnapshot?.(),
+      getDiscoverySnapshot: async (parkedSlugs) => workSource.snapshot?.(parkedSlugs),
       runFeature,
       onExecutorStarted: () => {
         activeExecutorCount += 1;

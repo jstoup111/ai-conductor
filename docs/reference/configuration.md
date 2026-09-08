@@ -704,6 +704,13 @@ a new dispatch does not create a new metric series for the same feature.
 The `conductor.step.duration` and `conductor.pipeline.closeout.duration` histograms use explicit
 duration buckets through 8 hours; quantiles saturate above that largest finite bucket boundary.
 
+Daemon exports include backlog count and oldest state-residence age by `state`, busy and free slots,
+in-flight features, liveness, active dispatch blockers, discovery duration, and build stalls by
+`reason`. `conductor.daemon.inflight` is the only `conductor.daemon.*` instrument with a `feature`
+attribute. The other daemon instruments—including `conductor.daemon.stalls`—carry only daemon-stable
+`project` and `worker` identity plus their instrument-specific attributes. Parked features contribute
+to both `conductor.daemon.backlog{state=parked}` and its oldest-age series.
+
 When a run opens a `conductor.run` root span, its terminal export carries
 `conductor.run.outcome`: `complete` after `feature_complete`, `halted` after `loop_halt`, or
 `terminated` when the visualizer force-closes without either terminal event. Halted roots also carry

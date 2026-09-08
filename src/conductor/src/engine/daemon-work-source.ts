@@ -14,8 +14,8 @@ import { orderBacklog } from './backlog-priority.js';
 import { readFirstSeen, recordFirstSeen } from './first-seen-marker.js';
 
 export interface DiscoverySnapshot {
-  counts: Record<'eligible' | 'waiting' | 'blocked' | 'gated', number>;
-  oldestAgeSeconds: Partial<Record<'eligible' | 'waiting' | 'blocked' | 'gated', number>>;
+  counts: Record<'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked', number>;
+  oldestAgeSeconds: Partial<Record<'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked', number>>;
   pollDurationMs?: number;
 }
 
@@ -26,7 +26,7 @@ export interface DiscoverySnapshot {
 /** Abstraction the run-loop calls to fetch the current buildable backlog. */
 export interface WorkSource {
   discover(opts: { refresh: boolean }): Promise<BacklogItem[]>;
-  latestSnapshot?: () => DiscoverySnapshot | undefined;
+  snapshot?: (parkedSlugs: readonly string[]) => Promise<DiscoverySnapshot | undefined>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -135,8 +135,6 @@ export interface LocalWorkSourceDeps {
    * anything else here is responsible for its own error containment.
    */
   onGatedDiscovered?: (gated: GatedItem[]) => Promise<void> | void;
-  /** Receives the exact per-pass counts and determinable oldest ages. */
-  onBacklogDiscovered?: (snapshot: DiscoverySnapshot) => Promise<void> | void;
   now?: () => number;
 }
 
@@ -149,9 +147,53 @@ export interface LocalWorkSourceDeps {
  * scanned. When `refresh` is false the fast-forward is skipped.
  */
 export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
-  let latest: DiscoverySnapshot | undefined;
+  let latestStates: {
+    eligible: BacklogItem[];
+    waiting: WaitingItem[];
+    blocked: BlockedSpecItem[];
+    gated: GatedItem[];
+    pollDurationMs: number;
+  } | undefined;
   return {
-    latestSnapshot: () => latest,
+    async snapshot(parkedSlugs) {
+      if (!latestStates) return undefined;
+      const observedAt = (deps.now ?? Date.now)();
+      const parked = new Set(parkedSlugs);
+      const states = {
+        eligible: latestStates.eligible.filter((item) => !parked.has(item.slug)),
+        waiting: latestStates.waiting.filter((item) => !parked.has(item.slug)),
+        blocked: latestStates.blocked.filter((item) => !parked.has(item.slug)),
+        gated: latestStates.gated.filter((item) => !('slug' in item) || !parked.has(item.slug)),
+        parked: parkedSlugs.map((slug) => ({ slug })),
+      } as const;
+      await Promise.all(Object.entries(states).flatMap(([state, members]) => members
+        .filter((item): item is { slug: string } => 'slug' in item)
+        .map((item) => recordFirstSeen(deps.projectRoot, item.slug, state, observedAt))));
+      const oldestAgeSeconds = Object.fromEntries(await Promise.all(
+        Object.entries(states).map(async ([state, members]) => {
+          const ages = (await Promise.all(members
+            .filter((item): item is { slug: string } => 'slug' in item)
+            .map(async (member) => {
+              const firstSeen = await readFirstSeen(deps.projectRoot, member.slug);
+              return firstSeen?.state === state
+                ? Math.max(0, (observedAt - firstSeen.enteredAt) / 1_000)
+                : undefined;
+            }))).filter((age): age is number => age !== undefined);
+          return [state, ages.length === 0 ? undefined : Math.max(...ages)];
+        }),
+      ).then((entries) => entries.filter(([, age]) => age !== undefined)));
+      return {
+        counts: {
+          eligible: states.eligible.length,
+          waiting: states.waiting.length,
+          blocked: states.blocked.length,
+          gated: states.gated.length,
+          parked: states.parked.length,
+        },
+        oldestAgeSeconds,
+        pollDurationMs: latestStates.pollDurationMs,
+      } as DiscoverySnapshot;
+    },
     async discover({ refresh }) {
       const discoveredAt = (deps.now ?? Date.now)();
       if (refresh) await deps.fastForwardRoot(deps.projectRoot, deps.log);
@@ -207,29 +249,13 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
       // early-return alike.
       await deps.onGatedDiscovered?.(gated);
 
-      const states = { eligible: items, waiting, blocked, gated } as const;
-      const membersWithSlugs = Object.values(states).flat().filter(
-        (item): item is BacklogItem | WaitingItem | BlockedSpecItem | Extract<GatedItem, { kind: 'spec' }> => 'slug' in item,
-      );
-      await Promise.all(Object.entries(states).flatMap(([state, members]) => members
-        .filter((item): item is BacklogItem | WaitingItem | BlockedSpecItem | Extract<GatedItem, { kind: 'spec' }> => 'slug' in item)
-        .map((item) => recordFirstSeen(deps.projectRoot, item.slug, state, discoveredAt))));
-      const oldestAgeSeconds = Object.fromEntries(await Promise.all(
-        Object.entries(states).map(async ([state, members]) => {
-          const ages = (await Promise.all(members.filter(
-            (member): member is BacklogItem | WaitingItem | BlockedSpecItem | Extract<GatedItem, { kind: 'spec' }> => 'slug' in member,
-          ).map(async (member) => {
-            const firstSeen = await readFirstSeen(deps.projectRoot, member.slug);
-            return firstSeen?.state !== state ? undefined : Math.max(0, (discoveredAt - firstSeen.enteredAt) / 1_000);
-          }))).filter((age): age is number => age !== undefined);
-          return [state, ages.length === 0 ? undefined : Math.max(...ages)];
-        }),
-      ).then((entries) => entries.filter(([, age]) => age !== undefined))) as DiscoverySnapshot['oldestAgeSeconds'];
-      latest = {
-        counts: { eligible: items.length, waiting: waiting.length, blocked: blocked.length, gated: gated.length },
-        oldestAgeSeconds, pollDurationMs: Math.max(0, (deps.now ?? Date.now)() - discoveredAt),
+      latestStates = {
+        eligible: items,
+        waiting,
+        blocked,
+        gated,
+        pollDurationMs: Math.max(0, (deps.now ?? Date.now)() - discoveredAt),
       };
-      await deps.onBacklogDiscovered?.(latest);
 
       // Apply priority ordering AFTER the gate (post-gate). If the backlog is
       // empty (all filtered by gates), the resolver is still called but with

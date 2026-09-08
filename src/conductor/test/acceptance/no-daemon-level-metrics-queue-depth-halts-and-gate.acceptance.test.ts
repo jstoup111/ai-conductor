@@ -311,7 +311,7 @@ describe('daemon-level metrics acceptance', () => {
       },
       shouldStop: () => stopAfterBusyTick,
     }, {
-      concurrency: 3,
+      concurrency: 2,
       once: false,
       idlePollMs: 0,
     });
@@ -325,7 +325,7 @@ describe('daemon-level metrics acceptance', () => {
     })).toBe(2);
     expect(pointValue(daemon.exporter, 'conductor.daemon.slots', {
       project: 'project-p', worker: 'worker-w', state: 'free',
-    })).toBe(1);
+    })).toBe(0);
     for (const feature of ['feature-a', 'feature-b']) {
       expect(latestMetricPointsWithAttributes(daemon.exporter, 'conductor.daemon.inflight', {
         project: 'project-p', worker: 'worker-w', feature,
@@ -337,6 +337,30 @@ describe('daemon-level metrics acceptance', () => {
 
     for (const release of releases.values()) release();
     await daemonRun;
+  });
+
+  it('records daemon stalls by reason without feature identity', async () => {
+    const root = await mkdtemp(join(testTmpdir(), 'daemon-stall-metrics-'));
+    roots.push(root);
+    const daemon = await createDaemonMeter(root);
+
+    const dispatch = startFeatureEventPersistence(root, daemon.events, 'feature-s');
+    await dispatch.events.emit({
+      type: 'build_stall',
+      step: 'build',
+      reason: 'no_task_progress',
+      resolvedBefore: 3,
+      resolvedAfter: 3,
+    });
+    dispatch.stop();
+    await daemon.scope.stop();
+
+    const points = latestMetricPointsWithAttributes(daemon.exporter, 'conductor.daemon.stalls', {
+      project: 'project-p', worker: 'worker-w', reason: 'no_task_progress',
+    });
+    expect(points).toHaveLength(1);
+    expect(points[0]?.value).toBe(1);
+    expect(points[0]?.attributes).not.toHaveProperty('feature');
   });
 
   it('exports oldest age only for determinable members while retaining the full backlog depth', async () => {

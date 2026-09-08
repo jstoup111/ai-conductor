@@ -201,11 +201,11 @@ export interface DaemonDeps {
   /** Synchronous observation of each scheduler pass; consumers must not perform I/O here. */
   onTick?: (snapshot: DaemonTickSnapshot) => void;
   /** Most recent real discovery pass, supplied by the production WorkSource. */
-  getDiscoverySnapshot?: () => {
-    counts: Omit<DaemonTickSnapshot['counts'], 'parked'>;
+  getDiscoverySnapshot?: (parkedSlugs: readonly string[]) => Promise<{
+    counts: DaemonTickSnapshot['counts'];
     oldestAgeSeconds: DaemonTickSnapshot['oldestAgeSeconds'];
     pollDurationMs?: number;
-  } | undefined;
+  } | undefined>;
   /**
    * Features eligible to run: stories + plan present, not yet at .pipeline/DONE.
    *
@@ -1383,17 +1383,19 @@ export async function runDaemon(
         }
       }
 
-      const snapshot = deps.getDiscoverySnapshot?.();
-      deps.onTick?.({
-        counts: { eligible: snapshot?.counts.eligible ?? 0, waiting: snapshot?.counts.waiting ?? 0,
-          blocked: snapshot?.counts.blocked ?? 0, gated: snapshot?.counts.gated ?? 0,
-          parked: claims.listParked().length },
-        oldestAgeSeconds: snapshot?.oldestAgeSeconds ?? {},
-        slots: { busy: inFlight.size, free: Math.max(0, concurrency - inFlight.size) },
-        inFlight: workers.map((worker) => worker.slug),
-        blocked: { paused, build_auth_missing: buildAuthMissing, gh_version: ghVersionBlocked, episode_active: episodeActive },
-        pollDurationMs: snapshot?.pollDurationMs ?? 0,
-      });
+      if (deps.onTick) {
+        const snapshot = await deps.getDiscoverySnapshot?.(claims.listParked());
+        deps.onTick({
+          counts: { eligible: snapshot?.counts.eligible ?? 0, waiting: snapshot?.counts.waiting ?? 0,
+            blocked: snapshot?.counts.blocked ?? 0, gated: snapshot?.counts.gated ?? 0,
+            parked: snapshot?.counts.parked ?? claims.listParked().length },
+          oldestAgeSeconds: snapshot?.oldestAgeSeconds ?? {},
+          slots: { busy: inFlight.size, free: Math.max(0, concurrency - inFlight.size) },
+          inFlight: workers.map((worker) => worker.slug),
+          blocked: { paused, build_auth_missing: buildAuthMissing, gh_version: ghVersionBlocked, episode_active: episodeActive },
+          pollDurationMs: snapshot?.pollDurationMs ?? 0,
+        });
+      }
 
       if (next) {
         // Before starting a feature, ensure the running engine matches current
@@ -1640,6 +1642,20 @@ export async function runDaemon(
 
         continue;
       }
+    }
+
+    if (inFlight.size >= concurrency && deps.onTick) {
+      const snapshot = await deps.getDiscoverySnapshot?.(claims.listParked());
+      deps.onTick({
+        counts: { eligible: snapshot?.counts.eligible ?? 0, waiting: snapshot?.counts.waiting ?? 0,
+          blocked: snapshot?.counts.blocked ?? 0, gated: snapshot?.counts.gated ?? 0,
+          parked: snapshot?.counts.parked ?? claims.listParked().length },
+        oldestAgeSeconds: snapshot?.oldestAgeSeconds ?? {},
+        slots: { busy: inFlight.size, free: Math.max(0, concurrency - inFlight.size) },
+        inFlight: workers.map((worker) => worker.slug),
+        blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
+        pollDurationMs: snapshot?.pollDurationMs ?? 0,
+      });
     }
 
     // Observe restart conditions only after the claim attempt. A drain begun
