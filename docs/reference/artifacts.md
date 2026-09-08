@@ -776,7 +776,7 @@ same session-capability contract described in
 
 Halt occurrences are consumed by `cost-rollup.halts`, the shipped record's `## Cost` block,
 `ai-conductor kpi`, and the engineer-loop signal assembler. `ai-conductor inline --report` renders
-kickback tables but not halt tables.
+neither halt nor kickback tables.
 
 > **Known limitation.** The other 26 event types — including `gate_verdict`, `loop_converged`,
 > `auto_park`, `zero_work_product`, `unattributed_dispatch`, `halt_cleared`, `ci_failed`, and every
@@ -786,7 +786,7 @@ kickback tables but not halt tables.
 > shipped records' `## Cost` blocks, `ai-conductor kpi`, and the engineer-loop signal assembler can
 > consume real halt occurrences. `.pipeline/HALT` remains the durable park signal and the daemon
 > log remains a useful immediate diagnostic. `kickback` is likewise persisted, and `--report`
-> renders kickback tables but not halt tables.
+> renders neither halt nor kickback tables.
 
 `build_progress` events carry an additional `tickReason` (`task-delta` | `head-moved` |
 `heartbeat`) and an explicit `headMoved` boolean, letting a reader distinguish "HEAD did not

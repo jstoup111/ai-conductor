@@ -662,7 +662,7 @@ Read-only. Renders four tables from `.pipeline/events.jsonl` — Step Durations,
 Token Spend, and Kickbacks by Source Gate — then exits 0. An unreadable events log exits 1. Run
 it from inside the worktree; it reads `.pipeline/` relative to the current directory.
 
-> **Known limitation.** `--report` does not render halt tables, although `loop_halt`,
+> **Known limitation.** `--report` renders neither halt nor kickback tables, although `loop_halt`,
 > `rebase_conflict_halt`, and `halt_marker_write_failed` persist in `events.jsonl`. For halt
 > occurrences, use `cost-rollup.halts`, the shipped record's `## Cost`
 > block, `ai-conductor kpi`, or the engineer-loop signal assembler; use `.pipeline/HALT` as the
