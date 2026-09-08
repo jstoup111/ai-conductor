@@ -250,15 +250,14 @@ import {
   bumpSuiteInfrastructureRetriesInLedger,
   readGrowth,
   readKickbackLedger,
+  refundBuildReviewKickback,
   isUnreadableKickbackGate,
   readSuiteInfrastructureRetries,
   recordGrowth,
   recordRemediationGateLap,
   updateKickbackLedger,
   recordKickbackCapEvidence,
-  writeKickbackLedger,
   type KickbackGateEntry,
-  type KickbackLedger,
   type PendingAsBuiltRemediationFinding,
   type PlanGrowth,
   type PlanGrowthEventSink,
@@ -10378,7 +10377,7 @@ export class Conductor {
                   continue;
                 }
                 const failureDetails = buildReviewFailureDetails(parsed);
-                let kickbackLedgerBeforeConsumption: KickbackLedger | undefined;
+                let buildReviewBeforeConsumption: KickbackGateEntry | undefined;
                 // The raw aggregate can outlive a concurrent operator acceptance.
                 // Every exit from this raw-FAIL block re-reads the effective
                 // verdict immediately before it exits, so no early snapshot can
@@ -10400,9 +10399,7 @@ export class Conductor {
                     'build_review raw FAIL dropped: every graded finding was accepted ' +
                       'by operator disposition at exit time; re-running build_review.',
                   );
-                  if (kickbackLedgerBeforeConsumption) {
-                    await writeKickbackLedger(this.projectRoot, kickbackLedgerBeforeConsumption);
-                  }
+                  if (buildReviewBeforeConsumption) await refundBuildReviewKickback(this.projectRoot, buildReviewBeforeConsumption);
                   await this.saveConductorStepStatus(state, step.name, 'failed');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   i = i - 1; // for-loop i++ re-lands on build_review
@@ -10503,8 +10500,8 @@ export class Conductor {
                   failureDetails.length > 0
                     ? failureDetails.join('\n')
                     : 'grader returned FAIL without reasons';
-                kickbackLedgerBeforeConsumption = await readKickbackLedger(this.projectRoot);
                 const kickback = await consumeKickbackBudget('build_review', evidence);
+                buildReviewBeforeConsumption = kickback.before;
                 const count = kickback.entry.count;
                 if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted) {
                   if (await reenterBuildReviewIfEffectivePass()) continue;

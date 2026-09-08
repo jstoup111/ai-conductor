@@ -1846,7 +1846,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 return state.ok ? state.value.pr_url : undefined;
               },
               cleanupPresentation: (prUrl) =>
-                cleanupHaltPresentation(ownerGh, projectRoot, prUrl, log),
+                cleanupHaltPresentation(ownerGh, projectRoot, prUrl, log, undefined, { preserveDraft: true }),
               resolveCommittedRecord: async (worktreePath, feature) => {
                 await supersedeHaltRecord(worktreePath, feature, 'kickback-budget');
               },
