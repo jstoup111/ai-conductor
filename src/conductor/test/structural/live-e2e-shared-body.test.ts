@@ -1,3 +1,4 @@
+// Covers: task:3
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +20,22 @@ const sharedBodyPath = join(structuralRoot, '../fixtures/live-e2e-run-body.ts');
 const LITERAL_PROVIDER_IDS = new Set(['claude', 'codex']);
 
 describe('structural: shared live E2E body', () => {
+  it('does not override the production build-review effective-verdict resolver', async () => {
+    const source = await readFile(sharedBodyPath, 'utf8');
+    const parsed = ts.createSourceFile(sharedBodyPath, source, ts.ScriptTarget.Latest, true);
+    const overrides: string[] = [];
+
+    const visit = (node: ts.Node): void => {
+      if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name) && node.name.text === 'buildReviewEffectiveResolver') {
+        overrides.push(node.name.text);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(parsed);
+
+    expect(overrides).toEqual([]);
+  });
+
   it('has no provider-specific branch in the shared body', async () => {
     const source = await readFile(sharedBodyPath, 'utf8');
     const parsed = ts.createSourceFile(sharedBodyPath, source, ts.ScriptTarget.Latest, true);
