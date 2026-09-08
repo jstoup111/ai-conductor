@@ -252,6 +252,41 @@ describe('formatFeatureUsageTotal', () => {
     expect(line).not.toContain('tok');
   });
 
+  it('withholds a zero cost when tokens were metered without a price', () => {
+    // Tokens are a real observation here, but a displayed $0.00 would claim
+    // that the provider priced them as free instead of leaving them unpriced.
+    const line = formatFeatureUsageTotal({
+      dispatches: 2,
+      meteredDispatches: 2,
+      unmeteredDispatches: 0,
+      costUnmeteredDispatches: 2,
+      costUsd: 0,
+      inputTokens: 900,
+      outputTokens: 120,
+    });
+    expect(line).toBe(
+      'finish: total usage — 2 dispatches, 900→120 tok, 2 cost-unmetered (tokens counted, cost not)',
+    );
+    expect(line).not.toContain('$');
+  });
+
+  it('withholds cost when inconsistent counts leave no cost-metered dispatches', () => {
+    // Defensive clamping must not expose a negative denominator or invent a
+    // $0.00 price when malformed rollup inputs exceed the dispatch count.
+    const line = formatFeatureUsageTotal({
+      dispatches: 1,
+      meteredDispatches: 1,
+      unmeteredDispatches: 2,
+      costUnmeteredDispatches: 3,
+      costUsd: 0,
+      inputTokens: 12,
+      outputTokens: 3,
+    });
+    expect(line).toBe('finish: total usage — 1 dispatch, 12→3 tok, 3 cost-unmetered (tokens counted, cost not), 2 unmetered');
+    expect(line).not.toContain('$');
+    expect(line).not.toMatch(/-\d/);
+  });
+
   it('says nothing extra when every metered dispatch also carried a cost', () => {
     expect(
       formatFeatureUsageTotal({

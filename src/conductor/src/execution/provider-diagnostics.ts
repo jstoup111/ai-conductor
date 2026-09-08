@@ -98,11 +98,12 @@ export interface FeatureUsageTotals {
  *   1.2M→48k tok, 2 unmetered
  *
  * Token figures are emitted ONLY when at least one dispatch was actually
- * metered. The cost figure names its smaller, cost-metered denominator whenever
- * it differs from the recorded dispatch count. A build whose provider reports
- * no usage prints its dispatch count and an explicit unmetered count rather
- * than a fabricated `$0.00` / `0→0 tok`, which would read as "this build was
- * free" instead of "this build was never measured".
+ * metered. The cost figure is withheld when no dispatch was cost-metered, and
+ * otherwise names its smaller, cost-metered denominator whenever it differs
+ * from the recorded dispatch count. A build whose provider reports no usage
+ * prints its dispatch count and an explicit unmetered count rather than a
+ * fabricated `$0.00` / `0→0 tok`, which would read as "this build was free"
+ * instead of "this build was never measured".
  */
 export function formatFeatureUsageTotal(totals: FeatureUsageTotals): string {
   const parts: string[] = [
@@ -113,11 +114,13 @@ export function formatFeatureUsageTotal(totals: FeatureUsageTotals): string {
     totals.meteredDispatches - (totals.costUnmeteredDispatches ?? 0),
   );
   if (totals.meteredDispatches > 0) {
-    const costDenominator =
-      costMeteredDispatches < totals.dispatches
-        ? ` (${costMeteredDispatches} cost-metered dispatch${costMeteredDispatches === 1 ? '' : 'es'})`
-        : '';
-    parts.push(`$${totals.costUsd.toFixed(2)}${costDenominator}`);
+    if (costMeteredDispatches > 0) {
+      const costDenominator =
+        costMeteredDispatches < totals.dispatches
+          ? ` (${costMeteredDispatches} cost-metered dispatch${costMeteredDispatches === 1 ? '' : 'es'})`
+          : '';
+      parts.push(`$${totals.costUsd.toFixed(2)}${costDenominator}`);
+    }
     // Fresh input and cached prompt volume are different quantities (cached
     // reads are the conversation resubmitted on every internal tool call, at
     // ~10% price); folding them into one "input" figure made ordinary agentic
