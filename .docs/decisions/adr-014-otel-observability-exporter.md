@@ -108,6 +108,15 @@ Relevant existing facts (evidence):
 > the hot path. Read Decision 4 as **bounded, non-blocking, in-memory work with no I/O on the
 > bus.** A handler that read the ledger, awaited, or iterated per dispatch would still violate it.
 
+> **Amended 2026-09-08 by operator resolution of #1937's Story 8 plan gap:** the
+> preceding tracer flush-only sentence is superseded. An interactive visualizer owns its
+> `TracerProvider` for exactly one run and calls `tracerProvider.shutdown()` once on stop.
+> OTel shutdown includes the final flush and processor/exporter cleanup; it is bounded and
+> failure-isolated under Decision 5. Daemon dispatch boundaries remain flush-only because
+> their daemon-owned provider survives dispatches; daemon process teardown still shuts that
+> provider down. Tests capture exported spans before exporter shutdown side effects rather
+> than requiring an in-memory exporter's buffer to remain readable after provider teardown.
+
 6. **Dual transport, config-selected** under `otel:` in `.ai-conductor/config.yml`
    (`exporter: otlp|file`, `endpoint`, `file`). Absent `otel` ⇒ disabled (default off, FR-1/FR-7).
 

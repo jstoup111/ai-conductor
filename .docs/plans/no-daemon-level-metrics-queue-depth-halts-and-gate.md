@@ -201,16 +201,16 @@ events by one listener, so the design holds when dispatch moves to a service wit
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: (a) a visualizer constructed with `metrics: false` in its context creates no `MeterProvider` and no `MetricsRecorder`, its `SpanManager` still opens and closes spans, and `stop()` flushes spans and never touches a meter; (b) a visualizer constructed without the flag creates its own `TracerProvider` only when a `MetricsListener` is not also supplied — the meter now lives in the listener (Task 20) — and initializes without throwing
+1. Write failing test: (a) a visualizer constructed with `metrics: false` in its context creates no `MeterProvider` and no `MetricsRecorder`, its `SpanManager` still opens and closes spans, and `stop()` shuts down its owned `TracerProvider` exactly once after exporting force-closed spans while never touching a meter; (b) a visualizer constructed without the flag creates its own `TracerProvider` only when a `MetricsListener` is not also supplied — the meter now lives in the listener (Task 20) — and initializes without throwing
 2. Verify test fails (RED)
-3. Implement: add optional `metrics?: boolean` (default true for compatibility during the refactor; Task 19 flips the interactive path to the listener) to `OtelVisualizerContext` and `VisualizerFactoryContext`; in `initializeProviders` skip the meter/recorder branch when false and make the `SpanManagerCallbacks` metric hooks no-ops; `_doStop` guards the meter shutdown on `this.meterProvider` being non-null; forward the field in `plugin-loader.ts`'s `visualizer:otel` factory and in `createOtelVisualizer`
+3. Implement: add optional `metrics?: boolean` (default true for compatibility during the refactor; Task 19 flips the interactive path to the listener) to `OtelVisualizerContext` and `VisualizerFactoryContext`; in `initializeProviders` skip the meter/recorder branch when false and make the `SpanManagerCallbacks` metric hooks no-ops; `_doStop` shuts down the owned tracer through the bounded failure-isolation path (without a preceding `forceFlush()`, because OTel shutdown includes it) and guards the meter shutdown on `this.meterProvider` being non-null; forward the field in `plugin-loader.ts`'s `visualizer:otel` factory and in `createOtelVisualizer`
 4. Verify test passes (GREEN)
 5. Commit with message: "OtelVisualizer: spans-only mode constructs no MeterProvider"
 
 **Done when:**
-- A test asserts a `metrics: false` visualizer constructs no `MeterProvider` and `stop()` calls no meter method while spans still flush
-- A test asserts a visualizer constructed with no `metrics` flag initializes without throwing and still exports spans
-- The trace side is unchanged in both modes: a `TracerProvider` is owned and spans are force-flushed on stop (existing flush tests pass)
+- A test asserts a `metrics: false` visualizer constructs no `MeterProvider` and `stop()` calls no meter method while its owned `TracerProvider` is shut down exactly once
+- A test asserts a visualizer constructed with no `metrics` flag initializes without throwing and exports force-closed spans before tracer shutdown
+- Both modes own a per-run `TracerProvider`; stop bounds and failure-isolates its one shutdown call
 
 **Files likely touched:**
 - src/conductor/src/engine/otel/otel-visualizer.ts — metrics flag, no-op metric callbacks, guarded shutdown
@@ -514,7 +514,7 @@ events by one listener, so the design holds when dispatch moves to a service wit
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: the listener coverage test names any `otel: true` event type with no `MetricsListener` handler case (fails for the four new types until their cases exist and for any type the visualizer used to record); an interactive run exports the pre-change instrument set with unchanged names and attributes, its metric Resource carries `service.instance.id = P/W`, per-feature points carry `feature`, and the interactive listener's meter receives `shutdown()` exactly once on stop; a visualizer initialized without the `metrics` flag does not throw
+1. Write failing test: the listener coverage test names any `otel: true` event type with no `MetricsListener` handler case (fails for the four new types until their cases exist and for any type the visualizer used to record); an interactive run exports the pre-change instrument set with unchanged names and attributes, its metric Resource carries `service.instance.id = P/W`, per-feature points carry `feature`, and both the visualizer's tracer and the interactive listener's meter receive `shutdown()` exactly once on stop; a visualizer initialized without the `metrics` flag does not throw
 2. Verify test fails (RED)
 3. Implement: in `index.ts`'s interactive wiring construct a `MetricsListener` with an interactive-owned `MeterProvider` on the run bus beside the visualizer (now `metrics: false` there too, so the visualizer never records metrics anywhere); remove the metric branches from `otel-visualizer.ts`'s `handleEvent` (spans only) and delete the now-dead recorder construction; rewrite `otel-visualizer-parity.test.ts`'s handler-coverage assertion to target the listener's handler table
 4. Verify test passes (GREEN)
@@ -523,7 +523,7 @@ events by one listener, so the design holds when dispatch moves to a service wit
 **Done when:**
 - The listener coverage test names any `otel: true` event type lacking a `MetricsListener` handler and passes with every case present
 - A test asserts the interactive exported instrument set (names, units, attribute keys) equals the pre-change set and the metric Resource is `P/W` with `feature` on per-feature points
-- A test asserts the interactive listener's meter receives `shutdown()` exactly once on stop and a visualizer without the `metrics` flag initializes without throwing
+- A test asserts the interactive visualizer's tracer and the interactive listener's meter each receive `shutdown()` exactly once on stop, and a visualizer without the `metrics` flag initializes without throwing
 - `interactive-otel-wiring.test.ts` passes with its assertions retargeted from the visualizer's meter to the listener's meter
 
 **Files likely touched:**

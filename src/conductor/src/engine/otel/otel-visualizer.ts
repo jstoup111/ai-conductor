@@ -303,15 +303,14 @@ export class OtelVisualizer implements VisualizerPlugin {
   }
 
   /**
-   * Force-close open spans (FR-9), flush the tracer, and shut down the meter
-   * provider after its final collection. Idempotent — safe to call from signal handlers or
+   * Force-close open spans, then shut down both providers after their final
+   * exports. Idempotent — safe to call from signal handlers or
    * directly; subsequent calls return the same promise from the first invocation
    * (not a new wrapper — callers can use reference equality to detect re-entry).
    *
-   * The tracer stays flush-only: BatchSpanProcessor.shutdown() calls
-   * exporter.shutdown(), which clears InMemorySpanExporter._finishedSpans and
-   * makes spans unreadable after stop(). The meter provider is shut down so its
-   * PeriodicExportingMetricReader clears its interval after the final export.
+   * Provider shutdown includes the effects of forceFlush under the OTel SDK
+   * contract. Both shutdowns are bounded because exporter implementations may
+   * return arbitrary promises.
    */
   stop(): Promise<void> {
     // Idempotent: if already stopping/stopped, return the existing promise.
@@ -337,21 +336,27 @@ export class OtelVisualizer implements VisualizerPlugin {
     // Force-close any spans still open (e.g. interrupted run, FR-9).
     this.spanManager.forceCloseAll();
 
-    // Flush the tracer and shut down the meter provider (off the hot path —
-    // intentionally async). The meter shutdown performs its own final flush.
+    // Shut down both providers off the hot path. Each shutdown performs its own
+    // final flush and is independently bounded so one dead transport cannot
+    // prevent the other provider from receiving its shutdown signal.
     //
     // FR-8: export/flush errors are already intercepted at the exporter level
     // (WarnOnceSpanExporter / WarnOnceMetricExporter). We additionally wrap here
-    // in case forceFlush() itself throws (rare but possible on SDK internals).
+    // in case provider shutdown itself throws.
     // T21: a dead transport still resolves within exportTimeoutMillis (T19 bound).
     try {
-      await this.tracerProvider.forceFlush();
+      const shutdownCompleted = await this.awaitTracerShutdown();
+      if (!shutdownCompleted) {
+        this.warnOnce?.(
+          `[otel] tracer shutdown timed out after ${this.exportTimeoutMillis}ms`,
+        );
+      }
     } catch (err) {
       // Exporter-wrapper callback path already calls warnOnce on FAILED results.
-      // This catch handles the rare case where forceFlush() itself throws; the
+      // This catch handles the rare case where shutdown itself throws; the
       // shared warnOnce flag ensures total warning count stays bounded to ONE.
       this.warnOnce?.(
-        `[otel] tracer flush error: ${err instanceof Error ? err.message : String(err)}`,
+        `[otel] tracer shutdown error: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
     try {
@@ -366,6 +371,22 @@ export class OtelVisualizer implements VisualizerPlugin {
       this.warnOnce?.(
         `[otel] meter flush error: ${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+  }
+
+  /** Bound terminal trace cleanup without weakening the provider-owned lifecycle. */
+  private async awaitTracerShutdown(): Promise<boolean> {
+    const shutdown = this.tracerProvider!.shutdown().then(() => true);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        shutdown,
+        new Promise<boolean>((resolve) => {
+          timeout = setTimeout(() => resolve(false), this.exportTimeoutMillis);
+        }),
+      ]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
     }
   }
 
