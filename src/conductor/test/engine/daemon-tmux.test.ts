@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 import { describe, it, expect, vi } from 'vitest';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -704,6 +704,29 @@ describe('requireTmux: throws TmuxNotInstalledError when tmux is absent', () => 
 // against real tmux daemons leaking out of the test suite and persisting).
 // ─────────────────────────────────────────────────────────────────────────────
 describe('defaultTmuxRunner: AI_CONDUCTOR_NO_REAL_EXEC kill-switch guards real tmux sessions', () => {
+  it.each(['has-session', 'capture-pane', 'kill-session'])('returns the ordinary tmux result for %s against an absent session when the kill-switch is set', async (verb) => {
+    const runner = requireFn(await load(), 'defaultTmuxRunner');
+    const sessionName = `cc-daemon-guardtest-absent-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const argsByVerb: Record<string, string[]> = {
+      'has-session': ['has-session', '-t', `=${sessionName}`],
+      'capture-pane': ['capture-pane', '-p', '-t', `=${sessionName}:`],
+      'kill-session': ['kill-session', '-t', `=${sessionName}`],
+    };
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      const result = runner(argsByVerb[verb], { inherit: false });
+      expect(result).toMatchObject({ code: expect.any(Number), stdout: expect.any(String) });
+      expect(result.code).not.toBe(0);
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+    }
+  });
+
   it('throws instead of creating a real cc-daemon-* session when the kill-switch is set', async () => {
     const mod = await load();
     const runner = requireFn(mod, 'defaultTmuxRunner');
