@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:6, task:7
 /**
  * Acceptance specs for the rerun-vs-route retry classifier (#646).
  *
@@ -40,7 +40,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
-import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { CoverageBindingPayloadError, DefaultStepRunner } from '../../src/engine/step-runners.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { StepName } from '../../src/types/index.js';
 
@@ -237,6 +237,62 @@ describe('integration/retry-classify (#646)', () => {
     expect(stepRetries).toHaveLength(1);
     expect(stepRetries[0]?.reason).toContain('coverage_binding refused: cited Done when checks do not assert the criterion.');
     expect(stepRetries[0]?.reason).not.toMatch(/produced no output/);
+  });
+
+  // ── Task 7: refusal output does not displace other diagnostics ─────────
+
+  it('Task 7: a blank non-refusal result keeps the produced-no-output diagnostic', async () => {
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async () => ({ success: false, output: '   ' }),
+    };
+    const { stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 2,
+      fromStep: 'coverage_binding',
+    });
+
+    await conductor.run();
+
+    expect(stepRetries).toHaveLength(1);
+    expect(stepRetries[0]?.reason).toMatch(/produced no output/);
+  });
+
+  it('Task 7: a coverage-binding payload error keeps its infrastructure diagnostic', async () => {
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async () => ({
+        success: false,
+        output: 'a refusal-like output must not displace the typed failure',
+        infrastructureFailure: new CoverageBindingPayloadError('judge payload was malformed'),
+      }),
+    };
+    const { stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 2,
+      fromStep: 'coverage_binding',
+    });
+
+    await conductor.run();
+
+    expect(stepRetries).toHaveLength(1);
+    expect(stepRetries[0]?.reason).toBe(
+      'coverage-binding judge infrastructure failure: judge payload was malformed',
+    );
   });
 
   // ── Story 1: as-built BLOCKED stops on try 1 ────────────────────────────
