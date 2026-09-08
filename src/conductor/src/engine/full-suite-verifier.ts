@@ -456,10 +456,37 @@ async function removeOwnedRecoveryClaim(
   }
 }
 
+async function stealOrphanedRecoveryClaim(
+  lockPath: string,
+): Promise<
+  | { status: 'RECLAIMED' }
+  | { status: 'VANISHED' }
+  | { status: 'FAILED'; message: string }
+> {
+  const claimPath = join(lockPath, FULL_SUITE_LOCK_RECOVERY_CLAIM);
+  const stolenPath = join(
+    lockPath,
+    `${FULL_SUITE_LOCK_RECOVERY_CLAIM}.stale.${process.pid}.${randomUUID()}`,
+  );
+  try {
+    await rename(claimPath, stolenPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { status: 'VANISHED' };
+    return {
+      status: 'FAILED',
+      message: `Unable to reclaim stale full-suite recovery claim: ${lockErrorMessage(error)}`,
+    };
+  }
+  await rm(stolenPath).catch(() => undefined);
+  return { status: 'RECLAIMED' };
+}
+
 async function quarantineClaimedStaleLock(
   lockPath: string,
   expectedOwner: string | null,
-  clock: () => number,
+  options: Required<Pick<FullSuiteLockOptions, 'clock' | 'processIsLive'>> & {
+    unownedStaleMs: number;
+  },
 ): Promise<
   | { status: 'RECOVERED' }
   | { status: 'OCCUPIED' }
@@ -469,23 +496,46 @@ async function quarantineClaimedStaleLock(
     version: 1,
     pid: process.pid,
     token: randomUUID(),
-    claimedAt: new Date(clock()).toISOString(),
+    claimedAt: new Date(options.clock()).toISOString(),
   };
   const serializedClaim = `${JSON.stringify(claim)}\n`;
+  const claimPath = join(lockPath, FULL_SUITE_LOCK_RECOVERY_CLAIM);
   try {
     await writeFile(
-      join(lockPath, FULL_SUITE_LOCK_RECOVERY_CLAIM),
+      claimPath,
       serializedClaim,
       { encoding: 'utf8', flag: 'wx' },
     );
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') return { status: 'RECOVERED' };
-    if (code === 'EEXIST') return { status: 'OCCUPIED' };
-    return {
-      status: 'FAILED',
-      message: `Unable to claim stale full-suite lock recovery: ${lockErrorMessage(error)}`,
-    };
+    if (code !== 'EEXIST') {
+      return {
+        status: 'FAILED',
+        message: `Unable to claim stale full-suite lock recovery: ${lockErrorMessage(error)}`,
+      };
+    }
+
+    const classification = await classifyFullSuiteRecoveryClaim(lockPath, options);
+    if (classification.status === 'FAILED') {
+      return { status: 'FAILED', message: classification.message };
+    }
+    if (classification.status === 'OCCUPIED') return { status: 'OCCUPIED' };
+    if (classification.status === 'ORPHANED') {
+      const reclaimed = await stealOrphanedRecoveryClaim(lockPath);
+      if (reclaimed.status === 'FAILED') return reclaimed;
+    }
+    try {
+      await writeFile(claimPath, serializedClaim, { encoding: 'utf8', flag: 'wx' });
+    } catch (retryError) {
+      const retryCode = (retryError as NodeJS.ErrnoException).code;
+      if (retryCode === 'ENOENT') return { status: 'RECOVERED' };
+      if (retryCode === 'EEXIST') return { status: 'OCCUPIED' };
+      return {
+        status: 'FAILED',
+        message: `Unable to claim stale full-suite lock recovery: ${lockErrorMessage(retryError)}`,
+      };
+    }
   }
 
   let currentOwner: string | null;
@@ -616,7 +666,11 @@ async function recoverLockIfProvablyStale(
     }
     if (ageMs < options.unownedStaleMs) return { status: 'OCCUPIED' };
   }
-  return quarantineClaimedStaleLock(lockPath, serialized, options.clock);
+  return quarantineClaimedStaleLock(lockPath, serialized, {
+    clock: options.clock,
+    processIsLive: options.processIsLive,
+    unownedStaleMs: options.unownedStaleMs,
+  });
 }
 
 async function releaseFullSuiteLock(

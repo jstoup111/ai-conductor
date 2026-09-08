@@ -3506,6 +3506,81 @@ describe('FullSuiteVerifier', () => {
     });
   });
 
+  it('reclaims orphaned recovery claims while recovering a dead full-suite owner', async () => {
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    const cases = [
+      {
+        name: 'dead-process claim',
+        claim: JSON.stringify({
+          version: 1,
+          pid: 2_147_483_646,
+          token: 'dead-recoverer',
+          claimedAt: '2026-09-07T11:59:59.999Z',
+        }),
+        claimMtime: now,
+      },
+      {
+        name: 'stale unparseable claim',
+        claim: 'not json',
+        claimMtime: now - 1_000,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const projectRoot = await makeConfiguredProject(`full-suite-orphaned-${testCase.name}-`);
+      const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+      const claimPath = join(lockPath, 'recovery.json');
+      await writeProjectFile(lockPath, 'owner.json', JSON.stringify({
+        version: 1,
+        pid: 2_147_483_647,
+        token: 'dead-owner',
+        acquiredAt: '2026-09-07T11:00:00.000Z',
+      }));
+      await writeFile(claimPath, testCase.claim, 'utf8');
+      await utimes(claimPath, new Date(testCase.claimMtime), new Date(testCase.claimMtime));
+      let executions = 0;
+
+      const result = await new FullSuiteVerifier({
+        projectRoot,
+        fingerprint: async () => ({
+          ok: true as const,
+          fingerprint: {
+            digest: `sha256:orphaned-${testCase.name}`,
+            headSha: 'orphaned-head',
+            categoryFingerprints: CATEGORY_FINGERPRINTS,
+          },
+        }),
+        execute: async () => {
+          executions += 1;
+          return {
+            ok: true as const,
+            command: 'node suite.mjs --all',
+            cwd: projectRoot,
+            startedAt: '2026-09-07T12:00:00.000Z',
+            endedAt: '2026-09-07T12:00:01.000Z',
+            durationMs: 1_000,
+            exitCode: 0 as const,
+            stdout: 'passed\n',
+            stderr: '',
+          };
+        },
+        lock: {
+          waitTimeoutMs: 0,
+          clock: () => now,
+          processIsLive: () => false,
+          unownedStaleMs: 100,
+        },
+      }).ensure();
+
+      expect({
+        result: result.status,
+        executions,
+        lockExists: await readdir(join(projectRoot, '.pipeline'))
+          .then((entries) => entries.includes('test-suite.lock')),
+      }).toEqual({ result: 'EXECUTED', executions: 1, lockExists: false });
+    }
+  });
+
   it('recovers a provably dead owner but refuses a live verification lock', async () => {
     const makeLockedProject = async (pid: number, token: string) => {
       const projectRoot = await makeConfiguredProject('full-suite-verifier-lock-');
