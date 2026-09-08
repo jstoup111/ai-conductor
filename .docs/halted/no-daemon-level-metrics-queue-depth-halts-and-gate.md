@@ -1,21 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-08T13:44:55.934Z
+Status: halted
 Slug: no-daemon-level-metrics-queue-depth-halts-and-gate
-Class: protected-artifact
+Class: needs-human
 Halting step: build
 Phase: BUILD
 Branch: feat/daemon-no-daemon-level-metrics-queue-depth-halts-and-gate
-Head SHA: 0654f357192c3cb1adc98e9d04cc58b1742dab6b
-Halted at: 2026-09-08T13:24:25.367Z
+Head SHA: 9c2991b520bc7e69446776fee4735c62361d4f83
+Halted at: 2026-09-08T14:47:14.579Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Protected artifact changed: .docs/architecture/no-daemon-level-metrics-queue-depth-halts-and-gate.md
-Feature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.
+Operator credentials expired and refresh timed out after 60 minutes.
+Credentials file: /home/james-stoup/.claude/.credentials.json
+Expires at: 1788875395141
+Please refresh your OAuth token and re-queue this feature.
 ```
