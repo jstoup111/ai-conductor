@@ -318,6 +318,31 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(inputs.sourceSnapshot.testQuality?.counterfactualFileSelectors).toEqual(['spec/example_spec.rb']);
     });
 
+    it('retains a marker-only unsupported Go test as a source-bound uncertainty candidate', async () => {
+      const { git } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+          'diff --git a/test/widget_test.go b/test/widget_test.go',
+          '--- a/test/widget_test.go', '+++ b/test/widget_test.go', '+// Covers: task:8',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
+        { match: ['show', 'head123:test/widget_test.go'], result: { stdout: '// Covers: task:8\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(inputs.sourceSnapshot.testScope).toMatchObject({
+        targets: [],
+        candidates: [{
+          source: { fileName: 'test/widget_test.go', side: 'head' },
+          reasons: ['unsupported-declaration'],
+          diagnostic: { reason: 'unsupported-source-language' },
+          markers: [{ reference: { kind: 'task', id: '8' } }],
+        }],
+      });
+    });
+
     it('retains uncertainty but creates no candidate for an unmarked unsupported-language spec', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
