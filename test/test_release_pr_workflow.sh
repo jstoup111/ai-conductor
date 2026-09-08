@@ -28,6 +28,15 @@ grep -q 'types: \[closed\]' "$WORKFLOW"
 grep -q '^  workflow_dispatch: {}$' "$WORKFLOW"
 rg -U -q "github\.event_name == 'workflow_dispatch'" "$WORKFLOW"
 rg -U -q "github\.event\.pull_request\.merged == true[\\s\\S]*github\.event\.pull_request\.head\.ref != 'automation/release-pr'" "$WORKFLOW"
+manual_ref_guard="$(awk '/^      - name: Reject non-default manual ref$/ {capture=1} capture && /^      - uses: actions\/checkout@v5$/ {exit} capture {print}' "$WORKFLOW")"
+grep -Fq "if: github.event_name == 'workflow_dispatch'" <<<"$manual_ref_guard"
+grep -Fq 'REQUESTED_REF: ${{ github.ref_name }}' <<<"$manual_ref_guard"
+grep -Fq 'DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}' <<<"$manual_ref_guard"
+grep -Fq 'if [ "$REQUESTED_REF" != "$DEFAULT_BRANCH" ]; then' <<<"$manual_ref_guard"
+manual_ref_guard_script="$(awk '/^      - name: Reject non-default manual ref$/ {guard=1} guard && /^        run: \|$/ {body=1; next} body && /^      - / {exit} body {print}' "$WORKFLOW")"
+if grep -Fq '${{' <<<"$manual_ref_guard_script"; then
+  exit 1
+fi
 grep -q 'actions/create-github-app-token@v2' "$WORKFLOW"
 grep -q 'app-id: \${{ secrets.RELEASE_PR_APP_ID }}' "$WORKFLOW"
 grep -q 'private-key: \${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}' "$WORKFLOW"

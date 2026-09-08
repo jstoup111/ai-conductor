@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -182,6 +183,40 @@ describe('structural: release workflow', () => {
       'pull-requests': 'read',
     });
     expect(Object.values(permissions)).not.toContain('write');
+  });
+
+  it('rejects manual release-PR maintenance away from the default branch before checkout', async () => {
+    const source = await readFile(resolve(REPO_ROOT, '.github/workflows/release-pr.yml'), 'utf8');
+    const workflow = job(loadYaml(source), 'release PR workflow');
+    const jobs = job(workflow.jobs, 'release PR workflow jobs');
+    const maintenance = job(jobs['release-pr-maintenance'], 'release PR maintenance job');
+    const steps = maintenance.steps as Array<Record<string, unknown>>;
+    const guard = steps[0];
+    const checkoutIndex = steps.findIndex((step) => step.uses === 'actions/checkout@v5');
+    const script = String(guard?.run ?? '');
+
+    expect(String(guard?.if)).toMatch(/github\.event_name\s*==\s*'workflow_dispatch'/);
+    expect(guard?.env).toEqual({
+      REQUESTED_REF: '${{ github.ref_name }}',
+      DEFAULT_BRANCH: '${{ github.event.repository.default_branch }}',
+    });
+    expect(checkoutIndex).toBeGreaterThan(0);
+    expect(script).not.toContain('${{');
+
+    const mismatched = spawnSync('bash', ['-c', script], {
+      encoding: 'utf8',
+      env: { REQUESTED_REF: 'feature/release-fix', DEFAULT_BRANCH: 'main' },
+    });
+    expect(mismatched.status).not.toBe(0);
+    expect(`${mismatched.stdout}${mismatched.stderr}`).toContain('main');
+    expect(`${mismatched.stdout}${mismatched.stderr}`).toContain('feature/release-fix');
+
+    const matched = spawnSync('bash', ['-c', script], {
+      encoding: 'utf8',
+      env: { REQUESTED_REF: 'main', DEFAULT_BRANCH: 'main' },
+    });
+    expect(matched.status).toBe(0);
+    expect(`${matched.stdout}${matched.stderr}`).toBe('');
   });
 
   it('wires the stable branch through a create-or-fast-forward GitHub ref adapter', async () => {
