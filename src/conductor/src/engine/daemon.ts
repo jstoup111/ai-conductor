@@ -200,6 +200,11 @@ export interface DaemonSweepContext {
 export interface DaemonDeps {
   /** Synchronous observation of each scheduler pass; consumers must not perform I/O here. */
   onTick?: (snapshot: DaemonTickSnapshot) => void;
+  /** Most recent real discovery pass, supplied by the production WorkSource. */
+  getDiscoverySnapshot?: () => {
+    counts: Omit<DaemonTickSnapshot['counts'], 'parked'>;
+    oldestAgeSeconds: DaemonTickSnapshot['oldestAgeSeconds'];
+  } | undefined;
   /**
    * Features eligible to run: stories + plan present, not yet at .pipeline/DONE.
    *
@@ -1282,16 +1287,7 @@ export async function runDaemon(
   let staleAlreadyHandledByPreflight = false;
 
   while (true) {
-    // A zero-filled baseline means an idle daemon remains observable. The CLI's
-    // richer discovery adapter may overwrite this with its classified counts.
-    deps.onTick?.({
-      counts: { eligible: 0, waiting: 0, blocked: 0, gated: 0, parked: claims.listParked().length },
-      oldestAgeSeconds: {},
-      slots: { busy: inFlight.size, free: Math.max(0, concurrency - inFlight.size) },
-      inFlight: workers.map((worker) => worker.slug),
-      blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
-      pollDurationMs: 0,
-    });
+    const tickStartedAt = now();
     if (deps.shouldStop?.()) {
       log('[daemon] teardown requested — draining in-flight, no new dispatch');
       stopReason = 'signal_teardown';
@@ -1314,6 +1310,11 @@ export async function runDaemon(
     stopReason = ceilingHit();
     if (stopReason) break;
 
+    let paused = false;
+    let buildAuthMissing = false;
+    let ghVersionBlocked = false;
+    let episodeActive = false;
+    let next: BacklogItem | undefined;
     // Fill the pool while slots are free.
     if (inFlight.size < concurrency && (!maintenance.isDraining() || maintenance.isDrained())) {
       // FR-1 (Task 11): re-poll the pause predicate every iteration (including
@@ -1322,19 +1323,19 @@ export async function runDaemon(
       // (handled below/at drain) is completely unaffected.
       // A drain reaches this same boundary at zero active claims, but must not
       // select a replacement item before its pending restart action runs.
-      const paused = maintenance.isDraining() || (await checkPaused());
+      paused = maintenance.isDraining() || (await checkPaused());
 
       // Task 13 (FR-6): re-poll the build-auth credential gate every
       // iteration, same cadence as `checkPaused`. Missing → no NEW item is
       // picked this tick; in-flight work is unaffected. Non-blocking: the
       // loop still services watchers/waker/idle-poll bookkeeping below.
-      const buildAuthMissing = await checkBuildAuthMissing();
-      const ghVersionBlocked = await checkGhVersionFloor();
+      buildAuthMissing = await checkBuildAuthMissing();
+      ghVersionBlocked = await checkGhVersionFloor();
 
       // Task 7: Rate-limit episode gate. When an episode is active, skip new
       // feature dispatch to avoid thundering herd. In-flight features remain
       // untouched. Optional dep: absence or inactive episode → proceed normally.
-      const episodeActive = deps.rateLimitEpisode?.active?.() ?? false;
+      episodeActive = deps.rateLimitEpisode?.active?.() ?? false;
 
       // First-in-backlog-order eligible item (Task 14: `pickEligible` consumes
       // only `items`, never `waiting`, so a dependency-gated spec never causes
@@ -1346,7 +1347,6 @@ export async function runDaemon(
         isProgressReKickEligible: isProgressReKickEligibleBounded,
       };
 
-      let next: BacklogItem | undefined;
       if (!paused && !episodeActive && !buildAuthMissing && !ghVersionBlocked) {
         // Local-only discovery first (no remote fetch): cheap, and it preserves
         // the common path when a slot can be filled without origin I/O.
@@ -1381,6 +1381,18 @@ export async function runDaemon(
           }
         }
       }
+
+      const snapshot = deps.getDiscoverySnapshot?.();
+      deps.onTick?.({
+        counts: { eligible: snapshot?.counts.eligible ?? 0, waiting: snapshot?.counts.waiting ?? 0,
+          blocked: snapshot?.counts.blocked ?? 0, gated: snapshot?.counts.gated ?? 0,
+          parked: claims.listParked().length },
+        oldestAgeSeconds: snapshot?.oldestAgeSeconds ?? {},
+        slots: { busy: inFlight.size, free: Math.max(0, concurrency - inFlight.size) },
+        inFlight: workers.map((worker) => worker.slug),
+        blocked: { paused, build_auth_missing: buildAuthMissing, gh_version: ghVersionBlocked, episode_active: episodeActive },
+        pollDurationMs: Math.max(0, now() - tickStartedAt),
+      });
 
       if (next) {
         // Before starting a feature, ensure the running engine matches current

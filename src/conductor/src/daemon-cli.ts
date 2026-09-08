@@ -1197,6 +1197,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       if (stopPromise) return stopPromise;
       stopPromise = (async () => {
         await visualizer?.stop();
+        await daemonOtel?.flush();
         for (const type of renderableEvents) featureEvents.off(type, renderEvent);
         persistence.stop();
       })();
@@ -1204,6 +1205,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     };
     return {
       ...persistence,
+      rootEvents: events,
       sessionId,
       visualizer,
       providerExecution: createProviderExecution(featureEvents, featureLog),
@@ -1899,6 +1901,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       onTick: (snapshot) => {
         void events.emit({ type: 'daemon_backlog_snapshot', ...snapshot });
       },
+      getDiscoverySnapshot: () => workSource.latestSnapshot?.(),
       runFeature,
       onExecutorStarted: () => {
         activeExecutorCount += 1;

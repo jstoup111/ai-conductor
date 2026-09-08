@@ -210,7 +210,13 @@ export type ConductorEvent =
       pollDurationMs: number;
     }
   | { type: 'feature_dispatch_started'; slug: string; kind: DispatchKind }
-  | { type: 'feature_dispatch_ended'; slug: string; outcome: FeatureDispatchOutcome }
+  | {
+      type: 'feature_dispatch_ended';
+      slug: string;
+      outcome: FeatureDispatchOutcome;
+      haltClass?: import('../engine/halt-marker.js').HaltDisposition;
+      step?: string;
+    }
   | {
       type: 'feature_shipped';
       slug: string;
