@@ -1611,6 +1611,24 @@ export async function runDaemon(
       }
     }
 
+    // A full worker pool does not run discovery in this lap, but it is still a
+    // scheduler tick.  Publish the latest completed discovery projection so
+    // liveness, slots, and in-flight series continue to advance while every
+    // worker is busy.  The free-slot branch above emits the freshly discovered
+    // projection before it starts a worker; keeping this separate preserves
+    // exactly one synchronous observation per loop pass.
+    const busySnapshot = deps.getDiscoverySnapshot?.();
+    deps.onTick?.({
+      counts: { eligible: busySnapshot?.counts.eligible ?? 0, waiting: busySnapshot?.counts.waiting ?? 0,
+        blocked: busySnapshot?.counts.blocked ?? 0, gated: busySnapshot?.counts.gated ?? 0,
+        parked: claims.listParked().length },
+      oldestAgeSeconds: busySnapshot?.oldestAgeSeconds ?? {},
+      slots: { busy: inFlight.size, free: Math.max(0, concurrency - inFlight.size) },
+      inFlight: workers.map((worker) => worker.slug),
+      blocked: { paused, build_auth_missing: buildAuthMissing, gh_version: ghVersionBlocked, episode_active: episodeActive },
+      pollDurationMs: Math.max(0, now() - tickStartedAt),
+    });
+
     // Observe restart conditions only after the claim attempt. A drain begun
     // here stops the next free slot from being filled after a worker settles.
     if (maintenance.busyMaintenanceEnabled()) await observeBusyDrainRequest();
