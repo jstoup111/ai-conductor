@@ -492,7 +492,7 @@ events by one listener, so the design holds when dispatch moves to a service wit
 **Type:** happy-path
 
 **Steps:**
-1. Write failing test: a forwarded `gate_verdict{step:'build_review', satisfied:true}` yields `conductor.gate.verdicts{feature=S, step=build_review, outcome=pass}` = 1; `satisfied:false` plus `kickback{from:'build_review', to:'build'}` yields `outcome=fail` = 1 and `conductor.gate.kickbacks{feature=S, from=build_review, to=build}` = 1; `build_stall{reason:'no_task_progress'}` yields `conductor.daemon.stalls{feature=S, reason=no_task_progress}` = 1; a verdict with step `some_future_step` records that step name verbatim without error; three consecutive fails read 3
+1. Write failing test: a forwarded `gate_verdict{step:'build_review', satisfied:true}` yields `conductor.gate.verdicts{feature=S, step=build_review, outcome=pass}` = 1; `satisfied:false` plus `kickback{from:'build_review', to:'build'}` yields `outcome=fail` = 1 and `conductor.gate.kickbacks{feature=S, from=build_review, to=build}` = 1; `build_stall{reason:'no_task_progress'}` yields `conductor.daemon.stalls{reason=no_task_progress}` = 1 with no `feature` attribute; a verdict with step `some_future_step` records that step name verbatim without error; three consecutive fails read 3
 2. Verify test fails (RED)
 3. Implement: listener handlers for `gate_verdict`, `kickback`, `build_stall` calling the Task 5 record methods with the feature taken from the forwarded event's feature tag
 4. Verify test passes (GREEN)
@@ -640,7 +640,7 @@ Independent starts: Tasks 1, 3, 9. Task 8 (monotonic counters) needs the full re
 | Story 4 negative: Given the halt record write fails after the HALT marker was written, when metrics are exported, then conductor.feature.halts still increments from the loop_halt event and the metrics handler does not throw | 14 | "a halt still increments the counter when the halt-record write fails" | diff-local |
 | Story 5 happy: Given gate build_review passes for feature S, when the verdict event is emitted, then conductor.gate.verdicts{feature=S, step=build_review, outcome=pass} increments by 1 | 18 | "the exact attribute sets and values for pass, fail-plus-kickback, and stall above" | diff-local |
 | Story 5 happy: Given gate build_review fails for feature S and routes work back to build, when the events are emitted, then conductor.gate.verdicts{feature=S, step=build_review, outcome=fail} increments by 1 and conductor.gate.kickbacks{feature=S, from=build_review, to=build} increments by 1 | 18 | "the exact attribute sets and values for pass, fail-plus-kickback, and stall above" | diff-local |
-| Story 5 happy: Given a build stalls with reason no_task_progress, when the stall event is emitted, then conductor.daemon.stalls{feature=S, reason=no_task_progress} increments by 1 | 18 | "the exact attribute sets and values for pass, fail-plus-kickback, and stall above" | diff-local |
+| Story 5 happy: Given a build stalls with reason no_task_progress, when the stall event is emitted, then conductor.daemon.stalls{reason=no_task_progress} increments by 1 and carries no feature attribute | 18 | "the exact attribute sets and values for pass, fail-plus-kickback, and feature-free stall above" | diff-local |
 | Story 5 negative: Given a gate verdict is emitted on the feature bus during a daemon dispatch, when it reaches the daemon-level listener, then it is counted exactly once (the forwarded copy is counted, the original is not double-counted) | 17 | "one feature-bus `gate_verdict` yields exactly one `conductor.gate.verdicts` point with value 1 and `feature=S`" | diff-local |
 | Story 5 negative: Given a gate verdict for a step name outside the known gate set, when it is recorded, then the step attribute carries the step name verbatim and no error is raised | 18 | "an unknown step name is carried verbatim on the `step` attribute with no thrown error" | diff-local |
 | Story 5 negative: Given the same gate fails three times in one dispatch, when metrics are exported, then verdicts{outcome=fail} reads 3, not 1 | 18 | "three fails for one gate in one dispatch read `outcome=fail` = 3" | diff-local |
@@ -708,3 +708,10 @@ no new telemetry channel or provider-specific path is introduced.
 - S1.5 is satisfied by this task.
 
 > **Amended 2026-09-08 by #1937:** The two Story 4 halt-classification rows in the Coverage Check are superseded by the accepted story wording: unreadable or unrecognized sidecars derive `unclassified`; an absent `HALT.class` with `HALT` present derives `legacy`.
+
+## Amendment 2026-09-08 — daemon stall identity
+
+The operator confirmed ADR-014 Decision 8's existing identity contract: `conductor.daemon.inflight`
+is the sole feature-scoped `conductor.daemon.*` instrument. Task 18 therefore records
+`conductor.daemon.stalls` with `reason` plus project/worker identity and no `feature` attribute.
+The implementation repair stays within Task 18; no new event or telemetry channel is introduced.

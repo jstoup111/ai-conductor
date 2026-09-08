@@ -103,16 +103,18 @@ As an operator, I want feature starts, halts (by class and step), and ships as c
 - [ ] A test covers every sidecar classification value on conductor.feature.halts: needs-human, mechanical, protected-artifact, plan-gap, kickback-cap, over-scope, legacy, and unclassified — a closed set of eight, no free text
 - [ ] A test asserts a parked feature increments neither halts nor shipped and appears in backlog{state=parked}
 
-## Story 5: Gate verdicts and kickbacks are counted per gate and per feature
+## Story 5: Gate verdicts and kickbacks are counted per gate and feature; stalls are daemon-scoped
 
-As an operator deciding whether a gate is worth keeping, I want pass and fail counts per gate and kickback routing counts over time so that a gate's behavior can be compared across weeks from reported numbers.
+As an operator deciding whether a gate is worth keeping, I want pass and fail counts per gate and
+kickback routing counts over time, plus daemon-wide stall counts by reason, so that gate behavior
+and worker health can be compared across weeks from reported numbers.
 
 ### Acceptance Criteria
 
 #### Happy Path
 - Given gate build_review passes for feature S, when the verdict event is emitted, then conductor.gate.verdicts{feature=S, step=build_review, outcome=pass} increments by 1
 - Given gate build_review fails for feature S and routes work back to build, when the events are emitted, then conductor.gate.verdicts{feature=S, step=build_review, outcome=fail} increments by 1 and conductor.gate.kickbacks{feature=S, from=build_review, to=build} increments by 1
-- Given a build stalls with reason no_task_progress, when the stall event is emitted, then conductor.daemon.stalls{feature=S, reason=no_task_progress} increments by 1
+- Given a build stalls with reason no_task_progress, when the stall event is emitted, then conductor.daemon.stalls{reason=no_task_progress} increments by 1 and carries no feature attribute
 
 #### Negative Paths
 - Given a gate verdict is emitted on the feature bus during a daemon dispatch, when it reaches the daemon-level listener, then it is counted exactly once (the forwarded copy is counted, the original is not double-counted)
@@ -120,7 +122,7 @@ As an operator deciding whether a gate is worth keeping, I want pass and fail co
 - Given the same gate fails three times in one dispatch, when metrics are exported, then verdicts{outcome=fail} reads 3, not 1
 
 ### Done When
-- [ ] A test emits gate_verdict pass and fail plus a kickback and a build_stall through the daemon path and asserts each named instrument has exactly one data point with the expected attributes and value
+- [ ] A test emits gate_verdict pass and fail plus a kickback and a build_stall through the daemon path and asserts each named instrument has exactly one data point with the expected attributes and value, including no feature attribute on conductor.daemon.stalls
 - [ ] A test proves a forwarded gate_verdict is counted once
 
 ## Story 6: End-to-end feature duration is observable as wall-clock and active time
