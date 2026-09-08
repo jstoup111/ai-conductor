@@ -904,12 +904,18 @@ export async function refundBuildReviewKickback(
     requireReadableGate(ledger, 'build_review');
     const current = ledger.gates.build_review;
     if (!current) return;
+    if (before === undefined) {
+      // The charge created this gate entry.  Restoring its prior absence must
+      // remove it rather than materializing a zero-valued legacy entry: a
+      // dropped raw FAIL has consumed neither budget nor durable gate state.
+      const { build_review: _chargedEntry, ...gates } = ledger.gates;
+      await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, gates });
+      return;
+    }
     // Only fields `bumpKickbackGate` changes are restored.  Any operator
     // authorization, cap evidence, or sibling-gate update read under this
     // lease remains authoritative.
-    const prior = before ?? {
-      count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
-    };
+    const prior = before;
     const restored = {
       ...current,
       count: prior.count,
