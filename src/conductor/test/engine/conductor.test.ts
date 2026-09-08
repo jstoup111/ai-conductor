@@ -1140,7 +1140,7 @@ describe('engine/conductor', () => {
       'build_review cumulative kickback cap exceeded:\n' +
         'Kickback budget (build_review): 6/5 consumed; 0 remaining\n' +
         'Latest reason: [testQuality] test-insensitive\n[testQuality] test-insensitive\n' +
-        'Adjustment history: unavailable\n' +
+        'Adjustment history: none\n' +
         'Mechanical faults: 0',
     ]);
   });
@@ -1204,7 +1204,7 @@ describe('engine/conductor', () => {
       'build_review cumulative kickback cap exceeded:\n' +
         'Kickback budget (build_review): 6/5 consumed; 0 remaining\n' +
         'Latest reason: [testQuality] test-insensitive\n[testQuality] test-insensitive\n' +
-        'Adjustment history: unavailable\n' +
+        'Adjustment history: none\n' +
         'Mechanical faults: 0',
     ]);
     expect(await readFile(join(dir, '.pipeline/HALT'), 'utf-8')).toContain('cumulative kickback cap');

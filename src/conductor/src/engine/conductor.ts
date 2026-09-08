@@ -10378,6 +10378,7 @@ export class Conductor {
                 }
                 const failureDetails = buildReviewFailureDetails(parsed);
                 let buildReviewBeforeConsumption: KickbackGateEntry | undefined;
+                let buildReviewKickbackCharged = false;
                 // The raw aggregate can outlive a concurrent operator acceptance.
                 // Every exit from this raw-FAIL block re-reads the effective
                 // verdict immediately before it exits, so no early snapshot can
@@ -10399,7 +10400,9 @@ export class Conductor {
                     'build_review raw FAIL dropped: every graded finding was accepted ' +
                       'by operator disposition at exit time; re-running build_review.',
                   );
-                  if (buildReviewBeforeConsumption) await refundBuildReviewKickback(this.projectRoot, buildReviewBeforeConsumption);
+                  if (buildReviewKickbackCharged) {
+                    await refundBuildReviewKickback(this.projectRoot, buildReviewBeforeConsumption);
+                  }
                   await this.saveConductorStepStatus(state, step.name, 'failed');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   i = i - 1; // for-loop i++ re-lands on build_review
@@ -10502,6 +10505,7 @@ export class Conductor {
                     : 'grader returned FAIL without reasons';
                 const kickback = await consumeKickbackBudget('build_review', evidence);
                 buildReviewBeforeConsumption = kickback.before;
+                buildReviewKickbackCharged = true;
                 const count = kickback.entry.count;
                 if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted) {
                   if (await reenterBuildReviewIfEffectivePass()) continue;
