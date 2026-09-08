@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:3
 import { describe, it, expect } from 'vitest';
 import { parseRateLimitWaitSeconds } from '../../src/execution/claude-provider.js';
 
@@ -44,6 +44,26 @@ describe('parseRateLimitWaitSeconds', () => {
     const output = 'retry after 59 seconds';
     const result = parseRateLimitWaitSeconds(output);
     expect(result.waitSeconds).toBe(59);
+  });
+
+  it('treats a bare wait duration as minutes', () => {
+    const result = parseRateLimitWaitSeconds('retry after 45');
+    expect(result.waitSeconds).toBe(2700);
+  });
+
+  it('treats a short bare wait duration as minutes', () => {
+    const result = parseRateLimitWaitSeconds('try again in 2');
+    expect(result.waitSeconds).toBe(300);
+  });
+
+  it('caps a large bare wait duration at one hour', () => {
+    const result = parseRateLimitWaitSeconds('retry after 450');
+    expect(result.waitSeconds).toBe(3600);
+  });
+
+  it('returns the floor for an unrecognized stated time unit', () => {
+    const result = parseRateLimitWaitSeconds('retry after 3 fortnights');
+    expect(result.waitSeconds).toBe(300);
   });
 
   it('scales explicitly stated minutes from "retry after 90 minutes"', () => {

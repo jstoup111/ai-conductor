@@ -23,6 +23,7 @@ import { enforceFreshSessionOptions } from './fresh-session.js';
 import { scrubTmuxEnvironment } from './child-environment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import {
+  inferRateLimitWaitSeconds,
   rateLimitDurationUnitAlternation,
   scaleRateLimitDurationSeconds,
 } from './rate-limit-duration.js';
@@ -179,6 +180,8 @@ function getDateInTimezone(
  * Handles three patterns:
  * 1. Duration-based: "retry after 450 seconds", "retry in 120 seconds", "try again after 60 seconds"
  *    - Explicit seconds, minutes, and hours scale to seconds according to their stated unit.
+ *    - Numbers with an absent or unrecognized unit are treated as minutes, floored at the
+ *      existing 300-second default and capped at 3,600 seconds to avoid an hours-long wedge.
  * 2. Time-based with timezone: "resets 3:20pm (America/New_York)"
  *    - Task 18: Extracts timezone, calculates deadline in that timezone, clamps to cap
  *    - Returns both waitSeconds and an absolute deadline (ms since epoch)
@@ -211,11 +214,7 @@ export function parseRateLimitWaitSeconds(
       if (durationMatch[3]) {
         return { waitSeconds: scaleRateLimitDurationSeconds(value, durationMatch[3]) ?? 300 };
       }
-      // Apply minutes heuristic: if value < 60, treat as minutes and convert to seconds
-      if (value < 60) {
-        return { waitSeconds: value * 60 };
-      }
-      return { waitSeconds: value };
+      return { waitSeconds: inferRateLimitWaitSeconds(value) };
     }
 
     // Try time-based patterns: "resets at 23:00", "resets 11pm", etc.
