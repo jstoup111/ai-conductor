@@ -31,10 +31,10 @@ describe('kickback budget view', () => {
     expect(rendered).toContain('Mechanical faults: 1');
   });
 
-  it('does not invent adjustment history for a legacy entry', () => {
+  it('reports an empty history for an existing never-adjusted entry', () => {
     const legacy = { count: 1, cumulative: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 };
-    expect(kickbackBudgetView(legacy, 'build_review', 5).adjustments).toBe('unavailable');
-    expect(renderKickbackBudgetView(legacy, 'build_review', 5)).toContain('Adjustment history: unavailable');
+    expect(kickbackBudgetView(legacy, 'build_review', 5).adjustments).toEqual([]);
+    expect(renderKickbackBudgetView(legacy, 'build_review', 5)).toContain('Adjustment history: none');
   });
 
   it('inspects every gate through the CLI and keeps JSON aligned with the rendered gates', async () => {

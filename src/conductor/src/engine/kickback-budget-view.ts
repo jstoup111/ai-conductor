@@ -21,7 +21,10 @@ export function kickbackBudgetView(entry: KickbackGateEntry | undefined, gate: s
     // A missing entry is a fresh gate, hence an empty history.  An existing
     // legacy entry without the recovery field cannot honestly be rendered as
     // an empty audit trail.
-    adjustments: entry === undefined ? [] : (entry.adjustments ?? 'unavailable'),
+    // A current, validated entry with no adjustments has an empty history.
+    // `unavailable` is reserved for the parser's deliberately preserved
+    // malformed-history shape, which never reaches this typed renderer.
+    adjustments: entry?.adjustmentsUnavailable ? 'unavailable' : (entry?.adjustments ?? []),
     ...(remediation ? { laps: entry?.laps ?? 0, lapCap: limit } : { mechanicalFaults: entry?.mechanicalFaults ?? 0 }),
   };
 }

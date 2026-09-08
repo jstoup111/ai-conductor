@@ -169,6 +169,18 @@ describe('consumeResumeAuthorizations', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('does not let an authorization from one remediation gate clear another gate\'s cap halt', async () => {
+    const { root, worktree } = await seed({
+      ...gateEntry,
+      capEvidence: { gate: 'architecture_review_as_built', consumed: 1, limit: 1, latestReason: 'cap', haltGeneration: 'g1' },
+    }, 'prd_audit');
+    try {
+      await expect(consumeResumeAuthorizations(base(worktree, { readLiveHaltClass: async () => 'kickback-cap' }) as never)).resolves.toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('clearHaltForResume', () => {
@@ -182,7 +194,7 @@ describe('clearHaltForResume', () => {
       resolveCommittedRecord: async () => { trace.push('record'); },
     });
     expect(result).toBe('confirmed');
-    expect(trace).toEqual(['presentation', 'marker', 'record']);
+    expect(trace).toEqual(['presentation', 'record', 'marker']);
   });
 
   it('reports partial and leaves the marker in place when presentation repair fails', async () => {
@@ -210,13 +222,24 @@ describe('clearHaltForResume', () => {
     expect(trace).toEqual(['marker']);
   });
 
-  it('still confirms when the committed record cannot be superseded', async () => {
+  it('retains the marker when the committed record cannot be superseded', async () => {
     const result = await clearHaltForResume({
       worktreePath: '/wt', slug: 'feature',
       clearMarker: async () => {},
       resolveCommittedRecord: async () => { throw new Error('no record'); },
     });
-    expect(result).toBe('confirmed');
+    expect(result).toBe('partial');
+  });
+
+  it('retains the marker when committed-record supersession reports a typed failure', async () => {
+    const trace: string[] = [];
+    const result = await clearHaltForResume({
+      worktreePath: '/wt', slug: 'feature',
+      clearMarker: async () => { trace.push('marker'); },
+      resolveCommittedRecord: async () => ({ kind: 'failed' }),
+    });
+    expect(result).toBe('partial');
+    expect(trace).toEqual([]);
   });
 });
 

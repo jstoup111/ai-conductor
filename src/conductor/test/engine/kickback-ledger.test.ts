@@ -32,6 +32,7 @@ import {
   readGrowth,
   readKickbackLedger,
   readSuiteInfrastructureRetries,
+  refundBuildReviewKickback,
   writeKickbackLedger,
   type KickbackGateEntry,
   type KickbackLedger,
@@ -308,6 +309,7 @@ describe('kickback-ledger', () => {
       version: 1,
       gates: {
         build_review: {
+          adjustmentsUnavailable: true,
           count: 2,
           cumulative: 5,
           mechanicalFaults: 0,
@@ -1226,5 +1228,35 @@ describe('kickback-ledger', () => {
     }));
 
     await expect(readSuiteInfrastructureRetries(dir)).resolves.toBe('unreadable');
+  });
+
+  it('reads a healthy test_suite retry counter despite a malformed sibling gate', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
+      version: 1,
+      gates: {
+        test_suite: { count: 0, cumulative: 0, suiteInfrastructureRetries: 1, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+        build_review: { count: 'broken' },
+      },
+    }));
+    await expect(readSuiteInfrastructureRetries(dir)).resolves.toBe(1);
+  });
+
+  it('refunds only build_review fields and preserves a later sibling-gate raise', async () => {
+    await writeKickbackLedger(dir, { version: 1, gates: {
+      build_review: { count: 1, cumulative: 2, treeHash: null, lastReason: 'before', priorVerdict: true, resolvedBefore: 0 },
+      prd_audit: { count: 0, cumulative: 0, laps: 1, effectiveLapCap: 2, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 },
+    } });
+    const charged = await bumpKickbackGateInLedger(dir, 'build_review', {
+      treeHash: '0123456789abcdef0123456789abcdef01234567', resolvedCount: 0, reason: 'charge',
+    });
+    await updateKickbackLedger(dir, (ledger) => ({
+      ledger: { ...ledger, gates: { ...ledger.gates, prd_audit: { ...ledger.gates.prd_audit!, effectiveLapCap: 3 } } },
+      result: undefined,
+    }));
+    await refundBuildReviewKickback(dir, charged.before);
+    const after = await readKickbackLedger(dir);
+    expect(after.gates.build_review.cumulative).toBe(2);
+    expect(after.gates.prd_audit.effectiveLapCap).toBe(3);
   });
 });

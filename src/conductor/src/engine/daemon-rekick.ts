@@ -150,7 +150,7 @@ export interface ClearHaltForResumeDeps {
   /** `cleanupHaltPresentation` for that PR. */
   cleanupPresentation?: (prUrl: string) => Promise<ResumeHaltClearResult>;
   /** Supersede the committed halt record (`.docs/halted/<slug>.md`). */
-  resolveCommittedRecord?: (worktreePath: string, slug: string) => Promise<void>;
+  resolveCommittedRecord?: (worktreePath: string, slug: string) => Promise<unknown>;
   log?: (message: string) => void;
 }
 
@@ -175,14 +175,17 @@ export async function clearHaltForResume(
       return 'partial';
     }
   }
-  await deps.clearMarker(deps.worktreePath);
   try {
-    await deps.resolveCommittedRecord?.(deps.worktreePath, deps.slug);
+    const record = await deps.resolveCommittedRecord?.(deps.worktreePath, deps.slug);
+    if (typeof record === 'object' && record !== null && 'kind' in record && record.kind === 'failed') {
+      deps.log?.(`kickback-budget ${deps.slug}: halt record not superseded — halt retained`);
+      return 'partial';
+    }
   } catch (error) {
-    // The halt is already cleared; a record that could not be superseded is a
-    // reporting gap, not a reason to leave the feature halted.
     deps.log?.(`kickback-budget ${deps.slug}: halt record not superseded (${errMsg(error)})`);
+    return 'partial';
   }
+  await deps.clearMarker(deps.worktreePath);
   return 'confirmed';
 }
 
@@ -243,6 +246,7 @@ export async function consumeResumeAuthorizations(
       const match = Object.entries(ledger.gates).find(([gate, entry]) =>
         !isUnreadableKickbackGate(ledger, gate) &&
         entry.capEvidence && entry.resumeAuthorization && !entry.resumeAuthorization.consumed &&
+        entry.capEvidence.gate === gate &&
         entry.capEvidence.haltGeneration === entry.resumeAuthorization.haltGeneration,
       );
       if (!match) continue;
