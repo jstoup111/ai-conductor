@@ -109,8 +109,10 @@ npm run smoke -- test/engine/daemon-e2e-live-claude.smoke.test.ts
 
 The reusable [Live daemon E2E workflow](../../.github/workflows/live-daemon-e2e.yml)
 runs one matrix leg per provider, selecting only that provider's smoke file.
-An absent matrix credential records a provider-named non-gating skip, while a
-credential-present leg remains gate-enforced. The separate
+Each leg records its result independently, and the release gate requires at
+least one provider leg to pass; a failure from one provider remains visible but
+does not block publication when the other provider succeeds. The non-provider
+smoke tier remains independently mandatory. The separate
 `require-live-provider-credential` job requires at least one provider
 credential overall. To add a provider, add its descriptor, its provider-specific
 smoke file, and its matrix entry in the same change; do not create a parallel
