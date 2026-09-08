@@ -353,6 +353,43 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     await rm(fakeHome, { recursive: true, force: true });
   });
 
+  it('does not create a rejection event for a successful land', async () => {
+    const worktree = await seedWorktree();
+    const fakeHome = await makeUserHome('spec_owner: bob\n');
+    const { opts } = captureOpts({ gh: async () => ({ stdout: 'unused\n' }) });
+
+    const code = await withHome(fakeHome, () => dispatchEngineer(
+      { kind: 'land', project: 'alpha', idea: 'dep bump', worktree },
+      opts,
+    ));
+
+    expect(code).toBe(0);
+    await expect(readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
+  it('keeps the reported rejection and exit code when its event ledger cannot be written', async () => {
+    const worktree = await seedWorktree();
+    await writeFile(join(worktree, '.docs', 'stories', 'dep-bump.md'), '# Stories: dep bump\n');
+    // A file at this path makes EventPersister's mkdir/write fail deterministically.
+    await writeFile(join(repoPath, '.pipeline'), 'not a directory\n');
+    const fakeHome = await makeUserHome('spec_owner: bob\n');
+    const { err, opts } = captureOpts({ gh: async () => ({ stdout: 'unused\n' }) });
+
+    const code = await withHome(fakeHome, () => dispatchEngineer(
+      { kind: 'land', project: 'alpha', idea: 'dep bump', worktree },
+      opts,
+    ));
+
+    expect(code).toBe(1);
+    expect(err[0]).toContain('stories artifact is not approved');
+    expect(err[1]).toBe(`engineer land: worktree kept for inspection at "${worktree}".`);
+    expect(err).toHaveLength(3);
+    expect(err[2]).toMatch(/^engineer land: could not record rejection event:/);
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
   // REMOVED: Interim test for un-owned stamp behavior (now throws fail-closed per Story 2).
   // Replaced by Task 3 tests: "does NOT honor project config" and "fallback to gh login".
 });
