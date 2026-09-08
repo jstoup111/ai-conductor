@@ -4,6 +4,12 @@ spec_hash: 6b9c4fba92070e80b47aa64892d97cc399c6c8ad1eba87f6758cac268e3daab3
 pr: https://github.com/jstoup111/ai-conductor/pull/2431
 shipped: 2026-09-08
 engine_version: 20260907T120758Z-4f8bdec36946
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/acceptance/daemon-e2e-live-agent-tier.acceptance.test.ts:127-131 — commit e64c8783f narrows the live-workflow assertion from `expect(workflow).not.toMatch(/exit 0/)` to a slice bounded by the provider-smoke step; the file appears in no plan task's Files list and the commit carries no `Task:` and no `Scope:` trailer"
+    accepted: false
 ---
 
 ## Cost
