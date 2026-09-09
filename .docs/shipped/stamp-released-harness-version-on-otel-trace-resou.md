@@ -4,6 +4,12 @@ spec_hash: 2018b3329a3e0e73db8eca64ac9c4592cab49590f2a061672ee55436df1cd527
 pr: https://github.com/jstoup111/ai-conductor/pull/2399
 shipped: 2026-09-09
 engine_version: 20260909T173417Z-98f540f3bc46
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "docs/reference/configuration.md:691-701 — user-facing reference doc rewritten to name the released harness version and the `service.version` attribute; no plan task declares this file"
+    accepted: true
 ---
 
 ## Cost
