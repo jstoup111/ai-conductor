@@ -59,20 +59,31 @@ except (json.JSONDecodeError, AttributeError, TypeError):
 ' 2>/dev/null || true)"
 
 # A known command that cannot create a commit should not pay for a Git or
-# engine invocation. Quoted spans are removed before splitting compound
+# engine invocation. Quoted spans become inert operands before splitting compound
 # commands, so an example in a commit message, echo, or comment cannot match.
 if [ -n "$command" ]; then
-  scannable_command="$(printf '%s' "$command" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")"
+  scannable_command="$(printf '%s' "$command" | sed -E "s/'[^']*'/__quoted_operand__/g; s/\"[^\"]*\"/__quoted_operand__/g")"
   if ! printf '%s' "$scannable_command" | tr ';|&' '\n' | awk '
     {
       token = 1
       while (token <= NF && $token ~ /^[[:alpha:]_][[:alnum:]_]*=/) token++
       if (token > NF || $token != "git") next
       for (token++; token <= NF; token++) {
+        # Global options with a separate value consume that operand even
+        # when it happens to be named commit, merge, or another command.
+        if ($token ~ /^(-C|-c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix)$/) {
+          token++
+          continue
+        }
+        if ($token ~ /^-/) continue
+        # The first non-option token is the subcommand. Later tokens are
+        # its arguments, so `git branch commit` and `git pull origin rebase`
+        # must not turn into commit-creating invocations.
         if ($token ~ /^(commit|merge|revert|cherry-pick|am|rebase)$/) {
           found = 1
           exit
         }
+        break
       }
     }
     END { exit !found }

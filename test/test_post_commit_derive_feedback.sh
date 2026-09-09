@@ -461,6 +461,40 @@ output=$(cd "$gate_repo" && { printf '%s' '{"tool_input":{}}' | AI_CONDUCTOR_ENG
 [ -f "$gate_log" ] && grep -q "derive-feedback --sha $gate_sha" "$gate_log" && echo "$output" | grep -q "$gate_sha"
 assert "Payload without a command falls through to the existing advisory check" $?
 
+# Regressions: only the actual Git subcommand controls the gate. Reuse a
+# fresh HEAD so a mistaken classification is observable at the fake engine.
+echo ""
+echo "Test 19: Git operands and excluded pull commands stay silent"
+gate_repo="$TMPDIR_ROOT/gate_subcommand"
+make_test_repo "$gate_repo"
+case_number=0
+for command_text in 'git branch commit' 'git log merge' 'git -C commit branch' 'git pull' 'git pull origin rebase'; do
+  case_number=$((case_number + 1))
+  gate_log="$TMPDIR_ROOT/gate-subcommand-$case_number.calls"
+  gate_payload=$(python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":sys.argv[1]}}))' "$command_text")
+  output=$(cd "$gate_repo" && { printf '%s' "$gate_payload" | AI_CONDUCTOR_ENGINE_BIN="$GATE_STUB" STUB_CALL_LOG="$gate_log" "$HOOK"; } 2>&1 || true)
+  if [ -z "$output" ] && [ ! -e "$gate_log" ]; then
+    assert "Silent for $command_text" 0
+  else
+    assert "Silent for $command_text" 1
+  fi
+done
+
+echo ""
+echo "Test 20: Git global options preserve real commit detection"
+gate_sha=$(git -C "$gate_repo" rev-parse HEAD)
+for command_text in 'git -C "." commit -m update' 'git -c core.quotePath=false commit -m update' 'git --git-dir=.git commit -m update' 'git branch commit; git commit -m update'; do
+  case_number=$((case_number + 1))
+  gate_log="$TMPDIR_ROOT/gate-subcommand-$case_number.calls"
+  gate_payload=$(python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":sys.argv[1]}}))' "$command_text")
+  output=$(cd "$gate_repo" && { printf '%s' "$gate_payload" | AI_CONDUCTOR_ENGINE_BIN="$GATE_STUB" STUB_CALL_LOG="$gate_log" "$HOOK"; } 2>&1 || true)
+  if [ -f "$gate_log" ] && grep -q "derive-feedback --sha $gate_sha" "$gate_log" && echo "$output" | grep -q "$gate_sha"; then
+    assert "Checks fresh HEAD for $command_text" 0
+  else
+    assert "Checks fresh HEAD for $command_text" 1
+  fi
+done
+
 # Summary
 echo ""
 echo ""
