@@ -1,7 +1,313 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
+import {
+  createConductStateLease,
+  type ConductStateLease,
+  type ConductStateLeaseOptions,
+} from './conduct-state-lease.js';
+
 export const ACCEPTED_WIDENINGS_PATH = '.pipeline/accepted-widenings.json';
+
+const ACCEPTED_WIDENINGS_STORE_VERSION = 2 as const;
+const MAX_DECISION_REFERENCE_LENGTH = 256;
+const MAX_DECISION_TEXT_LENGTH = 8_000;
+const MAX_DECISIONS = 512;
+
+/** The separately versioned feature identity that decision authority belongs to. */
+export interface AcceptedWideningFeatureIdentity {
+  readonly version: 1;
+  readonly repository: string;
+  readonly feature: string;
+}
+
+/** Evidence stamped before an operator can make a finding-level decision. */
+export interface AcceptedWideningOriginalSource {
+  readonly id: string;
+  readonly snapshot: string;
+}
+
+/**
+ * An immutable operator decision. Criterion decisions deliberately omit source
+ * references; NC decisions carry the original offer's source and case rather
+ * than a lap-local ordinal or later reviewer wording.
+ */
+export interface AcceptedWideningDecision {
+  readonly id: string;
+  readonly criterion: string;
+  readonly authority: 'accept' | 'refuse';
+  readonly rationale: string;
+  readonly operator: string;
+  readonly revision: number;
+  readonly originalSource?: AcceptedWideningOriginalSource;
+  readonly originalCaseId?: string;
+  readonly supersedes?: string;
+}
+
+export interface AcceptedWideningDecisionState {
+  readonly version: typeof ACCEPTED_WIDENINGS_STORE_VERSION;
+  readonly feature: AcceptedWideningFeatureIdentity;
+  readonly decisions: readonly AcceptedWideningDecision[];
+}
+
+export interface AcceptedWideningDecisionInput {
+  readonly criterion: string;
+  readonly authority: 'accept' | 'refuse';
+  readonly rationale: string;
+  readonly operator: string;
+  readonly originalSource?: AcceptedWideningOriginalSource;
+  readonly originalCaseId?: string;
+  readonly supersedes?: string;
+}
+
+export interface AcceptedWideningDecisionStoreFilesystem {
+  readFile(path: string): Promise<string>;
+  mkdir(path: string): Promise<void>;
+  writeFile(path: string, contents: string): Promise<void>;
+  rename(from: string, to: string): Promise<void>;
+  rm(path: string): Promise<void>;
+}
+
+export interface AcceptedWideningDecisionStoreOptions {
+  readonly filesystem?: AcceptedWideningDecisionStoreFilesystem;
+  readonly lock?: ConductStateLease;
+  readonly leaseOptions?: ConductStateLeaseOptions;
+  readonly newDecisionId?: () => string;
+}
+
+/** No invalid storage outcome is ever an empty successful authority history. */
+export type AcceptedWideningDecisionReadResult =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'valid'; readonly state: AcceptedWideningDecisionState }
+  | { readonly kind: 'malformed' }
+  | { readonly kind: 'unsupported'; readonly version: unknown }
+  | { readonly kind: 'foreign-feature' }
+  | { readonly kind: 'lease-failed'; readonly reason: 'lock-timeout' | 'lock-failed' | 'unreadable' };
+
+export type AcceptedWideningDecisionAppendResult =
+  | { readonly ok: true; readonly decision: AcceptedWideningDecision }
+  | { readonly ok: false; readonly reason: 'invalid-decision' | 'malformed-state' | 'unsupported-version' | 'foreign-feature' | 'lock-timeout' | 'lock-failed' | 'unreadable' | 'atomic-replace-failed' | 'lease-operation-failed' };
+
+const decisionStoreFilesystem: AcceptedWideningDecisionStoreFilesystem = {
+  readFile: (path) => readFile(path, 'utf8'),
+  mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
+  writeFile: (path, contents) => writeFile(path, contents, 'utf8').then(() => undefined),
+  rename: (from, to) => rename(from, to).then(() => undefined),
+  rm: (path) => rm(path, { force: true }).then(() => undefined),
+};
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).length === keys.length && Object.keys(value).every((key) => keys.includes(key));
+}
+
+function boundedDecisionString(value: unknown, maxLength = MAX_DECISION_TEXT_LENGTH): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength;
+}
+
+function parseDecisionFeature(value: unknown): AcceptedWideningFeatureIdentity | undefined {
+  if (!isObjectRecord(value) || !hasExactKeys(value, ['version', 'repository', 'feature']) || value.version !== 1 ||
+    !boundedDecisionString(value.repository, MAX_DECISION_REFERENCE_LENGTH) ||
+    !boundedDecisionString(value.feature, MAX_DECISION_REFERENCE_LENGTH)) return undefined;
+  return { version: 1, repository: value.repository, feature: value.feature };
+}
+
+function sameDecisionFeature(left: AcceptedWideningFeatureIdentity, right: AcceptedWideningFeatureIdentity): boolean {
+  return left.version === right.version && left.repository === right.repository && left.feature === right.feature;
+}
+
+function parseOriginalSource(value: unknown): AcceptedWideningOriginalSource | undefined {
+  if (!isObjectRecord(value) || !hasExactKeys(value, ['id', 'snapshot']) ||
+    !boundedDecisionString(value.id, MAX_DECISION_REFERENCE_LENGTH) || !boundedDecisionString(value.snapshot)) return undefined;
+  return { id: value.id, snapshot: value.snapshot };
+}
+
+function parseDecision(value: unknown): AcceptedWideningDecision | undefined {
+  if (!isObjectRecord(value)) return undefined;
+  const hasSource = Object.hasOwn(value, 'originalSource');
+  const hasCase = Object.hasOwn(value, 'originalCaseId');
+  if (hasSource !== hasCase) return undefined;
+  const keys = [
+    'id', 'criterion', 'authority', 'rationale', 'operator', 'revision',
+    ...(hasSource ? ['originalSource', 'originalCaseId'] : []),
+    ...(Object.hasOwn(value, 'supersedes') ? ['supersedes'] : []),
+  ];
+  if (!hasExactKeys(value, keys) || !boundedDecisionString(value.id, MAX_DECISION_REFERENCE_LENGTH) ||
+    !boundedDecisionString(value.criterion, MAX_DECISION_REFERENCE_LENGTH) ||
+    (value.authority !== 'accept' && value.authority !== 'refuse') ||
+    !boundedDecisionString(value.rationale) || !boundedDecisionString(value.operator, MAX_DECISION_REFERENCE_LENGTH) ||
+    typeof value.revision !== 'number' || !Number.isInteger(value.revision) || value.revision < 1 ||
+    (Object.hasOwn(value, 'supersedes') && !boundedDecisionString(value.supersedes, MAX_DECISION_REFERENCE_LENGTH))) return undefined;
+  const originalSource = hasSource ? parseOriginalSource(value.originalSource) : undefined;
+  if (hasSource && (!originalSource || !boundedDecisionString(value.originalCaseId, MAX_DECISION_REFERENCE_LENGTH))) return undefined;
+  return {
+    id: value.id,
+    criterion: value.criterion,
+    authority: value.authority,
+    rationale: value.rationale,
+    operator: value.operator,
+    revision: value.revision,
+    ...(originalSource === undefined ? {} : { originalSource, originalCaseId: value.originalCaseId as string }),
+    ...(Object.hasOwn(value, 'supersedes') ? { supersedes: value.supersedes as string } : {}),
+  };
+}
+
+function parseDecisionState(value: unknown):
+  | { readonly kind: 'valid'; readonly state: AcceptedWideningDecisionState }
+  | { readonly kind: 'malformed' }
+  | { readonly kind: 'unsupported'; readonly version: unknown } {
+  if (!isObjectRecord(value)) return { kind: 'malformed' };
+  if (value.version !== ACCEPTED_WIDENINGS_STORE_VERSION) return { kind: 'unsupported', version: value.version };
+  if (!hasExactKeys(value, ['version', 'feature', 'decisions']) || !Array.isArray(value.decisions) ||
+    value.decisions.length > MAX_DECISIONS) return { kind: 'malformed' };
+  const feature = parseDecisionFeature(value.feature);
+  const decisions = value.decisions.map(parseDecision);
+  if (!feature || decisions.some((decision) => decision === undefined)) return { kind: 'malformed' };
+  const accepted = decisions as AcceptedWideningDecision[];
+  if (new Set(accepted.map((decision) => decision.id)).size !== accepted.length ||
+    accepted.some((decision, index) => decision.revision !== index + 1)) return { kind: 'malformed' };
+  return { kind: 'valid', state: { version: ACCEPTED_WIDENINGS_STORE_VERSION, feature, decisions: accepted } };
+}
+
+function isMissingDecisionStore(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException).code === 'ENOENT';
+}
+
+/** Feature-local authority with one leased atomic decision append seam. */
+export class AcceptedWideningDecisionStore {
+  private readonly filesystem: AcceptedWideningDecisionStoreFilesystem;
+  private readonly path: string;
+  private readonly lock: ConductStateLease;
+  private readonly newDecisionId: () => string;
+
+  constructor(
+    projectRoot: string,
+    private readonly feature: AcceptedWideningFeatureIdentity,
+    options: AcceptedWideningDecisionStoreOptions = {},
+  ) {
+    this.filesystem = options.filesystem ?? decisionStoreFilesystem;
+    this.path = join(projectRoot, ACCEPTED_WIDENINGS_PATH);
+    this.lock = options.lock ?? createConductStateLease(this.path, {
+      ...options.leaseOptions,
+      label: 'accepted-widening-decision-store',
+    });
+    this.newDecisionId = options.newDecisionId ?? randomUUID;
+  }
+
+  private async acquire(): Promise<{ readonly ok: true; readonly release: () => Promise<void> } | Extract<AcceptedWideningDecisionReadResult, { readonly kind: 'lease-failed' }>> {
+    const acquired = await this.lock.acquire();
+    if (!acquired.ok) return { kind: 'lease-failed', reason: acquired.kind === 'timeout' ? 'lock-timeout' : 'lock-failed' };
+    return { ok: true, release: async () => { await acquired.handle.release(); } };
+  }
+
+  private async load(): Promise<AcceptedWideningDecisionReadResult> {
+    let serialized: string;
+    try {
+      serialized = await this.filesystem.readFile(this.path);
+    } catch (error) {
+      return isMissingDecisionStore(error) ? { kind: 'absent' } : { kind: 'lease-failed', reason: 'unreadable' };
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(serialized);
+    } catch {
+      return { kind: 'malformed' };
+    }
+    const parsed = parseDecisionState(raw);
+    if (parsed.kind !== 'valid') return parsed;
+    return sameDecisionFeature(parsed.state.feature, this.feature)
+      ? parsed
+      : { kind: 'foreign-feature' };
+  }
+
+  private async atomicReplace(state: AcceptedWideningDecisionState): Promise<boolean> {
+    const temporaryPath = `${this.path}.${randomUUID()}.tmp`;
+    try {
+      await this.filesystem.mkdir(dirname(this.path));
+      await this.filesystem.writeFile(temporaryPath, `${JSON.stringify(state)}\n`);
+      await this.filesystem.rename(temporaryPath, this.path);
+      return true;
+    } catch {
+      await this.filesystem.rm(temporaryPath).catch(() => undefined);
+      return false;
+    }
+  }
+
+  async read(): Promise<AcceptedWideningDecisionReadResult> {
+    const acquired = await this.acquire();
+    if (!('ok' in acquired)) return acquired;
+    try {
+      return await this.load();
+    } finally {
+      await acquired.release();
+    }
+  }
+
+  async append(input: unknown): Promise<AcceptedWideningDecisionAppendResult> {
+    const parsedInput = parseDecisionInput(input);
+    if (!parsedInput) return { ok: false, reason: 'invalid-decision' };
+    const acquired = await this.acquire();
+    if (!('ok' in acquired)) return { ok: false, reason: acquired.reason };
+    try {
+      const loaded = await this.load();
+      if (loaded.kind === 'malformed') return { ok: false, reason: 'malformed-state' };
+      if (loaded.kind === 'unsupported') return { ok: false, reason: 'unsupported-version' };
+      if (loaded.kind === 'foreign-feature') return { ok: false, reason: 'foreign-feature' };
+      if (loaded.kind === 'lease-failed') return { ok: false, reason: loaded.reason };
+      const state = loaded.kind === 'absent'
+        ? { version: ACCEPTED_WIDENINGS_STORE_VERSION, feature: this.feature, decisions: [] as readonly AcceptedWideningDecision[] }
+        : loaded.state;
+      const id = this.newDecisionId();
+      if (!boundedDecisionString(id, MAX_DECISION_REFERENCE_LENGTH) || state.decisions.some((decision) => decision.id === id)) {
+        return { ok: false, reason: 'invalid-decision' };
+      }
+      const decision: AcceptedWideningDecision = {
+        id,
+        ...parsedInput,
+        revision: state.decisions.length + 1,
+      };
+      const nextState: AcceptedWideningDecisionState = { ...state, decisions: [...state.decisions, decision] };
+      if (parseDecisionState(nextState).kind !== 'valid') return { ok: false, reason: 'invalid-decision' };
+      return await this.atomicReplace(nextState)
+        ? { ok: true, decision }
+        : { ok: false, reason: 'atomic-replace-failed' };
+    } catch {
+      return { ok: false, reason: 'lease-operation-failed' };
+    } finally {
+      await acquired.release();
+    }
+  }
+}
+
+function parseDecisionInput(value: unknown): Omit<AcceptedWideningDecision, 'id' | 'revision'> | undefined {
+  if (!isObjectRecord(value)) return undefined;
+  const hasSource = Object.hasOwn(value, 'originalSource');
+  const hasCase = Object.hasOwn(value, 'originalCaseId');
+  if (hasSource !== hasCase) return undefined;
+  const keys = [
+    'criterion', 'authority', 'rationale', 'operator',
+    ...(hasSource ? ['originalSource', 'originalCaseId'] : []),
+    ...(Object.hasOwn(value, 'supersedes') ? ['supersedes'] : []),
+  ];
+  if (!hasExactKeys(value, keys) || !boundedDecisionString(value.criterion, MAX_DECISION_REFERENCE_LENGTH) ||
+    (value.authority !== 'accept' && value.authority !== 'refuse') || !boundedDecisionString(value.rationale) ||
+    !boundedDecisionString(value.operator, MAX_DECISION_REFERENCE_LENGTH) ||
+    (Object.hasOwn(value, 'supersedes') && !boundedDecisionString(value.supersedes, MAX_DECISION_REFERENCE_LENGTH))) return undefined;
+  const originalSource = hasSource ? parseOriginalSource(value.originalSource) : undefined;
+  if (hasSource && (!originalSource || !boundedDecisionString(value.originalCaseId, MAX_DECISION_REFERENCE_LENGTH))) return undefined;
+  return {
+    criterion: value.criterion.trim(),
+    authority: value.authority,
+    rationale: value.rationale.trim(),
+    operator: value.operator.trim(),
+    ...(originalSource === undefined ? {} : { originalSource, originalCaseId: (value.originalCaseId as string).trim() }),
+    ...(Object.hasOwn(value, 'supersedes') ? { supersedes: (value.supersedes as string).trim() } : {}),
+  };
+}
 
 export interface OverScopeDecision { criterion: string; summary: string; decision: 'accept' | 'refuse'; rationale: string; operator: string; decidedAt: string }
 interface OverScopeDecisionsFile { version: 1; decisions: OverScopeDecision[] }
