@@ -7548,6 +7548,7 @@ export class Conductor {
               if (outcome.kind !== 'verdict' || outcome.verdict !== 'pass') return false;
               if (!this.verifyArtifacts) return true;
               const member = membership.dispatchable[idx]!;
+              if (branchHandshakeFailures.has(member.name)) return false;
               if (!gateVerdicts.get(member.name)?.satisfied) return false;
               if (member.name === 'manual_test' && manualTestFailRows.length > 0) return false;
               return true;
