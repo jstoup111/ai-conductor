@@ -48,6 +48,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Prevent operator-park boundary stops from being misreported as needs-human daemon halts. ([implementation PR #2431](https://github.com/jstoup111/ai-conductor/pull/2431)).
 - CI repair now uses daemon-owned configured verification before publication and directs repair agents to leave tests and pushing to the daemon. ([implementation PR #2468](https://github.com/jstoup111/ai-conductor/pull/2468)).
 - Restart the daemon idle-poll budget whenever it dispatches work. ([implementation PR #2452](https://github.com/jstoup111/ai-conductor/pull/2452)).
+- Terminal step refusals now halt immediately instead of consuming retry attempts. ([implementation PR #2461](https://github.com/jstoup111/ai-conductor/pull/2461)).
+- Autoresolve now verifies and pushes clean rebases before reporting a PR as refreshed. ([implementation PR #2472](https://github.com/jstoup111/ai-conductor/pull/2472)).
 
 ## Migration
 
