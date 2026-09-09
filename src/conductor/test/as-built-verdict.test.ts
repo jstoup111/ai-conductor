@@ -60,6 +60,32 @@ describe('as-built verdict gate', () => {
     });
   });
 
+  it('recognizes every verdict with one-to-six heading markers, optional bold, and closing markers', () => {
+    for (const verdict of ['APPROVED', 'APPROVED WITH DRIFT NOTES', 'PLAN_GAP', 'BLOCKED']) {
+      for (let depth = 1; depth <= 6; depth += 1) {
+        const decoration = '#'.repeat(depth);
+        for (const line of [
+          `${decoration} Verdict: ${verdict}`,
+          `${decoration} Verdict: ${verdict} ${decoration}`,
+          `${decoration} **Verdict: ${verdict}**`,
+          `${decoration} **Verdict: ${verdict}** ${decoration}`,
+        ]) {
+          expect(readAsBuiltVerdictLine(line)).toEqual({
+            found: true,
+            raw: verdict,
+            recognized: verdict,
+          });
+        }
+      }
+    }
+  });
+
+  it('classifies an APPROVED WITH DRIFT NOTES heading as approved', () => {
+    expect(classifyAsBuiltReviewOutcome('### **Verdict: APPROVED WITH DRIFT NOTES** ###')).toEqual({
+      kind: 'approved',
+    });
+  });
+
   it('parses an all-remediable BLOCKED findings table', () => {
     const report = [
       'Verdict: BLOCKED',
@@ -345,7 +371,7 @@ describe('as-built verdict gate', () => {
     }
   });
 
-  it('classifies a heading-style verdict as a missing verdict line', () => {
+  it('keeps a Verdict heading without a colon and a later value as a missing verdict line', () => {
     expect(classifyAsBuiltReviewOutcome('## Verdict\n\n**BLOCKED**')).toEqual({
       kind: 'invalid',
       cause: 'no-verdict-line',
@@ -359,6 +385,24 @@ describe('as-built verdict gate', () => {
       value: 'REJECTED',
     });
   });
+
+  it('classifies a heading-decorated unrecognized verdict with its raw value', () => {
+    expect(classifyAsBuiltReviewOutcome('### **Verdict: REJECTED** ###')).toEqual({
+      kind: 'invalid',
+      cause: 'unrecognized-verdict',
+      value: 'REJECTED',
+    });
+  });
+
+  it.each(['## Verdict: ', '## Verdict: **'])(
+    'classifies an empty or marker-only heading-decorated verdict as missing its verdict line: %j',
+    (report) => {
+      expect(classifyAsBuiltReviewOutcome(report)).toEqual({
+        kind: 'invalid',
+        cause: 'no-verdict-line',
+      });
+    },
+  );
 
   it.each(['Verdict: PLAN_GAP', 'Verdict: PLAN_GAP\nOutcome delivered: maybe'])(
     'classifies PLAN_GAP report %j without a valid outcome as missing its outcome',
@@ -743,6 +787,24 @@ describe('as-built SHIP routing', () => {
     expect(observed.some((event) => event.type === 'kickback')).toBe(false);
   });
 
+  it('lists a DESIGN finding when a heading-decorated BLOCKED verdict halts', async () => {
+    const observed = await runSerialAsBuiltExit({
+      report: [
+        '### **Verdict:** BLOCKED ###',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-HEADING | DESIGN | adr-2026-08-25-example decision 3 | Choose an incompatible policy |',
+      ].join('\n'),
+    });
+
+    const halt = observed.find((event) => event.type === 'loop_halt');
+    expect(halt?.reason).toContain(
+      'Blocking findings:\nARCH-HEADING (DESIGN; adr-2026-08-25-example decision 3): Choose an incompatible policy',
+    );
+  });
+
   async function runGroupedAsBuiltExit(input: {
     report: string;
     priorLap?: boolean;
@@ -959,8 +1021,17 @@ describe('as-built SHIP routing', () => {
     expect((halt?.reason ?? '').split('Blocking findings:').length - 1).toBe(1);
   });
 
-  it('keeps the no-verdict-line group halt free of findings and remediation wording', async () => {
-    const observed = await runGroupedAsBuiltExit({ report: '# As-Built Architecture Review\n\nNo verdict here.\n' });
+  it('keeps a blocked-shaped report without a recognizable verdict free of findings and remediation wording', async () => {
+    const observed = await runGroupedAsBuiltExit({
+      report: [
+        '## As-Built Architecture Review',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| ARCH-NO-VERDICT | DESIGN | Task 1 | This detail must not route without a verdict |',
+      ].join('\n'),
+    });
     const halt = observed.find((event) => event.type === 'loop_halt');
 
     expect(halt).toBeDefined();

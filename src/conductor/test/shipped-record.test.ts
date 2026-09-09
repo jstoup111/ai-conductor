@@ -1,3 +1,4 @@
+// Covers: task:4, task:5
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -349,5 +350,38 @@ describe('shipped-record recorded review findings', () => {
       summary: 'The approved architecture has no synchronous channel.',
     });
     expect(findings).toContainEqual(expect.objectContaining({ finding: 'AB-1', outcome: 'remediated' }));
+  });
+
+  it('retains a heading-decorated delivered PLAN_GAP exactly as its plain counterpart', () => {
+    const narrative = [
+      'Outcome delivered: yes',
+      '',
+      '## Recorded Findings',
+      '- Outcome: The status channel stays eventually consistent.',
+      '- Summary: The approved architecture has no synchronous channel.',
+    ];
+    const plain = recordedShipmentFindings({
+      asBuilt: ['Verdict: PLAN_GAP', ...narrative].join('\n'),
+    });
+    const decorated = recordedShipmentFindings({
+      asBuilt: ['## **Verdict**: **PLAN_GAP** ##', ...narrative].join('\n'),
+    });
+
+    expect(decorated).toEqual(plain);
+  });
+
+  it('does not retain narrative findings without a recognizable PLAN_GAP verdict', () => {
+    const findings = recordedShipmentFindings({
+      asBuilt: [
+        '## Findings from review',
+        'Outcome delivered: yes',
+        '',
+        '## Recorded Findings',
+        '- Outcome: The status channel stays eventually consistent.',
+        '- Summary: The approved architecture has no synchronous channel.',
+      ].join('\n'),
+    });
+
+    expect(findings).not.toContainEqual(expect.objectContaining({ grade: 'PLAN_GAP' }));
   });
 });
