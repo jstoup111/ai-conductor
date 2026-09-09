@@ -17,6 +17,11 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Build review now limits test-quality checks to changed behavior and explicitly recovers uncertain coverage. ([implementation PR #2324](https://github.com/jstoup111/ai-conductor/pull/2324)).
 
+### Fixed
+
+- Resolved intake issues now receive a resolution comment and close only when `compose forget` is given `--resolved-by <reference>`. ([implementation PR #2403](https://github.com/jstoup111/ai-conductor/pull/2403)).
+- Spec pull requests include a valid release disposition when they are opened. ([implementation PR #2407](https://github.com/jstoup111/ai-conductor/pull/2407)).
+
 ## [1.1.0] - 2026-09-08
 
 ### Added
