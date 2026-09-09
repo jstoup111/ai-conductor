@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-09T16:51:28.115Z
 Slug: close-the-unguarded-tmux-fixture-session-that-orph
 Class: needs-human
 Halting step: unknown
