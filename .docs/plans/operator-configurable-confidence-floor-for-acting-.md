@@ -310,19 +310,27 @@ The operator has an open intake (#2388) for per-rubric run scheduling under the 
 **Steps:**
 1. Write failing tests asserting a suppressed finding leaves a store entry keyed by its id with rubric, summary, confidence, floor and last-seen lap; recurrence updates the entry in place; entries survive laps where the finding is absent and survive resolution of a related case; and no entry appears in the operator disposition store.
 2. Verify tests fail (RED).
-3. Add an optional suppression-entry list to the store state, parsed as empty when absent, written by the coordinator under the existing lease and never pruned.
+3. Add an optional suppression-entry list to the store state, parsed as empty when absent, and never pruned.
+   - Write the entries through ONE seam, `persistBuildReviewSuppressions` in `build-review-suppression-history.ts`, invoked from the effective-verdict resolution path so it runs on every lap that suppressed anything — effective PASS as well as effective FAIL. The coordinator is NOT the sole writer: a fully suppressed lap is an effective PASS that never enters post-join judgement (ADR D4.4), so a coordinator-only write loses exactly the laps D4.6 governs.
+   - Make the coordinator reuse that same seam under the existing lease instead of carrying its own write, so there is one writer and one store; the upsert is keyed by finding id, so running the seam and then the coordinator over one lap leaves exactly one row.
 4. Verify tests pass (GREEN).
 5. Commit with message: "feat(engine): persist suppressed build_review findings in the case store".
 
 **Done when:**
 - The case store persists one suppression entry per suppressed finding id, updated in place on recurrence and never pruned.
+- A fully suppressed effective-PASS lap persists its entries even though it dispatches no remediate and never reaches the coordinator.
+- The seam and the coordinator together leave exactly one row per finding id, with no duplicate from the second write.
 - Resolved cases and suppression entries remain in the store across laps.
 - A suppression entry never appears in the operator disposition store.
 - An existing store with no suppression list parses with an empty list and STORE_VERSION stays at v1.
 
 **Files likely touched:**
 - `src/conductor/src/engine/remediation-case-store.ts` — suppression entries
-- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — write under lease
+- `src/conductor/src/engine/build-review-suppression-history.ts` — the single persistence seam
+- `src/conductor/src/engine/step-runners.ts` — seam invoked before the pass/fail fork
+- `src/conductor/src/engine/build-review-adjudication-coordinator.ts` — reuses the seam under the existing lease
+- `src/conductor/test/engine/build-review-suppression-history.test.ts` — projection and idempotent upsert
+- `src/conductor/test/engine/step-runners.test.ts` — fully suppressed lap persistence
 - `src/conductor/test/engine/remediation-case-store.test.ts` — persistence cases
 
 **Dependencies:** 9

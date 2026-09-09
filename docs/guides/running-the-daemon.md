@@ -146,6 +146,11 @@ read its condition and path, then follow the
 [stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#the-halt-is-a-protected-artifact-violation).
 Never delete or rewrite `.pipeline/protected-artifact-seal.json` by hand.
 
+`engine-append-unvouched` means a recorded remediation-task heading exists, but the committed
+artifact is not an exact append of the base-tip or fingerprint-verified sealed content. The refusal
+also reports the operator-reseal and engine-append exit outcomes; review that content before deciding
+whether an approved amendment needs a reseal.
+
 An approved plan or architecture amendment after first BUILD intentionally makes the existing seal
 baseline stale. Review the amendment, then reseal the approved paths with
 [`ai-conductor reseal`](../reference/cli.md#ai-conductor-reseal) before clearing the HALT (`--clear-halt`

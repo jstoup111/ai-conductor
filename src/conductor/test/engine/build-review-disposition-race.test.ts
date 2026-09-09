@@ -37,6 +37,7 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
         verdict: overrides.unresolved.length === 0 ? ('PASS' as const) : ('FAIL' as const),
         acceptedFindingIds: overrides.accepted,
         unresolvedFindingIds: overrides.unresolved,
+        suppressedFindingIds: [],
         skippedRubrics: [],
         infrastructureFailureRubrics: [],
         uncoveredInfrastructureFailureRubrics: [],

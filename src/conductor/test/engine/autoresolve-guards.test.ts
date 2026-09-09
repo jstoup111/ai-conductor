@@ -3,7 +3,7 @@
  * autoresolve call site (story: "Work-preservation guards reject lossy
  * resolutions", .docs/stories/auto-resolve-open-pr-conflicts.md).
  *
- * Covers: FR-8, FR-9
+ * Covers: FR-8, FR-9, task:2
  *
  * §3d adversarial-derivation-coverage note: `featureCommitsPreserved` and
  * `isBranchCurrent` already have direct tests in
@@ -86,6 +86,9 @@ describe('engine/autoresolve — acceptance guard sequence at the sweep-resoluti
 
   it('rejects a resolution that --skip-dropped the feature commit, naming featureCommitsPreserved (FR-9 negative)', async () => {
     const git: GitRunner = makeGitRunner(repo);
+    await writeFile(join(repo, 'retained.ts'), 'survives replay\n');
+    await g(['add', 'retained.ts']);
+    await g(['commit', '-q', '-m', 'feat: retained sibling']);
     await g(['rebase', 'main']).catch(() => undefined); // conflicts on a.ts
     // Operator/resolver --skips the conflicting patch instead of resolving it —
     // the "feat: change a" subject is now genuinely absent from main..HEAD.
@@ -95,12 +98,17 @@ describe('engine/autoresolve — acceptance guard sequence at the sweep-resoluti
     expect(log.stdout).not.toContain('feat: change a');
 
     const autoresolve = await import('../../src/engine/autoresolve.js');
-    const result = await autoresolve.runAcceptanceGuards(git, 'main', ['feat: change a']);
-    expect(result).toEqual({
+    const result = await autoresolve.runAcceptanceGuards(
+      git,
+      'main',
+      ['feat: change a', 'feat: retained sibling'],
+    );
+    expect(result).toMatchObject({
       ok: false,
       guard: 'featureCommitsPreserved',
       reason: expect.stringContaining('feat: change a'),
     });
+    if (!result.ok) expect(result.reason).not.toContain('feat: retained sibling');
   });
 
   it('rejects when the base advanced again mid-resolution, naming isBranchCurrent (FR-8 negative)', async () => {

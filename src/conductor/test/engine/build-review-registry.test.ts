@@ -1,3 +1,4 @@
+// Covers: task:10
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -16,7 +17,7 @@ describe('engine/build-review-registry', () => {
       testQuality: {
         skillName: 'build-review-test-quality',
         contractVersion: 'v3',
-        projectionVersion: 'v2',
+        projectionVersion: 'v3',
         cachePolicy: 'content-addressed',
         prerequisite: 'none',
       },
@@ -42,6 +43,7 @@ describe('engine/build-review-registry', () => {
       model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra'],
       max_retries: 3,
       escalate: true,
+      min_confidence: 0,
     };
     const reorderedObject: ResolvedBuildReviewRubricPolicy = {
       escalate: true,
@@ -51,6 +53,7 @@ describe('engine/build-review-registry', () => {
       model: 'gpt-5.6-sol',
       llm_provider: ['codex', 'claude'],
       enabled: false,
+      min_confidence: 0,
     };
 
     expect(fingerprintBuildReviewRubricPolicy(policy)).toMatch(/^sha256:[a-f0-9]{64}$/);

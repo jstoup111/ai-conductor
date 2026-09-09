@@ -64,6 +64,7 @@ import { checkDiagramsForFile, defaultRenderDeps, type RenderDeps } from '../mer
 import { resolvePlanStoriesPath } from '../plan-stories-reference.js';
 import { scanPlanProtectedTargets } from '../plan-protected-targets.js';
 import { validatePlanDoneWhen } from '../plan-done-when.js';
+import { PLAN_TASK_HARD_STOP_BOUNDARY, validatePlanTaskCount } from '../plan-task-count.js';
 
 const execFile = promisify(execFileCb);
 
@@ -273,6 +274,17 @@ export async function landSpec(
       })
       .join('; ');
     throw new Error(`landSpec: ${violations}`);
+  }
+
+  const taskCountValidation = validatePlanTaskCount(planContent);
+  if (taskCountValidation?.kind === 'unauthorized' || taskCountValidation?.kind === 'malformed') {
+    const declarationProblem = taskCountValidation.kind === 'unauthorized'
+      ? 'no scope exception declaration was provided'
+      : 'the scope exception declaration is malformed';
+    throw new Error(
+      `landSpec: plan has ${taskCountValidation.taskCount} addressable tasks, reaching hard-stop ` +
+        `boundary ${PLAN_TASK_HARD_STOP_BOUNDARY}; ${declarationProblem}.`,
+    );
   }
 
   // Land and daemon discovery must agree on the exact stories artifact. Resolve

@@ -74,6 +74,7 @@ import {
   type BuildReviewCoordinationEngineIdentity,
   type BuildReviewRubricSkillDigest,
   describeBuildReviewDispatchedResultRejection,
+  buildReviewCandidateScopeResolutionContext,
   stampBuildReviewDispatchedCandidate,
   validateBuildReviewDispatchedResult,
   type BuildReviewDispatchableRubric,
@@ -84,6 +85,7 @@ import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from '.
 import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
+import { persistBuildReviewSuppressions, projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import {
   bumpMechanicalFaultsInLedger,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
@@ -91,10 +93,11 @@ import {
 
 import {
   deriveBuildReviewInfrastructureFailureReason,
+  deriveBuildReviewScopeIncompleteFault,
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
-  renderBuildReviewJudgedResultShape,
+  renderBuildReviewProviderPayloadShape,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
@@ -2092,9 +2095,31 @@ export class DefaultStepRunner implements StepRunner {
     // Do not publish it as a fresh FAIL aggregate: completion deliberately
     // classifies a missing verdict as `absent`, which re-dispatches this
     // rubric without consuming the build_review kickback budget.
+    const scopeIncompleteFault = Object.values(validResults).flatMap((result) =>
+      result.kind === 'judged' ? [deriveBuildReviewScopeIncompleteFault(result)] : [],
+    ).find((fault): fault is NonNullable<typeof fault> => fault !== undefined);
     const infrastructureFailure = Object.values(validResults).find((result): result is Extract<BuildReviewRubricResult, { kind: 'infrastructure-failure' }> =>
       result.kind === 'infrastructure-failure',
     );
+    // A semantically valid indeterminate candidate is a non-judgment fault,
+    // not a malformed result. It consumes the existing durable allowance but
+    // never gets an in-session repair turn, and its judged findings remain in
+    // the branch artifact for the terminal aggregate.
+    if (scopeIncompleteFault) {
+      const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review', {
+        rubric: scopeIncompleteFault.rubric,
+        reason: scopeIncompleteFault.reason,
+        detail: scopeIncompleteFault.detail,
+        lapId,
+      });
+      if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
+        return {
+          success: false,
+          output: `build_review mechanical fault in ${scopeIncompleteFault.rubric} (${scopeIncompleteFault.reason}): ${scopeIncompleteFault.detail}`,
+          currentLapMechanicalFault: true,
+        };
+      }
+    }
     if (infrastructureFailure) {
       const hasJudgedFinding = Object.values(validResults).some(
         (result) => result.kind === 'judged' && result.findings.length > 0,
@@ -2133,12 +2158,25 @@ export class DefaultStepRunner implements StepRunner {
     }
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
+      minConfidence: Object.fromEntries(Object.entries(config.rubrics).map(([id, policy]) => [id, policy.min_confidence])),
     });
+    // adr-2026-08-29 D4.6: one projection of this lap's sub-floor findings,
+    // shared by the visibility event (D4.5) and the durable-history seam below.
+    const suppressionEntries = effective.ok
+      ? projectBuildReviewSuppressionEntries({
+          aggregate,
+          suppressedFindingIds: effective.effective.suppressedFindingIds ?? [],
+          floors: Object.fromEntries(Object.entries(config.rubrics).map(([id, policy]) => [id, policy.min_confidence])),
+        })
+      : [];
     await this.events?.emit({
       type: 'build_review_outer_verdict',
       lapId,
       rawVerdict: aggregate.verdict,
       effectiveVerdict: effective.ok ? effective.effective.verdict : 'FAIL',
+      ...(suppressionEntries.length > 0
+        ? { suppressedFindings: suppressionEntries.map(({ findingId, rubric, confidence, floor }) => ({ findingId, rubric, confidence, floor })) }
+        : {}),
     });
     if (!effective.ok) {
       return { success: false, output: `${JSON.stringify(aggregate)}\n\nbuild_review disposition resolution failed: ${effective.reason}` };
@@ -2159,6 +2197,19 @@ export class DefaultStepRunner implements StepRunner {
           output: `build_review reduced-coverage evidence publication failed: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
+    }
+    // adr-2026-08-29 D4.6: durable suppression history is written HERE, before
+    // the pass/fail fork below, because D4.4 keeps a fully suppressed lap out
+    // of post-join judgement entirely — such a lap returns success and never
+    // reaches the adjudication coordinator. The coordinator reuses this same
+    // idempotent seam on the failing route, so there is exactly one writer.
+    const persistedSuppressions = await persistBuildReviewSuppressions({
+      projectRoot: this.projectDir,
+      feature: effective.feature,
+      suppressions: suppressionEntries,
+    });
+    if (!persistedSuppressions.ok) {
+      return { success: false, output: `build_review suppression history persistence failed: ${persistedSuppressions.reason}` };
     }
     if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
     // A judged finding is a completed review, even when another rubric had a
@@ -2181,11 +2232,13 @@ export class DefaultStepRunner implements StepRunner {
     projection: BuildReviewRubricProjection,
   ): Promise<unknown> {
     const label: Record<BuildReviewDispatchableRubric['rubric'], string> = { testQuality: 'Test Quality' };
-    const contractShape = renderBuildReviewJudgedResultShape(branch.rubric);
+    const contractShape = renderBuildReviewProviderPayloadShape(branch.rubric);
+    const scopeResolutionContext = buildReviewCandidateScopeResolutionContext(projection);
     const rubricPrompt = [
         `Build Review ${label[branch.rubric]} rubric.`,
         'You are running inside the feature worktree. The closed projection below identifies the implementation diff BY REFERENCE instead of embedding it: changedFiles lists each changed file\'s path, change kind, and hunk line ranges (oldStart,oldCount -> newStart,newCount) from the graded diff. Read the working-tree files and run git yourself for any content you need — for example `git diff <mergeBase>..HEAD -- <path>` for one file\'s diff, or `git show <mergeBase>:<path>` for its pre-change form — using the mergeBase and headSha fields of the projection. Judge only the referenced changes; treat the projection as the complete list of what changed.',
-        `Return exactly one JSON object whose top-level fields are \`findings\` and optional \`counterfactualSensitivity\` (one of \`supports\`, \`indeterminate\`, or \`not-applicable\`); \`findings\` is an array. The engine owns the judged envelope. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
+        `Return only the provider payload shape below: \`findings\` is an array; \`scopeResolutions\` has exactly one entry per supplied candidate (or [] when no candidates); and \`counterfactualSensitivity\` is optional. The engine stamps the judged envelope identity afterward. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
+        `Candidate-resolution authority (use only these ids, regions, and obligations):\n${JSON.stringify(scopeResolutionContext)}`,
         `Your final message MUST end with a JSON object of exactly this shape (an empty findings array means no concern; anchor values follow the schema below exactly — content-region fields (\`changedTest\`, \`locus\`) are structured \`{path, contentHash, display}\` objects and every other anchor value is a plain string, all nested under \`anchor\` — never flattened to the finding's top level and never renamed):\n${contractShape}`,
         JSON.stringify(projection),
       ].join('\n\n');
@@ -2337,12 +2390,15 @@ export class DefaultStepRunner implements StepRunner {
       classified.tests,
       inputs.sourceSnapshot.removalContext,
     );
+    const counterfactualFileSelectors = inputs.sourceSnapshot.testQuality?.counterfactualFileSelectors
+      ?? classified.tests;
     return await materializeTautologyPreflight({
       scopedWorkingDirectory: this.projectDir,
       mergeBase: inputs.sourceSnapshot.mergeBase,
       headSha: inputs.sourceSnapshot.headSha,
       diff: inputs.diff,
       scopedCommand: this.config?.test_suite?.scoped_command ?? null,
+      counterfactualFileSelectors,
       currentGreenProofIdentity: `${inputs.testSuiteProof.provenanceHeadSha}:${inputs.testSuiteProof.fingerprint}`,
       ...(removalMaintenanceSelectors.length > 0
         ? { approvedException: 'removal-maintenance' as const, removalMaintenanceSelectors }
@@ -2473,6 +2529,7 @@ export class DefaultStepRunner implements StepRunner {
       model_fallback_ladder: this.modelPolicy.modelFallbackLadder,
       max_retries: resolved.max_retries,
       escalate: resolved.escalate,
+      min_confidence: 0,
     };
     const entryFor = (
       claim: ReturnType<typeof assembleCoverageBindingClaims>[number],

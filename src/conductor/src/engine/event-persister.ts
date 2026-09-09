@@ -1,5 +1,5 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   epochAnchoredMonotonicClock,
   type IntervalClock,
@@ -159,13 +159,19 @@ export class EventPersister {
  * preserves the closed ConductorEvent contract while forwarding.
  */
 const forwardedFromFeature = new WeakSet<ConductorEvent>();
+const forwardedFeature = new WeakMap<ConductorEvent, string>();
 
 export function isForwardedFromFeature(event: ConductorEvent): boolean {
   return forwardedFromFeature.has(event);
 }
 
+/** Feature identity is forwarding metadata, deliberately not a mutable event payload field. */
+export function forwardedFeatureOf(event: ConductorEvent): string | undefined {
+  return forwardedFeature.get(event);
+}
+
 class ForwardingEventEmitter extends ConductorEventEmitter {
-  constructor(private readonly globalEvents: ConductorEventEmitter) {
+  constructor(private readonly globalEvents: ConductorEventEmitter, private readonly slug?: string) {
     super();
   }
 
@@ -173,6 +179,7 @@ class ForwardingEventEmitter extends ConductorEventEmitter {
     await super.emit(event);
     const forwarded: ConductorEvent = { ...event };
     forwardedFromFeature.add(forwarded);
+    if (this.slug) forwardedFeature.set(forwarded, this.slug);
     await this.globalEvents.emit(forwarded);
   }
 }
@@ -196,8 +203,9 @@ export async function withFeatureEventPersistence<T>(input: {
 export function startFeatureEventPersistence(
   worktreePath: string,
   globalEvents: ConductorEventEmitter,
+  slug?: string,
 ): { events: ConductorEventEmitter; stop: () => void } {
-  const featureEvents = new ForwardingEventEmitter(globalEvents);
+  const featureEvents = new ForwardingEventEmitter(globalEvents, slug ?? basename(worktreePath));
   const persister = new EventPersister(
     join(worktreePath, '.pipeline', 'events.jsonl'),
     featureEvents,
@@ -207,4 +215,25 @@ export function startFeatureEventPersistence(
     events: featureEvents,
     stop: () => persister.stop(),
   };
+}
+
+/** Persist only daemon-origin events. Feature copies already have their own ledger. */
+export function startDaemonEventPersistence(
+  mainRoot: string,
+  events: ConductorEventEmitter,
+  log: (message: string) => void = () => {},
+): { stop: () => void } {
+  const persister = new EventPersister(join(mainRoot, '.daemon', 'events.jsonl'), events);
+  const handler: EventHandler = (event) => {
+    if (isForwardedFromFeature(event)) return;
+    try {
+      // EventPersister is intentionally private; invoke its subscribed handler through a small local emitter
+      // would duplicate subscriptions. The direct method is runtime-private only and preserves its schema.
+      (persister as unknown as { persist(event: ConductorEvent): void }).persist(event);
+    } catch (error) {
+      log(`[daemon] event persistence failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  for (const type of persistedEventTypes()) events.on(type, handler);
+  return { stop: () => { for (const type of persistedEventTypes()) events.off(type, handler); } };
 }

@@ -1,4 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -42,6 +45,12 @@ import type { BacklogItem } from '../../src/engine/daemon.js';
 
 const WS_MOD = '../../src/engine/daemon-work-source.js';
 
+const temporaryRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
 async function load(modPath: string): Promise<Record<string, unknown>> {
   // Throws (RED) if the module does not exist yet.
   return (await import(modPath)) as Record<string, unknown>;
@@ -57,6 +66,37 @@ function requireFn(mod: Record<string, unknown>, name: string): (...args: any[])
 
 /** Minimal BacklogItem stub. */
 const fakeItem = (slug: string): BacklogItem => ({ slug });
+
+describe('localWorkSource — parked state residence', () => {
+  it('includes parked count and oldest age in the scheduler snapshot', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'parked-snapshot-'));
+    temporaryRoots.push(root);
+    let now = 1_000;
+    const mod = await load(WS_MOD);
+    const localWorkSource = requireFn(mod, 'localWorkSource');
+    const source = localWorkSource({
+      projectRoot: root,
+      baseBranch: 'main',
+      log: vi.fn(),
+      isProcessed: vi.fn().mockResolvedValue(false),
+      hasWarned: vi.fn().mockResolvedValue(false),
+      markWarned: vi.fn().mockResolvedValue(undefined),
+      fastForwardRoot: vi.fn(async () => {}),
+      discoverBacklog: vi.fn(async () => ({ items: [], waiting: [], blocked: [], gated: [] })),
+      now: () => now,
+    });
+
+    await source.discover({ refresh: false });
+    now = 6_000;
+    const first = await source.snapshot(['parked-a']);
+    now = 11_000;
+    const second = await source.snapshot(['parked-a']);
+
+    expect(first.counts.parked).toBe(1);
+    expect(first.oldestAgeSeconds.parked).toBe(0);
+    expect(second.oldestAgeSeconds.parked).toBe(5);
+  });
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Fast-forward ordering

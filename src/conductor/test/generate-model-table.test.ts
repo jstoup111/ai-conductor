@@ -813,8 +813,8 @@ describe('unifiedDiff', () => {
 
   it('produces a unified diff with -/+ markers for a single-line change', () => {
     const diff = unifiedDiff('one\ntwo\nthree', 'one\nTWO\nthree');
-    expect(diff).toContain('--- a/HARNESS.md');
-    expect(diff).toContain('+++ b/HARNESS.md');
+    expect(diff).toContain('--- a/ARCHITECTURE.md');
+    expect(diff).toContain('+++ b/ARCHITECTURE.md');
     expect(diff).toContain('-two');
     expect(diff).toContain('+TWO');
   });

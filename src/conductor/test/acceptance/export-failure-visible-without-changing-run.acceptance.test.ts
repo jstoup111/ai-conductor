@@ -1,4 +1,4 @@
-// Covers: S4.1, S4.3, S4.4, S4.5, task:9
+// Covers: task:9
 /**
  * Acceptance seam: the daemon's real feature scope wires the OTel warning bus
  * to both the persisted feature ledger and daemon.log. A failing exporter is a
@@ -57,7 +57,7 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
         invoked: true,
         tokenUsage: { input: 10, output: 2, costUsd: 0.25 },
       });
-      await vi.advanceTimersByTimeAsync(60_000);
+      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(60_000);
     }
     await events.emit({ type: 'step_completed', step: 'build', status: 'done' });
     // Periodic exports use fake time, while meter shutdown awaits the SDK's
@@ -79,6 +79,18 @@ function failingMetricExporter(): PushMetricExporter {
       callback({ code: ExportResultCode.FAILED, error: new Error('collector refused metrics') });
     },
     async forceFlush(): Promise<void> {},
+    async shutdown(): Promise<void> {},
+  };
+}
+
+function rejectingLifecycleMetricExporter(): PushMetricExporter {
+  return {
+    export(_metrics: ResourceMetrics, callback: (result: ExportResult) => void): void {
+      callback({ code: ExportResultCode.SUCCESS });
+    },
+    async forceFlush(): Promise<void> {
+      throw new Error('flush rejected');
+    },
     async shutdown(): Promise<void> {},
   };
 }
@@ -116,7 +128,9 @@ async function runExportDaemon(metricExporter: PushMetricExporter): Promise<{
   await execFile('git', ['config', 'user.name', 'Test'], { cwd: repo });
   await execFile('git', ['add', '.'], { cwd: repo });
   await execFile('git', ['commit', '-qm', 'fixture'], { cwd: repo });
-  buildExporters.mockReturnValueOnce({
+  // The daemon lifetime meter and the feature-scoped span visualizer each use
+  // the transport seam. They intentionally share this fake metric exporter.
+  buildExporters.mockReturnValue({
     spanExporter: new InMemorySpanExporter(),
     metricExporter,
   });
@@ -132,8 +146,13 @@ async function runExportDaemon(metricExporter: PushMetricExporter): Promise<{
     workSource: { discover: async () => [{ slug: 'feature-a' }] },
   });
 
-  const rawEvents = await readFile(join(fixture.worktreePath, '.pipeline/events.jsonl'), 'utf8');
-  const events = rawEvents.trim().split('\n').map((line) => JSON.parse(line) as ConductorEvent);
+  const [rawFeatureEvents, rawDaemonEvents] = await Promise.all([
+    readFile(join(fixture.worktreePath, '.pipeline/events.jsonl'), 'utf8'),
+    readFile(join(repo, '.daemon/events.jsonl'), 'utf8'),
+  ]);
+  const events = [rawFeatureEvents, rawDaemonEvents]
+    .flatMap((raw) => raw.trim().split('\n').filter(Boolean))
+    .map((line) => JSON.parse(line) as ConductorEvent);
   const log = await readFile(join(repo, '.daemon/daemon.log'), 'utf8');
   const outcome = daemonResult?.processed.at(-1);
   if (!outcome) throw new Error('daemon completed without a feature outcome');
@@ -164,10 +183,26 @@ function terminalVerdicts(events: ConductorEvent[]): Array<Record<string, unknow
 }
 
 describe('acceptance: failed telemetry export is visible without changing daemon outcome', () => {
+  it('contains a rejected daemon per-dispatch flush and preserves the dispatch outcome', async () => {
+    const result = await runExportDaemon(rejectingLifecycleMetricExporter());
+    const lifecycleWarnings = result.events.filter((event): event is Extract<ConductorEvent, { type: 'renderer_error' }> =>
+      event.type === 'renderer_error' && event.error === '[otel] metric export failed: flush rejected',
+    );
+
+    expect(lifecycleWarnings).toHaveLength(1);
+    expect(result.outcome).toEqual({
+      slug: 'feature-a',
+      status: 'halted',
+      reason: 'test dispatch complete',
+    });
+    expect(terminalVerdicts(result.events)).toEqual([
+      { type: 'step_completed', step: 'build', status: 'done' },
+    ]);
+  });
+
   it('logs and persists one matching otel failure across repeated export attempts', async () => {
     vi.useFakeTimers();
     const failed = await runExportDaemon(failingMetricExporter());
-    vi.useFakeTimers();
     const succeeded = await runExportDaemon(new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE));
     const rendererErrors = failed.events.filter((event) => event.type === 'renderer_error');
     const failureLines = failed.log.split('\n').filter((line) => line.includes('renderer otel failed'));
@@ -182,7 +217,9 @@ describe('acceptance: failed telemetry export is visible without changing daemon
     expect(failureLines).toHaveLength(1);
     expect(failureLines[0]).toContain('otel');
     expect(failureLines[0]).toContain('collector refused metrics');
-    expect(terminalVerdicts(failed.events)).toEqual(terminalVerdicts(succeeded.events));
+    expect(terminalVerdicts(failed.events)).toEqual([
+      { type: 'step_completed', step: 'build', status: 'done' },
+    ]);
     expect(failed.outcome).toEqual(succeeded.outcome);
   });
 });

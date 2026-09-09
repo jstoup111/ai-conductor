@@ -905,7 +905,8 @@ protect and is skipped as a no-op.
 
 Do not delete or edit `.pipeline/protected-artifact-seal.json`. The engine rebaselines a stale seal
 automatically after a clean engine rebase, or during verification when it proves that every changed
-artifact is byte-identical to the base-branch tip.
+artifact is byte-identical to the base-branch tip or a recorded remediation append extends a
+fingerprint-verified sealed baseline.
 
 **First, identify an amendment request.** If the halt arose because BUILD discovered that an accepted
 DECIDE assertion must change, do not amend or reseal it in BUILD. Route the feature back to its owning
@@ -944,6 +945,10 @@ return this amendment to DECIDE; BUILD tasks must not target protected artifacts
      Restore the file from `HEAD`.
    - `Protected artifact changed: <path>` with a `Feature-authored committed change` cause — revert
      to the committed DECIDE content and route any actual amendment to DECIDE.
+   - `Unvouched engine remediation append: <path>` — a recorded remediation-task heading is present,
+     but the committed content is not an exact append of either the base-tip or fingerprint-verified
+     sealed content. Review the named content and the reported operator-reseal and engine-append exits;
+     do not treat it as the ordinary feature-authored revert case.
    - `Protected artifact provenance undeterminable: <path>` — the base ref could not be resolved, no
      merge-base exists between `HEAD` and the base branch, or the inheritance probe (`git diff`)
      failed. Supply the base ref, or rebase onto the base branch to establish shared history, then
@@ -995,10 +1000,12 @@ If REKICK encounters this refusal before starting git, the HALT begins
 resolver or run `git rebase --continue`; review and rotate the seal as above, then clear the HALT
 and re-queue.
 
-### The rebase halted on "dropped feature commit(s)"
+### The completed rebase halted for missing feature content
 
-**Symptom:** `.pipeline/HALT` is `needs-human` and reads `rebase resolution dropped feature
-commit(s)`, naming the files the resolver had to resolve.
+**Symptom:** `.pipeline/HALT` is `needs-human` and begins `rebase completed — parked for human
+review`. Its reason lists up to three missing commit subjects, each with its abbreviated pre-rebase
+identity and the failed content evidence; a suffix states how many further subjects were omitted.
+The rebase has already completed, so do not run `git rebase --continue`.
 
 The rebase work-preservation guard requires every pre-rebase commit subject to survive the replay.
 A commit legitimately vanishes when the base already carries its work: the replay empties it and
@@ -1011,19 +1018,19 @@ must be present in `HEAD`, and no line it removed may be back (counted against t
 parent, so a structural line like `});` surviving elsewhere in the file does not count as restored).
 A commit whose work is genuinely absent and cleanly re-appliable still halts.
 
-**Recovery:** confirm the branch really is intact, then clear the halt:
+**Recovery:** park the feature, review the named evidence, and restore any missing work:
 
 ```bash
+ai-conductor daemon park <slug>
 cd .worktrees/<slug>
-git log --format=%s "$(git merge-base HEAD main)"..ORIG_HEAD   # pre-rebase subjects
-git log --format=%s "$(git merge-base HEAD main)"..HEAD        # what survived
-git status                                                      # must be clean
+git show ORIG_HEAD -- <path>   # inspect the named pre-rebase content
+git status                     # must be clean before clearing the halt
 ```
 
-For each subject in the first list and not the second, confirm `main` already carries an equivalent
-change (`git log --oneline main -- <path>`). If every difference is accounted for that way, remove
-both halt files and let the daemon re-dispatch. If any feature work is actually missing, recover it
-from `ORIG_HEAD` before clearing anything.
+If the evidence is correct, restore the missing feature content from `ORIG_HEAD`, commit the repair,
+and confirm the working tree is clean. If the content is already present through an equivalent base
+change, verify that equivalence before clearing the halt. Then remove both live halt files, verify
+they are absent, and unpark as described in [A completed rebase still appears halted](#a-completed-rebase-still-appears-halted).
 
 ### A completed rebase still appears halted
 
@@ -1162,6 +1169,32 @@ A non-zero exit, or the restriction enabled while the daemon already runs inside
 means Codex has no way to spawn a shell there. Until the host grants it, route the affected steps
 to another provider; clearing the halt alone re-runs into the same denial.
 
+### build_review has a scope-incomplete candidate
+
+**Symptom:** `build_review` reports a mechanical fault whose cause is `scope-incomplete`; after the
+shared mechanical-fault allowance is exhausted, `.pipeline/HALT` names `testQuality` and
+`scope-incomplete`. The diagnostic identifies the concrete candidate, its available marker/obligation
+evidence, and the evidence that remains missing.
+
+**Diagnosis:** this is not an instruction to add a test merely because a test path appears in the plan,
+and it is not a test-insensitive finding. The engine already formed a frozen, feature-local candidate
+from a changed declaration with an ambiguous `Covers` association or from identified changed
+setup/helper evidence affecting an opted-in test or group. The reviewer returned a valid
+`indeterminate` scope resolution. Any valid findings from the same review remain in
+`.pipeline/build-review.json`; a scope fault does not discard them.
+
+**Recovery:** resolve the named ambiguity with source evidence where possible. The operator may supply
+a scope clarification, authorize a binding or evidence correction within the approved work, or authorize
+separately scoped analyzer work. Do not create speculative plan tasks, add a marker solely to silence the
+fault, or retry unchanged indeterminacy indefinitely. If the shared allowance is exhausted and the
+operator explicitly accepts reduced test-quality coverage, use the reduced-coverage procedure below for
+the named `testQuality` rubric and lap, then clear the halt. That acceptance suppresses only the derived
+scope fault: address any retained test-quality finding through its normal disposition or repair path.
+
+**Verification:** the next review either contains a complete candidate resolution or renders the
+operator's reduced-coverage decision. A valid finding from the original result is still listed and still
+blocks unless independently repaired or accepted.
+
 ### build_review halted on an exhausted mechanical fault allowance
 
 **Symptom:** `.pipeline/HALT` reads:
@@ -1187,20 +1220,19 @@ same: record reduced coverage for the named rubric and lap, then clear the halt.
 Both forms carry class `needs-human` — deliberately, so the daemon's automatic re-kick sweep does
 not clear it on its own.
 
-**Diagnosis:** a `build_review` rubric kept reporting an infrastructure failure (a tool crash,
-a `git diff` that could not run, a provider outage — never a genuine semantic FAIL) across
-repeated laps. Mechanical faults draw from a bounded allowance shared across `build_review`
-kickbacks (3 faults), tracked separately from the ordinary semantic kickback budget so an
-infrastructure blip never burns it. The allowance resets only on demonstrated progress (a
-rebase or base-branch advance), not on a bare retry — once it is exhausted the run halts
-instead of laundering the same infrastructure failure into a hollow PASS or an endless kickback
-loop.
+**Diagnosis:** a `build_review` rubric repeatedly produced either an infrastructure failure (a tool
+crash, a `git diff` that could not run, or a provider outage) or a valid `scope-incomplete` outcome
+from an indeterminate concrete candidate. Mechanical faults draw from a bounded allowance shared across
+`build_review` kickbacks (3 faults), tracked separately from the ordinary semantic kickback budget so an
+infrastructure blip or unresolved scope cannot be laundered into a hollow PASS or an endless kickback
+loop. The allowance resets only on demonstrated progress (a rebase or base-branch advance), not on a
+bare retry.
 
 **Recovery:** the halt body names both required steps.
 
 1. Record the decision — this requires an interactive terminal and a resolvable local operator
    identity; it derives the closed infrastructure cause itself, so it refuses if the rubric is
-   not currently an exhausted infrastructure failure (already judged, unknown rubric, allowance
+   not currently an exhausted infrastructure failure or `scope-incomplete` outcome (already judged, unknown rubric, allowance
    not actually exhausted, a duplicate reduced-coverage record, or the lap/review has since gone
    stale):
    ```bash
@@ -1210,20 +1242,17 @@ loop.
    This only writes the decision — it does not touch the halt marker.
 2. Clear the halt using [the resume procedure](#clear-a-halt-and-let-the-feature-resume).
 
-**Verification:** the next `build_review` run treats the rubric as reduced coverage rather than
-halting on the same infrastructure failure, the feature reaches PASS, and the shipped record at
-`.docs/shipped/<slug>.md` carries a reduced-coverage section for that rubric. A genuine semantic
-FAIL on the same rubric still blocks exactly as before — recording reduced coverage does not
-suppress a real finding.
+**Verification:** the next `build_review` run treats the named fault as reduced coverage rather than
+halting on the same infrastructure failure or `scope-incomplete` outcome, the feature can reach PASS,
+and the shipped record at `.docs/shipped/<slug>.md` carries a reduced-coverage section for that rubric.
+A genuine semantic FAIL on the same rubric still blocks exactly as before — recording reduced coverage
+does not suppress a real finding.
 
 **The record stops the halt, not the dispatch.** An excused rubric is still dispatched on every
-later lap and still reports the same infrastructure failure each time; what changes is that the
-failure no longer halts the run. Expect to keep seeing
-`build_review_rubric_infrastructure_failure` events for it in `.pipeline/events.jsonl` — on
-2026-08-23 a `completeness` record accepted at 12:16:42Z was followed by three more identical
-dispatches at 12:20:39Z, 13:07:12Z and 16:46:00Z. That is the documented behavior, not a sign the
-record failed to take; confirm the record itself in `.pipeline/build-review-dispositions.json`.
-Issue #1832 tracks suppressing the redundant dispatches.
+later lap and can still report the same infrastructure failure or scope-incomplete outcome; what
+changes is that the named fault no longer halts the run. Expect to keep seeing the corresponding
+build-review fault events in `.pipeline/events.jsonl`. That is not a sign the record failed to take;
+confirm the record itself in `.pipeline/build-review-dispositions.json`.
 
 ### Remediation supplied no recognized disposition
 

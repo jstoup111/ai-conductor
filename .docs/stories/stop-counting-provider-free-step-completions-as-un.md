@@ -6,7 +6,7 @@ Track: technical
 
 Tier: S
 
-Approved by the operator on 2026-09-06 (delegated). Scope is the shared dispatch-metering projection and the two readers that consume it: the committed per-feature cost rollup and the exported OTel dispatch counter. Emitter payload changes, KPI aggregate policy, and the partial-feature exclusion rule remain outside this slice.
+Approved by the operator on 2026-09-06 (delegated). Story 1's invoked-attempt negative path was amended by the operator on 2026-09-07, after the as-built review's AB-2 finding, to split absent usage (`unmetered`) from present tokens with unusable cost (`cost-unmetered`) per `adr-2026-07-27-cost-unmetered-is-a-first-class-state` D6. Scope is the shared dispatch-metering projection and the two readers that consume it: the committed per-feature cost rollup and the exported OTel dispatch counter. Emitter payload changes, KPI aggregate policy, and the partial-feature exclusion rule remain outside this slice.
 
 ## Story 1: A step that invoked no provider leaves the dispatch ledger untouched
 
@@ -22,7 +22,8 @@ As an operator reading a feature's cost record, I want the dispatch and unmetere
 #### Negative Paths
 
 - Given a step completion that has no matching provider attempt and carries no token usage, no actual provider, no preferred provider, and no model, when the rollup is computed, then it increases neither the dispatch count nor the unmetered-dispatch count, whether or not it is marked unmetered.
-- Given a provider attempt recorded as invoked whose usage is absent or unusable, when the rollup is computed, then it still contributes one dispatch and that dispatch is still counted as unmetered.
+- Given a provider attempt recorded as invoked that carries no token usage at all, when the rollup is computed, then it still contributes one dispatch and that dispatch is counted as unmetered.
+- Given a provider attempt recorded as invoked that carries token usage whose cost is missing or unusable, when the rollup is computed, then it still contributes one dispatch and that dispatch is counted as cost-unmetered, not unmetered.
 - Given a step completion with no matching provider attempt that carries provider or model attribution but no token usage, when the rollup is computed, then it still contributes one unmetered dispatch.
 
 ### Done When
@@ -30,7 +31,8 @@ As an operator reading a feature's cost record, I want the dispatch and unmetere
 - [ ] A fixture ledger shaped like the retained nine-completion case yields fourteen dispatches, fourteen metered and zero unmetered, with token and cost sums equal to its attempts.
 - [ ] A fixture of attribution-free completions alone yields zero dispatches and zero unmetered dispatches.
 - [ ] A fixture of attribution-bearing completions with no attempts keeps one unmetered dispatch for each completion.
-- [ ] An invoked attempt with unusable usage still yields one dispatch counted as unmetered.
+- [ ] An invoked attempt carrying no token usage still yields one dispatch counted as unmetered.
+- [ ] An invoked attempt carrying token usage with a missing or unusable cost still yields one dispatch counted as cost-unmetered.
 
 ## Story 2: Exported dispatch counters agree with the committed rollup
 
@@ -53,4 +55,4 @@ As an operator comparing a dashboard against a shipped record, I want the export
 
 ## Negative-category review
 
-Invalid and incomplete input is covered by the attribution-free completion, the attribution-bearing completion with no usage, and the invoked attempt with unusable usage — the three shapes the projection must tell apart. Partial-failure and degraded-mode behavior is covered by the invoked-attempt-without-usage criterion, which keeps a genuinely unmeasured provider call visible rather than silently dropping it. Backward compatibility with ledgers written before provider-attempt metering existed is covered by the attribution-bearing legacy criterion. Data integrity across surfaces is covered by Story 2's equality criterion between the exported counter and the committed rollup. The projection is a pure in-memory selection over an already-persisted append-only ledger, so auth, permission, timeout, network, concurrency, resource-exhaustion, deletion-cascade, and rollback categories are inapplicable; no datastore, queue, upload, transaction, or external call is introduced or changed.
+Invalid and incomplete input is covered by the attribution-free completion, the attribution-bearing completion with no usage, the invoked attempt with no usage, and the invoked attempt whose cost alone is unusable — the four shapes the projection must tell apart. Partial-failure and degraded-mode behavior is covered by the two invoked-attempt criteria, which keep a genuinely unmeasured provider call visible as `unmetered` and a token-bearing but cost-less call visible as `cost-unmetered`, rather than silently dropping either or collapsing them together. Backward compatibility with ledgers written before provider-attempt metering existed is covered by the attribution-bearing legacy criterion. Data integrity across surfaces is covered by Story 2's equality criterion between the exported counter and the committed rollup. The projection is a pure in-memory selection over an already-persisted append-only ledger, so auth, permission, timeout, network, concurrency, resource-exhaustion, deletion-cascade, and rollback categories are inapplicable; no datastore, queue, upload, transaction, or external call is introduced or changed.

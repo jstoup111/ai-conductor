@@ -609,7 +609,7 @@ describe('repository-local maintain-documentation contract', () => {
     });
   });
 
-  it('aligns repository release and README policy without changing consumer defaults', async () => {
+  it('aligns repository release policy without changing consumer defaults', async () => {
     const [claudePolicy, pullRequestTemplate] = await Promise.all([
       readFile(join(repoRoot, 'CLAUDE.md'), 'utf-8'),
       readFile(join(repoRoot, '.github/pull_request_template.md'), 'utf-8'),
@@ -658,13 +658,6 @@ describe('repository-local maintain-documentation contract', () => {
     };
     const policyContract = (policy: string) => ({
       release: releasePolicyContract(policy),
-      readme: {
-        localRefinement: /README.*repository-local landing-page refinement/i.test(policy),
-        canonicalAffectedDocs:
-          /ordinary reader-visible changes.*canonical affected documentation/is.test(policy),
-        unchangedUnlessLanding:
-          /leave README unchanged unless.*landing-page contract/is.test(policy),
-      },
       consumerIsolation:
         /consumer projects without.*custom.*configuration.*global.*unchanged/is.test(policy),
       removedContradictions: contradictionContract(policy),
@@ -717,11 +710,6 @@ describe('repository-local maintain-documentation contract', () => {
           dispositionValidation: true,
           botOwnedPublication: true,
           migrationBlocks: true,
-        },
-        readme: {
-          localRefinement: true,
-          canonicalAffectedDocs: true,
-          unchangedUnlessLanding: true,
         },
         consumerIsolation: true,
         removedContradictions: {

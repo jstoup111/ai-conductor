@@ -198,6 +198,14 @@ export interface DaemonSweepContext {
 }
 
 export interface DaemonDeps {
+  /** Synchronous observation of each scheduler pass; consumers must not perform I/O here. */
+  onTick?: (snapshot: DaemonTickSnapshot) => void;
+  /** Most recent real discovery pass, supplied by the production WorkSource. */
+  getDiscoverySnapshot?: (parkedSlugs: readonly string[]) => Promise<{
+    counts: DaemonTickSnapshot['counts'];
+    oldestAgeSeconds: DaemonTickSnapshot['oldestAgeSeconds'];
+    pollDurationMs?: number;
+  } | undefined>;
   /**
    * Features eligible to run: stories + plan present, not yet at .pipeline/DONE.
    *
@@ -579,6 +587,15 @@ export interface DaemonDeps {
    * @param isParked - Optional function to check if a slug is operator-parked
    */
   sweepEpisodeHalts?: (isParked?: (slug: string) => Promise<boolean>) => Promise<void>;
+}
+
+export interface DaemonTickSnapshot {
+  counts: Record<'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked', number>;
+  oldestAgeSeconds: Partial<Record<'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked', number>>;
+  slots: { busy: number; free: number };
+  inFlight: string[];
+  blocked: Record<'paused' | 'build_auth_missing' | 'gh_version' | 'episode_active', boolean>;
+  pollDurationMs: number;
 }
 
 export interface DaemonOptions {
@@ -1274,6 +1291,12 @@ export async function runDaemon(
   // fixes #598 Task 15's regression where both independently invoked
   // `isSuppressed`, double-firing `suppression-checked` for a single boundary.
   let staleAlreadyHandledByPreflight = false;
+  let latestBlocked = {
+    paused: false,
+    build_auth_missing: false,
+    gh_version: false,
+    episode_active: false,
+  };
 
   while (true) {
     if (deps.shouldStop?.()) {
@@ -1298,6 +1321,27 @@ export async function runDaemon(
     stopReason = ceilingHit();
     if (stopReason) break;
 
+    let paused = latestBlocked.paused;
+    let buildAuthMissing = latestBlocked.build_auth_missing;
+    let ghVersionBlocked = latestBlocked.gh_version;
+    let episodeActive = latestBlocked.episode_active;
+    let next: BacklogItem | undefined;
+
+    const emitTick = async (): Promise<void> => {
+      if (!deps.onTick) return;
+      const snapshot = await deps.getDiscoverySnapshot?.(claims.listParked());
+      deps.onTick({
+        counts: { eligible: snapshot?.counts.eligible ?? 0, waiting: snapshot?.counts.waiting ?? 0,
+          blocked: snapshot?.counts.blocked ?? 0, gated: snapshot?.counts.gated ?? 0,
+          parked: snapshot?.counts.parked ?? claims.listParked().length },
+        oldestAgeSeconds: snapshot?.oldestAgeSeconds ?? {},
+        slots: { busy: inFlight.size, free: Math.max(0, concurrency - inFlight.size) },
+        inFlight: workers.map((worker) => worker.slug),
+        blocked: { paused, build_auth_missing: buildAuthMissing, gh_version: ghVersionBlocked, episode_active: episodeActive },
+        pollDurationMs: snapshot?.pollDurationMs ?? 0,
+      });
+    };
+
     // Fill the pool while slots are free.
     if (inFlight.size < concurrency && (!maintenance.isDraining() || maintenance.isDrained())) {
       // FR-1 (Task 11): re-poll the pause predicate every iteration (including
@@ -1306,19 +1350,16 @@ export async function runDaemon(
       // (handled below/at drain) is completely unaffected.
       // A drain reaches this same boundary at zero active claims, but must not
       // select a replacement item before its pending restart action runs.
-      const paused = maintenance.isDraining() || (await checkPaused());
-
-      // Task 13 (FR-6): re-poll the build-auth credential gate every
-      // iteration, same cadence as `checkPaused`. Missing → no NEW item is
-      // picked this tick; in-flight work is unaffected. Non-blocking: the
-      // loop still services watchers/waker/idle-poll bookkeeping below.
-      const buildAuthMissing = await checkBuildAuthMissing();
-      const ghVersionBlocked = await checkGhVersionFloor();
-
-      // Task 7: Rate-limit episode gate. When an episode is active, skip new
-      // feature dispatch to avoid thundering herd. In-flight features remain
-      // untouched. Optional dep: absence or inactive episode → proceed normally.
-      const episodeActive = deps.rateLimitEpisode?.active?.() ?? false;
+      paused = maintenance.isDraining() || (await checkPaused());
+      buildAuthMissing = await checkBuildAuthMissing();
+      ghVersionBlocked = await checkGhVersionFloor();
+      episodeActive = deps.rateLimitEpisode?.active?.() ?? false;
+      latestBlocked = {
+        paused,
+        build_auth_missing: buildAuthMissing,
+        gh_version: ghVersionBlocked,
+        episode_active: episodeActive,
+      };
 
       // First-in-backlog-order eligible item (Task 14: `pickEligible` consumes
       // only `items`, never `waiting`, so a dependency-gated spec never causes
@@ -1330,7 +1371,6 @@ export async function runDaemon(
         isProgressReKickEligible: isProgressReKickEligibleBounded,
       };
 
-      let next: BacklogItem | undefined;
       // An operator adjustment changes the feature ledger, not main's SHA.
       // Consume it before retained HALTs are classified for this iteration.
       await deps.consumeResumeAuthorizations?.();
@@ -1368,6 +1408,8 @@ export async function runDaemon(
           }
         }
       }
+
+      await emitTick();
 
       if (next) {
         // Before starting a feature, ensure the running engine matches current
@@ -1614,6 +1656,23 @@ export async function runDaemon(
 
         continue;
       }
+    }
+
+    if (inFlight.size >= concurrency && deps.onTick) {
+      // A busy pool still discovers once per pass so the snapshot is current,
+      // rather than replaying the last free-slot discovery with a stale age.
+      await deps.discoverBacklog({ refresh: false });
+      paused = maintenance.isDraining() || (await checkPaused());
+      buildAuthMissing = await checkBuildAuthMissing();
+      ghVersionBlocked = await checkGhVersionFloor();
+      episodeActive = deps.rateLimitEpisode?.active?.() ?? false;
+      latestBlocked = {
+        paused,
+        build_auth_missing: buildAuthMissing,
+        gh_version: ghVersionBlocked,
+        episode_active: episodeActive,
+      };
+      await emitTick();
     }
 
     // Observe restart conditions only after the claim attempt. A drain begun

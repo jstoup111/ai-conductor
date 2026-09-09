@@ -94,6 +94,17 @@ describe('build-review adjudication context', () => {
     expect(resolved).toMatchObject({ ok: true, context: { priorCases: [], currentFindings: [expect.objectContaining({ summary: finding('unresolved').summary })] } });
   });
 
+  it('carries suppression history separately from current findings', () => {
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')), priorCases: [],
+      suppressions: [{ findingId: 'suppressed-id', rubric: 'testQuality', summary: 'Historical low-confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-prior' }],
+    });
+    expect(result).toMatchObject({ ok: true, context: {
+      currentFindings: [expect.objectContaining({ summary: finding('current').summary })],
+      suppressionHistory: [expect.objectContaining({ findingId: 'suppressed-id', lastSeenLap: 'lap-prior' })],
+    } });
+  });
+
   it('bounds only operator-unresolved sources, not the complete raw aggregate', () => {
     const current = aggregate(...Array.from(
       { length: BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS.maxCurrentSources + 1 },
@@ -193,13 +204,14 @@ describe('build-review adjudication context', () => {
     // real dispatch into the legacy gap-plan branch.
     expect(Object.keys(result.context).sort()).toEqual([
       'currentFindings', 'domain', 'effectPointers', 'lapId', 'mode', 'planContract',
-      'priorCases', 'snapshotDigest', 'taskStatus', 'version',
+      'priorCases', 'snapshotDigest', 'suppressionHistory', 'taskStatus', 'version',
     ]);
     expect(result.context).toMatchObject({
       mode: 'case-v1',
       domain: 'build_review',
       planContract: { path: '.docs/plans/example.md', pointers: [expect.stringContaining('Task 3')] },
       taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '3', status: 'completed' }] },
+      suppressionHistory: [],
     });
     // Effect pointers carry the prior effect state AND the durable BUILD
     // attempt evidence, so the judge can tell an interrupted case from a

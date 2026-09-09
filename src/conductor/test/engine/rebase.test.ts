@@ -1,3 +1,4 @@
+// Covers: task:3
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -656,6 +657,42 @@ describe('engine/rebase — HALT (FR-8)', () => {
     await writeHalt(dir, ['src/feature.ts']);
     const cls = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
     expect(cls).toBe('needs-human');
+  });
+
+  it('writes a completed-rebase recovery procedure without conflict-resolution steps', async () => {
+    expect(
+      await writeHalt(dir, [], 'feature content needs review', undefined, 'completed-rebase'),
+    ).toEqual({ status: 'written' });
+    const [note, cls] = await Promise.all([
+      readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
+      readFile(join(dir, '.pipeline/HALT.class'), 'utf-8'),
+    ]);
+    expect({ note, cls }).toEqual({
+      note:
+        `rebase completed — parked for human review\n` +
+        `feature content needs review\n\n` +
+        `Resume procedure:\n` +
+        `  1. Review the completed rebase and restore any missing feature content.\n` +
+        `  2. Confirm the working tree is clean.\n` +
+        `  3. rm .pipeline/HALT\n` +
+        `  4. Re-queue the feature for the daemon.\n`,
+      cls: 'needs-human',
+    });
+  });
+
+  it('uses the byte-identical paused-rebase procedure when no shape is supplied', async () => {
+    await writeHalt(dir, ['src/feature.ts'], 'feature content needs review');
+    const note = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    expect(note).toBe(
+      `rebase conflict — parked for human resolution\n` +
+        `feature content needs review\n` +
+        `Conflicted files: src/feature.ts\n\n` +
+        `Resume procedure:\n` +
+        `  1. Resolve the conflicts in the listed file(s).\n` +
+        `  2. git rebase --continue\n` +
+        `  3. rm .pipeline/HALT\n` +
+        `  4. Re-queue the feature for the daemon.\n`,
+    );
   });
 
   it('returns the marker write result for seal HALTs without an emitter', async () => {

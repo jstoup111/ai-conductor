@@ -9,6 +9,11 @@ import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-r
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
 
+vi.mock('../../src/engine/config.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/config.js')>(),
+  loadConfig: vi.fn(async () => ({ ok: true as const, config: {}, warnings: [] })),
+}));
+
 const lapId = parseBuildReviewLapId('lap-current')!;
 const finding = { concernKind: 'test-insensitive', summary: 'A changed test does not observe the behavior it should.', evidenceLocations: ['test/a.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } };
 const infrastructureAggregate = joinBuildReviewRubricOutcomes({
@@ -22,6 +27,20 @@ const aggregate = joinBuildReviewRubricOutcomes({
   lapId, snapshotDigest: 'sha256:snapshot',
   results: {
     testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [finding], verdict: 'FAIL' },
+  },
+});
+
+const scopeIncompleteAggregate = joinBuildReviewRubricOutcomes({
+  lapId, snapshotDigest: 'sha256:snapshot',
+  results: {
+    testQuality: {
+      kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS',
+      scopeResolutions: [{
+        candidateId: 'candidate:setup', status: 'indeterminate',
+        sourceRegion: { path: 'test/a.test.ts', startLine: 2, endLine: 3, contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'setup binding' },
+        obligationReferences: ['story:S6.2'], missingEvidenceReason: 'the pinned binding is incomplete',
+      }],
+    },
   },
 });
 
@@ -63,6 +82,38 @@ describe('build-review findings CLI', () => {
     }, expect.any(Function));
   });
 
+  it('records exhausted current scope-incomplete coverage through the existing leased action', async () => {
+    const appendReducedCoverageIfCurrent = vi.fn(async (input, validate) => {
+      expect(await validate([])).toBe(true);
+      return {
+        ok: true as const,
+        record: {
+          kind: 'reduced-coverage' as const, version: 'v1' as const, feature: input.feature,
+          identity: { rubric: input.rubric, reason: input.reason }, rationale: input.rationale,
+          operator: input.operator, acceptedAt: '2026-09-06T00:00:00.000Z',
+        },
+      };
+    });
+    const print = vi.fn();
+    const appendEvent = vi.fn();
+
+    await expect(dispatchBuildReviewRecordReducedCoverage({
+      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'testQuality', rationale: 'The pinned association cannot be recovered.',
+    }, {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(scopeIncompleteAggregate), readMechanicalFaults: async () => 3,
+      createStore: () => ({ appendReducedCoverageIfCurrent }), print, appendEvent,
+    })).resolves.toBe(0);
+
+    expect(appendReducedCoverageIfCurrent).toHaveBeenCalledWith(expect.objectContaining({
+      rubric: 'testQuality', reason: 'scope-incomplete', operator: 'local-operator',
+    }), expect.any(Function));
+    expect(appendEvent).toHaveBeenCalledWith('/main/.worktrees/review-rubrics', expect.objectContaining({
+      type: 'build_review_reduced_coverage_accepted', rubric: 'testQuality', reason: 'scope-incomplete', operator: 'local-operator',
+    }));
+    expect(print).toHaveBeenCalledWith('build-review record-reduced-coverage: recorded testQuality for lap lap-current.');
+  });
+
   it('reports the committed decision when acceptance telemetry throws', async () => {
     // A recorded finding disposition is durable once
     // appendReducedCoverageIfCurrent commits. An event-writer throw used to
@@ -102,6 +153,7 @@ describe('build-review findings CLI', () => {
     ['skipped rubric', aggregateWithTestQuality({ kind: 'skipped', rubric: 'testQuality', reason: 'disabled' }), 3, [], 'infrastructure failure', false],
     ['remaining allowance', infrastructureAggregate, 2, [], 'allowance', true],
     ['duplicate decision', infrastructureAggregate, 3, [{ kind: 'reduced-coverage' as const, version: 'v1' as const, feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' }, identity: { rubric: 'testQuality' as const, reason: 'provider-error' as const }, rationale: 'already accepted', operator: 'james', acceptedAt: '2026-08-19T12:00:00.000Z' }], 'already recorded', true],
+    ['corrected scope', aggregateWithTestQuality({ kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS', scopeResolutions: [{ candidateId: 'candidate:setup', status: 'resolved', sourceRegion: { path: 'test/a.test.ts', startLine: 2, endLine: 3, contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'setup binding' }, obligationReferences: ['story:S6.2'], associationReason: 'Corrected pinned binding proves this candidate.' }] }), 3, [], 'current.*fault', false],
   ])('refuses %s without storing a reduced-coverage decision', async (_caseName, currentAggregate, mechanicalFaults, records, reason, entersLease) => {
     const persisted = [...records];
     const appendReducedCoverageIfCurrent = vi.fn(async (_input, validate) => {
@@ -320,7 +372,7 @@ describe('build-review findings CLI', () => {
     expect(machineOutput.lastMechanicalFault).toEqual(fault);
     expect(Object.keys(machineOutput).sort()).toEqual([
       'acceptedDispositions', 'acceptedFindingIds', 'feature', 'infrastructureFailureRubrics', 'lapId', 'lastMechanicalFault',
-      'rawVerdict', 'skippedRubrics', 'snapshotDigest', 'unresolvedFindingIds', 'verdict',
+      'rawVerdict', 'skippedRubrics', 'snapshotDigest', 'suppressedFindingIds', 'unresolvedFindingIds', 'verdict',
     ]);
     expect(human).toHaveBeenCalledWith(expect.stringContaining(
       'Last mechanical fault: testQuality; cause: malformed-artifact; lap: lap-rejected; diagnostic: response omitted a verdict',
@@ -372,13 +424,38 @@ describe('build-review findings CLI', () => {
 
     expect(machine).toHaveBeenCalledWith(JSON.stringify({
       feature: 'review-rubrics', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', rawVerdict: 'PASS', verdict: 'PASS',
-      acceptedFindingIds: [], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], acceptedDispositions: [],
+      acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], acceptedDispositions: [],
     }));
     expect(JSON.parse(machine.mock.calls[0]![0])).not.toHaveProperty('lastMechanicalFault');
     expect(human).toHaveBeenCalledWith([
       'Build review findings: review-rubrics', 'Lap: lap-current', 'Raw verdict: PASS', 'Effective verdict: PASS',
       'Accepted findings: none', 'Unresolved findings: none', 'Skipped rubrics: none', 'Infrastructure failures: none',
     ].join('\n'));
+  });
+
+  it('does not publish uncovered scope routing state in machine findings output', async () => {
+    const scopeIncomplete = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot', results: {
+        testQuality: {
+          kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [], verdict: 'PASS',
+          scopeResolutions: [{
+            candidateId: 'candidate:setup', status: 'indeterminate',
+            sourceRegion: { path: 'test/a.test.ts', startLine: 2, endLine: 3, contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'setup binding' },
+            obligationReferences: ['story:S6.2'], missingEvidenceReason: 'the pinned binding is incomplete',
+          }],
+        },
+      },
+    });
+    const print = vi.fn();
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(scopeIncomplete), createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }), print,
+    })).resolves.toBe(0);
+
+    const output = JSON.parse(print.mock.calls[0]![0]);
+    expect(output).toMatchObject({ verdict: 'FAIL', scopeIncompleteRubrics: ['testQuality'] });
+    expect(output).not.toHaveProperty('uncoveredScopeIncompleteRubrics');
   });
 
   it('uses the live runner canonical identity for both findings reads and acceptance writes through an alternate main root', async () => {
@@ -477,6 +554,38 @@ describe('build-review accept', () => {
   const testQualityIdentity = canonicalizeBuildReviewFindingIdentity({
     rubric: 'testQuality', contractVersion: 'v3', concernKind: testQualityFinding.concernKind, anchor: testQualityFinding.anchor,
   })!;
+
+  it('suppresses configured sub-floor findings in findings output and refuses to accept them', async () => {
+    const lowConfidenceFinding = { ...testQualityFinding, confidence: 60 };
+    const lowConfidenceAggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: {
+        testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3', findings: [lowConfidenceFinding], verdict: 'FAIL' },
+      },
+    });
+    const print = vi.fn();
+    const store = { list: vi.fn(async () => ({ ok: true as const, records: [] })), append: vi.fn() };
+    const config = vi.fn(async () => ({ ok: true as const, config: { build_review: { rubrics: { testQuality: { min_confidence: 70 } } } }, warnings: [] }));
+    const shared = {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(lowConfidenceAggregate), createStore: () => store, loadConfig: config, print,
+    };
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, shared)).resolves.toBe(0);
+    expect(JSON.parse(print.mock.calls[0]![0] as string)).toMatchObject({
+      verdict: 'PASS', unresolvedFindingIds: [], suppressedFindingIds: [testQualityIdentity.id],
+    });
+
+    print.mockClear();
+    await expect(dispatchBuildReviewAccept(
+      { kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: testQualityIdentity.id, rationale: 'Accepted risk' },
+      { ...shared, isInteractive: true, resolveOperator: () => 'local-operator', appendEvent: vi.fn() },
+    )).resolves.toBe(1);
+    expect(config).toHaveBeenNthCalledWith(1, '/main/.worktrees/review-rubrics');
+    expect(config).toHaveBeenNthCalledWith(2, '/main/.worktrees/review-rubrics');
+    expect(store.append).not.toHaveBeenCalled();
+    expect(print).toHaveBeenCalledWith(expect.stringContaining('not actionable'));
+  });
 
   let root: string;
 

@@ -28,6 +28,7 @@ graph TD
     RAW["Raw join<br/>unchanged"]
     REDUCE["deriveEffectiveBuildReviewVerdict<br/>buckets: accepted, suppressed, unresolved<br/>only unresolved blocks"]
     OPDISP["Operator accepted-risk state<br/>separate authority, unchanged"]
+    SEAM["build-review-suppression-history.ts<br/>persistBuildReviewSuppressions<br/>runs on PASS and FAIL laps"]
     PASSQ{"unresolved empty?"}
   end
 
@@ -53,8 +54,10 @@ graph TD
   CFG --> REDUCE
   OPDISP --> REDUCE
   REDUCE --> OUTER
-  COORD --> STORE
-  REDUCE --> PASSQ
+  REDUCE --> SEAM
+  SEAM --> STORE
+  COORD -->|reuses the same seam| STORE
+  SEAM --> PASSQ
   PASSQ -->|yes: PASS| LOG
   PASSQ -->|no| COORD
   STORE --> SETTLED
@@ -80,9 +83,13 @@ graph TD
   different authorities; the engine never writes a suppression into the operator disposition store.
 - **Absent confidence blocks.** A finding without the field lands in `unresolved`. The fail-safe
   direction is cost, never silence.
-- **Nothing is forgotten.** Suppressions are written to the durable case store and enter the
-  judge's context as non-blocking history; the predicate reads that store and never prunes it, so
-  resolved cases and old suppressions remain available when rubrics later conflict.
+- **Nothing is forgotten, on either route.** Suppressions are written to the durable case store by
+  one seam, `persistBuildReviewSuppressions`, invoked from the effective-verdict path BEFORE the
+  pass/fail fork — so a fully suppressed lap, which is an effective PASS that never enters post-join
+  judgement (D4.4), still leaves its entries. The coordinator is not a second writer: it re-runs that
+  same idempotent upsert, keyed by finding id, so a recurrence refreshes a row in place and nothing is
+  ever duplicated. Entries enter the judge's context as non-blocking history; the store is never
+  pruned, so resolved cases and old suppressions remain available when rubrics later conflict.
 - **Exact-id only.** The predicate admits no fuzzy equivalence. A drifted id is a live source and
   dispatches the judge, which is the judgement the adjudicator was built to make.
 
@@ -93,3 +100,4 @@ graph TD
 | 2026-09-06 | Initial generation | Authored during DECIDE for jstoup111/ai-conductor#2383 |
 | 2026-09-06 | Corrected demotion seam to judgement admission; added case store and adjudication context as changed components | Source trace during architecture-review |
 | 2026-09-06 | Rewritten: confidence moved from the adjudicator case record to the rubric finding; floor moved to the effective reducer; settled-recurrence predicate added | Operator revised the placement after review showed the adjudicator floor could not stop the per-lap remediate re-dispatch |
+| 2026-09-07 | Suppression persistence moved to a seam on the effective-verdict path, run on both PASS and FAIL laps; the coordinator reuses it instead of owning the only write | As-built review AB-1: a fully suppressed lap is an effective PASS and never reaches the coordinator, so D4.6 was unreachable for exactly the laps it governs |

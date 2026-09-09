@@ -179,7 +179,7 @@ describe('cumulative build-review kickback bound', () => {
         ok: true,
         feature: { version: 'v1', repository: dir, feature: 'cumulative-kickback-bound' },
         effective: {
-          rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [],
+          rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
           skippedRubrics: [], infrastructureFailureRubrics: ['testQuality'], uncoveredInfrastructureFailureRubrics: ['testQuality'],
         },
       }),
@@ -236,7 +236,7 @@ describe('cumulative build-review kickback bound', () => {
       buildReviewEffectiveResolver: async () => ({
         ok: true,
         effective: {
-          rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [],
+          rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
           skippedRubrics: [], infrastructureFailureRubrics: ['testQuality'], uncoveredInfrastructureFailureRubrics: ['testQuality'],
         },
       }),

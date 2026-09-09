@@ -27,10 +27,12 @@ describe('build-review Test Quality skill contract', () => {
     expect(skill).toMatch(/judgement-only contract/i);
   });
 
-  it('returns a findings-plus-optional-counterfactualSensitivity payload with closed vocabularies and a nested content-region anchor', async () => {
+  it('renders one coherent provider payload, while the engine stamps the v3 envelope afterward', async () => {
     const skill = await readFile(testQualitySkillPath, 'utf8');
 
-    expect(skill).toMatch(/required `findings` array and an optional\s+`counterfactualSensitivity` field/i);
+    expect(skill).toMatch(/Return exactly one provider payload JSON object with a required `findings` array, required\s+`scopeResolutions` array, and optional `counterfactualSensitivity` field/i);
+    expect(skill).toMatch(/Do not return `kind`, `rubric`, `contractVersion`, `lapId`, `snapshotDigest`, or\s+`verdict`: the engine stamps that `judged` envelope identity after validating this provider payload/i);
+    expect(skill).not.toMatch(/Return exactly one JSON object.*top-level.*`kind`/i);
     expect(skill).toMatch(/"counterfactualSensitivity": "supports \| indeterminate \| not-applicable"/);
     expect(skill).toMatch(/`supports` means either an executed in-scope example fails on the reverted tree, or the reverted\s+production causes the intended tests to fail during collection or load/i);
     expect(skill).toMatch(/`indeterminate`[\s\S]*#1915 database-auth or boot failures/i);
@@ -44,11 +46,19 @@ describe('build-review Test Quality skill contract', () => {
     expect(skill).toMatch(/never flattened/i);
   });
 
-  it('never reads, writes, or decides a disposition and judges only the supplied projection', async () => {
+  it('requires one source-grounded disposition for each supplied fallback candidate', async () => {
     const skill = await readFile(testQualitySkillPath, 'utf8');
 
-    expect(skill).toMatch(/does not read, write, apply, or decide a disposition/i);
-    expect(skill).toMatch(/engine owns scope selection,\s+evidence assembly,\s+result validation,\s+finding identity,\s+dispositions,\s+and the outer gate verdict/i);
+    expect(skill).toMatch(/`scopeResolutions`/i);
+    expect(skill).toMatch(/`resolved`, `out-of-scope`, or `indeterminate`/i);
+    expect(skill).toMatch(/candidateId/i);
+  });
+
+  it('reports candidate resolutions only from supplied authority and judges only the supplied projection', async () => {
+    const skill = await readFile(testQualitySkillPath, 'utf8');
+
+    expect(skill).toMatch(/does not read, write, or apply a disposition/i);
+    expect(skill).toMatch(/engine owns scope selection,\s+evidence assembly,\s+result validation,\s+finding identity,\s+the stamped result envelope,\s+and the outer gate verdict/i);
     expect(skill).toMatch(/omit tests outside the supplied in-scope projection/i);
     expect(skill).not.toMatch(/build-review accept|record-reduced-coverage/);
   });

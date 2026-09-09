@@ -10,6 +10,11 @@ The roles in this harness — engine, daemon, composer loop, host agent, operato
 work crosses the boundaries between them. For the module map and import layering, see
 [code-organization](../contributing/code-organization.md).
 
+[HARNESS.md](../../HARNESS.md) is the always-loaded execution contract. The optional
+[architecture and operations reference](../../ARCHITECTURE.md) holds the agent catalog, generated
+model table, routing/retry mechanics, enforcement taxonomy, update flow, and daemon command reference.
+Read it when working on those concerns; ordinary lifecycle execution does not require loading it.
+
 ## The five roles
 
 | Role | What it is | Owns | Never owns |

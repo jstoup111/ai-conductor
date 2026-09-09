@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import { resourceFromAttributes, type Resource } from '@opentelemetry/resources';
@@ -14,6 +15,8 @@ export interface ResourceContext {
   project?: string;
   /** Resolved project identity for service.instance.id. Defaults to 'unknown'. */
   projectName?: string;
+  /** Worker identity; metrics are stable per project/worker instead of feature. */
+  workerName?: string;
   /** Git branch: a non-empty string resolves; own empty/undefined is unresolved; omission is not supplied. */
   branch?: string;
   /** Engine version: a non-empty string resolves; own empty/undefined is unresolved; omission is not supplied. */
@@ -50,10 +53,13 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
   const feature = ctx.feature ?? 'unknown';
   const project = ctx.project ?? 'unknown';
   const projectName = ctx.projectName ?? 'unknown';
+  const workerName = ctx.workerName ?? 'unknown';
   const branch = normalizeIdentity(ctx, 'branch');
 
-  const featureStable = {
+  const traceStable = {
     'service.name': SERVICE_NAME,
+    // Trace identity intentionally remains feature scoped.  Metrics use the
+    // stable project/worker identity below.
     'service.instance.id': `${projectName}/${feature}`,
     'conductor.feature': feature,
     'conductor.project': project,
@@ -63,13 +69,27 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
   // one row per feature rather than one per run. Resolving the run id is also
   // skipped here: it writes the session-id file as a side effect, and the
   // metric scope has no use for the value.
-  if (signal === 'metrics') return resourceFromAttributes(featureStable);
+  if (signal === 'metrics') return resourceFromAttributes({
+    'service.name': SERVICE_NAME,
+    'service.instance.id': `${projectName}/${workerName}`,
+    'conductor.project': project,
+    'conductor.worker': workerName,
+    'host.name': resolveHostName(),
+  });
 
   return resourceFromAttributes({
-    ...featureStable,
+    ...traceStable,
     'conductor.run.id': ctx.runId ?? resolveRunId(ctx.pipelineDir),
     'conductor.engine.version': normalizeIdentity(ctx, 'engineVersion'),
   });
+}
+
+function resolveHostName(): string {
+  try {
+    return hostname() || 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 function normalizeIdentity(ctx: ResourceContext, key: 'branch' | 'engineVersion'): string {

@@ -5,6 +5,11 @@ import {
   validateRemediationCaseGraph,
   type RemediationCaseJudgement,
 } from '../../src/engine/remediation-case-validator.js';
+import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import {
+  assembleBuildReviewAdjudicationContext,
+  buildReviewAdjudicationSourceId,
+} from '../../src/engine/build-review-adjudication-context.js';
 
 const CURRENT_SOURCE_IDS = [
   'testQuality:finding-1',
@@ -70,6 +75,52 @@ describe('remediation case graph validator', () => {
         ],
       },
     });
+  });
+
+  it('does not require an outcome for a suppressed finding excluded by adjudication context assembly', () => {
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId: 'lap-suppressed-source' as never,
+      snapshotDigest: 'snapshot-suppressed-source',
+      results: {
+        testQuality: {
+          kind: 'judged', rubric: 'testQuality', lapId: 'lap-suppressed-source' as never,
+          snapshotDigest: 'snapshot-suppressed-source', contractVersion: 'v3', verdict: 'FAIL',
+          findings: [
+            { concernKind: 'test-insensitive', summary: 'Live finding.', evidenceLocations: ['test/live.test.ts:1'], anchor: { rubric: 'testQuality', locus: { path: 'test/live.test.ts', contentHash: 'sha256:live', display: 'live' } } },
+            { concernKind: 'test-insensitive', summary: 'Suppressed finding.', evidenceLocations: ['test/suppressed.test.ts:1'], anchor: { rubric: 'testQuality', locus: { path: 'test/suppressed.test.ts', contentHash: 'sha256:suppressed', display: 'suppressed' } } },
+          ],
+        },
+      },
+    });
+    const sources = projectBuildReviewAggregateSources(aggregate)!;
+    const [liveSource, suppressedSource] = sources;
+    const context = assembleBuildReviewAdjudicationContext({
+      aggregate,
+      priorCases: [],
+      excludedSourceIds: new Set([buildReviewAdjudicationSourceId(suppressedSource!)]),
+      suppressions: [{
+        findingId: suppressedSource!.findingId, rubric: 'testQuality', summary: 'Suppressed finding.',
+        confidence: 40, floor: 70, lastSeenLap: 'lap-suppressed-source',
+      }],
+    });
+    expect(context).toMatchObject({ ok: true });
+    if (!context.ok) throw new Error('expected suppression context to assemble');
+    const liveSourceIds = context.context.currentFindings.map((source) => source.sourceId);
+    const suppressedSourceId = buildReviewAdjudicationSourceId(suppressedSource!);
+    const judgement = {
+      mode: 'case-v1',
+      domain: 'build_review',
+      sourceOutcomes: [{ sourceId: buildReviewAdjudicationSourceId(liveSource!), outcome: 'rejected', caseRef: 'case-live' }],
+      cases: [{
+        caseRef: 'case-live', disposition: 'reject', priority: 'low',
+        rationale: 'The live finding is not actionable.', confidence: 'high', effect: { kind: 'none' },
+      }],
+    } as const satisfies RemediationCaseJudgement;
+
+    expect(liveSourceIds).toEqual([buildReviewAdjudicationSourceId(liveSource!)]);
+    expect(liveSourceIds).not.toContain(suppressedSourceId);
+    expect(context.context.suppressionHistory).toHaveLength(1);
+    expect(validateRemediationCaseGraph(liveSourceIds, judgement)).toMatchObject({ ok: true });
   });
 
   it.each([

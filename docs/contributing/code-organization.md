@@ -83,7 +83,7 @@ Flat `engine/` files cluster by filename prefix. Use the prefix to find the subs
 | markers | `halt-marker.ts`, `park-marker.ts`, `pause-marker.ts`, `phase-marker.ts`, `restart-marker.ts`, `restart-intent.ts` |
 | plugins | `plugin-loader.ts`, `plugin-registry.ts`, `plugin-manifest.ts` |
 | memory | `memory-store.ts`, `memory-cli.ts`, `memory-migrate.ts`, `local-memory-provider.ts` |
-| worktree / git | `worktree.ts`, `worktree-prepare.ts`, `worktree-shared.ts`, `git-hook-assets.ts` |
+| worktree / git | `worktree.ts`, `worktree-prepare.ts`, `worktree-shared.ts`, `git-blob-batch.ts`, `git-hook-assets.ts` |
 
 Two lookups that are easy to get wrong:
 
@@ -131,7 +131,7 @@ triggers `process.exit` or stdio side effects.
 
 | File | Generates |
 | --- | --- |
-| `generate-model-table.ts` | The HARNESS.md model-selection table, from `engine/provider-model-policy.ts` and `engine/model-table-metadata.ts`. |
+| `generate-model-table.ts` | The ARCHITECTURE.md model-selection table, from `engine/provider-model-policy.ts` and `engine/model-table-metadata.ts`. |
 | `generate-docs-guard-hook.ts` | `hooks/claude/docs-guard.sh`, from `engine/session-hook-assets.ts`. |
 | `generate-docs-guard-hook-main.ts` | The direct-execution shell for the above. |
 

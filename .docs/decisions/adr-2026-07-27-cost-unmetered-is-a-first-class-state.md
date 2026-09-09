@@ -47,7 +47,7 @@ Model metering as **three-valued** rather than boolean, and represent unknown co
 |---|---|---|---|
 | `fully-metered` | yes | yes | Claude (`total_cost_usd`) |
 | `cost-unmetered` | yes | **no** | Codex (subscription) |
-| `unmetered` | no | no | non-LLM steps, parse failure, interactive dispatches |
+| `unmetered` | no | no | non-LLM **dispatches**, parse failure, interactive dispatches (scoped by D5 below) |
 
 Concretely:
 
@@ -61,6 +61,44 @@ Concretely:
 
 `durationMs` is likewise left absent for Codex: the stream carries no model-time figure, and
 engine wall-clock measures a different quantity.
+
+### Amendment — 2026-09-07 (feature `stop-counting-provider-free-step-completions-as-un`, #1906)
+
+> Operator-approved on 2026-09-07 after the as-built review raised AB-1 and AB-2. Decisions 1-4
+> stand unreversed. The amendment narrows the **input domain** of the classification — which
+> records are dispatches at all — rather than redefining any of the three states.
+>
+> **D5. A provider-free step completion is not a dispatch, and is excluded before metering
+> classification.** A retained `step_completed` record that no earlier successful invoked provider
+> attempt matched and that carries none of `tokenUsage`, `actualProvider`, `preferredProvider` or
+> `model` describes a step that never called a provider. It is neither metered nor unmetered: it
+> contributes to no dispatch count, no metering bucket, no token or cost sum, and no per-provider
+> sub-rollup. The `unmetered` row's "non-LLM steps" entry is hereby scoped to non-LLM
+> *dispatches*; a native step that invoked nothing was never a dispatch to classify, and counting
+> it presented a fully measured feature as partially unmetered.
+>
+> **D6. `unmetered` keeps its Decision-3 meaning for every real dispatch.** An invoked provider
+> attempt whose usage is absent is one `unmetered` dispatch. A parse failure and an interactive
+> dispatch stay `unmetered`. An unmatched completion carrying provider or model attribution but no
+> usage stays one `unmetered` dispatch. An invoked attempt whose tokens are present but whose cost
+> is missing or unusable is one `cost-unmetered` dispatch, per Decision 2 — absent cost is never
+> collapsed into `unmetered`. Nothing that reached a provider is dropped.
+>
+> **D7. Historical replay reclassifies provider-free completions, and that is explicitly
+> accepted.** The per-feature rollup is a reader-side projection computed on demand over the
+> committed `.pipeline/events.jsonl` spine; no dispatch record is stored, so there is no committed
+> dispatch meaning for D5 to rewrite. Replaying a ledger written before this amendment under this
+> projection therefore reports fewer dispatches than it once did, because the completions it drops
+> were never provider calls. Decision 3's compatibility guarantee is honored where it applies —
+> the committed `## Cost` block's `unmetered:` field keeps its meaning, format and parse — and the
+> recount of provider-free completions is the deliberate correction this amendment exists to make.
+> `adr-2026-07-27-additive-cost-block-evolution-and-split-aggregates` Decision 1 is therefore
+> unaffected and needs no amendment: it governs the serialized block's field semantics, which D5
+> does not touch, not which events the reader projects into a dispatch.
+>
+> The state table in
+> `.docs/architecture/2026-07-27-codex-usage-metering-and-cost-attribution-906.md:19-25` is
+> amended in the same commit to match D5.
 
 ## Rejected alternatives
 

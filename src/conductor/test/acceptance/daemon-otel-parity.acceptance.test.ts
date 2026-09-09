@@ -10,7 +10,8 @@ import {
   type PushMetricExporter,
   type ResourceMetrics,
 } from '@opentelemetry/sdk-metrics';
-import { InMemorySpanExporter, type ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import { type ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import { CapturingSpanExporter as InMemorySpanExporter } from '../fixtures/capturing-span-exporter.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 
 const fixture = vi.hoisted(() => ({
@@ -50,7 +51,7 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
         invoked: true,
         tokenUsage: { input: 10, output: 2, costUsd: 0.25 },
       });
-      await vi.advanceTimersByTimeAsync(60_000);
+      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(60_000);
     }
     // The periodic exports need fake time, while daemon shutdown awaits the
     // SDK's real completion path. Return to real timers before cleanup.
@@ -81,6 +82,18 @@ afterEach(async () => {
 
 const config = { otel: { exporter: 'otlp', endpoint: 'http://fake-collector:4318' } } as HarnessConfig;
 const eventSequences: Partial<Record<ConductorEvent['type'], ConductorEvent[]>> = {
+  daemon_backlog_snapshot: [{
+    type: 'daemon_backlog_snapshot',
+    counts: { eligible: 1, waiting: 0, blocked: 0, gated: 0, parked: 0 },
+    oldestAgeSeconds: { eligible: 1 },
+    slots: { busy: 0, free: 1 },
+    inFlight: [],
+    blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
+    pollDurationMs: 1,
+  }],
+  feature_dispatch_started: [{ type: 'feature_dispatch_started', slug: 'feature-a', kind: 'initial' }],
+  feature_dispatch_ended: [{ type: 'feature_dispatch_ended', slug: 'feature-a', outcome: 'complete' }],
+  feature_shipped: [{ type: 'feature_shipped', slug: 'feature-a', active: { state: 'unavailable' } }],
   step_started: [{ type: 'step_started', step: 'build', index: 0 }],
   step_completed: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_completed', step: 'build', status: 'done' }],
   step_failed: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 }],
@@ -105,16 +118,36 @@ function eventSequence(type: ConductorEvent['type']): ConductorEvent[] {
 }
 
 interface OtelSignals {
-  spans: unknown[];
-  metrics: unknown[];
+  spans: Array<Record<string, unknown>>;
+  metrics: Array<{
+    name: string;
+    dataPoints: Array<{ value: unknown; attributes: Record<string, unknown> }>;
+  }>;
 }
 
-function withoutRunIdentity(attributes: Record<string, unknown>): Record<string, unknown> {
-  const { project: _project, feature: _feature, ...eventAttributes } = attributes;
+function withoutResourceIdentity(attributes: Record<string, unknown>): Record<string, unknown> {
+  const {
+    project: _project,
+    feature: _feature,
+    worker: _worker,
+    'service.name': _serviceName,
+    'service.instance.id': _serviceInstanceId,
+    'conductor.run.id': _runId,
+    'conductor.feature': _conductorFeature,
+    'conductor.project': _conductorProject,
+    'conductor.branch': _branch,
+    'conductor.engine.version': _engineVersion,
+    'conductor.worker': _conductorWorker,
+    ...eventAttributes
+  } = attributes;
   return eventAttributes;
 }
 
 function comparableMetricValue(name: string, value: unknown): unknown {
+  // Daemon gauges are refreshed by the daemon's own discovery ticks around a
+  // feature dispatch. Parity proves their instrument/label routing; the last
+  // observed value belongs to that live tick, not this injected fixture.
+  if (name.startsWith('conductor.daemon.')) return undefined;
   // Step duration is the only metric whose value is intentionally derived from
   // wall-clock time. The two supported wiring paths do not share a clock, so
   // compare the emitted observation count while retaining exact values for
@@ -127,13 +160,13 @@ function comparableMetricValue(name: string, value: unknown): unknown {
 
 function signals(spanExporter: InMemorySpanExporter, metricExporter: InMemoryMetricExporter): OtelSignals {
   return {
-    spans: spanExporter.getFinishedSpans().map((span: ReadableSpan) => ({ name: span.name, status: span.status, attributes: span.attributes, events: span.events.map((event) => ({ name: event.name, attributes: event.attributes })) })),
+    spans: spanExporter.getFinishedSpans().map((span: ReadableSpan) => ({ name: span.name, status: span.status, attributes: withoutResourceIdentity(span.attributes), events: span.events.map((event) => ({ name: event.name, attributes: event.attributes })) })),
     metrics: metricExporter.getMetrics().flatMap((resourceMetrics) => resourceMetrics.scopeMetrics.flatMap((scopeMetrics) =>
       scopeMetrics.metrics.map((metric) => ({
         name: metric.descriptor.name,
         dataPoints: metric.dataPoints.map((point) => ({
           value: comparableMetricValue(metric.descriptor.name, point.value),
-          attributes: withoutRunIdentity(point.attributes),
+          attributes: withoutResourceIdentity(point.attributes),
         })),
       })),
     )),
@@ -143,7 +176,12 @@ async function throughInteractive(events: ConductorEvent[]): Promise<OtelSignals
   const pipelineDir = await mkdtemp(join(tmpdir(), 'interactive-otel-parity-')); dirs.push(pipelineDir);
   const exporter = new InMemorySpanExporter();
   const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-  buildExporters.mockReturnValueOnce({ spanExporter: exporter, metricExporter });
+  // The daemon owns its lifetime meter and the feature scope owns spans, so
+  // both construction paths consult the transport seam. Keep one exporter per
+  // signal so the assertion observes the complete daemon output.
+  buildExporters
+    .mockReturnValueOnce({ spanExporter: exporter, metricExporter })
+    .mockReturnValueOnce({ spanExporter: exporter, metricExporter });
   const emitter = new ConductorEventEmitter();
   const context: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = { config, pipelineDir, emitter, startContext: { feature: 'interactive', project: 'test', pipelineDir, branch: undefined, engineVersion: undefined } };
   const visualizers = buildInteractiveVisualizers(new PluginRegistry(), config, context);
@@ -158,7 +196,9 @@ async function throughDaemonDispatch(events: ConductorEvent[], filteredType?: Co
   await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'otel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n');
   const exporter = new InMemorySpanExporter();
   const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-  buildExporters.mockReturnValueOnce({ spanExporter: exporter, metricExporter });
+  buildExporters
+    .mockReturnValueOnce({ spanExporter: exporter, metricExporter })
+    .mockReturnValueOnce({ spanExporter: exporter, metricExporter });
   await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }) });
   return signals(exporter, metricExporter);
 }
@@ -189,11 +229,16 @@ async function runDaemonExportScenario(metricExporter: PushMetricExporter): Prom
   fixture.metricExportAttempts = 3;
   await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true }); await mkdir(join(repo, '.ai-conductor'), { recursive: true });
   await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'otel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n');
-  buildExporters.mockReturnValueOnce({ spanExporter: new InMemorySpanExporter(), metricExporter });
+  buildExporters.mockReturnValue({ spanExporter: new InMemorySpanExporter(), metricExporter });
   await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }) });
-  const rawEvents = await readFile(join(fixture.worktreePath, '.pipeline/events.jsonl'), 'utf8');
+  const [rawFeatureEvents, rawDaemonEvents] = await Promise.all([
+    readFile(join(fixture.worktreePath, '.pipeline/events.jsonl'), 'utf8'),
+    readFile(join(repo, '.daemon/events.jsonl'), 'utf8'),
+  ]);
   return {
-    events: rawEvents.trim().split('\n').map((line) => JSON.parse(line) as ConductorEvent),
+    events: [rawFeatureEvents, rawDaemonEvents]
+      .flatMap((raw) => raw.trim().split('\n').filter(Boolean))
+      .map((line) => JSON.parse(line) as ConductorEvent),
     log: await readFile(join(repo, '.daemon/daemon.log'), 'utf8'),
     outcome: fixture.outcomes.at(-1)!,
     metricExportCalls: fixture.metricExportCalls,
@@ -214,7 +259,24 @@ function terminalVerdicts(events: ConductorEvent[]): Array<Record<string, unknow
   return verdicts;
 }
 function missingParityTypes(results: Map<ConductorEvent['type'], { interactive: OtelSignals; daemon: OtelSignals }>): ConductorEvent['type'][] {
-  return [...results].flatMap(([type, result]) => JSON.stringify(result.interactive) === JSON.stringify(result.daemon) ? [] : [type]);
+  return [...results].flatMap(([type, { interactive, daemon }]) => {
+    const daemonSpans = new Set(daemon.spans.map((span) => JSON.stringify(span)));
+    const missingSpan = interactive.spans.some((span) => !daemonSpans.has(JSON.stringify(span)));
+    const daemonMetrics = new Map<string, Set<string>>(
+      daemon.metrics.map((metric) => [
+        metric.name,
+        new Set(metric.dataPoints.map((point) => JSON.stringify(point))),
+      ]),
+    );
+    const missingPoint = interactive.metrics.some((metric) => {
+      const points = daemonMetrics.get(metric.name);
+      return !points || metric.dataPoints.some((point) => !points.has(JSON.stringify(point)));
+    });
+    // The daemon also records its own lifecycle/backlog observations around a
+    // dispatch. Parity is directional: every interactive observation must be
+    // present in that richer daemon stream, not byte-identical to it.
+    return missingSpan || missingPoint ? [type] : [];
+  });
 }
 
 describe('daemon OTel parity acceptance', () => {
@@ -233,7 +295,6 @@ describe('daemon OTel parity acceptance', () => {
   it('logs one persisted otel export failure without changing the daemon run outcome', async () => {
     vi.useFakeTimers();
     const failed = await runDaemonExportScenario(rejectingMetricExporter());
-    vi.useFakeTimers();
     const succeeded = await runDaemonExportScenario(new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE));
     const rendererErrors = failed.events.filter((event) => event.type === 'renderer_error');
     const errorLines = failed.log.split('\n').filter((line) => line.includes('renderer otel failed'));

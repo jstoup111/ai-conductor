@@ -52,9 +52,8 @@ export interface HaltRetentionDecision {
 /**
  * The halt classes sealed Story 3 names: a halt carrying one of these, with no
  * operator resume authorization, is retained by EVERY automatic path.
- * `over-scope` and `kickback-cap` are written verbatim to the sidecar but are
- * outside the daemon's `HaltDisposition` union, so the raw text is the only
- * place they can be recognized.
+ * Read the raw sidecar text so unknown classifications also fail closed,
+ * alongside the daemon's recognized `HaltDisposition` values.
  */
 export const RETAINED_HALT_CLASSES: ReadonlySet<string> = new Set([
   'needs-human',
@@ -878,7 +877,7 @@ export async function resumeRebaseFirst(opts: {
 
   if (outcome.kind === 'conflict_halt') {
     // Re-conflict on the new base → re-park via 9.0's existing HALT path.
-    await writeHalt(opts.worktreePath, outcome.conflicts, outcome.reason, opts.events);
+    await writeHalt(opts.worktreePath, outcome.conflicts, outcome.reason, opts.events, outcome.resumeShape);
     opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase re-conflicted on advanced base — re-parked`);
     return 'halted';
   }

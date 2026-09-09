@@ -685,7 +685,7 @@ describe('ST-976-2: verification recovers a seal stranded by a history rewrite',
   );
 
   it(
-    'negative: an unresolvable baseline object is an indeterminate fail-closed refusal with its own reason — never "rewritten, therefore rotatable"',
+    'negative: an unresolvable baseline object does not pre-empt the evaluation — the base-tip anchor alone decides, and it still refuses unvouched drift',
     async () => {
       const scratch = await makeFeatureRepo();
       const { repo } = scratch;
@@ -699,8 +699,10 @@ describe('ST-976-2: verification recovers a seal stranded by a history rewrite',
         `${JSON.stringify({ ...seal, baselineCommit: missingBaseline }, null, 2)}\n`,
         'utf8',
       );
-      // Drift that WOULD otherwise be provably inherited, so only the
-      // unresolvable baseline can explain the refusal.
+      // Uncommitted drift on a protected artifact: nothing in the history
+      // vouches for it, so the base-tip evaluation the unreadable baseline now
+      // falls through to must still refuse — never "rewritten, therefore
+      // rotatable".
       await writeRepoFile(repo, CANARY_PATH, 'guardrails v2\n');
 
       const verdict = await verifyProtectedArtifactSeal({
@@ -710,7 +712,11 @@ describe('ST-976-2: verification recovers a seal stranded by a history rewrite',
       });
 
       expect(verdict.ok).toBe(false);
-      expect((verdict as { reason: string }).reason).toMatch(/baseline/i);
+      // The verdict is the one the base tip produces, reached without throwing
+      // and without the old unreachable-by-construction baseline short-circuit.
+      expect((verdict as { reason: string }).reason).toContain(
+        `Uncommitted protected artifact changed: ${CANARY_PATH}`,
+      );
       expect((await readSeal(repo)).baselineCommit).toBe(missingBaseline); // unrotated
     },
     30000,

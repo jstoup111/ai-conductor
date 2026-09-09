@@ -1,3 +1,4 @@
+// Covers: task:2
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
 import { PassThrough } from 'node:stream';
@@ -679,10 +680,14 @@ describe('ClaudeProvider', () => {
         const [command, , options] = mockExeca.mock.calls[0] as [string, string[], any];
         expect(command).toBe('claude');
         // Claude adds no Codex-specific overlay of its own: the child env is
-        // exactly the inherited parent env (which may carry CODEX_HOME) plus
-        // the daemon-session marker — same inheritance as the pre-marker
-        // behavior where env was left undefined for execa to inherit.
-        expect(options.env).toEqual({ ...process.env, CONDUCT_DAEMON_SESSION: '1' });
+        // the inherited parent env (which may carry CODEX_HOME) plus the
+        // daemon-session marker, with tmux's implicit target variables masked.
+        expect(options.env).toEqual({
+          ...process.env,
+          CONDUCT_DAEMON_SESSION: '1',
+          TMUX: undefined,
+          TMUX_PANE: undefined,
+        });
       } finally {
         if (priorHome === undefined) delete process.env.CODEX_HOME;
         else process.env.CODEX_HOME = priorHome;
@@ -1530,6 +1535,19 @@ describe('ClaudeProvider', () => {
     });
 
     describe('rate-limit waitSeconds parsing', () => {
+      it('reports an exact two-hour wait from rate-limited output', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: '',
+          stderr: 'Error: rate limit exceeded, try again in 2 hours',
+          exitCode: 1,
+          failed: true,
+        } as any);
+
+        const result = await provider.invoke(baseOptions);
+
+        expect(result).toMatchObject({ rateLimited: true, waitSeconds: 7200 });
+      });
+
       it('parses waitSeconds from rate-limited output with reset time (happy path)', async () => {
         mockExeca.mockResolvedValue({
           stdout: '',
@@ -1612,7 +1630,7 @@ describe('ClaudeProvider', () => {
       expect(opts.env.CLAUDE_CODE_EFFORT_LEVEL).toBe('xhigh');
     });
 
-    it('passes only the parent env plus the daemon-session marker when effort is not set', async () => {
+    it('passes the parent env plus the daemon-session marker with tmux targets masked when effort is not set', async () => {
       mockExeca.mockResolvedValue({ stdout: '', exitCode: 0, failed: false } as any);
 
       await provider.invoke({ ...baseOptions });
@@ -1620,10 +1638,15 @@ describe('ClaudeProvider', () => {
       const [, , opts] = mockExeca.mock.calls[0] as [string, string[], any];
       // The env is always passed now (it carries CONDUCT_DAEMON_SESSION=1 for
       // the conduct-ts entry guard) but adds no effort override: parent env
-      // plus exactly the marker.
+      // plus the marker, with tmux target variables masked.
       expect(opts.env.CLAUDE_CODE_EFFORT_LEVEL).toBeUndefined();
       expect(opts.env.CONDUCT_DAEMON_SESSION).toBe('1');
-      expect(opts.env).toEqual({ ...process.env, CONDUCT_DAEMON_SESSION: '1' });
+      expect(opts.env).toEqual({
+        ...process.env,
+        CONDUCT_DAEMON_SESSION: '1',
+        TMUX: undefined,
+        TMUX_PANE: undefined,
+      });
     });
 
     it('invokeInteractive also forwards the effort env var', async () => {

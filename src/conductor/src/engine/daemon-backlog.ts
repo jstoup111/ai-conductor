@@ -21,6 +21,7 @@ import type { BlockerResolver, BlockerVerdict } from './blocker-resolver.js';
 import { announceWaitingForRoot } from './daemon-waiting-announce.js';
 import { listShippedRecords, parseShippedRecord, specHash } from './shipped-record.js';
 import type { BacklogTreeSource } from './backlog-tree-source.js';
+import { readGitBlobs, type GitBlobBatchRunner } from './git-blob-batch.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { isOperatorParked as readOperatorParkMarker } from './park-marker.js';
 import { parseCoherenceArtifact } from './coherence-parse.js';
@@ -60,15 +61,42 @@ export type { BacklogTreeSource } from './backlog-tree-source.js';
  * and artifacts that live only on an unmerged `spec/<slug>` branch are invisible
  * — the daemon builds a spec only once its PR is merged onto `baseBranch`.
  */
-export function gitTreeSource(projectRoot: string, baseBranch: string): BacklogTreeSource {
+export interface GitTreeSourceOptions {
+  /** Test seam for observing the one batched committed-blob read per scan. */
+  blobRunner?: GitBlobBatchRunner;
+  /** Test seam for observing committed-tree Git reads outside the batch reader. */
+  gitRunner?: (args: string[]) => Promise<{ stdout: string }>;
+}
+
+export function gitTreeSource(
+  projectRoot: string,
+  baseBranch: string,
+  options: GitTreeSourceOptions = {},
+): BacklogTreeSource {
+  let prefetchedDocs: Promise<Map<string, string>> | undefined;
+  const runGit = options.gitRunner ?? (async (args: string[]) => {
+    const { stdout } = await execFile('git', args, { cwd: projectRoot });
+    return { stdout: stdout.toString() };
+  });
+
+  const prefetchDocs = () => {
+    prefetchedDocs ??= (async () => {
+      try {
+        const { stdout } = await runGit(['ls-tree', '-r', '-z', '--name-only', baseBranch, '--', '.docs']);
+        const paths = stdout.split('\0').filter(Boolean);
+        const blobs = await readGitBlobs(projectRoot, baseBranch, paths, { runner: options.blobRunner });
+        return new Map([...blobs].map(([path, content]) => [path, content.toString('utf8')]));
+      } catch {
+        return new Map<string, string>();
+      }
+    })();
+    return prefetchedDocs;
+  };
+
   return {
     async listPlanFiles() {
       try {
-        const { stdout } = await execFile(
-          'git',
-          ['ls-tree', '--name-only', `${baseBranch}:.docs/plans`],
-          { cwd: projectRoot },
-        );
+        const { stdout } = await runGit(['ls-tree', '--name-only', `${baseBranch}:.docs/plans`]);
         return stdout
           .split('\n')
           .map((l) => l.trim())
@@ -82,11 +110,7 @@ export function gitTreeSource(projectRoot: string, baseBranch: string): BacklogT
     },
     async listShippedFiles() {
       try {
-        const { stdout } = await execFile(
-          'git',
-          ['ls-tree', '--name-only', `${baseBranch}:.docs/shipped`],
-          { cwd: projectRoot },
-        );
+        const { stdout } = await runGit(['ls-tree', '--name-only', `${baseBranch}:.docs/shipped`]);
         return stdout
           .split('\n')
           .map((l) => l.trim())
@@ -98,11 +122,7 @@ export function gitTreeSource(projectRoot: string, baseBranch: string): BacklogT
     },
     async listAdrFiles() {
       try {
-        const { stdout } = await execFile(
-          'git',
-          ['ls-tree', '--name-only', `${baseBranch}:.docs/decisions`],
-          { cwd: projectRoot },
-        );
+        const { stdout } = await runGit(['ls-tree', '--name-only', `${baseBranch}:.docs/decisions`]);
         return stdout
           .split('\n')
           .map((l) => l.trim())
@@ -113,13 +133,14 @@ export function gitTreeSource(projectRoot: string, baseBranch: string): BacklogT
       }
     },
     async readFile(relPath) {
+      const docs = await prefetchDocs();
+      if (relPath.startsWith('.docs/')) return docs.get(relPath) ?? null;
+
       try {
-        const { stdout } = await execFile('git', ['show', `${baseBranch}:${relPath}`], {
-          cwd: projectRoot,
-        });
+        const { stdout } = await runGit(['show', `${baseBranch}:${relPath}`]);
         return stdout;
       } catch {
-        return null; // absent from the base-branch tree
+        return null;
       }
     },
   };
