@@ -1,7 +1,7 @@
 ---
 slug: hotfix-ci-repair-daemon-tests
 spec_hash: 38c57ce6031325c5a88934cb953ec80180be7a5468e292539eeed5e6cc44feda
-pr: local
+pr: https://github.com/jstoup111/ai-conductor/pull/2468
 shipped: 2026-09-09
 engine_version: 20260909T114210Z-ff0b3522fec6
 ---
