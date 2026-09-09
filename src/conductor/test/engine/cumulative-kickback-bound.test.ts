@@ -10,7 +10,7 @@ import { coordinateBuildReviewRubrics, type BuildReviewCoordination } from '../.
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import type { BuildReviewFrozenInputs } from '../../src/engine/build-review-inputs.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
-import { readKickbackLedger, writeKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { writeState } from '../../src/engine/state.js';
@@ -290,3 +290,5 @@ describe('cumulative build-review kickback bound', () => {
     });
   });
 });
+
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

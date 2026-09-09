@@ -38,13 +38,12 @@ describe('Task 20 — daemon-cli wires the episode-halt tracker into runDaemon d
     // Stamp path: the deps' onHaltWritten delegates to the tracker.
     expect(source).toMatch(/onHaltWritten:\s*async[\s\S]{0,200}episodeHaltTracker\.onHaltWritten\(/);
 
-    // Sweep path: the deps delegate to the real sweep binding, which the
-    // integration case below drives against real marker files.
+    // Sweep path: retention uses the shared primitive, so every automatic
+    // recovery path retains a classified human halt consistently.
     expect(source).toMatch(
-      /sweepEpisodeHalts:\s*\(isParkedDep\)\s*=>\s*sweepEpisodeHalts\(episodeHaltTracker, worktreeBase, log, isParkedDep\)/,
+      /sweepEpisodeHalts:\s*async\s*\(isParkedDep\)\s*=>\s*\{\s*await\s+recoverEpisodeHalts\(/,
     );
-    expect(source).toMatch(/isOperatorActionHalt\(disposition\)/);
-    expect(source).toMatch(/readHaltClass\(join\(worktreeBase, slug\)\)/);
+    expect(source).toMatch(/readHaltClass:\s*\(slug\)\s*=>\s*readRawHaltClass\(join\(worktreeBase, slug\)\)/);
   });
 
   it('the real tracker records only episode-caused parks and gates on the live HALT marker', async () => {

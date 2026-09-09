@@ -25,7 +25,7 @@ import {
   renderOverScopeDecisionBlock,
 } from '../src/engine/accepted-widenings.js';
 import { parsePrdAuditReport } from '../src/engine/artifacts.js';
-import { readGrowth, readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
+import { readGrowth, readKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
 import { readState, writeState } from '../src/engine/state.js';
 import type { ConductState, StepName } from '../src/types/index.js';
@@ -2502,3 +2502,5 @@ describe('prd_audit kickback', () => {
     }
   });
 });
+
+import { writeKickbackLedger } from './kickback-ledger-test-support.js';

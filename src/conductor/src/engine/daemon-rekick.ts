@@ -3,9 +3,14 @@ import { join } from 'node:path';
 import {
   HALT_MARKER,
   HALT_CLASS_MARKER,
-  isOperatorActionHalt,
+  PLAN_GAP_HALT_CLASS,
   type HaltDisposition,
 } from './halt-marker.js';
+import {
+  KICKBACK_CAP_HALT_CLASS,
+  OVER_SCOPE_HALT_CLASS,
+  RECOVERABLE_CAP_HALT_CLASS_BY_GATE,
+} from './halt-classification.js';
 import {
   makeGitRunner,
   rebaseStateActive,
@@ -29,6 +34,262 @@ import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { ALL_STEPS } from './steps.js';
+import {
+  consumeKickbackResumeAuthorization,
+  isUnreadableKickbackGate,
+  isUnreadableKickbackLedger,
+  readKickbackLedger,
+} from './kickback-ledger.js';
+
+/** What an automatic path decided about one worktree's live halt classification. */
+export interface HaltRetentionDecision {
+  /** The class text actually observed; `unclassified` when the sidecar is absent. */
+  haltClass: string;
+  /** True when this halt must survive the automatic path that asked. */
+  retained: boolean;
+}
+
+/**
+ * The halt classes sealed Story 3 names: a halt carrying one of these, with no
+ * operator resume authorization, is retained by EVERY automatic path.
+ * Read the raw sidecar text so unknown classifications also fail closed,
+ * alongside the daemon's recognized `HaltDisposition` values.
+ */
+export const RETAINED_HALT_CLASSES: ReadonlySet<string> = new Set([
+  'needs-human',
+  PLAN_GAP_HALT_CLASS,
+  OVER_SCOPE_HALT_CLASS,
+  KICKBACK_CAP_HALT_CLASS,
+]);
+
+/**
+ * The single retention decision every automatic path shares (sealed Story 3).
+ *
+ * `readHaltClass` yields the raw `.pipeline/HALT.class` text (or a
+ * `HaltDisposition`, which is a subset of it). A class this daemon does not
+ * recognize is retained — an unknown classification is never evidence that a
+ * halt is safe to clear — and an unreadable sidecar fails closed the same way.
+ *
+ * `retainUnclassified` distinguishes an ABSENT sidecar. The base-advance sweep
+ * has always retained one (its `unclassified` disposition) and its sealed
+ * retention matrix depends on that, while the progress re-kick and episode-end
+ * paths exist precisely to recover halts written without a class. Only that one
+ * case differs; the named classes are decided here for all three.
+ */
+export async function resolveHaltRetention(
+  readHaltClass: () => Promise<string>,
+  options: { retainUnclassified?: boolean } = {},
+): Promise<HaltRetentionDecision> {
+  let raw: string;
+  try {
+    raw = (await readHaltClass()).trim();
+  } catch {
+    return { haltClass: 'unclassified', retained: true };
+  }
+  if (raw === '' || raw === 'unclassified') {
+    return { haltClass: 'unclassified', retained: options.retainUnclassified === true };
+  }
+  if (RETAINED_HALT_CLASSES.has(raw)) return { haltClass: raw, retained: true };
+  if (raw === 'mechanical' || raw === 'legacy') return { haltClass: raw, retained: false };
+  // An unknown classification is never evidence that a halt is safe to clear.
+  return { haltClass: raw, retained: true };
+}
+
+/** Raw `.pipeline/HALT.class` text for a worktree, or '' when absent. */
+export async function readRawHaltClass(worktreePath: string): Promise<string> {
+  try {
+    return await readFile(join(worktreePath, HALT_CLASS_MARKER), 'utf-8');
+  } catch {
+    return '';
+  }
+}
+
+/** Identity embedded in cap HALT bodies, binding authorization to that marker. */
+export async function readKickbackHaltGeneration(worktreePath: string): Promise<string> {
+  try {
+    const body = await readFile(join(worktreePath, HALT_MARKER), 'utf-8');
+    return /^Kickback halt generation: ([^\s]+)$/m.exec(body)?.[1] ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Episode-end recovery (Task 20): clear exactly the halts an outage episode
+ * caused. Operator intent wins first, then the shared retention predicate — an
+ * episode that happened to coincide with a human halt must not clear it.
+ */
+export async function recoverEpisodeHalts(deps: {
+  stampedHalts: () => Promise<string[]>;
+  isOperatorParked?: (slug: string) => Promise<boolean>;
+  /** Raw `.pipeline/HALT.class` text for the slug (see `readRawHaltClass`). */
+  readHaltClass: (slug: string) => Promise<string>;
+  clearMarker: (slug: string) => Promise<void>;
+  log?: (message: string) => void;
+}): Promise<string[]> {
+  const cleared: string[] = [];
+  for (const slug of await deps.stampedHalts()) {
+    // Operator intent outranks automatic recovery (same rule as rekickSweep).
+    if (deps.isOperatorParked && (await deps.isOperatorParked(slug))) {
+      deps.log?.(`episode-end sweep: ${slug} operator-parked — left for a human`);
+      continue;
+    }
+    const decision = await resolveHaltRetention(() => deps.readHaltClass(slug));
+    if (decision.retained) {
+      deps.log?.(`episode-end sweep: ${slug} retained — halt disposition ${decision.haltClass}`);
+      continue;
+    }
+    await deps.clearMarker(slug);
+    deps.log?.(`episode-end sweep: re-kicked ${slug} (episode-caused HALT cleared)`);
+    cleared.push(slug);
+  }
+  return cleared;
+}
+
+/** How a halt-for-resume clear ended: fully repaired, or left partially repaired. */
+export type ResumeHaltClearResult = 'confirmed' | 'partial';
+
+export interface ClearHaltForResumeDeps {
+  worktreePath: string;
+  slug: string;
+  /** Marker + class sidecar + REKICK sentinel (`clearMarker`). */
+  clearMarker: (worktreePath: string) => Promise<void>;
+  /** The feature's recorded PR, when it has one. */
+  resolvePrUrl?: (slug: string) => Promise<string | undefined>;
+  /** `cleanupHaltPresentation` for that PR. */
+  cleanupPresentation?: (prUrl: string) => Promise<ResumeHaltClearResult>;
+  /** Supersede the committed halt record (`.docs/halted/<slug>.md`). */
+  resolveCommittedRecord?: (worktreePath: string, slug: string) => Promise<unknown>;
+  log?: (message: string) => void;
+}
+
+/**
+ * Clear one halt as a single operation (adr-2026-08-09: marker and label are
+ * atomic; adr-2026-08-29 D6: the canonical marker/presentation lifecycle and
+ * committed-record resolution).
+ *
+ * Presentation repair runs BEFORE the marker is removed. The sealed negative
+ * path requires that a `partial` clear leaves the feature halted with its
+ * authorization unconsumed; repairing first is the only ordering under which
+ * "stays halted" is literally true rather than a marker already deleted.
+ */
+export async function clearHaltForResume(
+  deps: ClearHaltForResumeDeps,
+): Promise<ResumeHaltClearResult> {
+  const prUrl = await deps.resolvePrUrl?.(deps.slug);
+  if (prUrl && deps.cleanupPresentation) {
+    const presentation = await deps.cleanupPresentation(prUrl);
+    if (presentation === 'partial') {
+      deps.log?.(`kickback-budget ${deps.slug}: presentation repair partial — halt retained`);
+      return 'partial';
+    }
+  }
+  try {
+    const record = await deps.resolveCommittedRecord?.(deps.worktreePath, deps.slug);
+    if (typeof record === 'object' && record !== null && 'kind' in record && record.kind === 'failed') {
+      deps.log?.(`kickback-budget ${deps.slug}: halt record not superseded — halt retained`);
+      return 'partial';
+    }
+  } catch (error) {
+    deps.log?.(`kickback-budget ${deps.slug}: halt record not superseded (${errMsg(error)})`);
+    return 'partial';
+  }
+  await deps.clearMarker(deps.worktreePath);
+  return 'confirmed';
+}
+
+export interface ConsumeResumeAuthorizationsDeps {
+  listHaltedWorktrees: () => Promise<string[]>;
+  worktreePath: (slug: string) => string;
+  isOperatorParked: (slug: string) => Promise<boolean>;
+  /**
+   * True when the slug's work already shipped. A processed feature has nothing
+   * to resume, so its authorization is never consumed (same precedence the
+   * base-advance sweep gives `isProcessed`). Throwing is treated as
+   * NOT processed, matching that sweep's fail-open read.
+   */
+  isProcessed?: (slug: string) => Promise<boolean>;
+  /** Raw `.pipeline/HALT.class` text for the live halt, or '' when absent. */
+  readLiveHaltClass: (slug: string) => Promise<string>;
+  /** Generation embedded in the live cap marker, or '' when absent. */
+  readLiveHaltGeneration: (slug: string) => Promise<string>;
+  /** Clear the halt as one operation; `partial` retains it. */
+  clearHalt: (slug: string) => Promise<ResumeHaltClearResult>;
+  emit?: (slug: string, event: { type: 'halt_cleared'; cause: 'kickback-budget' }) => void | Promise<void>;
+  log?: (message: string) => void;
+}
+
+/**
+ * Consume one-shot operator authorizations at the daemon's halted-feature
+ * boundary (adr-2026-08-29 successor D3). This sweep never dispatches:
+ * `pickEligible`/`isHalted` remain the sole dispatch authority.
+ *
+ * Order is load-bearing. Park and processed checks come first, then the live
+ * halt must still be the cap halt the authorization was bound to, then the
+ * atomic clear, and only a CONFIRMED clear consumes the authorization.
+ */
+export async function consumeResumeAuthorizations(
+  deps: ConsumeResumeAuthorizationsDeps,
+): Promise<string[]> {
+  const cleared: string[] = [];
+  for (const slug of await deps.listHaltedWorktrees()) {
+    try {
+      if (await deps.isOperatorParked(slug)) continue;
+      if (deps.isProcessed) {
+        let processed = false;
+        try {
+          processed = await deps.isProcessed(slug);
+        } catch (error) {
+          deps.log?.(`kickback-budget ${slug}: isProcessed check FAILED (${errMsg(error)}); treating as unprocessed`);
+        }
+        if (processed) {
+          deps.log?.(`kickback-budget ${slug}: already shipped — authorization left unconsumed`);
+          continue;
+        }
+      }
+      const path = deps.worktreePath(slug);
+      const ledger = await readKickbackLedger(path);
+      if (isUnreadableKickbackLedger(ledger)) {
+        throw new Error('kickback ledger is unreadable');
+      }
+      // adr-2026-08-31 decision 3: a malformed sibling gate never invalidates a
+      // healthy gate's authorization, but its own gate is never honored.
+      const match = Object.entries(ledger.gates).find(([gate, entry]) =>
+        !isUnreadableKickbackGate(ledger, gate) &&
+        entry.capEvidence && entry.resumeAuthorization && !entry.resumeAuthorization.consumed &&
+        entry.capEvidence.gate === gate &&
+        entry.capEvidence.haltGeneration === entry.resumeAuthorization.haltGeneration,
+      );
+      if (!match) continue;
+      const [gate, entry] = match;
+      // The live halt must still be THIS gate's cap halt. Without this an
+      // authorization raised against a cap halt would clear whatever unrelated
+      // halt happened to replace it (D6: "no unrelated halt is cleared").
+      const liveHaltClass = (await deps.readLiveHaltClass(slug)).trim();
+      const expected = RECOVERABLE_CAP_HALT_CLASS_BY_GATE[gate];
+      if (expected === undefined || liveHaltClass !== expected) {
+        deps.log?.(
+          `kickback-budget ${slug}: retained — live halt class '${liveHaltClass || 'absent'}' ` +
+            `is not ${gate}'s recoverable cap halt`,
+        );
+        continue;
+      }
+      const liveGeneration = (await deps.readLiveHaltGeneration(slug)).trim();
+      if (liveGeneration !== entry.capEvidence!.haltGeneration) {
+        deps.log?.(`kickback-budget ${slug}: retained — live halt generation does not match authorization`);
+        continue;
+      }
+      // Repair-then-clear, then consume. A `partial` clear leaves the halt and
+      // the authorization exactly as they were, so the next iteration retries.
+      if ((await deps.clearHalt(slug)) === 'partial') continue;
+      if (await consumeKickbackResumeAuthorization(path, gate, entry.resumeAuthorization!.adjustmentId)) {
+        await deps.emit?.(slug, { type: 'halt_cleared', cause: 'kickback-budget' });
+        cleared.push(slug);
+      }
+    } catch (error) { deps.log?.(`kickback-budget ${slug}: retained (${errMsg(error)})`); }
+  }
+  return cleared;
+}
 
 // ── Main-advance re-kick sweep (ADR-013 / FR-7, FR-9, FR-12) ──────────────────
 //
@@ -197,13 +458,12 @@ export async function rekickSweep(
     // is reused below so mechanical/legacy clear-path logs are observable.
     let haltClass: HaltDisposition | undefined;
     if (deps.readHaltClass) {
-      haltClass = 'unclassified';
-      try {
-        haltClass = await deps.readHaltClass(slug);
-      } catch {
-        /* best-effort: an unreadable class is retained as unclassified */
-      }
-      if (isOperatorActionHalt(haltClass)) {
+      const readHaltClass = deps.readHaltClass;
+      // The base-advance sweep retains an absent class sidecar too; its sealed
+      // retention matrix (Task 6) depends on that and is unchanged here.
+      const decision = await resolveHaltRetention(() => readHaltClass(slug), { retainUnclassified: true });
+      haltClass = decision.haltClass as HaltDisposition;
+      if (decision.retained) {
         skipped.push(slug);
         let classReason = 'unknown';
         try {

@@ -145,6 +145,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'setup_repair',
   'project_setup',
   'plan_growth',
+  'kickback_budget_adjustment_authorized',
   'coverage_binding_judged',
   'coverage_binding_disabled',
   'config_deprecated_key',
@@ -182,6 +183,7 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
   'step_status_write_refused',
   'halt_cleared',
   'operator_rewind',
+  'kickback_budget_adjustment_authorized',
 ] satisfies Array<ConductorEvent['type']>;
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [

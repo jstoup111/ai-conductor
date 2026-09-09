@@ -104,3 +104,132 @@ describe('Task 5 — daemon-cli wires the real readHaltClass dep into the re-kic
     }
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 20 — sealed Story 3 requires EVERY automatic path (base-advance sweep,
+// progress re-kick, episode-end sweep) to retain a classified human halt with
+// no resume authorization. These drive the two paths the base-advance sweep
+// does not own, against real `.pipeline/HALT.class` fixtures.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Task 20 — the progress re-kick predicate retains classified human halts', () => {
+  const RETAINED = ['needs-human', 'plan-gap', 'kickback-cap', 'over-scope'];
+
+  async function seedProgress(
+    worktreeBase: string,
+    slug: string,
+    haltClass: string | undefined,
+  ): Promise<void> {
+    const pipeline = join(worktreeBase, slug, '.pipeline');
+    await mkdir(pipeline, { recursive: true });
+    await writeFile(join(pipeline, 'HALT'), 'halted\n', 'utf-8');
+    if (haltClass !== undefined) await writeFile(join(pipeline, 'HALT.class'), haltClass, 'utf-8');
+    // Forward progress: two resolved tasks against a stamped baseline of zero.
+    await writeFile(
+      join(pipeline, 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'completed' }, { id: '2', status: 'completed' }] }),
+      'utf-8',
+    );
+    await writeFile(
+      join(pipeline, 'task-evidence.json'),
+      JSON.stringify({ lastResolvedCount: 0 }),
+      'utf-8',
+    );
+  }
+
+  it.each(RETAINED)('returns false for a %s halt even with forward task progress', async (haltClass) => {
+    const { buildProgressReKickDeps } = await import('../../src/daemon-cli.js');
+    const worktreeBase = await mkdtemp(join(tmpdir(), 'progress-rekick-retain-'));
+    try {
+      await seedProgress(worktreeBase, 'feat', haltClass);
+      const deps = buildProgressReKickDeps({ build_progress_halt: { enabled: true } } as never, worktreeBase);
+      expect(await deps.isProgressReKickEligible!('feat')).toBe(false);
+    } finally {
+      await rm(worktreeBase, { recursive: true, force: true });
+    }
+  });
+
+  // An ABSENT sidecar is the one case that differs from the base-advance sweep:
+  // the progress path exists precisely to recover halts written without a
+  // class, and sealed Story 3 names four CLASSES, not the absence of one.
+  it('still returns true when the class sidecar is absent', async () => {
+    const { buildProgressReKickDeps } = await import('../../src/daemon-cli.js');
+    const worktreeBase = await mkdtemp(join(tmpdir(), 'progress-rekick-unreadable-'));
+    try {
+      await seedProgress(worktreeBase, 'feat', undefined);
+      const deps = buildProgressReKickDeps({ build_progress_halt: { enabled: true } } as never, worktreeBase);
+      expect(await deps.isProgressReKickEligible!('feat')).toBe(true);
+    } finally {
+      await rm(worktreeBase, { recursive: true, force: true });
+    }
+  });
+
+  it('still returns true for a mechanical halt with forward progress', async () => {
+    const { buildProgressReKickDeps } = await import('../../src/daemon-cli.js');
+    const worktreeBase = await mkdtemp(join(tmpdir(), 'progress-rekick-mechanical-'));
+    try {
+      await seedProgress(worktreeBase, 'feat', 'mechanical');
+      const deps = buildProgressReKickDeps({ build_progress_halt: { enabled: true } } as never, worktreeBase);
+      expect(await deps.isProgressReKickEligible!('feat')).toBe(true);
+    } finally {
+      await rm(worktreeBase, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Task 20 — episode-end recovery shares the retention predicate', () => {
+  it('leaves a needs-human halt in place and still clears a mechanical one', async () => {
+    const { recoverEpisodeHalts } = await import('../../src/engine/daemon-rekick.js');
+    const cleared: string[] = [];
+    const classes: Record<string, string> = { human: 'needs-human', broken: 'mechanical' };
+    const result = await recoverEpisodeHalts({
+      stampedHalts: async () => ['human', 'broken'],
+      readHaltClass: async (slug) => classes[slug] as never,
+      clearMarker: async (slug) => { cleared.push(slug); },
+    });
+    expect(cleared).toEqual(['broken']);
+    expect(result).toEqual(['broken']);
+  });
+
+  it('leaves an operator-parked slug alone before it even reads the class', async () => {
+    const { recoverEpisodeHalts } = await import('../../src/engine/daemon-rekick.js');
+    const cleared: string[] = [];
+    let classReads = 0;
+    await recoverEpisodeHalts({
+      stampedHalts: async () => ['parked'],
+      isOperatorParked: async () => true,
+      readHaltClass: async () => { classReads += 1; return 'mechanical'; },
+      clearMarker: async (slug) => { cleared.push(slug); },
+    });
+    expect(cleared).toEqual([]);
+    expect(classReads).toBe(0);
+  });
+
+  it('retains a halt whose class sidecar read throws (fails closed)', async () => {
+    const { recoverEpisodeHalts } = await import('../../src/engine/daemon-rekick.js');
+    const cleared: string[] = [];
+    await recoverEpisodeHalts({
+      stampedHalts: async () => ['unreadable'],
+      readHaltClass: async () => { throw new Error('EACCES'); },
+      clearMarker: async (slug) => { cleared.push(slug); },
+    });
+    expect(cleared).toEqual([]);
+  });
+});
+
+describe('Task 20 — daemon-cli wires both paths through the shared predicate', () => {
+  it('the episode-end sweep delegates to recoverEpisodeHalts with the real class reader', async () => {
+    const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
+    const sweep = source.match(/sweepEpisodeHalts:\s*async\s*\([\s\S]*?\n\s{6}\},/);
+    expect(sweep, 'expected a sweepEpisodeHalts binding').toBeTruthy();
+    expect(sweep![0]).toMatch(/recoverEpisodeHalts\(/);
+    expect(sweep![0]).toMatch(/readHaltClass:\s*\(slug\)\s*=>\s*readRawHaltClass\(/);
+  });
+
+  it('the progress re-kick predicate consults resolveHaltRetention', async () => {
+    const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
+    const predicate = source.match(/isProgressReKickEligible:\s*async\s*\(slug: string\)[\s\S]*?\n {4}\},/);
+    expect(predicate, 'expected an isProgressReKickEligible binding').toBeTruthy();
+    expect(predicate![0]).toMatch(/resolveHaltRetention\(/);
+  });
+});

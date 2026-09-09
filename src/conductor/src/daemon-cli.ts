@@ -146,6 +146,7 @@ import { isOperatorParked, reconcileStrandedParkMarkers, writeAutoPark } from '.
 import { amendDeferredAutoParkHaltAtWorktree } from './engine/auto-park-halt.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { getStepStatus, readState } from './engine/state.js';
+import { supersedeHaltRecord } from './engine/halt-record.js';
 import {
   createStepStatusWriteRefusalDiagnostics,
   resolveConductorStateStore,
@@ -176,6 +177,12 @@ import {
   hasRebaseInProgress,
   abortRebase,
   clearMarker,
+  clearHaltForResume,
+  consumeResumeAuthorizations,
+  readRawHaltClass,
+  readKickbackHaltGeneration,
+  recoverEpisodeHalts,
+  resolveHaltRetention,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
 import { isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
@@ -696,6 +703,7 @@ export function createRestartRequester(
 export function buildProgressReKickDeps(
   config: HarnessConfig | undefined,
   worktreeBase: string,
+  log?: (message: string) => void,
 ): {
   isProgressReKickEligible?: (slug: string) => Promise<boolean>;
   progressReKickDispatchCeiling: number;
@@ -712,6 +720,15 @@ export function buildProgressReKickDeps(
     progressReKickDispatchCeiling,
     isProgressReKickEligible: async (slug: string) => {
       const slugRoot = join(worktreeBase, slug);
+      // Sealed Story 3: a classified human halt is retained by EVERY automatic
+      // path, not only the base-advance sweep. Forward task progress is not
+      // authority to re-dispatch a halt only an operator can resolve, so the
+      // shared retention predicate is consulted before the progress compare.
+      const retention = await resolveHaltRetention(() => readRawHaltClass(slugRoot));
+      if (retention.retained) {
+        log?.(`progress re-kick: ${slug} retained — halt disposition ${retention.haltClass}`);
+        return false;
+      }
       const [lastResolvedCount, liveResolvedCount] = await Promise.all([
         readLastResolvedCount(slugRoot),
         countResolvedTasks(slugRoot),
@@ -1847,12 +1864,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // real progress-gated cross-dispatch re-kick (T8/T9/T10) into runDaemon
       // — previously constructed and fully unit-tested only at the
       // daemon.ts/pickEligible level, never reachable from this entrypoint.
-      ...buildProgressReKickDeps(config, worktreeBase),
-      // Task 2 (refuse-daemon-auto-resume-of-an-operator-action-ha): the
-      // progress-gated re-kick veto must read the live class from this
-      // feature's worktree, using the same canonical worktree base as the
-      // base-advance sweep above.
-      readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)),
+      ...buildProgressReKickDeps(config, worktreeBase, log),
       // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).
@@ -1894,8 +1906,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // episode-caused HALT recovery (daemon.ts guards with ?.()).
       onHaltWritten: async (slug, episodeCaused) =>
         episodeHaltTracker.onHaltWritten(slug, episodeCaused),
-      sweepEpisodeHalts: (isParkedDep) =>
-        sweepEpisodeHalts(episodeHaltTracker, worktreeBase, log, isParkedDep),
+      sweepEpisodeHalts: async (isParkedDep) => {
+        await recoverEpisodeHalts({
+          stampedHalts: () =>
+            episodeHaltTracker.getEpisodeHalts((slug) => isHalted(worktreeBase, slug)),
+          isOperatorParked: isParkedDep,
+          // Sealed Story 3: share the base-advance sweep's retention predicate
+          // so an episode that coincided with a human halt cannot clear it.
+          readHaltClass: (slug) => readRawHaltClass(join(worktreeBase, slug)),
+          clearMarker: (slug) => clearMarker(join(worktreeBase, slug)),
+          log,
+        });
+      },
       // Keep daemon-level observations on the existing root event spine.  The
       // loop owns scheduling state; this adapter is deliberately only the
       // synchronous projection from that state to its typed occurrence.
@@ -2163,6 +2185,46 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       },
       readPersistedBaseSha: () => readPersistedBaseSha(projectRoot),
       writePersistedBaseSha: (sha) => writePersistedBaseSha(projectRoot, sha, log),
+      consumeResumeAuthorizations: async () => {
+        await consumeResumeAuthorizations({
+          listHaltedWorktrees: () => listHaltedWorktrees(worktreeBase),
+          worktreePath: (slug) => join(worktreeBase, slug),
+          isOperatorParked: (slug) => isOperatorParked(projectRoot, slug),
+          // Same content-aware dedup the base-advance sweep uses: a shipped
+          // feature has nothing to resume, so its authorization is left alone.
+          isProcessed: makeIsProcessed(processedDir, gitTreeSource(projectRoot, baseBranch)),
+          readLiveHaltClass: (slug) => readRawHaltClass(join(worktreeBase, slug)),
+          readLiveHaltGeneration: (slug) => readKickbackHaltGeneration(join(worktreeBase, slug)),
+          // adr-2026-08-29 D6: the canonical marker/presentation lifecycle plus
+          // committed-record resolution, as ONE operation reporting `partial`.
+          clearHalt: (slug) =>
+            clearHaltForResume({
+              worktreePath: join(worktreeBase, slug),
+              slug,
+              clearMarker,
+              resolvePrUrl: async (feature) => {
+                const state = await readState(join(worktreeBase, feature));
+                return state.ok ? state.value.pr_url : undefined;
+              },
+              cleanupPresentation: (prUrl) =>
+                cleanupHaltPresentation(ownerGh, projectRoot, prUrl, log, undefined, { preserveDraft: true }),
+              resolveCommittedRecord: async (worktreePath, feature) => {
+                return supersedeHaltRecord(worktreePath, feature, 'kickback-budget');
+              },
+              log,
+            }),
+          // A halted feature has no active per-feature runner. Project this
+          // exact global occurrence through the feature's declared audit sink
+          // before forwarding it to the daemon-global bus.
+          emit: async (slug, event) => {
+            const featureEvents = new ConductorEventEmitter();
+            new AuditTrailWriter(join(worktreeBase, slug)).subscribe(featureEvents);
+            await featureEvents.emit(event);
+            await events.emit(event);
+          },
+          log,
+        });
+      },
       rekickSweep: async (sha, context) => {
         // Reconcile stranded park markers at the TOP of the sweep so the same
         // sweep that moves them also skips them (#486).

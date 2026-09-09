@@ -24,7 +24,7 @@ graph TD
 
   subgraph Marker["halt-marker (unchanged)"]
     WH["writeHaltMarker(root, body, class)"]
-    HALT["HALT + HALT.class<br/>needs-human, naming attempts spent"]
+    HALT["HALT + HALT.class<br/>needs-human (build_review) or kickback-cap (remediation)"]
   end
 
   subgraph Ledger["Kickback ledger (adr-2026-08-29 D1)"]
@@ -32,8 +32,8 @@ graph TD
   end
 
   subgraph CLI["Operator-only command family (D3)"]
-    RAISE["NEW: kickback-budget raise<br/>--feature «slug» --by N --rationale"]
-    RESET["NEW: kickback-budget reset<br/>--feature «slug» --rationale"]
+    RAISE["NEW: kickback-budget raise<br/>--feature «slug» --gate G --by N --rationale"]
+    RESET["NEW: kickback-budget reset<br/>--feature «slug» --gate G --rationale"]
     INSPECT["NEW: kickback-budget inspect<br/>one renderer (D8)"]
   end
 
@@ -82,8 +82,9 @@ graph TD
 - Green — new by this feature. Red — explicitly excluded; these halts stay fail-closed and are
   never retried, by adr-2026-08-17, adr-2026-06-30, adr-2026-07-26, adr-2026-08-05.
 - «…» — variable segment placeholder.
-- No new dispatch state, marker, timer, or grant store. `pickEligible`, `rekickSweep`, and
-  `HALT.class` are unchanged (adr-2026-08-05 §4, adr-2026-07-28 D2).
+- No new dispatch state, marker, timer, or grant store. `pickEligible` and `HALT.class` remain
+  unchanged; `rekickSweep` is the shared halt-retention seam used by base-advance, progress, and
+  episode-end recovery (adr-2026-08-05 §4, adr-2026-07-28 D2).
 - The CLI never clears a halt (08-29 D6; adr-2026-08-03 D6). It records an authorization in the
   ledger; the daemon boundary consumes it and clears through the existing atomic clear.
 - The `mechanical` class is unchanged in meaning; three writers move to `needs-human` because a

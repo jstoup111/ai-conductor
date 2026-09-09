@@ -30,8 +30,7 @@ import { readHaltClass } from '../../src/engine/halt-marker.js';
 import {
   MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
   readKickbackLedger,
-  writeKickbackLedger,
-} from '../../src/engine/kickback-ledger.js';
+  } from '../../src/engine/kickback-ledger.js';
 import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
@@ -239,3 +238,5 @@ describe('acceptance: a build_review PASS does not clear convergence (#1694 Stor
     );
   }, 60_000);
 });
+
+import { writeKickbackLedger } from '../kickback-ledger-test-support.js';

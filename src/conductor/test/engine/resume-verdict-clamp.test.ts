@@ -624,6 +624,13 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+        // This test observes resume selection. `test_suite` is engine-native,
+        // so keep its verifier inside the fixture instead of allowing the
+        // selected build to fall through to the repository configuration.
+        fullSuiteVerifier: {
+          ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+          inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+        },
       });
 
       await conductor.run();

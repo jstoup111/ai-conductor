@@ -8,8 +8,9 @@ import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-i
 import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId, type BuildReviewInfrastructureFailureReason } from './build-review-domain.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { resolveMainRepoRoot } from './park-marker.js';
+import { resolveCliFeatureWorktree } from './cli-operator-authority.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
-import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, readKickbackLedger, type KickbackGateEntry } from './kickback-ledger.js';
+import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, isUnreadableKickbackGate, readKickbackLedger, type KickbackGateEntry } from './kickback-ledger.js';
 import { loadConfig as loadConfigDefault, type ConfigResult } from './config.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import type { BuildReviewRubricId } from '../types/config.js';
@@ -184,8 +185,17 @@ async function resolveCliFeature(
   try {
     const resolveMainRoot = deps.resolveMainRoot ?? resolveMainRepoRoot;
     const realpath = deps.realpath ?? realpathDefault;
-    const root = await resolveMainRoot(deps.cwd ?? process.cwd());
-    const worktree = await realpath(join(root, '.worktrees', command.feature));
+    // The shared named-worktree resolution every operator command uses
+    // (adr-2026-08-29 D3: factored into a shared module rather than copied).
+    const worktree = await resolveCliFeatureWorktree(command.feature, {
+      cwd: deps.cwd,
+      resolveMainRoot: deps.resolveMainRoot,
+      realpath: deps.realpath,
+      // `resolveBuildReviewFeatureIdentity` below is this command's existence
+      // proof; a separate stat would reject an injected resolution seam.
+      verifyDirectory: false,
+    });
+    if (!worktree) return undefined;
     const feature = await resolveBuildReviewFeatureIdentity(worktree, { resolveMainRoot, realpath });
     return feature?.feature === command.feature ? { worktree, feature } : undefined;
   } catch {
@@ -216,7 +226,13 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
       ? await deps.readKickbackGateEntry(worktree)
       : deps.readMechanicalFaults
         ? { mechanicalFaults: await deps.readMechanicalFaults(worktree) }
-        : (await readKickbackLedger(worktree)).gates.build_review;
+        : await (async () => {
+          const ledger = await readKickbackLedger(worktree);
+          if (isUnreadableKickbackGate(ledger, 'build_review')) {
+            throw new Error("kickback ledger gate 'build_review' is unreadable");
+          }
+          return ledger.gates.build_review;
+        })();
     const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records, reducedCoverage.records, minConfidence);
     if (!effective) throw new Error('current findings are invalid');
     const accepted = acceptedDispositions(aggregate, feature, effective, records);
@@ -396,8 +412,13 @@ export async function dispatchBuildReviewRecordReducedCoverage(
     }
     if (!feature) throw new Error('feature identity is unavailable');
     let stateRefusal: string | undefined;
-    const readMechanicalFaults = deps.readMechanicalFaults ?? (async (root: string) =>
-      (await readKickbackLedger(root)).gates.build_review?.mechanicalFaults);
+    const readMechanicalFaults = deps.readMechanicalFaults ?? (async (root: string) => {
+      const ledger = await readKickbackLedger(root);
+      if (isUnreadableKickbackGate(ledger, 'build_review')) {
+        throw new Error("kickback ledger gate 'build_review' is unreadable");
+      }
+      return ledger.gates.build_review?.mechanicalFaults;
+    });
     const appended = await (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree).appendReducedCoverageIfCurrent({
       feature,
       rubric,

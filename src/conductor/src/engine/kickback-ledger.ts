@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import type { BuildReviewRubricId } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
@@ -8,6 +9,8 @@ import {
   type BuildReviewInfrastructureFailureReason,
 } from './build-review-domain.js';
 import { boundedHeadTailExcerpt } from './build-review-test-quality-preflight.js';
+import { createConductStateLease } from './conduct-state-lease.js';
+import type { ConductStateLeaseFailureKind } from './conduct-state-lease.js';
 
 /** The latest infrastructure failure charged to a build-review rubric lap. */
 export interface KickbackLastMechanicalFault {
@@ -15,6 +18,33 @@ export interface KickbackLastMechanicalFault {
   reason: BuildReviewInfrastructureFailureReason;
   detail: string;
   lapId: string;
+}
+
+export interface KickbackBudgetAdjustment {
+  id: string;
+  kind: 'raise' | 'reset';
+  beforeConsumed: number;
+  afterConsumed: number;
+  beforeLimit: number;
+  afterLimit: number;
+  operator: string;
+  rationale: string;
+  timestamp: string;
+  haltGeneration: string;
+}
+
+export interface KickbackCapEvidence {
+  gate: string;
+  consumed: number;
+  limit: number;
+  latestReason: string;
+  haltGeneration: string;
+}
+
+export interface KickbackResumeAuthorization {
+  adjustmentId: string;
+  haltGeneration: string;
+  consumed: boolean;
 }
 
 /** Durable state for a gate's cross-dispatch kickback budget. */
@@ -26,7 +56,25 @@ export interface KickbackGateEntry {
   /** Stable build-review work-order effects that already consumed this gate. */
   chargedEffectIds?: string[];
   mechanicalFaults?: number;
+  /** Non-charging retry laps for test-suite infrastructure failures. */
+  suiteInfrastructureRetries?: number;
   lastMechanicalFault?: KickbackLastMechanicalFault;
+  /** Feature-specific cumulative limit authorized by an operator. */
+  effectiveLimit?: number;
+  /** Feature-specific remediation lap limit authorized by an operator. */
+  effectiveLapCap?: number;
+  /** Completed operator-authorized budget changes. */
+  adjustments?: KickbackBudgetAdjustment[];
+  /** Current-schema marker: an absent history is authoritatively empty. */
+  adjustmentsKnown?: true;
+  /** Read-only marker retained when a persisted adjustment history is malformed. */
+  adjustmentsUnavailable?: boolean;
+  /** A staged adjustment awaiting its audit event and durable application. */
+  pendingAdjustment?: KickbackBudgetAdjustment;
+  /** Typed evidence captured before a budget-cap halt. */
+  capEvidence?: KickbackCapEvidence;
+  /** Authorization for the daemon to resume one matching cap halt. */
+  resumeAuthorization?: KickbackResumeAuthorization;
   treeHash: string | null;
   lastReason: string;
   priorVerdict: boolean;
@@ -63,14 +111,22 @@ export interface PlanGrowthEventSink {
 export interface KickbackLedger {
   version: 1;
   gates: Record<string, KickbackGateEntry>;
+  /** A durable ledger could not be safely interpreted; never authorize writes from it. */
+  unreadable?: true;
+  /** Invalid entries do not erase healthy sibling accounting, but still fail closed. */
+  unreadableGates?: string[];
   growth?: PlanGrowthRecord;
   pendingAsBuiltRemediationFindings?: PendingAsBuiltRemediationFinding[];
   settlementReceipts?: Record<string, { gates: string[] }>;
 }
 
-type PersistedKickbackGateEntry = Omit<KickbackGateEntry, 'cumulative' | 'mechanicalFaults'> & {
+type PersistedKickbackGateEntry = Omit<
+  KickbackGateEntry,
+  'cumulative' | 'mechanicalFaults' | 'suiteInfrastructureRetries'
+> & {
   cumulative?: number;
   mechanicalFaults?: number;
+  suiteInfrastructureRetries?: number;
 };
 
 interface PersistedKickbackLedger {
@@ -83,6 +139,54 @@ interface PersistedKickbackLedger {
 
 export const KICKBACK_LEDGER_PATH = '.pipeline/kickback-ledger.json';
 
+/** A feature-local ledger mutation could not obtain its exclusive lease. */
+export class KickbackLedgerLeaseError extends Error {
+  constructor(readonly kind: ConductStateLeaseFailureKind, message: string) {
+    super(message);
+    this.name = 'KickbackLedgerLeaseError';
+  }
+}
+
+/**
+ * Run one ledger read-modify-write transaction under the feature-local lease.
+ * The private writer below deliberately bypasses this wrapper so one
+ * transaction never attempts to acquire its own non-reentrant lease.
+ */
+export async function withKickbackLedgerLease<T>(
+  projectRoot: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const lease = createConductStateLease(join(projectRoot, KICKBACK_LEDGER_PATH), {
+    label: 'kickback-ledger',
+  });
+  let acquired = await lease.acquire();
+  // A competing writer creates the lease directory just before it records
+  // owner metadata.  That tiny window is neither a live nor ambiguous owner;
+  // retry it briefly so concurrent ledger transactions remain serialized.
+  for (
+    let retry = 0;
+    !acquired.ok &&
+      acquired.kind === 'recovery_refused' &&
+      acquired.message.includes('owner metadata is unavailable (ENOENT:') &&
+      retry < 10;
+    retry += 1
+  ) {
+    await delay(10);
+    acquired = await lease.acquire();
+  }
+  if (!acquired.ok) throw new KickbackLedgerLeaseError(acquired.kind, acquired.message);
+
+  let operationSucceeded = false;
+  try {
+    const result = await operation();
+    operationSucceeded = true;
+    return result;
+  } finally {
+    const released = await acquired.handle.release();
+    if (!released.ok && operationSucceeded) throw new KickbackLedgerLeaseError('filesystem', released.message);
+  }
+}
+
 /** A gate may be kicked back to BUILD this many times for one progress state. */
 export const MAX_KICKBACKS_PER_GATE = 2;
 
@@ -91,6 +195,9 @@ export const MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW = 5;
 
 /** Mechanical build-review faults allowed before human intervention is required. */
 export const MAX_MECHANICAL_FAULTS_BUILD_REVIEW = 3;
+
+/** Test-suite infrastructure retries allowed before human intervention is required. */
+export const MAX_SUITE_INFRASTRUCTURE_RETRIES = 2;
 
 /** Matches the raw rubric diagnostic cap before its detail reaches durable state. */
 const RUBRIC_FAILURE_DETAIL_CAP_BYTES = 2_048;
@@ -125,7 +232,16 @@ export type BumpMechanicalFaultsInLedgerResult =
   | { readonly kind: 'ok'; readonly entry: KickbackGateEntry }
   | { readonly kind: 'unreadable'; readonly reason: string };
 
-const NON_LAP_COUNTING_GATE_ENTRY_FIELDS = new Set(['count', 'resolvedBefore']);
+const NON_LAP_COUNTING_GATE_ENTRY_FIELDS = new Set([
+  'count',
+  'resolvedBefore',
+  'effectiveLimit',
+  'effectiveLapCap',
+  'adjustments',
+  'pendingAdjustment',
+  'capEvidence',
+  'resumeAuthorization',
+]);
 
 function isLapCountingValue(value: unknown): value is number | Record<string, number> {
   return (
@@ -157,6 +273,16 @@ function emptyLedger(): KickbackLedger {
   return { version: 1, gates: {} };
 }
 
+function unreadableLedger(gates: Record<string, KickbackGateEntry> = {}, unreadableGates?: string[]): KickbackLedger {
+  const ledger: KickbackLedger = { version: 1, gates };
+  // Keep the durable-state result structurally compatible with legacy readers;
+  // the typed sentinel is intentionally non-enumerable so it can never be
+  // persisted accidentally by a spread/write path.
+  Object.defineProperty(ledger, 'unreadable', { value: true, enumerable: false });
+  if (unreadableGates?.length) Object.defineProperty(ledger, 'unreadableGates', { value: unreadableGates, enumerable: false });
+  return ledger;
+}
+
 function isLastMechanicalFault(value: unknown): value is KickbackLastMechanicalFault {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
 
@@ -169,6 +295,43 @@ function isLastMechanicalFault(value: unknown): value is KickbackLastMechanicalF
   });
   return infrastructureFailure !== undefined &&
     typeof fault.lapId === 'string' && fault.lapId.trim().length > 0;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isBudgetAdjustment(value: unknown): value is KickbackBudgetAdjustment {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const adjustment = value as Record<string, unknown>;
+  return isNonEmptyString(adjustment.id) &&
+    (adjustment.kind === 'raise' || adjustment.kind === 'reset') &&
+    isNonNegativeInteger(adjustment.beforeConsumed) &&
+    isNonNegativeInteger(adjustment.afterConsumed) &&
+    isNonNegativeInteger(adjustment.beforeLimit) &&
+    isNonNegativeInteger(adjustment.afterLimit) &&
+    isNonEmptyString(adjustment.operator) &&
+    isNonEmptyString(adjustment.rationale) &&
+    isNonEmptyString(adjustment.timestamp) &&
+    isNonEmptyString(adjustment.haltGeneration);
+}
+
+function isCapEvidence(value: unknown): value is KickbackCapEvidence {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const evidence = value as Record<string, unknown>;
+  return isNonEmptyString(evidence.gate) &&
+    isNonNegativeInteger(evidence.consumed) &&
+    isNonNegativeInteger(evidence.limit) &&
+    isNonEmptyString(evidence.latestReason) &&
+    isNonEmptyString(evidence.haltGeneration);
+}
+
+function isResumeAuthorization(value: unknown): value is KickbackResumeAuthorization {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const authorization = value as Record<string, unknown>;
+  return isNonEmptyString(authorization.adjustmentId) &&
+    isNonEmptyString(authorization.haltGeneration) &&
+    typeof authorization.consumed === 'boolean';
 }
 
 function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntry {
@@ -185,7 +348,14 @@ function isKickbackGateEntry(value: unknown): value is PersistedKickbackGateEntr
       Number.isInteger(entry.mechanicalFaults) &&
       entry.mechanicalFaults >= 0
     )) &&
+    (entry.suiteInfrastructureRetries === undefined || isNonNegativeInteger(entry.suiteInfrastructureRetries)) &&
     (entry.lastMechanicalFault === undefined || isLastMechanicalFault(entry.lastMechanicalFault)) &&
+    (entry.effectiveLimit === undefined || isPositiveSafeInteger(entry.effectiveLimit)) &&
+    (entry.effectiveLapCap === undefined || isPositiveSafeInteger(entry.effectiveLapCap)) &&
+    (entry.adjustments === undefined || (Array.isArray(entry.adjustments) && entry.adjustments.every(isBudgetAdjustment))) &&
+    (entry.pendingAdjustment === undefined || isBudgetAdjustment(entry.pendingAdjustment)) &&
+    (entry.capEvidence === undefined || isCapEvidence(entry.capEvidence)) &&
+    (entry.resumeAuthorization === undefined || isResumeAuthorization(entry.resumeAuthorization)) &&
     (typeof entry.treeHash === 'string' || entry.treeHash === null) &&
     typeof entry.lastReason === 'string' &&
     typeof entry.priorVerdict === 'boolean' &&
@@ -197,6 +367,10 @@ function isChargedEffectIds(value: unknown): value is string[] {
   return Array.isArray(value) &&
     value.every((effectId) => typeof effectId === 'string' && effectId.trim().length > 0) &&
     new Set(value).size === value.length;
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -239,6 +413,16 @@ function isPendingAsBuiltRemediationFindings(
     new Set(value.map((finding) => finding.finding)).size === value.length;
 }
 
+function isSettlementReceipts(value: unknown): value is Record<string, { gates: string[] }> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) &&
+    Object.entries(value).every(([key, receipt]) =>
+      key.trim().length > 0 && typeof receipt === 'object' && receipt !== null &&
+      Array.isArray((receipt as { gates?: unknown }).gates) &&
+      (receipt as { gates: unknown[] }).gates.every(
+        (gate) => typeof gate === 'string' && gate.trim().length > 0,
+      ));
+}
+
 function isKickbackLedger(value: unknown): value is PersistedKickbackLedger {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
 
@@ -252,12 +436,7 @@ function isKickbackLedger(value: unknown): value is PersistedKickbackLedger {
     (
       ledger.pendingAsBuiltRemediationFindings === undefined ||
       isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
-    ) && (ledger.settlementReceipts === undefined ||
-      (typeof ledger.settlementReceipts === 'object' && ledger.settlementReceipts !== null &&
-        !Array.isArray(ledger.settlementReceipts) && Object.entries(ledger.settlementReceipts).every(([key, receipt]) =>
-          key.trim().length > 0 && typeof receipt === 'object' && receipt !== null &&
-          Array.isArray((receipt as { gates?: unknown }).gates) &&
-          (receipt as { gates: unknown[] }).gates.every((gate) => typeof gate === 'string' && gate.trim().length > 0))));
+    ) && (ledger.settlementReceipts === undefined || isSettlementReceipts(ledger.settlementReceipts));
 }
 
 /** Atomically record one admitted round's gate charges; replay is a no-op. */
@@ -266,20 +445,23 @@ export async function settleRemediationRound(
   receiptId: string,
   gates: readonly string[],
 ): Promise<{ settled: boolean }> {
-  const ledger = await readKickbackLedger(projectRoot);
-  if (ledger.settlementReceipts?.[receiptId]) return { settled: false };
-  const uniqueGates = [...new Set(gates)];
-  const nextGates = { ...ledger.gates };
-  for (const gate of uniqueGates) {
-    const current = nextGates[gate] ?? { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 };
-    nextGates[gate] = { ...current, laps: (current.laps ?? 0) + 1 };
-  }
-  await writeKickbackLedger(projectRoot, {
-    ...ledger,
-    gates: nextGates,
-    settlementReceipts: { ...ledger.settlementReceipts, [receiptId]: { gates: uniqueGates } },
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    if (ledger.settlementReceipts?.[receiptId]) return { settled: false };
+    const uniqueGates = [...new Set(gates)];
+    for (const gate of uniqueGates) requireReadableGate(ledger, gate);
+    const nextGates = { ...ledger.gates };
+    for (const gate of uniqueGates) {
+      const current = nextGates[gate] ?? { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0 };
+      nextGates[gate] = { ...current, laps: (current.laps ?? 0) + 1 };
+    }
+    await writeKickbackLedgerUnsafe(projectRoot, {
+      ...ledger,
+      gates: nextGates,
+      settlementReceipts: { ...ledger.settlementReceipts, [receiptId]: { gates: uniqueGates } },
+    });
+    return { settled: true };
   });
-  return { settled: true };
 }
 
 function normalizeKickbackLedger(ledger: PersistedKickbackLedger): KickbackLedger {
@@ -299,16 +481,109 @@ function normalizeKickbackLedger(ledger: PersistedKickbackLedger): KickbackLedge
   };
 }
 
+function normalizeKickbackGateEntry(value: unknown): PersistedKickbackGateEntry | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const entry = value as Record<string, unknown>;
+  const withoutHistory = { ...entry };
+  const historyIsValid = entry.adjustments === undefined || (
+    Array.isArray(entry.adjustments) && entry.adjustments.every(isBudgetAdjustment)
+  );
+  if (!historyIsValid) {
+    delete withoutHistory.adjustments;
+    withoutHistory.adjustmentsUnavailable = true;
+  }
+
+  return isKickbackGateEntry(withoutHistory) ? withoutHistory : undefined;
+}
+
+function parseKickbackLedger(value: unknown): KickbackLedger | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const ledger = value as Record<string, unknown>;
+  if (ledger.version !== 1 || typeof ledger.gates !== 'object' || ledger.gates === null || Array.isArray(ledger.gates)) {
+    return undefined;
+  }
+
+  const unreadableGates: string[] = [];
+  const gates = Object.fromEntries(
+    Object.entries(ledger.gates as Record<string, unknown>).flatMap(([gate, entry]) => {
+      const normalized = normalizeKickbackGateEntry(entry);
+      if (normalized === undefined) {
+        unreadableGates.push(gate);
+        return [];
+      }
+      return [[gate, normalized]];
+    }),
+  );
+  // These are ledger-level enforcement records. Silently omitting either
+  // creates fresh allowance or loses a durable remediation finding.
+  if (ledger.growth !== undefined && !isPlanGrowthRecord(ledger.growth)) {
+    return unreadableLedger(normalizeKickbackLedger({ version: 1, gates }).gates);
+  }
+  if (
+    ledger.pendingAsBuiltRemediationFindings !== undefined &&
+    !isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
+  ) return unreadableLedger(normalizeKickbackLedger({ version: 1, gates }).gates);
+  const parsed: PersistedKickbackLedger = {
+    version: 1,
+    gates,
+    ...(ledger.growth !== undefined && isPlanGrowthRecord(ledger.growth) ? { growth: ledger.growth } : {}),
+    ...(ledger.pendingAsBuiltRemediationFindings !== undefined && isPendingAsBuiltRemediationFindings(ledger.pendingAsBuiltRemediationFindings)
+      ? { pendingAsBuiltRemediationFindings: ledger.pendingAsBuiltRemediationFindings }
+      : {}),
+    ...(ledger.settlementReceipts === undefined || isSettlementReceipts(ledger.settlementReceipts)
+      ? { settlementReceipts: ledger.settlementReceipts }
+      : {}),
+  };
+  const normalized = normalizeKickbackLedger(parsed);
+  return unreadableGates.length > 0 ? unreadableLedger(normalized.gates, unreadableGates) : normalized;
+}
+
 /**
- * Read the durable kickback state. Missing, malformed, and incompatible
- * ledgers deliberately fail open to an empty budget and never interrupt a run.
+ * True when the ledger ENVELOPE could not be interpreted — an unsupported
+ * version, a corrupt document, or an unreadable file. adr-2026-08-31 decision 3
+ * reserves whole-ledger rejection for exactly that: one malformed gate entry
+ * never invalidates a sibling gate's counts, so a per-gate invalidity is
+ * reported by `isUnreadableKickbackGate` instead.
+ */
+export function isUnreadableKickbackLedger(ledger: KickbackLedger): boolean {
+  return ledger.unreadable === true && ledger.unreadableGates === undefined;
+}
+
+/** True when THIS gate's durable state must not be used to authorize anything. */
+export function isUnreadableKickbackGate(ledger: KickbackLedger, gate: string): boolean {
+  return isUnreadableKickbackLedger(ledger) || (ledger.unreadableGates?.includes(gate) ?? false);
+}
+
+/** Every gate whose own entry failed validation, for reporting it as unavailable. */
+export function unreadableKickbackGates(ledger: KickbackLedger): readonly string[] {
+  return ledger.unreadableGates ?? [];
+}
+
+function requireReadableLedger(ledger: KickbackLedger): void {
+  if (isUnreadableKickbackLedger(ledger)) {
+    throw new Error('kickback ledger is unreadable');
+  }
+}
+
+function requireReadableGate(ledger: KickbackLedger, gate: string): void {
+  requireReadableLedger(ledger);
+  if (isUnreadableKickbackGate(ledger, gate)) {
+    throw new Error(`kickback ledger gate '${gate}' is unreadable`);
+  }
+}
+
+/**
+ * Read durable kickback state. Only ENOENT is an empty base case. Every other
+ * failure is typed so callers retain their existing needs-human boundary rather
+ * than accidentally treating damaged accounting as fresh allowance.
  */
 export async function readKickbackLedgerResult(projectRoot: string): Promise<KickbackLedgerReadResult> {
   const ledgerPath = join(projectRoot, KICKBACK_LEDGER_PATH);
 
   try {
     const parsed: unknown = JSON.parse(await readFile(ledgerPath, 'utf-8'));
-    if (isKickbackLedger(parsed)) return { kind: 'ok', ledger: normalizeKickbackLedger(parsed) };
+    const ledger = parseKickbackLedger(parsed);
+    if (ledger && !isUnreadableKickbackLedger(ledger)) return { kind: 'ok', ledger };
 
     if (typeof parsed === 'object' && parsed !== null && (parsed as { version?: unknown }).version !== 1) {
       return { kind: 'unreadable', reason: 'kickback ledger has an unsupported version' };
@@ -320,28 +595,71 @@ export async function readKickbackLedgerResult(projectRoot: string): Promise<Kic
   }
 }
 
-/**
- * Legacy callers intentionally retain the historic fail-open behavior. New
- * enforcement boundaries consume readKickbackLedgerResult instead.
- */
+/** Read durable state while retaining valid sibling gates for diagnostics. */
 export async function readKickbackLedger(projectRoot: string): Promise<KickbackLedger> {
   const ledgerPath = join(projectRoot, KICKBACK_LEDGER_PATH);
   const result = await readKickbackLedgerResult(projectRoot);
-  if (result.kind === 'ok') return result.ledger;
-  if (result.kind === 'unreadable') {
-    if (result.reason === 'kickback ledger has an unsupported version') {
-      console.warn(`[kickback-ledger] unsupported ledger version at ${ledgerPath}; using empty ledger`);
-    } else if (result.reason === 'kickback ledger is corrupt') {
-      console.warn(`[kickback-ledger] corrupt ledger at ${ledgerPath}; using empty ledger`);
-    } else {
-      console.warn(`[kickback-ledger] unable to read ledger at ${ledgerPath}; using empty ledger: ${result.reason.slice('kickback ledger is unreadable: '.length)}`);
+  if (result.kind === 'ok') {
+    if (result.ledger.unreadable) {
+      console.warn(`[kickback-ledger] corrupt ledger gate entry at ${ledgerPath}; retaining sibling counts`);
     }
+    return result.ledger;
   }
-  return emptyLedger();
+  if (result.kind === 'absent') return emptyLedger();
+  if (result.reason.includes('unsupported version')) {
+    console.warn(`[kickback-ledger] unsupported ledger version at ${ledgerPath}`);
+  } else if (result.reason.startsWith('kickback ledger is unreadable:')) {
+    console.warn(`[kickback-ledger] unable to read ledger at ${ledgerPath}: ${result.reason.slice('kickback ledger is unreadable: '.length)}`);
+  } else {
+    console.warn(`[kickback-ledger] corrupt ledger at ${ledgerPath}`);
+  }
+  return unreadableLedger();
+}
+
+/**
+ * Read the test-suite infrastructure retry counter. Unlike ordinary ledger
+ * reads, this counter fails closed for corrupt durable state. A fresh ledger
+ * (or one without a test_suite entry) has spent no retry allowance yet.
+ */
+export async function readSuiteInfrastructureRetries(
+  projectRoot: string,
+): Promise<number | 'unreadable'> {
+  const ledger = await readKickbackLedger(projectRoot);
+  if (isUnreadableKickbackGate(ledger, 'test_suite')) return 'unreadable';
+  return ledger.gates.test_suite?.suiteInfrastructureRetries ?? 0;
+}
+
+/**
+ * Re-attach, verbatim, any on-disk gate entry that failed validation and is not
+ * being rewritten. adr-2026-08-31 decision 4 forbids repairing, defaulting, or
+ * inferring a failed value; scoping invalidity to its own gate (decision 3)
+ * must therefore not silently erase that gate's durable record when a sibling
+ * gate is written. Runs under the ledger lease, so the read is not racy.
+ */
+async function withPreservedUnreadableGates(
+  ledgerPath: string,
+  ledger: KickbackLedger,
+): Promise<KickbackLedger> {
+  let stored: unknown;
+  try {
+    stored = JSON.parse(await readFile(ledgerPath, 'utf-8'));
+  } catch {
+    return ledger;
+  }
+  const gates = (stored as { gates?: unknown } | null)?.gates;
+  if (typeof gates !== 'object' || gates === null || Array.isArray(gates)) return ledger;
+  const preserved: Record<string, unknown> = {};
+  for (const [gate, entry] of Object.entries(gates as Record<string, unknown>)) {
+    if (gate in ledger.gates) continue;
+    if (normalizeKickbackGateEntry(entry) === undefined) preserved[gate] = entry;
+  }
+  return Object.keys(preserved).length === 0
+    ? ledger
+    : ({ ...ledger, gates: { ...ledger.gates, ...preserved } } as KickbackLedger);
 }
 
 /** Write the ledger atomically, so readers never observe a partially written file. */
-export async function writeKickbackLedger(
+async function writeKickbackLedgerUnsafe(
   projectRoot: string,
   ledger: KickbackLedger,
 ): Promise<void> {
@@ -354,7 +672,7 @@ export async function writeKickbackLedger(
 
   await mkdir(ledgerDir, { recursive: true });
   try {
-    await writeFile(tempPath, JSON.stringify(ledger, null, 2));
+    await writeFile(tempPath, JSON.stringify(await withPreservedUnreadableGates(ledgerPath, ledger), null, 2));
     await rename(tempPath, ledgerPath);
   } catch (error) {
     await rm(tempPath, { force: true }).catch(() => {});
@@ -364,7 +682,9 @@ export async function writeKickbackLedger(
 
 /** Remove the ledger when a genuinely fresh feature session begins. */
 export async function clearKickbackLedger(projectRoot: string): Promise<void> {
-  await rm(join(projectRoot, KICKBACK_LEDGER_PATH), { force: true });
+  await withKickbackLedgerLease(projectRoot, async () => {
+    await rm(join(projectRoot, KICKBACK_LEDGER_PATH), { force: true });
+  });
 }
 
 function withRemaining(growth: PlanGrowthRecord, cap: number): PlanGrowth {
@@ -420,32 +740,35 @@ async function deriveGrowthFromActivePlan(
  * included in that denominator: they predate this feature's growth record.
  */
 export async function readGrowth(projectRoot: string, cap: number): Promise<PlanGrowth> {
-  const ledger = await readKickbackLedger(projectRoot);
-  const derived = await deriveGrowthFromActivePlan(projectRoot);
-  const stored = ledger.growth;
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableLedger(ledger);
+    const derived = await deriveGrowthFromActivePlan(projectRoot);
+    const stored = ledger.growth;
 
-  if (!stored) return withRemaining(derived.growth, cap);
+    if (!stored) return withRemaining(derived.growth, cap);
 
-  const matchesPlan = !derived.resolved || stored.authored + stored.added === derived.growth.authored;
-  if (growthTotalsAgree(stored) && matchesPlan) return withRemaining(stored, cap);
+    const matchesPlan = !derived.resolved || stored.authored + stored.added === derived.growth.authored;
+    if (growthTotalsAgree(stored) && matchesPlan) return withRemaining(stored, cap);
 
-  // A plan can contain an old unrecorded foreign append from before append
-  // authorization was centralized. Preserve every recorded addition rather
-  // than reclassifying it as authored and refunding its allowance.
-  if (growthTotalsAgree(stored) && derived.resolved) {
-    const reconciled = {
-      authored: Math.max(0, derived.growth.authored - stored.added),
-      added: stored.added,
-      byGate: { ...stored.byGate },
-    };
-    console.warn('[kickback-ledger] plan count diverged; preserving recorded growth allowance');
-    await writeKickbackLedger(projectRoot, { ...ledger, growth: reconciled });
-    return withRemaining(reconciled, cap);
-  }
+    // A plan can contain an old unrecorded foreign append from before append
+    // authorization was centralized. Preserve every recorded addition rather
+    // than reclassifying it as authored and refunding its allowance.
+    if (growthTotalsAgree(stored) && derived.resolved) {
+      const reconciled = {
+        authored: Math.max(0, derived.growth.authored - stored.added),
+        added: stored.added,
+        byGate: { ...stored.byGate },
+      };
+      console.warn('[kickback-ledger] plan count diverged; preserving recorded growth allowance');
+      await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: reconciled });
+      return withRemaining(reconciled, cap);
+    }
 
-  console.warn('[kickback-ledger] impossible growth record; recomputing from the active plan');
-  await writeKickbackLedger(projectRoot, { ...ledger, growth: derived.growth });
-  return withRemaining(derived.growth, cap);
+    console.warn('[kickback-ledger] impossible growth record; recomputing from the active plan');
+    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, growth: derived.growth });
+    return withRemaining(derived.growth, cap);
+  });
 }
 
 /** Persist a growth update and publish the resulting cap state on the event spine. */
@@ -458,12 +781,16 @@ export async function recordGrowth(
     throw new Error('plan growth must have non-negative counts whose gate total equals added');
   }
 
-  const ledger = await readKickbackLedger(projectRoot);
-  const cap = options.cap ?? growth.added;
-  const recorded = withRemaining(growth, cap);
-  await writeKickbackLedger(projectRoot, {
-    ...ledger,
-    growth: { authored: growth.authored, added: growth.added, byGate: { ...growth.byGate } },
+  const recorded = await withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableLedger(ledger);
+    const cap = options.cap ?? growth.added;
+    const next = withRemaining(growth, cap);
+    await writeKickbackLedgerUnsafe(projectRoot, {
+      ...ledger,
+      growth: { authored: growth.authored, added: growth.added, byGate: { ...growth.byGate } },
+    });
+    return next;
   });
   await options.events?.emit({ type: 'plan_growth', ...recorded });
   return recorded;
@@ -487,6 +814,7 @@ export function bumpKickbackGate(
     // checked, then clears it back to true after that single use.
     priorVerdict: true,
     resolvedBefore: input.resolvedCount,
+    adjustmentsKnown: true,
   };
   const madeProgress =
     previous.treeHash !== input.treeHash || input.resolvedCount > previous.resolvedBefore;
@@ -494,6 +822,7 @@ export function bumpKickbackGate(
 
   const nextEntry: KickbackGateEntry = {
     ...previous,
+    ...(entry === undefined ? { adjustmentsKnown: true as const } : {}),
     count: nextCount,
     cumulative: previous.cumulative + 1,
     treeHash: input.treeHash,
@@ -503,7 +832,9 @@ export function bumpKickbackGate(
 
   return {
     entry: nextEntry,
-    cumulativeExhausted: nextEntry.cumulative > MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+    cumulativeExhausted: nextEntry.cumulative > (
+      nextEntry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW
+    ),
     exhausted: !madeProgress && previous.count >= MAX_KICKBACKS_PER_GATE,
   };
 }
@@ -535,16 +866,54 @@ export async function bumpKickbackGateInLedger(
   projectRoot: string,
   gate: string,
   input: BumpKickbackGateInput,
-): Promise<BumpKickbackGateResult> {
-  const ledger = await readKickbackLedger(projectRoot);
-  const result = bumpKickbackGate(ledger.gates[gate], input);
-
-  await writeKickbackLedger(projectRoot, {
-    ...ledger,
-    gates: { ...ledger.gates, [gate]: result.entry },
+): Promise<BumpKickbackGateResult & { before: KickbackGateEntry | undefined }> {
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableGate(ledger, gate);
+    const result = bumpKickbackGate(ledger.gates[gate], input);
+    await writeKickbackLedgerUnsafe(projectRoot, {
+      ...ledger,
+      gates: { ...ledger.gates, [gate]: result.entry },
+    });
+    return { ...result, before: ledger.gates[gate] };
   });
+}
 
-  return result;
+/** Undo a build-review budget charge without restoring an obsolete whole ledger. */
+export async function refundBuildReviewKickback(
+  projectRoot: string,
+  before: KickbackGateEntry | undefined,
+): Promise<void> {
+  await withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableGate(ledger, 'build_review');
+    const current = ledger.gates.build_review;
+    if (!current) return;
+    if (before === undefined) {
+      // The charge created this gate entry.  Restoring its prior absence must
+      // remove it rather than materializing a zero-valued legacy entry: a
+      // dropped raw FAIL has consumed neither budget nor durable gate state.
+      const { build_review: _chargedEntry, ...gates } = ledger.gates;
+      await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, gates });
+      return;
+    }
+    // Only fields `bumpKickbackGate` changes are restored.  Any operator
+    // authorization, cap evidence, or sibling-gate update read under this
+    // lease remains authoritative.
+    const prior = before;
+    const restored = {
+      ...current,
+      count: prior.count,
+      cumulative: prior.cumulative,
+      treeHash: prior.treeHash,
+      lastReason: prior.lastReason,
+      resolvedBefore: prior.resolvedBefore,
+    };
+    await writeKickbackLedgerUnsafe(projectRoot, {
+      ...ledger,
+      gates: { ...ledger.gates, build_review: restored },
+    });
+  });
 }
 
 /** Load, idempotently charge, and atomically persist one build-review effect. */
@@ -553,19 +922,22 @@ export async function chargeBuildReviewEffectInLedger(
   effectId: string,
   input: BumpKickbackGateInput,
 ): Promise<ChargeBuildReviewEffectResult> {
-  const read = await readKickbackLedgerResult(projectRoot);
-  if (read.kind === 'unreadable') return { status: 'unreadable', reason: read.reason };
-  const ledger = read.kind === 'ok' ? read.ledger : emptyLedger();
-  const result = chargeBuildReviewEffect(ledger.gates.build_review, effectId, input);
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    if (isUnreadableKickbackGate(ledger, 'build_review')) {
+      return { status: 'unreadable', reason: "kickback ledger gate 'build_review' is unreadable" };
+    }
+    const result = chargeBuildReviewEffect(ledger.gates.build_review, effectId, input);
 
-  if (result.status === 'charged') {
-    await writeKickbackLedger(projectRoot, {
-      ...ledger,
-      gates: { ...ledger.gates, build_review: result.entry },
-    });
-  }
+    if (result.status === 'charged') {
+      await writeKickbackLedgerUnsafe(projectRoot, {
+        ...ledger,
+        gates: { ...ledger.gates, build_review: result.entry },
+      });
+    }
 
-  return result;
+    return result;
+  });
 }
 /** Purely consume one build-review mechanical-fault allowance. */
 export function bumpMechanicalFaults(
@@ -609,7 +981,7 @@ async function bumpMechanicalFaultsInLedgerFromLedger(
   const entry = ledger.gates[gate] ?? emptyKickbackGateEntry(gate);
 
   const nextEntry = bumpMechanicalFaults(entry, fault);
-  await writeKickbackLedger(projectRoot, {
+  await writeKickbackLedgerUnsafe(projectRoot, {
     ...ledger,
     gates: { ...ledger.gates, [gate]: nextEntry },
   });
@@ -626,10 +998,13 @@ export async function bumpMechanicalFaultsInLedgerResult(
   gate: string,
   fault?: KickbackLastMechanicalFault,
 ): Promise<BumpMechanicalFaultsInLedgerResult> {
-  const result = await readKickbackLedgerResult(projectRoot);
-  if (result.kind === 'unreadable') return result;
-  const ledger = result.kind === 'ok' ? result.ledger : emptyLedger();
-  return { kind: 'ok', entry: await bumpMechanicalFaultsInLedgerFromLedger(projectRoot, ledger, gate, fault) };
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    if (isUnreadableKickbackGate(ledger, gate)) {
+      return { kind: 'unreadable', reason: `kickback ledger gate '${gate}' is unreadable` };
+    }
+    return { kind: 'ok', entry: await bumpMechanicalFaultsInLedgerFromLedger(projectRoot, ledger, gate, fault) };
+  });
 }
 
 /**
@@ -641,7 +1016,246 @@ export async function bumpMechanicalFaultsInLedger(
   gate: string,
   fault?: KickbackLastMechanicalFault,
 ): Promise<KickbackGateEntry> {
-  const result = await bumpMechanicalFaultsInLedgerResult(projectRoot, gate, fault);
-  if (result.kind === 'ok') return result.entry;
-  return bumpMechanicalFaultsInLedgerFromLedger(projectRoot, await readKickbackLedger(projectRoot), gate, fault);
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableGate(ledger, gate);
+    return bumpMechanicalFaultsInLedgerFromLedger(projectRoot, ledger, gate, fault);
+  });
+}
+
+/** Increment the non-charging test-suite infrastructure retry allowance. */
+export async function bumpSuiteInfrastructureRetriesInLedger(
+  projectRoot: string,
+): Promise<KickbackGateEntry> {
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableGate(ledger, 'test_suite');
+    const entry = ledger.gates.test_suite ?? {
+      count: 0,
+      cumulative: 0,
+      treeHash: null,
+      lastReason: '',
+      priorVerdict: true,
+      resolvedBefore: 0,
+      adjustmentsKnown: true,
+    };
+    const nextEntry: KickbackGateEntry = {
+      ...entry,
+      adjustmentsKnown: true,
+      suiteInfrastructureRetries: (entry.suiteInfrastructureRetries ?? 0) + 1,
+    };
+    await writeKickbackLedgerUnsafe(projectRoot, {
+      ...ledger,
+      gates: { ...ledger.gates, test_suite: nextEntry },
+    });
+    return nextEntry;
+  });
+}
+
+/**
+ * Run one ledger read-modify-write as a SINGLE lease transaction.
+ *
+ * adr-2026-08-29 D4 requires every ledger read-modify-write path to share the
+ * bounded feature-local lease. Reading with `readKickbackLedger` and writing
+ * with a write-only leased wrapper takes the lease only for the write half, so a
+ * concurrent operator adjustment landing in between is silently overwritten.
+ * Callers that derive their next ledger from its current contents use this.
+ *
+ * Returning no `ledger` from the transaction writes nothing.
+ */
+export async function updateKickbackLedger<T>(
+  projectRoot: string,
+  transaction: (ledger: KickbackLedger) => { ledger?: KickbackLedger; result: T } | Promise<{ ledger?: KickbackLedger; result: T }>,
+  gate?: string,
+): Promise<T> {
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const current = await readKickbackLedger(projectRoot);
+    if (gate === undefined) requireReadableLedger(current);
+    else requireReadableGate(current, gate);
+    const { ledger, result } = await transaction(current);
+    if (ledger !== undefined) await writeKickbackLedgerUnsafe(projectRoot, ledger);
+    return result;
+  });
+}
+
+/**
+ * Consume one remediation lap for `gate` under a SINGLE lease transaction.
+ *
+ * adr-2026-08-29 D4 carries forward "all ledger read-modify-write paths share
+ * the existing bounded lease". Reading the entry outside the lease and writing
+ * the derived value inside it is not that: a concurrent operator adjustment
+ * landing between the two silently loses. The prior lap count is therefore read
+ * here, inside the same transaction that writes its successor.
+ *
+ * Returns the growth record observed under the lease so the caller merges its
+ * growth update from durable state rather than from a pre-lease snapshot.
+ */
+export async function recordRemediationGateLap(
+  projectRoot: string,
+  gate: string,
+  consumesLap: boolean,
+): Promise<{ entry: KickbackGateEntry & { laps: number }; growth: PlanGrowthRecord | undefined }> {
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableGate(ledger, gate);
+    const existing = ledger.gates[gate] ?? {
+      count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+    };
+    const entry = { ...existing, laps: (existing.laps ?? 0) + (consumesLap ? 1 : 0) };
+    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, gates: { ...ledger.gates, [gate]: entry } });
+    return { entry, growth: ledger.growth };
+  });
+}
+
+/** Persist the evidence that makes an operator budget recovery eligible. */
+export async function recordKickbackCapEvidence(
+  projectRoot: string,
+  gate: string,
+  evidence: Omit<KickbackCapEvidence, 'gate' | 'haltGeneration'> & { haltGeneration?: string },
+): Promise<KickbackGateEntry> {
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableGate(ledger, gate);
+    const existing = ledger.gates[gate] ?? {
+      count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0,
+    };
+    const next = {
+      ...existing,
+      capEvidence: {
+        gate,
+        ...evidence,
+        haltGeneration: evidence.haltGeneration ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      },
+    };
+    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, gates: { ...ledger.gates, [gate]: next } });
+    return next;
+  });
+}
+
+/** Mark a matching recovery authorization consumed without changing budget state. */
+export async function consumeKickbackResumeAuthorization(
+  projectRoot: string,
+  gate: string,
+  adjustmentId: string,
+): Promise<boolean> {
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableGate(ledger, gate);
+    const entry = ledger.gates[gate];
+    if (!entry?.resumeAuthorization || entry.resumeAuthorization.adjustmentId !== adjustmentId || entry.resumeAuthorization.consumed) return false;
+    const next = { ...entry, resumeAuthorization: { ...entry.resumeAuthorization, consumed: true } };
+    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, gates: { ...ledger.gates, [gate]: next } });
+    return true;
+  });
+}
+
+/** Durably stage an operator adjustment before its external authorization event. */
+export async function stageKickbackBudgetAdjustment(
+  projectRoot: string,
+  gate: string,
+  createAdjustment: (entry: KickbackGateEntry) => KickbackBudgetAdjustment,
+  verifyLiveHalt?: () => Promise<void>,
+): Promise<KickbackBudgetAdjustment> {
+  return withKickbackLedgerLease(projectRoot, async () => {
+    await verifyLiveHalt?.();
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableGate(ledger, gate);
+    const entry = ledger.gates[gate];
+    if (!entry) throw new Error('current cap evidence is missing or no longer matches the live halt');
+    const adjustment = createAdjustment(entry);
+    if (!capEvidenceAgreesWithAdjustment(entry, gate, adjustment, undefined)) {
+      throw new Error('current cap evidence is missing or no longer matches the live halt');
+    }
+    if (entry.pendingAdjustment && entry.pendingAdjustment.id !== adjustment.id) {
+      throw new Error('another kickback adjustment is awaiting reconciliation');
+    }
+    await writeKickbackLedgerUnsafe(projectRoot, {
+      ...ledger,
+      gates: { ...ledger.gates, [gate]: { ...entry, pendingAdjustment: adjustment } },
+    });
+    return adjustment;
+  });
+}
+
+/** Remove an eventless interrupted stage without changing the active budget. */
+export async function discardPendingKickbackBudgetAdjustment(
+  projectRoot: string,
+  gate: string,
+  adjustmentId: string,
+): Promise<boolean> {
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableGate(ledger, gate);
+    const entry = ledger.gates[gate];
+    if (!entry?.pendingAdjustment || entry.pendingAdjustment.id !== adjustmentId) return false;
+    await writeKickbackLedgerUnsafe(projectRoot, {
+      ...ledger,
+      gates: { ...ledger.gates, [gate]: { ...entry, pendingAdjustment: undefined } },
+    });
+    return true;
+  });
+}
+
+export async function applyKickbackBudgetAdjustment(
+  projectRoot: string,
+  gate: string,
+  adjustment: KickbackBudgetAdjustment,
+  defaultLimit: number,
+): Promise<KickbackGateEntry> {
+  return withKickbackLedgerLease(projectRoot, async () => {
+    const ledger = await readKickbackLedger(projectRoot);
+    requireReadableGate(ledger, gate);
+    const entry = ledger.gates[gate];
+    if (!entry || !capEvidenceAgreesWithAdjustment(entry, gate, adjustment, defaultLimit)) {
+      throw new Error('current cap evidence is missing or no longer matches the live halt');
+    }
+    const alreadyApplied = entry.adjustments?.find((item) => item.id === adjustment.id);
+    if (alreadyApplied) return entry;
+    if (entry.pendingAdjustment && entry.pendingAdjustment.id !== adjustment.id) {
+      throw new Error('staged adjustment does not match the requested authorization');
+    }
+    const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
+    const beforeLimit = remediation ? (entry.effectiveLapCap ?? defaultLimit) : (entry.effectiveLimit ?? defaultLimit);
+    const beforeConsumed = remediation ? (entry.laps ?? 0) : entry.cumulative;
+    const raised = adjustment.kind === 'raise' ? adjustment.afterLimit : beforeLimit;
+    const next: KickbackGateEntry = {
+      ...entry,
+      adjustmentsKnown: true,
+      ...(remediation
+        ? { effectiveLapCap: raised, laps: adjustment.kind === 'reset' ? 0 : entry.laps ?? 0 }
+        : { effectiveLimit: raised, cumulative: adjustment.kind === 'reset' ? 0 : entry.cumulative }),
+      adjustments: [...(entry.adjustments ?? []), { ...adjustment, beforeLimit, beforeConsumed, afterLimit: raised, afterConsumed: adjustment.kind === 'reset' ? 0 : beforeConsumed }],
+      pendingAdjustment: undefined,
+      resumeAuthorization: { adjustmentId: adjustment.id, haltGeneration: adjustment.haltGeneration, consumed: false },
+    };
+    await writeKickbackLedgerUnsafe(projectRoot, { ...ledger, gates: { ...ledger.gates, [gate]: next } });
+    return next;
+  });
+}
+
+/**
+ * D2's cap evidence is a snapshot of the exact budget the operator is
+ * authorizing.  Generation alone binds it to a halt, but cannot prove that a
+ * later gate update did not make its gate, count, or limit stale.  Both stage
+ * and apply use this one comparison so their lease-time eligibility cannot
+ * drift apart.
+ */
+function capEvidenceAgreesWithAdjustment(
+  entry: KickbackGateEntry,
+  gate: string,
+  adjustment: KickbackBudgetAdjustment,
+  defaultLimit: number | undefined,
+): boolean {
+  const evidence = entry.capEvidence;
+  if (!evidence || evidence.haltGeneration !== adjustment.haltGeneration || evidence.gate !== gate) return false;
+  const remediation = gate === 'prd_audit' || gate === 'architecture_review_as_built';
+  const currentConsumed = remediation ? (entry.laps ?? 0) : entry.cumulative;
+  const currentLimit = remediation
+    ? (entry.effectiveLapCap ?? defaultLimit ?? adjustment.beforeLimit)
+    : (entry.effectiveLimit ?? defaultLimit ?? adjustment.beforeLimit);
+  // Staging supplies adjustment values from this same entry. At apply, the
+  // values also reject a tampered/replayed authorization.
+  return currentLimit !== undefined &&
+    evidence.consumed === currentConsumed && evidence.limit === currentLimit &&
+    adjustment.beforeConsumed === currentConsumed && adjustment.beforeLimit === currentLimit;
 }

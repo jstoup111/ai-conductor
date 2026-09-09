@@ -43,20 +43,24 @@ sequenceDiagram
   participant H as halt-state clear (atomic)
   participant C as Conductor
 
-  O->>K: kickback-budget raise --feature «slug» --by N --rationale "…"
+  O->>K: kickback-budget raise --feature «slug» --gate G --by N --rationale "…"
+  K->>P: establish or reuse park quiescence (D4)
   K->>K: interactive-terminal gate + machine-scoped identity (D3)
-  K->>P: establish park quiescence (D4)
   K->>LG: stage adjustment {kind raise, by N, rationale, generation} (D5)
+  K->>S: kickback_budget_adjustment_authorized {adjustmentId, gate, kind, operator, before/after} (D7)
   K->>LG: apply: effectiveLimit + N, history appended (D1/D2)
-  K->>S: kickback_budget_adjusted {feature, gate, kind, by, rationale} (D7)
-  K->>P: release quiescence
+  alt CLI established the park
+    K->>P: release quiescence
+  else feature was already parked
+    Note over K,P: preserve the operator park
+  end
   K-->>O: rendered inspection: consumed / effectiveLimit / laps remaining (D8)
-  Note over D: next boundary — HALT is needs-human (08-29-successor D1)
+  Note over D: next boundary — HALT is needs-human for build_review, kickback-cap for remediation
   D->>LG: read typed cap evidence + authorization, generation must match (successor D2/D3)
   alt authorization valid and unconsumed
     D->>H: clear HALT + HALT.class + needs-remediation label as one operation (adr-2026-08-09)
     D->>LG: mark authorization consumed
-    D->>S: halt_cleared {feature, cause kickback-budget}
+    D->>S: halt_cleared {cause kickback-budget}
     D->>C: dispatch «slug» → resume after last completed step
   else no authorization, stale generation, or unreadable ledger
     D-->>D: retain halt (adr-2026-08-31 §1: never more permissive than the record)

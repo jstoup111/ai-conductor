@@ -408,14 +408,14 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
   );
 
   it(
-    'Story 1 negative: a corrupt ledger is treated as absent — the dispatch survives it, ' +
-    'warns, and proceeds on a fresh budget',
+    'Story 1 regression: a corrupt ledger fails closed — the dispatch warns, preserves the record, ' +
+    'and requires a human rather than granting fresh budget',
     async () => {
       await writeState(statePath, {
         ...frontDone(),
         track: 'technical',
-        // An unset value means a fresh session and deliberately clears the
-        // ledger before its tolerant reader can observe corruption.
+        // A populated value preserves the ledger across this re-dispatch, so
+        // the reader must enforce its corrupt-record behavior.
         run_started_at: 1,
       });
       await writeFile(join(dir, KICKBACK_LEDGER), '{ not json at all');
@@ -432,13 +432,10 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       };
       await expect(makeConductor(runner, { escalationEnabled: false }).run()).resolves.not.toThrow();
 
-      expect(kicks.filter((k) => k.from === 'build_review' && k.to === 'build')).toHaveLength(
-        MAX_KICKBACKS_PER_GATE,
-      );
+      expect(kicks.filter((k) => k.from === 'build_review' && k.to === 'build')).toHaveLength(0);
       expect(warn).toHaveBeenCalled();
-      // The corrupt document is replaced, not left to poison the next dispatch.
-      const entry = await readLedgerEntry(dir, 'build_review');
-      expect(entry).not.toBeNull();
+      expect(await readFile(join(dir, KICKBACK_LEDGER), 'utf8')).toBe('{ not json at all');
+      expect(await readHaltClass(dir)).toBe('needs-human');
       warn.mockRestore();
     },
     60_000,

@@ -905,6 +905,38 @@ protected reference elsewhere in the task.
 Run it before committing a plan. Correct the accepted artifact during DECIDE and re-author the task;
 do not hand the amendment to BUILD. The land gate repeats this check when a spec is landed.
 
+## `ai-conductor kickback-budget`
+
+```bash
+ai-conductor kickback-budget inspect --feature <slug> [--format human|json]
+ai-conductor kickback-budget raise --feature <slug> --gate <gate> --by <positive-integer> --rationale "<reason>"
+ai-conductor kickback-budget reset --feature <slug> --gate <gate> --rationale "<reason>"
+```
+
+Use this operator-only command to inspect or authorize one recovery from a budget-cap halt. `raise`
+and `reset` require a local interactive terminal, a live HALT, matching cap evidence, and a
+machine-scoped operator identity resolved from your user config's `spec_owner` and otherwise from
+the `gh`-authenticated login — no environment variable names the operator. The rationale must be
+non-empty and at most 2000 bytes. They record an auditable authorization for the daemon to
+consume. The authorization is durably staged before its
+event is written, so an interrupted command is reconciled exactly once on the next command entry.
+The daemon consumes a matching authorization on its next loop iteration; it does not wait for an
+unrelated base-branch advance. Supported gates are `build_review`, `prd_audit`, and
+`architecture_review_as_built`. Inspect always lists all three gates; JSON renders an empty
+`adjustments` array for a valid gate with no adjustment history. Inspect also performs that
+reconciliation, so it is safe as the first command after an interrupted `raise` or `reset`.
+
+The eligible live halt class is per gate: `build_review`'s cumulative convergence cap halts
+`needs-human`, while the `prd_audit` and `architecture_review_as_built` remediation-lap caps halt
+`kickback-cap`. A `raise` or `reset` naming a gate whose live halt carries the other class is
+refused and changes nothing.
+
+`raise` increases that feature's effective limit by `--by`; `reset` returns the gate's consumed
+count to zero without lowering an already authorized effective limit. For either mutation, the
+command temporarily parks an unparked feature while it records the authorization and removes that
+temporary park after success. It preserves a park that already existed; unpark that feature when
+ready, otherwise the daemon leaves the authorization unconsumed.
+
 ## `ai-conductor decide-grant`
 
 ```bash

@@ -11,7 +11,7 @@ import {
   renderAsBuiltInvalidReason,
 } from '../src/engine/artifacts.js';
 import { Conductor, type StepRunner } from '../src/engine/conductor.js';
-import { readKickbackLedger, writeKickbackLedger } from '../src/engine/kickback-ledger.js';
+import { readKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
 import { writeState } from '../src/engine/state.js';
 import type { ConductState, StepName } from '../src/types/index.js';
@@ -1120,3 +1120,5 @@ describe('as-built SHIP routing', () => {
     });
   });
 });
+
+import { writeKickbackLedger } from './kickback-ledger-test-support.js';

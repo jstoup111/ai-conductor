@@ -125,6 +125,9 @@ describe('live-agent daemon E2E tier (#1124)', () => {
     expect(workflow).toMatch(/export\s+"\$\{\{\s*matrix\.credential_env\s*\}\}=\$LIVE_PROVIDER_CREDENTIAL"/);
     expect(workflow).toMatch(/SMOKE_MODE=gate\s+npm\s+run\s+smoke\s+--\s+"\$\{\{\s*matrix\.smoke_file\s*\}\}"/);
     expect(workflow).toMatch(/unset\s+LIVE_PROVIDER_CREDENTIAL/);
+    // The aggregate gate exits successfully only after it has found a
+    // successful provider result; the provider legs themselves remain gated.
+    expect(workflow).toMatch(/No live-provider E2E passed\."\s*\n\s*exit\s+1/);
     const providerLeg = workflow.slice(workflow.indexOf('live-daemon-e2e:'), workflow.indexOf('live-provider-gate:'));
     expect(providerLeg).not.toMatch(/exit\s+0/);
     expect(workflow).toMatch(/if\s+grep\s+-Rqx\s+success\s+live-provider-results;\s+then[\s\S]*exit\s+0/);

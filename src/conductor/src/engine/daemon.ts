@@ -465,6 +465,8 @@ export interface DaemonDeps {
    * FR-9 bound lives inside the wired impl.
    */
   rekickSweep?: (sha: string, context: DaemonSweepContext) => Promise<void>;
+  /** Operator authorizations are independent of base movement and run every loop. */
+  consumeResumeAuthorizations?: () => Promise<void>;
   /**
    * Task 18 (ADR-013): optional reconciliation hook for halt-PR state.
    * Invoked on startup and once per idle poll tick, BEFORE sweepMergeableLabels
@@ -1139,7 +1141,10 @@ export async function runDaemon(
   // Startup advance check: refresh so a base that moved on origin while the
   // daemon was DOWN is caught (FR-5 downtime-advance path).
   // FR-14: sweep mergeable labels on startup (after reconciliation).
-  await maintenance.startup(() => maybeRekick(true), sweepBestEffort);
+  await maintenance.startup(async () => {
+    await maybeRekick(true);
+    await deps.consumeResumeAuthorizations?.();
+  }, sweepBestEffort);
 
   // Stale-engine restart gate chain (Task 12, gates 1-4) — constant per run.
   const staleGatesArmed =
@@ -1366,6 +1371,9 @@ export async function runDaemon(
         isProgressReKickEligible: isProgressReKickEligibleBounded,
       };
 
+      // An operator adjustment changes the feature ledger, not main's SHA.
+      // Consume it before retained HALTs are classified for this iteration.
+      await deps.consumeResumeAuthorizations?.();
       if (!paused && !episodeActive && !buildAuthMissing && !ghVersionBlocked) {
         // Local-only discovery first (no remote fetch): cheap, and it preserves
         // the common path when a slot can be filled without origin I/O.
