@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:5
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -132,6 +132,99 @@ describe('accepted widening decision store', () => {
       { id: 'decision-1', revision: 1, originalCaseId: 'prd-case-1' },
       { id: 'decision-2', revision: 2, criterion: 'S3.1' },
     ] } });
+  });
+
+  it('rejects reversals that target a foreign case or stale decision revision', async () => {
+    const projectRoot = await createProjectRoot();
+    const identifiers = ['decision-1', 'decision-2', 'decision-3'];
+    const store = new AcceptedWideningDecisionStore(projectRoot, FEATURE, {
+      newDecisionId: () => identifiers.shift()!,
+    });
+    const acceptedOffer = {
+      ...DECISION_INPUT,
+      offerEntryId: 'offer-nc-1',
+    };
+
+    await expect(store.append(acceptedOffer)).resolves.toMatchObject({
+      ok: true,
+      decision: { id: 'decision-1', revision: 1 },
+    });
+    await expect(store.append({
+      ...DECISION_INPUT,
+      authority: 'refuse',
+      offerEntryId: 'offer-nc-1-foreign-reversal',
+      originalCaseId: 'prd-case-2',
+      supersedes: { id: 'decision-1', revision: 1 },
+    })).resolves.toMatchObject({ ok: false });
+    await expect(store.append({
+      ...DECISION_INPUT,
+      authority: 'refuse',
+      offerEntryId: 'offer-nc-1-stale-reversal',
+      supersedes: { id: 'decision-1', revision: 2 },
+    })).resolves.toMatchObject({ ok: false });
+
+    await expect(store.read()).resolves.toMatchObject({
+      kind: 'valid',
+      state: {
+        decisions: [{
+          id: 'decision-1',
+          authority: 'accept',
+          originalCaseId: 'prd-case-1',
+          revision: 1,
+        }],
+      },
+    });
+    const state = await store.read();
+    if (state.kind === 'valid') {
+      expect(state.state.decisions).toHaveLength(1);
+    }
+  });
+
+  it('keeps a newer refusal effective when an earlier accepted offer entry is replayed', async () => {
+    const projectRoot = await createProjectRoot();
+    const identifiers = ['decision-1', 'decision-2', 'decision-3'];
+    const store = new AcceptedWideningDecisionStore(projectRoot, FEATURE, {
+      newDecisionId: () => identifiers.shift()!,
+    });
+    const acceptedOffer = {
+      ...DECISION_INPUT,
+      offerEntryId: 'offer-nc-1',
+    };
+
+    await store.append(acceptedOffer);
+    await store.append({
+      ...DECISION_INPUT,
+      authority: 'refuse',
+      rationale: 'The operator explicitly reversed the earlier acceptance.',
+      offerEntryId: 'offer-nc-1-reversal',
+      supersedes: { id: 'decision-1', revision: 1 },
+    });
+    await store.append(acceptedOffer);
+
+    const state = await store.read();
+    expect(state).toMatchObject({
+      kind: 'valid',
+      state: {
+        decisions: [
+          {
+            id: 'decision-1',
+            authority: 'accept',
+            offerEntryId: 'offer-nc-1',
+            revision: 1,
+          },
+          {
+            id: 'decision-2',
+            authority: 'refuse',
+            offerEntryId: 'offer-nc-1-reversal',
+            supersedes: { id: 'decision-1', revision: 1 },
+            revision: 2,
+          },
+        ],
+      },
+    });
+    if (state.kind === 'valid') {
+      expect(state.state.decisions).toHaveLength(2);
+    }
   });
 
   it.each([

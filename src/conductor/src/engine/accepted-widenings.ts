@@ -28,6 +28,12 @@ export interface AcceptedWideningOriginalSource {
   readonly snapshot: string;
 }
 
+/** An engine-ordered reference to the decision an explicit reversal replaces. */
+export interface AcceptedWideningDecisionReference {
+  readonly id: string;
+  readonly revision: number;
+}
+
 /**
  * An immutable operator decision. Criterion decisions deliberately omit source
  * references; NC decisions carry the original offer's source and case rather
@@ -42,7 +48,9 @@ export interface AcceptedWideningDecision {
   readonly revision: number;
   readonly originalSource?: AcceptedWideningOriginalSource;
   readonly originalCaseId?: string;
-  readonly supersedes?: string;
+  /** Immutable identity of the editable offer entry that created this decision. */
+  readonly offerEntryId?: string;
+  readonly supersedes?: AcceptedWideningDecisionReference;
 }
 
 export interface AcceptedWideningDecisionState {
@@ -58,7 +66,8 @@ export interface AcceptedWideningDecisionInput {
   readonly operator: string;
   readonly originalSource?: AcceptedWideningOriginalSource;
   readonly originalCaseId?: string;
-  readonly supersedes?: string;
+  readonly offerEntryId?: string;
+  readonly supersedes?: AcceptedWideningDecisionReference;
 }
 
 export interface AcceptedWideningDecisionStoreFilesystem {
@@ -126,6 +135,40 @@ function parseOriginalSource(value: unknown): AcceptedWideningOriginalSource | u
   return { id: value.id, snapshot: value.snapshot };
 }
 
+function parseDecisionReference(value: unknown): AcceptedWideningDecisionReference | undefined {
+  if (!isObjectRecord(value) || !hasExactKeys(value, ['id', 'revision']) ||
+    !boundedDecisionString(value.id, MAX_DECISION_REFERENCE_LENGTH) ||
+    typeof value.revision !== 'number' || !Number.isInteger(value.revision) || value.revision < 1) return undefined;
+  return { id: value.id, revision: value.revision };
+}
+
+function sameDecisionCase(
+  left: Pick<AcceptedWideningDecision, 'originalCaseId' | 'originalSource'>,
+  right: Pick<AcceptedWideningDecision, 'originalCaseId' | 'originalSource'>,
+): boolean {
+  return left.originalCaseId !== undefined && right.originalCaseId !== undefined &&
+    left.originalCaseId === right.originalCaseId && left.originalSource?.id === right.originalSource?.id &&
+    left.originalSource?.snapshot === right.originalSource?.snapshot;
+}
+
+function hasValidDecisionRelationships(decisions: readonly AcceptedWideningDecision[]): boolean {
+  const offerEntries = new Set<string>();
+  for (const decision of decisions) {
+    if (decision.offerEntryId !== undefined) {
+      if (offerEntries.has(decision.offerEntryId)) return false;
+      offerEntries.add(decision.offerEntryId);
+    }
+    const prior = decisions.slice(0, decision.revision - 1).filter((candidate) => sameDecisionCase(candidate, decision)).at(-1);
+    if (decision.supersedes === undefined) {
+      if (prior !== undefined) return false;
+      continue;
+    }
+    if (decision.offerEntryId === undefined || !prior || decision.supersedes.id !== prior.id || decision.supersedes.revision !== prior.revision ||
+      decision.authority === prior.authority) return false;
+  }
+  return true;
+}
+
 function parseDecision(value: unknown): AcceptedWideningDecision | undefined {
   if (!isObjectRecord(value)) return undefined;
   const hasSource = Object.hasOwn(value, 'originalSource');
@@ -134,6 +177,7 @@ function parseDecision(value: unknown): AcceptedWideningDecision | undefined {
   const keys = [
     'id', 'criterion', 'authority', 'rationale', 'operator', 'revision',
     ...(hasSource ? ['originalSource', 'originalCaseId'] : []),
+    ...(Object.hasOwn(value, 'offerEntryId') ? ['offerEntryId'] : []),
     ...(Object.hasOwn(value, 'supersedes') ? ['supersedes'] : []),
   ];
   if (!hasExactKeys(value, keys) || !boundedDecisionString(value.id, MAX_DECISION_REFERENCE_LENGTH) ||
@@ -141,9 +185,12 @@ function parseDecision(value: unknown): AcceptedWideningDecision | undefined {
     (value.authority !== 'accept' && value.authority !== 'refuse') ||
     !boundedDecisionString(value.rationale) || !boundedDecisionString(value.operator, MAX_DECISION_REFERENCE_LENGTH) ||
     typeof value.revision !== 'number' || !Number.isInteger(value.revision) || value.revision < 1 ||
-    (Object.hasOwn(value, 'supersedes') && !boundedDecisionString(value.supersedes, MAX_DECISION_REFERENCE_LENGTH))) return undefined;
+    (Object.hasOwn(value, 'offerEntryId') && !boundedDecisionString(value.offerEntryId, MAX_DECISION_REFERENCE_LENGTH))) return undefined;
   const originalSource = hasSource ? parseOriginalSource(value.originalSource) : undefined;
-  if (hasSource && (!originalSource || !boundedDecisionString(value.originalCaseId, MAX_DECISION_REFERENCE_LENGTH))) return undefined;
+  const supersedes = Object.hasOwn(value, 'supersedes') ? parseDecisionReference(value.supersedes) : undefined;
+  if (hasSource && (!originalSource || !boundedDecisionString(value.originalCaseId, MAX_DECISION_REFERENCE_LENGTH)) ||
+    (Object.hasOwn(value, 'offerEntryId') && !hasSource) ||
+    (Object.hasOwn(value, 'supersedes') && (!supersedes || !hasSource || !Object.hasOwn(value, 'offerEntryId')))) return undefined;
   return {
     id: value.id,
     criterion: value.criterion,
@@ -152,7 +199,8 @@ function parseDecision(value: unknown): AcceptedWideningDecision | undefined {
     operator: value.operator,
     revision: value.revision,
     ...(originalSource === undefined ? {} : { originalSource, originalCaseId: value.originalCaseId as string }),
-    ...(Object.hasOwn(value, 'supersedes') ? { supersedes: value.supersedes as string } : {}),
+    ...(Object.hasOwn(value, 'offerEntryId') ? { offerEntryId: value.offerEntryId as string } : {}),
+    ...(supersedes === undefined ? {} : { supersedes }),
   };
 }
 
@@ -169,7 +217,7 @@ function parseDecisionState(value: unknown):
   if (!feature || decisions.some((decision) => decision === undefined)) return { kind: 'malformed' };
   const accepted = decisions as AcceptedWideningDecision[];
   if (new Set(accepted.map((decision) => decision.id)).size !== accepted.length ||
-    accepted.some((decision, index) => decision.revision !== index + 1)) return { kind: 'malformed' };
+    accepted.some((decision, index) => decision.revision !== index + 1) || !hasValidDecisionRelationships(accepted)) return { kind: 'malformed' };
   return { kind: 'valid', state: { version: ACCEPTED_WIDENINGS_STORE_VERSION, feature, decisions: accepted } };
 }
 
@@ -261,6 +309,17 @@ export class AcceptedWideningDecisionStore {
       const state = loaded.kind === 'absent'
         ? { version: ACCEPTED_WIDENINGS_STORE_VERSION, feature: this.feature, decisions: [] as readonly AcceptedWideningDecision[] }
         : loaded.state;
+      const replay = parsedInput.offerEntryId === undefined
+        ? undefined
+        : state.decisions.find((decision) => decision.offerEntryId === parsedInput.offerEntryId);
+      if (replay !== undefined) return { ok: true, decision: replay };
+      const prior = state.decisions.filter((decision) => sameDecisionCase(decision, parsedInput)).at(-1);
+      if (parsedInput.supersedes !== undefined) {
+        if (!prior || parsedInput.supersedes.id !== prior.id || parsedInput.supersedes.revision !== prior.revision ||
+          parsedInput.authority === prior.authority) return { ok: false, reason: 'invalid-decision' };
+      } else if (prior !== undefined) {
+        return { ok: false, reason: 'invalid-decision' };
+      }
       const id = this.newDecisionId();
       if (!boundedDecisionString(id, MAX_DECISION_REFERENCE_LENGTH) || state.decisions.some((decision) => decision.id === id)) {
         return { ok: false, reason: 'invalid-decision' };
@@ -291,21 +350,26 @@ function parseDecisionInput(value: unknown): Omit<AcceptedWideningDecision, 'id'
   const keys = [
     'criterion', 'authority', 'rationale', 'operator',
     ...(hasSource ? ['originalSource', 'originalCaseId'] : []),
+    ...(Object.hasOwn(value, 'offerEntryId') ? ['offerEntryId'] : []),
     ...(Object.hasOwn(value, 'supersedes') ? ['supersedes'] : []),
   ];
   if (!hasExactKeys(value, keys) || !boundedDecisionString(value.criterion, MAX_DECISION_REFERENCE_LENGTH) ||
     (value.authority !== 'accept' && value.authority !== 'refuse') || !boundedDecisionString(value.rationale) ||
     !boundedDecisionString(value.operator, MAX_DECISION_REFERENCE_LENGTH) ||
-    (Object.hasOwn(value, 'supersedes') && !boundedDecisionString(value.supersedes, MAX_DECISION_REFERENCE_LENGTH))) return undefined;
+    (Object.hasOwn(value, 'offerEntryId') && !boundedDecisionString(value.offerEntryId, MAX_DECISION_REFERENCE_LENGTH))) return undefined;
   const originalSource = hasSource ? parseOriginalSource(value.originalSource) : undefined;
-  if (hasSource && (!originalSource || !boundedDecisionString(value.originalCaseId, MAX_DECISION_REFERENCE_LENGTH))) return undefined;
+  const supersedes = Object.hasOwn(value, 'supersedes') ? parseDecisionReference(value.supersedes) : undefined;
+  if ((hasSource && (!originalSource || !boundedDecisionString(value.originalCaseId, MAX_DECISION_REFERENCE_LENGTH))) ||
+    (Object.hasOwn(value, 'offerEntryId') && !hasSource) ||
+    (Object.hasOwn(value, 'supersedes') && (!supersedes || !hasSource || !Object.hasOwn(value, 'offerEntryId')))) return undefined;
   return {
     criterion: value.criterion.trim(),
     authority: value.authority,
     rationale: value.rationale.trim(),
     operator: value.operator.trim(),
     ...(originalSource === undefined ? {} : { originalSource, originalCaseId: (value.originalCaseId as string).trim() }),
-    ...(Object.hasOwn(value, 'supersedes') ? { supersedes: (value.supersedes as string).trim() } : {}),
+    ...(Object.hasOwn(value, 'offerEntryId') ? { offerEntryId: (value.offerEntryId as string).trim() } : {}),
+    ...(supersedes === undefined ? {} : { supersedes }),
   };
 }
 
