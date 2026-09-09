@@ -4,6 +4,14 @@ spec_hash: 0cd809b8ccc2dd26aea8f1844e4f560e080cb2470207190499214a361e473ec3
 pr: https://github.com/jstoup111/ai-conductor/pull/2397
 shipped: 2026-09-09
 engine_version: 20260909T124054Z-7dc49b2ad3d5
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/src/engine/memory-cli.ts:140 — `conduct memory setup` now prints `failed: directory does not exist: <dir>` where it previously printed `directory does not exist: <dir>`; the plan required the CLI's console output to be unchanged"
+    accepted: true
+    decision: accept
+    rationale: "Operator: harmless prefix on an error message, exit code unchanged; accepted as-is."
 ---
 
 ## Cost
