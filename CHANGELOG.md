@@ -25,6 +25,13 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Resolved intake issues now receive a resolution comment and close only when `compose forget` is given `--resolved-by <reference>`. ([implementation PR #2403](https://github.com/jstoup111/ai-conductor/pull/2403)).
 - Spec pull requests include a valid release disposition when they are opened. ([implementation PR #2407](https://github.com/jstoup111/ai-conductor/pull/2407)).
+- Keep harness execution context smaller while making optional architecture references available in both installed skill catalogs. ([implementation PR #2446](https://github.com/jstoup111/ai-conductor/pull/2446)).
+
+## Migration
+
+```bash migration
+./bin/install --update
+```
 
 ## [1.1.0] - 2026-09-08
 
