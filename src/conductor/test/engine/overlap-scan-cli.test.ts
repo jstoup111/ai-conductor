@@ -1,3 +1,4 @@
+// Covers: task:3
 // Tests for the `conduct-ts overlap-scan` subcommand (Task 7).
 // Covers: CLI surface registration, argv detection, and real dispatch
 // (real makeGitRunner + real createBlockerResolver) against a scratch repo.
@@ -145,6 +146,60 @@ describe('overlapScanCommand — real dispatch', () => {
       // Advisory — never blocks authoring, even on a degraded/skip result.
       expect(code).toBe(0);
       expect(printed.length).toBeGreaterThan(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('prints the clean report when only the base advanced on a candidate path', async () => {
+    const { overlapScanCommand, detectOverlapScanCommand } = await import('../../src/index.js');
+    const dir = await makeScratchRepo();
+    try {
+      await git(dir, ['checkout', '-q', '-b', 'spec/sibling-feature']);
+      await writeFile(join(dir, 'sibling-only.txt'), 'sibling\n');
+      await git(dir, ['add', '.']);
+      await git(dir, ['commit', '-q', '-m', 'sibling change']);
+      await git(dir, ['checkout', '-q', 'main']);
+      await writeFile(join(dir, 'base.txt'), 'base\nadvanced by main\n');
+      await git(dir, ['add', '.']);
+      await git(dir, ['commit', '-q', '-m', 'base advances base.txt']);
+
+      const cmd = detectOverlapScanCommand([
+        'node', 'conduct-ts', 'overlap-scan', '--files', 'base.txt', '--base', 'main', '--cwd', dir,
+      ]);
+      const printed: string[] = [];
+      await expect(overlapScanCommand(cmd!, { print: (s: string) => printed.push(s) })).resolves.toBe(0);
+
+      expect(printed.join('\n')).toBe(
+        'No overlap detected; no open blockers. (Note: renames or name-only diffs may not be detected.)',
+      );
+      expect(printed.join('\n')).not.toContain('spec/sibling-feature');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('names only the candidate path changed by the sibling after the base advanced', async () => {
+    const { overlapScanCommand, detectOverlapScanCommand } = await import('../../src/index.js');
+    const dir = await makeScratchRepo();
+    try {
+      await git(dir, ['checkout', '-q', '-b', 'spec/sibling-feature']);
+      await writeFile(join(dir, 'sibling-only.txt'), 'sibling\n');
+      await git(dir, ['add', '.']);
+      await git(dir, ['commit', '-q', '-m', 'sibling change']);
+      await git(dir, ['checkout', '-q', 'main']);
+      await writeFile(join(dir, 'base.txt'), 'base\nadvanced by main\n');
+      await git(dir, ['add', '.']);
+      await git(dir, ['commit', '-q', '-m', 'base advances base.txt']);
+
+      const cmd = detectOverlapScanCommand([
+        'node', 'conduct-ts', 'overlap-scan', '--files', 'base.txt,sibling-only.txt', '--base', 'main', '--cwd', dir,
+      ]);
+      const printed: string[] = [];
+      await expect(overlapScanCommand(cmd!, { print: (s: string) => printed.push(s) })).resolves.toBe(0);
+
+      expect(printed.join('\n')).toContain('Overlap with spec/sibling-feature: sibling-only.txt');
+      expect(printed.join('\n')).not.toContain('base.txt');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

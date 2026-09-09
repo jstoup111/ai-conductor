@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:1, task:3
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -20,6 +20,7 @@ import {
   emitRebaseEvent,
   emitGateInvalidationEvents,
   makeGitRunner,
+  changedPathsSinceMergeBase,
   performRebase,
   type GitRunner,
   type GitResult,
@@ -51,6 +52,35 @@ function fakeGit(
   };
   return { git, calls };
 }
+
+describe('changedPathsSinceMergeBase (Task 1)', () => {
+  it('diffs the branch from its resolved merge base, never from the base tip', async () => {
+    const { git, calls } = fakeGit([
+      { match: ['merge-base', 'main', 'spec/sibling'], result: { stdout: 'fork-sha\n' } },
+      {
+        match: ['diff', '--name-only', 'fork-sha', 'spec/sibling'],
+        result: { stdout: 'branch-only.ts\n' },
+      },
+    ]);
+
+    await expect(changedPathsSinceMergeBase(git, 'main', 'spec/sibling')).resolves.toEqual([
+      'branch-only.ts',
+    ]);
+    expect(calls).not.toContainEqual(['diff', '--name-only', 'main', 'spec/sibling']);
+  });
+
+  it.each([
+    { name: 'fails', result: { exitCode: 1, stderr: 'unrelated histories' } },
+    { name: 'prints no merge-base', result: { stdout: ' \n' } },
+  ])('returns null when merge-base $name', async ({ result }) => {
+    const { git, calls } = fakeGit([
+      { match: ['merge-base', 'main', 'spec/sibling'], result },
+    ]);
+
+    await expect(changedPathsSinceMergeBase(git, 'main', 'spec/sibling')).resolves.toBeNull();
+    expect(calls).toEqual([['merge-base', 'main', 'spec/sibling']]);
+  });
+});
 
 describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
   it('takes both branches of the markdown classifier: docs/base-only.txt skips, while root base-only.txt rebases', async () => {

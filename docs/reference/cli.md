@@ -875,7 +875,7 @@ ai-conductor overlap-scan [--files <a.ts,b.ts>] [--source-ref <owner/repo#N>] [-
 | --- | --- | --- | --- |
 | `--files <list>` | comma-separated paths | none | Candidate paths. Split on commas, trimmed, empties dropped. |
 | `--source-ref <ref>` | string | unset | Linked issue reference swept for open blockers. |
-| `--base <ref>` | string | the origin default branch, else `main` | Base branch that sibling branches are diffed against. |
+| `--base <ref>` | string | the origin default branch, else `main` | Base ref used to find each sibling branch's merge base; the scan compares only paths that branch contributed after that point. |
 | `--cwd <dir>` | path | current directory | Repository to scan. |
 
 Advisory by contract: it always exits 0. Even an unexpected error prints `overlap-scan: unable to
