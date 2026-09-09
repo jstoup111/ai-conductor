@@ -4,12 +4,6 @@ spec_hash: 13395199a82ce1a4c8e1506b9d28af18d7057d467a6d3ce4894972d95490163a
 pr: https://github.com/jstoup111/ai-conductor/pull/2457
 shipped: 2026-09-09
 engine_version: 20260909T144830Z-b97e8d600456
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.1
-    summary: "src/conductor/test/acceptance/daemon-e2e-live-agent-tier.acceptance.test.ts:136 — commit 85db35c81 adds `expect(workflow).toMatch(/id:\\s*provider-smoke\\s+continue-on-error:\\s*true/)` to the live-agent daemon E2E tier test, asserting CI-workflow YAML for a `provider-smoke` step; unrelated to the grant store, carries no `Task:` or `Scope:` trailer, and changes no production file"
-    accepted: false
 ---
 
 ## Cost
@@ -29,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:finish
+reason: provider-outside-active-union
 
 ## Build Review
 laps_to_pass: 2
