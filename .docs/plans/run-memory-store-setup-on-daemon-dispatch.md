@@ -20,6 +20,8 @@ Add the call at the daemon's dispatch preparation binding in `daemon-deps.ts`, i
 
 The event carries the state observed before setup, a boolean canonical verdict, and an optional failure reason. Registration is three places and no more: the union in `types/events.ts`, the exhaustive sink map in `event-sinks.ts` (persisted and rendered, not audited, not OTel), and the `renderDaemonEvent` switch in `daemon-cli.ts`. Persistence is derived from the sink map by the existing persister, so no persister change is needed, and the daemon dashboard's own subscription list is unrelated to the feature log this event belongs to.
 
+> **Amended 2026-09-09 by #2062:** AB-2 identifies that the OTel exclusion conflicts with ADR-014 Decision 1. Task 1 includes OTel subscription and translation through the existing metrics listener and recorder. The `conductor.memory.setup` counter records each observation, including before the first step, with `before` and `canonical` attributes and the established project/worker/feature identity. Failure text stays in the event and log, not metric labels. Persistence, rendering, and audit disposition remain as specified.
+
 Tests follow the repository's local test rules. The observer's cases are unit tests in the memory CLI test file, which already establishes the pattern this work reuses: redirect `HOME` and `USERPROFILE` to a temporary directory in `beforeEach`, build a real local git repository with an `origin` remote so the project key is stable, and restore the environment in `afterEach`. Search for that fixture pair in the existing memory tests rather than inventing a new one. The daemon binding test reuses the existing daemon-deps convention of mocking the worktree-prepare module and asserting on the binding's observable calls, so the real observer runs against a temporary worktree while the project setup boundary stays mocked. The renderer test follows the existing per-event daemon render tests, which call the exported renderer directly with a collecting log. No test may reach a real provider, network, or package registry, and none of these needs a conductor run.
 
 ## Preconditions and claim ledger
@@ -55,6 +57,8 @@ Tests follow the repository's local test rules. The observer's cases are unit te
 1. The new event type appears in the persisted and rendered type lists and in neither the audited nor the OTel list.
 2. The sink map compiles as an exhaustive record over the union with the new variant declared.
 3. The scoped test run for the sink test file passes and the typecheck target covering tests is clean.
+
+> **Amended 2026-09-09 by #2062:** In Task 1 Steps 1 and 4 and Done when 1, OTel is included, not excluded, to satisfy ADR-014 Decision 1. Task 1 also owns `src/conductor/src/engine/otel/metrics-listener.ts`, `metrics.ts`, `otel-visualizer.ts`, and `src/conductor/test/engine/otel/memory-setup.test.ts`. Done when: an event emitted before any step starts produces one `conductor.memory.setup` observation for successful and failed placement through the real emitter, listener, recorder, and an in-memory exporter; failure text is absent from metric attributes. Existing OTel tests and the sink test must pass. Document the counter in the daemon guide and README.
 
 ### Task 2: Extract a non-printing setup core and add a fail-open observer
 **Story:** Story 1

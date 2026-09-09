@@ -15,7 +15,7 @@ export const EVENT_SINKS = {
   operator_rewind: { render: true, persist: true, audit: true, otel: false },
   setup_repair: { render: true, persist: true, audit: false, otel: false },
   project_setup: { render: true, persist: true, audit: false, otel: false },
-  memory_setup: { render: true, persist: true, audit: false, otel: false },
+  memory_setup: { render: true, persist: true, audit: false, otel: true },
   plan_growth: { render: true, persist: true, audit: false, otel: false },
   coverage_binding_judged: { render: false, persist: true, audit: false, otel: false },
   coverage_binding_disabled: { render: false, persist: true, audit: false, otel: false },

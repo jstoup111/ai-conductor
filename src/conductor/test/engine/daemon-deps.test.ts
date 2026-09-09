@@ -51,6 +51,7 @@ import {
 } from '../../src/engine/daemon-deps.js';
 import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 import { buildWorkOrder } from '../../src/engine/work-order.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -244,12 +245,13 @@ describe('engine/daemon-deps', () => {
     });
     const path = join(dir, 'feature');
     await mkdir(path);
-    const events = { emit: vi.fn(async () => {}) } as never;
+    const events = new ConductorEventEmitter();
+    const emit = vi.spyOn(events, 'emit');
 
     await d.prepareWorktree!({ path, branch: 'feat/feature' }, undefined, events);
 
     expect(prepareWorktree).toHaveBeenCalledOnce();
-    expect(events.emit).toHaveBeenCalledWith(expect.objectContaining({
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
       type: 'memory_setup', before: 'absent', canonical: true,
     }));
   });

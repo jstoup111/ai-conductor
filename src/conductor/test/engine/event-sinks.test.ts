@@ -305,7 +305,8 @@ void [
 ];
 
 describe('event sink subscriptions', () => {
-  it('persists and renders memory setup without widening audit or OpenTelemetry sinks', () => {
+  // Covers: task:1
+  it('persists, renders, and exports memory setup without widening audit', () => {
     expect({
       sinks: EVENT_SINKS.memory_setup,
       persisted: persistedEventTypes(),
@@ -313,11 +314,11 @@ describe('event sink subscriptions', () => {
       audited: auditedEventTypes(),
       otel: otelEventTypes(),
     }).toMatchObject({
-      sinks: { render: true, persist: true, audit: false, otel: false },
+      sinks: { render: true, persist: true, audit: false, otel: true },
       persisted: expect.arrayContaining(['memory_setup']),
       rendered: expect.arrayContaining(['memory_setup']),
       audited: expect.not.arrayContaining(['memory_setup']),
-      otel: expect.not.arrayContaining(['memory_setup']),
+      otel: expect.arrayContaining(['memory_setup']),
     });
   });
 
@@ -341,6 +342,7 @@ describe('event sink subscriptions', () => {
 
   it('subscribes OpenTelemetry only to its defined event set', () => {
     expect(new Set(otelEventTypes())).toEqual(new Set([
+      'memory_setup',
       'daemon_backlog_snapshot',
       'feature_dispatch_started',
       'feature_dispatch_ended',
