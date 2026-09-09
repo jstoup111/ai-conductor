@@ -281,7 +281,7 @@ describe('engine/overlap-scan — runOverlapScan advisory degradation (Task 5)',
     expect(result.skipNotes.some((n) => n.toLowerCase().includes('enumerat'))).toBe(true);
   });
 
-  it('preserves results from other branches when one branch diff throws', async () => {
+  it.each(['throws', 'returns non-zero'] as const)('preserves results and reports an advisory when one branch diff %s', async (failure) => {
     const git: GitRunner = async (args) => {
       if (args[0] === 'remote') return { exitCode: 0, stdout: '', stderr: '' };
       if (args[0] === 'for-each-ref') {
@@ -294,7 +294,8 @@ describe('engine/overlap-scan — runOverlapScan advisory degradation (Task 5)',
         return { exitCode: 0, stdout: `fork-${args[2]}\n`, stderr: '' };
       }
       if (args[0] === 'diff' && args.includes('spec/feature-a')) {
-        throw new Error('diff blew up for feature-a');
+        if (failure === 'throws') throw new Error('diff blew up for feature-a');
+        return { exitCode: 128, stdout: '', stderr: 'diff blew up for feature-a' };
       }
       if (args[0] === 'diff' && args.includes('spec/feature-b')) {
         return { exitCode: 0, stdout: 'src/foo.ts\n', stderr: '' };
@@ -312,7 +313,8 @@ describe('engine/overlap-scan — runOverlapScan advisory degradation (Task 5)',
     });
 
     expect(result.seamOverlaps).toEqual([{ branch: 'spec/feature-b', files: ['src/foo.ts'] }]);
-    expect(result.skipNotes.some((n) => n.includes('spec/feature-a'))).toBe(true);
+    expect(result.skipNotes).toEqual([expect.stringContaining('skipped diff for branch spec/feature-a:')]);
+    expect(result.skipNotes[0]).toContain('diff blew up for feature-a');
   });
 
   it('records one advisory note and no overlap when a branch has no merge base', async () => {

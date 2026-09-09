@@ -422,7 +422,16 @@ export async function changedPathsSinceMergeBase(
   const mergeBase = await git(['merge-base', baseRef, branchRef]);
   const fromRef = mergeBase.stdout.trim();
   if (mergeBase.exitCode !== 0 || !fromRef) return null;
-  return changedPathsBetween(git, fromRef, branchRef);
+  // This scan must distinguish a failed diff from a clean, empty result.
+  // Keep the legacy helper and its other callers' behavior unchanged.
+  const checkedGit: GitRunner = async (args) => {
+    const result = await git(args);
+    if (result.exitCode !== 0) {
+      throw new Error(`git diff failed (exit ${result.exitCode}): ${result.stderr.trim()}`);
+    }
+    return result;
+  };
+  return changedPathsBetween(checkedGit, fromRef, branchRef);
 }
 
 // ── Conflict inspection ──────────────────────────────────────────────────────
