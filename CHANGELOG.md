@@ -19,6 +19,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon OpenTelemetry exports now report queue depth, liveness, dispatch blockers, and feature lifecycle outcomes. ([implementation PR #2423](https://github.com/jstoup111/ai-conductor/pull/2423)).
 - Plan landing now halts oversized plans unless they include a documented scope exception. ([implementation PR #2410](https://github.com/jstoup111/ai-conductor/pull/2410)).
 - The inline report shows kickbacks by source gate and BUILD re-entry counts. ([implementation PR #2451](https://github.com/jstoup111/ai-conductor/pull/2451)).
+- Daemon dispatches now establish and observe each worktree's canonical memory store before project setup. ([implementation PR #2397](https://github.com/jstoup111/ai-conductor/pull/2397)).
 
 ### Changed
 
