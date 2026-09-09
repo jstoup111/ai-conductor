@@ -1,9 +1,11 @@
+// Covers: task:5
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { execa } from 'execa';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConductorEvent } from '../../src/types/events.js';
 import {
@@ -22,6 +24,7 @@ import {
   rotateProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
 } from '../../src/engine/protected-artifact-seal.js';
+import type { GitBlobBatchRunner } from '../../src/engine/git-blob-batch.js';
 
 const { gitInvocations, failGitDiff } = vi.hoisted(() => ({
   gitInvocations: [] as string[][],
@@ -64,13 +67,13 @@ async function git(repo: string, args: string[]): Promise<string> {
   return result.stdout.trim();
 }
 
-async function writeProjectFile(repo: string, path: string, content: string): Promise<void> {
+async function writeProjectFile(repo: string, path: string, content: string | Uint8Array): Promise<void> {
   const destination = join(repo, path);
   await mkdir(dirname(destination), { recursive: true });
   await writeFile(destination, content);
 }
 
-async function makeRepo(files: Record<string, string>): Promise<string> {
+async function makeRepo(files: Record<string, string | Uint8Array>): Promise<string> {
   const repo = await mkdtemp(join(tmpdir(), 'protected-artifact-seal-'));
   scratches.push(repo);
   await git(repo, ['init', '-q', '-b', 'main']);
@@ -93,6 +96,80 @@ afterEach(async () => {
   while (scratches.length > 0) {
     await rm(scratches.pop()!, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
+});
+
+it('records the pre-change paths and fingerprints for a large committed protected-artifact corpus', async () => {
+  const files = Object.fromEntries(Array.from({ length: 300 }, (_, index) => {
+    const directory = PROTECTED_ARTIFACT_DIRECTORIES[index % PROTECTED_ARTIFACT_DIRECTORIES.length];
+    const path = `${directory}/artifact-${String(index).padStart(3, '0')}.md`;
+    return [path, `# Artifact ${index}\n\nCommitted content ${index}\n`];
+  }));
+  const repo = await makeRepo(files);
+  const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+  const expected = Object.entries(files)
+    .sort(([left], [right]) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
+    .map(([path, content]) => ({
+      path,
+      fingerprint: `sha256:${createHash('sha256').update(content).digest('hex')}`,
+    }));
+
+  await expect(createProtectedArtifactSeal({ projectRoot: repo, baselineCommit })).resolves.toMatchObject({
+    baselineCommit,
+    protectedArtifacts: expected,
+  });
+});
+
+it('uses one injected batch runner for both small and large protected-artifact corpora', async () => {
+  const createFiles = (count: number) => Object.fromEntries(Array.from({ length: count }, (_, index) => {
+    const directory = PROTECTED_ARTIFACT_DIRECTORIES[index % PROTECTED_ARTIFACT_DIRECTORIES.length];
+    return [`${directory}/artifact-${String(index).padStart(3, '0')}.md`, `# ${index}\n`];
+  }));
+  const smallRepo = await makeRepo(createFiles(4));
+  const largeRepo = await makeRepo(createFiles(300));
+  const runnerMock = vi.fn<GitBlobBatchRunner>(async (file, args, options) => ({
+    stdout: Buffer.from((await execa(file, args, options)).stdout),
+  }));
+  const runner: GitBlobBatchRunner = runnerMock;
+
+  await createProtectedArtifactSeal({
+    projectRoot: smallRepo,
+    baselineCommit: await git(smallRepo, ['rev-parse', 'HEAD']),
+    runner,
+  });
+  const smallInvocationCount = runnerMock.mock.calls.length;
+  runnerMock.mockClear();
+  await createProtectedArtifactSeal({
+    projectRoot: largeRepo,
+    baselineCommit: await git(largeRepo, ['rev-parse', 'HEAD']),
+    runner,
+  });
+
+  expect({ smallInvocationCount, largeInvocationCount: runnerMock.mock.calls.length }).toEqual({
+    smallInvocationCount: 1,
+    largeInvocationCount: 1,
+  });
+});
+
+it('refuses to create a seal when a listed protected artifact has no readable blob', async () => {
+  const repo = await makeRepo({ '.docs/stories/feature.md': 'approved story\n' });
+  const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+  const runner: GitBlobBatchRunner = async () => ({
+    stdout: Buffer.from(`${baselineCommit}:.docs/stories/feature.md missing\n`),
+  });
+
+  await expect(createProtectedArtifactSeal({ projectRoot: repo, baselineCommit, runner }))
+    .rejects.toThrow(`Protected artifact is unreadable at ${baselineCommit}: .docs/stories/feature.md`);
+});
+
+it('keeps the pre-change UTF-8-decoded fingerprint for invalid committed bytes', async () => {
+  const content = Buffer.from([0x66, 0x6f, 0x80, 0x6f, 0x0a]);
+  const repo = await makeRepo({ '.docs/stories/invalid.md': content });
+  const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+  const expectedFingerprint = `sha256:${createHash('sha256').update(content.toString('utf8')).digest('hex')}`;
+
+  await expect(createProtectedArtifactSeal({ projectRoot: repo, baselineCommit })).resolves.toMatchObject({
+    protectedArtifacts: [{ path: '.docs/stories/invalid.md', fingerprint: expectedFingerprint }],
+  });
 });
 
 it('exports protected artifact directory and feature-name helpers', () => {
@@ -1751,7 +1828,7 @@ describe('verifyProtectedArtifactSeal', () => {
       verdict: { ok: false, reason: 'Protected artifact deleted: .docs/plans/feature.md' },
       gitInvocations: [
         ['ls-tree', '-r', '-z', '--name-only', baselineCommit, '--', ...PROTECTED_ARTIFACT_DIRECTORIES],
-        ['show', `${baselineCommit}:.docs/plans/feature.md`],
+        ['cat-file', '--batch', '--buffer'],
       ],
     });
   });

@@ -1977,9 +1977,20 @@ describe('integration/gate-loop', () => {
         options?: import('execa').Options,
       ) => Promise<import('execa').Result>;
       const mockExeca = vi.mocked(execa) as unknown as import('vitest').Mock<ExecaInvocation>;
-      mockExeca.mockImplementation(async (_command: string, args: readonly string[] = []) => {
+      mockExeca.mockImplementation(async (_command: string, args: readonly string[] = [], options?: import('execa').Options) => {
         if (args[0] === 'ls-tree') return { stdout: '.docs/plans/p.md\0' } as never;
         if (args[0] === 'show') return { stdout: planText } as never;
+        if (args[0] === 'cat-file' && args.includes('--batch')) {
+          const requestedPaths = String(options?.input ?? '')
+            .trim()
+            .split('\n')
+            .filter(Boolean);
+          const response = Buffer.concat(requestedPaths.map((request) => {
+            const content = Buffer.from(planText);
+            return Buffer.concat([Buffer.from(`${request.split(':', 1)[0]} blob ${content.length}\n`), content, Buffer.from('\n')]);
+          }));
+          return { stdout: response } as never;
+        }
         return { stdout: '' } as never;
       });
       await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
