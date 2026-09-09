@@ -17,7 +17,7 @@ import type { IntakeSource } from './source.js';
 import type { Ledger } from './ledger.js';
 import { parseSourceRef } from '../issue-ref.js';
 import { createGithubTrackerClient, type TrackerClient } from '../../tracker-client.js';
-import { parseWorkRef, type WorkRef } from '../source-ref.js';
+import { formatWorkRef, type WorkRef } from '../source-ref.js';
 import { sanitizeInboundText, type InboundSanitizeResult } from './sanitize-inbound.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -217,6 +217,13 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
       for (const repo of repos) {
         // Resolve the GitHub API target and local path for this repo.
         const ghRepo = repo.ghRepo ?? repo.name;
+        // WorkRef's GitHub grammar accepts any non-empty repository prefix.
+        // Isolate invalid registry entries before fetching, not individual issues
+        // after capture; the sanitizer receives an already-constructed reference.
+        if (!ghRepo) {
+          log(`github-issues: skipping invalid repository target ${ghRepo}`);
+          continue;
+        }
         repoPaths.set(ghRepo, repo.path);
 
         let issues: RawIssue[];
@@ -230,12 +237,8 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
         }
 
         for (const issue of issues) {
-          const sourceRef = `${ghRepo}#${issue.number}`;
-          const workRef = parseWorkRef(sourceRef);
-          if (!workRef) {
-            log(`github-issues: skipping issue with invalid sourceRef ${sourceRef}`);
-            continue;
-          }
+          const workRef: WorkRef = { kind: 'github', repo: ghRepo, number: String(issue.number) };
+          const sourceRef = formatWorkRef(workRef);
 
           if (labelNames(issue).includes(HANDLED_LABEL)) {
             // FR-35: handled-labelled issues are skipped at capture, except for

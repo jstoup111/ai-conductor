@@ -365,21 +365,28 @@ describe('poll() re-ingests after a forget disposition (TR-10)', () => {
   });
 });
 
-describe('poll() invalid generated source references', () => {
-  it('skips and logs an invalid sourceRef instead of aborting the polling pass', async () => {
+describe('poll() invalid repository targets', () => {
+  it('isolates an invalid repository before fetching and captures the following valid repository', async () => {
     const logs: string[] = [];
-    const registry = { list: async () => [{ name: '', path: dir }] };
+    const targets: string[] = [];
+    const registry = { list: async () => [{ name: '', path: dir }, { name: 'o/a', path: dir }] };
     const ledger = createLedger(join(dir, 'ledger.json'));
     const gh: GhRunner = async (args) => {
       if (args[0] === 'issue' && args[1] === 'list') {
-        return { stdout: JSON.stringify([{ number: 1, title: 'Malformed source', body: 'body' }]) };
+        targets.push(args[args.indexOf('-R') + 1]);
+        return { stdout: JSON.stringify([{ number: 1, title: 'Valid issue', body: 'body' }]) };
       }
       return { stdout: '' };
     };
     const adapter = createGithubIssuesAdapter({ gh, registry, ledger, log: (message) => logs.push(message) });
 
-    await expect(adapter.poll()).resolves.toEqual([]);
+    const envelopes = await adapter.poll();
 
-    expect(logs).toContain('github-issues: skipping issue with invalid sourceRef #1');
+    expect(targets).toEqual(['o/a']);
+    expect(envelopes).toHaveLength(1);
+    expect(envelopes[0].sourceRef).toBe('o/a#1');
+    expect(envelopes[0].inbound).toBeDefined();
+    expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
+    expect(logs).toContain('github-issues: skipping invalid repository target ');
   });
 });
