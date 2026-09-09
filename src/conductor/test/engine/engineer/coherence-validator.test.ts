@@ -76,7 +76,7 @@ describe('corrected failing criterion rows', () => {
 
   it.each([
     ['plan', 'criterion:cannot-deliver-plan:1', 'correction: plan'],
-    ['architecture:adr-x#D2', 'criterion:cannot-deliver-architecture:1', 'constraint: adr-x#D2'],
+    ['architecture:adr-x#D2', 'criterion:cannot-deliver-architecture:1', 'correction: architecture; constraint: adr-x#D2'],
   ])('emits actionable %s cannot-deliver gaps', (correction, gapId, detail) => {
     const result = checkCriterionCoverage(correctedRows(correction), stories, plan);
     expect(result).toMatchObject({ ok: false, reason: 'criterion-gap' });
@@ -129,7 +129,7 @@ ${indexedCriteria.map((criterion, index) => {
     expect(architectureGap).toEqual({
       gapId: 'criterion:cannot-deliver-architecture:5',
       criterion: indexedCriteria[4],
-      detail: `criterion "${indexedCriteria[4]}" cannot be delivered by cited tasks task-5; quote: Evidence 5.; constraint: adr-x#D2`,
+      detail: `criterion "${indexedCriteria[4]}" cannot be delivered by cited tasks task-5; quote: Evidence 5.; correction: architecture; constraint: adr-x#D2`,
     });
 
     const report = renderGapReport([planGap, architectureGap].map((gap) => ({
@@ -2945,6 +2945,7 @@ describe('runCoherenceGate criterion fail-closed guard', () => {
 
   it('reports an architecture correction when no ADR decision is in the change set', async () => {
     const error = await architectureCorrectionGateError('adr-none#D1');
+    expect(error.message).toContain('correction: architecture');
     expect(error.message).toContain('criterion:correction-unknown-decision:1');
     expect(error.message).toContain('architecture correction references unknown decision adr-none#D1; enumerated decision set is empty');
   });

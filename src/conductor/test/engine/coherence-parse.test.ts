@@ -143,14 +143,14 @@ describe('parseCoherenceArtifact', () => {
     ).toEqual(fixtures.map(({ sixCellCriterionRows }) => sixCellCriterionRows));
   });
 
-  it('rejects an unknown correction with its exact line-numbered detail', () => {
+  it.each(['rewrite-plan', 'architecture:not-a-decision', 'architecture:adr-x', 'architecture:adr-x#Dno', 'architecture:../adr-x#D2'])('rejects unknown correction %s with its exact line-numbered detail', (correction) => {
     expect(parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
 | --- | --- | --- | --- | --- | --- |
-| criterion | Given a widget | task:3 | fail | evidence | diff-local | rewrite-plan |
+| criterion | Given a widget | task:3 | fail | evidence | diff-local | ${correction} |
 `)).toEqual({
       ok: false,
       reason: 'unparseable-criterion-row',
-      detail: { line: 3, message: 'unknown criterion correction "rewrite-plan"' },
+      detail: { line: 3, message: `unknown criterion correction "${correction}"` },
     });
   });
 

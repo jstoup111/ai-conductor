@@ -497,7 +497,7 @@ export function checkCriterionCoverage(
 
     if (row.verdict === 'fail' && row.correction) {
       const correctionDetail = row.correction.layer === 'architecture'
-        ? `constraint: ${row.correction.decisionRef}`
+        ? `correction: architecture; constraint: ${row.correction.decisionRef}`
         : 'correction: plan';
       gaps.push({
         gapId: `criterion:cannot-deliver-${row.correction.layer}:${index + 1}`,

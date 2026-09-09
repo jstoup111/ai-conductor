@@ -72,7 +72,9 @@ function parseCriterionCorrection(value: string): CriterionCorrection | null {
   if (!value.startsWith('architecture:')) return null;
 
   const decisionRef = value.slice('architecture:'.length);
-  return decisionRef.length === 0 ? null : { layer: 'architecture', decisionRef };
+  return /^adr-[^\s/#]+#D\d+$/.test(decisionRef)
+    ? { layer: 'architecture', decisionRef }
+    : null;
 }
 
 /**
