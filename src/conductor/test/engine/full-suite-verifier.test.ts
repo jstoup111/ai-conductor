@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,7 @@ import {
 } from '../../src/engine/full-suite-evidence.js';
 import type { FullSuiteExecutionResult } from '../../src/engine/full-suite-executor.js';
 import {
+  inspectFullSuiteRecoveryClaim,
   deriveFullSuiteScopedSelection,
   FullSuiteVerifier,
 } from '../../src/engine/full-suite-verifier.js';
@@ -135,6 +136,112 @@ afterEach(async () => {
 });
 
 describe('FullSuiteVerifier', () => {
+  it('classifies existing recovery claims by liveness and bounded age', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-recovery-claim-classification-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const claimPath = join(lockPath, 'recovery.json');
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    const staleThresholdMs = 1_000;
+    const inspect = async () => (await inspectFullSuiteRecoveryClaim(lockPath, {
+      clock: () => now,
+      processIsLive: (pid) => pid === 22,
+      unownedStaleMs: staleThresholdMs,
+    })).classification;
+
+    await writeProjectFile(lockPath, 'recovery.json', JSON.stringify({
+      version: 1,
+      pid: 11,
+      token: 'dead-claimant',
+      claimedAt: '2026-09-07T11:59:59.900Z',
+    }));
+    await utimes(claimPath, new Date(now), new Date(now));
+    const deadClaim = await inspect();
+
+    await writeFile(claimPath, JSON.stringify({
+      version: 1,
+      pid: 22,
+      token: 'live-claimant',
+      claimedAt: '2026-09-07T11:59:59.900Z',
+    }));
+    await utimes(claimPath, new Date(now), new Date(now));
+    const liveFreshClaim = await inspect();
+
+    await writeFile(claimPath, 'not json');
+    await utimes(claimPath, new Date(now), new Date(now));
+    const unparseableFreshClaim = await inspect();
+    await utimes(claimPath, new Date(now - staleThresholdMs), new Date(now - staleThresholdMs));
+    const unparseableStaleClaim = await inspect();
+
+    await writeFile(claimPath, JSON.stringify({ version: 1, pid: 0 }));
+    await utimes(claimPath, new Date(now - staleThresholdMs), new Date(now - staleThresholdMs));
+    const invalidStaleClaim = await inspect();
+
+    await rm(claimPath);
+    const vanishedClaim = await inspect();
+
+    expect({
+      deadClaim,
+      liveFreshClaim,
+      unparseableFreshClaim,
+      unparseableStaleClaim,
+      invalidStaleClaim,
+      vanishedClaim,
+    }).toEqual({
+      deadClaim: { status: 'ORPHANED' },
+      liveFreshClaim: { status: 'OCCUPIED' },
+      unparseableFreshClaim: { status: 'OCCUPIED' },
+      unparseableStaleClaim: { status: 'ORPHANED' },
+      invalidStaleClaim: { status: 'ORPHANED' },
+      vanishedClaim: { status: 'VANISHED' },
+    });
+  });
+
+  it('reports recovery-claim read, liveness, and age probe failures', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-recovery-claim-errors-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const claimPath = join(lockPath, 'recovery.json');
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    await mkdir(claimPath, { recursive: true });
+    const readFailure = (await inspectFullSuiteRecoveryClaim(lockPath, {
+      clock: () => now,
+      processIsLive: () => false,
+      unownedStaleMs: 1_000,
+    })).classification;
+    await rm(claimPath, { recursive: true });
+    await writeFile(claimPath, JSON.stringify({
+      version: 1,
+      pid: 22,
+      token: 'live-claimant',
+      claimedAt: '2026-09-07T11:59:59.900Z',
+    }));
+    const livenessFailure = (await inspectFullSuiteRecoveryClaim(lockPath, {
+      clock: () => now,
+      processIsLive: () => { throw new Error('liveness denied'); },
+      unownedStaleMs: 1_000,
+    })).classification;
+    await writeFile(claimPath, 'not json');
+    const ageFailure = (await inspectFullSuiteRecoveryClaim(lockPath, {
+      clock: () => { throw new Error('clock denied'); },
+      processIsLive: () => false,
+      unownedStaleMs: 1_000,
+    })).classification;
+
+    expect({ readFailure, livenessFailure, ageFailure }).toEqual({
+      readFailure: expect.objectContaining({
+        status: 'FAILED',
+        message: expect.stringContaining('recovery claim'),
+      }),
+      livenessFailure: expect.objectContaining({
+        status: 'FAILED',
+        message: expect.stringContaining('recovery claim'),
+      }),
+      ageFailure: expect.objectContaining({
+        status: 'FAILED',
+        message: expect.stringContaining('recovery claim'),
+      }),
+    });
+  });
+
   it('derives changed test paths as scoped selectors', async () => {
     const gitCalls: string[][] = [];
 
@@ -3398,6 +3505,420 @@ describe('FullSuiteVerifier', () => {
       executions: 0,
     });
   });
+
+  it('reclaims orphaned recovery claims while recovering a dead full-suite owner', async () => {
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    const cases = [
+      {
+        name: 'dead-process claim',
+        claim: JSON.stringify({
+          version: 1,
+          pid: 2_147_483_646,
+          token: 'dead-recoverer',
+          claimedAt: '2026-09-07T11:59:59.999Z',
+        }),
+        claimMtime: now,
+      },
+      {
+        name: 'stale unparseable claim',
+        claim: 'not json',
+        claimMtime: now - 1_000,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const projectRoot = await makeConfiguredProject(`full-suite-orphaned-${testCase.name}-`);
+      const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+      const claimPath = join(lockPath, 'recovery.json');
+      await writeProjectFile(lockPath, 'owner.json', JSON.stringify({
+        version: 1,
+        pid: 2_147_483_647,
+        token: 'dead-owner',
+        acquiredAt: '2026-09-07T11:00:00.000Z',
+      }));
+      await writeFile(claimPath, testCase.claim, 'utf8');
+      await utimes(claimPath, new Date(testCase.claimMtime), new Date(testCase.claimMtime));
+      let executions = 0;
+
+      const result = await new FullSuiteVerifier({
+        projectRoot,
+        fingerprint: async () => ({
+          ok: true as const,
+          fingerprint: {
+            digest: `sha256:orphaned-${testCase.name}`,
+            headSha: 'orphaned-head',
+            categoryFingerprints: CATEGORY_FINGERPRINTS,
+          },
+        }),
+        execute: async () => {
+          executions += 1;
+          return {
+            ok: true as const,
+            command: 'node suite.mjs --all',
+            cwd: projectRoot,
+            startedAt: '2026-09-07T12:00:00.000Z',
+            endedAt: '2026-09-07T12:00:01.000Z',
+            durationMs: 1_000,
+            exitCode: 0 as const,
+            stdout: 'passed\n',
+            stderr: '',
+          };
+        },
+        lock: {
+          waitTimeoutMs: 0,
+          clock: () => now,
+          processIsLive: () => false,
+          unownedStaleMs: 100,
+        },
+      }).ensure();
+
+      expect({
+        result: result.status,
+        executions,
+        lockExists: await readdir(join(projectRoot, '.pipeline'))
+          .then((entries) => entries.includes('test-suite.lock')),
+      }).toEqual({ result: 'EXECUTED', executions: 1, lockExists: false });
+    }
+  });
+
+  it('keeps a replacement recovery claim when it changes after orphan classification', async () => {
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    const projectRoot = await makeConfiguredProject('full-suite-replacement-recovery-claim-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const claimPath = join(lockPath, 'recovery.json');
+    const orphanClaim = JSON.stringify({
+      version: 1,
+      pid: 2_147_483_646,
+      token: 'dead-recoverer',
+      claimedAt: '2026-09-07T11:59:59.999Z',
+    });
+    const replacementClaim = JSON.stringify({
+      version: 1,
+      pid: 22,
+      token: 'live-recoverer',
+      claimedAt: '2026-09-07T12:00:00.000Z',
+    });
+    await writeProjectFile(lockPath, 'owner.json', JSON.stringify({
+      version: 1,
+      pid: 2_147_483_647,
+      token: 'dead-owner',
+      acquiredAt: '2026-09-07T11:00:00.000Z',
+    }));
+    await writeFile(claimPath, orphanClaim, 'utf8');
+    let executions = 0;
+
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      execute: async () => {
+        executions += 1;
+        throw new Error('must not execute while a replacement claim holds the lock');
+      },
+      lock: {
+        waitTimeoutMs: 0,
+        clock: () => now,
+        processIsLive: (pid) => {
+          if (pid === 2_147_483_646) writeFileSync(claimPath, replacementClaim, 'utf8');
+          return pid === 22;
+        },
+      },
+    }).ensure();
+
+    expect({ result, executions, claim: await readFile(claimPath, 'utf8') }).toEqual({
+      result: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to acquire full-suite verification lock within 0ms',
+      },
+      executions: 0,
+      claim: replacementClaim,
+    });
+  });
+
+  it('takes a vanished orphaned recovery claim only once during stale-lock recovery', async () => {
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    const projectRoot = await makeConfiguredProject('full-suite-vanished-recovery-claim-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const claimPath = join(lockPath, 'recovery.json');
+    await writeProjectFile(lockPath, 'owner.json', JSON.stringify({
+      version: 1,
+      pid: 2_147_483_647,
+      token: 'dead-owner',
+      acquiredAt: '2026-09-07T11:00:00.000Z',
+    }));
+    await writeFile(claimPath, JSON.stringify({
+      version: 1,
+      pid: 2_147_483_646,
+      token: 'vanishing-recoverer',
+      claimedAt: '2026-09-07T11:59:59.999Z',
+    }), 'utf8');
+    let executions = 0;
+    const livenessProbes: number[] = [];
+
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true as const,
+        fingerprint: {
+          digest: 'sha256:vanished-recovery-claim',
+          headSha: 'vanished-recovery-claim-head',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
+      }),
+      execute: async () => {
+        executions += 1;
+        return {
+          ok: true as const,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-09-07T12:00:00.000Z',
+          endedAt: '2026-09-07T12:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0 as const,
+          stdout: 'passed\n',
+          stderr: '',
+        };
+      },
+      lock: {
+        waitTimeoutMs: 0,
+        clock: () => now,
+        processIsLive: (pid) => {
+          livenessProbes.push(pid);
+          if (pid === 2_147_483_646) rmSync(claimPath);
+          return false;
+        },
+      },
+    }).ensure();
+
+    expect({
+      result: result.status,
+      executions,
+      livenessProbes,
+      lockExists: await readdir(join(projectRoot, '.pipeline'))
+        .then((entries) => entries.includes('test-suite.lock')),
+    }).toEqual({
+      result: 'EXECUTED',
+      executions: 1,
+      livenessProbes: [2_147_483_647, 2_147_483_646],
+      lockExists: false,
+    });
+  });
+
+  it('fails closed when recovery-claim classification cannot probe liveness', async () => {
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    const projectRoot = await makeConfiguredProject('full-suite-recovery-claim-probe-failure-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const claimPath = join(lockPath, 'recovery.json');
+    const existingClaim = JSON.stringify({
+      version: 1,
+      pid: 2_147_483_646,
+      token: 'unprobeable-recoverer',
+      claimedAt: '2026-09-07T11:59:59.999Z',
+    });
+    await writeProjectFile(lockPath, 'owner.json', JSON.stringify({
+      version: 1,
+      pid: 2_147_483_647,
+      token: 'dead-owner',
+      acquiredAt: '2026-09-07T11:00:00.000Z',
+    }));
+    await writeFile(claimPath, existingClaim, 'utf8');
+    let executions = 0;
+
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      execute: async () => {
+        executions += 1;
+        throw new Error('must not execute after a recovery-claim probe failure');
+      },
+      lock: {
+        waitTimeoutMs: 0,
+        clock: () => now,
+        processIsLive: (pid) => {
+          if (pid === 2_147_483_646) throw new Error('liveness denied');
+          return false;
+        },
+      },
+    }).ensure();
+
+    expect({
+      result,
+      executions,
+      claim: await readFile(claimPath, 'utf8'),
+    }).toEqual({
+      result: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to verify full-suite recovery claim liveness: liveness denied',
+      },
+      executions: 0,
+      claim: existingClaim,
+    });
+  });
+
+  it('keeps a live recovery claim exclusive until lock acquisition times out', async () => {
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    const projectRoot = await makeConfiguredProject('full-suite-live-recovery-claim-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const claimPath = join(lockPath, 'recovery.json');
+    const existingClaim = JSON.stringify({
+      version: 1,
+      pid: 22,
+      token: 'live-recoverer',
+      claimedAt: '2026-09-07T11:59:59.999Z',
+    });
+    await writeProjectFile(lockPath, 'owner.json', JSON.stringify({
+      version: 1,
+      pid: 2_147_483_647,
+      token: 'dead-owner',
+      acquiredAt: '2026-09-07T11:00:00.000Z',
+    }));
+    await writeFile(claimPath, existingClaim, 'utf8');
+    await utimes(claimPath, new Date(now), new Date(now));
+    let executions = 0;
+
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      execute: async () => {
+        executions += 1;
+        throw new Error('must not execute while a live recovery claim holds the lock');
+      },
+      lock: {
+        waitTimeoutMs: 0,
+        clock: () => now,
+        processIsLive: (pid) => pid === 22,
+      },
+    }).ensure();
+
+    expect({
+      result,
+      executions,
+      claim: await readFile(claimPath, 'utf8'),
+    }).toEqual({
+      result: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to acquire full-suite verification lock within 0ms',
+      },
+      executions: 0,
+      claim: existingClaim,
+    });
+  });
+
+  it('keeps a fresh unparseable recovery claim exclusive without renaming it', async () => {
+    const now = Date.parse('2026-09-07T12:00:00.000Z');
+    const projectRoot = await makeConfiguredProject('full-suite-fresh-unparseable-recovery-claim-');
+    const lockPath = join(projectRoot, '.pipeline/test-suite.lock');
+    const claimPath = join(lockPath, 'recovery.json');
+    const existingClaim = 'not json';
+    await writeProjectFile(lockPath, 'owner.json', JSON.stringify({
+      version: 1,
+      pid: 2_147_483_647,
+      token: 'dead-owner',
+      acquiredAt: '2026-09-07T11:00:00.000Z',
+    }));
+    await writeFile(claimPath, existingClaim, 'utf8');
+    await utimes(claimPath, new Date(now), new Date(now));
+    let executions = 0;
+
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      execute: async () => {
+        executions += 1;
+        throw new Error('must not execute while an unparseable recovery claim is fresh');
+      },
+      lock: {
+        waitTimeoutMs: 0,
+        clock: () => now,
+        processIsLive: () => false,
+        unownedStaleMs: 100,
+      },
+    }).ensure();
+
+    expect({
+      result,
+      executions,
+      claim: await readFile(claimPath, 'utf8'),
+      lockEntries: await readdir(lockPath),
+    }).toEqual({
+      result: {
+        status: 'FAILED',
+        reason: 'internal_error',
+        message: 'Unable to acquire full-suite verification lock within 0ms',
+      },
+      executions: 0,
+      claim: existingClaim,
+      lockEntries: ['owner.json', 'recovery.json'],
+    });
+  });
+
+  it('executes exactly once when two verifiers contend over an orphaned lock', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-orphaned-lock-processes-'));
+    scratches.push(projectRoot);
+    await writeProjectFile(projectRoot, '.gitignore', '.pipeline/\n');
+    await writeProjectFile(
+      projectRoot,
+      '.ai-conductor/config.yml',
+      'test_suite:\n  command: node suite.mjs\n  timeout_seconds: 10\n',
+    );
+    await writeProjectFile(projectRoot, 'src/app.ts', 'export const value = 1;\n');
+    await writeProjectFile(
+      projectRoot,
+      'suite.mjs',
+      [
+        "import { mkdir, writeFile } from 'node:fs/promises';",
+        "import { setTimeout as delay } from 'node:timers/promises';",
+        "await mkdir('.pipeline/launches', { recursive: true });",
+        "await writeFile(`.pipeline/launches/${process.pid}`, 'launched');",
+        'await delay(250);',
+        "console.log('all suites passed');",
+        '',
+      ].join('\n'),
+    );
+    await execa('git', ['init', '-q', '-b', 'main'], { cwd: projectRoot });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: projectRoot });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: projectRoot });
+    await execa('git', ['add', '.'], { cwd: projectRoot });
+    await execa('git', ['commit', '-q', '-m', 'fixture'], { cwd: projectRoot });
+    await writeProjectFile(
+      projectRoot,
+      '.pipeline/test-suite.lock/owner.json',
+      JSON.stringify({
+        version: 1,
+        pid: 2_147_483_647,
+        token: 'orphaned-owner',
+        acquiredAt: '2026-09-07T11:00:00.000Z',
+      }),
+    );
+
+    const resultPaths = [
+      join(projectRoot, '.pipeline/orphaned-caller-1.json'),
+      join(projectRoot, '.pipeline/orphaned-caller-2.json'),
+    ];
+    const invoke = (resultPath: string) => execa(
+      process.execPath,
+      [
+        '--import',
+        TSX_LOADER,
+        CONCURRENT_ENSURE_FIXTURE,
+        projectRoot,
+        resultPath,
+      ],
+      { cwd: CONDUCTOR_ROOT },
+    );
+    await Promise.all(resultPaths.map(invoke));
+    const results = await Promise.all(resultPaths.map(async (path) =>
+      JSON.parse(await readFile(path, 'utf8')) as { status: string }));
+    const launches = await readdir(join(projectRoot, '.pipeline/launches'));
+
+    expect({
+      statuses: results.map(({ status }) => status).sort(),
+      launches: launches.length,
+      persisted: await readFullSuiteEvidence(projectRoot),
+    }).toMatchObject({
+      statuses: ['EXECUTED', 'REUSED'],
+      launches: 1,
+      persisted: { usable: true, evidence: { outcome: 'PASS' } },
+    });
+  }, 20_000);
 
   it('recovers a provably dead owner but refuses a live verification lock', async () => {
     const makeLockedProject = async (pid: number, token: string) => {

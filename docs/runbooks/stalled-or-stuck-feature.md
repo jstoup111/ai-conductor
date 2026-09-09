@@ -595,6 +595,24 @@ ai-conductor rewind --to test_suite
 by `build_review`; the new review either has the resolved feature plan as input or reports an
 independent gate result.
 
+#### Full-suite verification lock remains occupied
+
+**Symptom:** `test_suite` reports `Unable to acquire full-suite verification lock within 30000ms`.
+
+**Diagnosis:** the verifier serializes suite execution with
+`.worktrees/<slug>/.pipeline/test-suite.lock`. A dead lock owner is recovered automatically. If
+that recovery was interrupted, its `recovery.json` claim is also reclaimed when its recorded process
+is dead, or when unparseable claim bytes are at least five minutes old. A live claim and a fresh
+unparseable claim remain exclusive.
+
+**Recovery:** rerun the verification or let the daemon's next BUILD attempt run it. Do not delete
+the lock directory or its claim: a live verifier may own it. If verification instead reports an
+error naming a recovery claim, preserve the directory and diagnose the filesystem or process-probe
+failure before retrying.
+
+**Verification:** the next `test_suite` run either settles normally or reports its actual suite
+failure; it does not remain blocked by a dead owner or reclaimable stale claim.
+
 #### Setup failures
 
 If the project's `bin/setup` failed inside the worktree, the feature may be quarantined:
