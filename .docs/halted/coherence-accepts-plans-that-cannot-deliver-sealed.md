@@ -1,22 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-09T12:39:11.446Z
+Status: halted
 Slug: coherence-accepts-plans-that-cannot-deliver-sealed
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-coherence-accepts-plans-that-cannot-deliver-sealed
-Head SHA: f4d5149cef570527a16c8bea2f6d49900861a24b
-Halted at: 2026-09-09T04:28:34.909Z
+Head SHA: daa2370c36306833856302122e7309a6b8b5ea08
+Halted at: 2026-09-09T19:09:26.856Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: uncovered build-review coverage failure
-route: halt
-
+Validation group "prd_audit" halted: needs human DECIDE — existing-task remediation for finding 'AB-1' cannot resolve bound id 'task-2' in the active plan.
 ```
