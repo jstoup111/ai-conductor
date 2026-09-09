@@ -107,6 +107,9 @@ are document reviews, not live steering:
 Between 2 and 4 the daemon does the cheap part: code, tests, review fixes, rebase, PR prose. Delegating
 that is what frees your head for the next design problem while this one builds.
 
+CI repair agents commit fixes from CI diagnostics; the daemon owns repair test execution and publishes
+only after the configured verifier passes. Missing test configuration blocks publication.
+
 **The ADRs are the asset.** Every ADR is a durable architectural decision with its reasoning attached,
 committed to the repo and read by machinery: the composer plans the next feature against them, and the
 as-built review kicks back any build that violates one. Design knowledge that used to live in a few

@@ -4354,8 +4354,10 @@ TIER: M`,
         if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: 'M\u0000x\u0000', stderr: '' };
         if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/x b/x\n', stderr: '' };
         if (args[0] === 'show' && args[1] === 'head:plan.md') return { exitCode: 0, stdout: '# Plan\n', stderr: '' };
+        if (args[0] === 'show' && args[1]?.startsWith('head:.docs/plans/')) return { exitCode: 0, stdout: '# Plan\n', stderr: '' };
         if (args[0] === 'show' && args[1] === 'head:.docs/stories/plan.md') return { exitCode: 0, stdout: '# Stories\n', stderr: '' };
         if (args[0] === 'show' && args[1] === 'head:x') return { exitCode: 0, stdout: 'export const x = true;\n', stderr: '' };
+        if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '', stderr: '' };
         return { exitCode: 1, stdout: '', stderr: '' };
       };
       return git;
@@ -4834,6 +4836,9 @@ TIER: M`,
       expect(opts.resume).toBe(false);
       expect(opts.dangerouslySkipPermissions).toBe(true);
       expect(opts.cwd).toBe('/wt/feature-x');
+      expect(opts.systemPrompt).toContain('Do not run tests');
+      expect(opts.systemPrompt).toContain('Do not push');
+      expect(opts.systemPrompt).toContain('The daemon owns all test execution');
       expect(opts.prompt).toContain("TypeError: Cannot read properties of undefined (reading 'foo')");
     });
   });
