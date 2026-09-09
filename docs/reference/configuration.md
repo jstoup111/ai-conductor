@@ -1191,10 +1191,12 @@ Remediation waits for terminal CI. A rollup counts as `failed` as soon as one ch
 while sibling checks are still queued or running, so the eligibility gate defers any PR that still
 has a non-terminal check — reason `checks-not-terminal`
 (`src/conductor/src/engine/ci-fix.ts#nonTerminalCheckNames`). A check is terminal once it reports a
-conclusion (`SUCCESS`, `FAILURE`, `CANCELLED`, `TIMED_OUT`, `SKIPPED`, …); `QUEUED`, `IN_PROGRESS`,
-`PENDING`, `WAITING`, `REQUESTED`, `EXPECTED`, and a missing conclusion are not. A deferral burns no
-attempt — the next sweep tick re-reads the PR and dispatches once every check has finished. When the
-PR state carries no check-rollup detail at all, the gate does not block.
+conclusion (`SUCCESS`, `FAILURE`, `CANCELLED`, `TIMED_OUT`, `SKIPPED`, …). Legacy commit-status
+entries are terminal when they report a completed `state` such as `SUCCESS`, `FAILURE`, or `ERROR`;
+`QUEUED`, `IN_PROGRESS`, `PENDING`, `WAITING`, `REQUESTED`, `EXPECTED`, and entries with neither a
+conclusion nor a state are not. A deferral burns no attempt — the next sweep tick re-reads the PR and
+dispatches once every check has finished. When the PR state carries no check-rollup detail at all, the
+gate does not block.
 
 CI repair agents diagnose from the supplied logs and commit fixes without running tests or pushing.
 The daemon runs the configured `test_suite` verifier in the repair worktree, including its working

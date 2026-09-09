@@ -26,7 +26,13 @@ import type { GhRunner } from '../../src/engine/pr-labels.js';
 import { isEligibleForCiFix } from '../../src/engine/ci-fix.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
 
-type Check = { status?: string | null; conclusion?: string | null };
+type Check = {
+  status?: string | null;
+  conclusion?: string | null;
+  state?: string | null;
+  name?: string;
+  context?: string;
+};
 
 function prViewJson(opts: {
   mergeable?: string;
@@ -56,6 +62,14 @@ const PENDING_CHECKS: Check[] = [{ status: 'IN_PROGRESS', conclusion: null }];
 const FAILED_WITH_RUNNING_CHECKS: Check[] = [
   { status: 'COMPLETED', conclusion: 'FAILURE' },
   { status: 'IN_PROGRESS', conclusion: null },
+];
+const FAILED_WITH_COMPLETED_COMMIT_STATUS: Check[] = [
+  { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+  { state: 'SUCCESS', context: 'external-status' },
+];
+const FAILED_WITH_PENDING_COMMIT_STATUS: Check[] = [
+  { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+  { state: 'PENDING', context: 'external-status' },
 ];
 
 interface GhCall {
@@ -208,6 +222,58 @@ describe('mergeable-sweep native CI state + bounded CI-fix dispatch', () => {
     // Deferring never paints a harness status on top of GitHub's own checks.
     const ciFailedLabelCalls = calls.filter((c) => c.args.join(' ').includes('ci-failed'));
     expect(ciFailedLabelCalls).toHaveLength(0);
+  });
+
+  it('a failed check plus a completed commit status dispatches once and persists its attempt', async () => {
+    const prUrl = 'https://github.com/acme/widget/pull/1';
+    await enrollWatch(projectRoot, { prUrl, slug: 'widget', repoCwd: projectRoot });
+
+    const calls: GhCall[] = [];
+    const gh = makeGh({ [prUrl]: { checks: FAILED_WITH_COMPLETED_COMMIT_STATUS } }, calls);
+    const dispatched: WatchEntry[] = [];
+
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: gh,
+      ciFix: {
+        enabled: true,
+        isEligible: async (entry: WatchEntry, state: PrMergeState) =>
+          isEligibleForCiFix(entry, state, {}, new Date()),
+        dispatch: async (entry: WatchEntry) => {
+          dispatched.push(entry);
+        },
+      },
+    });
+
+    expect(dispatched).toHaveLength(1);
+    const [persisted] = await readEntries(projectRoot);
+    expect(persisted.ciFixAttempts).toBe(1);
+  });
+
+  it('a failed check plus a pending commit status defers without dispatching or burning an attempt', async () => {
+    const prUrl = 'https://github.com/acme/widget/pull/1';
+    await enrollWatch(projectRoot, { prUrl, slug: 'widget', repoCwd: projectRoot });
+
+    const calls: GhCall[] = [];
+    const gh = makeGh({ [prUrl]: { checks: FAILED_WITH_PENDING_COMMIT_STATUS } }, calls);
+    const dispatched: WatchEntry[] = [];
+
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: gh,
+      ciFix: {
+        enabled: true,
+        isEligible: async (entry: WatchEntry, state: PrMergeState) =>
+          isEligibleForCiFix(entry, state, {}, new Date()),
+        dispatch: async (entry: WatchEntry) => {
+          dispatched.push(entry);
+        },
+      },
+    });
+
+    expect(dispatched).toHaveLength(0);
+    const [persisted] = await readEntries(projectRoot);
+    expect(persisted.ciFixAttempts ?? 0).toBe(0);
   });
 
   it('TR-3 happy: bumps ciFixAttempts + stamps lastCiFixAt BEFORE dispatch, persisted in the registry', async () => {

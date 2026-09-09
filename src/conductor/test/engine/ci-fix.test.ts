@@ -5,7 +5,13 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { buildCiFixHint, isEligibleForCiFix, runCiFix, productionCiFixRunner } from '../../src/engine/ci-fix.js';
+import {
+  buildCiFixHint,
+  isEligibleForCiFix,
+  nonTerminalCheckNames,
+  runCiFix,
+  productionCiFixRunner,
+} from '../../src/engine/ci-fix.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
@@ -373,7 +379,13 @@ describe('ci-fix: isEligibleForCiFix terminal-CI-state gate', () => {
 
   /** A `failed` rollup — the state the sweep hands to the CI-fix dispatch. */
   function stateWithChecks(
-    statusCheckRollup: Array<{ status?: string | null; conclusion?: string | null; name?: string }>,
+    statusCheckRollup: Array<{
+      status?: string | null;
+      conclusion?: string | null;
+      state?: string | null;
+      name?: string;
+      context?: string;
+    }>,
   ): PrMergeState {
     return {
       state: 'OPEN',
@@ -416,6 +428,95 @@ describe('ci-fix: isEligibleForCiFix terminal-CI-state gate', () => {
     const state = stateWithChecks([
       { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
       { status: 'PENDING', conclusion: 'PENDING', name: 'deploy-preview' },
+    ]);
+
+    const result = await isEligibleForCiFix(entry, state, config, NOW);
+
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toContain('checks-not-terminal');
+  });
+
+  it.each(['SUCCESS', 'FAILURE', 'ERROR'])(
+    'a completed commit status reporting %s alongside a failure → eligible',
+    async (reportedState) => {
+      const state = stateWithChecks([
+        { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+        { state: reportedState, name: 'external-status' },
+      ]);
+
+      expect(nonTerminalCheckNames(state.statusCheckRollup)).toEqual([]);
+      const result = await isEligibleForCiFix(entry, state, config, NOW);
+
+      expect(result).toEqual({ eligible: true });
+    },
+  );
+
+  it.each(['PENDING', 'EXPECTED'])(
+    'a commit status reporting %s alongside a failure → ineligible(checks-not-terminal)',
+    async (reportedState) => {
+      const state = stateWithChecks([
+        { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+        { state: reportedState, name: 'external-status' },
+      ]);
+
+      expect(nonTerminalCheckNames(state.statusCheckRollup)).toEqual(['external-status']);
+      const result = await isEligibleForCiFix(entry, state, config, NOW);
+
+      expect(result.eligible).toBe(false);
+      expect(result.reason).toContain('checks-not-terminal');
+    },
+  );
+
+  it('a pending commit status with context but no name → identifies its context in the refusal', async () => {
+    const state = stateWithChecks([
+      { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+      { state: 'PENDING', context: 'deploy-preview' },
+    ]);
+
+    const result = await isEligibleForCiFix(entry, state, config, NOW);
+
+    expect(result.reason).toContain('deploy-preview');
+  });
+
+  it('a pending entry with no identifier → uses the existing placeholder in the refusal', async () => {
+    const state = stateWithChecks([
+      { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+      { state: 'PENDING' },
+    ]);
+
+    const result = await isEligibleForCiFix(entry, state, config, NOW);
+
+    expect(result.reason).toContain('(unnamed check)');
+  });
+
+  it('a pending entry with whitespace-only identifiers → uses the existing placeholder in the refusal', async () => {
+    const state = stateWithChecks([
+      { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+      { state: 'PENDING', name: '  ', context: '\t' },
+    ]);
+
+    const result = await isEligibleForCiFix(entry, state, config, NOW);
+
+    expect(result.reason).toContain('(unnamed check)');
+  });
+
+  it('all completed entries → eligible without a deferral log', async () => {
+    const state = stateWithChecks([
+      { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+      { state: 'SUCCESS' },
+    ]);
+    const logs: string[] = [];
+
+    const result = await isEligibleForCiFix(entry, state, config, NOW, (message) => logs.push(message));
+
+    expect(result).toEqual({ eligible: true });
+    expect(logs).toEqual([]);
+  });
+
+  it('a check run with neither conclusion nor reported state → ineligible(checks-not-terminal)', async () => {
+    const state = stateWithChecks([
+      { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+      { status: 'COMPLETED', name: 'integration' },
     ]);
 
     const result = await isEligibleForCiFix(entry, state, config, NOW);
