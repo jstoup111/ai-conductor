@@ -54,7 +54,7 @@ Nineteen entries. Alphabetized; the four with no code reference are marked.
 | `manual-test-results.md` | loose file | legacy | **no code reference** — superseded by `.pipeline/manual-test-results.md` |
 | `observation/` | free-form | manual | **no code reference** |
 | `phase7-daemon-validation.md` | loose file | manual | **no code reference** |
-| `plans/` | `YYYY-MM-DD-<slug>.md` — the stem is the canonical feature key | `plan` skill; the composer loop writes `.docs/plans/<slug>.md` at land | `plan` completion glob; land requires every parsed task to have a `Done when:` block with 2–5 nonblank list checks; seeds `.pipeline/task-status.json`; the build predicate parses `### Task <id>` headings; protected-artifact seal |
+| `plans/` | `YYYY-MM-DD-<slug>.md` — the stem is the canonical feature key | `plan` skill; the composer loop writes `.docs/plans/<slug>.md` at land | `plan` completion glob; land requires every parsed task to have a `Done when:` block with 2–5 nonblank list checks and refuses 41 or more tasks without exactly one non-empty `**Scope-exception:**` declaration; seeds `.pipeline/task-status.json`; the build predicate parses `### Task <id>` headings; protected-artifact seal |
 | `release-waivers/` | `<plan-stem>.md` | operator, hand-authored in the same diff | the self-host release gate. Also the only `.docs` prefix always writable during BUILD |
 | `shipped/` | `<plan-stem>.md` | `ai-conductor shipped-record` | daemon backlog dedup; the only input to `ai-conductor kpi` |
 | `specs/` | `YYYY-MM-DD-<slug>.md` | `prd` skill (product track only) | `prd` completion glob; protected-artifact seal |

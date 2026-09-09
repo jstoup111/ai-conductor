@@ -1,3 +1,4 @@
+// Covers: task:3
 // land-spec.test.ts — Story 2 (Slice B): landSpec fails CLOSED on unresolved
 // identity (adr-2026-07-01-machine-scoped-operator-identity, D3).
 //
@@ -1390,6 +1391,79 @@ describe('landSpec Done-when validation', () => {
       '- The second observable result exists.',
       '',
     ].join('\n'));
+
+    const result = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+  });
+});
+
+function planWithAddressableTaskCount(taskCount: number, trailingContent = ''): string {
+  const tasks = Array.from({ length: taskCount }, (_, index) => [
+    `### Task ${index + 1}: Task ${index + 1}`,
+    '**Done when:**',
+    '- The first observable result exists.',
+    '- The second observable result exists.',
+  ].join('\n')).join('\n\n');
+  return [
+    '# Implementation Plan: dep bump',
+    '',
+    '**Stories:** .docs/stories/dep-bump.md',
+    '',
+    tasks,
+    trailingContent,
+    '',
+  ].join('\n');
+}
+
+describe('landSpec plan task-count validation', () => {
+  const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+  it('refuses a hard-stop plan with no scope exception', async () => {
+    const dir = await seedValidWorktree();
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), planWithAddressableTaskCount(41));
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/41 addressable tasks.*hard-stop boundary 41.*no scope exception/i);
+  });
+
+  it('lands an authorized hard-stop plan and preserves its rationale verbatim', async () => {
+    const dir = await seedValidWorktree();
+    const rationale = 'The coordinated migration needs all changes reviewed together.';
+    await writeFile(
+      join(dir, '.docs', 'plans', 'dep-bump.md'),
+      planWithAddressableTaskCount(41, `**Scope-exception:** ${rationale}`),
+    );
+
+    const result = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
+    const committedPlan = await git(['show', `${result.branch}:.docs/plans/dep-bump.md`], dir);
+
+    expect(committedPlan).toContain(`**Scope-exception:** ${rationale}`);
+  });
+
+  it.each([
+    ['an empty rationale', '**Scope-exception:**'],
+    ['duplicate declarations', '**Scope-exception:** First rationale.\n**Scope-exception:** Second rationale.'],
+  ])('refuses a hard-stop plan with %s as malformed', async (_caseName, declaration) => {
+    const dir = await seedValidWorktree();
+    await writeFile(
+      join(dir, '.docs', 'plans', 'dep-bump.md'),
+      planWithAddressableTaskCount(41, declaration),
+    );
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/41 addressable tasks.*hard-stop boundary 41.*scope exception declaration is malformed/i);
+  });
+
+  it.each([
+    ['one task below the hard-stop boundary', planWithAddressableTaskCount(40)],
+    ['fenced extra task headings', planWithAddressableTaskCount(40, `\`\`\`markdown\n${planWithAddressableTaskCount(41)}\n\`\`\``)],
+    ['an inert declaration', planWithAddressableTaskCount(40, '**Scope-exception:** Not needed below the boundary.')],
+  ])('lands a below-boundary plan with %s', async (_caseName, plan) => {
+    const dir = await seedValidWorktree();
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), plan);
 
     const result = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
 
