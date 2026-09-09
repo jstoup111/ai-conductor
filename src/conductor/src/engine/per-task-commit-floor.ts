@@ -301,3 +301,20 @@ export function renderContainmentFloorReport(report: ContainmentFloorReport): st
     ...report.skipNotes.map((note) => `Advisory: ${note}.`),
   ];
 }
+
+/**
+ * Keeps the review verdict at the head of a failed build_review output while
+ * retaining containment observations in the durable step record.
+ */
+export function composeContainmentAdvisoryOutput(
+  reviewOutput: string,
+  advisoryLines: readonly string[],
+  success: boolean,
+): string {
+  if (advisoryLines.length === 0) return reviewOutput;
+
+  const advisoryOutput = advisoryLines.join('\n');
+  return success
+    ? `${advisoryOutput}\n\n${reviewOutput}`
+    : `${reviewOutput}\n\n${advisoryOutput}`;
+}

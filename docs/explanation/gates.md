@@ -97,6 +97,10 @@ reference — per-file paths, change kinds, and hunk line ranges anchored to the
 session, running inside the feature worktree, reads the referenced file contents and per-path diffs itself
 instead of receiving the raw diff text inline.
 
+The advisory remains in the warning log and step output on every lap. On a failing lap it follows the review's
+own reason, so the failure and retry lines name the actual review failure; on a passing lap it precedes the
+review output.
+
 ### Declared pattern replication check
 
 A plan may declare, in its header, that it replicates an existing source file under a rename map

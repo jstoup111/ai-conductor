@@ -3781,6 +3781,59 @@ TIER: M`,
       expect(provider.invoke).not.toHaveBeenCalled();
     });
 
+    it.each([
+      ['failed', false, 'review failed: missing coverage'],
+      ['passed', true, 'review passed'],
+    ])('places a containment advisory around %s review output without changing its success result', async (_caseName, success, reviewOutput) => {
+      const provider = createMockProvider();
+      const warnings: string[] = [];
+      const coordinate = vi.fn(async () => ({ success, output: reviewOutput }));
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+        config: { build_review: { scopeContainmentEnforced: true } } as HarnessConfig,
+        buildReviewCoordinator: coordinate,
+        log: (message) => warnings.push(message),
+        ...currentBuildReviewProof(),
+      });
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.success).toBe(success);
+      const advisory =
+        'Advisory: containment-floor: git repository check failed: fatal: not a git repository (or any of the parent directories): .git.';
+      expect(result.output).toContain(advisory);
+      expect(result.output?.startsWith(success
+        ? advisory
+        : reviewOutput)).toBe(true);
+      expect(warnings).toEqual([
+        `WARNING: ${advisory}`,
+      ]);
+      expect(coordinate).toHaveBeenCalledOnce();
+    });
+
+    it('leaves coordinator output untouched when containment is off or non-string', async () => {
+      const provider = createMockProvider();
+      const coordinator = vi.fn()
+        .mockResolvedValueOnce({ success: false, output: 'review failed: untouched' })
+        .mockResolvedValueOnce({ success: false });
+      const withoutContainment = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(), planPath, buildReviewCoordinator: coordinator, ...currentBuildReviewProof(),
+      });
+      const withNonStringOutput = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(), planPath,
+        config: { build_review: { scopeContainmentEnforced: true } } as HarnessConfig,
+        buildReviewCoordinator: coordinator, ...currentBuildReviewProof(),
+      });
+
+      await expect(withoutContainment.run('build_review', emptyState)).resolves.toMatchObject({
+        success: false, output: 'review failed: untouched',
+      });
+      const nonStringResult = await withNonStringOutput.run('build_review', emptyState);
+      expect(nonStringResult.success).toBe(false);
+      expect('output' in nonStringResult).toBe(false);
+    });
+
     it('empty-passes opted-in test quality when no feature plan resolves', async () => {
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
