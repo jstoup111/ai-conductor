@@ -2807,6 +2807,77 @@ Return requests are accepted.
 });
 
 describe('runCoherenceGate criterion fail-closed guard', () => {
+  async function architectureCorrectionGateError(
+    decisionRef: string,
+    options: { addedAdr?: { name: string; content: string }; deletedAdr?: { name: string; content: string } } = {},
+  ): Promise<Error> {
+    const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-unknown-correction-'));
+    temporaryRepositories.push(canonicalPath);
+    const worktreePath = join(canonicalPath, 'feature');
+    await runGit(canonicalPath, ['init', '--initial-branch=main']);
+    await runGit(canonicalPath, ['config', 'user.email', 'test@example.com']);
+    await runGit(canonicalPath, ['config', 'user.name', 'Test User']);
+    await writeFile(join(canonicalPath, 'README.md'), '# fixture\n');
+    if (options.deletedAdr) {
+      await mkdir(join(canonicalPath, '.docs/decisions'), { recursive: true });
+      await writeFile(join(canonicalPath, `.docs/decisions/${options.deletedAdr.name}.md`), options.deletedAdr.content);
+    }
+    await runGit(canonicalPath, ['add', '.']);
+    await runGit(canonicalPath, ['commit', '-m', 'seed fixture']);
+    await runGit(canonicalPath, ['worktree', 'add', '-b', 'feature', worktreePath]);
+
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    if (options.addedAdr) {
+      await mkdir(join(worktreePath, '.docs/decisions'), { recursive: true });
+      await writeFile(join(worktreePath, `.docs/decisions/${options.addedAdr.name}.md`), options.addedAdr.content);
+    }
+    if (options.deletedAdr) await unlink(join(worktreePath, `.docs/decisions/${options.deletedAdr.name}.md`));
+    await writeFile(join(worktreePath, '.docs/coherence/idea.md'), `| Row Class | Id | Cited Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| story | story-1 | task-1 | covered | fixture |
+| task | task-1 | story-1 | covered | fixture |
+| criterion | Story 1 happy: Given a widget, when shipped, then it arrives | task-1 | fail | "Deliver widget." | diff-local | architecture:${decisionRef} |
+`);
+    await runGit(worktreePath, ['add', '-A']);
+    await runGit(worktreePath, ['commit', '-m', 'add correction fixture']);
+
+    try {
+      await runCoherenceGate({
+        worktreePath, canonicalPath, tier: 'M', track: 'technical', sourceRef: undefined, planStem: 'idea',
+        storiesText: '# Stories\n\n## Story 1: Widget\n\n### Happy Path\n- Given a widget, when shipped, then it arrives\n',
+        planText: '# Plan\n\n### Task 1: Deliver widget\n**Story:** Story 1\n\n**Done when:**\n- Deliver widget.\n\n## Coverage Check\n\n| Criterion | Tasks | Done when quote | Disposition |\n| --- | --- | --- | --- |\n| Story 1 happy: Given a widget, when shipped, then it arrives | task-1 | "Deliver widget." | diff-local |\n',
+        prdText: null, outcomeBullets: [], ideaFiles: new Set(['.docs/coherence/idea.md']),
+        guard: new AuthoringGuard(worktreePath),
+      });
+    } catch (error) {
+      if (error instanceof Error) return error;
+      throw error;
+    }
+    throw new Error('expected unknown correction reference to block the gate');
+  }
+
+  it('reports an architecture correction when no ADR decision is in the change set', async () => {
+    const error = await architectureCorrectionGateError('adr-none#D1');
+    expect(error.message).toContain('criterion:correction-unknown-decision:1');
+    expect(error.message).toContain('architecture correction references unknown decision adr-none#D1; enumerated decision set is empty');
+  });
+
+  it('reports an out-of-range architecture decision with every enumerated id', async () => {
+    const error = await architectureCorrectionGateError('adr-range#D9', {
+      addedAdr: { name: 'adr-range', content: '# Range ADR\n\n## Decision\n\n1. First.\n2. Second.\n3. Third.\n' },
+    });
+    expect(error.message).toContain('criterion:correction-unknown-decision:1');
+    expect(error.message).toContain('architecture correction references unknown decision adr-range#D9; enumerated decision ids: adr-range#D1, adr-range#D2, adr-range#D3');
+  });
+
+  it('reports a reference to an ADR deleted from the change set', async () => {
+    const error = await architectureCorrectionGateError('adr-deleted#D1', {
+      deletedAdr: { name: 'adr-deleted', content: '# Deleted ADR\n\n## Decisions\n\n1. Removed decision.\n' },
+    });
+    expect(error.message).toContain('criterion:correction-unknown-decision:1');
+    expect(error.message).toContain('architecture correction references unknown decision adr-deleted#D1; enumerated decision set is empty');
+  });
+
   it.each([
     ['numbered decision', '2. The ADR decision permits the correction.\n', 'adr-correction#D2'],
     ['amendment-blockquote decision', '> **Amended 2026-09-08 by #1:**\n> 10. The amendment permits the correction.\n', 'adr-correction#D10'],
@@ -2826,7 +2897,7 @@ describe('runCoherenceGate criterion fail-closed guard', () => {
 
     await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
     await mkdir(join(worktreePath, '.docs/decisions'), { recursive: true });
-    await writeFile(join(worktreePath, '.docs/decisions/adr-correction.md'), `# Correction ADR\n\n## Decisions\n\n${adrDecision}`);
+    await writeFile(join(worktreePath, '.docs/decisions/adr-correction.md'), `# Correction ADR\n\n## Decision\n\n${adrDecision}`);
     await writeFile(
       join(worktreePath, '.docs/coherence/idea.md'),
       `| Row Class | Id | Cited Ids | Verdict | Quote | Disposition | Correction |
