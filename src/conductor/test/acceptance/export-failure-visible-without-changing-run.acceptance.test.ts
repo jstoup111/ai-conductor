@@ -1,4 +1,4 @@
-// Covers: S4.1, S4.3, S4.4, S4.5, task:9
+// Covers: task:9
 /**
  * Acceptance seam: the daemon's real feature scope wires the OTel warning bus
  * to both the persisted feature ledger and daemon.log. A failing exporter is a

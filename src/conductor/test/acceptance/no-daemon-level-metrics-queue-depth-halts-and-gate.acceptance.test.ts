@@ -1,14 +1,16 @@
-// Covers: S1.1, S1.2, S1.3, S1.4, S1.6, S3.1, S3.4, S3.8, S3.9, task:8, task:12
+// Covers: S1.1, S1.2, S1.3, S1.4, S1.6, S3.1, S3.4, S3.8, S3.9, S4.1, S4.3, S4.4, S4.5, task:8, task:12
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   AggregationTemporality,
   InMemoryMetricExporter,
+  MeterProvider,
 } from '@opentelemetry/sdk-metrics';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
 import { localWorkSource } from '../../src/engine/daemon-work-source.js';
+import { readHaltSidecarClassification } from '../../src/engine/halt-marker.js';
 import { startFeatureEventPersistence } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -225,6 +227,8 @@ async function emitExitedDispatch(
     type: 'feature_dispatch_ended',
     slug,
     outcome: 'halted',
+    haltClass: await readHaltSidecarClassification(worktree),
+    step: 'build',
   });
 }
 
@@ -244,6 +248,20 @@ describe('daemon-level metrics acceptance', () => {
     await daemon.scope.flush();
     expect(pointValue(daemon.exporter, 'conductor.run.outcomes', {
       project: 'project-p', worker: 'worker-w', feature: 'feature-b', outcome: 'halted',
+    })).toBe(1);
+    for (const [feature, kind] of [['feature-a', 'initial'], ['feature-b', 'rekick']]) {
+      expect(pointValue(daemon.exporter, 'conductor.feature.dispatches', {
+        project: 'project-p', worker: 'worker-w', feature, kind,
+      })).toBe(1);
+      expect(pointValue(daemon.exporter, 'conductor.feature.halts', {
+        project: 'project-p', worker: 'worker-w', feature, haltClass: 'unclassified', step: 'build',
+      })).toBe(1);
+    }
+    expect(metricPoints(daemon.exporter, 'conductor.feature.shipped')).toHaveLength(0);
+    await daemon.events.emit({ type: 'feature_shipped', slug: 'feature-b', active: { state: 'unavailable' } });
+    await daemon.scope.flush();
+    expect(pointValue(daemon.exporter, 'conductor.feature.shipped', {
+      project: 'project-p', worker: 'worker-w', feature: 'feature-b',
     })).toBe(1);
     await daemon.scope.stop();
   });
@@ -323,6 +341,8 @@ describe('daemon-level metrics acceptance', () => {
   });
 
   it('exports liveness, zero-valued backlog states, and free slots from a real idle daemon tick', async () => {
+    const getMeter = vi.spyOn(MeterProvider.prototype, 'getMeter');
+    let daemonProvider: MeterProvider | undefined;
     const root = await mkdtemp(join(testTmpdir(), 'idle-daemon-metrics-'));
     roots.push(root);
     await mkdir(join(root, '.ai-conductor'), { recursive: true });
@@ -348,7 +368,15 @@ describe('daemon-level metrics acceptance', () => {
       baseBranch: 'main',
       ensureFresh: async () => {},
       watch: false,
-      workSource: { discover: async () => [] },
+      workSource: { discover: async () => {
+        const provider = getMeter.mock.contexts[getMeter.mock.calls.findIndex(([name]) => name === 'conductor')];
+        if (!(provider instanceof MeterProvider)) throw new Error('daemon meter was not constructed before discovery');
+        daemonProvider = provider;
+        // Wiring alone must not announce liveness before any daemon tick.
+        await daemonProvider!.forceFlush();
+        expect(metricPoints(exporter, 'conductor.daemon.up')).toHaveLength(0);
+        return [];
+      } },
       probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
     });
 
@@ -376,6 +404,11 @@ describe('daemon-level metrics acceptance', () => {
     expect(pointValue(exporter, 'conductor.daemon.slots', {
       project: 'project-p', worker: 'worker-w', state: 'free',
     })).toBe(3);
+    // The real loop has returned and shut down its provider. An additional
+    // export request must not keep publishing the last live observation.
+    exporter.reset();
+    await daemonProvider!.forceFlush();
+    expect(metricPoints(exporter, 'conductor.daemon.up')).toHaveLength(0);
   });
 
   it('exports live slots and one in-flight point per slug from a real busy daemon tick', async () => {
