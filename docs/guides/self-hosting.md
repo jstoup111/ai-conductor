@@ -39,6 +39,19 @@ Every gate toggle defaults to enabled, and an unknown key under `harness_self_ho
 error rather than a silently disabled guardrail. See
 [configuration reference](../reference/configuration.md) for every key.
 
+## Open-PR recovery
+
+This repository explicitly enables `mergeable_autoresolve` and `ci_watch` in
+`.ai-conductor/config.yml`, each with a 60-minute retry cooldown. The daemon repairs
+conflicts on watched, eligible open PRs before attempting CI-failure repair. Both
+paths use `npm --prefix src/conductor test` from their isolated worktree root
+before publishing a repair. Existing attempt limits, draft/label exclusions, and
+the CI-fix startup preflight still apply; enabling the settings does not bypass them.
+
+Restart the daemon after landing this configuration to activate it. Consumer
+defaults are unchanged: conflict auto-resolution remains opt-in, and CI watch
+defaults to enabled. See the [configuration reference](../reference/configuration.md#mergeable_autoresolve).
+
 ## Prerequisites
 
 | Requirement | Check |

@@ -819,6 +819,12 @@ subcommand '<token>'.` followed by the daemon help, and exits 1.
 
 ## Finish-time mergeability
 
+After publication, watched PRs have a separate recovery loop controlled by
+`mergeable_autoresolve.enabled` and `ci_watch.enabled`. Conflicts take precedence
+over CI repair. The harness repository explicitly enables both; see
+[self-host open-PR recovery](self-hosting.md#open-pr-recovery) for its suite command
+and activation requirements. This does not enable automatic merging.
+
 At the daemon-only `rebase` step immediately before `finish`, the engine first checks whether the
 feature can merge cleanly with the current base. Textual cleanliness alone is **not** enough to skip
 the rebase — `git merge-tree` proves only that the two trees do not collide, never that this
