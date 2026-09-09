@@ -32,6 +32,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Rebase halts now identify missing feature content and provide the correct recovery steps. ([implementation PR #2396](https://github.com/jstoup111/ai-conductor/pull/2396)).
 - Telemetry no longer counts provider-free step completions as provider dispatches. ([implementation PR #2401](https://github.com/jstoup111/ai-conductor/pull/2401)).
 - Recover sealed artifact verification when recorded remediation tasks append to a valid baseline. ([implementation PR #2394](https://github.com/jstoup111/ai-conductor/pull/2394)).
+- Require operator authorization before a halted feature resumes and provide budget recovery commands. ([implementation PR #2206](https://github.com/jstoup111/ai-conductor/pull/2206)).
 
 ## Migration
 
