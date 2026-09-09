@@ -83,6 +83,65 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     };
   }
 
+  it.each([
+    { name: 'passing suite', exitCode: 0, configured: true, concurrentPush: false, expected: 'refreshed' },
+    { name: 'failing suite', exitCode: 1, configured: true, concurrentPush: false, expected: 'escalated' },
+    { name: 'unconfigured suite', exitCode: 0, configured: false, concurrentPush: false, expected: 'escalated' },
+    { name: 'concurrent remote update', exitCode: 0, configured: true, concurrentPush: true, expected: 'escalated' },
+  ])('gates and publishes a clean rebase: $name', async ({ exitCode, configured, concurrentPush, expected }) => {
+    await writeFile(join(dir, 'base.txt'), 'base\n');
+    await gDir(['add', '.']);
+    await gDir(['commit', '-q', '-m', 'base']);
+    await gDir(['remote', 'add', 'origin', origin]);
+    await gDir(['push', 'origin', 'main']);
+    await gDir(['checkout', '-q', '-b', 'feat/widget']);
+    await writeFile(join(dir, 'feature.txt'), 'feature\n');
+    await gDir(['add', '.']);
+    await gDir(['commit', '-q', '-m', 'feature work']);
+    await gDir(['push', 'origin', 'feat/widget']);
+    const before = (await gDir(['rev-parse', 'HEAD'])).stdout.trim();
+    await gDir(['checkout', '-q', 'main']);
+    await writeFile(join(dir, 'upstream.txt'), 'upstream\n');
+    await gDir(['add', '.']);
+    await gDir(['commit', '-q', '-m', 'upstream work']);
+    await gDir(['push', 'origin', 'main']);
+    const baseTip = (await gDir(['rev-parse', 'HEAD'])).stdout.trim();
+    const { resolveConflictingPr } = await import('../../src/engine/autoresolve.js');
+    const logs: string[] = [];
+    let suiteCalls = 0;
+    let resolverCalls = 0;
+    let verifiedTip: string | undefined;
+    const remoteTip = async () => (await execFile('git', ['rev-parse', 'refs/heads/feat/widget'], { cwd: origin })).stdout.trim();
+
+    const outcome = await resolveConflictingPr(
+      { prUrl: PR_URL, slug: 'widget', repoCwd: dir }, 'feat/widget',
+      { enabled: true, suiteCommand: 'test', cooldownMinutes: 60, attemptCap: ATTEMPT_CAP },
+      {
+        runGh: fakeGhFor([], []),
+        runSuite: async (cwd) => {
+          suiteCalls++;
+          expect(await remoteTip()).toBe(before);
+          verifiedTip = (await execFile('git', ['rev-parse', 'HEAD'], { cwd })).stdout.trim();
+          await execFile('git', ['merge-base', '--is-ancestor', baseTip, 'HEAD'], { cwd });
+          expect((await execFile('git', ['show', 'HEAD:feature.txt'], { cwd })).stdout).toBe('feature\n');
+          if (concurrentPush) {
+            // Simulate another writer without refreshing this checkout's lease.
+            await execFile('git', ['update-ref', 'refs/heads/feat/widget', baseTip, before], { cwd: origin });
+          }
+          return { exitCode, configured, durationMs: 1 };
+        },
+        resolver: async () => { resolverCalls++; return { resolved: false, reason: 'unexpected resolver' }; },
+        log: (line) => logs.push(line),
+      },
+    );
+
+    expect(suiteCalls).toBe(1);
+    expect(resolverCalls).toBe(0);
+    expect(outcome.kind).toBe(expected);
+    expect(await remoteTip()).toBe(expected === 'refreshed' ? verifiedTip : concurrentPush ? baseTip : before);
+    expect(logs.some(line => line.includes('stage=lease-push result=refreshed'))).toBe(expected === 'refreshed');
+  });
+
   it('a CHANGELOG-only conflict is handed to the generic resolver (FR-3/FR-4)', async () => {
     // Base (origin/main) and the feature branch both append DIFFERENT entries
     // under [Unreleased] → a rebase conflict confined to CHANGELOG.md.

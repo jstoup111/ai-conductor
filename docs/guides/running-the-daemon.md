@@ -826,6 +826,10 @@ over CI repair. The harness repository explicitly enables both; see
 [self-host open-PR recovery](self-hosting.md#open-pr-recovery) for its suite command
 and activation requirements. This does not enable automatic merging.
 
+An autoresolve attempt whose rebase completes without conflicts still runs the preservation
+checks and configured suite before pushing with a lease. `refreshed` is reported only after that
+push succeeds; failed verification or a rejected push reports `escalated`.
+
 At the daemon-only `rebase` step immediately before `finish`, the engine first checks whether the
 feature can merge cleanly with the current base. Textual cleanliness alone is **not** enough to skip
 the rebase — `git merge-tree` proves only that the two trees do not collide, never that this
