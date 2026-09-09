@@ -194,6 +194,46 @@ export function aggregateKickbacks(events: ParsedEvent[]): KickbackEntry[] {
   return out;
 }
 
+export interface KickbackSummaryEntry {
+  from: string;
+  to: string;
+  occurrences: number;
+  kickbackOutcome?: string;
+}
+
+export interface KickbackSummary {
+  totalOccurrences: number;
+  buildReentries: number;
+  pairs: KickbackSummaryEntry[];
+}
+
+/** Summarize individual kickback records by their source and target gates. */
+export function summarizeKickbacks(kickbacks: readonly KickbackEntry[]): KickbackSummary {
+  const summaries = new Map<string, KickbackSummaryEntry>();
+  for (const kickback of kickbacks) {
+    const key = `${kickback.from}\u0000${kickback.to}`;
+    const summary = summaries.get(key) ?? {
+      from: kickback.from,
+      to: kickback.to,
+      occurrences: 0,
+    };
+    summary.occurrences++;
+    if (kickback.kickbackOutcome !== undefined) summary.kickbackOutcome = kickback.kickbackOutcome;
+    summaries.set(key, summary);
+  }
+
+  const pairs = [...summaries.values()].sort(
+    (a, b) => b.occurrences - a.occurrences || a.from.localeCompare(b.from) || a.to.localeCompare(b.to),
+  );
+  return {
+    totalOccurrences: kickbacks.length,
+    buildReentries: pairs
+      .filter((kickback) => kickback.to === 'build')
+      .reduce((total, kickback) => total + kickback.occurrences, 0),
+    pairs,
+  };
+}
+
 export interface HaltEntry {
   reason: string;
 }
@@ -231,9 +271,35 @@ export function renderReport(eventsJsonlPath: string): string {
   sections.push(renderRetries(events));
   sections.push(renderTokenSpend(events));
   sections.push(renderOperatorParkBoundaries(events));
+  sections.push(renderKickbacks(events));
   sections.push(renderBuildReviewMetrics(events));
 
   return sections.join('\n\n');
+}
+
+function renderKickbacks(events: ParsedEvent[]): string {
+  const summary = summarizeKickbacks(aggregateKickbacks(events));
+  if (summary.totalOccurrences === 0) {
+    return '## Kickbacks\n\nNo kickbacks recorded';
+  }
+  const lines = [
+    '## Kickbacks',
+    '',
+    `Total occurrences: ${summary.totalOccurrences}`,
+    `BUILD re-entries: ${summary.buildReentries}`,
+    '',
+    padRow(['Source Gate', 'Target Gate', 'Occurrences', 'Latest Outcome']),
+    padRow(['-----------', '-----------', '-----------', '--------------']),
+  ];
+  for (const kickback of summary.pairs) {
+    lines.push(padRow([
+      kickback.from || '—',
+      kickback.to || '—',
+      String(kickback.occurrences),
+      kickback.kickbackOutcome ?? '—',
+    ]));
+  }
+  return lines.join('\n');
 }
 
 function renderBuildReviewMetrics(events: ParsedEvent[]): string {

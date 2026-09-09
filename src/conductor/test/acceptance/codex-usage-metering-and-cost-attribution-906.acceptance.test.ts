@@ -809,7 +809,7 @@ describe('acceptance: Codex usage metering and cost attribution (#906)', () => {
       }
     });
 
-    it('Story 6 HP-2: documentation names halt consumers without promising --report halt or kickback tables', async () => {
+    it('Story 6 HP-2: documentation names halt consumers and distinguishes report kickback tables', async () => {
       const artifacts = await readFile(join(REPO_ROOT, 'docs/reference/artifacts.md'), 'utf-8');
       const stalledRunbook = await readFile(join(REPO_ROOT, 'docs/runbooks/stalled-or-stuck-feature.md'), 'utf-8');
 
@@ -829,8 +829,8 @@ describe('acceptance: Codex usage metering and cost attribution (#906)', () => {
       ]) {
         expect(artifacts).toContain(consumer);
       }
-      expect(artifacts).toContain('renders neither halt nor kickback tables');
-      expect(stalledRunbook).toContain('renders neither halt nor kickback tables');
+      expect(artifacts).toContain('kickback tables but not halt tables');
+      expect(stalledRunbook).toContain('does not render halt tables');
       expect(artifacts).not.toMatch(/`aggregateHalts` always returns/);
       expect(artifacts).not.toMatch(/kickback table do reflect real/);
     });

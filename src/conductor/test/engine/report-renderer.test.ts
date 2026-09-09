@@ -1,8 +1,9 @@
+// Covers: task:1, task:2, task:3
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { renderReport, ReportError, parseEvents, aggregateHalts, aggregateKickbacks } from '../../src/engine/report-renderer.js';
+import { renderReport, ReportError, parseEvents, aggregateHalts, aggregateKickbacks, summarizeKickbacks } from '../../src/engine/report-renderer.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { computeCostRollup } from '../../src/engine/cost-rollup.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
@@ -15,6 +16,27 @@ function makeEvent(event: Record<string, unknown>, ts: string): string {
 
 function makeLines(events: Array<{ event: Record<string, unknown>; ts: string }>): string {
   return events.map((e) => makeEvent(e.event, e.ts)).join('\n') + '\n';
+}
+
+/** Capture a feature tree's complete recursive listing and exact file bytes. */
+async function snapshotTree(directory: string, relativePath = ''): Promise<Array<{
+  path: string;
+  kind: 'directory' | 'file';
+  bytes?: Buffer;
+}>> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const snapshot: Array<{ path: string; kind: 'directory' | 'file'; bytes?: Buffer }> = [];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    const path = join(relativePath, entry.name);
+    const fullPath = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      snapshot.push({ path, kind: 'directory' });
+      snapshot.push(...await snapshotTree(fullPath, path));
+    } else {
+      snapshot.push({ path, kind: 'file', bytes: await readFile(fullPath) });
+    }
+  }
+  return snapshot;
 }
 
 describe('report-renderer', () => {
@@ -46,7 +68,152 @@ describe('report-renderer', () => {
     expect(renderReport(eventsPath)).toContain('## Build Review Metrics\nNo build-review metrics recorded');
   });
 
-  it('ignores persisted kickback lines in report, timing, and cost rollups', async () => {
+  it('renders an explicit empty Kickbacks state for an empty ledger', async () => {
+    await writeFile(eventsPath, '', 'utf8');
+
+    const report = renderReport(eventsPath);
+    const kickbackSection = report.split('\n\n## Build Review Metrics')[0];
+
+    expect(kickbackSection).toContain('## Kickbacks\n\nNo kickbacks recorded');
+    expect(kickbackSection).not.toContain('Source Gate');
+  });
+
+  it('renders an explicit empty Kickbacks state when the ledger has no kickback events', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'step_completed', step: 'build' }, ts: '2026-01-01T00:00:00.000Z' },
+    ]), 'utf8');
+
+    expect(renderReport(eventsPath)).toContain('## Kickbacks\n\nNo kickbacks recorded');
+  });
+
+  it('retains malformed kickbacks with em-dash source and target placeholders', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'kickback', from: 42, to: null }, ts: '2026-01-01T00:00:00.000Z' },
+    ]), 'utf8');
+
+    expect(renderReport(eventsPath)).toMatch(/Total occurrences:\s*1[\s\S]*—\s+—\s+1/);
+  });
+
+  it('renders malformed and well-formed kickback occurrences together', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'kickback', from: false, to: {} }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'kickback', from: 'build_review', to: 'build' }, ts: '2026-01-01T00:00:01.000Z' },
+    ]), 'utf8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toMatch(/Total occurrences:\s*2[\s\S]*—\s+—\s+1[\s\S]*build_review\s+build\s+1/);
+  });
+
+  it('renders each kickback occurrence, BUILD re-entries, and source-target attribution before build-review metrics', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'kickback', from: 'build_review', to: 'build', evidence: 'fix the report', count: 9, kickback_outcome: 'older outcome' }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'kickback', from: 'build_review', to: 'build', evidence: 'fix the report again', count: 10, kickback_outcome: 'latest outcome' }, ts: '2026-01-01T00:00:01.000Z' },
+    ]), 'utf8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toMatch(/## Kickbacks[\s\S]*Total occurrences:\s*2[\s\S]*BUILD re-entries:\s*2[\s\S]*build_review\s+build\s+2\s+latest outcome/);
+    expect(report.indexOf('## Kickbacks')).toBeLessThan(report.indexOf('## Build Review Metrics'));
+  });
+
+  it('renders a source-gate row for each distinct build target pair', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'kickback', from: 'build_review', to: 'build' }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'kickback', from: 'manual_test', to: 'build' }, ts: '2026-01-01T00:00:01.000Z' },
+      { event: { type: 'kickback', from: 'prd_audit', to: 'build' }, ts: '2026-01-01T00:00:02.000Z' },
+    ]), 'utf8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toMatch(/build_review\s+build\s+1[\s\S]*manual_test\s+build\s+1[\s\S]*prd_audit\s+build\s+1/);
+  });
+
+  it('renders non-build targets without counting them as BUILD re-entries', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'kickback', from: 'build_review', to: 'build' }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'kickback', from: 'finish', to: 'manual_test' }, ts: '2026-01-01T00:00:01.000Z' },
+    ]), 'utf8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toMatch(/BUILD re-entries:\s*1[\s\S]*build_review\s+build\s+1[\s\S]*finish\s+manual_test\s+1/);
+  });
+
+  it('reads production-persisted kickbacks from distinct source gates without writing the feature directory', async () => {
+    const featureDir = join(tempDir, 'production-ledger');
+    const ledgerPath = join(featureDir, '.pipeline', 'events.jsonl');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(ledgerPath, events);
+    persister.start();
+    try {
+      await events.emit({ type: 'kickback', from: 'build_review', to: 'build', count: 1 });
+      await events.emit({ type: 'kickback', from: 'manual_test', to: 'build', count: 1 });
+      await events.emit({ type: 'kickback', from: 'manual_test', to: 'build', count: 2 });
+    } finally {
+      persister.stop();
+    }
+
+    const beforeRender = await snapshotTree(featureDir);
+    const report = renderReport(ledgerPath);
+    const afterRender = await snapshotTree(featureDir);
+
+    expect(report).toMatch(/manual_test\s+build\s+2[\s\S]*build_review\s+build\s+1/);
+    expect(afterRender).toEqual(beforeRender);
+  });
+
+  it('renders kickback pairs in deterministic count, source, and target order', async () => {
+    const records = [
+      { event: { type: 'kickback', from: 'manual_test', to: 'build' }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'kickback', from: 'build_review', to: 'build' }, ts: '2026-01-01T00:00:01.000Z' },
+      { event: { type: 'kickback', from: 'build_review', to: 'build' }, ts: '2026-01-01T00:00:02.000Z' },
+      { event: { type: 'kickback', from: 'finish', to: 'manual_test' }, ts: '2026-01-01T00:00:03.000Z' },
+    ];
+    const reorderedPath = join(tempDir, 'reordered-events.jsonl');
+    await writeFile(eventsPath, makeLines(records), 'utf8');
+    await writeFile(reorderedPath, makeLines([...records].reverse()), 'utf8');
+
+    const kickbackSection = (path: string) => renderReport(path).split('\n\n## Build Review Metrics')[0];
+
+    const sharedSection = kickbackSection(eventsPath);
+    expect(sharedSection).toBe(kickbackSection(reorderedPath));
+    expect(sharedSection).toMatch(
+      /build_review\s+build\s+2[\s\S]*finish\s+manual_test\s+1[\s\S]*manual_test\s+build\s+1/,
+    );
+  });
+
+  it('orders kickback summaries by descending occurrences, source, then target', () => {
+    expect(summarizeKickbacks([
+      { from: 'manual_test', to: 'build', count: 1 },
+      { from: 'prd_audit', to: 'build', count: 1 },
+      { from: 'build_review', to: 'build', count: 1 },
+      { from: 'build_review', to: 'build', count: 1 },
+      { from: 'prd_audit', to: 'acceptance_specs', count: 1 },
+    ]).pairs).toEqual([
+      { from: 'build_review', to: 'build', occurrences: 2 },
+      { from: 'manual_test', to: 'build', occurrences: 1 },
+      { from: 'prd_audit', to: 'acceptance_specs', occurrences: 1 },
+      { from: 'prd_audit', to: 'build', occurrences: 1 },
+    ]);
+  });
+
+  it('retains the latest recorded kickback outcome for a source-target pair', () => {
+    expect(summarizeKickbacks([
+      { from: 'build_review', to: 'build', count: 1, kickbackOutcome: 'older outcome' },
+      { from: 'build_review', to: 'build', count: 1, kickbackOutcome: 'latest outcome' },
+    ])).toEqual({
+      totalOccurrences: 2,
+      buildReentries: 2,
+      pairs: [{
+      from: 'build_review',
+      to: 'build',
+      occurrences: 2,
+      kickbackOutcome: 'latest outcome',
+      }],
+    });
+  });
+
+  it('keeps timing and cost rollups isolated while the report now reports persisted kickbacks', async () => {
     const baselineDir = join(tempDir, 'baseline');
     const kickbackDir = join(tempDir, 'with-kickback');
     const baseline = makeLines([
@@ -63,17 +230,18 @@ describe('report-renderer', () => {
     }));
 
     const baselineResults = [
-      renderReport(join(baselineDir, '.pipeline', 'events.jsonl')),
       await computeTimingRollup(baselineDir),
       await computeCostRollup(baselineDir),
     ];
     const kickbackResults = [
-      renderReport(join(kickbackDir, '.pipeline', 'events.jsonl')),
       await computeTimingRollup(kickbackDir),
       await computeCostRollup(kickbackDir),
     ];
 
     expect(kickbackResults).toEqual(baselineResults);
+    expect(renderReport(join(kickbackDir, '.pipeline', 'events.jsonl'))).toMatch(
+      /## Kickbacks[\s\S]*build_review\s+build\s+1/,
+    );
   });
 
   it('aggregates loop_halt records persisted through the event sink', async () => {
