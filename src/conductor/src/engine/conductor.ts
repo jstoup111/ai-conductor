@@ -2020,7 +2020,11 @@ export class Conductor {
     // refusal is deliverable (but non-terminal) while that enclosing window
     // remains open.
     const terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
-      ? `step:${event.step}`
+      ? this.openExecutions.has(`step:${event.step}`)
+        ? `step:${event.step}`
+        : this.openExecutions.has(`parallel:${event.step}`)
+          ? `parallel:${event.step}`
+          : `step:${event.step}`
       : event.type === 'step_refused'
         ? (this.openExecutions.has(`step:${event.step}`) ? `step:${event.step}` : undefined)
       : event.type === 'parallel_completed'
@@ -7539,14 +7543,17 @@ export class Conductor {
               });
             }
 
-            const allGreen = outcomes.every((outcome, idx) => {
+            const memberSatisfiedAtJoin = (idx: number): boolean => {
+              const outcome = outcomes[idx];
               if (outcome.kind !== 'verdict' || outcome.verdict !== 'pass') return false;
               if (!this.verifyArtifacts) return true;
               const member = membership.dispatchable[idx]!;
               if (!gateVerdicts.get(member.name)?.satisfied) return false;
               if (member.name === 'manual_test' && manualTestFailRows.length > 0) return false;
               return true;
-            });
+            };
+
+            const allGreen = outcomes.every((_, idx) => memberSatisfiedAtJoin(idx));
 
             // Task 18: a `no-verdict` outcome means a branch exhausted its
             // retries without ever producing a completion marker — an
@@ -7556,9 +7563,10 @@ export class Conductor {
             // FAST, mirroring the credentials/auth HALT pattern elsewhere in
             // this file (~841, ~882) — write the HALT marker, emit
             // `loop_halt`, and never synthesize a remediation plan or emit a
-            // `kickback`. No partial join either: not even siblings that
-            // themselves passed get marked 'done', because the group as a
-            // whole never reached a verdict.
+            // `kickback`. Siblings whose dispatches passed the same joined
+            // satisfaction predicate are retained atomically with the failed
+            // stamping, so a cleared HALT re-dispatches only the member that
+            // failed to produce a verdict.
             const noVerdictIdx = outcomes.findIndex((outcome) => outcome.kind === 'no-verdict');
             if (noVerdictIdx !== -1) {
               const noVerdictOutcome = outcomes[noVerdictIdx] as NoVerdictOutcome;
@@ -7573,10 +7581,25 @@ export class Conductor {
               // retry budget) — a work failure, not a judgement awaiting a
               // human. It keeps `failed` so the refusal lane can never mask a
               // broken validator.
-              await this.commitStateChanges(state, `fail ${step.name} validation group`, {
-                [step.name]: 'failed',
-                last_step: step.name,
-              });
+              const retainedSiblings = Object.fromEntries(
+                membership.dispatchable.flatMap((member, idx) =>
+                  idx !== noVerdictIdx && memberSatisfiedAtJoin(idx)
+                    ? [[member.name, 'done'], [`${builtinGroup.name}__${member.name}`, 'done']]
+                    : [],
+                ),
+              );
+              try {
+                await this.commitStateChanges(state, `fail ${step.name} validation group`, {
+                  ...retainedSiblings,
+                  [step.name]: 'failed',
+                  last_step: step.name,
+                });
+              } catch (err) {
+                (this.log ?? console.warn)(
+                  `[conductor] validation-group halt could not persist satisfied siblings: ` +
+                    `${err instanceof Error ? err.message : String(err)}`,
+                );
+              }
               await this.emitLoopHalt(haltReason);
               await emitTracked({
                 type: 'step_failed',
