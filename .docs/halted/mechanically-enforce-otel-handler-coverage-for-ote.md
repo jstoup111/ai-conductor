@@ -1,23 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-09T11:35:23.592Z
+Status: halted
 Slug: mechanically-enforce-otel-handler-coverage-for-ote
-Class: needs-human
+Class: plan-gap
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-mechanically-enforce-otel-handler-coverage-for-ote
-Head SHA: fe6450e37273ae5e89409bd480c737ffdfb9cfdb
-Halted at: 2026-09-09T11:18:28.816Z
+Head SHA: a4bc6ddeb3cb8f47d7575ea9a708cb1e49f1dd45
+Halted at: 2026-09-09T11:57:00.104Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-1 (adr-014-otel-observability-exporter D9)
-
-Blocking findings:
-AB-1 (DESIGN; adr-014-otel-observability-exporter D9): Four daemon lifecycle events are now mechanically excluded from the visualizer even though Decision 9 explicitly requires visualizer cases for them.
+Validation group "prd_audit" halted: as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome
 ```
