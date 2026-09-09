@@ -695,11 +695,11 @@ the trace Resource identifies the feature, project, durable dispatch run id, bra
 engine version. For daemon dispatches, the branch is the dispatched feature worktree's branch rather
 than the primary checkout's branch. Branch and engine-version identity use a non-empty resolved value;
 an explicitly attempted but unavailable value is `unresolved`, while a caller that did not supply the
-property is `not-supplied`. The metric Resource
-keeps only feature-stable identity: `service.name`, `service.instance.id` (`<project>/<feature>`),
-`conductor.feature`, `conductor.project`, and `conductor.branch`. Metric data points also carry
-`project` and `feature`; neither a run id nor the engine version is attached to metric Resources, so
-a new dispatch does not create a new metric series for the same feature.
+property is `not-supplied`. The metric Resource uses daemon-stable identity: `service.name`,
+`service.instance.id` (`<project>/<worker>`), `conductor.project`, `conductor.worker`, and
+`host.name`. It has no feature, branch, run-id, or engine-version attributes. Metric data points
+carry `project` and `worker`; feature-scoped instruments also carry `feature`. A new dispatch
+therefore does not create a new metric Resource series for the same daemon worker.
 
 The `conductor.step.duration` and `conductor.pipeline.closeout.duration` histograms use explicit
 duration buckets through 8 hours; quantiles saturate above that largest finite bucket boundary.
