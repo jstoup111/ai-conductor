@@ -35,6 +35,7 @@ HARNESS_DIR="$(cd "$HOOK_DIR/../.." && pwd)"
 # src/conductor/src/engine/autoheal.ts. Used only by the bash fallback path;
 # the engine path is authoritative when available.
 TASK_ID_PATTERN='[A-Za-z0-9._-]+'
+FRESH_COMMIT_WINDOW_SECONDS=120
 
 warn() {
   echo "warning: commit $commit lacks Task: trailer"
@@ -42,10 +43,69 @@ warn() {
   echo "  See: https://github.com/jamesstoup/james-stoup-agents for more info"
 }
 
+# A PostToolUse Bash payload tells us what command just ran. Read it with a
+# hard byte and time bound: absent, malformed, or otherwise unclassifiable
+# input deliberately falls through to the original advisory behavior.
+payload="$(timeout 3s head -c 1048576 2>/dev/null || true)"
+command="$(printf '%s' "$payload" | python3 -c '
+import json
+import sys
+
+try:
+    value = json.load(sys.stdin).get("tool_input", {}).get("command", "")
+    print(value if isinstance(value, str) else "")
+except (json.JSONDecodeError, AttributeError, TypeError):
+    print("")
+' 2>/dev/null || true)"
+
+# A known command that cannot create a commit should not pay for a Git or
+# engine invocation. Quoted spans become inert operands before splitting compound
+# commands, so an example in a commit message, echo, or comment cannot match.
+if [ -n "$command" ]; then
+  scannable_command="$(printf '%s' "$command" | sed -E "s/'[^']*'/__quoted_operand__/g; s/\"[^\"]*\"/__quoted_operand__/g")"
+  if ! printf '%s' "$scannable_command" | tr ';|&' '\n' | awk '
+    {
+      token = 1
+      while (token <= NF && $token ~ /^[[:alpha:]_][[:alnum:]_]*=/) token++
+      if (token > NF || $token != "git") next
+      for (token++; token <= NF; token++) {
+        # Global options with a separate value consume that operand even
+        # when it happens to be named commit, merge, or another command.
+        if ($token ~ /^(-C|-c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix)$/) {
+          token++
+          continue
+        }
+        if ($token ~ /^-/) continue
+        # The first non-option token is the subcommand. Later tokens are
+        # its arguments, so `git branch commit` and `git pull origin rebase`
+        # must not turn into commit-creating invocations.
+        if ($token ~ /^(commit|merge|revert|cherry-pick|am|rebase)$/) {
+          found = 1
+          exit
+        }
+        break
+      }
+    }
+    END { exit !found }
+  '; then
+    exit 0
+  fi
+fi
+
 # Get the current commit SHA
-commit=$(git rev-parse HEAD 2>/dev/null || echo "")
+commit=$(git rev-parse --verify HEAD 2>/dev/null || echo "")
 if [ -z "$commit" ]; then
   # No commits yet (initial commit), nothing to check
+  exit 0
+fi
+
+# A commit-capable command can leave HEAD unchanged (for example, an aborted
+# commit or a fast-forward merge). Only a newly-created HEAD merits advisory
+# feedback. An unreadable or future timestamp remains fail-open and proceeds.
+commit_timestamp=$(git log -1 --format=%ct "$commit" 2>/dev/null || echo "")
+now_timestamp=$(date +%s 2>/dev/null || echo "")
+if [[ "$commit_timestamp" =~ ^[0-9]+$ && "$now_timestamp" =~ ^[0-9]+$ ]] \
+  && (( now_timestamp - commit_timestamp > FRESH_COMMIT_WINDOW_SECONDS )); then
   exit 0
 fi
 

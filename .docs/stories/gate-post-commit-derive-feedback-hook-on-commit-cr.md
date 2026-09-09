@@ -15,10 +15,12 @@ Approved by the operator on 2026-09-06 (delegated). Scope is the hook script's o
 #### Happy Path
 
 - Given the hook receives a tool payload whose Bash command is an ordinary non-commit command such as a directory listing, when the hook runs, then it exits 0 with no output and never invokes the engine derive binary.
-- Given the hook receives a payload whose Bash command creates a commit and HEAD is a freshly created commit carrying no Task trailer, when the hook runs, then it invokes the engine derive binary and prints the existing warning naming that commit.
+- Given the hook receives a payload whose Bash command uses the supported Git subcommands (`commit`, `merge`, `revert`, `cherry-pick`, `am`, or `rebase`) and HEAD is a freshly created commit carrying no Task trailer, when the hook runs, then it invokes the engine derive binary and prints the existing warning naming that commit.
 
 #### Negative Paths
 
+- Given a payload whose Git subcommand is `pull`, when the hook runs, then it stays silent even if the pull created a fresh merge commit; merge commits introduced by pulls do not need another task-reference advisory.
+- Given a non-commit Git subcommand whose argument names a supported verb (such as `git branch commit`), when the hook runs, then it stays silent.
 - Given the hook receives a payload whose Bash command mentions a commit-creating invocation only inside a quoted argument, when the hook runs, then it exits 0 with no output and never invokes the engine derive binary.
 
 ### Done When
