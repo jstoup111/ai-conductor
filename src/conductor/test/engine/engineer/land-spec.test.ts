@@ -2017,3 +2017,57 @@ describe('landSpec remediation text uses the canonical compose verb', () => {
     expect(caught!.message).not.toContain('ai-conductor engineer worktree');
   });
 });
+
+describe('DECIDE amendments at land', () => {
+  const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+  it('lands existing story and plan amendments without selecting them as the current feature', async () => {
+    for (const family of ['stories', 'plans']) {
+      await mkdir(join(repoPath, '.docs', family), { recursive: true });
+      await writeFile(join(repoPath, '.docs', family, 'previous-feature.md'), '# Historical artifact\n');
+    }
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'existing DECIDE artifacts']);
+    const dir = await seedValidWorktree();
+    for (const family of ['stories', 'plans']) {
+      const file = join(dir, '.docs', family, 'previous-feature.md');
+      await writeFile(file, '# Historical artifact\n\nCorrected accepted assertion.\n');
+      const newer = new Date(Date.now() + 60_000);
+      await utimes(file, newer, newer);
+      await git(['add', file], dir);
+    }
+    await git(['commit', '-m', 'amend existing DECIDE assertions'], dir);
+
+    await expect(landSpec(target(), 'dep bump', dir, undefined, { gh })).resolves.toMatchObject({ branch: 'spec/dep-bump' });
+    expect(await readFile(join(dir, '.docs', 'stories', 'previous-feature.md'), 'utf8')).toContain('Corrected accepted assertion.');
+    expect(await git(['status', '--porcelain'], dir)).toBe('');
+  });
+
+  it('does not let an existing amendment satisfy a missing current-feature story', async () => {
+    await mkdir(join(repoPath, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'stories', 'previous-feature.md'), ACCEPTED_STORIES);
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'existing story']);
+    const dir = await seedValidWorktree();
+    await rm(join(dir, '.docs', 'stories', 'dep-bump.md'));
+    await writeFile(join(dir, '.docs', 'stories', 'previous-feature.md'), ACCEPTED_STORIES + '\nCorrected assertion.\n');
+    await git(['add', '.docs/stories/previous-feature.md'], dir);
+    await git(['commit', '-m', 'amend previous story'], dir);
+    const head = await git(['rev-parse', 'HEAD'], dir);
+    await expect(landSpec(target(), 'dep bump', dir, undefined, { gh })).rejects.toThrow('stories');
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(head);
+  });
+
+  it('rejects a newly committed mismatched story even when it was renamed from an existing artifact', async () => {
+    await mkdir(join(repoPath, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'stories', 'previous-feature.md'), ACCEPTED_STORIES);
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'existing story']);
+    const dir = await seedValidWorktree();
+    await git(['mv', '.docs/stories/previous-feature.md', '.docs/stories/wrong-new-name.md'], dir);
+    await git(['commit', '-m', 'rename story'], dir);
+    const head = await git(['rev-parse', 'HEAD'], dir);
+    await expect(landSpec(target(), 'dep bump', dir, undefined, { gh })).rejects.toThrow('wrong-new-name.md');
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(head);
+  });
+});

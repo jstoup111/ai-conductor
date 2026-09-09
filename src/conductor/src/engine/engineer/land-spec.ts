@@ -216,16 +216,17 @@ export async function landSpec(
   // and have no PRD. Track is read from `.docs/track/<slug>.md` (written by
   // /explore); a missing marker defaults to `product` (back-compat).
   const ideaFiles = await resolveIdeaFiles(worktreePath, canonical);
+  const featureSlug = slugify(idea);
+  const featureFiles = await resolveFeatureFiles(worktreePath, canonical, ideaFiles, featureSlug);
   const trackDir = join(worktreePath, '.docs', 'track');
-  const trackFile = await pickIdeaFile(trackDir, ideaFiles);
+  const trackFile = await pickIdeaFile(trackDir, featureFiles);
   const track = parseTrack(trackFile ? await readFile(trackFile, 'utf-8') : null) ?? 'product';
   const specRequired = track === 'product';
 
   // 4. C2: require stories + plan always; spec only on the product track.
-  const specFile = await pickIdeaFile(specsDir, ideaFiles);
-  const storiesFile = await pickIdeaFile(storiesDir, ideaFiles);
-  const planFile = await pickIdeaFile(plansDir, ideaFiles);
-  const featureSlug = slugify(idea);
+  const specFile = await pickIdeaFile(specsDir, featureFiles);
+  const storiesFile = await pickIdeaFile(storiesDir, featureFiles);
+  const planFile = await pickIdeaFile(plansDir, featureFiles);
 
   if ((specRequired && !specFile) || !storiesFile || !planFile) {
     const missing: string[] = [];
@@ -326,16 +327,16 @@ export async function landSpec(
   //     spec can never reach the daemon missing conflict-check or architecture.
   const complexityDir = join(worktreePath, '.docs', 'complexity');
   const decisionsDir = join(worktreePath, '.docs', 'decisions');
-  const complexityFile = await pickIdeaFile(complexityDir, ideaFiles);
+  const complexityFile = await pickIdeaFile(complexityDir, featureFiles);
   const tier = complexityFile
     ? parseComplexityTier(await readFile(complexityFile, 'utf-8'))
     : undefined;
 
   let conflictsFile: string | null = null;
   if (tier && tier !== 'S') {
-    conflictsFile = await pickIdeaFile(join(worktreePath, '.docs', 'conflicts'), ideaFiles);
-    const architectureFile = await pickIdeaFile(join(worktreePath, '.docs', 'architecture'), ideaFiles);
-    const reviewFile = await pickIdeaFile(decisionsDir, ideaFiles);
+    conflictsFile = await pickIdeaFile(join(worktreePath, '.docs', 'conflicts'), featureFiles);
+    const architectureFile = await pickIdeaFile(join(worktreePath, '.docs', 'architecture'), featureFiles);
+    const reviewFile = await pickIdeaFile(decisionsDir, featureFiles);
     const missing: string[] = [];
     if (!conflictsFile) missing.push('conflicts');
     if (!architectureFile) missing.push('architecture');
@@ -355,9 +356,9 @@ export async function landSpec(
   // the misnamed one it is looking straight past. Validate it here, through the
   // same feature-stem contract as every other feature-scoped family, so no
   // artifact family keeps a private naming path.
-  const coherenceFile = await pickIdeaFile(join(worktreePath, '.docs', 'coherence'), ideaFiles);
+  const coherenceFile = await pickIdeaFile(join(worktreePath, '.docs', 'coherence'), featureFiles);
 
-  // Validate EVERY idea-attributable file in each feature-scoped family, not the
+  // Validate EVERY current-feature file in each feature-scoped family, not the
   // single `pickIdeaFile` pick. The picks above deliberately reduce a family to
   // its newest file so the gates have one artifact to read, but land stages every
   // `.docs/` file the idea authored (see the `git add` below). Validating only the
@@ -368,7 +369,7 @@ export async function landSpec(
   // whose pattern matches descendants (`stories` is `.docs/stories/**\/*.md`) is
   // walked recursively, so a nested artifact cannot be staged unvalidated.
   const familyPaths = async (step: StepName, dir: string): Promise<string[]> =>
-    (await listIdeaFiles(dir, ideaFiles, {
+    (await listIdeaFiles(dir, featureFiles, {
       recursive: featureArtifactPatternsAreRecursive(step),
     })).map((file) => relative(worktreePath, file));
 
@@ -570,6 +571,39 @@ export async function landSpec(
   }
 
   return { slug, branch, repoPath: worktreePath };
+}
+
+/** Existing paths retain their owning feature during DECIDE amendments. New paths,
+ * including rename destinations, still belong to this feature and must match its stem.
+ * Keep the full change set separately for ADR/coherence checks and the final commit.
+ */
+async function resolveFeatureFiles(
+  worktreePath: string,
+  canonicalPath: string,
+  ideaFiles: Set<string>,
+  featureSlug: string,
+): Promise<Set<string>> {
+  const defaultBranch = await deriveDefaultBranch(canonicalPath);
+  const { stdout: base } = await execFile('git', ['merge-base', 'HEAD', defaultBranch], { cwd: worktreePath });
+  const { stdout: tree } = await execFile('git', ['ls-tree', '-r', '-z', base.trim(), '--', '.docs'], { cwd: worktreePath });
+  const existing = new Set(tree.split('\0').flatMap((entry) => {
+    const match = entry.match(/^100(?:644|755) blob [a-f0-9]+\t([\s\S]+)$/);
+    return match ? [match[1]] : [];
+  }));
+  const families: Array<{ step: StepName; directory: string }> = [
+    { step: 'prd', directory: 'specs' },
+    { step: 'stories', directory: 'stories' },
+    { step: 'plan', directory: 'plans' },
+    { step: 'conflict_check', directory: 'conflicts' },
+    { step: 'coherence_check', directory: 'coherence' },
+  ];
+  const amendments = validateFeatureArtifactStems(families.map(({ step, directory }) => ({
+    step,
+    paths: [...ideaFiles].filter((path) => path.startsWith(`.docs/${directory}/`) && existing.has(path)),
+  })), featureSlug);
+  const featureFiles = new Set(ideaFiles);
+  for (const amendment of amendments) featureFiles.delete(amendment.path);
+  return featureFiles;
 }
 
 // ── Idea-scoped attribution (foundational helper; wired in later tasks) ───────
