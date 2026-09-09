@@ -457,7 +457,9 @@ export function checkCriterionCoverage(
       continue;
     }
 
-    if (row.verdict !== 'covered') {
+    // Legacy verdict diagnostics must survive later disposition/task failures.
+    // Corrected fail rows use the new diagnostic only after their tasks resolve.
+    if (row.verdict !== 'covered' && !(row.verdict === 'fail' && row.correction)) {
       gaps.push({
         gapId: `criterion:verdict:${index + 1}`,
         criterion: row.criterion,
@@ -492,6 +494,17 @@ export function checkCriterionCoverage(
       continue;
     }
     const citedTaskIds = taskResolution.ids;
+
+    if (row.verdict === 'fail' && row.correction) {
+      const correctionDetail = row.correction.layer === 'architecture'
+        ? `correction: architecture; constraint: ${row.correction.decisionRef}`
+        : 'correction: plan';
+      gaps.push({
+        gapId: `criterion:cannot-deliver-${row.correction.layer}:${index + 1}`,
+        criterion: row.criterion,
+        detail: `criterion "${row.criterion}" cannot be delivered by cited tasks ${row.citedIds.join(', ')}; quote: ${row.quote}; ${correctionDetail}`,
+      });
+    }
 
     const quote = normalizeWhitespace(row.quote);
     if (!quote) {
@@ -530,6 +543,26 @@ export function checkCriterionCoverage(
   }
 
   return gaps.length > 0 ? { ok: false, reason: 'criterion-gap', gaps } : { ok: true };
+}
+
+/** Verify architecture correction references against the changed ADR decision pool. */
+export function checkCorrectionReferences(
+  rows: CoherenceRow[],
+  decisionIds: ReadonlySet<string>,
+): CriterionGapFinding[] {
+  return rows
+    .filter((row): row is CriterionCoherenceRow => row.rowClass === 'criterion')
+    .flatMap((row, index) => {
+      if (row.correction?.layer !== 'architecture' || decisionIds.has(row.correction.decisionRef)) return [];
+      const available = decisionIds.size === 0
+        ? 'enumerated decision set is empty'
+        : `enumerated decision ids: ${[...decisionIds].join(', ')}`;
+      return [{
+        gapId: `criterion:correction-unknown-decision:${index + 1}`,
+        criterion: row.criterion,
+        detail: `architecture correction references unknown decision ${row.correction.decisionRef}; ${available}`,
+      }];
+    });
 }
 
 // --- FR-coverage layer (Task 8) ---
@@ -1514,6 +1547,22 @@ async function resolveChangedFilesForWaiver(
   return [...committed, ...untracked];
 }
 
+async function collectArchitectureDecisionIds(
+  worktreePath: string,
+  adrIds: ReadonlySet<string>,
+): Promise<Set<string>> {
+  const decisionIds = new Set<string>();
+  for (const adrId of adrIds) {
+    const adrText = await readFile(join(worktreePath, '.docs', 'decisions', `${adrId}.md`), 'utf-8');
+    const decisions = parseAdrDecisions(adrText);
+    if (decisions.kind !== 'decisions') continue;
+    for (const decisionId of decisions.ids) {
+      decisionIds.add(formatArchitectureDecisionId(adrId, decisionId));
+    }
+  }
+  return decisionIds;
+}
+
 export interface RunCoherenceGateArgs {
   /** The per-idea worktree (cwd for all git/fs ops). */
   worktreePath: string;
@@ -1613,21 +1662,16 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
       .map(({ path }) => path.slice('.docs/decisions/'.length).replace(/\.md$/, '')),
   );
 
+  const hasArchitectureCorrection = rows.some(
+    (row) => row.rowClass === 'criterion' && row.correction?.layer === 'architecture',
+  );
+  const architectureDecisionIds = required.layers.has('adr') || hasArchitectureCorrection
+    ? await collectArchitectureDecisionIds(worktreePath, adrIds)
+    : new Set<string>();
+
   // Tier S intentionally enforces only plan-carried criterion claims. Its
   // architecture-obligation rows are not part of that reduced surface.
   if (required.layers.has('adr')) {
-    const architectureDecisionIds = new Set<string>();
-    for (const adrId of adrIds) {
-      const adrText = await readFile(join(worktreePath, '.docs', 'decisions', `${adrId}.md`), 'utf-8');
-      const decisions = parseAdrDecisions(adrText);
-      // ADR shape/status validation already has an owning land gate. This layer
-      // validates only decision ids that the established ADR parser can cite;
-      // it must not create a second, stricter ADR-validity judgement.
-      if (decisions.kind !== 'decisions') continue;
-      for (const decisionId of decisions.ids) {
-        architectureDecisionIds.add(formatArchitectureDecisionId(adrId, decisionId));
-      }
-    }
 
     const architectureCoverageViolations = validateArchitectureObligationCoverage(
       planText ?? '',
@@ -1702,6 +1746,15 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
           artifact: 'stories / plan',
           item: gap.detail,
         })));
+
+  for (const gap of checkCorrectionReferences(rows, architectureDecisionIds)) {
+    gaps.push({
+      layer: 'criterion',
+      gapId: gap.gapId,
+      artifact: 'stories / plan',
+      item: gap.detail,
+    });
+  }
 
   const defaultBranch = await deriveDefaultBranch(canonicalPath);
   if (required.carrier === 'coherence') {

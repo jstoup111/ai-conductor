@@ -78,8 +78,101 @@ describe('parseCoherenceArtifact', () => {
       reason: 'unparseable-criterion-row',
       detail: {
         line: 3,
-        message: expect.stringContaining('expected 6 and actual 5'),
+        message: expect.stringContaining('expected 6 or 7 and actual 5'),
       },
+    });
+  });
+
+  it('accepts a seven-cell fail row with a plan correction', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget | task:3 | fail | evidence | diff-local | plan |
+`),
+    ).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'criterion',
+          criterion: 'Given a widget',
+          citedIds: ['task:3'],
+          verdict: 'fail',
+          quote: 'evidence',
+          disposition: 'diff-local',
+          correction: { layer: 'plan' },
+        },
+      ],
+    });
+  });
+
+  it('accepts a seven-cell fail row with an architecture correction', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget | task:3 | fail | evidence | diff-local | architecture:adr-x#D2 |
+`),
+    ).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'criterion',
+          criterion: 'Given a widget',
+          citedIds: ['task:3'],
+          verdict: 'fail',
+          quote: 'evidence',
+          disposition: 'diff-local',
+          correction: { layer: 'architecture', decisionRef: 'adr-x#D2' },
+        },
+      ],
+    });
+  });
+
+  it('six-cell rows parse identically', () => {
+    const fixtures = coherenceRegressionCorpus.filter(
+      (fixture): fixture is typeof fixture & { sixCellCriterionRows: NonNullable<typeof fixture.sixCellCriterionRows> } =>
+        fixture.sixCellCriterionRows !== undefined,
+    );
+
+    expect(fixtures).not.toHaveLength(0);
+    expect(
+      fixtures.map((fixture) => {
+        const result = parseCoherenceArtifact(fixture.content);
+        if (!result.ok) throw new Error(`six-cell corpus fixture ${fixture.slug} did not parse`);
+        return result.rows.filter((row) => row.rowClass === 'criterion');
+      }),
+    ).toEqual(fixtures.map(({ sixCellCriterionRows }) => sixCellCriterionRows));
+  });
+
+  it.each(['rewrite-plan', 'architecture:not-a-decision', 'architecture:adr-x', 'architecture:adr-x#Dno', 'architecture:../adr-x#D2'])('rejects unknown correction %s with its exact line-numbered detail', (correction) => {
+    expect(parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget | task:3 | fail | evidence | diff-local | ${correction} |
+`)).toEqual({
+      ok: false,
+      reason: 'unparseable-criterion-row',
+      detail: { line: 3, message: `unknown criterion correction "${correction}"` },
+    });
+  });
+
+  it('rejects an empty architecture correction with its exact line-numbered detail', () => {
+    expect(parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget | task:3 | fail | evidence | diff-local | architecture: |
+`)).toEqual({
+      ok: false,
+      reason: 'unparseable-criterion-row',
+      detail: { line: 3, message: 'architecture correction must reference a decision' },
+    });
+  });
+
+  it('rejects a correction on a covered row with its exact line-numbered detail', () => {
+    expect(parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget | task:3 | covered | evidence | diff-local | plan |
+`)).toEqual({
+      ok: false,
+      reason: 'unparseable-criterion-row',
+      detail: { line: 3, message: 'only a fail row may carry a correction' },
     });
   });
 

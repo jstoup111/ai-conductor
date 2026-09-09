@@ -19,6 +19,11 @@ export type CriterionVerdict = 'covered' | 'gap' | 'fail';
 /** The authored answer to whether a criterion depends only on this feature's diff. */
 export type CriterionDiffLocalityDisposition = 'diff-local' | 'outside-diff';
 
+/** An optional authored correction for a failing criterion coverage claim. */
+export type CriterionCorrection =
+  | { layer: 'plan' }
+  | { layer: 'architecture'; decisionRef: string };
+
 /** A parsed criterion-level claim, grounded by one or more plan-task citations. */
 export interface CriterionCoherenceRow {
   rowClass: 'criterion';
@@ -27,6 +32,7 @@ export interface CriterionCoherenceRow {
   verdict: CriterionVerdict;
   quote: string;
   disposition: CriterionDiffLocalityDisposition | undefined;
+  correction?: CriterionCorrection;
 }
 
 /** A single parsed row of the coherence mapping table. */
@@ -59,6 +65,16 @@ export function isCriterionDiffLocalityDisposition(
   value: string,
 ): value is CriterionDiffLocalityDisposition {
   return value === 'diff-local' || value === 'outside-diff';
+}
+
+function parseCriterionCorrection(value: string): CriterionCorrection | null {
+  if (value === 'plan') return { layer: 'plan' };
+  if (!value.startsWith('architecture:')) return null;
+
+  const decisionRef = value.slice('architecture:'.length);
+  return /^adr-[^\s/#]+#D\d+$/.test(decisionRef)
+    ? { layer: 'architecture', decisionRef }
+    : null;
 }
 
 /**
@@ -227,13 +243,13 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
     const rawRowClass = cells[0];
     const rowClass = rawRowClass.trim().toLowerCase();
     if (rowClass === 'criterion') {
-      if (cells.length !== 6) {
+      if (cells.length !== 6 && cells.length !== 7) {
         return structuralParseFailure('unparseable-criterion-row', {
           line,
-          message: `criterion row expected 6 and actual ${cells.length} cells`,
+          message: `criterion row expected 6 or 7 and actual ${cells.length} cells`,
         });
       }
-      const [, rawCriterion, rawCitedIds, rawVerdict, rawQuote, rawDisposition] = cells;
+      const [, rawCriterion, rawCitedIds, rawVerdict, rawQuote, rawDisposition, rawCorrection] = cells;
       const criterion = rawCriterion.trim();
       const verdict = rawVerdict.trim();
       const quote = unquote(rawQuote);
@@ -266,7 +282,32 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
       const disposition: CriterionDiffLocalityDisposition | undefined =
         dispositionText === '' ? undefined : (dispositionText as CriterionDiffLocalityDisposition);
 
-      rows.push({ rowClass, criterion, citedIds, verdict, quote, disposition });
+      const correctionText = rawCorrection?.trim();
+      if (correctionText !== undefined && verdict !== 'fail') {
+        return structuralParseFailure('unparseable-criterion-row', {
+          line,
+          message: 'only a fail row may carry a correction',
+        });
+      }
+      if (correctionText === 'architecture:') {
+        return structuralParseFailure('unparseable-criterion-row', {
+          line,
+          message: 'architecture correction must reference a decision',
+        });
+      }
+      let correction: CriterionCorrection | undefined;
+      if (correctionText !== undefined) {
+        const parsedCorrection = parseCriterionCorrection(correctionText);
+        if (parsedCorrection === null) {
+          return structuralParseFailure('unparseable-criterion-row', {
+            line,
+            message: `unknown criterion correction "${correctionText}"`,
+          });
+        }
+        correction = parsedCorrection;
+      }
+
+      rows.push({ rowClass, criterion, citedIds, verdict, quote, disposition, ...(correction === undefined ? {} : { correction }) });
       continue;
     }
     if (cells.length !== 5) {

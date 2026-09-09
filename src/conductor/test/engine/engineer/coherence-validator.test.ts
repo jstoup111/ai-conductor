@@ -49,6 +49,145 @@ afterEach(async () => {
   await Promise.all(temporaryRepositories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
+describe('corrected failing criterion rows', () => {
+  const criterion = 'Story 1 happy: Given a widget, when shipped, then it arrives';
+  const stories = `# Stories
+
+## Story 1: Widget
+
+### Happy Path
+- Given a widget, when shipped, then it arrives
+`;
+  const plan = `# Plan
+
+### Task 1: Ship widget
+**Done when:**
+- The widget arrives.
+`;
+
+  function correctedRows(correction: string, taskId = 'task-1') {
+    const parsed = parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| criterion | ${criterion} | ${taskId} | fail | "The widget arrives." | diff-local | ${correction} |
+`);
+    if (!parsed.ok) throw new Error('expected corrected criterion row to parse');
+    return parsed.rows;
+  }
+
+  it.each([
+    ['plan', 'criterion:cannot-deliver-plan:1', 'correction: plan'],
+    ['architecture:adr-x#D2', 'criterion:cannot-deliver-architecture:1', 'correction: architecture; constraint: adr-x#D2'],
+  ])('emits actionable %s cannot-deliver gaps', (correction, gapId, detail) => {
+    const result = checkCriterionCoverage(correctedRows(correction), stories, plan);
+    expect(result).toMatchObject({ ok: false, reason: 'criterion-gap' });
+    if (result.ok) return;
+    expect(result.gaps).toContainEqual(expect.objectContaining({ gapId, criterion }));
+    expect(result.gaps.find((gap) => gap.gapId === gapId)?.detail).toContain('task-1');
+    expect(result.gaps.find((gap) => gap.gapId === gapId)?.detail).toContain('The widget arrives.');
+    expect(result.gaps.find((gap) => gap.gapId === gapId)?.detail).toContain(detail);
+  });
+
+  it('emits indexed actionable gaps and renders each detail on one line', () => {
+    const indexedCriteria = [1, 2, 3, 4, 5].map(
+      (number) => `Story 1 happy: Given widget ${number}, when shipped, then it arrives`,
+    );
+    const indexedStories = `# Stories
+
+## Story 1: Widgets
+
+### Happy Path
+${[1, 2, 3, 4, 5].map((number) => `- Given widget ${number}, when shipped, then it arrives`).join('\n')}
+`;
+    const indexedPlan = `# Plan
+
+${[1, 2, 3, 4, 5].map((number) => `### Task ${number}: Ship widget ${number}
+**Done when:**
+- Evidence ${number}.`).join('\n\n')}
+`;
+    const parsed = parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+${indexedCriteria.map((criterion, index) => {
+  const number = index + 1;
+  const correction = number === 3 ? ' | plan' : number === 5 ? ' | architecture:adr-x#D2' : '';
+  const verdict = correction === '' ? 'covered' : 'fail';
+  return `| criterion | ${criterion} | task-${number} | ${verdict} | "Evidence ${number}." | diff-local${correction} |`;
+}).join('\n')}
+`);
+    if (!parsed.ok) throw new Error('expected indexed corrected criterion rows to parse');
+
+    const result = checkCriterionCoverage(parsed.rows, indexedStories, indexedPlan);
+    expect(result).toMatchObject({ ok: false, reason: 'criterion-gap' });
+    if (result.ok) return;
+
+    const planGap = result.gaps.find(({ gapId }) => gapId === 'criterion:cannot-deliver-plan:3');
+    const architectureGap = result.gaps.find(({ gapId }) => gapId === 'criterion:cannot-deliver-architecture:5');
+    expect(planGap).toEqual({
+      gapId: 'criterion:cannot-deliver-plan:3',
+      criterion: indexedCriteria[2],
+      detail: `criterion "${indexedCriteria[2]}" cannot be delivered by cited tasks task-3; quote: Evidence 3.; correction: plan`,
+    });
+    expect(architectureGap).toEqual({
+      gapId: 'criterion:cannot-deliver-architecture:5',
+      criterion: indexedCriteria[4],
+      detail: `criterion "${indexedCriteria[4]}" cannot be delivered by cited tasks task-5; quote: Evidence 5.; correction: architecture; constraint: adr-x#D2`,
+    });
+
+    const report = renderGapReport([planGap, architectureGap].map((gap) => ({
+      layer: 'criterion',
+      gapId: gap!.gapId,
+      artifact: 'stories / plan',
+      item: gap!.detail,
+    })));
+    const reportLines = report.split('\n').filter((line) => line.startsWith('- '));
+    expect(reportLines).toEqual([
+      `- **${planGap!.gapId}** (stories / plan): "${planGap!.detail}"`,
+      `- **${architectureGap!.gapId}** (stories / plan): "${architectureGap!.detail}"`,
+    ]);
+  });
+
+  it('preserves the exact legacy fail verdict gap', () => {
+    const legacy = checkCriterionCoverage(
+      correctedRows('plan').map((row) => row.rowClass === 'criterion' ? { ...row, correction: undefined } : row),
+      stories,
+      plan,
+    );
+    expect(legacy).toEqual({
+      ok: false,
+      reason: 'criterion-gap',
+      gaps: [{
+        gapId: 'criterion:verdict:1',
+        criterion,
+        detail: `criterion row is marked fail: ${criterion}`,
+      }],
+    });
+  });
+
+  it.each(['fail', 'gap'] as const)('retains the legacy %s diagnostic before a missing-task diagnostic', (verdict) => {
+    const result = checkCriterionCoverage(
+      correctedRows('plan', 'task-404').map((row) => row.rowClass === 'criterion' ? { ...row, correction: undefined, verdict } : row),
+      stories,
+      plan,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.gaps.map((gap) => gap.gapId)).toEqual([
+      'criterion:verdict:1', 'criterion:task-missing:1:404',
+    ]);
+  });
+
+  it('suppresses cannot-deliver when a corrected criterion cites an unresolvable task', () => {
+    const missing = checkCriterionCoverage(correctedRows('plan', 'task-404'), stories, plan);
+    expect(missing).toEqual({
+      ok: false,
+      reason: 'criterion-gap',
+      gaps: [{
+        gapId: 'criterion:task-missing:1:404',
+        criterion,
+        detail: `criterion "${criterion}" cites task 404, which does not exist in the plan`,
+      }],
+    });
+  });
+});
+
 async function runGit(cwd: string, args: string[]): Promise<void> {
   await execFile('git', args, { cwd });
 }
@@ -2456,7 +2595,7 @@ ${row}
     if (result.ok) return;
 
     if (_label === 'wrong cell count') {
-      expect(result.detail).toMatchObject({ line: 3, message: expect.stringContaining('expected 6 and actual 5') });
+      expect(result.detail).toMatchObject({ line: 3, message: expect.stringContaining('expected 6 or 7 and actual 5') });
     } else if (_label === 'unknown verdict') {
       expect(result.detail).toMatchObject({ line: 3, message: expect.stringContaining('probably-covered') });
     } else if (_label === 'out-of-vocabulary disposition') {
@@ -2680,6 +2819,202 @@ Return requests are accepted.
 });
 
 describe('runCoherenceGate criterion fail-closed guard', () => {
+  it('keeps correction parsing and validation owned by their two engine modules', async () => {
+    const engineRoot = new URL('../../../src/engine/', import.meta.url).pathname;
+    const sourcePaths = (await readdir(engineRoot, { recursive: true }))
+      .filter((path) => path.endsWith('.ts'));
+    const correctionOwners = (await Promise.all(sourcePaths.map(async (path) => ({
+      path,
+      text: await readFile(join(engineRoot, path), 'utf-8'),
+    })))).filter(({ text }) => /(?:CriterionCorrection|parseCriterionCorrection|row\.correction)/.test(text)).map(({ path }) => path);
+    expect(correctionOwners).toEqual([
+      'coherence-parse.ts',
+      join('engineer', 'coherence-validator.ts'),
+    ]);
+  });
+
+  it('rejects an architecture cannot-deliver finding without changing the plan or writing pipeline state', async () => {
+    const worktreePath = await mkdtemp(join(tmpdir(), 'coherence-cannot-deliver-no-side-effects-'));
+    temporaryRepositories.push(worktreePath);
+    await runGit(worktreePath, ['init', '--initial-branch=main']);
+    await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+    await runGit(worktreePath, ['config', 'user.name', 'Test User']);
+    await writeFile(join(worktreePath, 'README.md'), '# fixture\n');
+    await runGit(worktreePath, ['add', 'README.md']);
+    await runGit(worktreePath, ['commit', '-m', 'seed fixture']);
+    const planPath = join(worktreePath, '.docs/plans/idea.md');
+    const planBytes = '# Plan\n\n### Task 1: Deliver widget\n**Story:** Story 1\n\n**Done when:**\n- Deliver widget.\n';
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await mkdir(join(worktreePath, '.docs/decisions'), { recursive: true });
+    await mkdir(join(worktreePath, '.docs/plans'), { recursive: true });
+    await writeFile(planPath, planBytes);
+    await writeFile(join(worktreePath, '.docs/decisions/adr-correction.md'), '# ADR\n\n## Decision\n\n1. Deliver widget.\n');
+    await writeFile(join(worktreePath, '.docs/coherence/idea.md'), '| Row Class | Id | Cited Ids | Verdict | Quote | Disposition | Correction |\n| --- | --- | --- | --- | --- | --- |\n| story | story-1 | task-1 | covered | fixture |\n| task | task-1 | story-1 | covered | fixture |\n| criterion | Story 1 happy: Given a widget, when shipped, then it arrives | task-1 | fail | "Deliver widget." | diff-local | architecture:adr-correction#D1 |\n');
+    await expect(runCoherenceGate({ worktreePath, canonicalPath: worktreePath, tier: 'M', track: 'technical', sourceRef: undefined, planStem: 'idea', storiesText: '# Stories\n\n## Story 1: Widget\n\n### Happy Path\n- Given a widget, when shipped, then it arrives\n', planText: planBytes, prdText: null, outcomeBullets: [], ideaFiles: new Set(['.docs/coherence/idea.md']), guard: new AuthoringGuard(worktreePath) })).rejects.toThrow('criterion:cannot-deliver-architecture:1');
+    expect(await readFile(planPath, 'utf-8')).toBe(planBytes);
+    await expect(readdir(join(worktreePath, '.pipeline'))).rejects.toThrow();
+  });
+
+  it('passes an exact fresh waiver for cannot-deliver and unknown-decision gaps, but rejects partial coverage', async () => {
+    const gaps: CoherenceGap[] = [
+      { layer: 'criterion', gapId: 'criterion:cannot-deliver-plan:2', artifact: 'stories / plan', item: 'plan correction' },
+      { layer: 'criterion', gapId: 'criterion:correction-unknown-decision:4', artifact: 'stories / plan', item: 'unknown decision' },
+    ];
+    const changedFiles = [{ status: 'A', path: '.docs/coherence-waivers/idea.md' }];
+    const exact = await evaluateCoherenceWaiver({
+      gaps, changedFiles, root: '/repo',
+      readText: async () => 'Waives: criterion:cannot-deliver-plan:2, criterion:correction-unknown-decision:4\nRationale: both correction findings are accepted.\n',
+    });
+    expect(exact).toEqual({ ok: true });
+    const partial = await evaluateCoherenceWaiver({
+      gaps, changedFiles, root: '/repo',
+      readText: async () => 'Waives: criterion:cannot-deliver-plan:2\nRationale: only one finding is accepted.\n',
+    });
+    expect(partial).toMatchObject({ ok: false, reason: expect.stringContaining('criterion:correction-unknown-decision:4') });
+  });
+
+  it('rejects a malformed correction before evaluating a waiver', async () => {
+    const waiverSpy = vi.fn();
+    vi.resetModules();
+    vi.doMock('../../../src/engine/engineer/coherence-waiver.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../../../src/engine/engineer/coherence-waiver.js')>()),
+      evaluateCoherenceWaiver: waiverSpy,
+    }));
+    try {
+      const { runCoherenceGate: mockedGate } = await import('../../../src/engine/engineer/coherence-validator.js');
+      const worktreePath = await mkdtemp(join(tmpdir(), 'coherence-malformed-correction-'));
+      temporaryRepositories.push(worktreePath);
+      await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+      await writeFile(join(worktreePath, '.docs/coherence/idea.md'), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |\n| --- | --- | --- | --- | --- | --- |\n| criterion | Given a widget | task-1 | fail | evidence | diff-local | malformed |\n');
+      await expect(mockedGate({ worktreePath, canonicalPath: worktreePath, tier: 'M', track: 'technical', sourceRef: undefined, planStem: 'idea', storiesText: null, planText: null, prdText: null, outcomeBullets: [], ideaFiles: new Set(['.docs/coherence/idea.md']), guard: new AuthoringGuard(worktreePath) })).rejects.toThrow('unparseable-criterion-row');
+      expect(waiverSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('../../../src/engine/engineer/coherence-waiver.js');
+      vi.resetModules();
+    }
+  });
+
+  async function architectureCorrectionGateError(
+    decisionRef: string,
+    options: { addedAdr?: { name: string; content: string }; deletedAdr?: { name: string; content: string } } = {},
+  ): Promise<Error> {
+    const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-unknown-correction-'));
+    temporaryRepositories.push(canonicalPath);
+    const worktreePath = join(canonicalPath, 'feature');
+    await runGit(canonicalPath, ['init', '--initial-branch=main']);
+    await runGit(canonicalPath, ['config', 'user.email', 'test@example.com']);
+    await runGit(canonicalPath, ['config', 'user.name', 'Test User']);
+    await writeFile(join(canonicalPath, 'README.md'), '# fixture\n');
+    if (options.deletedAdr) {
+      await mkdir(join(canonicalPath, '.docs/decisions'), { recursive: true });
+      await writeFile(join(canonicalPath, `.docs/decisions/${options.deletedAdr.name}.md`), options.deletedAdr.content);
+    }
+    await runGit(canonicalPath, ['add', '.']);
+    await runGit(canonicalPath, ['commit', '-m', 'seed fixture']);
+    await runGit(canonicalPath, ['worktree', 'add', '-b', 'feature', worktreePath]);
+
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    if (options.addedAdr) {
+      await mkdir(join(worktreePath, '.docs/decisions'), { recursive: true });
+      await writeFile(join(worktreePath, `.docs/decisions/${options.addedAdr.name}.md`), options.addedAdr.content);
+    }
+    if (options.deletedAdr) await unlink(join(worktreePath, `.docs/decisions/${options.deletedAdr.name}.md`));
+    await writeFile(join(worktreePath, '.docs/coherence/idea.md'), `| Row Class | Id | Cited Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| story | story-1 | task-1 | covered | fixture |
+| task | task-1 | story-1 | covered | fixture |
+| criterion | Story 1 happy: Given a widget, when shipped, then it arrives | task-1 | fail | "Deliver widget." | diff-local | architecture:${decisionRef} |
+`);
+    await runGit(worktreePath, ['add', '-A']);
+    await runGit(worktreePath, ['commit', '-m', 'add correction fixture']);
+
+    try {
+      await runCoherenceGate({
+        worktreePath, canonicalPath, tier: 'M', track: 'technical', sourceRef: undefined, planStem: 'idea',
+        storiesText: '# Stories\n\n## Story 1: Widget\n\n### Happy Path\n- Given a widget, when shipped, then it arrives\n',
+        planText: '# Plan\n\n### Task 1: Deliver widget\n**Story:** Story 1\n\n**Done when:**\n- Deliver widget.\n\n## Coverage Check\n\n| Criterion | Tasks | Done when quote | Disposition |\n| --- | --- | --- | --- |\n| Story 1 happy: Given a widget, when shipped, then it arrives | task-1 | "Deliver widget." | diff-local |\n',
+        prdText: null, outcomeBullets: [], ideaFiles: new Set(['.docs/coherence/idea.md']),
+        guard: new AuthoringGuard(worktreePath),
+      });
+    } catch (error) {
+      if (error instanceof Error) return error;
+      throw error;
+    }
+    throw new Error('expected unknown correction reference to block the gate');
+  }
+
+  it('reports an architecture correction when no ADR decision is in the change set', async () => {
+    const error = await architectureCorrectionGateError('adr-none#D1');
+    expect(error.message).toContain('correction: architecture');
+    expect(error.message).toContain('criterion:correction-unknown-decision:1');
+    expect(error.message).toContain('architecture correction references unknown decision adr-none#D1; enumerated decision set is empty');
+  });
+
+  it('reports an out-of-range architecture decision with every enumerated id', async () => {
+    const error = await architectureCorrectionGateError('adr-range#D9', {
+      addedAdr: { name: 'adr-range', content: '# Range ADR\n\n## Decision\n\n1. First.\n2. Second.\n3. Third.\n' },
+    });
+    expect(error.message).toContain('criterion:correction-unknown-decision:1');
+    expect(error.message).toContain('architecture correction references unknown decision adr-range#D9; enumerated decision ids: adr-range#D1, adr-range#D2, adr-range#D3');
+  });
+
+  it('reports a reference to an ADR deleted from the change set', async () => {
+    const error = await architectureCorrectionGateError('adr-deleted#D1', {
+      deletedAdr: { name: 'adr-deleted', content: '# Deleted ADR\n\n## Decisions\n\n1. Removed decision.\n' },
+    });
+    expect(error.message).toContain('criterion:correction-unknown-decision:1');
+    expect(error.message).toContain('architecture correction references unknown decision adr-deleted#D1; enumerated decision set is empty');
+  });
+
+  it.each([
+    ['numbered decision', '2. The ADR decision permits the correction.\n', 'adr-correction#D2'],
+    ['amendment-blockquote decision', '> **Amended 2026-09-08 by #1:**\n> 10. The amendment permits the correction.\n', 'adr-correction#D10'],
+  ])('resolves an architecture correction against a changed ADR %s without engaging the ADR layer', async (
+    _label,
+    adrDecision,
+    decisionRef,
+  ) => {
+    const worktreePath = await mkdtemp(join(tmpdir(), 'coherence-correction-decision-'));
+    temporaryRepositories.push(worktreePath);
+    await runGit(worktreePath, ['init', '--initial-branch=main']);
+    await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+    await runGit(worktreePath, ['config', 'user.name', 'Test User']);
+    await writeFile(join(worktreePath, 'README.md'), '# fixture\n');
+    await runGit(worktreePath, ['add', '.']);
+    await runGit(worktreePath, ['commit', '-m', 'seed fixture']);
+
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await mkdir(join(worktreePath, '.docs/decisions'), { recursive: true });
+    await writeFile(join(worktreePath, '.docs/decisions/adr-correction.md'), `# Correction ADR\n\n## Decision\n\n${adrDecision}`);
+    await writeFile(
+      join(worktreePath, '.docs/coherence/idea.md'),
+      `| Row Class | Id | Cited Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| story | story-1 | task-1 | covered | fixture |
+| task | task-1 | story-1 | covered | fixture |
+| criterion | Story 1 happy: Given a widget, when shipped, then it arrives | task-1 | fail | "Deliver widget." | diff-local | architecture:${decisionRef} |
+`,
+    );
+
+    const ideaFiles = new Set(['.docs/coherence/idea.md']);
+    const required = resolveRequiredLayers(worktreePath, 'M', 'technical', [], ideaFiles);
+    expect(required.engaged && required.layers.has('adr')).toBe(false);
+    await expect(runCoherenceGate({
+      worktreePath,
+      canonicalPath: worktreePath,
+      tier: 'M',
+      track: 'technical',
+      sourceRef: undefined,
+      planStem: 'idea',
+      storiesText: `# Stories\n\n## Story 1: Widget\n\n### Happy Path\n- Given a widget, when shipped, then it arrives\n`,
+      planText: `# Plan\n\n### Task 1: Deliver widget\n**Story:** Story 1\n\n**Done when:**\n- Deliver widget.\n\n## Coverage Check\n\n| Criterion | Tasks | Done when quote | Disposition |\n| --- | --- | --- | --- |\n| Story 1 happy: Given a widget, when shipped, then it arrives | task-1 | "Deliver widget." | diff-local |\n`,
+      prdText: null,
+      outcomeBullets: [],
+      ideaFiles,
+      guard: new AuthoringGuard(worktreePath),
+    })).rejects.toThrow(/criterion:cannot-deliver-architecture:1/);
+  });
+
   // Covers: task:4 — run the land gate, rather than its shared parser helper,
   // over the same corpus text used by discovery. The fixture intentionally
   // lacks the surrounding plan, so the later fabricated-id failure proves the
@@ -2796,7 +3131,7 @@ describe('runCoherenceGate criterion fail-closed guard', () => {
         ideaFiles: new Set(['.docs/coherence/idea.md', '.docs/coherence-waivers/idea.md']),
         guard: new AuthoringGuard(worktreePath),
       }),
-    ).rejects.toThrow(/unparseable-criterion-row.*line 3.*expected 6 and actual 5/is);
+    ).rejects.toThrow(/unparseable-criterion-row.*line 3.*expected 6 or 7 and actual 5/is);
   });
 
   it('rejects unparseable story criteria even when a fresh waiver names criterion:stories-unparseable', async () => {
