@@ -31,17 +31,14 @@ shared story-criteria module, and the task-body enumerator in the shared plan ta
 change adds no new grammar and cannot drift from the parsers the rest of the engine uses.
 
 Two properties make the function safe at this seam. It is total: every section it cannot derive is
-omitted rather than emitted empty, so a legacy or malformed artifact set lands with whatever remains
-derivable and never fails. Section omission is independent per section: empty or unparseable plan
-and stories text suppresses only the sections those artifacts feed, so a land whose track is
-resolved — which production always is, defaulting to `product` — still carries its track and tier
-line. Only when no section at all is derivable, the track included, does the function return the
-subject line alone.
-
-And it is inert: the build evidence reader scans commit messages for a `Task:`-prefixed trailer, so
-no line the composer emits or copies may satisfy that grammar. Rendered task lines therefore use a list-bullet prefix, and any
+omitted rather than emitted empty, and with nothing derivable it returns the subject line alone, so
+a legacy or malformed artifact set lands exactly as it does today. And it is inert: the build
+evidence reader scans commit messages for a `Task:`-prefixed trailer, so no line the composer emits
+or copies may satisfy that grammar. Rendered task lines therefore use a list-bullet prefix, and any
 line copied out of an artifact that already matches the trailer grammar is dropped. Without that
 guard, a spec land commit could silently register as evidence for a build task.
+
+> **Amended 2026-09-09 by #2400 (preserving the previously operator-approved AB-2 correction):** Section omission is independent. Empty or unparseable plan and stories text suppresses only their sections. A resolved track still contributes the track and tier line; production defaults the track to `product`. The subject alone is returned only when nothing is derivable, including the track. The original bare-subject assertion above is superseded accordingly.
 
 The call site changes only the message argument of the existing commit invocation. No file read, no
 gate, no return value, and no subject line changes, so every existing land assertion holds.
@@ -97,16 +94,21 @@ the landed commit. No test spawns a real provider, network call, or hosting CLI.
 
 **Steps:**
 1. Write a failing case whose plan summary text contains a line already in the trailer grammar, asserting that line is absent from the composed message while the rest of the summary survives.
-2. Write a failing case with empty plan text and empty stories text and a resolved track, asserting the composed message is the subject line, a blank line, and the track line alone, plus a second case with no track either, asserting the message equals the subject line alone; assert neither call throws.
+2. Write a failing case with empty plan text and empty stories text, asserting the composed message equals the subject line alone and that the call throws nothing.
+
+> **Amended 2026-09-09 by #2400 (preserving the previously operator-approved AB-2 correction):** For this step, cover both cases: with a resolved track, expect the subject, a blank line, and the track line; with no track, expect the subject alone. Neither call throws.
+
 3. Write a failing case with a plan that has no Summary section and a stories text with no story heading, asserting the message carries no heading whose section is empty.
 4. Verify the cases fail, then extend the composer to drop any copied line matching the trailer grammar and to omit every section it cannot derive rather than emitting its heading.
 5. Verify the whole unit file passes and commit the focused change.
 
 **Done when:**
 1. A trailer-shaped line present in the artifact text does not appear anywhere in the composed message.
-2. Empty plan and stories text with a resolved track produce a message of the subject line, a blank line, and the track line, with no trailing blank line and no thrown error.
-3. Empty plan and stories text with no track produce a message equal to the subject line, with no trailing blank line and no thrown error.
-4. A plan with no Summary section and a stories text with no story heading produce a message containing no heading followed by an empty section.
+2. Empty plan and stories text produce a message equal to the subject line, with no trailing blank line and no thrown error.
+
+> **Amended 2026-09-09 by #2400 (preserving the previously operator-approved AB-2 correction):** This Done-when has two cases: a resolved track yields the subject, a blank line, and the track line; no track yields the subject alone. Neither result has a trailing blank line, and neither call throws.
+
+3. A plan with no Summary section and a stories text with no story heading produce a message containing no heading followed by an empty section.
 
 ### Task 3: Commit the composed message from the land primitive
 **Story:** Story 1
@@ -153,12 +155,13 @@ the landed commit. No test spawns a real provider, network call, or hosting CLI.
 | Story 1 negative: Given a worktree whose plan artifact has no Summary section and whose stories artifact has no story heading, when the spec is landed, then the commit is still created and its body carries no heading for the missing sections. | 4 | "A land fixture whose plan has no Summary section and whose stories have no story heading resolves successfully." | diff-local |
 | Story 2 happy: Given a plan whose tasks are numbered, when the commit body renders those tasks, then no rendered line matches the commit trailer grammar the build evidence reader uses. | 1 | "No line of the composed message matches an anchored trailer regex built from the exported task id pattern." | diff-local |
 | Story 2 negative: Given artifact text that itself contains a line in that trailer grammar, when the body is composed, then that line does not appear in the composed message. | 2 | "A trailer-shaped line present in the artifact text does not appear anywhere in the composed message." | diff-local |
-| Story 2 negative: Given empty or unparseable plan and stories text but a derivable track, when the body is composed, then the composed message is the subject line, a blank line, and the track and tier line, and nothing else. | 2 | "Empty plan and stories text with a resolved track produce a message of the subject line, a blank line, and the track line, with no trailing blank line and no thrown error." | diff-local |
-| Story 2 negative: Given empty or unparseable plan and stories text and no derivable track either, when the body is composed, then the composer returns the subject line alone and raises no error. | 2 | "Empty plan and stories text with no track produce a message equal to the subject line, with no trailing blank line and no thrown error." | diff-local |
+| Story 2 negative: Given empty or unparseable plan and stories text, when the body is composed, then the composer returns the subject line alone and raises no error. | 2 | "Empty plan and stories text produce a message equal to the subject line, with no trailing blank line and no thrown error." | diff-local |
+
+> **Amended 2026-09-09 by #2400 (preserving the previously operator-approved AB-2 correction):** The preceding coverage row for empty or unparseable artifacts now covers two Story 2 negative criteria, both owned by Task 2 and both diff-local: retain the track and tier when derivable, and return the subject alone only when the track is also unavailable. There are seven criteria rather than the original six stated below.
 
 ## Test dispositions and integration ownership
 
-All seven criteria are diff-local: every one is decided by the composer's return value or by the
+All six criteria are diff-local: every one is decided by the composer's return value or by the
 message of a commit this feature's own code writes, and no commit outside this diff can change
 whether they hold. Tasks 1 and 2 own unit coverage of the pure composer with literal fixture strings
 and no filesystem access. Task 3 owns the single integration proof that matters for this defect —
