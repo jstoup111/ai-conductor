@@ -123,7 +123,7 @@ describe('renderDaemonEvent: feature_usage_total', () => {
     chalk.level = 0;
   });
 
-  it('logs the whole-feature totals as a sibling of the per-step provider lines', () => {
+  it('qualifies a partial cost total as a sibling of the per-step provider lines', () => {
     const [line] = lines({
       type: 'feature_usage_total',
       dispatches: 23,
@@ -134,7 +134,20 @@ describe('renderDaemonEvent: feature_usage_total', () => {
       outputTokens: 48_000,
     });
     expect(line).toBe(
-      '·   finish: total usage — 23 dispatches, $12.34, 1.2M→48k tok, 2 unmetered',
+      '·   finish: total usage — 23 dispatches, $12.34 (21 cost-metered dispatches), 1.2M→48k tok, 2 unmetered',
     );
+  });
+
+  it('leaves a fully cost-metered total unqualified', () => {
+    const [line] = lines({
+      type: 'feature_usage_total',
+      dispatches: 2,
+      meteredDispatches: 2,
+      unmeteredDispatches: 0,
+      costUsd: 0.75,
+      inputTokens: 120,
+      outputTokens: 12,
+    });
+    expect(line).toBe('·   finish: total usage — 2 dispatches, $0.75, 120→12 tok');
   });
 });

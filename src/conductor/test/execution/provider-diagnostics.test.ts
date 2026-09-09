@@ -157,30 +157,66 @@ describe('summarizeProviderDiagnostic: unrecognized output passes through verbat
 // read as a sibling of the per-step lines, and must never turn "never
 // measured" into "measured as free".
 describe('formatFeatureUsageTotal', () => {
-  it('renders dispatch count, cost, and token split for a fully metered build', () => {
-    expect(
-      formatFeatureUsageTotal({
+  it.each([
+    {
+      name: 'renders a fully cost-metered build without a denominator clause',
+      // Prevents an honest all-provider total from gaining needless noise.
+      totals: {
         dispatches: 23,
         meteredDispatches: 23,
         unmeteredDispatches: 0,
         costUsd: 12.3449,
         inputTokens: 1_200_000,
         outputTokens: 48_000,
-      }),
-    ).toBe('finish: total usage — 23 dispatches, $12.34, 1.2M→48k tok');
-  });
-
-  it('names the unmetered dispatches alongside the metered totals in a mixed build', () => {
-    expect(
-      formatFeatureUsageTotal({
+      },
+      expected: 'finish: total usage — 23 dispatches, $12.34, 1.2M→48k tok',
+    },
+    {
+      name: 'names the cost-metered denominator when unmetered dispatches reduce it',
+      // Prevents a cost over eight measured dispatches reading as all ten dispatches' cost.
+      totals: {
         dispatches: 10,
         meteredDispatches: 8,
         unmeteredDispatches: 2,
         costUsd: 3.5,
         inputTokens: 900,
         outputTokens: 120,
-      }),
-    ).toBe('finish: total usage — 10 dispatches, $3.50, 900→120 tok, 2 unmetered');
+      },
+      expected:
+        'finish: total usage — 10 dispatches, $3.50 (8 cost-metered dispatches), 900→120 tok, 2 unmetered',
+    },
+    {
+      name: 'names the cost-metered denominator when cost-unmetered dispatches reduce it',
+      // Prevents dollars from 30 dispatches being read as the cost of all 47 token-metered ones.
+      totals: {
+        dispatches: 47,
+        meteredDispatches: 47,
+        unmeteredDispatches: 0,
+        costUnmeteredDispatches: 17,
+        costUsd: 5.63,
+        inputTokens: 2_250_000,
+        outputTokens: 148_000,
+        cachedInputTokens: 58_000_000,
+      },
+      expected:
+        'finish: total usage — 47 dispatches, $5.63 (30 cost-metered dispatches), ' +
+        '2.3M fresh + 58M cached→148k tok, 17 cost-unmetered (tokens counted, cost not)',
+    },
+    {
+      name: 'keeps a one-dispatch cost-metered total plain',
+      // Prevents the singular denominator wording from appearing when it adds no information.
+      totals: {
+        dispatches: 1,
+        meteredDispatches: 1,
+        unmeteredDispatches: 0,
+        costUsd: 0.004,
+        inputTokens: 12,
+        outputTokens: 3,
+      },
+      expected: 'finish: total usage — 1 dispatch, $0.00, 12→3 tok',
+    },
+  ])('$name', ({ totals, expected }) => {
+    expect(formatFeatureUsageTotal(totals)).toBe(expected);
   });
 
   it('splits fresh from cached input when the build tracked cache volume', () => {
@@ -216,26 +252,39 @@ describe('formatFeatureUsageTotal', () => {
     expect(line).not.toContain('tok');
   });
 
-  it('names cost-unmetered dispatches so a partial cost never reads as a total', () => {
-    // The gap this closes: a mixed-provider build whose second provider
-    // reported tokens but no money contributed its full token volume and $0.
-    // The line printed one provider's dollars beside both providers' tokens
-    // with nothing to say so — a 4.4x understatement that looked authoritative.
-    expect(
-      formatFeatureUsageTotal({
-        dispatches: 47,
-        meteredDispatches: 47,
-        unmeteredDispatches: 0,
-        costUnmeteredDispatches: 17,
-        costUsd: 5.63,
-        inputTokens: 2_250_000,
-        outputTokens: 148_000,
-        cachedInputTokens: 58_000_000,
-      }),
-    ).toBe(
-      'finish: total usage — 47 dispatches, $5.63, 2.3M fresh + 58M cached→148k tok, ' +
-        '17 cost-unmetered (tokens counted, cost not)',
+  it('withholds a zero cost when tokens were metered without a price', () => {
+    // Tokens are a real observation here, but a displayed $0.00 would claim
+    // that the provider priced them as free instead of leaving them unpriced.
+    const line = formatFeatureUsageTotal({
+      dispatches: 2,
+      meteredDispatches: 2,
+      unmeteredDispatches: 0,
+      costUnmeteredDispatches: 2,
+      costUsd: 0,
+      inputTokens: 900,
+      outputTokens: 120,
+    });
+    expect(line).toBe(
+      'finish: total usage — 2 dispatches, 900→120 tok, 2 cost-unmetered (tokens counted, cost not)',
     );
+    expect(line).not.toContain('$');
+  });
+
+  it('withholds cost when inconsistent counts leave no cost-metered dispatches', () => {
+    // Defensive clamping must not expose a negative denominator or invent a
+    // $0.00 price when malformed rollup inputs exceed the dispatch count.
+    const line = formatFeatureUsageTotal({
+      dispatches: 1,
+      meteredDispatches: 1,
+      unmeteredDispatches: 2,
+      costUnmeteredDispatches: 3,
+      costUsd: 0,
+      inputTokens: 12,
+      outputTokens: 3,
+    });
+    expect(line).toBe('finish: total usage — 1 dispatch, 12→3 tok, 3 cost-unmetered (tokens counted, cost not), 2 unmetered');
+    expect(line).not.toContain('$');
+    expect(line).not.toMatch(/-\d/);
   });
 
   it('says nothing extra when every metered dispatch also carried a cost', () => {
@@ -252,16 +301,4 @@ describe('formatFeatureUsageTotal', () => {
     ).not.toContain('cost-unmetered');
   });
 
-  it('singularizes a one-dispatch build', () => {
-    expect(
-      formatFeatureUsageTotal({
-        dispatches: 1,
-        meteredDispatches: 1,
-        unmeteredDispatches: 0,
-        costUsd: 0.004,
-        inputTokens: 12,
-        outputTokens: 3,
-      }),
-    ).toBe('finish: total usage — 1 dispatch, $0.00, 12→3 tok');
-  });
 });

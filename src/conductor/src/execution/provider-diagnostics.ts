@@ -94,20 +94,33 @@ export interface FeatureUsageTotals {
 /**
  * Compose the whole-feature usage line logged when `finish` completes:
  *
- *   finish: total usage — 23 dispatches, $12.34, 1.2M→48k tok, 2 unmetered
+ *   finish: total usage — 23 dispatches, $12.34 (21 cost-metered dispatches),
+ *   1.2M→48k tok, 2 unmetered
  *
- * Cost and token figures are emitted ONLY when at least one dispatch was
- * actually metered. A build whose provider reports no usage prints its
- * dispatch count and an explicit unmetered count rather than a fabricated
- * `$0.00` / `0→0 tok`, which would read as "this build was free" instead of
- * "this build was never measured".
+ * Token figures are emitted ONLY when at least one dispatch was actually
+ * metered. The cost figure is withheld when no dispatch was cost-metered, and
+ * otherwise names its smaller, cost-metered denominator whenever it differs
+ * from the recorded dispatch count. A build whose provider reports no usage
+ * prints its dispatch count and an explicit unmetered count rather than a
+ * fabricated `$0.00` / `0→0 tok`, which would read as "this build was free"
+ * instead of "this build was never measured".
  */
 export function formatFeatureUsageTotal(totals: FeatureUsageTotals): string {
   const parts: string[] = [
     `${totals.dispatches} dispatch${totals.dispatches === 1 ? '' : 'es'}`,
   ];
+  const costMeteredDispatches = Math.max(
+    0,
+    totals.meteredDispatches - (totals.costUnmeteredDispatches ?? 0),
+  );
   if (totals.meteredDispatches > 0) {
-    parts.push(`$${totals.costUsd.toFixed(2)}`);
+    if (costMeteredDispatches > 0) {
+      const costDenominator =
+        costMeteredDispatches < totals.dispatches
+          ? ` (${costMeteredDispatches} cost-metered dispatch${costMeteredDispatches === 1 ? '' : 'es'})`
+          : '';
+      parts.push(`$${totals.costUsd.toFixed(2)}${costDenominator}`);
+    }
     // Fresh input and cached prompt volume are different quantities (cached
     // reads are the conversation resubmitted on every internal tool call, at
     // ~10% price); folding them into one "input" figure made ordinary agentic

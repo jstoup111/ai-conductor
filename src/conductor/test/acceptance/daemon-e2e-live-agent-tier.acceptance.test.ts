@@ -110,13 +110,14 @@ describe('live-agent daemon E2E tier (#1124)', () => {
     }
   });
 
-  it('keeps the live workflow advisory to merges and makes each credential-present leg gate-enforced', async () => {
+  it('keeps the live workflow advisory to merges and requires a successful credentialed provider leg', async () => {
     const [workflow, ci] = await Promise.all([
       requiredSource(WORKFLOW_PATH),
       requiredSource(join(REPO_ROOT, '.github/workflows/ci.yml')),
     ]);
 
     expect(workflow).toMatch(/workflow_dispatch\s*:/);
+    expect(workflow).toMatch(/name:\s*Require one successful live-provider E2E/);
     expect(workflow).toMatch(/workflow_call\s*:/);
     expect(workflow).not.toMatch(/^\s*(?:pull_request|schedule)\s*:/m);
     expect(workflow).toMatch(/fail-fast:\s*false/);

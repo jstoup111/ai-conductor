@@ -821,7 +821,7 @@ describe('engine/cost-rollup', () => {
         costUnmeteredDispatches: 0,
       });
       expect(formatFeatureUsageTotal(totals)).toBe(
-        'finish: total usage — 3 dispatches, $3.75, 2k→500 tok, 1 unmetered',
+        'finish: total usage — 3 dispatches, $3.75 (2 cost-metered dispatches), 2k→500 tok, 1 unmetered',
       );
     });
 
@@ -853,8 +853,9 @@ describe('engine/cost-rollup', () => {
 
       expect(totals.costUnmeteredDispatches).toBe(1);
       expect(totals.costUsd).toBe(5.63);
-      expect(formatFeatureUsageTotal(totals)).toContain(
-        '1 cost-unmetered (tokens counted, cost not)',
+      expect(formatFeatureUsageTotal(totals)).toBe(
+        'finish: total usage — 2 dispatches, $5.63 (1 cost-metered dispatch), ' +
+          '2.3M fresh + 58M cached→148.1k tok, 1 cost-unmetered (tokens counted, cost not)',
       );
     });
 
