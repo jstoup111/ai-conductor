@@ -53,6 +53,39 @@ describe('assembleCoverageBindingClaims', () => {
     ]);
   });
 
+  it('ignores a seven-cell fail-row correction when assembling coverage-binding inputs', () => {
+    const sixCellTwin = `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Corrected criterion | task-1, task-3 | fail | "Third check" | diff-local |
+`;
+    const sevenCellRow = `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- | --- |
+| criterion | Corrected criterion | task-1, task-3 | fail | "Third check" | diff-local | plan |
+`;
+
+    const sixCellClaims = assembleCoverageBindingClaims({
+      tier: 'M',
+      coherenceText: sixCellTwin,
+      planText: PLAN_WITH_TASKS,
+    });
+    const sevenCellClaims = assembleCoverageBindingClaims({
+      tier: 'M',
+      coherenceText: sevenCellRow,
+      planText: PLAN_WITH_TASKS,
+    });
+
+    expect(sevenCellClaims).toEqual(sixCellClaims);
+    expect(sevenCellClaims).toEqual([
+      {
+        criterion: 'Corrected criterion',
+        taskIds: ['1', '3'],
+        doneWhen: [['First check is true.'], ['Third check is true.']],
+        quote: 'Third check',
+        applicability: 'applicable',
+      },
+    ]);
+  });
+
   it('uses the S-tier plan Coverage Check carrier', () => {
     const planText = `${PLAN_WITH_TASKS}
 ## Coverage Check

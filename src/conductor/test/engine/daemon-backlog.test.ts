@@ -524,6 +524,28 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(result.items.map((item) => item.slug)).toEqual(['parser-only-criterion']);
   });
 
+  it('dispatches a merged non-S spec whose coherence artifact has a seven-cell fail criterion row', async () => {
+    const sevenCellFixture = coherenceRegressionCorpus.find(
+      ({ sevenCellFailCriterionTable }) => sevenCellFailCriterionTable !== undefined,
+    )?.sevenCellFailCriterionTable;
+    if (sevenCellFixture === undefined) throw new Error('missing seven-cell coherence corpus fixture');
+
+    const slug = 'seven-cell-fail-criterion';
+    await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+    await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await writeFile(join(dir, `.docs/coherence/${slug}.md`), sevenCellFixture);
+    await mkdir(join(dir, '.docs/complexity'), { recursive: true });
+    await writeFile(join(dir, `.docs/complexity/${slug}.md`), '# Complexity\n\nTier: M\n');
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([]);
+    expect(result.items.map((item) => item.slug)).toEqual([slug]);
+  });
+
   it('dispatches a parser-only legacy table whose header and separator widths differ', async () => {
     // This is the inverse arity mismatch: the retired predicate also rejected
     // it before inspecting the valid five-cell legacy row.
@@ -565,13 +587,13 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
         reason: 'missing-coherence',
         remedy:
           'Author a valid coherence table in .docs/coherence/malformed-coherence.md on the default branch. ' +
-          'Detail: line 3: criterion row expected 6 and actual 5 cells.',
+          'Detail: line 3: criterion row expected 6 or 7 and actual 5 cells.',
       },
     ]);
     expect(logs).toContain(
       'skip malformed-coherence: merged spec cannot build — missing or unparseable coherence artifact ' +
         '(.docs/coherence/malformed-coherence.md) required for tier unresolved. ' +
-        'Author it on the default branch; logged once. Detail: line 3: criterion row expected 6 and actual 5 cells.',
+        'Author it on the default branch; logged once. Detail: line 3: criterion row expected 6 or 7 and actual 5 cells.',
     );
   });
 

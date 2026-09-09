@@ -19,6 +19,11 @@ export interface CoherenceCorpusFixture {
    * visible to every consumer of these fixtures.
    */
   sixCellCriterionRows?: readonly CriterionCoherenceRow[];
+  /**
+   * A seven-cell failing criterion row paired with a six-cell corpus shape.
+   * Consumers that do not adjudicate corrections must treat it identically.
+   */
+  sevenCellFailCriterionTable?: string;
 }
 
 // Retired discovery predicate, copied verbatim from daemon-backlog.ts before
@@ -87,6 +92,10 @@ export const coherenceRegressionCorpus: readonly CoherenceCorpusFixture[] = [
         disposition: 'diff-local',
       },
     ],
+    sevenCellFailCriterionTable: `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a fixture | task:6 | fail | fixture | diff-local | plan |
+`,
   },
   {
     slug: 'five-wide-header-criterion',
