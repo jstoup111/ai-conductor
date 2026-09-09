@@ -504,7 +504,10 @@ async function snapshotTypedTestScope(
   const changeByPath = new Map(changes.filter((change) => change.kind !== 'D').map((change) => [change.path, change]));
   const paths = new Set([
     ...changedPaths,
-    ...[...parsePlanTaskPaths(planBody).values()].flatMap((taskPaths) => [...taskPaths]),
+    // Directory hints describe task scope, not a blob to parse. Changed files
+    // beneath them remain included independently through the Git inventory.
+    ...[...parsePlanTaskPaths(planBody).values()].flatMap((taskPaths) =>
+      [...taskPaths].filter((path) => !path.endsWith('/'))),
   ].filter(isTestPath));
   const initial: ScopedTestFile[] = [];
   for (const path of paths) {

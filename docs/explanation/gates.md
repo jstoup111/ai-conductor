@@ -670,3 +670,10 @@ Three things in this repo are easy to conflate and are not the same:
 
 Per-step enforcement values and skip rules: [steps](../reference/steps.md). Gate-related config keys:
 [configuration](../reference/configuration.md).
+
+## Directory hints in build review
+
+A plan Files entry ending in `/` describes a directory, not a source file. Build review does not
+read it as a Git blob or seed dependency discovery from it. Changed test files beneath that directory
+still enter review through the pinned Git diff; explicit test-file entries still seed discovery.
+Missing required source blobs and invalid file paths continue to block review.

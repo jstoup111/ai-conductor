@@ -582,6 +582,30 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       }
     });
 
+    it('accepts directory hints while retaining changed test evidence beneath them', async () => {
+      const path = 'test/fixtures/intake-inbound/example.test.ts';
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+          `diff --git a/${path} b/${path}`,
+          `--- a/${path}`, `+++ b/${path}`, '+change',
+        ].join('\n') } },
+        { match: ['show', 'head123:plan.md'], result: { stdout:
+          '### Task 1: fixtures\n**Files:**\n- test/fixtures/intake-inbound/\n- test/absent/\n' } },
+        { match: ['show', `base123:${path}`], result: { stdout: '' } },
+        { match: ['show', `head123:${path}`], result: { stdout:
+          "// Covers: task:1\nit('checks the fixture', () => { expect(true).toBe(true); });\n" } },
+      ]);
+
+      const result = await assembleBuildReviewInputs(git, planPath);
+
+      expect(result.sourceSnapshot.changedTestTitles).toContainEqual(expect.objectContaining({
+        selector: path, titleText: 'checks the fixture',
+      }));
+      expect(calls.filter((args) => args[0] === 'show').some((args) => args[1]?.endsWith('/'))).toBe(false);
+    });
+
     it('refuses a missing pinned HEAD blob for a changed test instead of silently emptying scope', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
