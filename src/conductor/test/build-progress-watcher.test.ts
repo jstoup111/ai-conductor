@@ -444,7 +444,7 @@ describe('BuildProgressWatcher change-driven emission', () => {
   });
 
   for (const failure of ['throws', 'non-zero', 'unparseable', 'blank'] as const) {
-    it(`preserves the last commit time and emits when the commit-time probe ${failure}`, async () => {
+    it(`omits the stale commit time and emits when the commit-time probe ${failure}`, async () => {
       await execa('git', ['init', '-b', 'main'], { cwd: dir });
       await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
       await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
@@ -458,6 +458,7 @@ describe('BuildProgressWatcher change-driven emission', () => {
 
       const watcher = new BuildProgressWatcher({ projectRoot: dir, events: emitter, step: 'build' });
       await tick(watcher);
+      expect(buildProgressEvents()[0]).toEqual(expect.objectContaining({ lastCommitAt: initialCommitAt }));
       emitSpy.mockClear();
 
       await writeFile(join(dir, 'README.md'), 'second');
@@ -473,7 +474,7 @@ describe('BuildProgressWatcher change-driven emission', () => {
           tickReason: 'head-moved',
           resolved: 5,
           total: 21,
-          lastCommitAt: initialCommitAt,
+          lastCommitAt: undefined,
         }),
       ]);
     });

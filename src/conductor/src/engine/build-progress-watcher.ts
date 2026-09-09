@@ -329,6 +329,8 @@ export class BuildProgressWatcher {
 
     const previous = this.lastSnapshot;
     if (head && head !== this.lastCommitHead) {
+      // A timestamp from an earlier HEAD must never label the current commit.
+      this.lastCommitAt = undefined;
       try {
         const git = makeGitRunner(this.projectRoot);
         const result = await git(['show', '-s', '--format=%ct', head]);
@@ -339,7 +341,7 @@ export class BuildProgressWatcher {
           this.lastCommitAt = commitSeconds * 1000;
         }
       } catch {
-        // Commit time is display metadata: preserve the last observed value
+        // Commit time is optional display metadata. Leave it absent on failure
         // and continue to report the task/HEAD progress that this tick saw.
       }
     }
