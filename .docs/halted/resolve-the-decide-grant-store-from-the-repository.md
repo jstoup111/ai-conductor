@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-09T14:39:18.706Z
 Slug: resolve-the-decide-grant-store-from-the-repository
 Class: needs-human
 Halting step: prd_audit
