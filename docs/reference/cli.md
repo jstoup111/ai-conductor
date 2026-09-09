@@ -931,6 +931,12 @@ The eligible live halt class is per gate: `build_review`'s cumulative convergenc
 `kickback-cap`. A `raise` or `reset` naming a gate whose live halt carries the other class is
 refused and changes nothing.
 
+`raise` increases that feature's effective limit by `--by`; `reset` returns the gate's consumed
+count to zero without lowering an already authorized effective limit. For either mutation, the
+command temporarily parks an unparked feature while it records the authorization and removes that
+temporary park after success. It preserves a park that already existed; unpark that feature when
+ready, otherwise the daemon leaves the authorization unconsumed.
+
 ## `ai-conductor decide-grant`
 
 ```bash

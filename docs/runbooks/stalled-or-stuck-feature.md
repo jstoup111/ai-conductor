@@ -96,7 +96,8 @@ never absent for long. Content the reader doesn't recognize still reads as `uncl
 
 | Class | Meaning | Cleared by the re-kick sweep? |
 | --- | --- | --- |
-| `needs-human` | Only an operator can resolve it. A detail naming a remediation-planner mismatch is a plan gap wearing this class; see [the remediation planner disagreed with the parsed findings](#the-remediation-planner-disagreed-with-the-parsed-findings). | No — skipped on every sweep. |
+| `needs-human` | Only an operator can resolve it. A detail naming a remediation-planner mismatch is a plan gap wearing this class; see [the remediation planner disagreed with the parsed findings](#the-remediation-planner-disagreed-with-the-parsed-findings). | No — except a matching, one-use `kickback-budget` authorization for a budget-cap halt. |
+| `kickback-cap` | A bounded `prd_audit` or as-built-review remediation allowance is exhausted. | No — except a matching, one-use `kickback-budget` authorization. |
 | `plan-gap` | `prd_audit` or the as-built review found an outcome no active plan task owns; see [the plan-gap recovery](#the-halt-is-a-plan-gap). | No — skipped on every sweep. |
 | `mechanical` | The daemon may safely retry it. | Yes, on a base-branch advance. |
 | `protected-artifact` | BUILD or SHIP found a genuine protected DECIDE-artifact violation. | No — skipped on every sweep until an operator resolves it. |
@@ -518,6 +519,21 @@ cat .worktrees/<slug>/.pipeline/gates/<step>.json
 The record is `{ satisfied, reason, checkedAt, kickback }`. `reason` is the exact string the
 gate computed. The concepts behind gate verdicts are in [gates](../explanation/gates.md); the
 per-step evidence files are listed in [artifacts](../reference/artifacts.md).
+
+For a budget-cap halt, do not remove `HALT` or `HALT.class`. From the main checkout, inspect the
+budget and authorize the intended recovery:
+
+```bash
+ai-conductor kickback-budget inspect --feature <slug>
+ai-conductor kickback-budget raise --feature <slug> --gate <gate> --by <positive-integer> --rationale "<why more allowance is justified>"
+# or
+ai-conductor kickback-budget reset --feature <slug> --gate <gate> --rationale "<why this count may restart>"
+```
+
+The daemon clears only a live halt whose gate and generation match that one-use authorization. It
+does so on its next loop iteration, without waiting for a base-branch advance. If the feature was
+already operator-parked, unpark it after the command; otherwise it remains intentionally halted.
+The full command contract is in the [CLI reference](../reference/cli.md#ai-conductor-kickback-budget).
 
 #### BUILD verification after a repair
 

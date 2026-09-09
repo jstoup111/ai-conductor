@@ -850,7 +850,7 @@ per feature:
 
 1. Skips it entirely if it is operator-parked, already shipped, or already re-kicked at this SHA.
 2. Skips it, on every sweep regardless of SHA, if `.pipeline/HALT.class` reads `needs-human` or
-   `unclassified` — only `mechanical`, `legacy`, and `protected-artifact` are retryable. See the
+   `unclassified` — only `mechanical` and `legacy` are ordinarily retryable. See the
    classification table in
    [stalled or stuck feature](../runbooks/stalled-or-stuck-feature.md#1-read-the-halt-marker-first).
 3. Aborts a paused rebase if one is mid-flight — a failed abort leaves the HALT marker intact rather
@@ -861,6 +861,24 @@ per feature:
 The sweep never dispatches directly; the cleared feature is re-dispatched on the next poll. That is
 why a git error left in a feature's worktree gets retried without backoff, and why parking is the
 only reliable way to make a feature stay stopped.
+
+### Budget-cap halts need an authorization
+
+A budget-cap halt is the one exception to the ordinary `needs-human` retention rule. From the main
+repository checkout, inspect the feature and then authorize either more allowance or a fresh count:
+
+```bash
+ai-conductor kickback-budget inspect --feature <slug>
+ai-conductor kickback-budget raise --feature <slug> --gate <gate> --by <positive-integer> --rationale "<why more allowance is justified>"
+# or
+ai-conductor kickback-budget reset --feature <slug> --gate <gate> --rationale "<why this count may restart>"
+```
+
+The command accepts only the live cap halt and generation it inspected, records the operator and
+rationale, and the daemon clears that matching halt on its next loop iteration. Do not delete the
+markers by hand. If the feature was already parked, unpark it after the authorization; an operator
+park deliberately prevents automatic consumption. See the [kickback-budget CLI reference](../reference/cli.md#ai-conductor-kickback-budget)
+for its exact gate and terminal requirements.
 
 ### DECIDE-entry halts need a grant
 
@@ -998,9 +1016,9 @@ kickback-ping-pong guard classify that halt `needs-human`, so the re-kick sweep 
 clears it. `test_suite`'s cap halt stays `mechanical` and can still be cleared by the re-kick sweep
 on a base-branch advance.
 
-Read the marker and fix the reported gate failure before resuming. Use the recovery procedure in
-[stalled or stuck feature](../runbooks/stalled-or-stuck-feature.md#clear-a-halt-and-let-the-feature-resume);
-do not clear the marker merely to retry the same unchanged loop.
+Read the marker and fix the reported gate failure before resuming. To authorize a justified retry,
+use [`ai-conductor kickback-budget`](../reference/cli.md#ai-conductor-kickback-budget); do not clear
+the marker merely to retry the same unchanged loop.
 
 The former terminal-less park caused by a passing stale BUILD-member verdict is retired. A repaired
 BUILD round re-verifies all non-skipped members, so it proceeds to its join or records an explicit
