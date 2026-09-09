@@ -54,3 +54,20 @@ export function formatProgressDelta(before?: number, after?: number): string {
 export function displayBuildPosition(resolved: number, total: number, hasCurrent: boolean): number {
   return Math.min(resolved + (hasCurrent ? 1 : 0), total);
 }
+
+/**
+ * Renders the age of the newest observed commit for a progress log line.
+ * Returns an empty fragment when no commit timestamp is available.
+ */
+export function formatCommitAge(lastCommitAt: number | undefined, now: number): string {
+  if (lastCommitAt === undefined) return '';
+
+  const elapsedMs = Math.max(0, now - lastCommitAt);
+  const elapsedMinutes = Math.floor(elapsedMs / 60_000);
+  if (elapsedMinutes < 1) return '<1m ago';
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m ago`;
+
+  const hours = Math.floor(elapsedMinutes / 60);
+  const minutes = elapsedMinutes % 60;
+  return `${hours}h ${minutes}m ago`;
+}

@@ -785,6 +785,8 @@ export type ConductorEvent =
       featureSlug?: string;
       tickReason?: 'task-delta' | 'head-moved' | 'heartbeat';
       headMoved?: boolean;
+      /** Epoch ms of the last observed commit, if tracked. */
+      lastCommitAt?: number;
     }
   | {
       /**

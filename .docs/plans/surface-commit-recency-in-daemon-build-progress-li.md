@@ -96,6 +96,8 @@ The daemon renderer is the entry point that owns the observable behavior for bot
 3. Unparseable probe output produces the same unchanged-value outcome as the injected failure.
 4. A tick following a commit that moved no task row emits a progress event carrying the new commit time and emits no quiet warning for that episode.
 
+> **Amended 2026-09-09 by #1715:** The operator approved Story 1’s failure behavior: a thrown, non-zero, blank, or unparseable timestamp lookup clears the cached commit time, including after an earlier successful observation. Task 3 Steps 1 and 4 and Done when 2–3 now require an absent timestamp while progress still emits. Keeping an earlier commit’s timestamp would mislabel the current commit’s age.
+
 ### Task 4: Name commit age on the two daemon build lines
 **Story:** Story 1
 **Story:** Story 2
