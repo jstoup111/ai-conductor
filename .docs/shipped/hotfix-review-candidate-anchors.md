@@ -1,7 +1,7 @@
 ---
 slug: hotfix-review-candidate-anchors
 spec_hash: 159728ac5e3cacbccdb191cfe9c65534c93c62de2fe749b38c948d62b4b93fc0
-pr: local
+pr: https://github.com/jstoup111/ai-conductor/pull/2474
 shipped: 2026-09-09
 engine_version: 20260909T144830Z-b97e8d600456
 ---
