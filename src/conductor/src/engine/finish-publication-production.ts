@@ -6,7 +6,7 @@
  * `finish-publication.ts`; this module is deliberately only its real-boundary
  * adapter.
  */
-import { access, lstat, readFile, writeFile } from 'node:fs/promises';
+import { access, lstat, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import type { ConductState, FinishPublicationEvent, RunMode } from '../types/index.js';
@@ -42,6 +42,12 @@ import {
   appendRecordedShipmentFindings,
   recordedShipmentFindings,
 } from './shipment-association.js';
+import { resolveShipmentIdentity } from './shipment-identity.js';
+import {
+  extractShipmentPlanDeclarations,
+  upsertShipmentPlanDeclaration,
+  withoutShipmentPlanDeclarations,
+} from './shipment-plan-declaration.js';
 
 export interface ProductionFinishPublicationCoordinator {
   advance(input: {
@@ -325,6 +331,23 @@ export function createProductionFinishPublicationCoordinator(
       await deps.gh(['pr', 'edit', prUrl, '--body', acceptedRiskBody.body], { cwd: deps.projectRoot });
     }
   };
+  const projectShipmentPlanDeclarationToRetainedPr = async (prUrl: string, requestedSlug: string) => {
+    const planPaths = (await readdir(join(deps.projectRoot, '.docs', 'plans')))
+      .filter((name) => name.endsWith('.md'))
+      .map((name) => join('.docs', 'plans', name));
+    const resolution = resolveShipmentIdentity(requestedSlug, planPaths);
+    if (resolution.kind !== 'resolved') {
+      const detail = resolution.kind === 'ambiguous'
+        ? `ambiguous plan candidates: ${resolution.candidates.join(', ')}`
+        : `plan not found: ${resolution.expected}`;
+      throw new Error(`shipment plan declaration: ${detail}`);
+    }
+    const { stdout } = await deps.gh(['pr', 'view', prUrl, '--json', 'body'], { cwd: deps.projectRoot });
+    const body = (JSON.parse(stdout) as { body?: unknown }).body;
+    if (typeof body !== 'string') throw new Error('shipment plan declaration: PR body is malformed');
+    const next = upsertShipmentPlanDeclaration(body, resolution.identity.slug);
+    if (next !== body) await deps.gh(['pr', 'edit', prUrl, '--body', next], { cwd: deps.projectRoot });
+  };
 
   return {
     async advance({ state, mode, daemon, dispatchJudgment, dispatchAuthoring, emit }) {
@@ -411,7 +434,16 @@ export function createProductionFinishPublicationCoordinator(
                 };
                 if (typeof pr.url === 'string') {
                   const halted = prHaltState(pr.title, pr.body, pr.labels);
-                  const revision = `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`;
+                  // The declaration is mechanically maintained shipment
+                  // metadata, not reader-facing prose. Its append/replacement
+                  // must not invalidate the verdict for an otherwise identical
+                  // title/body revision and trigger another provider judgment.
+                  const proseBody = typeof pr.body === 'string'
+                    ? extractShipmentPlanDeclarations(pr.body).length === 0
+                      ? pr.body
+                      : withoutShipmentPlanDeclarations(pr.body).trimEnd()
+                    : pr.body ?? '';
+                  const revision = `${pr.url}\u0000${JSON.stringify([pr.title ?? '', proseBody])}`;
                   proseRevisionByPr.set(pr.url, revision);
                   await seedJudgmentStore();
                   if (authoredPlaceholderProsePendingByPr.delete(pr.url) && !halted) {
@@ -575,12 +607,31 @@ export function createProductionFinishPublicationCoordinator(
             await projectAcceptedRiskToRetainedPr(state.pr_url);
             if (deps.repairPresentation) {
               await deps.repairPresentation({ prUrl: state.pr_url, state });
-              return;
+            } else {
+              await deps.gh(['pr', 'ready', state.pr_url], { cwd: deps.projectRoot });
             }
-            await deps.gh(['pr', 'ready', state.pr_url], { cwd: deps.projectRoot });
+            if (!state.feature_desc) throw new Error('missing shipment identity');
+            await projectShipmentPlanDeclarationToRetainedPr(state.pr_url, state.feature_desc);
           },
           recordOutcome: async (request) => {
-            if (request.choice === 'pr') await projectAcceptedRiskToRetainedPr(request.prUrl);
+            if (request.choice === 'pr') {
+              await projectAcceptedRiskToRetainedPr(request.prUrl);
+              // AB-1: repairPresentation is NOT the only route to a completed PR
+              // outcome. The selector returns record_outcome directly whenever the
+              // retained PR is already non-draft (finish-publication.ts, `if
+              // (!snapshot.pr.ready) return 'ready_pr'`), which covers both a PR
+              // findOrCreatePr reused in ready state and a retry after a ready_pr
+              // effect that marked the PR ready but then failed at declaration
+              // maintenance — that retry observes `ready: !pr.isDraft` and skips
+              // repairPresentation entirely. Binding the declaration to the same
+              // choice === 'pr' rung the accepted-risk projection already occupies
+              // makes the guard unconditional for a PR outcome. The upsert is
+              // idempotent and edits only when the body changes, so the repaired
+              // path re-reads here and issues no second edit. The keep rung
+              // deliberately projects nothing.
+              if (!state.feature_desc) throw new Error('missing shipment identity');
+              await projectShipmentPlanDeclarationToRetainedPr(request.prUrl, state.feature_desc);
+            }
             // finish-record signals every fail-closed refusal as a non-zero exit
             // code, never a throw. Discarding it turned a refusal into a silent
             // no-op, so the loop halted on the generic "record_outcome left
