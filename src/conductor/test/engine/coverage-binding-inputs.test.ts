@@ -1,4 +1,3 @@
-// Covers: task:10
 // Test: coverage-binding claim assembly
 
 import { describe, expect, it } from 'vitest';
@@ -53,6 +52,7 @@ describe('assembleCoverageBindingClaims', () => {
     ]);
   });
 
+  // Covers: task:8
   it('ignores a seven-cell fail-row correction when assembling coverage-binding inputs', () => {
     const sixCellTwin = `| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |
 | --- | --- | --- | --- | --- | --- |
