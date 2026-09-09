@@ -1,5 +1,7 @@
 // Covers: task:4
 
+import type { CriterionCoherenceRow } from '../../src/engine/coherence-parse.js';
+
 /**
  * Regression corpus for the retired discovery predicate and the shared
  * coherence parser. Both parser- and discovery-level tests consume this file
@@ -11,6 +13,12 @@ export interface CoherenceCorpusFixture {
   content: string | null;
   oracleAccepted: boolean;
   parserAccepted: boolean;
+  /**
+   * The pre-correction parse shape for every accepted six-cell criterion row.
+   * Keeping it in the shared corpus makes the parser's compatibility promise
+   * visible to every consumer of these fixtures.
+   */
+  sixCellCriterionRows?: readonly CriterionCoherenceRow[];
 }
 
 // Retired discovery predicate, copied verbatim from daemon-backlog.ts before
@@ -69,6 +77,16 @@ export const coherenceRegressionCorpus: readonly CoherenceCorpusFixture[] = [
 `,
     oracleAccepted: true,
     parserAccepted: true,
+    sixCellCriterionRows: [
+      {
+        rowClass: 'criterion',
+        criterion: 'Given a fixture',
+        citedIds: ['task:6'],
+        verdict: 'covered',
+        quote: 'fixture',
+        disposition: 'diff-local',
+      },
+    ],
   },
   {
     slug: 'five-wide-header-criterion',
@@ -79,6 +97,16 @@ export const coherenceRegressionCorpus: readonly CoherenceCorpusFixture[] = [
 `,
     oracleAccepted: false,
     parserAccepted: true,
+    sixCellCriterionRows: [
+      {
+        rowClass: 'criterion',
+        criterion: 'Given a fixture',
+        citedIds: ['task:6'],
+        verdict: 'covered',
+        quote: 'fixture',
+        disposition: 'diff-local',
+      },
+    ],
   },
   {
     slug: 'six-wide-header-legacy',

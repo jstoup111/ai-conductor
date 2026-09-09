@@ -83,14 +83,11 @@ describe('parseCoherenceArtifact', () => {
     });
   });
 
-  it.each([
-    ['plan', { layer: 'plan' }],
-    ['architecture:adr-x#D2', { layer: 'architecture', decisionRef: 'adr-x#D2' }],
-  ])('accepts a seven-cell fail row with a %s correction', (correction, expectedCorrection) => {
+  it('accepts a seven-cell fail row with a plan correction', () => {
     expect(
       parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
 | --- | --- | --- | --- | --- | --- |
-| criterion | Given a widget | task:3 | fail | evidence | diff-local | ${correction} |
+| criterion | Given a widget | task:3 | fail | evidence | diff-local | plan |
 `),
     ).toEqual({
       ok: true,
@@ -102,10 +99,48 @@ describe('parseCoherenceArtifact', () => {
           verdict: 'fail',
           quote: 'evidence',
           disposition: 'diff-local',
-          correction: expectedCorrection,
+          correction: { layer: 'plan' },
         },
       ],
     });
+  });
+
+  it('accepts a seven-cell fail row with an architecture correction', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget | task:3 | fail | evidence | diff-local | architecture:adr-x#D2 |
+`),
+    ).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'criterion',
+          criterion: 'Given a widget',
+          citedIds: ['task:3'],
+          verdict: 'fail',
+          quote: 'evidence',
+          disposition: 'diff-local',
+          correction: { layer: 'architecture', decisionRef: 'adr-x#D2' },
+        },
+      ],
+    });
+  });
+
+  it('six-cell rows parse identically', () => {
+    const fixtures = coherenceRegressionCorpus.filter(
+      (fixture): fixture is typeof fixture & { sixCellCriterionRows: NonNullable<typeof fixture.sixCellCriterionRows> } =>
+        fixture.sixCellCriterionRows !== undefined,
+    );
+
+    expect(fixtures).not.toHaveLength(0);
+    expect(
+      fixtures.map((fixture) => {
+        const result = parseCoherenceArtifact(fixture.content);
+        if (!result.ok) throw new Error(`six-cell corpus fixture ${fixture.slug} did not parse`);
+        return result.rows.filter((row) => row.rowClass === 'criterion');
+      }),
+    ).toEqual(fixtures.map(({ sixCellCriterionRows }) => sixCellCriterionRows));
   });
 
   it.each([
