@@ -1,6 +1,6 @@
 // Covers: S1.1, S1.2, S1.3, S1.4, S1.6, S3.1, S3.4, S3.8, S3.9, task:8, task:12
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   AggregationTemporality,
@@ -16,6 +16,12 @@ import type { ConductorEvent } from '../../src/types/events.js';
 
 const buildExporters = vi.hoisted(() => vi.fn());
 vi.mock('../../src/engine/otel/transport.js', () => ({ buildExporters }));
+vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/ci-fix.js')>()),
+  defaultCiFixProbe: vi.fn(async () => ({ exitCode: 0, stdout: 'claude 1.0.0', stderr: '' })),
+}));
+
+import { runDaemonMode } from '../../src/daemon-cli.js';
 
 interface DaemonOtelScope {
   flush(): Promise<void>;
@@ -51,15 +57,6 @@ type WireInteractiveOtelMetrics = (
   },
   events: ConductorEventEmitter,
 ) => InteractiveOtelScope | null;
-
-interface DaemonTickSnapshot {
-  counts: Record<'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked', number>;
-  oldestAgeSeconds: Partial<Record<'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked', number>>;
-  slots: { busy: number; free: number };
-  inFlight: string[];
-  blocked: Record<'paused' | 'build_auth_missing' | 'gh_version' | 'episode_active', boolean>;
-  pollDurationMs: number;
-}
 
 const config = {
   otel: { exporter: 'otlp', endpoint: 'http://fake-collector:4318' },
@@ -328,60 +325,57 @@ describe('daemon-level metrics acceptance', () => {
   it('exports liveness, zero-valued backlog states, and free slots from a real idle daemon tick', async () => {
     const root = await mkdtemp(join(testTmpdir(), 'idle-daemon-metrics-'));
     roots.push(root);
-    const daemon = await createDaemonMeter(root);
-    const emissions: Array<Promise<void>> = [];
-    const onTick = (snapshot: DaemonTickSnapshot): void => {
-      emissions.push(emitUntyped(daemon.events, {
-        type: 'daemon_backlog_snapshot',
-        ...snapshot,
-      }));
-    };
-
-    await runDaemon({
-      discoverBacklog: async () => [],
-      runFeature: async () => {
-        throw new Error('idle acceptance fixture must not dispatch');
-      },
-      sleep: async () => {},
-      onTick,
-    } as DaemonDeps, {
-      concurrency: 3,
-      once: false,
-      idlePollMs: 0,
-      maxIdlePolls: 1,
+    await mkdir(join(root, '.ai-conductor'), { recursive: true });
+    await writeFile(join(root, '.ai-conductor', 'config.yml'), [
+      'daemon_concurrency: 3',
+      'otel:',
+      '  exporter: otlp',
+      '  endpoint: http://fake-collector:4318',
+      '  project_name: project-p',
+      '  worker_name: worker-w',
+      '',
+    ].join('\n'));
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    buildExporters.mockReturnValue({
+      spanExporter: new InMemorySpanExporter(),
+      metricExporter: exporter,
     });
-    await Promise.all(emissions);
-    const snapshotInvocations = daemon.listenerInvocations
-      .filter((type) => type === 'daemon_backlog_snapshot').length;
-    expect(snapshotInvocations).toBeGreaterThan(0);
-    await daemon.scope.stop();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
 
-    expect(pointValue(daemon.exporter, 'conductor.daemon.up', {
+    await runDaemonMode({
+      projectRoot: root,
+      concurrency: 3,
+      baseBranch: 'main',
+      ensureFresh: async () => {},
+      watch: false,
+      workSource: { discover: async () => [] },
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+    });
+
+    const daemonEvents = (await readFile(join(root, '.daemon', 'events.jsonl'), 'utf8'))
+      .trim().split('\n').filter(Boolean)
+      .map((line) => JSON.parse(line) as ConductorEvent);
+    expect(daemonEvents).toContainEqual(expect.objectContaining({
+      type: 'daemon_backlog_snapshot',
+      counts: { eligible: 0, waiting: 0, blocked: 0, gated: 0, parked: 0 },
+      slots: { busy: 0, free: 3 },
+      inFlight: [],
+    }));
+
+    expect(pointValue(exporter, 'conductor.daemon.up', {
       project: 'project-p', worker: 'worker-w',
     })).toBe(1);
     for (const state of ['eligible', 'waiting', 'blocked', 'gated', 'parked']) {
-      expect(pointValue(daemon.exporter, 'conductor.daemon.backlog', {
+      expect(pointValue(exporter, 'conductor.daemon.backlog', {
         project: 'project-p', worker: 'worker-w', state,
       }), `missing zero-valued backlog point for ${state}`).toBe(0);
     }
-    expect(pointValue(daemon.exporter, 'conductor.daemon.slots', {
+    expect(pointValue(exporter, 'conductor.daemon.slots', {
       project: 'project-p', worker: 'worker-w', state: 'busy',
     })).toBe(0);
-    expect(pointValue(daemon.exporter, 'conductor.daemon.slots', {
+    expect(pointValue(exporter, 'conductor.daemon.slots', {
       project: 'project-p', worker: 'worker-w', state: 'free',
     })).toBe(3);
-
-    await emitUntyped(daemon.events, {
-      type: 'daemon_backlog_snapshot',
-      counts: { eligible: 0, waiting: 0, blocked: 0, gated: 0, parked: 0 },
-      oldestAgeSeconds: {},
-      slots: { busy: 0, free: 3 },
-      inFlight: [],
-      blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
-      pollDurationMs: 0,
-    });
-    expect(daemon.listenerInvocations
-      .filter((type) => type === 'daemon_backlog_snapshot')).toHaveLength(snapshotInvocations);
   });
 
   it('exports live slots and one in-flight point per slug from a real busy daemon tick', async () => {
