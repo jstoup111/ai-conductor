@@ -51,6 +51,11 @@ function fakeGit(
       if (entry.match.every((tok, i) =>
         args[i] === tok
         || (tok === 'HEAD' && i > 0)
+        // Some base-branch fixtures describe the merge-base in terms of the
+        // symbolic review ref. Assembly resolves that label before issuing
+        // the command, so accept the fixture alias without weakening the
+        // production command's pinned-identity contract.
+        || (tok === 'origin/main' && args[i] === 'base-tip123')
         || (tok.endsWith('..HEAD') && args[i]?.startsWith(tok.slice(0, -4)))
         || (tok.startsWith('HEAD:') && args[i]?.endsWith(tok.slice(4)))
       )) {
