@@ -87,6 +87,64 @@ describe('corrected failing criterion rows', () => {
     expect(result.gaps.find((gap) => gap.gapId === gapId)?.detail).toContain(detail);
   });
 
+  it('emits indexed actionable gaps and renders each detail on one line', () => {
+    const indexedCriteria = [1, 2, 3, 4, 5].map(
+      (number) => `Story 1 happy: Given widget ${number}, when shipped, then it arrives`,
+    );
+    const indexedStories = `# Stories
+
+## Story 1: Widgets
+
+### Happy Path
+${[1, 2, 3, 4, 5].map((number) => `- Given widget ${number}, when shipped, then it arrives`).join('\n')}
+`;
+    const indexedPlan = `# Plan
+
+${[1, 2, 3, 4, 5].map((number) => `### Task ${number}: Ship widget ${number}
+**Done when:**
+- Evidence ${number}.`).join('\n\n')}
+`;
+    const parsed = parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+${indexedCriteria.map((criterion, index) => {
+  const number = index + 1;
+  const correction = number === 3 ? ' | plan' : number === 5 ? ' | architecture:adr-x#D2' : '';
+  const verdict = correction === '' ? 'covered' : 'fail';
+  return `| criterion | ${criterion} | task-${number} | ${verdict} | "Evidence ${number}." | diff-local${correction} |`;
+}).join('\n')}
+`);
+    if (!parsed.ok) throw new Error('expected indexed corrected criterion rows to parse');
+
+    const result = checkCriterionCoverage(parsed.rows, indexedStories, indexedPlan);
+    expect(result).toMatchObject({ ok: false, reason: 'criterion-gap' });
+    if (result.ok) return;
+
+    const planGap = result.gaps.find(({ gapId }) => gapId === 'criterion:cannot-deliver-plan:3');
+    const architectureGap = result.gaps.find(({ gapId }) => gapId === 'criterion:cannot-deliver-architecture:5');
+    expect(planGap).toEqual({
+      gapId: 'criterion:cannot-deliver-plan:3',
+      criterion: indexedCriteria[2],
+      detail: `criterion "${indexedCriteria[2]}" cannot be delivered by cited tasks task-3; quote: Evidence 3.; correction: plan`,
+    });
+    expect(architectureGap).toEqual({
+      gapId: 'criterion:cannot-deliver-architecture:5',
+      criterion: indexedCriteria[4],
+      detail: `criterion "${indexedCriteria[4]}" cannot be delivered by cited tasks task-5; quote: Evidence 5.; constraint: adr-x#D2`,
+    });
+
+    const report = renderGapReport([planGap, architectureGap].map((gap) => ({
+      layer: 'criterion',
+      gapId: gap!.gapId,
+      artifact: 'stories / plan',
+      item: gap!.detail,
+    })));
+    const reportLines = report.split('\n').filter((line) => line.startsWith('- '));
+    expect(reportLines).toEqual([
+      `- **${planGap!.gapId}** (stories / plan): "${planGap!.detail}"`,
+      `- **${architectureGap!.gapId}** (stories / plan): "${architectureGap!.detail}"`,
+    ]);
+  });
+
   it('preserves legacy verdict ids and suppresses cannot-deliver for an unresolvable task', () => {
     const legacy = checkCriterionCoverage(
       correctedRows('plan').map((row) => row.rowClass === 'criterion' ? { ...row, correction: undefined } : row),
