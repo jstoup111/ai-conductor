@@ -17,6 +17,7 @@ import { writeFile, rename, mkdir } from 'node:fs/promises';
 import {
   writeHaltMarker,
   readHaltClass,
+  readHaltSidecarClassification,
   HALT_MARKER,
   HALT_CLASS_MARKER,
   PLAN_GAP_HALT_CLASS,
@@ -284,6 +285,35 @@ describe('readHaltClass', () => {
     await (actual.writeFile as any)(join(root, HALT_CLASS_MARKER), 'garbage-value', 'utf-8');
 
     await expect(readHaltClass(root)).resolves.toBe('unclassified');
+  });
+});
+
+describe('readHaltSidecarClassification', () => {
+  let root: string;
+
+  afterEach(async () => {
+    if (root) await rm(root, { recursive: true, force: true });
+  });
+
+  it('fails closed for absent and unreadable sidecars while preserving stamped classifications', async () => {
+    root = await mkdtemp(join(tmpdir(), 'halt-sidecar-'));
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    await actual.writeFile(join(root, HALT_MARKER), 'old halt', 'utf8');
+    await expect(readHaltSidecarClassification(root)).resolves.toBe('unclassified');
+    await actual.writeFile(join(root, HALT_CLASS_MARKER), 'kickback-cap', 'utf8');
+    await expect(readHaltSidecarClassification(root)).resolves.toBe('kickback-cap');
+    await actual.writeFile(join(root, HALT_CLASS_MARKER), 'mechanical', 'utf8');
+    await expect(readHaltSidecarClassification(root)).resolves.toBe('mechanical');
+    await actual.writeFile(join(root, HALT_CLASS_MARKER), 'legacy', 'utf8');
+    await expect(readHaltSidecarClassification(root)).resolves.toBe('legacy');
+    await actual.writeFile(join(root, HALT_CLASS_MARKER), 'over-scope', 'utf8');
+    await expect(readHaltSidecarClassification(root)).resolves.toBe('over-scope');
+
+    const fs = await import('node:fs/promises');
+    const unreadable = vi.spyOn(fs, 'readFile').mockRejectedValueOnce(new Error('permission denied'));
+    await expect(readHaltSidecarClassification(root)).resolves.toBe('unclassified');
+    unreadable.mockRestore();
   });
 });
 

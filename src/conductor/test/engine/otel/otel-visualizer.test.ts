@@ -25,6 +25,13 @@ import {
   type ResourceMetrics,
 } from '@opentelemetry/sdk-metrics';
 
+/** Retain exported snapshots so lifecycle assertions can inspect them after shutdown. */
+class CapturingSpanExporter extends InMemorySpanExporter {
+  override shutdown(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
 describe('OtelVisualizer — T9: provider/processor setup', () => {
   let tempDir: string;
   let pipelineDir: string;
@@ -35,7 +42,7 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'otel-vis-t9-'));
     pipelineDir = join(tempDir, '.pipeline');
-    spanExporter = new InMemorySpanExporter();
+    spanExporter = new CapturingSpanExporter();
     metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     emitter = new ConductorEventEmitter();
   });
@@ -240,7 +247,7 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
     await expect(vis.stop()).resolves.toBeUndefined();
   });
 
-  it('exporter receives spans after stop() flushes the BatchSpanProcessor', async () => {
+  it('exports spans and shuts down the tracer exporter when stop completes', async () => {
     const resolved = resolveOtelConfig(
       { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
       pipelineDir,
@@ -256,10 +263,10 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
     await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
     await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
     await emitter.emit({ type: 'feature_complete', featureDesc: 'test' });
-    // Before stop: BatchSpanProcessor may not have exported yet
+    const shutdown = vi.spyOn(spanExporter, 'shutdown').mockResolvedValue();
     await vis.stop();
-    // After stop + forceFlush: spans must be in the exporter
     expect(spanExporter.getFinishedSpans().length).toBeGreaterThan(0);
+    expect(shutdown).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -273,7 +280,7 @@ describe('Task 5: visualizer identity wiring', () => {
   beforeEach(async () => {
     identityTempDir = await mkdtemp(join(tmpdir(), 'otel-vis-identity-'));
     identityPipelineDir = join(identityTempDir, '.pipeline');
-    identitySpanExporter = new InMemorySpanExporter();
+    identitySpanExporter = new CapturingSpanExporter();
     identityMetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     identityEmitter = new ConductorEventEmitter();
   });
@@ -323,7 +330,7 @@ describe('Task 5: visualizer identity wiring', () => {
     };
   }
 
-  it('derives the metric project basename and shares the run resource identity with spans', async () => {
+  it('derives a worker-stable metric identity while traces remain feature-scoped', async () => {
     const exported = await exportStepMetric('nested-feature');
 
     expect({
@@ -331,9 +338,9 @@ describe('Task 5: visualizer identity wiring', () => {
       spanInstanceId: exported.span.resource.attributes['service.instance.id'],
       metricInstanceId: exported.metricResource.attributes['service.instance.id'],
     }).toEqual({
-      dataPoint: { step: 'build', project: 'nested-project', feature: 'nested-feature' },
+      dataPoint: { step: 'build', project: 'nested-project', worker: 'unknown', feature: 'nested-feature' },
       spanInstanceId: 'nested-project/nested-feature',
-      metricInstanceId: 'nested-project/nested-feature',
+      metricInstanceId: 'nested-project/unknown',
     });
   });
 
@@ -344,9 +351,9 @@ describe('Task 5: visualizer identity wiring', () => {
     // a run-varying attribute here mints one series per run — the defect the
     // 2026-08-28 as-built review caught after `service.instance.id` was re-keyed.
     expect(Object.keys(exported.metricResource.attributes).sort()).toEqual([
-      'conductor.branch',
-      'conductor.feature',
       'conductor.project',
+      'conductor.worker',
+      'host.name',
       'service.instance.id',
       'service.name',
     ]);
@@ -360,6 +367,7 @@ describe('Task 5: visualizer identity wiring', () => {
     expect(exported.dataPoint.attributes).toEqual({
       step: 'build',
       project: 'nested-project',
+      worker: 'unknown',
       feature: 'unknown',
     });
   });
@@ -369,7 +377,7 @@ describe('Task 5: visualizer identity wiring', () => {
     const secondProject = join(identityTempDir, 'tenant-b', 'shared');
     const first = await exportStepMetric('feature-a', firstProject, ' tenant-a ');
     identityMetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-    identitySpanExporter = new InMemorySpanExporter();
+    identitySpanExporter = new CapturingSpanExporter();
     const second = await exportStepMetric('feature-b', secondProject, 'tenant-b');
 
     expect({
@@ -396,7 +404,7 @@ describe('Task 5: feature cost snapshot routing', () => {
   beforeEach(async () => {
     task5TempDir = await mkdtemp(join(tmpdir(), 'otel-vis-feature-cost-'));
     task5PipelineDir = join(task5TempDir, '.pipeline');
-    task5SpanExporter = new InMemorySpanExporter();
+    task5SpanExporter = new CapturingSpanExporter();
     task5MetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     task5Emitter = new ConductorEventEmitter();
   });
@@ -444,12 +452,12 @@ describe('Task 5: feature cost snapshot routing', () => {
 
     expect(metric(task5MetricExporter, 'conductor.feature.cost')?.dataPoints).toContainEqual(
       expect.objectContaining({ value: 3.5, attributes: {
-        project: 'task-5-project', feature: 'task-5-feature', cost_complete: true,
+        project: 'task-5-project', worker: 'unknown', feature: 'task-5-feature', cost_complete: true,
       } }),
     );
     expect(metric(task5MetricExporter, 'conductor.feature.step.cost')?.dataPoints).toContainEqual(
       expect.objectContaining({ value: 2, attributes: {
-        project: 'task-5-project', feature: 'task-5-feature', step: 'build_review', model: 'm2', source: 'rate-card',
+        project: 'task-5-project', worker: 'unknown', feature: 'task-5-feature', step: 'build_review', model: 'm2', source: 'rate-card',
       } }),
     );
     expect(metric(task5MetricExporter, 'conductor.feature.step.tokens')?.dataPoints).toEqual(
@@ -497,7 +505,7 @@ describe('Task 5: feature cost snapshot routing', () => {
 
     expect(metric(secondExporter, 'conductor.feature.cost')?.dataPoints).toContainEqual(
       expect.objectContaining({ value: 3.5, attributes: {
-        project: 'task-5-project', feature: 'task-5-feature', cost_complete: true,
+        project: 'task-5-project', worker: 'unknown', feature: 'task-5-feature', cost_complete: true,
       } }),
     );
   });
@@ -511,7 +519,7 @@ describe('Task 5: feature cost snapshot routing', () => {
 
     expect(metric(task5MetricExporter, 'conductor.feature.cost')?.dataPoints).toContainEqual(
       expect.objectContaining({ value: 0, attributes: {
-        project: 'task-5-project', feature: 'task-5-feature', cost_complete: false,
+        project: 'task-5-project', worker: 'unknown', feature: 'task-5-feature', cost_complete: false,
       } }),
     );
     expect(metric(task5MetricExporter, 'conductor.feature.step.cost')).toBeUndefined();
@@ -531,7 +539,7 @@ describe('Task 6: stop() shuts down the meter provider after its final flush', (
     vi.useFakeTimers();
     task6TempDir = await mkdtemp(join(tmpdir(), 'otel-vis-meter-stop-'));
     task6PipelineDir = join(task6TempDir, '.pipeline');
-    task6SpanExporter = new InMemorySpanExporter();
+    task6SpanExporter = new CapturingSpanExporter();
     task6MetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     task6Emitter = new ConductorEventEmitter();
   });
@@ -598,14 +606,20 @@ describe('Task 6: stop() shuts down the meter provider after its final flush', (
     expect(exportSpy).toHaveBeenCalledTimes(exportsAtStop);
   });
 
-  it('keeps force-closed spans readable after stop()', async () => {
+  it('exports force-closed spans before shutting down the tracer exporter', async () => {
     const visualizer = makeTask6Visualizer();
+    const exportSpans = vi.spyOn(task6SpanExporter, 'export');
+    const shutdownTracer = vi.spyOn(task6SpanExporter, 'shutdown').mockResolvedValue();
     await task6Emitter.emit({ type: 'step_started', step: 'build', index: 0 });
 
     await stopWithSdkTimers(visualizer);
 
     expect(task6SpanExporter.getFinishedSpans().map((span) => span.name)).toEqual(
       expect.arrayContaining(['build', 'conductor.run']),
+    );
+    expect(shutdownTracer).toHaveBeenCalledTimes(1);
+    expect(exportSpans.mock.invocationCallOrder[0]).toBeLessThan(
+      shutdownTracer.mock.invocationCallOrder[0]!,
     );
   });
 
@@ -642,6 +656,7 @@ describe('Task 7: stop stays bounded and sequential runs do not interleave', () 
     metricExporter: PushMetricExporter,
     exportTimeoutMillis = 100,
     onWarning?: (message: string) => void,
+    spanExporter: SpanExporter = new CapturingSpanExporter(),
   ): OtelVisualizer {
     const resolved = resolveOtelConfig(
       { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
@@ -651,7 +666,7 @@ describe('Task 7: stop stays bounded and sequential runs do not interleave', () 
       runId: 'task-7-run',
       feature: 'task-7-feature',
       project: 'task-7-project',
-      spanExporter: new InMemorySpanExporter(),
+      spanExporter,
       metricExporter,
       exportTimeoutMillis,
       onWarning,
@@ -684,12 +699,37 @@ describe('Task 7: stop stays bounded and sequential runs do not interleave', () 
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
+  it('bounds a hanging tracer shutdown and still shuts down the meter', async () => {
+    const warn = vi.fn();
+    const tracerShutdown = vi.fn(() => new Promise<void>(() => {}));
+    const spanExporter: SpanExporter = {
+      export(_spans, callback): void { callback({ code: 0 }); },
+      shutdown: tracerShutdown,
+    };
+    const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const meterShutdown = vi.spyOn(metricExporter, 'shutdown');
+    const timeoutMillis = 100;
+    const visualizer = makeVisualizer(metricExporter, timeoutMillis, warn, spanExporter);
+
+    const stopped = visualizer.stop();
+    await vi.advanceTimersByTimeAsync(timeoutMillis + 25);
+
+    await expect(stopped).resolves.toBeUndefined();
+    expect(tracerShutdown).toHaveBeenCalledTimes(1);
+    expect(meterShutdown).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      `[otel] tracer shutdown timed out after ${timeoutMillis}ms`,
+    );
+  });
+
   it('returns the in-flight stop promise when a signal arrives during stop and shuts down once', async () => {
     const shutdown = vi.fn(async (): Promise<void> => {});
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     exporter.shutdown = shutdown;
     const processOn = vi.spyOn(process, 'on');
-    const visualizer = makeVisualizer(exporter);
+    const spanExporter = new CapturingSpanExporter();
+    const tracerShutdown = vi.spyOn(spanExporter, 'shutdown').mockResolvedValue();
+    const visualizer = makeVisualizer(exporter, 100, undefined, spanExporter);
 
     const first = visualizer.stop();
     const sigintHandler = processOn.mock.calls.find(([signal]) => signal === 'SIGINT')?.[1];
@@ -701,6 +741,7 @@ describe('Task 7: stop stays bounded and sequential runs do not interleave', () 
     await vi.advanceTimersByTimeAsync(125);
     await first;
     expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(tracerShutdown).toHaveBeenCalledTimes(1);
   });
 
   it('is a no-op when stop is called before start', async () => {
@@ -709,7 +750,7 @@ describe('Task 7: stop stays bounded and sequential runs do not interleave', () 
       task7PipelineDir,
     );
     const visualizer = new OtelVisualizer(resolved, {
-      spanExporter: new InMemorySpanExporter(),
+      spanExporter: new CapturingSpanExporter(),
       metricExporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
     });
 
@@ -888,7 +929,7 @@ describe('Task 19: pipeline_closeout export', () => {
   beforeEach(async () => {
     closeoutTempDir = await mkdtemp(join(tmpdir(), 'otel-vis-closeout-'));
     closeoutPipelineDir = join(closeoutTempDir, '.pipeline');
-    closeoutSpanExporter = new InMemorySpanExporter();
+    closeoutSpanExporter = new CapturingSpanExporter();
     closeoutMetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     closeoutEmitter = new ConductorEventEmitter();
   });
@@ -953,7 +994,7 @@ describe('T21: flush on exit — idempotent stop() and signal handlers', () => {
   beforeEach(async () => {
     t21TempDir = await mkdtemp(join(tmpdir(), 'otel-vis-t21-'));
     t21PipelineDir = join(t21TempDir, '.pipeline');
-    t21SpanExporter = new InMemorySpanExporter();
+    t21SpanExporter = new CapturingSpanExporter();
     t21MetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     t21Emitter = new ConductorEventEmitter();
   });

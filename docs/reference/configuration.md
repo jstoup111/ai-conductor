@@ -695,14 +695,21 @@ the trace Resource identifies the feature, project, durable dispatch run id, bra
 engine version. For daemon dispatches, the branch is the dispatched feature worktree's branch rather
 than the primary checkout's branch. Branch and engine-version identity use a non-empty resolved value;
 an explicitly attempted but unavailable value is `unresolved`, while a caller that did not supply the
-property is `not-supplied`. The metric Resource
-keeps only feature-stable identity: `service.name`, `service.instance.id` (`<project>/<feature>`),
-`conductor.feature`, `conductor.project`, and `conductor.branch`. Metric data points also carry
-`project` and `feature`; neither a run id nor the engine version is attached to metric Resources, so
-a new dispatch does not create a new metric series for the same feature.
+property is `not-supplied`. The metric Resource uses daemon-stable identity: `service.name`,
+`service.instance.id` (`<project>/<worker>`), `conductor.project`, `conductor.worker`, and
+`host.name`. It has no feature, branch, run-id, or engine-version attributes. Metric data points
+carry `project` and `worker`; feature-scoped instruments also carry `feature`. A new dispatch
+therefore does not create a new metric Resource series for the same daemon worker.
 
 The `conductor.step.duration` and `conductor.pipeline.closeout.duration` histograms use explicit
 duration buckets through 8 hours; quantiles saturate above that largest finite bucket boundary.
+
+Daemon exports include backlog count and oldest state-residence age by `state`, busy and free slots,
+in-flight features, liveness, active dispatch blockers, discovery duration, and build stalls by
+`reason`. `conductor.daemon.inflight` is the only `conductor.daemon.*` instrument with a `feature`
+attribute. The other daemon instruments—including `conductor.daemon.stalls`—carry only daemon-stable
+`project` and `worker` identity plus their instrument-specific attributes. Parked features contribute
+to both `conductor.daemon.backlog{state=parked}` and its oldest-age series.
 
 When a run opens a `conductor.run` root span, its terminal export carries
 `conductor.run.outcome`: `complete` after `feature_complete`, `halted` after `loop_halt`, or
@@ -756,6 +763,7 @@ each sample already represents the whole feature total at that moment.
 | `otel.protocol` | string | No | `http/protobuf`, `grpc` per the type | passed through unchecked; omitted when falsy |
 | `otel.headers` | mapping | No; non-empty mappings only with `exporter: otlp` and HTTP/protobuf | header name to `{ env: <non-empty variable name> }` | absent; no headers are sent |
 | `otel.project_name` | string | No | any non-blank name | project root basename |
+| `otel.worker_name` | string | No | any non-blank name | OS hostname |
 
 The failure mode is silent-disable-with-an-error-string, not a halt. An unknown exporter yields
 `{ enabled: false, error: "Unknown otel exporter '<x>'. Valid options: otlp, file." }`; `otlp` without an
@@ -794,6 +802,9 @@ export-failure handling remains in effect.
 the basename of the absolute project root for metric data-point identity; it does not affect
 `service.name` (`ai-conductor`) or the Resource `conductor.project` attribute. It is the project
 half of `service.instance.id` as well.
+
+`otel.worker_name` is trimmed before use. An absent or blank value falls back to the OS hostname,
+then `unknown` if hostname resolution fails. It is the worker half of metric `service.instance.id`.
 
 > **Known limitation.** `otel.protocol` is passed through entirely unvalidated
 > (`otel-config.ts:60`) even though the type restricts it to `'http/protobuf' | 'grpc'`

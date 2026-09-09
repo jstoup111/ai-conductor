@@ -101,7 +101,7 @@ import { registerCliBuiltins } from './engine/cli-builtins.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
-import { wireOtelVisualizer } from './engine/otel/wire.js';
+import { wireInteractiveOtelMetrics, wireOtelVisualizer } from './engine/otel/wire.js';
 import type { OtelVisualizerStartContext } from './engine/otel/wire.js';
 import { resolveEngineVersion } from './engine/shipped-record.js';
 import {
@@ -291,10 +291,15 @@ export function buildInteractiveVisualizers(
   );
   const otel = wireOtelVisualizer(
     config,
+    { ...context.startContext, pipelineDir: context.pipelineDir, metrics: false },
+    context.emitter,
+  );
+  const metrics = wireInteractiveOtelMetrics(
+    config,
     { ...context.startContext, pipelineDir: context.pipelineDir },
     context.emitter,
   );
-  return otel ? [...started, otel] : started;
+  return [...started, ...(otel ? [otel] : []), ...(metrics ? [metrics] : [])];
 }
 
 /** Invoke a visualizer factory with its real context and refuse malformed products. */

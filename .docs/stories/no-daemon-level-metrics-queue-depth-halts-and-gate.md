@@ -39,7 +39,7 @@ As a telemetry consumer running several projects and possibly several workers pe
 #### Happy Path
 - Given project P and a worker whose resolved name is W, when the daemon exports metrics, then the metric Resource carries service.name=ai-conductor, service.instance.id=P/W, conductor.project, conductor.worker=W, and host.name equal to the OS hostname
 - Given a per-feature instrument such as conductor.step.duration for feature S, when it is exported, then its data point carries project=P, worker=W, and feature=S as attributes
-- Given a daemon-level instrument such as conductor.daemon.backlog, when it is exported, then its data point carries project=P and worker=W and no feature attribute
+- Given a daemon-level instrument other than conductor.daemon.inflight, such as conductor.daemon.backlog, when it is exported, then its data point carries project=P and worker=W and no feature attribute; conductor.daemon.inflight is feature-scoped and carries the in-flight slug as feature
 - Given otel.worker_name is set to a non-blank value in .ai-conductor/config.yml, when the daemon exports, then W is that trimmed value; given it is absent or blank, then W is the OS hostname
 
 #### Negative Paths
@@ -61,7 +61,7 @@ As an operator, I want to see whether the backlog is growing, draining, or stuck
 #### Happy Path
 - Given a running daemon with an empty backlog and no dispatch in flight, when a metrics export occurs, then conductor.daemon.up reads 1 and conductor.daemon.backlog{state} has a data point for each of eligible, waiting, blocked, gated, and parked (each 0)
 - Given discovery finds 3 eligible, 2 waiting, 1 blocked, 4 gated specs and 2 operator-parked features, when the tick's snapshot is exported, then conductor.daemon.backlog reads 3, 2, 1, 4, 2 for those states respectively
-- Given the oldest eligible spec became eligible 36 hours ago, when the snapshot is exported, then conductor.daemon.backlog.oldest_age{state=eligible} reads approximately 129600 seconds
+- Given the oldest eligible spec entered the eligible state 36 hours ago, when the snapshot is exported, then conductor.daemon.backlog.oldest_age{state=eligible} reads approximately 129600 seconds, regardless of when that spec was first discovered in another state
 - Given daemon concurrency is 3 and 2 features are in flight, when the snapshot is exported, then conductor.daemon.slots{state=busy} reads 2, conductor.daemon.slots{state=free} reads 1, and conductor.daemon.inflight{feature} reads 1 for each of the two in-flight slugs
 - Given a discovery pass took 840 ms, when the snapshot is exported, then conductor.daemon.poll.duration has one observation of 840 ms
 
@@ -71,6 +71,7 @@ As an operator, I want to see whether the backlog is growing, draining, or stuck
 - Given the daemon is hard-killed, when the backend's next scrape interval passes, then conductor.daemon.up stops being reported (the series goes stale) rather than continuing to read 1
 - Given a backlog state has no members, when the snapshot is exported, then that state's data point reads 0 rather than being absent, so dashboards never show a gap for an empty state
 - Given the backlog contains an eligible spec whose eligibility timestamp cannot be determined, when oldest_age is computed, then that spec is excluded from the age and the count still includes it
+- Given a discovered feature changes backlog state, when the next snapshot is computed, then its age starts from that state transition rather than its first-ever discovery; repeated discovery in the same state preserves the existing state-entry timestamp
 
 ### Done When
 - [ ] An acceptance test starts the daemon loop with OTel enabled, an empty backlog, and no dispatch, and asserts conductor.daemon.up, all five conductor.daemon.backlog states, and both conductor.daemon.slots states are exported
@@ -90,8 +91,8 @@ As an operator, I want feature starts, halts (by class and step), and ships as c
 - Given feature S ships, when the shipped record is landed, then conductor.feature.shipped{feature=S} increments by 1
 
 #### Negative Paths
-- Given a halt whose HALT.class sidecar is missing, unreadable, or holds an unrecognized value, when it is recorded, then haltClass carries the existing disposition value unclassified, never an invented label and never an empty string
-- Given a halt from a build older than the class sidecar, when it is recorded, then haltClass carries the existing disposition value legacy
+- Given a halt whose HALT.class sidecar is absent, unreadable, or holds an unrecognized value, when it is recorded, then haltClass carries the existing disposition value unclassified, never an invented label and never an empty string
+- Given the one-time halt-classification migration stamps a pre-boundary halt as legacy, when it is recorded, then haltClass carries the explicit disposition value legacy
 - Given a halt whose sidecar holds kickback-cap or over-scope (the two operator-owned classes the conductor writes beyond the base HaltClass union), when it is recorded, then haltClass carries that value verbatim rather than folding it to unclassified, so operator-attention halts are never miscounted as unknown
 - Given a feature is operator-parked, when metrics are exported, then it appears in conductor.daemon.backlog{state=parked} and increments neither conductor.feature.halts nor conductor.feature.shipped
 - Given the daemon resumes a feature whose worktree already exists and which was not halted, when the dispatch begins, then kind is resume, not initial and not rekick
@@ -102,16 +103,18 @@ As an operator, I want feature starts, halts (by class and step), and ships as c
 - [ ] A test covers every sidecar classification value on conductor.feature.halts: needs-human, mechanical, protected-artifact, plan-gap, kickback-cap, over-scope, legacy, and unclassified — a closed set of eight, no free text
 - [ ] A test asserts a parked feature increments neither halts nor shipped and appears in backlog{state=parked}
 
-## Story 5: Gate verdicts and kickbacks are counted per gate and per feature
+## Story 5: Gate verdicts and kickbacks are counted per gate and feature; stalls are daemon-scoped
 
-As an operator deciding whether a gate is worth keeping, I want pass and fail counts per gate and kickback routing counts over time so that a gate's behavior can be compared across weeks from reported numbers.
+As an operator deciding whether a gate is worth keeping, I want pass and fail counts per gate and
+kickback routing counts over time, plus daemon-wide stall counts by reason, so that gate behavior
+and worker health can be compared across weeks from reported numbers.
 
 ### Acceptance Criteria
 
 #### Happy Path
 - Given gate build_review passes for feature S, when the verdict event is emitted, then conductor.gate.verdicts{feature=S, step=build_review, outcome=pass} increments by 1
 - Given gate build_review fails for feature S and routes work back to build, when the events are emitted, then conductor.gate.verdicts{feature=S, step=build_review, outcome=fail} increments by 1 and conductor.gate.kickbacks{feature=S, from=build_review, to=build} increments by 1
-- Given a build stalls with reason no_task_progress, when the stall event is emitted, then conductor.daemon.stalls{feature=S, reason=no_task_progress} increments by 1
+- Given a build stalls with reason no_task_progress, when the stall event is emitted, then conductor.daemon.stalls{reason=no_task_progress} increments by 1 and carries no feature attribute
 
 #### Negative Paths
 - Given a gate verdict is emitted on the feature bus during a daemon dispatch, when it reaches the daemon-level listener, then it is counted exactly once (the forwarded copy is counted, the original is not double-counted)
@@ -119,7 +122,7 @@ As an operator deciding whether a gate is worth keeping, I want pass and fail co
 - Given the same gate fails three times in one dispatch, when metrics are exported, then verdicts{outcome=fail} reads 3, not 1
 
 ### Done When
-- [ ] A test emits gate_verdict pass and fail plus a kickback and a build_stall through the daemon path and asserts each named instrument has exactly one data point with the expected attributes and value
+- [ ] A test emits gate_verdict pass and fail plus a kickback and a build_stall through the daemon path and asserts each named instrument has exactly one data point with the expected attributes and value, including no feature attribute on conductor.daemon.stalls
 - [ ] A test proves a forwarded gate_verdict is counted once
 
 ## Story 6: End-to-end feature duration is observable as wall-clock and active time

@@ -64,9 +64,10 @@ import {
 } from './engine/finish-publication-production.js';
 import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-labels.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
-import { isForwardedFromFeature, startFeatureEventPersistence } from './engine/event-persister.js';
+import { isForwardedFromFeature, startDaemonEventPersistence, startFeatureEventPersistence } from './engine/event-persister.js';
 import { renderedEventTypes } from './engine/event-sinks.js';
-import { wireOtelVisualizer } from './engine/otel/wire.js';
+import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
+import { resolveOtelConfig, resolveWorkerName } from './engine/otel/otel-config.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { LiveBoundaryCoordinator } from './engine/self-host/live-boundary-coordinator.js';
 import { loadMergedConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
@@ -1076,6 +1077,16 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // One daemon-wide forwarding bus keeps rendering global. Each feature owns a
   // local persistence bus plus provider runtime/session state; rate limits remain shared.
   const events = new ConductorEventEmitter();
+  // Both daemon-only occurrences and forwarded feature events share one bus;
+  // the sibling ledger deliberately persists only daemon-origin copies.
+  const daemonEventPersistence = startDaemonEventPersistence(projectRoot, events, log);
+  const daemonOtel = wireDaemonOtel(config ?? {}, {
+    mainRoot: projectRoot,
+    project: projectRoot,
+    projectName: basename(projectRoot),
+    workerName: resolveWorkerName(resolveOtelConfig(config ?? {}, join(projectRoot, '.pipeline'))),
+    rootEvents: events,
+  });
   const rateLimitEpisode = createRateLimitEpisode();
   // Task 20: track which parks were episode-caused so the episode-end sweep
   // (runDaemon's active→inactive transition hook) can recover exactly those.
@@ -1164,7 +1175,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   };
   const beginFeatureRun = async (worktree: FeatureWorktree, item: BacklogItem) => {
     const sessionId = uuidv4();
-    const persistence = startFeatureEventPersistence(worktree.path, events);
+    const persistence = startFeatureEventPersistence(worktree.path, events, item.slug);
     const featureEvents = persistence.events;
     const pipelineDir = join(worktree.path, '.pipeline');
     const persistedSessionId = await readFile(join(pipelineDir, 'conduct-session-id'), 'utf8')
@@ -1176,6 +1187,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       project: projectRoot,
       branch: worktree.branch,
       engineVersion: resolveEngineVersion(__dirname),
+      metrics: false,
     }, featureEvents);
     const featureLog = featureLogFor(item.slug);
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
@@ -1186,6 +1198,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       if (stopPromise) return stopPromise;
       stopPromise = (async () => {
         await visualizer?.stop();
+        await daemonOtel?.flush();
         for (const type of renderableEvents) featureEvents.off(type, renderEvent);
         persistence.stop();
       })();
@@ -1193,6 +1206,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     };
     return {
       ...persistence,
+      rootEvents: events,
       sessionId,
       visualizer,
       providerExecution: createProviderExecution(featureEvents, featureLog),
@@ -1882,6 +1896,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         episodeHaltTracker.onHaltWritten(slug, episodeCaused),
       sweepEpisodeHalts: (isParkedDep) =>
         sweepEpisodeHalts(episodeHaltTracker, worktreeBase, log, isParkedDep),
+      // Keep daemon-level observations on the existing root event spine.  The
+      // loop owns scheduling state; this adapter is deliberately only the
+      // synchronous projection from that state to its typed occurrence.
+      onTick: (snapshot) => {
+        void events.emit({ type: 'daemon_backlog_snapshot', ...snapshot });
+      },
+      getDiscoverySnapshot: async (parkedSlugs) => workSource.snapshot?.(parkedSlugs),
       runFeature,
       onExecutorStarted: () => {
         activeExecutorCount += 1;
@@ -2461,6 +2482,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   );
 
   subscriber.stop();
+  await daemonOtel?.stop();
+  daemonEventPersistence.stop();
   // A finite daemon invocation (including test/CLI bounded runs) has no
   // remaining work for the process-level signal handler to coordinate.
   // Leaving it installed makes later SIGTERM delivery invoke stale shutdown

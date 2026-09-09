@@ -159,7 +159,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
       // Idempotent create/reconcile via the shared worktree mechanism (parity with
       // the engineer). The base ref is resolved lazily — only when a fresh branch is
       // cut — so the reuse/attach paths issue no extra git call.
-      const { path: p, branch: b } = await ensureWorktree({
+      const { path: p, branch: b, reconcile } = await ensureWorktree({
         root,
         path,
         branch,
@@ -175,7 +175,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
         },
         log: cfg.log,
       });
-      return { path: p, branch: b };
+      return { path: p, branch: b, wasExisting: reconcile !== 'created' };
     }),
 
     // Write WORKTREE_NAMESPACE into the worktree .env and run the project's

@@ -54,6 +54,10 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   AuditedEventType,
   'friction-mapped' | 'not-audited-by-design'
 > = {
+  daemon_backlog_snapshot: 'not-audited-by-design',
+  feature_dispatch_started: 'not-audited-by-design',
+  feature_dispatch_ended: 'not-audited-by-design',
+  feature_shipped: 'not-audited-by-design',
   project_setup: 'not-audited-by-design',
   setup_repair: 'not-audited-by-design',
   coverage_binding_judged: 'not-audited-by-design',
@@ -189,6 +193,18 @@ const EVENT_TYPE_CLASSIFICATION: Record<
 
 /** One minimally-valid fixture per `ConductorEvent` member, keyed by type. */
 const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, { type: K }> } = {
+  daemon_backlog_snapshot: {
+    type: 'daemon_backlog_snapshot',
+    counts: { eligible: 0, waiting: 0, blocked: 0, gated: 0, parked: 0 },
+    oldestAgeSeconds: {},
+    slots: { busy: 0, free: 1 },
+    inFlight: [],
+    blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
+    pollDurationMs: 1,
+  },
+  feature_dispatch_started: { type: 'feature_dispatch_started', slug: 'feature', kind: 'initial' },
+  feature_dispatch_ended: { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete' },
+  feature_shipped: { type: 'feature_shipped', slug: 'feature', active: { state: 'unavailable' } },
   project_setup: { type: 'project_setup', ran: false, reason: 'marker-valid' },
   setup_repair: {
     type: 'setup_repair',

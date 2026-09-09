@@ -7,7 +7,11 @@ export interface SinkDeclaration {
   otel: boolean;
 }
 
-export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
+export const EVENT_SINKS = {
+  daemon_backlog_snapshot: { render: false, persist: true, audit: false, otel: true },
+  feature_dispatch_started: { render: false, persist: true, audit: false, otel: true },
+  feature_dispatch_ended: { render: false, persist: true, audit: false, otel: true },
+  feature_shipped: { render: false, persist: true, audit: false, otel: true },
   operator_rewind: { render: true, persist: true, audit: true, otel: false },
   setup_repair: { render: true, persist: true, audit: false, otel: false },
   project_setup: { render: true, persist: true, audit: false, otel: false },
@@ -141,7 +145,11 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   ci_failed: { render: true, persist: false, audit: false, otel: false },
   attribution_divergence: { render: false, persist: true, audit: false, otel: false },
   acceptance_red: { render: false, persist: true, audit: false, otel: false },
-};
+} satisfies Record<ConductorEvent['type'], SinkDeclaration>;
+
+export type OtelEventType = {
+  [Type in keyof typeof EVENT_SINKS]: (typeof EVENT_SINKS)[Type]['otel'] extends true ? Type : never;
+}[keyof typeof EVENT_SINKS];
 
 function eventTypesFor(sink: keyof SinkDeclaration): ConductorEvent['type'][] {
   return (Object.keys(EVENT_SINKS) as ConductorEvent['type'][])
@@ -160,6 +168,6 @@ export function renderedEventTypes(): ConductorEvent['type'][] {
   return eventTypesFor('render');
 }
 
-export function otelEventTypes(): ConductorEvent['type'][] {
-  return eventTypesFor('otel');
+export function otelEventTypes(): OtelEventType[] {
+  return eventTypesFor('otel') as OtelEventType[];
 }

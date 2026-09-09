@@ -213,6 +213,8 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
       'protected-artifact': 'retain',
       unclassified: 'retain',
       mechanical: 'retry',
+      'kickback-cap': 'retry',
+      'over-scope': 'retry',
       legacy: 'retry',
     } satisfies Record<HaltDisposition, 'retain' | 'retry'>;
 

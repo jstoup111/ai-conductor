@@ -27,146 +27,140 @@ export const DURATION_BUCKET_BOUNDARIES_MS = [
 ];
 
 export class MetricsRecorder {
-  private readonly durationHistogram: Histogram;
-  private readonly retriesCounter: Counter;
-  private readonly dispatchesCounter: Counter;
-  private readonly featureCostGauge: Gauge;
-  private readonly featureStepCostGauge: Gauge;
-  private readonly featureStepTokensGauge: Gauge;
-  private readonly closeoutDurationHistogram: Histogram;
-  private readonly runOutcomesCounter: Counter;
+  private readonly instruments: MetricInstruments;
 
   constructor(
     meter: Meter,
-    private readonly identityAttrs: { project: string; feature: string } = {
+    private readonly identityAttrs: { project: string; worker: string; feature?: string } = {
       project: 'unknown',
-      feature: 'unknown',
+      worker: 'unknown',
     },
+    instruments?: MetricInstruments,
   ) {
-    this.durationHistogram = meter.createHistogram('conductor.step.duration', {
-      description: 'Duration of conductor steps in milliseconds; quantiles saturate above 8 h (largest finite bucket boundary)',
-      unit: 'ms',
-      advice: { explicitBucketBoundaries: DURATION_BUCKET_BOUNDARIES_MS },
-    });
-    this.retriesCounter = meter.createCounter('conductor.step.retries', {
-      description: 'Number of retries per conductor step',
-    });
-    this.dispatchesCounter = meter.createCounter('conductor.step.dispatches', {
-      description: 'Number of conductor step dispatches classified by metering status',
-    });
-    this.featureCostGauge = meter.createGauge('conductor.feature.cost', {
-      description: 'Authoritative shipped-record cost for a conductor feature',
-      unit: 'usd',
-    });
-    this.featureStepCostGauge = meter.createGauge('conductor.feature.step.cost', {
-      description: 'Authoritative cumulative feature cost by step, model, and source',
-      unit: 'usd',
-    });
-    this.featureStepTokensGauge = meter.createGauge('conductor.feature.step.tokens', {
-      description: 'Authoritative cumulative feature tokens by step and model',
-    });
-    this.closeoutDurationHistogram = meter.createHistogram('conductor.pipeline.closeout.duration', {
-      description: 'Duration of pipeline closeout obligations in milliseconds; quantiles saturate above 8 h (largest finite bucket boundary)',
-      unit: 'ms',
-      advice: { explicitBucketBoundaries: DURATION_BUCKET_BOUNDARIES_MS },
-    });
-    this.runOutcomesCounter = meter.createCounter('conductor.run.outcomes', {
-      description: 'Number of conductor runs by terminal outcome',
-    });
+    this.instruments = instruments ?? createInstruments(meter);
   }
 
-  /**
-   * Record metrics when a step closes (completed or failed).
-   *
-   * @param step       - Step name (for metric attributes).
-   * @param durationMs - Wall-clock duration from step_started to close (milliseconds).
-   * @param retryCount - Number of retries for this step execution.
-   * @param tokenUsage - Optional token usage from step_completed; absent → skip.
-   * @param model      - Optional model name from step_completed; when present,
-   *                     tagged onto each token data point's attributes.
-   */
+  /** Bind a feature without creating a second set of OTel instruments. */
+  forFeature(feature: string): MetricsRecorder {
+    return new MetricsRecorder({} as Meter, { ...this.identityAttrs, feature }, this.instruments);
+  }
+
   onStepClose(
-    step: string,
-    durationMs: number,
-    retryCount: number,
-    tokenUsage?: TokenUsage,
-    model?: string,
-    recordDispatch = true,
+    step: string, durationMs: number, retryCount: number, tokenUsage?: TokenUsage, model?: string, recordDispatch = true,
   ): void {
-    // Duration: always record (even 0 ms is a valid observation).
-    this.durationHistogram.record(durationMs, this.withIdentity({ step }));
-
-    // Retries: skip when zero to avoid meaningless zero data points.
-    if (retryCount > 0) {
-      this.retriesCounter.add(retryCount, this.withIdentity({ step }));
-    }
-
+    this.instruments.durationHistogram.record(durationMs, this.withIdentity({ step }));
+    if (retryCount > 0) this.instruments.retriesCounter.add(retryCount, this.withIdentity({ step }));
     if (recordDispatch) this.onDispatch(step, tokenUsage, model);
   }
 
-  /** Record one dispatch selected by the shared shipped-record metering projection. */
   onDispatch(step: string, tokenUsage?: TokenUsage, _model?: string): void {
-    this.dispatchesCounter.add(1, this.withIdentity({ step, metering: classifyMetering(tokenUsage) }));
+    this.instruments.dispatchesCounter.add(1, this.withIdentity({ step, metering: classifyMetering(tokenUsage) }));
   }
+  onRetry(step: string): void { this.instruments.retriesCounter.add(1, this.withIdentity({ step })); }
 
-  /** Record cumulative ledger dimensions emitted after each step terminal. */
   onFeatureCostSnapshot(event: Extract<ConductorEvent, { type: 'feature_cost_snapshot' }>): void {
     if (!Number.isFinite(event.costUsd)) return;
-
-    this.featureCostGauge.record(event.costUsd, this.withIdentity({ cost_complete: event.costComplete }));
+    this.instruments.featureCostGauge.record(event.costUsd, this.withIdentity({ cost_complete: event.costComplete }));
     for (const bucket of event.byDimension) {
       if (!Number.isFinite(bucket.costUsd)) continue;
       const attributes: Record<string, string> = { step: bucket.step };
       if (bucket.model !== undefined) attributes.model = bucket.model;
       if (bucket.source !== undefined) attributes.source = bucket.source;
-      this.featureStepCostGauge.record(bucket.costUsd, this.withIdentity(attributes));
+      this.instruments.featureStepCostGauge.record(bucket.costUsd, this.withIdentity(attributes));
     }
     for (const bucket of event.tokensByDimension) {
       for (const kind of MetricsRecorder.TOKEN_KINDS) {
         const value = bucket.tokens[kind];
-        if (typeof value !== 'number' || !Number.isFinite(value)) continue;
-        const attributes: Record<string, string> = { step: bucket.step, kind };
-        if (bucket.model !== undefined) attributes.model = bucket.model;
-        this.featureStepTokensGauge.record(value, this.withIdentity(attributes));
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          const attributes: Record<string, string> = { step: bucket.step, kind };
+          if (bucket.model !== undefined) attributes.model = bucket.model;
+          this.instruments.featureStepTokensGauge.record(value, this.withIdentity(attributes));
+        }
       }
     }
   }
 
-  /** Record the exact whole-feature cost computed from the shipped-record ledger. */
   onFeatureUsageTotal(event: Extract<ConductorEvent, { type: 'feature_usage_total' }>): void {
-    if (!Number.isFinite(event.costUsd)) return;
-    this.featureCostGauge.record(event.costUsd, this.withIdentity({
-      cost_complete:
-        event.unmeteredDispatches === 0
-        && (event.costUnmeteredDispatches ?? 0) === 0,
+    if (Number.isFinite(event.costUsd)) this.instruments.featureCostGauge.record(event.costUsd, this.withIdentity({
+      cost_complete: event.unmeteredDispatches === 0 && (event.costUnmeteredDispatches ?? 0) === 0,
     }));
   }
 
-  /** Record a pipeline-owned closeout obligation as it is re-emitted on the bus. */
   onPipelineCloseout(event: Extract<ConductorEvent, { type: 'pipeline_closeout' }>): void {
-    this.closeoutDurationHistogram.record(event.endedAt - event.startedAt, this.withIdentity({
-      obligation: event.obligation,
-    }));
+    this.instruments.closeoutDurationHistogram.record(event.endedAt - event.startedAt, this.withIdentity({ obligation: event.obligation }));
   }
 
-  /** Record the terminal outcome of an opened run exactly once. */
-  onRunClose(outcome: RunOutcome): void {
-    this.runOutcomesCounter.add(1, this.withIdentity({ outcome }));
+  onRunClose(outcome: RunOutcome): void { this.instruments.runOutcomesCounter.add(1, this.withIdentity({ outcome })); }
+
+  onDaemonBacklog(snapshot: Extract<ConductorEvent, { type: 'daemon_backlog_snapshot' }>): void {
+    for (const state of BACKLOG_STATES) {
+      this.instruments.daemonBacklogGauge.record(snapshot.counts[state], this.withIdentity({ state }));
+      const age = snapshot.oldestAgeSeconds[state];
+      if (typeof age === 'number' && Number.isFinite(age)) this.instruments.daemonOldestAgeGauge.record(age, this.withIdentity({ state }));
+    }
+    this.instruments.daemonSlotsGauge.record(snapshot.slots.busy, this.withIdentity({ state: 'busy' }));
+    this.instruments.daemonSlotsGauge.record(snapshot.slots.free, this.withIdentity({ state: 'free' }));
+    for (const feature of snapshot.inFlight) this.instruments.daemonInflightGauge.record(1, this.withIdentity({ feature }));
+    for (const reason of BLOCK_REASONS) this.instruments.daemonBlockedGauge.record(snapshot.blocked[reason] ? 1 : 0, this.withIdentity({ reason }));
+    this.instruments.daemonPollHistogram.record(snapshot.pollDurationMs, this.withIdentity({}));
+    this.instruments.daemonUpGauge.record(1, this.withIdentity({}));
   }
 
-  /**
-   * Only the four true token-count fields are recorded as "kind" data points.
-   * costUsd/numTurns/durationMs (added to TokenUsage for cost rollup, Task 1)
-   * are NOT token counts and must not be double-counted as counter kinds here.
-   */
-  private static readonly TOKEN_KINDS = [
-    'input',
-    'output',
-    'cacheRead',
-    'cacheCreation',
-  ] as const;
-
-  private withIdentity(attrs: Attributes): Attributes {
-    return { ...attrs, ...this.identityAttrs };
+  onFeatureDispatch(kind: string): void { this.instruments.featureDispatchesCounter.add(1, this.withIdentity({ kind })); }
+  onFeatureHalt(haltClass: string, step: string): void { this.instruments.featureHaltsCounter.add(1, this.withIdentity({ haltClass, step })); }
+  onFeatureShipped(): void { this.instruments.featureShippedCounter.add(1, this.withIdentity({})); }
+  onFeatureDuration(wallMs?: number, activeMs?: number): void {
+    if (typeof wallMs === 'number' && Number.isFinite(wallMs)) this.instruments.featureWallHistogram.record(wallMs, this.withIdentity({}));
+    if (typeof activeMs === 'number' && Number.isFinite(activeMs)) this.instruments.featureActiveHistogram.record(activeMs, this.withIdentity({}));
   }
+  onGateVerdict(step: string, outcome: 'pass' | 'fail'): void { this.instruments.gateVerdictsCounter.add(1, this.withIdentity({ step, outcome })); }
+  onKickback(from: string, to: string): void { this.instruments.gateKickbacksCounter.add(1, this.withIdentity({ from, to })); }
+  onStall(reason: string): void { this.instruments.daemonStallsCounter.add(1, this.withIdentity({ reason })); }
+
+  private static readonly TOKEN_KINDS = ['input', 'output', 'cacheRead', 'cacheCreation'] as const;
+  private withIdentity(attrs: Attributes): Attributes { return { ...attrs, ...this.identityAttrs }; }
+}
+
+const BACKLOG_STATES = ['eligible', 'waiting', 'blocked', 'gated', 'parked'] as const;
+const BLOCK_REASONS = ['paused', 'build_auth_missing', 'gh_version', 'episode_active'] as const;
+
+interface MetricInstruments {
+  durationHistogram: Histogram; retriesCounter: Counter; dispatchesCounter: Counter;
+  featureCostGauge: Gauge; featureStepCostGauge: Gauge; featureStepTokensGauge: Gauge;
+  closeoutDurationHistogram: Histogram; runOutcomesCounter: Counter;
+  daemonBacklogGauge: Gauge; daemonOldestAgeGauge: Gauge; daemonSlotsGauge: Gauge; daemonInflightGauge: Gauge;
+  daemonUpGauge: Gauge; daemonBlockedGauge: Gauge; daemonPollHistogram: Histogram; daemonStallsCounter: Counter;
+  featureDispatchesCounter: Counter; featureHaltsCounter: Counter; featureShippedCounter: Counter;
+  featureWallHistogram: Histogram; featureActiveHistogram: Histogram; gateVerdictsCounter: Counter; gateKickbacksCounter: Counter;
+}
+
+function createInstruments(meter: Meter): MetricInstruments {
+  const histogram = (name: string, description: string, unit = 'ms') => meter.createHistogram(name, { description, unit, advice: { explicitBucketBoundaries: DURATION_BUCKET_BOUNDARIES_MS } });
+  const counter = (name: string, description: string) => meter.createCounter(name, { description });
+  const gauge = (name: string, description: string, unit?: string) => meter.createGauge(name, { description, ...(unit ? { unit } : {}) });
+  return {
+    durationHistogram: histogram('conductor.step.duration', 'Duration of conductor steps in milliseconds; quantiles saturate above 8 h (largest finite bucket boundary)'),
+    retriesCounter: counter('conductor.step.retries', 'Number of retries per conductor step'),
+    dispatchesCounter: counter('conductor.step.dispatches', 'Number of conductor step dispatches classified by metering status'),
+    featureCostGauge: gauge('conductor.feature.cost', 'Authoritative shipped-record cost for a conductor feature', 'usd'),
+    featureStepCostGauge: gauge('conductor.feature.step.cost', 'Authoritative cumulative feature cost by dimension', 'usd'),
+    featureStepTokensGauge: gauge('conductor.feature.step.tokens', 'Authoritative cumulative feature tokens by dimension'),
+    closeoutDurationHistogram: histogram('conductor.pipeline.closeout.duration', 'Duration of pipeline closeout obligations in milliseconds; quantiles saturate above 8 h (largest finite bucket boundary)'),
+    runOutcomesCounter: counter('conductor.run.outcomes', 'Number of conductor runs by terminal outcome'),
+    daemonBacklogGauge: gauge('conductor.daemon.backlog', 'Backlog entries by state'),
+    daemonOldestAgeGauge: gauge('conductor.daemon.backlog.oldest_age', 'Oldest backlog age by state', 's'),
+    daemonSlotsGauge: gauge('conductor.daemon.slots', 'Daemon worker slots by state'),
+    daemonInflightGauge: gauge('conductor.daemon.inflight', 'Daemon features in flight'),
+    daemonUpGauge: gauge('conductor.daemon.up', 'Daemon liveness'),
+    daemonBlockedGauge: gauge('conductor.daemon.blocked_reason', 'Daemon dispatch blockers by reason'),
+    daemonPollHistogram: histogram('conductor.daemon.poll.duration', 'Daemon discovery duration in milliseconds'),
+    daemonStallsCounter: counter('conductor.daemon.stalls', 'Daemon build stalls'),
+    featureDispatchesCounter: counter('conductor.feature.dispatches', 'Feature dispatches'),
+    featureHaltsCounter: counter('conductor.feature.halts', 'Feature halts'),
+    featureShippedCounter: counter('conductor.feature.shipped', 'Feature shipments'),
+    featureWallHistogram: histogram('conductor.feature.duration.wall', 'Feature wall duration in milliseconds'),
+    featureActiveHistogram: histogram('conductor.feature.duration.active', 'Feature active duration in milliseconds'),
+    gateVerdictsCounter: counter('conductor.gate.verdicts', 'Gate verdicts'),
+    gateKickbacksCounter: counter('conductor.gate.kickbacks', 'Gate kickbacks'),
+  };
 }

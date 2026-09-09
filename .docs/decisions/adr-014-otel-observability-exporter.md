@@ -108,6 +108,15 @@ Relevant existing facts (evidence):
 > the hot path. Read Decision 4 as **bounded, non-blocking, in-memory work with no I/O on the
 > bus.** A handler that read the ledger, awaited, or iterated per dispatch would still violate it.
 
+> **Amended 2026-09-08 by operator resolution of #1937's Story 8 plan gap:** the
+> preceding tracer flush-only sentence is superseded. An interactive visualizer owns its
+> `TracerProvider` for exactly one run and calls `tracerProvider.shutdown()` once on stop.
+> OTel shutdown includes the final flush and processor/exporter cleanup; it is bounded and
+> failure-isolated under Decision 5. Daemon dispatch boundaries remain flush-only because
+> their daemon-owned provider survives dispatches; daemon process teardown still shuts that
+> provider down. Tests capture exported spans before exporter shutdown side effects rather
+> than requiring an in-memory exporter's buffer to remain readable after provider teardown.
+
 6. **Dual transport, config-selected** under `otel:` in `.ai-conductor/config.yml`
    (`exporter: otlp|file`, `endpoint`, `file`). Absent `otel` ⇒ disabled (default off, FR-1/FR-7).
 
@@ -306,6 +315,18 @@ Relevant existing facts (evidence):
 >    rollup state is `partial` or `unavailable`), `gate.verdicts` and `gate.kickbacks`. Handlers
 >    stay within Decision 4: bounded in-memory work, no I/O; the snapshot's counts are computed by
 >    the discovery pass that already ran, before the event is emitted.
+
+> **Amended 2026-09-08 by #1937 (as-built decisions AB-6, AB-7, AB-10):** “traces are
+> unaffected” in Decision 7 is literal: the trace Resource, including its existing
+> `service.instance.id`, remains byte-identical to the pre-feature trace Resource. Decision 8's
+> prohibition on `feature` for daemon-level instruments does not apply to
+> `conductor.daemon.inflight`: despite its daemon namespace, each point describes one in-flight
+> feature and is therefore feature-scoped, as Decision 9 and Story 3 require. All other
+> `conductor.daemon.*` instruments remain feature-free. Backlog age measures residence in the
+> reported state, not time since first-ever discovery: durable per-slug state records the current
+> state and the time that state was entered, preserves that timestamp while the state is unchanged,
+> and replaces it on a state transition. This keeps oldest eligible/waiting/blocked/gated/parked age
+> truthful when a feature moves between states.
 
 ## Consequences
 

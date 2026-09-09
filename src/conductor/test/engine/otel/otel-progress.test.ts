@@ -15,7 +15,7 @@ import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
-import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
+import { CapturingSpanExporter as InMemorySpanExporter } from '../../fixtures/capturing-span-exporter.js';
 import { InMemoryMetricExporter, AggregationTemporality } from '@opentelemetry/sdk-metrics';
 
 function makeVisualizer(

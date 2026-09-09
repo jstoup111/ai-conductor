@@ -129,6 +129,10 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
 // This is deliberately an exact set rather than a volume count: a newly-persisted
 // non-halt event must update this contract explicitly.
 const PINNED_PERSISTED_EVENT_TYPES = [
+  'daemon_backlog_snapshot',
+  'feature_dispatch_started',
+  'feature_dispatch_ended',
+  'feature_shipped',
   ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
   'test_suite_verification',
@@ -317,6 +321,10 @@ describe('event sink subscriptions', () => {
 
   it('subscribes OpenTelemetry only to its defined event set', () => {
     expect(new Set(otelEventTypes())).toEqual(new Set([
+      'daemon_backlog_snapshot',
+      'feature_dispatch_started',
+      'feature_dispatch_ended',
+      'feature_shipped',
       'step_started',
       'step_completed',
       'step_failed',
