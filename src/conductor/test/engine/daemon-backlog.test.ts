@@ -1708,6 +1708,11 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'daemon-backlog-fr24-'));
     await execFile('git', ['init', '-b', 'main', '-q'], { cwd: dir });
+    // These tests remove the repository immediately after each case. Disable
+    // Git's automatic background maintenance so it cannot recreate
+    // `.git/objects/pack` while teardown is removing that exact fixture.
+    await execFile('git', ['config', 'maintenance.auto', 'false'], { cwd: dir });
+    await execFile('git', ['config', 'gc.auto', '0'], { cwd: dir });
     await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
     await execFile('git', ['config', 'user.name', 'Test'], { cwd: dir });
     await writeFile(join(dir, 'README.md'), 'init\n');

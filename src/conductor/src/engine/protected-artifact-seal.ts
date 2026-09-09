@@ -64,6 +64,8 @@ export interface EvaluateProtectedArtifactSealRotationInput {
   workspaceArtifacts: ReadonlyMap<string, Buffer>;
   headArtifacts: ReadonlyMap<string, Buffer>;
   baseTipArtifacts?: ReadonlyMap<string, Buffer>;
+  /** Protected bytes at the seal's own baseline commit, trusted only when fingerprint-verified. */
+  sealedArtifacts?: ReadonlyMap<string, Buffer>;
   authorshipByPath?: ReadonlyMap<string, 'authored' | 'not-authored' | 'indeterminate'>;
   /**
    * Task ids the engine itself appended to the plan during remediation routing
@@ -96,11 +98,14 @@ export type ProtectedArtifactSealRotationVerdict =
   | ({ permitted: false; condition: 'head-unresolvable' } & ProtectedArtifactRotationEvidence)
   | ({ permitted: false; condition: 'base-tip-unresolved' } & ProtectedArtifactRotationEvidence)
   | ({ permitted: false; condition: 'workspace-differs-from-head'; path: string } & ProtectedArtifactRotationEvidence)
-  | ({ permitted: false; condition: 'head-differs-from-base'; path: string } & ProtectedArtifactRotationEvidence);
+  | ({ permitted: false; condition: 'head-differs-from-base'; path: string } & ProtectedArtifactRotationEvidence)
+  | ({ permitted: false; condition: 'engine-append-unvouched'; path: string } & ProtectedArtifactRotationEvidence);
 
 type ProtectedArtifactRotationEvidence = {
   mergeBase?: string;
   headTouchedPath?: boolean | 'indeterminate';
+  operatorResealExit?: 'not-resealed' | 'sealed-content-mismatch';
+  engineAppendExit?: 'not-present' | 'unvouched';
 };
 
 export type ProtectedArtifactSealRebaselineEvent =
@@ -121,6 +126,8 @@ export type ProtectedArtifactSealRebaselineEvent =
       path?: string;
       mergeBase?: string;
       headTouchedPath?: boolean | 'indeterminate';
+      operatorResealExit?: 'not-resealed' | 'sealed-content-mismatch';
+      engineAppendExit?: 'not-present' | 'unvouched';
     };
 
 export type ProtectedArtifactSealRebaselineObserver = (
@@ -331,6 +338,18 @@ function optionalBuffersEqual(left: Buffer | undefined, right: Buffer | undefine
   return left === undefined ? right === undefined : right !== undefined && left.equals(right);
 }
 
+function hasRecordedRemediationTaskHeading(
+  content: Buffer | undefined,
+  appendedRemediationTaskIds: readonly string[] | undefined,
+): boolean {
+  if (!content || !appendedRemediationTaskIds?.length) return false;
+  const recorded = new Set(appendedRemediationTaskIds);
+  return content.toString('utf8').split('\n').some((line) => {
+    const heading = /^### Task ([^:\s]+):/.exec(line);
+    return heading !== null && recorded.has(heading[1]);
+  });
+}
+
 /**
  * True when `head`'s divergence from `base` is exactly an append of the
  * engine's own remediation-task blocks: the base content is a byte prefix of
@@ -375,6 +394,7 @@ export function evaluateProtectedArtifactSealRotation({
   workspaceArtifacts,
   headArtifacts,
   baseTipArtifacts,
+  sealedArtifacts,
   authorshipByPath,
   appendedRemediationTaskIds,
 }: EvaluateProtectedArtifactSealRotationInput): ProtectedArtifactSealRotationVerdict {
@@ -441,16 +461,43 @@ export function evaluateProtectedArtifactSealRotation({
         // append (d6c53022c commits it as a feature commit, so git-inheritance
         // authorship cannot distinguish it). Accepted only when the divergence
         // from the base tip is exactly the recorded appended task blocks.
+        const sealedContent = sealedArtifacts?.get(path);
+        const sealedAnchorMatches = sealedContent !== undefined
+          && sealed.get(path) === fingerprint(sealedContent);
         if (isEngineAppendedRemediationAmendment(
           baseTipArtifacts.get(path),
           head,
           appendedRemediationTaskIds,
+        ) || (
+          sealedAnchorMatches
+          && isEngineAppendedRemediationAmendment(
+            sealedContent,
+            head,
+            appendedRemediationTaskIds,
+          )
         )) {
           includedEngineAppendedPaths.push(path);
           rotationPaths.push(path);
           continue;
         }
-        return { permitted: false, condition: 'head-differs-from-base', path };
+        const engineAppendExit = hasRecordedRemediationTaskHeading(head, appendedRemediationTaskIds)
+          ? 'unvouched' as const
+          : 'not-present' as const;
+        return engineAppendExit === 'unvouched'
+          ? {
+              permitted: false,
+              condition: 'engine-append-unvouched',
+              path,
+              operatorResealExit: operatorResealedPaths.has(path) ? 'sealed-content-mismatch' : 'not-resealed',
+              engineAppendExit,
+            }
+          : {
+              permitted: false,
+              condition: 'head-differs-from-base',
+              path,
+              operatorResealExit: operatorResealedPaths.has(path) ? 'sealed-content-mismatch' : 'not-resealed',
+              engineAppendExit,
+            };
       }
       excludedOperatorResealedPaths.push(path);
       continue;
@@ -641,6 +688,20 @@ export async function readRecordedAppendedRemediationTaskIds(projectRoot: string
   return [];
 }
 
+/**
+ * Whether `commit` names an object this repository can read. Distinguishes a
+ * seal whose baseline was rewritten away from a probe that failed for any
+ * other reason — only the latter is `baseline-unresolvable`.
+ */
+async function commitIsReadable(projectRoot: string, commit: string): Promise<boolean> {
+  const verified = await execa(
+    'git',
+    ['rev-parse', '--verify', '--quiet', `${commit}^{commit}`],
+    { cwd: projectRoot, reject: false },
+  ).catch(() => undefined);
+  return verified?.exitCode === 0 && verified.stdout.length > 0;
+}
+
 export async function evaluateProtectedArtifactSealRotationInRepository({
   projectRoot,
   seal,
@@ -652,13 +713,23 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
     ['merge-base', '--is-ancestor', seal.baselineCommit, headCommit],
     { cwd: projectRoot, reject: false },
   ).catch(() => undefined);
-  const baselineAncestry =
+  const probedAncestry =
     ancestry?.exitCode === 0 ? 'ancestor'
       : ancestry?.exitCode === 1 ? 'non-ancestor'
         : 'unresolvable';
-  if (baselineAncestry === 'unresolvable') {
+  if (probedAncestry === 'unresolvable' && await commitIsReadable(projectRoot, seal.baselineCommit)) {
+    // The probe failed for some reason other than the seal's own baseline: the
+    // baseline object is right there and readable, so we cannot say anything
+    // about this history. Fail closed.
     return { permitted: false, condition: 'baseline-unresolvable' };
   }
+  // An unreadable baseline commit (rewritten away, pruned) is exactly the case
+  // this rotation exists to survive. Treat it as a non-ancestor and evaluate
+  // against the base tip alone: the sealed-content read below already degrades
+  // to no sealed-baseline map, and the base-tip anchor vouches for every
+  // divergence on its own. Returning early here would make that read — and the
+  // whole base-tip evaluation — unreachable.
+  const baselineAncestry = probedAncestry === 'unresolvable' ? 'non-ancestor' : probedAncestry;
   if (baselineAncestry === 'ancestor') {
     return { permitted: false, condition: 'same-history-ancestor' };
   }
@@ -675,6 +746,7 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
   if (!baseTipArtifacts) {
     return { permitted: false, condition: 'base-tip-unresolved' };
   }
+  const sealedArtifacts = await protectedArtifactsAtCommit(projectRoot, seal.baselineCommit).catch(() => undefined);
   const provenanceByPath = new Map(await Promise.all(
     [...new Set([...headArtifacts.keys(), ...baseTipArtifacts.keys(), workspace.unresolvedPath])]
       .filter((path) => (
@@ -713,6 +785,7 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
     workspaceArtifacts: workspace.artifacts,
     headArtifacts,
     baseTipArtifacts,
+    ...(sealedArtifacts ? { sealedArtifacts } : {}),
     authorshipByPath,
     appendedRemediationTaskIds: await readRecordedAppendedRemediationTaskIds(projectRoot),
   });
@@ -1113,6 +1186,12 @@ function rotationRefusalVerdict(
       reason: `Uncommitted protected artifact changed: ${rotation.path}\nRestore from HEAD.`,
     };
   }
+  if (rotation.condition === 'engine-append-unvouched') {
+    return {
+      ok: false,
+      reason: `Unvouched engine remediation append: ${rotation.path}\nOperator-reseal exit: ${rotation.operatorResealExit}; engine-append exit: ${rotation.engineAppendExit}.`,
+    };
+  }
   return {
     ok: false,
     reason: `Protected artifact changed: ${rotation.path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.`,
@@ -1390,6 +1469,10 @@ async function emitRotationRefusal(
     ...('mergeBase' in verdict && verdict.mergeBase ? { mergeBase: verdict.mergeBase } : {}),
     ...('headTouchedPath' in verdict && verdict.headTouchedPath !== undefined
       ? { headTouchedPath: verdict.headTouchedPath } : {}),
+    ...('path' in verdict ? {
+      operatorResealExit: verdict.operatorResealExit ?? 'not-resealed',
+      engineAppendExit: verdict.engineAppendExit ?? 'not-present',
+    } : {}),
   });
 }
 
