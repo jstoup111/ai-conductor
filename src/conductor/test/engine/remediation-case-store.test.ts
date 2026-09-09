@@ -20,7 +20,7 @@ import type { ConductStateLease } from '../../src/engine/conduct-state-lease.js'
 
 const FEATURE = { version: 'v1', repository: 'acme/conductor', feature: 'case-store' } as const;
 const CASE_STATE: RemediationCaseStoreState = {
-  version: 'v1',
+  version: 'v2',
   feature: FEATURE,
   cases: [{
     id: 'case-1',
@@ -41,6 +41,7 @@ const CASE_STATE: RemediationCaseStoreState = {
       status: 'reserved',
     },
   }],
+  prdWideningCases: [],
   suppressions: [],
 };
 
@@ -65,6 +66,14 @@ const PRD_WIDENING_CASE = {
 } as const;
 
 const temporaryDirectories: string[] = [];
+
+/** Frozen v1 envelope admission boundary: an old writer cannot load v2 to overwrite it. */
+function predecessorV1Decoder(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const state = value as Record<string, unknown>;
+  return state.version === 'v1' && Array.isArray(state.cases) &&
+    Object.keys(state).every((key) => ['version', 'feature', 'cases', 'suppressions'].includes(key));
+}
 
 async function createProjectRoot(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'remediation-case-store-'));
@@ -112,7 +121,7 @@ describe('remediation case store', () => {
 
     await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
       ok: true,
-      state: { version: 'v1', feature: FEATURE, cases: [], suppressions: [] },
+      state: { version: 'v2', feature: FEATURE, cases: [], prdWideningCases: [], suppressions: [] },
     });
   });
 
@@ -129,19 +138,55 @@ describe('remediation case store', () => {
     });
   });
 
-  it('preserves one suppression per finding and accepts v1 state with no suppression list', async () => {
+  it('migrates a v1 envelope under the store lease without losing build-review history or suppression entries', async () => {
     const projectRoot = await createProjectRoot();
-    const store = new RemediationCaseStore(projectRoot, FEATURE);
-    await store.mutate(async (state) => ({ value: undefined, nextState: {
-      ...state,
+    const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
+    const v1State = {
+      version: 'v1',
+      feature: FEATURE,
+      cases: CASE_STATE.cases,
       suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-first' }],
-    } }));
-    await store.mutate(async (state) => ({ value: undefined, nextState: {
-      ...state,
-      suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Refreshed finding.', confidence: 45, floor: 70, lastSeenLap: 'lap-second' }],
-    } }));
-    const read = await store.read();
-    expect(read).toMatchObject({ ok: true, state: { suppressions: [{ findingId: 'finding-1', lastSeenLap: 'lap-second' }] } });
+    };
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(statePath, JSON.stringify(v1State), 'utf8');
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await expect(store.mutate(async (state) => ({ value: 'migrated' as const, nextState: state }))).resolves.toEqual({ ok: true, value: 'migrated' });
+    await expect(store.read()).resolves.toEqual({
+      ok: true,
+      state: { ...CASE_STATE, suppressions: v1State.suppressions },
+    });
+    const serializedV2 = `${JSON.stringify({
+      ...CASE_STATE,
+      suppressions: v1State.suppressions,
+    })}\n`;
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(serializedV2);
+    expect(predecessorV1Decoder(JSON.parse(serializedV2))).toBe(false);
+    await expect(store.mutate(async (state) => ({ value: 'repeated' as const, nextState: state }))).resolves.toEqual({ ok: true, value: 'repeated' });
+    await expect(store.read()).resolves.toEqual({ ok: true, state: { ...CASE_STATE, suppressions: v1State.suppressions } });
+  });
+
+  it('leaves the original v1 envelope readable when migration replacement is interrupted', async () => {
+    const projectRoot = await createProjectRoot();
+    const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
+    const v1State = { version: 'v1', feature: FEATURE, cases: CASE_STATE.cases, suppressions: [] };
+    const original = JSON.stringify(v1State);
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(statePath, original, 'utf8');
+    const filesystem: RemediationCaseStoreFilesystem = {
+      readFile: (path) => readFile(path, 'utf8'),
+      mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+      writeFile: async (path, contents) => { await writeFile(path, contents, 'utf8'); },
+      rename: async () => { throw new Error('interrupted replacement'); },
+      rm: async (path) => { await rm(path, { force: true }); },
+    };
+
+    await expect(new RemediationCaseStore(projectRoot, FEATURE, { filesystem })
+      .mutate(async (state) => ({ value: null, nextState: state }))).resolves.toEqual({ ok: false, reason: 'atomic-replace-failed' });
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(original);
+    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
+      ok: true,
+      state: { ...CASE_STATE, suppressions: [] },
+    });
   });
 
   it.each([
@@ -150,7 +195,7 @@ describe('remediation case store', () => {
       ...CASE_STATE,
       cases: [{ ...CASE_STATE.cases[0], domain: 'prd_audit' }],
     }, 'foreign-domain'],
-    ['an unsupported state version', { ...CASE_STATE, version: 'v2' }, 'unknown-version'],
+    ['an unsupported state version', { ...CASE_STATE, version: 'v3' }, 'unknown-version'],
     ['a mismatched action effect', {
       ...CASE_STATE,
       cases: [{ ...CASE_STATE.cases[0], effect: { id: 'effect-1', kind: 'deferral', status: 'reserved' } }],
@@ -186,6 +231,10 @@ describe('remediation case store', () => {
       ...CASE_STATE,
       cases: [{ ...CASE_STATE.cases[0], sources: [CASE_STATE.cases[0].sources[0], CASE_STATE.cases[0].sources[0]] }],
     }, 'malformed-state'],
+    ['a PRD source owned by two PRD cases', {
+      ...CASE_STATE,
+      prdWideningCases: [PRD_WIDENING_CASE, { ...PRD_WIDENING_CASE, id: 'prd-case-2' }],
+    }, 'malformed-state'],
     ['two suppression entries sharing one finding id', {
       ...CASE_STATE,
       suppressions: [
@@ -199,6 +248,21 @@ describe('remediation case store', () => {
     await writeFile(join(projectRoot, '.pipeline/remediation-cases.json'), JSON.stringify(state), 'utf8');
 
     await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({ ok: false, reason });
+  });
+
+  it.each([
+    ['foreign feature', JSON.stringify({ ...CASE_STATE, feature: { ...FEATURE, feature: 'other-feature' } }), 'foreign-feature'],
+    ['malformed JSON', '{not-json', 'malformed-json'],
+    ['unknown future envelope', JSON.stringify({ ...CASE_STATE, version: 'v3' }), 'unknown-version'],
+  ])('does not overwrite %s while refusing it', async (_description, original, reason) => {
+    const projectRoot = await createProjectRoot();
+    const statePath = join(projectRoot, '.pipeline/remediation-cases.json');
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(statePath, original, 'utf8');
+
+    await expect(new RemediationCaseStore(projectRoot, FEATURE)
+      .mutate(async () => ({ value: null, nextState: CASE_STATE }))).resolves.toEqual({ ok: false, reason });
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(original);
   });
 
   it('returns the lease failure without treating state as empty', async () => {
@@ -242,7 +306,7 @@ describe('remediation case store', () => {
     await expect(readFile(statePath, 'utf8')).resolves.toBe(original);
     await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
       ok: true,
-      state: { version: 'v1', feature: FEATURE, cases: [], suppressions: [] },
+      state: { version: 'v2', feature: FEATURE, cases: [], prdWideningCases: [], suppressions: [] },
     });
   });
 

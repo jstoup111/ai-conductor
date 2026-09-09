@@ -14,7 +14,10 @@ import type {
   RemediationCaseSourceOutcome,
 } from './remediation-case-artifact.js';
 
-const STORE_VERSION = 'v1' as const;
+/** Envelope format. Feature identity deliberately retains its own version. */
+const STORE_VERSION = 'v2' as const;
+const LEGACY_STORE_VERSION = 'v1' as const;
+const FEATURE_VERSION = 'v1' as const;
 const STORE_PATH = '.pipeline/remediation-cases.json';
 const MAX_REFERENCE_LENGTH = 256;
 const MAX_TEXT_LENGTH = 8_000;
@@ -22,7 +25,7 @@ const MAX_CASES = 128;
 const MAX_SOURCES_PER_CASE = 512;
 
 export interface RemediationCaseFeatureIdentity {
-  readonly version: typeof STORE_VERSION;
+  readonly version: typeof FEATURE_VERSION;
   readonly repository: string;
   readonly feature: string;
 }
@@ -112,13 +115,26 @@ export interface RemediationCaseSuppressionEntry {
   readonly lastSeenLap: string;
 }
 
-export interface RemediationCaseStoreState {
-  readonly version: typeof STORE_VERSION;
+/** Predecessor state accepted at the mutation boundary and upgraded before write. */
+export interface RemediationCaseStoreV1State {
+  readonly version: typeof LEGACY_STORE_VERSION;
   readonly feature: RemediationCaseFeatureIdentity;
   readonly cases: readonly RemediationCaseRecord[];
-  /** Optional on disk for v1 compatibility; normalized to an empty list on read. */
   readonly suppressions?: readonly RemediationCaseSuppressionEntry[];
 }
+
+/** Current shared envelope. */
+export interface RemediationCaseStoreV2State {
+  readonly version: typeof STORE_VERSION;
+  readonly feature: RemediationCaseFeatureIdentity;
+  /** Existing autonomous build-review history. */
+  readonly cases: readonly RemediationCaseRecord[];
+  /** Effect-free PRD widening history, independent of build-review authority. */
+  readonly prdWideningCases: readonly RemediationCasePrdWideningRecord[];
+  readonly suppressions: readonly RemediationCaseSuppressionEntry[];
+}
+
+export type RemediationCaseStoreState = RemediationCaseStoreV1State | RemediationCaseStoreV2State;
 
 export interface RemediationCaseStoreFilesystem {
   readFile(path: string): Promise<string>;
@@ -199,9 +215,9 @@ function oneOf<T extends string>(value: unknown, values: readonly T[]): value is
 }
 
 function parseFeature(value: unknown): RemediationCaseFeatureIdentity | undefined {
-  if (!isRecord(value) || !exactKeys(value, ['version', 'repository', 'feature']) || value.version !== STORE_VERSION ||
+  if (!isRecord(value) || !exactKeys(value, ['version', 'repository', 'feature']) || value.version !== FEATURE_VERSION ||
     !boundedString(value.repository, MAX_REFERENCE_LENGTH) || !boundedString(value.feature, MAX_REFERENCE_LENGTH)) return undefined;
-  return { version: STORE_VERSION, repository: value.repository, feature: value.feature };
+  return { version: FEATURE_VERSION, repository: value.repository, feature: value.feature };
 }
 
 function sameFeature(left: RemediationCaseFeatureIdentity, right: RemediationCaseFeatureIdentity): boolean {
@@ -364,17 +380,22 @@ function parseSuppression(value: unknown): RemediationCaseSuppressionEntry | und
   return { findingId: value.findingId, rubric: value.rubric, summary: value.summary, confidence: value.confidence, floor: value.floor, lastSeenLap: value.lastSeenLap };
 }
 
-function parseState(value: unknown):
+type ParsedState =
   | { readonly ok: true; readonly state: RemediationCaseStoreState }
-  | { readonly ok: false; readonly reason: 'unknown-version' | 'foreign-domain' | 'malformed-state' } {
-  if (!isRecord(value) || !Object.keys(value).every((key) => ['version', 'feature', 'cases', 'suppressions'].includes(key)) ||
-    !['version', 'feature', 'cases'].every((key) => Object.hasOwn(value, key))) return { ok: false, reason: 'malformed-state' };
-  if (value.version !== STORE_VERSION) return { ok: false, reason: 'unknown-version' };
-  const feature = parseFeature(value.feature);
-  if (!feature || !Array.isArray(value.cases) || value.cases.length > MAX_CASES) return { ok: false, reason: 'malformed-state' };
-  const cases: RemediationCaseRecord[] = [];
-  const suppressions = value.suppressions === undefined ? [] : Array.isArray(value.suppressions) ? value.suppressions.map(parseSuppression) : undefined;
-  if (!suppressions || suppressions.some((entry) => entry === undefined) || new Set(suppressions.map((entry) => entry!.findingId)).size !== suppressions.length) return { ok: false, reason: 'malformed-state' };
+  | { readonly ok: false; readonly reason: 'unknown-version' | 'foreign-domain' | 'malformed-state' };
+
+function parseSuppressions(value: unknown): RemediationCaseSuppressionEntry[] | undefined {
+  const suppressions = value === undefined ? [] : Array.isArray(value) ? value.map(parseSuppression) : undefined;
+  return !suppressions || suppressions.some((entry) => entry === undefined) ||
+    new Set(suppressions.map((entry) => entry!.findingId)).size !== suppressions.length
+    ? undefined
+    : suppressions as RemediationCaseSuppressionEntry[];
+}
+
+function parseBuildReviewCases(value: unknown):
+  | { readonly ok: true; readonly cases: RemediationCaseRecord[] }
+  | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state' } {
+  if (!Array.isArray(value) || value.length > MAX_CASES) return { ok: false, reason: 'malformed-state' };
   // Canonical identity: one row per case id, one case per durable effect id,
   // one link per source within a case. Downstream readers index by these ids
   // (`new Map(cases.map(...))`), which would silently collapse a duplicate
@@ -383,7 +404,8 @@ function parseState(value: unknown):
   const caseIds = new Set<string>();
   const effectIds = new Set<string>();
   const sourceIds = new Set<string>();
-  for (const caseValue of value.cases) {
+  const cases: RemediationCaseRecord[] = [];
+  for (const caseValue of value) {
     const parsed = parseCase(caseValue);
     if (!parsed.ok) return parsed;
     const record = parsed.record;
@@ -402,7 +424,61 @@ function parseState(value: unknown):
     }
     cases.push(record);
   }
-  return { ok: true, state: { version: STORE_VERSION, feature, cases, suppressions: suppressions as RemediationCaseSuppressionEntry[] } };
+  return { ok: true, cases };
+}
+
+function parsePrdWideningCases(value: unknown): RemediationCasePrdWideningRecord[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_CASES) return undefined;
+  const cases = value.map(parsePrdWideningCase);
+  if (cases.some((record) => record === undefined)) return undefined;
+  const caseIds = new Set<string>();
+  const sourceOwners = new Map<string, string>();
+  for (const record of cases as RemediationCasePrdWideningRecord[]) {
+    if (caseIds.has(record.id)) return undefined;
+    caseIds.add(record.id);
+    for (const source of [...record.originalSources, ...record.currentSources]) {
+      const owner = sourceOwners.get(source.sourceId);
+      if (owner !== undefined && owner !== record.id) return undefined;
+      sourceOwners.set(source.sourceId, record.id);
+    }
+  }
+  return cases as RemediationCasePrdWideningRecord[];
+}
+
+function parseV1State(value: Record<string, unknown>): ParsedState {
+  if (!Object.keys(value).every((key) => ['version', 'feature', 'cases', 'suppressions'].includes(key)) ||
+    !['version', 'feature', 'cases'].every((key) => Object.hasOwn(value, key))) return { ok: false, reason: 'malformed-state' };
+  const feature = parseFeature(value.feature);
+  const cases = parseBuildReviewCases(value.cases);
+  const suppressions = parseSuppressions(value.suppressions);
+  if (!feature || !cases.ok || !suppressions) return !cases.ok ? cases : { ok: false, reason: 'malformed-state' };
+  return {
+    ok: true,
+    state: {
+      version: STORE_VERSION,
+      feature,
+      cases: cases.cases,
+      prdWideningCases: [],
+      suppressions,
+    },
+  };
+}
+
+function parseV2State(value: Record<string, unknown>): ParsedState {
+  if (!exactKeys(value, ['version', 'feature', 'cases', 'prdWideningCases', 'suppressions'])) return { ok: false, reason: 'malformed-state' };
+  const feature = parseFeature(value.feature);
+  const cases = parseBuildReviewCases(value.cases);
+  const prdWideningCases = parsePrdWideningCases(value.prdWideningCases);
+  const suppressions = parseSuppressions(value.suppressions);
+  if (!feature || !cases.ok || !prdWideningCases || !suppressions) return !cases.ok ? cases : { ok: false, reason: 'malformed-state' };
+  return { ok: true, state: { version: STORE_VERSION, feature, cases: cases.cases, prdWideningCases, suppressions } };
+}
+
+function parseState(value: unknown): ParsedState {
+  if (!isRecord(value)) return { ok: false, reason: 'malformed-state' };
+  if (value.version === LEGACY_STORE_VERSION) return parseV1State(value);
+  if (value.version === STORE_VERSION) return parseV2State(value);
+  return { ok: false, reason: 'unknown-version' };
 }
 
 function isMissing(error: unknown): boolean {
@@ -450,7 +526,7 @@ export class RemediationCaseStore {
       serialized = await this.filesystem.readFile(this.statePath);
     } catch (error) {
       return isMissing(error)
-        ? { ok: true, state: { version: STORE_VERSION, feature: this.feature, cases: [], suppressions: [] } }
+        ? { ok: true, state: { version: STORE_VERSION, feature: this.feature, cases: [], prdWideningCases: [], suppressions: [] } }
         : { ok: false, reason: 'unreadable' };
     }
     let raw: unknown;
