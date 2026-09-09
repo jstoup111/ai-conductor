@@ -52,6 +52,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Terminal step refusals now halt immediately instead of consuming retry attempts. ([implementation PR #2461](https://github.com/jstoup111/ai-conductor/pull/2461)).
 - Autoresolve now verifies and pushes clean rebases before reporting a PR as refreshed. ([implementation PR #2472](https://github.com/jstoup111/ai-conductor/pull/2472)).
 - CI-fix remediation now treats completed legacy commit statuses as terminal. ([implementation PR #2458](https://github.com/jstoup111/ai-conductor/pull/2458)).
+- Build review excludes paths whose feature-only changes are already patch-equivalent to the review base. ([implementation PR #2427](https://github.com/jstoup111/ai-conductor/pull/2427)).
 
 ## Migration
 
