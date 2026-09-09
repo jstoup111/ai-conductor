@@ -4,6 +4,18 @@ spec_hash: 9fba769824e99fd82873b5a3dd0ae1a8931f282358d147afb9a7cebd9e9b7638
 pr: https://github.com/jstoup111/ai-conductor/pull/2461
 shipped: 2026-09-09
 engine_version: 20260909T010219Z-decd14cb6c54
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/acceptance/daemon-e2e-live-agent-tier.acceptance.test.ts:128 — commit `14405267b` narrows an unrelated CI-workflow lint assertion from `expect(workflow).not.toMatch(/exit\\s+0/)` over the whole workflow file to a slice covering only the `live-daemon-e2e:` job; the change owns no story criterion and no plan task, and carries no `Task:` trailer, no `Scope:` trailer, and an empty commit body"
+    accepted: false
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "Task 6"
+    outcome: remediated
+    summary: "The failure branch ignores `refusal.reason` when an interface-valid refusal result omits `output`, violating the sealed any-refusal `lastError` contract."
 ---
 
 ## Cost
