@@ -202,6 +202,18 @@ export function parseCodexJsonl(stdout: string): {
   return { output: output ?? stdout, tokenUsage, hasTerminalResult };
 }
 
+function accumulateTokenUsage(current: TokenUsage | undefined, observed: TokenUsage): TokenUsage {
+  const total = current ?? { input: 0, output: 0 };
+  total.input += observed.input;
+  total.output += observed.output;
+  for (const field of ['reasoningOutput', 'cacheRead', 'cacheCreation', 'numTurns', 'durationMs'] as const) {
+    if (observed[field] !== undefined) total[field] = (total[field] ?? 0) + observed[field];
+  }
+  if (observed.costUsd !== undefined) total.costUsd = (total.costUsd ?? 0) + observed.costUsd;
+  if (observed.costSource !== undefined) total.costSource = observed.costSource;
+  return total;
+}
+
 function parseWaitSeconds(output: string, fallbackSeconds = 300): number {
   const match = output.match(new RegExp(
     `(?:retry|try again)\\s*(?:after|in)?\\s*(\\d+)\\s*(${rateLimitDurationUnitAlternation})\\b`,
@@ -296,6 +308,7 @@ export class CodexProvider implements LLMProvider {
 
     const authentication = this.authentication;
     const args = [...this.selfHostArgs(options), ...this.buildArgs(options, !repl)];
+    let streamedTokenUsage: TokenUsage | undefined;
 
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
       const subprocess = this.spawnCodex(options.selfHost?.executable ?? this.executable, args, {
@@ -309,6 +322,8 @@ export class CodexProvider implements LLMProvider {
       }, {
         ...options,
         onProviderStream: repl ? undefined : options.streamConsumer?.onProviderStream ?? options.onProviderStream,
+      }, repl ? undefined : (usage) => {
+        streamedTokenUsage = accumulateTokenUsage(streamedTokenUsage, usage);
       });
       return subprocess;
     });
@@ -324,7 +339,14 @@ export class CodexProvider implements LLMProvider {
       { model: options.model, cwd: options.cwd },
       !repl,
     );
-    return { ...completion, observedIntervals: [interval] };
+    const tokenUsage = !repl && completion.success && completion.tokenUsage === undefined && streamedTokenUsage !== undefined
+      ? applyRateCard(
+          streamedTokenUsage,
+          options.model,
+          this.loadRates(options.cwd ?? process.cwd()),
+        )
+      : completion.tokenUsage;
+    return { ...completion, tokenUsage, observedIntervals: [interval] };
   }
 
   /**
@@ -336,6 +358,7 @@ export class CodexProvider implements LLMProvider {
   private wireActivityWatchdog(
     subprocess: { kill: () => void; stdout?: NodeJS.ReadableStream | null; stderr?: NodeJS.ReadableStream | null },
     options: Pick<InvokeOptions, 'onActivity' | 'onProviderStream' | 'onSpawn'>,
+    onTokenUsage?: (usage: TokenUsage) => void,
   ): void {
     try {
       options.onSpawn?.();
@@ -352,6 +375,7 @@ export class CodexProvider implements LLMProvider {
         for (const record of streamAssembler.push(String(chunk))) {
           const usage = parseCodexJsonl(JSON.stringify(record)).tokenUsage;
           if (!usage) continue;
+          onTokenUsage?.(usage);
 
           uncachedInputTokens += usage.input;
           outputTokens += usage.output;
@@ -388,10 +412,11 @@ export class CodexProvider implements LLMProvider {
     args: readonly string[],
     options: ExecaOptions,
     watchdogOptions: Pick<InvokeOptions, 'onActivity' | 'onProviderStream' | 'onSpawn' | 'spawnPermit'>,
+    onTokenUsage?: (usage: TokenUsage) => void,
   ): ResultPromise {
     this.assertSpawnPermitted(watchdogOptions.spawnPermit);
     const subprocess = this.subprocessFactory(executable, args, options);
-    this.wireActivityWatchdog(subprocess, watchdogOptions);
+    this.wireActivityWatchdog(subprocess, watchdogOptions, onTokenUsage);
     return subprocess;
   }
 

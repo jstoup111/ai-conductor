@@ -3,7 +3,7 @@ import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath } from
 import { writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { execa } from 'execa';
 import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
@@ -3908,7 +3908,7 @@ TIER: M`,
       await Promise.all(plans.map((name) => writeFile(join(dir, '.docs', 'plans', name), '# Plan\n')));
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         featureDesc: 'this-feature-has-no-plan',
-        gitRunner: scriptedGit(),
+        gitRunner: scriptedGit('.docs/plans/this-feature-has-no-plan.md'),
         buildReviewCoordinator: coordinate,
         ...currentBuildReviewProof(),
       });
@@ -4346,18 +4346,16 @@ TIER: M`,
       await rm(dir, { recursive: true, force: true });
     });
 
-    function scriptedGit() {
+    function scriptedGit(planRepoPath = 'plan.md') {
       const git = async (args: string[]) => {
         if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
         if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: 'head\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
         if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: 'M\u0000x\u0000', stderr: '' };
         if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/x b/x\n', stderr: '' };
-        if (args[0] === 'show' && args[1] === 'head:plan.md') return { exitCode: 0, stdout: '# Plan\n', stderr: '' };
-        if (args[0] === 'show' && args[1]?.startsWith('head:.docs/plans/')) return { exitCode: 0, stdout: '# Plan\n', stderr: '' };
-        if (args[0] === 'show' && args[1] === 'head:.docs/stories/plan.md') return { exitCode: 0, stdout: '# Stories\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `head:${planRepoPath}`) return { exitCode: 0, stdout: '# Plan\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `head:.docs/stories/${basename(planRepoPath)}`) return { exitCode: 0, stdout: '# Stories\n', stderr: '' };
         if (args[0] === 'show' && args[1] === 'head:x') return { exitCode: 0, stdout: 'export const x = true;\n', stderr: '' };
-        if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '', stderr: '' };
         return { exitCode: 1, stdout: '', stderr: '' };
       };
       return git;
