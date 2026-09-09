@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-09T12:39:11.446Z
 Slug: coherence-accepts-plans-that-cannot-deliver-sealed
 Class: needs-human
 Halting step: unknown
