@@ -128,7 +128,9 @@ export async function discoverBuildReviewScopeDependencies(
   };
   const seeds = unique([
     ...input.changedTestPaths,
-    ...[...parsePlanTaskPaths(input.planText).values()].flatMap((paths) => [...paths].filter(isPlanTestPath)),
+    // Only explicit files seed blob discovery; directory hints are task scope.
+    ...[...parsePlanTaskPaths(input.planText).values()].flatMap((paths) =>
+      [...paths].filter((path) => !path.endsWith('/') && isPlanTestPath(path))),
   ].filter(isPlanTestPath), (path) => path);
   const effects: BuildReviewScopeDependencyEffect[] = [];
   const uncertainties: BuildReviewScopeDependencyUncertainty[] = [];

@@ -203,6 +203,7 @@ the evidence and routes you to the right [runbook](docs/runbooks/index.md).
 - [Code organization](docs/contributing/code-organization.md)
 - [Testing](docs/contributing/testing.md)
 - [Validation](docs/contributing/validation.md)
+- [Build review directory hints](docs/explanation/gates.md#directory-hints-in-build-review)
 - [Releases](docs/contributing/releases.md)
 - [Extending](docs/contributing/extending.md)
 
