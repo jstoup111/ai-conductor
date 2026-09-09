@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { detectKickbackBudgetCommand } from '../../src/cli.js';
 import { resolveMachineOperatorIdentity } from '../../src/engine/cli-operator-authority.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
+import { createConductStateLease } from '../../src/engine/conduct-state-lease.js';
 import type { GhRunner } from '../../src/engine/tracker-client.js';
 
 const execFileP = promisify(execFile);
@@ -182,6 +183,25 @@ describe('kickback-budget inspect reconciles an interrupted adjustment at comman
       expect(await inspect(fixture)).toBe(1);
       expect((await readLedger(fixture.worktree)).gates.build_review.pendingAdjustment.id).toBe('adj-1');
     } finally { await rm(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it('refuses and retains the pending adjustment while the authorization event writer is held', async () => {
+    const fixture = await makeFeature({
+      version: 1, gates: { build_review: { ...baseEntry, capEvidence, pendingAdjustment: pending } },
+    });
+    const eventPath = join(fixture.worktree, '.pipeline', 'pipeline-events.jsonl');
+    const acquired = await createConductStateLease(eventPath, { label: 'kickback-budget-authorization-events' }).acquire();
+    if (!acquired.ok) throw new Error(acquired.message);
+    try {
+      expect(await inspect(fixture)).toBe(1);
+      const entry = (await readLedger(fixture.worktree)).gates.build_review;
+      expect(entry.pendingAdjustment.id).toBe('adj-1');
+      expect(entry.effectiveLimit).toBeUndefined();
+      expect(entry.cumulative).toBe(1);
+    } finally {
+      await acquired.handle.release();
+      await rm(fixture.root, { recursive: true, force: true });
+    }
   });
 });
 

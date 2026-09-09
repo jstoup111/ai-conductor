@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { KickbackBudgetDispatch } from '../cli.js';
-import { appendCloseoutEvent } from './closeout-events.js';
+import { appendCloseoutEvent, appendKickbackBudgetAuthorizationEvent, readKickbackBudgetAuthorizationEvents } from './closeout-events.js';
 import { EventPersister } from './event-persister.js';
 import { AuditTrailWriter } from './audit-trail.js';
 import { ConductorEventEmitter } from '../ui/events.js';
@@ -53,8 +53,8 @@ async function appendAuthorizationEvent(
   event: Extract<ConductorEvent, { type: 'kickback_budget_adjustment_authorized' }>,
   appendEvent?: typeof appendCloseoutEvent,
 ): Promise<void> {
-  if (appendEvent) return appendEvent(worktree, event);
-  appendCloseoutEvent(worktree, event);
+  if (appendEvent) await appendEvent(worktree, event);
+  else await appendKickbackBudgetAuthorizationEvent(worktree, event);
   const events = new ConductorEventEmitter();
   const persister = new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events);
   const audit = new AuditTrailWriter(worktree, { throwOnWriteFailure: true });
@@ -70,8 +70,8 @@ async function reconcilePendingAdjustments(worktree: string): Promise<void> {
   // its own words; reconciliation simply has nothing it may safely act on.
   if (isUnreadableKickbackLedger(ledger)) return;
   let eventText = '';
-  try { eventText = await readFile(join(worktree, '.pipeline', 'pipeline-events.jsonl'), 'utf8'); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('authorization event ledger is unreadable'); }
+  try { eventText = await readKickbackBudgetAuthorizationEvents(worktree); }
+  catch { throw new Error('authorization event ledger is unreadable'); }
   const defaults = await defaultsFor(worktree);
   for (const [gate, entry] of Object.entries(ledger.gates)) {
     const pending = entry.pendingAdjustment;
