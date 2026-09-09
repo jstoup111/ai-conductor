@@ -58,7 +58,7 @@ import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
-import { makeProductionGh } from './tracker-client.js';
+import { createGithubTrackerClient, makeProductionGh } from './tracker-client.js';
 import {
   GH_VERSION_FLOOR,
   probeGhVersion,
@@ -76,7 +76,7 @@ type EngineerDispatchDescriptor =
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
   | { kind: 'poll' }
   | { kind: 'claim' }
-  | { kind: 'forget'; sourceRef: string }
+  | { kind: 'forget'; sourceRef: string; resolvedBy?: string }
   | { kind: 'unclaim'; sourceRef: string }
   | { kind: 'requeue'; stale: true; olderThan?: string }
   | { kind: 'resolve'; sourceRef: string; prUrl: string; branch?: string }
@@ -211,14 +211,21 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
   }
 
   if (subCmd === 'forget') {
-    // `ai-conductor engineer forget <sourceRef>` — drop a ledger entry + strip the label.
+    // `ai-conductor engineer forget <sourceRef> [--resolved-by <reference>]` — drop a
+    // ledger entry + strip the label, optionally recording resolution evidence.
     const sourceRef = argv[4];
-    if (!sourceRef || sourceRef.startsWith('--')) {
+    if (!sourceRef || !sourceRef.trim() || sourceRef.startsWith('--')) {
       return { kind: 'guide' };
     }
-    const unk = findUnknownFlag(argv, []);
+    const resolvedBy = parseFlag(argv, '--resolved-by');
+    if (argv.includes('--resolved-by') && (!resolvedBy || !resolvedBy.trim())) {
+      return { kind: 'guide' };
+    }
+    const unk = findUnknownFlag(argv, ['--resolved-by']);
     if (unk) return { kind: 'reject', sub: 'forget', flag: unk };
-    return { kind: 'forget', sourceRef };
+    return resolvedBy
+      ? { kind: 'forget', sourceRef, resolvedBy }
+      : { kind: 'forget', sourceRef };
   }
 
   if (subCmd === 'unclaim') {
@@ -592,9 +599,9 @@ export const SUBCOMMAND_HELP = {
     'Mutates: dequeues from the inbox and records a claimed entry in the ledger.\n' +
     'Loop fit: first step of the loop — claim → worktree → land → handoff → resolve/forget.',
   forget:
-    'compose forget <sourceRef> — drop a ledger entry and strip its intake label.\n' +
-    'Flags: <sourceRef> positional (required, must not start with --).\n' +
-    'Mutates: removes the entry from the ledger and strips the source label (e.g. on the GitHub issue).\n' +
+    'compose forget <sourceRef> [--resolved-by <reference>] — drop a ledger entry and strip its intake label.\n' +
+    'Flags: <sourceRef> positional (required, must not start with --), --resolved-by <reference> (optional — comments the reference on the originating GitHub issue, then closes it).\n' +
+    'Mutates: removes the entry from the ledger and strips the source label (e.g. on the GitHub issue); with --resolved-by, comments and closes the originating issue first. Without --resolved-by, it does not close the issue.\n' +
     'Loop fit: terminal step — claim → worktree → land → handoff → resolve/forget (abandon path, alternative to resolve).',
   resolve:
     'compose resolve <sourceRef> --pr-url <url> [--branch <branch>] — mark a claimed ledger entry as delivered when the normal write-back failed.\n' +
@@ -638,7 +645,7 @@ function printGuide(print: (s: string) => void): void {
       '  ai-conductor compose unclaim <owner/repo#N>              — requeue a claimed ledger entry back to pending (single-idea recovery)\n' +
       '  ai-conductor compose requeue --stale [--older-than <dur>] — bulk-recover stranded claimed ledger entries (e.g. "24h")\n' +
       '  ai-conductor compose poll                                — poll github issues → enqueue new ideas\n' +
-      '  ai-conductor compose forget <owner/repo#N>               — drop an intake ledger entry + label\n' +
+      '  ai-conductor compose forget <owner/repo#N> [--resolved-by <reference>] — drop an intake ledger entry + label; the optional flag comments and closes the issue\n' +
       '  ai-conductor compose migrate-issue-deps [--confirm]      — one-time prose→link dependency migration ' +
       '(dry-run by default; --confirm writes)\n',
   );
@@ -1293,15 +1300,57 @@ export async function dispatchEngineer(
 
       const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
       if (!entry) {
+        if (dispatch.resolvedBy) {
+          printErr(
+            `engineer forget: cannot record resolution for ${sourceRef}: no intake ledger entry; ` +
+            'rerun without --resolved-by to remove only the source label.',
+          );
+          return 1;
+        }
         print(JSON.stringify({ kind: 'forget', sourceRef, found: false }));
         return 0;
+      }
+
+      const parsedForget = parseSourceRef(sourceRef);
+      const closed = Boolean(dispatch.resolvedBy && parsedForget);
+      if (dispatch.resolvedBy && !parsedForget) {
+        printErr(
+          `engineer forget: cannot record resolution for ${sourceRef}: it is not a GitHub issue reference; ` +
+          'rerun without --resolved-by to remove only the source label.',
+        );
+        return 1;
+      }
+      if (dispatch.resolvedBy && parsedForget) {
+        const tracker = createGithubTrackerClient(gh);
+        try {
+          await tracker.commentOnIssue(
+            parsedForget.repo,
+            Number(parsedForget.issue),
+            `Resolved by ${dispatch.resolvedBy}`,
+            process.cwd(),
+          );
+        } catch (err: unknown) {
+          printErr(
+            `engineer forget: failed to comment on ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
+            'ledger entry retained.',
+          );
+          return 1;
+        }
+        try {
+          await tracker.closeIssue(parsedForget.repo, String(parsedForget.issue), process.cwd());
+        } catch (err: unknown) {
+          printErr(
+            `engineer forget: failed to close ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
+            `close the issue by hand, then rerun \`engineer forget ${sourceRef}\` without --resolved-by.`,
+          );
+          return 1;
+        }
       }
 
       await ledger.forget(GITHUB_ISSUES_SOURCE, sourceRef);
 
       // Best-effort label strip; a gh failure must not fail `forget` (the ledger
       // entry is already gone, which is the authoritative dedup state).
-      const parsedForget = parseSourceRef(sourceRef);
       if (parsedForget) {
         try {
           await gh(restRemoveLabelArgs(parsedForget.repo, parsedForget.issue, HANDLED_LABEL), { cwd: process.cwd() });
@@ -1310,7 +1359,14 @@ export async function dispatchEngineer(
         }
       }
 
-      print(JSON.stringify({ kind: 'forget', sourceRef, found: true, removed: true }));
+      print(JSON.stringify({
+        kind: 'forget',
+        sourceRef,
+        found: true,
+        removed: true,
+        closed,
+        ...(closed ? { resolvedBy: dispatch.resolvedBy } : {}),
+      }));
       return 0;
     }
 
