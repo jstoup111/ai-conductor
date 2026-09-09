@@ -123,6 +123,13 @@ The only disposition statuses are `resolved`, `out-of-scope`, or `indeterminate`
 - an actionable summary; and
 - concrete evidence locations from the supplied projection.
 
+For a resolved candidate, you may copy its supplied source-region path and contentHash into
+`anchor.locus`, with a non-empty display. The engine translates that evidence reference to the
+existing declared-title/occurrence identity only when the complete validated candidate set identifies
+exactly one candidate at that source reference and it is resolved. Shared source hashes remain
+ambiguous: use the canonical test reference in that case. Excluded, indeterminate, and foreign
+regions never gain finding authority through this translation.
+
 The engine validates anchors, canonicalizes identities, stamps the envelope, and decides the branch
 and outer verdict. This skill reports candidate resolutions only from supplied frozen authority; it
 does not read, write, or apply a disposition.

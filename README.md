@@ -182,6 +182,7 @@ the evidence and routes you to the right [runbook](docs/runbooks/index.md).
 - [Configuration](docs/reference/configuration.md) — every `.ai-conductor/config.yml` key
 - [Settings and hooks](docs/reference/settings-and-hooks.md) — `settings.json` and host event hooks
 - [Environment variables](docs/reference/environment.md)
+- [Gates](docs/explanation/gates.md) — verification and review, including validated test-quality candidate references
 - [Steps](docs/reference/steps.md) — the step vocabulary `--from` accepts
 - [Skills](docs/reference/skills.md) — the full skill catalog
 - [Artifacts](docs/reference/artifacts.md) — the `.docs/` and `.pipeline/` trees

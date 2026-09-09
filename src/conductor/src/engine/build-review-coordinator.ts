@@ -8,6 +8,7 @@ import {
   deriveBuildReviewScopeIncompleteFault,
   isLegacyBuildReviewTestScope,
   parseBuildReviewJudgedResult,
+  parseBuildReviewFindingAnchor,
   type BuildReviewJudgedResult,
   type BuildReviewLapId,
   type BuildReviewCoordinatorFailureReason,
@@ -244,7 +245,7 @@ export function stampBuildReviewDispatchedCandidate(
     contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
     lapId: projection.lapId,
     snapshotDigest: projection.snapshotDigest,
-    findings: source?.findings,
+    findings: stampResolvedCandidateFindingAnchors(source, projection),
     ...(source?.scopeResolutions === undefined ? {} : { scopeResolutions: source.scopeResolutions }),
     // The relocation audit is provider-owned EVIDENCE, not an envelope field:
     // the test-quality contract validates it as typed evidence, the
@@ -256,6 +257,45 @@ export function stampBuildReviewDispatchedCandidate(
       ? {}
       : { counterfactualSensitivity: source.counterfactualSensitivity }),
   };
+}
+
+/**
+ * Candidate source hashes are evidence, not persisted finding identity. The
+ * provider can cite that exact engine-supplied evidence; only a unique, valid
+ * resolved candidate permits translating it into the existing title/occurrence
+ * reference. No fuzzy titles, line guesses, or whole-file authority participate.
+ */
+function stampResolvedCandidateFindingAnchors(
+  source: Record<string, unknown> | undefined,
+  projection: BuildReviewRubricProjection,
+): unknown {
+  if (!Array.isArray(source?.findings)) return source?.findings;
+  const context = buildReviewCandidateScopeResolutionContext(projection);
+  const resolutions = parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, context);
+  if (!resolutions) return source.findings;
+  const resolved = resolutions.filter((resolution) => resolution.status === 'resolved');
+  if (resolved.length === 0) return source.findings;
+  const references = buildReviewFindingReferenceContext(projection, resolutions);
+  // The shared authority builder appends one region per resolved candidate,
+  // after established targets, assigning ordinals in that complete namespace.
+  const regions = references.changedTestRegions!.slice(-resolved.length);
+  return source.findings.map((finding: unknown) => {
+    const item = record(finding);
+    const anchor = record(item?.anchor);
+    if (parseBuildReviewFindingAnchor(anchor, references)) return finding;
+    const locus = record(anchor?.locus);
+    if (!item || anchor?.rubric !== 'testQuality' || !locus ||
+        typeof locus.display !== 'string' || !locus.display.trim()) return finding;
+    const matches = context.candidates.filter((candidate) =>
+      candidate.sourceRegion.path === locus.path && candidate.sourceRegion.contentHash === locus.contentHash);
+    // Shared setup can give several candidates the same source hash. Never
+    // infer which test was meant from an untrusted display label.
+    if (matches.length !== 1) return finding;
+    const index = resolved.findIndex((resolution) => resolution.candidateId === matches[0]!.candidateId);
+    const canonical = index < 0 ? undefined : regions[index];
+    if (!canonical || (locus.occurrence !== undefined && locus.occurrence !== (canonical.occurrence ?? 0))) return finding;
+    return { ...item, anchor: { ...anchor, locus: canonical } };
+  });
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

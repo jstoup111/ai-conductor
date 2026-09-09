@@ -793,6 +793,52 @@ describe("build-review coordinator: candidate scope resolutions", () => {
     }, testSuiteProof: {}, revertedProductionManifest: [], preflight: { classification: "approved-exception", exception: "empty-test-set" },
   } as unknown as import('../../src/engine/build-review-projections.js').TestQualityProjection;
 
+  it('stamps a uniquely resolved source reference into the existing declared-title identity', async () => {
+    const projection = {
+      ...candidateProjection,
+      testScope: { targets: [], candidates: [{
+        ...scopeCandidate,
+        declaration: { kind: 'test', titleChain: ['widget', 'persists state'], occurrence: 1 },
+      }] },
+    };
+    const resolution = { ...scopeCandidate, status: 'resolved', associationReason: 'The pinned assertion covers the obligation.' };
+    const payload = {
+      findings: [{ ...testQualityFinding('Cleanup only tests itself'), anchor: {
+        rubric: 'testQuality', locus: { path: scopeRegion.path, contentHash: scopeRegion.contentHash, display: scopeRegion.display },
+      } }], scopeResolutions: [resolution],
+    };
+    const result = validateBuildReviewDispatchedResult(stampBuildReviewDispatchedCandidate(payload, 'testQuality', projection), 'testQuality', projection);
+    expect(result).toMatchObject({ verdict: 'FAIL', findings: [{ anchor: { locus: {
+      path: scopeRegion.path,
+      contentHash: `sha256:${createHash('sha256').update('widget > persists state').digest('hex')}`,
+      occurrence: 1,
+    } } }], scopeResolutions: [resolution] });
+    expect(payload.findings[0]!.anchor.locus.contentHash).toBe(scopeRegion.contentHash);
+    const input = coordinationInput(true, { projections: { testQuality: projection }, dispatchModel: vi.fn(async () => payload) });
+    const coordinated = await coordinateBuildReviewRubrics(input);
+    expect(testQualityBranch(coordinated)).toMatchObject({ kind: 'dispatched', result });
+    expect(input.dispatchModel).toHaveBeenCalledTimes(1);
+    expect(input.writeArtifact).toHaveBeenCalledWith(expect.objectContaining({ result }));
+  });
+
+  it.each(['out-of-scope', 'indeterminate', 'foreign-hash', 'ambiguous', 'wrong-occurrence'])(
+    'does not translate a %s source reference into finding authority', (failure) => {
+      const declared = { ...scopeCandidate, declaration: { kind: 'test', titleChain: ['widget', 'persists state'], occurrence: 1 } };
+      const candidates = failure === 'ambiguous' ? [declared, { ...declared, candidateId: 'sibling' }] : [declared];
+      const projection = { ...candidateProjection, testScope: { targets: [], candidates } };
+      const resolutions = candidates.map((candidate) => failure === 'out-of-scope'
+        ? { candidateId: candidate.candidateId, status: 'out-of-scope', exclusionReason: 'Unrelated assertion.' }
+        : failure === 'indeterminate'
+          ? { candidateId: candidate.candidateId, status: 'indeterminate', missingEvidenceReason: 'Binding uncertain.' }
+          : { ...candidate, status: 'resolved', associationReason: 'Pinned assertion.' });
+      const payload = { findings: [{ ...testQualityFinding('Concern'), anchor: { rubric: 'testQuality', locus: {
+        path: scopeRegion.path, contentHash: failure === 'foreign-hash' ? `sha256:${'b'.repeat(64)}` : scopeRegion.contentHash,
+        display: scopeRegion.display, ...(failure === 'wrong-occurrence' ? { occurrence: 2 } : {}),
+      } } }], scopeResolutions: resolutions };
+      expect(validateBuildReviewDispatchedResult(stampBuildReviewDispatchedCandidate(payload, 'testQuality', projection), 'testQuality', projection)).toBeUndefined();
+    },
+  );
+
   it('diagnoses invalid candidate authority before blaming an otherwise scoped finding anchor', () => {
     const foreignResolution = {
       candidateId: 'candidate-widget', status: 'resolved',

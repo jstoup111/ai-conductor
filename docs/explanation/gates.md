@@ -683,3 +683,13 @@ A plan Files entry ending in `/` describes a directory, not a source file. Build
 read it as a Git blob or seed dependency discovery from it. Changed test files beneath that directory
 still enter review through the pinned Git diff; explicit test-file entries still seed discovery.
 Missing required source blobs and invalid file paths continue to block review.
+
+### Test-quality candidate references
+
+A reviewer may cite a resolved candidate using the source-region reference supplied by the engine.
+When that reference identifies exactly one validated candidate, the engine translates it to the
+existing test-title and occurrence identity before validating the finding. This prevents a source
+hash versus title hash mismatch from discarding an otherwise actionable review. Shared source
+references require a canonical test reference; excluded, indeterminate, or foreign regions remain
+rejected. Finding identities, prior dispositions, and the substantive test-quality verdict do not
+change.
