@@ -39,6 +39,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Build review now fails clearly when it cannot identify this feature's plan. ([implementation PR #2426](https://github.com/jstoup111/ai-conductor/pull/2426)).
 - Build-review failures now keep the actionable review verdict ahead of containment advisories. ([implementation PR #2428](https://github.com/jstoup111/ai-conductor/pull/2428)).
 - Preserve Codex token metering when completed usage is observed live but omitted from retained terminal output. ([implementation PR #2442](https://github.com/jstoup111/ai-conductor/pull/2442)).
+- Prevent build review from halting when a plan's Files list includes a directory hint. ([implementation PR #2469](https://github.com/jstoup111/ai-conductor/pull/2469)).
 
 ## Migration
 
