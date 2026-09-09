@@ -20,6 +20,10 @@ build_review:
 
 # CONFIG_INIT_TEST_SUITE_VERIFICATION
 
+# OpenTelemetry identity override (optional; defaults to this machine's hostname).
+# otel:
+#   worker_name: ci-worker-1
+
 # --- Per-step overrides (optional) -------------------------------------------
 # steps:
 #   explore:

@@ -49,17 +49,19 @@ trap 'rm -rf "$TMP_ROOT"' EXIT
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 # Copy the minimal harness surface bin/install needs (skills enumeration, the
-# conduct symlink source, hook configuration). src/conductor is deliberately
-# omitted so build_conduct_ts skips (no npm install in a smoke test); the guard
-# keys on the path alone, so a plain copy at a .worktrees/-shaped path suffices.
+# conduct symlink source, hook configuration). The unrelated engine build is
+# represented by an empty existing bundle, as in test_codex_skill_installation.sh;
+# no npm install runs. A plain copy at a .worktrees/-shaped path exercises the guard.
 make_harness_copy() {
   local dest=$1
   mkdir -p "$dest"
   cp -r "$HARNESS_DIR/bin" "$dest/bin"
   cp -r "$HARNESS_DIR/skills" "$dest/skills"
   cp -r "$HARNESS_DIR/hooks" "$dest/hooks"
-  cp "$HARNESS_DIR/HARNESS.md" "$dest/HARNESS.md"
+  cp "$HARNESS_DIR/HARNESS.md" "$HARNESS_DIR/ARCHITECTURE.md" "$dest/"
   cp "$HARNESS_DIR/VERSION" "$dest/VERSION"
+  mkdir -p "$dest/src/conductor/dist"
+  : > "$dest/src/conductor/dist/index.js"
 }
 
 # Stub out external tools the default-install dependency bootstrap probes for
@@ -249,6 +251,32 @@ assert "Claude harness instructions linked on the plain-root install" \
 assert "Codex harness instructions linked on the plain-root install" \
   "$([ -L "$HOME7/.agents/skills/HARNESS.md" ]; echo $?)"
 
+# References resolve beside the installed HARNESS.md for both hosts. Check mode
+# must diagnose missing links without repairing them; update owns repair.
+for catalog in .claude/skills .agents/skills; do
+  reference="$HOME7/$catalog/ARCHITECTURE.md"
+  assert "$catalog architecture reference resolves to the installed checkout" \
+    "$([ -L "$reference" ] && [ "$(readlink -f "$reference")" = "$PLAIN_COPY/ARCHITECTURE.md" ]; echo $?)"
+  rm -f "$reference"
+done
+run_install "$PLAIN_COPY/bin/install" "$HOME7" --check
+assert "check diagnoses the missing architecture reference" \
+  "$(echo "$OUT" | grep -q 'architecture reference.*missing'; echo $?)"
+assert "check leaves the missing architecture reference untouched" \
+  "$([ ! -L "$HOME7/.agents/skills/ARCHITECTURE.md" ]; echo $?)"
+run_install "$PLAIN_COPY/bin/install" "$HOME7" --update
+assert "update repairs the missing architecture reference" \
+  "$([ -f "$HOME7/.agents/skills/ARCHITECTURE.md" ]; echo $?)"
+
+# Updating from another complete checkout must recognize the old reference
+# before it retargets HARNESS.md, the catalog's ownership anchor.
+run_install "$WORKTREE_COPY/bin/install" "$HOME7" --update --allow-worktree-root
+for catalog in .claude/skills .agents/skills; do
+  assert "$catalog architecture reference follows a checkout update" \
+    "$([ "$(readlink -f "$HOME7/$catalog/ARCHITECTURE.md")" = "$WORKTREE_COPY/ARCHITECTURE.md" ]; echo $?)"
+done
+run_install "$PLAIN_COPY/bin/install" "$HOME7" --update
+
 run_install "$PLAIN_COPY/bin/install" "$HOME7" --uninstall
 assert "uninstall removes Claude user-scoped skills" \
   "$([ ! -e "$HOME7/.claude/skills/tdd" ]; echo $?)"
@@ -258,6 +286,31 @@ assert "uninstall removes Claude user-scoped harness instructions" \
   "$([ ! -e "$HOME7/.claude/skills/HARNESS.md" ]; echo $?)"
 assert "uninstall removes Codex user-scoped harness instructions" \
   "$([ ! -e "$HOME7/.agents/skills/HARNESS.md" ]; echo $?)"
+
+for catalog in .claude/skills .agents/skills; do
+  assert "uninstall removes $catalog architecture reference" \
+    "$([ ! -L "$HOME7/$catalog/ARCHITECTURE.md" ]; echo $?)"
+  printf 'operator reference\n' > "$HOME7/$catalog/ARCHITECTURE.md"
+done
+run_install "$PLAIN_COPY/bin/install" "$HOME7" --update
+run_install "$PLAIN_COPY/bin/install" "$HOME7" --uninstall
+for catalog in .claude/skills .agents/skills; do
+  assert "update and uninstall preserve $catalog operator reference" \
+    "$(grep -qx 'operator reference' "$HOME7/$catalog/ARCHITECTURE.md"; echo $?)"
+done
+
+# A foreign symlink is also operator-owned, even beside valid harness links.
+for catalog in .claude/skills .agents/skills; do
+  reference="$HOME7/$catalog/ARCHITECTURE.md"
+  rm -- "$reference"
+  ln -s "$PLAIN_COPY/VERSION" "$reference"
+done
+run_install "$PLAIN_COPY/bin/install" "$HOME7" --update
+run_install "$PLAIN_COPY/bin/install" "$HOME7" --uninstall
+for catalog in .claude/skills .agents/skills; do
+  assert "update and uninstall preserve $catalog foreign architecture symlink" \
+    "$([ "$(readlink "$HOME7/$catalog/ARCHITECTURE.md")" = "$PLAIN_COPY/VERSION" ]; echo $?)"
+done
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 

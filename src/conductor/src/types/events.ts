@@ -13,6 +13,12 @@ import type { SchedulingUnitRef } from './scheduling-unit.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
+/** Daemon-lifetime backlog dimensions. Kept closed so metric cardinality is bounded. */
+export type BacklogState = 'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked';
+export type DispatchKind = 'initial' | 'resume' | 'rekick';
+export type DispatchBlockReason = 'paused' | 'build_auth_missing' | 'gh_version' | 'episode_active';
+export type FeatureDispatchOutcome = 'complete' | 'halted' | 'terminated';
+
 /** Closed outcomes for the daemon's bounded setup repair session. */
 export type SetupRepairDisposition =
   | 'engine-committed'
@@ -194,6 +200,29 @@ export type ProviderStreamProgressEvent = ProviderStreamObservation & {
 };
 
 export type ConductorEvent =
+  | {
+      type: 'daemon_backlog_snapshot';
+      counts: Record<BacklogState, number>;
+      oldestAgeSeconds: Partial<Record<BacklogState, number>>;
+      slots: { busy: number; free: number };
+      inFlight: string[];
+      blocked: Record<DispatchBlockReason, boolean>;
+      pollDurationMs: number;
+    }
+  | { type: 'feature_dispatch_started'; slug: string; kind: DispatchKind }
+  | {
+      type: 'feature_dispatch_ended';
+      slug: string;
+      outcome: FeatureDispatchOutcome;
+      haltClass?: import('../engine/halt-marker.js').HaltDisposition;
+      step?: string;
+    }
+  | {
+      type: 'feature_shipped';
+      slug: string;
+      runStartedAt?: number;
+      active: { state: 'exact' | 'partial' | 'unavailable'; activeMs?: number };
+    }
   | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
   | {
       type: 'setup_repair';
@@ -260,9 +289,30 @@ export type ConductorEvent =
   | { type: 'build_review_rubric_result'; rubric: string; lapId: string; verdict: 'PASS' | 'FAIL' }
   | { type: 'build_review_rubric_skipped'; rubric: string; lapId: string; reason: string }
   | { type: 'build_review_cache_hit'; rubric: string; lapId: string }
+  /** Frozen scope assessment for one rubric lap; routine detail stays in the shared ledger. */
+  | {
+      type: 'build_review_scope_summary';
+      rubric: string;
+      lapId: string;
+      establishedTargetCount: number;
+      candidateCount: number;
+      unresolvedReasons: readonly string[];
+    }
   /** adr-2026-08-21 D5: a cached judgement discarded because the judging engine or rubric skill text changed. */
   | { type: 'build_review_cache_discarded'; rubric: string; lapId: string; reason: 'engine-version-mismatch' | 'skill-digest-mismatch'; cachedEngineStamp?: string; currentEngineStamp: string }
   | { type: 'build_review_rubric_infrastructure_failure'; rubric: string; lapId: string; reason: string; excerpt?: string }
+  /** Valid scope judgment could not resolve a concrete candidate; not a malformed provider result. */
+  | {
+      type: 'build_review_scope_incomplete';
+      rubric: string;
+      lapId: string;
+      candidates: readonly {
+        candidateId: string;
+        sourceRegion: { path: string; startLine: number; endLine: number; contentHash: string; display: string };
+        obligationReferences: readonly string[];
+        missingEvidenceReason: string;
+      }[];
+    }
   | {
       /** The shared retry allowance was exhausted for a mechanical rubric failure. */
       type: 'build_review_mechanical_allowance_exhausted';
@@ -293,6 +343,8 @@ export type ConductorEvent =
       reason?: string;
       /** Unbound Covers declarations seen in the frozen test-quality scope. */
       unresolvedMarkers?: readonly { selector: string; reference: string }[];
+      /** Findings below the configured per-rubric confidence floor. */
+      suppressedFindings?: readonly { findingId: string; rubric: string; confidence: number; floor: number }[];
     }
   | {
       /** A post-join remediation judgement is about to run for one build-review lap. */
@@ -586,12 +638,17 @@ export type ConductorEvent =
         | 'head-unresolvable'
         | 'base-tip-unresolved'
         | 'workspace-differs-from-head'
-        | 'head-differs-from-base';
+        | 'head-differs-from-base'
+        | 'engine-append-unvouched';
       path?: string;
       /** Merge-base used to classify a named path, when provenance resolved far enough to obtain one. */
       mergeBase?: string;
       /** Whether HEAD changed the named path since `mergeBase`; degraded probes stay explicit. */
       headTouchedPath?: boolean | 'indeterminate';
+      /** Why the operator-reseal exit could not approve this named path. */
+      operatorResealExit?: 'not-resealed' | 'sealed-content-mismatch';
+      /** Why the engine-remediation-append exit could not approve this named path. */
+      engineAppendExit?: 'not-present' | 'unvouched';
     }
   | {
       /** An interactive operator resealed the enumerated protected artifacts. */

@@ -1,4 +1,4 @@
-// Covers: task:16, task:rem-as-built-rem-ab1-4
+// Covers: task:12, task:14, task:16, task:rem-as-built-rem-ab1-4
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review-adjudication-coordinator.js';
+import { persistBuildReviewSuppressions } from '../../src/engine/build-review-suppression-history.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
@@ -242,8 +243,164 @@ describe('coordinateBuildReviewAdjudication', () => {
       ...input(root, judge), operatorResolvedFindingIds: new Set([findingId]),
     });
 
-    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(result).toMatchObject({ ok: true, route: 'pass', dispatchSkipped: false });
     expect(judge).not.toHaveBeenCalled();
+  });
+
+  it('preserves applied effect ids when an acceptance-terminal path bypasses the provider', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-durable', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The repair was applied before operator acceptance.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-09-06T00:00:00.000Z' }],
+        effect: { id: 'effect-durable', kind: 'action', status: 'applied', workOrderId: 'order-durable' },
+      }],
+    });
+    const events: RemediationCaseLifecycleEvent[] = [];
+
+    await coordinateBuildReviewAdjudication({
+      ...input(root, async () => actionJudgement()),
+      operatorResolvedFindingIds: new Set([findingId]),
+      emit: async (event) => { events.push(event); },
+    });
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'remediation_adjudication_completed', effectIds: ['effect-durable'],
+    }));
+  });
+
+  it('refreshes one suppression through coordinator merge without pruning prior history or writing operator authority', async () => {
+    const root = await projectRoot();
+    const priorFindingId = 'finding-from-an-earlier-lap';
+    const firstLap = {
+      findingId,
+      rubric: 'testQuality',
+      summary: 'Initial low-confidence finding.',
+      confidence: 40,
+      floor: 70,
+      lastSeenLap: 'lap-suppression-first',
+    } as const;
+    const refreshed = {
+      findingId,
+      rubric: 'testQuality',
+      summary: 'Refreshed low-confidence finding.',
+      confidence: 55,
+      floor: 70,
+      lastSeenLap: 'lap-suppression-second',
+    } as const;
+    const retained = {
+      findingId: priorFindingId,
+      rubric: 'testQuality',
+      summary: 'A prior suppression absent from this lap.',
+      confidence: 35,
+      floor: 70,
+      lastSeenLap: 'lap-earlier',
+    } as const;
+
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => { throw new Error('suppressed finding must not reach the judge'); }),
+      suppressions: [firstLap, retained],
+      suppressedFindingIds: new Set([findingId]),
+    })).resolves.toMatchObject({ ok: true, route: 'pass' });
+
+    const secondLapAggregate = joinBuildReviewRubricOutcomes({
+      lapId: 'lap-suppression-second' as never,
+      snapshotDigest: 'snapshot-suppression-second',
+      results: {
+        testQuality: {
+          kind: 'judged', rubric: 'testQuality', lapId: 'lap-suppression-second' as never, snapshotDigest: 'snapshot-suppression-second', contractVersion: 'v3', verdict: 'FAIL',
+          findings: [
+            {
+              concernKind: 'test-insensitive', summary: 'The changed test is insensitive.', evidenceLocations: ['test/example.test.ts:1'],
+              anchor: { rubric: 'testQuality', locus: { path: 'test/example.test.ts', contentHash: 'sha256:fixture', display: 'example test' } },
+            },
+            {
+              concernKind: 'test-insensitive', summary: 'An unrelated changed test is insensitive.', evidenceLocations: ['test/unrelated.test.ts:1'],
+              anchor: { rubric: 'testQuality', locus: { path: 'test/unrelated.test.ts', contentHash: 'sha256:unrelated', display: 'unrelated test' } },
+            },
+          ],
+        },
+      },
+    });
+    const unrelatedSource = projectBuildReviewAggregateSources(secondLapAggregate)![1]!;
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => ({
+        mode: 'case-v1', domain: 'build_review',
+        sourceOutcomes: [{ sourceId: buildReviewAdjudicationSourceId(unrelatedSource), outcome: 'acted', caseRef: 'case-unrelated' }],
+        cases: [{
+          caseRef: 'case-unrelated', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'The unrelated test needs an assertion.',
+          effect: { kind: 'action', route: 'build', tasks: [{ title: 'Repair the unrelated test' }] },
+        }],
+      })),
+      aggregate: secondLapAggregate,
+      suppressions: [refreshed],
+      suppressedFindingIds: new Set([findingId]),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    const persisted = await new RemediationCaseStore(root, feature).read();
+    expect(persisted).toMatchObject({
+      ok: true,
+      state: { suppressions: expect.arrayContaining([refreshed, retained]) },
+    });
+    if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
+    expect(persisted.state.suppressions?.filter((entry) => entry.findingId === findingId)).toEqual([refreshed]);
+    await expect(access(join(root, '.pipeline/build-review-dispositions.json'))).rejects.toThrow();
+  });
+
+  it('leaves exactly one row when the coordinator re-runs the seam over a lap the effective-verdict path already persisted', async () => {
+    const root = await projectRoot();
+    const entry = {
+      findingId,
+      rubric: 'testQuality',
+      summary: 'A sub-floor finding on a mixed lap.',
+      confidence: 45,
+      floor: 70,
+      lastSeenLap: 'lap-1',
+    } as const;
+
+    // The effective-verdict seam writes first, on every lap.
+    await expect(persistBuildReviewSuppressions({ projectRoot: root, feature, suppressions: [entry] }))
+      .resolves.toEqual({ ok: true });
+
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, async () => { throw new Error('suppressed finding must not reach the judge'); }),
+      suppressions: [entry],
+      suppressedFindingIds: new Set([findingId]),
+    })).resolves.toMatchObject({ ok: true, route: 'pass' });
+
+    const persisted = await new RemediationCaseStore(root, feature).read();
+    if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
+    expect(persisted.state.suppressions).toEqual([entry]);
+  });
+
+  it('shows the judge a suppression the seam wrote on an earlier lap as non-blocking history', async () => {
+    const root = await projectRoot();
+    const earlierLap = {
+      findingId: 'finding-suppressed-on-an-earlier-lap',
+      rubric: 'testQuality',
+      summary: 'A finding suppressed on a fully suppressed lap.',
+      confidence: 30,
+      floor: 70,
+      lastSeenLap: 'lap-0',
+    } as const;
+
+    await expect(persistBuildReviewSuppressions({ projectRoot: root, feature, suppressions: [earlierLap] }))
+      .resolves.toEqual({ ok: true });
+
+    const judge = vi.fn(async (context: unknown) => {
+      expect(context).toMatchObject({
+        currentFindings: [expect.objectContaining({ findingId })],
+        suppressionHistory: [earlierLap],
+      });
+      return actionJudgement();
+    });
+
+    await expect(coordinateBuildReviewAdjudication(input(root, judge))).resolves.toMatchObject({ ok: true, route: 'build' });
+    expect(judge).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -825,6 +982,141 @@ describe('coordinateBuildReviewAdjudication', () => {
       type: 'remediation_semantic_repeat_halt', caseId: 'case-durable', effectId: 'effect-durable', reason: 'regressed',
     }));
   });
+
+  it.each([
+    ['an applied deferral', 'defer', 'deferred', { id: 'effect-durable', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/1' }],
+    ['a rejection', 'reject', 'rejected', { kind: 'none' }],
+    ['a merged source on an applied action case', 'act', 'merged', { id: 'effect-durable', kind: 'action', status: 'applied', workOrderId: 'order-durable' }],
+  ] as const)('skips the judge when exact recurrence is settled by %s', async (_description, disposition, outcome, effect) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-finalized', domain: 'build_review', disposition, priority: 'low', confidence: 'high',
+        rationale: 'This finding is already finalized.', resolution: 'resolved',
+        sources: [{ sourceId, outcome, recordedAt: '2026-09-06T00:00:00.000Z' }], effect,
+      }],
+    });
+    const judge = vi.fn(async () => actionJudgement());
+
+    const result = await coordinateBuildReviewAdjudication(input(root, judge));
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(judge).not.toHaveBeenCalled();
+  });
+
+  it('settles only the merged source of a resolved action case and re-adjudicates its unmerged sibling', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    // One resolved action case carrying two sources: the first merged, the
+    // second only acted. Settlement is per source, so the merged source is
+    // retired while its unmerged sibling recurs live and must reach the judge.
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-mixed-outcomes', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'One source of this case merged; the other did not.', resolution: 'resolved',
+        sources: [
+          { sourceId: buildReviewAdjudicationSourceId(acceptedSource), outcome: 'merged', recordedAt: '2026-09-06T00:00:00.000Z' },
+          { sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'acted', recordedAt: '2026-09-06T00:00:00.000Z' },
+        ],
+        effect: { id: 'effect-mixed', kind: 'action', status: 'applied', workOrderId: 'order-mixed' },
+      }],
+    });
+    const contexts: unknown[] = [];
+    const judge = vi.fn(async (context: unknown) => {
+      contexts.push(context);
+      // The unmerged sibling recurs against its own still-resolved case, which
+      // is the semantic-repeat regression the coordinator must be able to see.
+      return {
+        mode: 'case-v1' as const, domain: 'build_review' as const,
+        sourceOutcomes: [{ sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'acted' as const, caseRef: 'case-live' }],
+        cases: [{
+          caseRef: 'case-live', existingCaseId: 'case-mixed-outcomes', disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+          rationale: 'The unmerged sibling still needs a focused assertion.',
+          effect: { kind: 'action' as const, route: 'build' as const, tasks: [{ title: 'Repair the second test' }] },
+        }],
+      };
+    });
+
+    const result = await coordinateBuildReviewAdjudication({ ...input(root, judge), aggregate: mixedAggregate, generateId: sequentialIds('sibling') });
+
+    expect(judge).toHaveBeenCalledTimes(1);
+    expect(contexts[0]).toMatchObject({ currentFindings: [expect.objectContaining({ sourceId: buildReviewAdjudicationSourceId(liveSource) })] });
+    expect(result).toMatchObject({ ok: false, detail: 'semantic remediation case regression case-mixed-outcomes' });
+  });
+
+  it('keeps a merged source live while its applied action case remains open', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-open-action', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The repair was applied but the case is not resolved.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'merged', recordedAt: '2026-09-06T00:00:00.000Z' }],
+        effect: { id: 'effect-open-action', kind: 'action', status: 'applied', workOrderId: 'order-open-action' },
+      }],
+    });
+    const judge = vi.fn(async () => actionJudgement());
+
+    await coordinateBuildReviewAdjudication(input(root, judge));
+
+    expect(judge).toHaveBeenCalledOnce();
+  });
+
+  it('dispatches only the new source when another exact recurrence is settled', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-finalized', domain: 'build_review', disposition: 'reject', priority: 'low', confidence: 'high',
+        rationale: 'The first finding is already finalized.', resolution: 'resolved',
+        sources: [{ sourceId: buildReviewAdjudicationSourceId(acceptedSource), outcome: 'rejected', recordedAt: '2026-09-06T00:00:00.000Z' }],
+        effect: { kind: 'none' },
+      }],
+    });
+    const judge = vi.fn(async (context: unknown) => {
+      expect(context).toMatchObject({ currentFindings: [expect.objectContaining({ sourceId: buildReviewAdjudicationSourceId(liveSource) })] });
+      return {
+        mode: 'case-v1' as const, domain: 'build_review' as const,
+        sourceOutcomes: [{ sourceId: buildReviewAdjudicationSourceId(liveSource), outcome: 'acted' as const, caseRef: 'case-live' }],
+        cases: [{
+          caseRef: 'case-live', disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+          rationale: 'The second test needs a focused assertion.',
+          effect: { kind: 'action' as const, route: 'build' as const, tasks: [{ title: 'Repair the second test' }] },
+        }],
+      };
+    });
+
+    const result = await coordinateBuildReviewAdjudication({ ...input(root, judge), aggregate: mixedAggregate });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    expect(judge).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a skipped dispatch only when every live source was already settled (NC.3)', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-finalized', domain: 'build_review', disposition: 'reject', priority: 'low', confidence: 'high',
+        rationale: 'The finding is already finalized.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'rejected', recordedAt: '2026-09-06T00:00:00.000Z' }],
+        effect: { kind: 'none' },
+      }],
+    });
+    const judge = vi.fn(async () => actionJudgement());
+
+    const result = await coordinateBuildReviewAdjudication({ ...input(root, judge) });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass', dispatchSkipped: true, trace: expect.stringContaining('case-finalized') });
+    expect(judge).not.toHaveBeenCalled();
+  });
+
   it('adjudicates the unresolved remainder when the lap opens with a pre-existing acceptance', async () => {
     const root = await projectRoot();
     const judge = vi.fn(async () => {

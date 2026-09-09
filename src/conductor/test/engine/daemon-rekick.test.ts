@@ -213,6 +213,8 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
       'protected-artifact': 'retain',
       unclassified: 'retain',
       mechanical: 'retry',
+      'kickback-cap': 'retry',
+      'over-scope': 'retry',
       legacy: 'retry',
     } satisfies Record<HaltDisposition, 'retain' | 'retry'>;
 
@@ -934,6 +936,28 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     expect(attempts).toBe(3); // exhausted the cap before parking
     expect(await fileExists(join(dir, HALT_MARKER))).toBe(true);
     expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
+  });
+
+  it('completed rebase that drops feature content writes completed-rebase recovery at the re-kick halt site', async () => {
+    await initConflictRepo();
+    await writeSentinel();
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      resolveAttempts: 3,
+      resolveConflict: async () => {
+        await git('rebase', '--skip');
+        return { resolved: true };
+      },
+    });
+
+    const halt = await readFile(join(dir, HALT_MARKER), 'utf8');
+    expect(res).toBe('halted');
+    expect(halt).toContain('Review the completed rebase and restore any missing feature content.');
+    expect(halt).not.toContain('git rebase --continue');
   });
 
   // Task 12: Rekick call site ships capability-absent (fail-closed).

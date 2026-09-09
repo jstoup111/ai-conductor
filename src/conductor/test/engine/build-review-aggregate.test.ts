@@ -1,13 +1,15 @@
-// Covers: S3.2, task:3
+// Covers: S3.2, task:3, task:15
 import { describe, expect, it } from 'vitest';
 
-import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import type { BuildReviewFinding, BuildReviewJudgedResult } from '../../src/engine/build-review-domain.js';
 import {
   deriveEffectiveBuildReviewVerdict,
+  deriveEffectiveBuildReviewVerdictWithDispositions,
   joinBuildReviewRubricOutcomes,
   parseBuildReviewAggregate,
 } from '../../src/engine/build-review-aggregate.js';
+import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 
 // Surviving coverage in test/engine/build-review-verdict.test.ts (gate wiring,
 // mechanical-fault lane, incomplete `results`) and test/build-review-compat.test.ts
@@ -29,11 +31,84 @@ const finding: BuildReviewFinding = {
   anchor: { rubric: 'testQuality', locus: { path: 'test/widget.test.ts', contentHash: HASH, display: 'widget persists state' } },
 };
 
+function confidenceFinding(confidence: number | undefined, label: string): BuildReviewFinding {
+  return {
+    concernKind: 'test-insensitive', summary: `Finding ${label}`, evidenceLocations: [`test/${label}.test.ts:8`],
+    anchor: { rubric: 'testQuality', locus: { path: `test/${label}.test.ts`, contentHash: HASH, display: label } },
+    ...(confidence === undefined ? {} : { confidence }),
+  };
+}
+
+function findingId(value: BuildReviewFinding): string {
+  return canonicalizeBuildReviewFindingIdentity({
+    rubric: 'testQuality', contractVersion: 'v3', concernKind: value.concernKind, anchor: value.anchor,
+  })!.id;
+}
+
 function currentAggregate() {
   return joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: judged() } });
 }
 
 describe('build-review raw aggregate', () => {
+  it('retains judged findings while deriving a blocking scope-incomplete fault from validated indeterminacy', () => {
+    const result = {
+      ...judged([finding]),
+      scopeResolutions: [{
+        candidateId: 'candidate:setup', status: 'indeterminate',
+        sourceRegion: { path: 'test/widget.test.ts', startLine: 3, endLine: 8, contentHash: HASH, display: 'widget setup' },
+        obligationReferences: ['story:S6.1'],
+        missingEvidenceReason: 'the helper association is ambiguous',
+      }],
+    } as BuildReviewJudgedResult;
+
+    const fault = deriveBuildReviewScopeIncompleteFault(result);
+    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: result } });
+
+    expect(fault).toMatchObject({
+      rubric: 'testQuality', reason: 'scope-incomplete',
+      candidates: [{ candidateId: 'candidate:setup', obligationReferences: ['story:S6.1'], missingEvidenceReason: 'the helper association is ambiguous' }],
+    });
+    expect(aggregate).toMatchObject({
+      verdict: 'FAIL', coverage: { testQuality: 'scope-incomplete' },
+      results: { testQuality: { findings: [finding] } },
+      scopeIncomplete: [fault],
+    });
+    expect(parseBuildReviewAggregate(aggregate)).toEqual(aggregate);
+    expect(deriveEffectiveBuildReviewVerdict(aggregate)).toMatchObject({
+      verdict: 'FAIL', unresolvedFindingIds: [expect.any(String)], scopeIncompleteRubrics: ['testQuality'],
+      uncoveredScopeIncompleteRubrics: ['testQuality'],
+    });
+  });
+
+  it('allows reduced coverage to cover only the derived scope fault, never an independent finding', () => {
+    const scopeOnly = {
+      ...judged(),
+      scopeResolutions: [{
+        candidateId: 'candidate:setup', status: 'indeterminate',
+        sourceRegion: { path: 'test/widget.test.ts', startLine: 3, endLine: 8, contentHash: HASH, display: 'widget setup' },
+        obligationReferences: ['story:S6.1'], missingEvidenceReason: 'the helper association is ambiguous',
+      }],
+    } as BuildReviewJudgedResult;
+    const scopeAndFinding: BuildReviewJudgedResult = { ...scopeOnly, findings: [finding], verdict: 'FAIL' };
+    const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
+    const coverage = [{
+      kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
+      identity: { rubric: 'testQuality' as const, reason: 'scope-incomplete' as const },
+      rationale: 'operator accepts the bounded missing association', operator: 'operator', acceptedAt: '2026-09-06T00:00:00.000Z',
+    }];
+
+    expect(deriveEffectiveBuildReviewVerdictWithDispositions(
+      joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: scopeOnly } }), feature, [], coverage,
+    )).toMatchObject({
+      verdict: 'PASS', scopeIncompleteRubrics: ['testQuality'], uncoveredScopeIncompleteRubrics: [], unresolvedFindingIds: [],
+    });
+    expect(deriveEffectiveBuildReviewVerdictWithDispositions(
+      joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: scopeAndFinding } }), feature, [], coverage,
+    )).toMatchObject({
+      verdict: 'FAIL', scopeIncompleteRubrics: ['testQuality'], uncoveredScopeIncompleteRubrics: [], unresolvedFindingIds: [expect.any(String)],
+    });
+  });
+
   it.each(['wiring', 'scope', 'rootCause', 'completeness', 'causalIntegrity', 'tautology'] as const)(
     'tolerates an in-flight aggregate whose FAIL verdict derives only from the retired %s member',
     (retired) => {
@@ -125,8 +200,9 @@ describe('build-review raw aggregate', () => {
     });
     expect(parseBuildReviewAggregate(aggregate)).toEqual(aggregate);
     expect(deriveEffectiveBuildReviewVerdict(aggregate)).toEqual({
-      rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [],
+      rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
       skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+      uncoveredScopeIncompleteRubrics: [],
     });
   });
 
@@ -153,5 +229,45 @@ describe('build-review raw aggregate', () => {
     expect(parseBuildReviewAggregate({ ...aggregate, coverage: { testQuality: 'skipped' } })).toBeUndefined();
     expect(parseBuildReviewAggregate({ ...aggregate, findings: { testQuality: [] } })).toBeUndefined();
     expect(parseBuildReviewAggregate({ ...aggregate, reasons: [] })).toBeUndefined();
+  });
+
+  it('suppresses only findings below the configured confidence floor', () => {
+    const below = confidenceFinding(69, 'below-floor');
+    const at = confidenceFinding(70, 'at-floor');
+    const above = confidenceFinding(90, 'above-floor');
+    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: judged([below, at, above]) } });
+
+    expect(deriveEffectiveBuildReviewVerdict(aggregate, new Set(), [], { testQuality: 70 })).toMatchObject({
+      suppressedFindingIds: [findingId(below)],
+      unresolvedFindingIds: [findingId(at), findingId(above)],
+    });
+  });
+
+  it('passes when every finding is suppressed and never suppresses an unscored finding', () => {
+    const lower = confidenceFinding(20, 'lower');
+    const low = confidenceFinding(69, 'low');
+    const unscored = confidenceFinding(undefined, 'unscored');
+    const allSuppressed = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: judged([lower, low]) } });
+    const withUnscored = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: judged([lower, low, unscored]) } });
+
+    expect(deriveEffectiveBuildReviewVerdict(allSuppressed, new Set(), [], { testQuality: 70 })).toMatchObject({
+      rawVerdict: 'FAIL', verdict: 'PASS', unresolvedFindingIds: [], suppressedFindingIds: [findingId(lower), findingId(low)],
+    });
+    expect(deriveEffectiveBuildReviewVerdict(withUnscored, new Set(), [], { testQuality: 70 })).toMatchObject({
+      verdict: 'FAIL', suppressedFindingIds: [findingId(lower), findingId(low)], unresolvedFindingIds: [findingId(unscored)],
+    });
+  });
+
+  it('applies identical floor semantics through the dispositions entry point', () => {
+    const below = confidenceFinding(69, 'disposition-below');
+    const at = confidenceFinding(70, 'disposition-at');
+    const above = confidenceFinding(90, 'disposition-above');
+    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: judged([below, at, above]) } });
+    const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
+
+    expect(deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, [], [], { testQuality: 70 })).toMatchObject({
+      suppressedFindingIds: [findingId(below)],
+      unresolvedFindingIds: [findingId(at), findingId(above)],
+    });
   });
 });

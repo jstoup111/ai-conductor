@@ -41,7 +41,7 @@ export type HaltClass =
   | typeof PLAN_GAP_HALT_CLASS;
 
 /** Classification observed while reading a HALT sidecar. */
-export type HaltDisposition = HaltClass | 'legacy' | 'unclassified';
+export type HaltDisposition = HaltClass | 'kickback-cap' | 'over-scope' | 'legacy' | 'unclassified';
 
 /** True for a classified halt which the daemon must retain for an operator. */
 export function isOperatorActionHalt(
@@ -259,6 +259,34 @@ export async function readHaltClass(worktreePath: string): Promise<HaltDispositi
     ) {
       return contents;
     }
+    return 'unclassified';
+  } catch {
+    return 'unclassified';
+  }
+}
+
+/**
+ * Classify a HALT for telemetry. Missing, unreadable, and invalid sidecars
+ * fail closed as `unclassified`; only the migration may stamp `legacy`.
+ */
+export async function readHaltSidecarClassification(worktreePath: string): Promise<HaltDisposition> {
+  const haltPath = join(worktreePath, HALT_MARKER);
+  try {
+    await stat(haltPath);
+  } catch {
+    return 'unclassified';
+  }
+  try {
+    const contents = (await readFile(join(worktreePath, HALT_CLASS_MARKER), 'utf-8')).trim();
+    if (
+      contents === 'needs-human' ||
+      contents === 'mechanical' ||
+      contents === 'kickback-cap' ||
+      contents === 'over-scope' ||
+      contents === 'legacy' ||
+      contents === PROTECTED_ARTIFACT_HALT_CLASS ||
+      contents === PLAN_GAP_HALT_CLASS
+    ) return contents;
     return 'unclassified';
   } catch {
     return 'unclassified';

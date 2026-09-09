@@ -7,12 +7,14 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
-import { InMemorySpanExporter, type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace-base';
+import { type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace-base';
+import { CapturingSpanExporter as InMemorySpanExporter } from './fixtures/capturing-span-exporter.js';
 import { resolveOtelConfig } from '../src/engine/otel/otel-config.js';
 import { createOtelVisualizer } from '../src/engine/otel/create-otel-visualizer.js';
 import type { FeatureRunnerDeps, FeatureRunScope } from '../src/engine/daemon-runner.js';
 
 type WireOtelVisualizer = typeof import('../src/engine/otel/wire.js').wireOtelVisualizer;
+type WireDaemonOtel = typeof import('../src/engine/otel/wire.js').wireDaemonOtel;
 type VisualizerPlugin = import('../src/types/plugin.js').VisualizerPlugin;
 type HarnessConfig = import('../src/types/config.js').HarnessConfig;
 type LoadMergedConfig = typeof import('../src/engine/config.js').loadMergedConfig;
@@ -33,10 +35,11 @@ const fixture = vi.hoisted(() => ({
   runnerSessionIds: [] as string[],
 }));
 const wireOtelVisualizer = vi.hoisted(() => vi.fn<WireOtelVisualizer>(() => null));
+const wireDaemonOtel = vi.hoisted(() => vi.fn<WireDaemonOtel>(() => null));
 const loadMergedConfig = vi.hoisted(() => vi.fn<LoadMergedConfig>());
 const resolveEngineVersion = vi.hoisted(() => vi.fn<ResolveEngineVersion>(() => 'dev'));
 
-vi.mock('../src/engine/otel/wire.js', () => ({ wireOtelVisualizer }));
+vi.mock('../src/engine/otel/wire.js', () => ({ wireOtelVisualizer, wireDaemonOtel }));
 vi.mock('../src/engine/config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/engine/config.js')>();
   return { ...actual, loadMergedConfig };
@@ -440,7 +443,7 @@ describe('daemon OTel visualizer wiring', () => {
       rendererErrors: [
         expect.objectContaining({
           rendererName: 'otel',
-          error: expect.stringContaining('[otel] tracer flush error:'),
+          error: expect.stringContaining('[otel] tracer shutdown timed out after'),
         }),
       ],
       dispatches: 1,

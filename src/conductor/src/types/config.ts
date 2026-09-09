@@ -246,6 +246,8 @@ export interface OtelConfig {
   headers?: Record<string, OtelHeaderEnvironmentReference>;
   /** Optional metric project identity. Defaults to the project root basename. */
   project_name?: string;
+  /** Stable worker identity for daemon-scoped metric Resources. */
+  worker_name?: string;
 }
 
 /**
@@ -682,6 +684,7 @@ export interface BuildReviewRubricConfig {
   model_fallback_ladder?: string[];
   max_retries?: number;
   escalate?: boolean;
+  min_confidence?: number;
 }
 
 /** Per-rubric settings keyed by the closed {@link BuildReviewRubricId} set. */

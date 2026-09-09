@@ -3,7 +3,7 @@ set -euo pipefail
 
 # test_harness_integrity.sh — Validates harness structural integrity.
 # Checks bash syntax, SKILL.md frontmatter, agent/template references,
-# cross-skill references, and HARNESS.md model table completeness.
+# cross-skill references, and ARCHITECTURE.md model table completeness.
 #
 # Usage: ./test/test_harness_integrity.sh
 #
@@ -261,7 +261,7 @@ fi
 echo ""
 echo -e "${BOLD}3. Agent references${NC}"
 
-agent_refs=$(grep -roh 'agents/[a-z_-]*\.md' "${HARNESS_DIR}"/skills/ "${HARNESS_DIR}"/HARNESS.md 2>/dev/null | sort -u || true)
+agent_refs=$(grep -roh 'agents/[a-z_-]*\.md' "${HARNESS_DIR}"/skills/ "${HARNESS_DIR}"/HARNESS.md "${HARNESS_DIR}"/ARCHITECTURE.md 2>/dev/null | sort -u || true)
 if [ -z "$agent_refs" ]; then
   assert "no agent references found" 0
 else
@@ -330,21 +330,21 @@ for ref in $skill_refs; do
   fi
 done
 
-# ── 5. HARNESS.md model table ────────────────────────────────────────────────
+# ── 5. ARCHITECTURE.md model table ────────────────────────────────────────────────
 
 echo ""
-echo -e "${BOLD}5. HARNESS.md model table${NC}"
+echo -e "${BOLD}5. ARCHITECTURE.md model table${NC}"
 
 for skill_name in "${known_skills[@]}"; do
-  if grep -qE "\| ${skill_name}[ (|]" "${HARNESS_DIR}/HARNESS.md" 2>/dev/null; then
+  if grep -qE "\| ${skill_name}[ (|]" "${HARNESS_DIR}/ARCHITECTURE.md" 2>/dev/null; then
     assert "${skill_name} in model table" 0
   else
-    warn_check "${skill_name} — not in HARNESS.md model selection table" 1
+    warn_check "${skill_name} — not in ARCHITECTURE.md model selection table" 1
   fi
 done
 
 # ── 5a. Model-table drift gate ───────────────────────────────────────────────
-# bin/generate-model-table --check validates that HARNESS.md's generated
+# bin/generate-model-table --check validates that ARCHITECTURE.md's generated
 # model-selection table region matches what the TypeScript generator would
 # produce. The tool runs the TS source directly via the local tsx binary
 # (src/conductor/node_modules/.bin/tsx), so it's only runnable when
@@ -372,12 +372,12 @@ else
 
   case "$model_table_exit" in
     0)
-      assert "bin/generate-model-table --check — HARNESS.md model table matches source (no drift)" 0
+      assert "bin/generate-model-table --check — ARCHITECTURE.md model table matches source (no drift)" 0
       ;;
     1)
-      echo -e "  ${RED}FAIL${NC} bin/generate-model-table --check — drift detected in HARNESS.md model table"
+      echo -e "  ${RED}FAIL${NC} bin/generate-model-table --check — drift detected in ARCHITECTURE.md model table"
       echo "$model_table_output" | sed 's/^/    /'
-      assert "bin/generate-model-table --check — drift detected in HARNESS.md model table (remediation: run 'bin/generate-model-table' to regenerate)" 1
+      assert "bin/generate-model-table --check — drift detected in ARCHITECTURE.md model table (remediation: run 'bin/generate-model-table' to regenerate)" 1
       ;;
     2)
       echo -e "  ${RED}FAIL${NC} bin/generate-model-table --check — environment error"
@@ -392,11 +392,11 @@ else
   esac
 
   # Fixture sub-test: prove the provider-labelled contract is not a
-  # presence-only check. Run the real binary against a temporary HARNESS.md
+  # presence-only check. Run the real binary against a temporary ARCHITECTURE.md
   # whose Codex provider label is changed, then require both drift exit 1 and
   # a useful unified diff naming the changed and canonical labels.
   model_table_fixture="$(mktemp)"
-  cp "${HARNESS_DIR}/HARNESS.md" "$model_table_fixture"
+  cp "${HARNESS_DIR}/ARCHITECTURE.md" "$model_table_fixture"
   sed -i '0,/| Codex model |/s//| Codex model-drift |/' "$model_table_fixture"
 
   set +e
@@ -610,7 +610,7 @@ fi
 echo ""
 echo -e "${BOLD}6. Template references${NC}"
 
-template_refs=$(grep -roh 'templates/[a-z_.-]*\.template' "${HARNESS_DIR}"/skills/ "${HARNESS_DIR}"/HARNESS.md 2>/dev/null | sort -u || true)
+template_refs=$(grep -roh 'templates/[a-z_.-]*\.template' "${HARNESS_DIR}"/skills/ "${HARNESS_DIR}"/HARNESS.md "${HARNESS_DIR}"/ARCHITECTURE.md 2>/dev/null | sort -u || true)
 if [ -z "$template_refs" ]; then
   assert "no template references to check" 0
 else

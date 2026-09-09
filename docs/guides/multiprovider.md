@@ -35,6 +35,12 @@ readiness report — a line per selected host saying whether its CLI was found. 
 (`~/.claude/skills` for Claude, `~/.agents/skills` for Codex) are symlinked on every install
 regardless of the value, and the flag never writes into any config file.
 
+Both catalogs also contain `HARNESS.md` and `ARCHITECTURE.md` symlinks to the installed
+harness checkout. The latter keeps optional architecture references resolvable beside
+`HARNESS.md`; it is not loaded automatically. Install and update create or refresh these links,
+`--check` diagnoses missing, broken, stale, or duplicate references without changing them, and
+uninstall removes owned links while preserving operator-owned entries.
+
 ## 2. Set the host
 
 `llm_provider` is read from the **project** config — `<project>/.ai-conductor/config.yml` — for

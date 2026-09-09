@@ -83,6 +83,8 @@ describe('build_review input isolation', () => {
     await mainGit('worktree', 'add', '-b', 'feature/foo', dir);
     planPath = join(dir, 'plan.md');
     await writeFile(planPath, '# Plan body\n\nDo the isolated thing.\n', 'utf-8');
+    await git('add', 'plan.md');
+    await git('commit', '-m', 'add frozen plan');
 
     // Commit an unrelated feature change — this is what should actually
     // appear in the graded diff.

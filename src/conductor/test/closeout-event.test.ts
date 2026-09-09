@@ -77,6 +77,7 @@ describe('ConductorEvent union includes pipeline closeout events', () => {
       resolveOperator: () => 'local-operator',
       resolveMainRoot: async () => projectRoot,
       realpath: async (path) => path,
+      loadConfig: async () => ({ ok: true, config: {}, warnings: [] }),
       resolveRepository: () => 'repository',
       createStore: () => ({
         list: async () => ({ ok: true as const, records: [] }),

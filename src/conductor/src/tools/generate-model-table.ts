@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Generated HARNESS.md model-selection table — splicer + renderer + (future) CLI.
+// Generated ARCHITECTURE.md model-selection table — splicer + renderer + (future) CLI.
 // See .docs/decisions/adr-2026-07-03-generated-model-table-single-source.md
 // and .docs/plans/generated-model-table.md (Task 5: pure renderer; Task 6: pure
 // splicer).
@@ -584,10 +584,10 @@ function buildHunks(ops: DiffOp[], context = 3): Hunk[] {
 /**
  * Produce a unified diff between `oldText` and `newText`. Pure, exact
  * (no normalization of whitespace or line endings) — used by --check to show
- * drift between the committed HARNESS.md and the freshly rendered table.
+ * drift between the committed ARCHITECTURE.md and the freshly rendered table.
  * Returns '' when the texts are identical.
  */
-export function unifiedDiff(oldText: string, newText: string, label = 'HARNESS.md'): string {
+export function unifiedDiff(oldText: string, newText: string, label = 'ARCHITECTURE.md'): string {
   const oldLines = oldText.split('\n');
   const newLines = newText.split('\n');
   const ops = diffLineOps(oldLines, newLines);
@@ -776,8 +776,8 @@ export async function runGenerateModelTableCli(opts: CliOptions): Promise<CliRes
 
 // ────────────────────────────────────────────────────────────────────────────
 // Direct-execution entry point — invoked by `bin/generate-model-table` via
-// `tsx` (Task 11). Resolves the repo-root HARNESS.md relative to this source
-// file's location (src/conductor/src/tools/ -> ../../../../HARNESS.md), runs
+// `tsx` (Task 11). Resolves the repo-root ARCHITECTURE.md relative to this source
+// file's location (src/conductor/src/tools/ -> ../../../../ARCHITECTURE.md), runs
 // runGenerateModelTable against real filesystem IO, and exits with the
 // resulting code (0 ok, 1 drift, 2 environment/marker error).
 //
@@ -787,7 +787,7 @@ export async function runGenerateModelTableCli(opts: CliOptions): Promise<CliRes
 
 function defaultHarnessMdPath(): string {
   const here = dirname(fileURLToPath(import.meta.url));
-  return resolvePath(here, '../../../../HARNESS.md');
+  return resolvePath(here, '../../../../ARCHITECTURE.md');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -567,12 +567,15 @@ describe('tmpdir-leak-guard: stale run root sweep', () => {
     return runRoot;
   }
 
-  it('reaps stale roots, including read-only nesting, and retains a live root', async () => {
+  it('reaps stale roots, including unreadable nesting, and retains a live root', async () => {
     const staleOne = await makeMarkedRoot(root('stale-one'), now - staleAfterMs - 1);
     const staleTwo = await makeMarkedRoot(root('stale-two'), now - staleAfterMs - 1);
     const protectedDir = join(staleTwo, 'nested', 'read-only');
     await mkdir(protectedDir, { recursive: true });
-    await chmod(protectedDir, 0o555);
+    // A previous interrupted run may contain a fixture that deliberately
+    // removes all access from a path component. The sweep must restore access
+    // before walking the tree, or that root becomes permanent debris.
+    await chmod(protectedDir, 0o000);
     const live = await makeMarkedRoot(root('live'), now);
 
     const result = await sweepStaleRunTmpRoots(fakeRealTmpdir, {

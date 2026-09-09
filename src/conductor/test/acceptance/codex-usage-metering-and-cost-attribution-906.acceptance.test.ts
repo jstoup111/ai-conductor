@@ -369,7 +369,7 @@ describe('acceptance: Codex usage metering and cost attribution (#906)', () => {
           actualProvider: 'codex',
           tokenUsage: { input: 600, output: 60, cacheRead: 5, cacheCreation: 7 },
         },
-        // A non-LLM step: no usage at all → plain unmetered (today's meaning).
+        // A provider-free completion carries no dispatch evidence and is excluded.
         { type: 'step_completed', step: 'worktree', status: 'done' },
       ]);
       expect(await shipRecord()).toBe(0);
@@ -411,15 +411,15 @@ describe('acceptance: Codex usage metering and cost attribution (#906)', () => {
       expect(codex).toMatch(/cost_unmetered:\s*(?:count:\s*)?1\b/);
     });
 
-    it('NP-1: a step with no tokenUsage keeps today\'s meaning — unmetered, NOT cost_unmetered', async () => {
+    it('NP-1: a provider-free step with no tokenUsage is excluded from both metering counts', async () => {
       await writeEventsLedger([
-        // Only the non-LLM step: no usage at all.
+        // Only the provider-free completion: no provider or usage evidence.
         { type: 'step_completed', step: 'worktree', status: 'done' },
       ]);
       expect(await shipRecord()).toBe(0);
 
       const block = await committedCostBlock();
-      expect(block).toMatch(/^unmetered: count: 1, duration_ms: 0$/m);
+      expect(block).toMatch(/^unmetered: count: 0, duration_ms: 0$/m);
       expect(block).toMatch(/^cost_unmetered:\s*(?:count:\s*)?0\b/m);
     });
 

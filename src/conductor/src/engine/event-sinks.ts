@@ -7,7 +7,11 @@ export interface SinkDeclaration {
   otel: boolean;
 }
 
-export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
+export const EVENT_SINKS = {
+  daemon_backlog_snapshot: { render: false, persist: true, audit: false, otel: true },
+  feature_dispatch_started: { render: false, persist: true, audit: false, otel: true },
+  feature_dispatch_ended: { render: false, persist: true, audit: false, otel: true },
+  feature_shipped: { render: false, persist: true, audit: false, otel: true },
   operator_rewind: { render: true, persist: true, audit: true, otel: false },
   setup_repair: { render: true, persist: true, audit: false, otel: false },
   project_setup: { render: true, persist: true, audit: false, otel: false },
@@ -22,10 +26,12 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   build_review_rubric_result: { render: false, persist: true, audit: false, otel: false },
   build_review_rubric_skipped: { render: false, persist: true, audit: false, otel: false },
   build_review_cache_hit: { render: false, persist: true, audit: false, otel: false },
+  build_review_scope_summary: { render: false, persist: true, audit: false, otel: false },
   // adr-2026-08-21 D5: discards are attributable in the daemon log, the
   // ledger, and the audit trail by rubric and cause.
   build_review_cache_discarded: { render: true, persist: true, audit: true, otel: false },
   build_review_rubric_infrastructure_failure: { render: false, persist: true, audit: false, otel: false },
+  build_review_scope_incomplete: { render: true, persist: true, audit: false, otel: false },
   build_review_mechanical_allowance_exhausted: { render: false, persist: true, audit: false, otel: false },
   // These are written by the external build-review CLI to the pipeline-owned
   // ledger, then tailed onto the live bus. Re-persisting them would duplicate
@@ -34,12 +40,12 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   build_review_reduced_coverage_accepted: { render: false, persist: false, audit: false, otel: false },
   build_review_disposition_refused: { render: false, persist: false, audit: false, otel: false },
   build_review_disposition_version_invalidated: { render: false, persist: true, audit: true, otel: false },
-  build_review_outer_verdict: { render: false, persist: true, audit: false, otel: false },
+  build_review_outer_verdict: { render: true, persist: true, audit: false, otel: false },
   // Case lifecycle occurrences are durable feature telemetry. They are not
   // daemon-log lines, audit-trail records, or OTel metrics; the existing
   // event ledger is the complete reader path for this detail.
   remediation_adjudication_started: { render: false, persist: true, audit: false, otel: false },
-  remediation_adjudication_completed: { render: false, persist: true, audit: false, otel: false },
+  remediation_adjudication_completed: { render: true, persist: true, audit: false, otel: false },
   remediation_adjudication_failed: { render: false, persist: true, audit: false, otel: false },
   remediation_case_reconciled: { render: false, persist: true, audit: false, otel: false },
   remediation_effect_reserved: { render: false, persist: true, audit: false, otel: false },
@@ -139,7 +145,11 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   ci_failed: { render: true, persist: false, audit: false, otel: false },
   attribution_divergence: { render: false, persist: true, audit: false, otel: false },
   acceptance_red: { render: false, persist: true, audit: false, otel: false },
-};
+} satisfies Record<ConductorEvent['type'], SinkDeclaration>;
+
+export type OtelEventType = {
+  [Type in keyof typeof EVENT_SINKS]: (typeof EVENT_SINKS)[Type]['otel'] extends true ? Type : never;
+}[keyof typeof EVENT_SINKS];
 
 function eventTypesFor(sink: keyof SinkDeclaration): ConductorEvent['type'][] {
   return (Object.keys(EVENT_SINKS) as ConductorEvent['type'][])
@@ -158,6 +168,6 @@ export function renderedEventTypes(): ConductorEvent['type'][] {
   return eventTypesFor('render');
 }
 
-export function otelEventTypes(): ConductorEvent['type'][] {
-  return eventTypesFor('otel');
+export function otelEventTypes(): OtelEventType[] {
+  return eventTypesFor('otel') as OtelEventType[];
 }

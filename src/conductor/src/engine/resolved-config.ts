@@ -699,6 +699,7 @@ export interface ResolvedBuildReviewRubricPolicy {
   model_fallback_ladder: readonly string[];
   max_retries: number;
   escalate: boolean;
+  min_confidence: number;
 }
 
 /** Concrete post-join remediation adjudication setting. */
@@ -816,6 +817,7 @@ export function resolveBuildReviewConfig(
           : rubricPolicy.modelFallbackLadder),
       max_retries: resolvedNeutral.max_retries,
       escalate: resolvedNeutral.escalate,
+      min_confidence: rubric?.min_confidence ?? 0,
     } satisfies ResolvedBuildReviewRubricPolicy];
   })) as Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
   const enabledRubricCount = Object.values(rubrics).filter((rubric) => rubric.enabled).length;

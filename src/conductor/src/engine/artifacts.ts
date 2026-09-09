@@ -26,6 +26,7 @@ import {
   readOverScopeDecisions,
 } from './accepted-widenings.js';
 import { resolveGateCodeValidityConfig } from './config.js';
+import { resolveBuildReviewConfig } from './resolved-config.js';
 import { resolveTaskIdsWithDiagnostics } from './task-progress.js';
 import { FULL_SUITE_EVIDENCE_PATH } from './full-suite-evidence.js';
 import {
@@ -3538,7 +3539,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             if (aggregate) {
               const effectiveResolution = await (
                 ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
-              )(dir, aggregate);
+              )(dir, aggregate, {
+                minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(ctx.config ?? {}).rubrics)
+                  .map(([id, policy]) => [id, policy.min_confidence])),
+              });
               if (!effectiveResolution.ok) {
                 return {
                   done: false,
@@ -3643,7 +3647,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
       const effectiveResolution = await (
         ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
-      )(dir, aggregate);
+      )(dir, aggregate, {
+        minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(ctx.config ?? {}).rubrics)
+          .map(([id, policy]) => [id, policy.min_confidence])),
+      });
       if (!effectiveResolution.ok) {
         return {
           done: false,

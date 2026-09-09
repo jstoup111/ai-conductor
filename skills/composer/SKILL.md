@@ -104,6 +104,17 @@ and writing the complete build-ready `.docs/` set only inside the worktree:
 Do not hand-write stub or DRAFT artifacts and do not shell out to `claude -p`. If the operator
 rejects a step, stay within that skill until accepted or abandon the idea.
 
+### 3a. Drop an already-fixed intake idea
+
+If an intake idea is already fixed on the target, do not author a spec. Only after explicit
+operator approval, and only when the claim carries an originating GitHub issue, run:
+
+`ai-conductor compose forget <owner/repo#N> --resolved-by <reference>`
+
+This comments the supplied resolving reference and closes the originating issue before dropping
+the claim. Without both preconditions, do not use `--resolved-by` and do not close anything. End
+the session after the successful drop; this path authors and lands nothing.
+
 ### 4. Land the authored spec
 
 Run `ai-conductor compose land --project <name> --idea "<idea>" --worktree <worktreePath>`, adding

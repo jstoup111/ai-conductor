@@ -75,8 +75,7 @@ wrong one is either invisible to consumers or imposed on them without cause.
 ### Follow the existing precedent
 
 This repository already states the boundary explicitly, in a fixed sentence shape, wherever a rule is
-deliberately repo-only. Both instances live in `AGENT_INSTRUCTIONS.md` — the documentation-upkeep
-rule and the changelog rule — and both end:
+deliberately repo-only. The release-disposition rule in `AGENT_INSTRUCTIONS.md` uses:
 
 > "For consumer projects without this custom-step configuration, the global harness … convention
 > remains unchanged."
@@ -131,9 +130,9 @@ A **`skills/` addition** must satisfy all of:
 
 - Frontmatter with all four required fields — `name`, `description`, `enforcement`, `phase`
   (integrity check 2).
-- A row in `HARNESS.md`'s model-selection table (check 5). That region is **generated**: its source
+- A row in `ARCHITECTURE.md`'s model-selection table (check 5). That region is **generated**: its source
   is `src/conductor/src/engine/model-table-metadata.ts` plus the resolved config, rendered by
-  `bin/generate-model-table`. Hand-editing `HARNESS.md` fails check 5a's drift gate — the fix is to
+  `bin/generate-model-table`. Hand-editing `ARCHITECTURE.md` fails check 5a's drift gate — the fix is to
   update the metadata and regenerate.
 - Agreement between the model table's tier and the skill's own `model:` pin, in both directions
   (check 5b).
@@ -323,7 +322,7 @@ a nuance to reconcile in prose. Re-run A; one of the two answers is wrong.
 - [ ] Decision B run for every new skill, with its deciding step named
 - [ ] A `skills/` addition declares `name`, `description`, `enforcement`, `phase`
 - [ ] A `skills/` addition is registered via `src/conductor/src/engine/model-table-metadata.ts` and
-      `bin/generate-model-table` — `HARNESS.md`'s generated table is **not** hand-edited
+      `bin/generate-model-table` — `ARCHITECTURE.md`'s generated table is **not** hand-edited
 - [ ] A `.agents/skills/` addition declares `name`, `description`, and
       `disable-model-invocation: true`, and adds no other fields the local catalog does not use
 - [ ] A `.agents/skills/` addition ships its `agents/openai.yaml` interface block with

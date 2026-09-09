@@ -3,6 +3,7 @@ import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { makeRunFeature } from '../../src/engine/daemon-runner.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { FeatureRunnerDeps, FeatureWorktree, WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 
@@ -221,7 +222,7 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
       { daemon: true },
     );
     featureDeps.beginFeatureRun = () => ({
-      events: undefined as never,
+      events: new ConductorEventEmitter(),
       providerExecution: undefined as never,
       log: (message) => featureLogs.push(message),
       stop: () => {},

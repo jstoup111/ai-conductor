@@ -188,6 +188,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'otel.protocol': consumer(OTEL_CONFIG),
   'otel.headers': consumer(OTEL_CONFIG),
   'otel.project_name': consumer(OTEL_CONFIG),
+  'otel.worker_name': consumer(OTEL_CONFIG),
   'build_review.enabled': consumer(RESOLVED_CONFIG),
   'build_review.perTaskFloor': none(
     'retired rubric-container knob: validateConfig warns and deletes it before resolution, so no resolved config ever carries it (adr-2026-08-22-build-review-opt-in-rubric-container)',
@@ -204,6 +205,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.rubrics.model_fallback_ladder': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.max_retries': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.escalate': consumer(RESOLVED_CONFIG),
+  'build_review.rubrics.min_confidence': consumer(RESOLVED_CONFIG),
 
   // ── coverage_binding ────────────────────────────────────────────────────
   // The step runner consumes the resolved boolean; resolution is the sole

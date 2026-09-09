@@ -118,7 +118,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'steps.parallel': ['name', 'skill', 'model', 'effort', 'advisory'],
   'steps.by_tier': ['model', 'effort', 'max_retries'],
   'build_review.adjudication': ['enabled'],
-  'build_review.rubrics': ['enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate'],
+  'build_review.rubrics': ['enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence'],
   build_review: ['enabled', 'perTaskFloor', 'scopeContainmentEnforced', 'maxParallel', 'adjudication', 'rubrics'],
   ci_watch: ['enabled', 'cooldownMinutes'],
   kickback_escalation: ['enabled'],
@@ -138,7 +138,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   retry_routing: ['enabled'],
   coverage_binding: ['judge'],
   'coverage_binding.judge': ['enabled'],
-  otel: ['exporter', 'endpoint', 'file', 'protocol', 'headers', 'project_name'],
+  otel: ['exporter', 'endpoint', 'file', 'protocol', 'headers', 'project_name', 'worker_name'],
   markdown_viewer: ['preset', 'command', 'args', 'mode'],
   mermaid_renderer: ['preset', 'command', 'args', 'mode'],
 } as const;
@@ -258,6 +258,9 @@ function validateBuildReviewRubrics(
     }
     if (policy.escalate !== undefined && typeof policy.escalate !== 'boolean') {
       return { type: 'validation_error', message: `${path}.escalate must be a boolean` };
+    }
+    if (policy.min_confidence !== undefined && (typeof policy.min_confidence !== 'number' || !Number.isInteger(policy.min_confidence) || policy.min_confidence < 0 || policy.min_confidence > 100)) {
+      return { type: 'validation_error', message: `${path}.min_confidence must be an integer between 0 and 100` };
     }
   }
   return null;

@@ -224,10 +224,13 @@ function makeDirectoriesWritableSync(path: string): void {
   }
   if (!stat.isDirectory()) return;
 
+  // Directory read permission is required before readdirSync can discover
+  // descendants to repair. Restore it first so an interrupted test that left
+  // a 000 path component cannot make its entire run root unreapable.
+  chmodSync(path, 0o700);
   for (const entry of readdirSync(path)) {
     makeDirectoriesWritableSync(join(path, entry));
   }
-  chmodSync(path, 0o700);
 }
 
 /**

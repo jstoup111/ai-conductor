@@ -1,4 +1,4 @@
-// Covers: task:1, task:10, task:11
+// Covers: task:1, task:2, task:10, task:11
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -321,6 +321,63 @@ describe('engine/cost-rollup', () => {
     expect(rollup.unmetered).toEqual({ count: 0, durationMs: 0 });
   });
 
+  it('ignores provider-free completions while retaining all measured provider attempts', async () => {
+    const attempts = Array.from({ length: 14 }, (_, index) => {
+      const sequence = index + 1;
+      return {
+        type: 'provider_attempt',
+        step: 'build',
+        provider: sequence % 2 === 0 ? 'codex' : 'claude',
+        outcome: 'success',
+        invoked: true,
+        tokenUsage: {
+          input: sequence * 100,
+          output: sequence * 10,
+          cacheRead: sequence,
+          cacheCreation: sequence * 2,
+          costUsd: sequence / 10,
+        },
+      };
+    });
+    const providerFreeCompletions = [
+      'finish', 'review', 'rebase', 'suite', 'finish', 'review', 'rebase', 'suite', 'finish',
+    ].map((step) => ({ type: 'step_completed', step, status: 'done', unmetered: true }));
+    const expected = attempts.reduce((totals, attempt) => ({
+      input: totals.input + attempt.tokenUsage.input,
+      output: totals.output + attempt.tokenUsage.output,
+      cacheRead: totals.cacheRead + attempt.tokenUsage.cacheRead,
+      cacheCreation: totals.cacheCreation + attempt.tokenUsage.cacheCreation,
+      costUsd: totals.costUsd + attempt.tokenUsage.costUsd,
+    }), { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, costUsd: 0 });
+    const { costUsd: expectedCostUsd, ...expectedTokens } = expected;
+    await writeEvents([...attempts, ...providerFreeCompletions].map((event) => JSON.stringify(event)));
+
+    const rollup = await computeCostRollup(dir);
+    const totals = toFeatureUsageTotals(rollup);
+
+    expect(rollup).toMatchObject({
+      tokens: expectedTokens,
+      costUsd: expectedCostUsd,
+      dispatches: attempts.length,
+      unmetered: { count: 0, durationMs: 0 },
+      costUnmetered: { count: 0 },
+      providers: {
+        claude: { dispatches: 7, costUsd: 4.9 },
+        codex: { dispatches: 7, costUsd: 5.6 },
+      },
+    });
+    expect(totals).toMatchObject({
+      dispatches: attempts.length,
+      meteredDispatches: attempts.length,
+      unmeteredDispatches: 0,
+      costUnmeteredDispatches: 0,
+      inputTokens: expected.input,
+      outputTokens: expected.output,
+      cachedInputTokens: expected.cacheRead + expected.cacheCreation,
+      costUsd: expectedCostUsd,
+    });
+  });
+
   it('counts a loop halt only when the production event sink persists it', async () => {
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(dir, '.pipeline', 'events.jsonl'), events);
@@ -622,10 +679,14 @@ describe('engine/cost-rollup', () => {
     expect(rollup.readErrors).toBe(1);
   });
 
-  it('handles an all-unmetered fixture', async () => {
+  it('retains unmatched legacy completions that carry resolved provider attribution', async () => {
     await writeEvents([
-      JSON.stringify({ type: 'step_completed', step: 'explore', status: 'done', unmetered: true }),
-      JSON.stringify({ type: 'step_completed', step: 'plan', status: 'done', unmetered: true }),
+      JSON.stringify({
+        type: 'step_completed', step: 'explore', status: 'done', actualProvider: 'claude', unmetered: true,
+      }),
+      JSON.stringify({
+        type: 'step_completed', step: 'plan', status: 'done', actualProvider: 'codex', unmetered: true,
+      }),
     ]);
 
     const rollup = await computeCostRollup(dir);
@@ -635,6 +696,82 @@ describe('engine/cost-rollup', () => {
     expect(rollup.tokens).toEqual({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 });
     expect(rollup.costUsd).toBe(0);
     expect(rollup.costUnmetered).toEqual({ count: 0 });
+  });
+
+  it('does not count attribution-free completions as unmetered dispatches', async () => {
+    await writeEvents([
+      JSON.stringify({ type: 'step_completed', step: 'finish', status: 'done', unmetered: true }),
+      JSON.stringify({ type: 'step_completed', step: 'review', status: 'done', unmetered: true }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup.dispatches).toBe(0);
+    expect(rollup.unmetered).toEqual({ count: 0, durationMs: 0 });
+    expect(rollup.costUnmetered).toEqual({ count: 0 });
+  });
+
+  // adr-2026-07-27-cost-unmetered-is-a-first-class-state D6: absent usage and
+  // absent cost are different states and must not collapse into each other.
+  // The cost-less attempt below carries no `costUsd` key at all, which is the
+  // shape `parseCodexJsonl` actually produces (D1) — the NaN case in the
+  // sibling test covers a cost that is present but unusable.
+  it('separates an invoked attempt with no usage from one whose cost alone is missing', async () => {
+    await writeEvents([
+      JSON.stringify({
+        type: 'provider_attempt', step: 'plan', provider: 'claude', outcome: 'success', invoked: true,
+      }),
+      JSON.stringify({
+        type: 'provider_attempt', step: 'build', provider: 'codex', outcome: 'success', invoked: true,
+        tokenUsage: { input: 100, output: 20 },
+      }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup.dispatches).toBe(2);
+    expect(rollup.tokens).toMatchObject({ input: 100, output: 20 });
+    expect(rollup.costUsd).toBe(0);
+    expect(rollup.unmetered).toEqual({ count: 1, durationMs: 0 });
+    expect(rollup.costUnmetered).toEqual({ count: 1 });
+    // The no-usage attempt is unmetered and never cost-unmetered; the
+    // token-bearing attempt is cost-unmetered and never unmetered.
+    expect(rollup.providers?.claude).toMatchObject({
+      dispatches: 1,
+      unmetered: { count: 1, durationMs: 0 },
+    });
+    expect(rollup.providers?.claude?.costUnmetered).toEqual({ count: 0 });
+    expect(rollup.providers?.codex).toMatchObject({
+      dispatches: 1,
+      unmetered: { count: 0, durationMs: 0 },
+      costUnmetered: { count: 1 },
+    });
+  });
+
+  it('keeps invoked attempts with absent usage or unusable cost visibly incomplete', async () => {
+    await writeEvents([
+      JSON.stringify({
+        type: 'provider_attempt', step: 'review', provider: 'claude', outcome: 'success', invoked: true,
+      }),
+      JSON.stringify({
+        type: 'provider_attempt', step: 'suite', provider: 'codex', outcome: 'success', invoked: true,
+        tokenUsage: { input: 40, output: 4, costUsd: Number.NaN },
+      }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup).toMatchObject({
+      tokens: { input: 40, output: 4, cacheRead: 0, cacheCreation: 0 },
+      costUsd: 0,
+      dispatches: 2,
+      unmetered: { count: 1, durationMs: 0 },
+      costUnmetered: { count: 1 },
+      providers: {
+        claude: { dispatches: 1, unmetered: { count: 1, durationMs: 0 } },
+        codex: { dispatches: 1, costUnmetered: { count: 1 } },
+      },
+    });
   });
 
   // The whole-feature usage line logged when `finish` completes reads the same

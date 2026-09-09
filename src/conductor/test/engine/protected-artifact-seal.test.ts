@@ -1,9 +1,11 @@
+// Covers: task:5
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { execa } from 'execa';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConductorEvent } from '../../src/types/events.js';
 import {
@@ -22,6 +24,7 @@ import {
   rotateProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
 } from '../../src/engine/protected-artifact-seal.js';
+import type { GitBlobBatchRunner } from '../../src/engine/git-blob-batch.js';
 
 const { gitInvocations, failGitDiff } = vi.hoisted(() => ({
   gitInvocations: [] as string[][],
@@ -64,13 +67,13 @@ async function git(repo: string, args: string[]): Promise<string> {
   return result.stdout.trim();
 }
 
-async function writeProjectFile(repo: string, path: string, content: string): Promise<void> {
+async function writeProjectFile(repo: string, path: string, content: string | Uint8Array): Promise<void> {
   const destination = join(repo, path);
   await mkdir(dirname(destination), { recursive: true });
   await writeFile(destination, content);
 }
 
-async function makeRepo(files: Record<string, string>): Promise<string> {
+async function makeRepo(files: Record<string, string | Uint8Array>): Promise<string> {
   const repo = await mkdtemp(join(tmpdir(), 'protected-artifact-seal-'));
   scratches.push(repo);
   await git(repo, ['init', '-q', '-b', 'main']);
@@ -93,6 +96,80 @@ afterEach(async () => {
   while (scratches.length > 0) {
     await rm(scratches.pop()!, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
+});
+
+it('records the pre-change paths and fingerprints for a large committed protected-artifact corpus', async () => {
+  const files = Object.fromEntries(Array.from({ length: 300 }, (_, index) => {
+    const directory = PROTECTED_ARTIFACT_DIRECTORIES[index % PROTECTED_ARTIFACT_DIRECTORIES.length];
+    const path = `${directory}/artifact-${String(index).padStart(3, '0')}.md`;
+    return [path, `# Artifact ${index}\n\nCommitted content ${index}\n`];
+  }));
+  const repo = await makeRepo(files);
+  const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+  const expected = Object.entries(files)
+    .sort(([left], [right]) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
+    .map(([path, content]) => ({
+      path,
+      fingerprint: `sha256:${createHash('sha256').update(content).digest('hex')}`,
+    }));
+
+  await expect(createProtectedArtifactSeal({ projectRoot: repo, baselineCommit })).resolves.toMatchObject({
+    baselineCommit,
+    protectedArtifacts: expected,
+  });
+});
+
+it('uses one injected batch runner for both small and large protected-artifact corpora', async () => {
+  const createFiles = (count: number) => Object.fromEntries(Array.from({ length: count }, (_, index) => {
+    const directory = PROTECTED_ARTIFACT_DIRECTORIES[index % PROTECTED_ARTIFACT_DIRECTORIES.length];
+    return [`${directory}/artifact-${String(index).padStart(3, '0')}.md`, `# ${index}\n`];
+  }));
+  const smallRepo = await makeRepo(createFiles(4));
+  const largeRepo = await makeRepo(createFiles(300));
+  const runnerMock = vi.fn<GitBlobBatchRunner>(async (file, args, options) => ({
+    stdout: Buffer.from((await execa(file, args, options)).stdout),
+  }));
+  const runner: GitBlobBatchRunner = runnerMock;
+
+  await createProtectedArtifactSeal({
+    projectRoot: smallRepo,
+    baselineCommit: await git(smallRepo, ['rev-parse', 'HEAD']),
+    runner,
+  });
+  const smallInvocationCount = runnerMock.mock.calls.length;
+  runnerMock.mockClear();
+  await createProtectedArtifactSeal({
+    projectRoot: largeRepo,
+    baselineCommit: await git(largeRepo, ['rev-parse', 'HEAD']),
+    runner,
+  });
+
+  expect({ smallInvocationCount, largeInvocationCount: runnerMock.mock.calls.length }).toEqual({
+    smallInvocationCount: 1,
+    largeInvocationCount: 1,
+  });
+});
+
+it('refuses to create a seal when a listed protected artifact has no readable blob', async () => {
+  const repo = await makeRepo({ '.docs/stories/feature.md': 'approved story\n' });
+  const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+  const runner: GitBlobBatchRunner = async () => ({
+    stdout: Buffer.from(`${baselineCommit}:.docs/stories/feature.md missing\n`),
+  });
+
+  await expect(createProtectedArtifactSeal({ projectRoot: repo, baselineCommit, runner }))
+    .rejects.toThrow(`Protected artifact is unreadable at ${baselineCommit}: .docs/stories/feature.md`);
+});
+
+it('keeps the pre-change UTF-8-decoded fingerprint for invalid committed bytes', async () => {
+  const content = Buffer.from([0x66, 0x6f, 0x80, 0x6f, 0x0a]);
+  const repo = await makeRepo({ '.docs/stories/invalid.md': content });
+  const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+  const expectedFingerprint = `sha256:${createHash('sha256').update(content.toString('utf8')).digest('hex')}`;
+
+  await expect(createProtectedArtifactSeal({ projectRoot: repo, baselineCommit })).resolves.toMatchObject({
+    protectedArtifacts: [{ path: '.docs/stories/invalid.md', fingerprint: expectedFingerprint }],
+  });
 });
 
 it('exports protected artifact directory and feature-name helpers', () => {
@@ -844,7 +921,13 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       sameHistoryAncestor: { permitted: false, condition: 'same-history-ancestor' },
       baseTipUnresolved: { permitted: false, condition: 'base-tip-unresolved' },
       workspaceDiffersFromHead: { permitted: false, condition: 'workspace-differs-from-head', path },
-      headDiffersFromBase: { permitted: false, condition: 'head-differs-from-base', path },
+      headDiffersFromBase: {
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'not-present',
+      },
       headDiffersFromBaseNotAuthored: { permitted: true, paths: [], excludedBaseAheadPaths: [path] },
       missingWorkspaceArtifactDiffersFromHead: { permitted: false, condition: 'workspace-differs-from-head', path },
     });
@@ -902,6 +985,8 @@ describe('evaluateProtectedArtifactSealRotation', () => {
         permitted: false,
         condition: 'head-differs-from-base',
         path,
+        operatorResealExit: 'sealed-content-mismatch',
+        engineAppendExit: 'not-present',
       });
     });
 
@@ -912,6 +997,8 @@ describe('evaluateProtectedArtifactSealRotation', () => {
         permitted: false,
         condition: 'head-differs-from-base',
         path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'not-present',
       });
     });
   });
@@ -926,7 +1013,11 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       rebaselines: [],
     };
 
-    function evaluate(headBytes: Buffer, appendedRemediationTaskIds?: readonly string[]) {
+    function evaluate(
+      headBytes: Buffer,
+      appendedRemediationTaskIds?: readonly string[],
+      sealedArtifacts?: ReadonlyMap<string, Buffer>,
+    ) {
       return evaluateProtectedArtifactSealRotation({
         seal,
         baselineAncestry: 'non-ancestor',
@@ -935,8 +1026,62 @@ describe('evaluateProtectedArtifactSealRotation', () => {
         baseTipArtifacts: new Map([[path, baseBytes]]),
         authorshipByPath: new Map([[path, 'authored']]),
         ...(appendedRemediationTaskIds ? { appendedRemediationTaskIds } : {}),
+        ...(sealedArtifacts ? { sealedArtifacts } : {}),
       });
     }
+
+    it('permits an authored plan appended to its fingerprint-verified sealed baseline', () => {
+      const sealedBytes = Buffer.from('# Resealed Plan\n\n### Task 1: ship it\n');
+      const head = Buffer.concat([sealedBytes, Buffer.from(
+        '### Task rem-scope-1: remove the unauthorized change\n',
+      )]);
+      const sealed = {
+        ...seal,
+        protectedArtifacts: [{
+          path,
+          fingerprint: `sha256:${createHash('sha256').update(sealedBytes).digest('hex')}`,
+        }],
+      };
+
+      expect(evaluateProtectedArtifactSealRotation({
+        seal: sealed,
+        baselineAncestry: 'non-ancestor',
+        workspaceArtifacts: new Map([[path, head]]),
+        headArtifacts: new Map([[path, head]]),
+        baseTipArtifacts: new Map([[path, baseBytes]]),
+        sealedArtifacts: new Map([[path, sealedBytes]]),
+        authorshipByPath: new Map([[path, 'authored']]),
+        appendedRemediationTaskIds: ['rem-scope-1'],
+      })).toEqual({
+        permitted: true,
+        paths: [path],
+        includedEngineAppendedPaths: [path],
+      });
+    });
+
+    it('discards a sealed anchor whose bytes do not match the recorded fingerprint', () => {
+      const head = Buffer.from('# Resealed Plan\n### Task rem-scope-1: repair\n');
+      const mismatched = new Map([[path, Buffer.from('# different sealed plan\n')]]);
+      const sealed = {
+        ...seal,
+        protectedArtifacts: [{
+          path,
+          fingerprint: `sha256:${createHash('sha256').update('# expected sealed plan\n').digest('hex')}`,
+        }],
+      };
+      const input = {
+        seal: sealed,
+        baselineAncestry: 'non-ancestor' as const,
+        workspaceArtifacts: new Map([[path, head]]),
+        headArtifacts: new Map([[path, head]]),
+        baseTipArtifacts: new Map([[path, baseBytes]]),
+        authorshipByPath: new Map([[path, 'authored' as const]]),
+        appendedRemediationTaskIds: ['rem-scope-1'],
+      };
+
+      expect(evaluateProtectedArtifactSealRotation({ ...input, sealedArtifacts: mismatched }))
+        .toEqual(evaluateProtectedArtifactSealRotation(input));
+    });
 
     it('permits an authored plan whose divergence is exactly the recorded appended task blocks', () => {
       const head = Buffer.concat([baseBytes, Buffer.from(
@@ -960,8 +1105,10 @@ describe('evaluateProtectedArtifactSealRotation', () => {
 
       expect(evaluate(head, ['rem-scope-1'])).toEqual({
         permitted: false,
-        condition: 'head-differs-from-base',
+        condition: 'engine-append-unvouched',
         path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'unvouched',
       });
     });
 
@@ -970,8 +1117,10 @@ describe('evaluateProtectedArtifactSealRotation', () => {
 
       expect(evaluate(head, ['rem-scope-1'])).toEqual({
         permitted: false,
-        condition: 'head-differs-from-base',
+        condition: 'engine-append-unvouched',
         path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'unvouched',
       });
     });
 
@@ -982,8 +1131,20 @@ describe('evaluateProtectedArtifactSealRotation', () => {
         omitted: evaluate(head),
         empty: evaluate(head, []),
       }).toEqual({
-        omitted: { permitted: false, condition: 'head-differs-from-base', path },
-        empty: { permitted: false, condition: 'head-differs-from-base', path },
+        omitted: {
+          permitted: false,
+          condition: 'head-differs-from-base',
+          path,
+          operatorResealExit: 'not-resealed',
+          engineAppendExit: 'not-present',
+        },
+        empty: {
+          permitted: false,
+          condition: 'head-differs-from-base',
+          path,
+          operatorResealExit: 'not-resealed',
+          engineAppendExit: 'not-present',
+        },
       });
     });
 
@@ -994,8 +1155,10 @@ describe('evaluateProtectedArtifactSealRotation', () => {
 
       expect(evaluate(head, ['rem-scope-1'])).toEqual({
         permitted: false,
-        condition: 'head-differs-from-base',
+        condition: 'engine-append-unvouched',
         path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'unvouched',
       });
     });
 
@@ -1006,8 +1169,10 @@ describe('evaluateProtectedArtifactSealRotation', () => {
 
       expect(evaluate(head, ['rem-scope-1'])).toEqual({
         permitted: false,
-        condition: 'head-differs-from-base',
+        condition: 'engine-append-unvouched',
         path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'unvouched',
       });
     });
 
@@ -1016,10 +1181,12 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       const repo = await makeRepo({ [planPath]: 'approved plan\n' });
       const sharedCommit = await git(repo, ['rev-parse', 'HEAD']);
       await git(repo, ['checkout', '-q', '-b', 'sealed-history', sharedCommit]);
-      await git(repo, ['commit', '--allow-empty', '-q', '-m', 'sealed baseline lineage']);
+      await writeProjectFile(repo, planPath, 'operator-resealed plan\n');
+      await git(repo, ['add', planPath]);
+      await git(repo, ['commit', '-q', '-m', 'operator reseals plan']);
       const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
       await git(repo, ['checkout', '-q', '-b', 'feature', sharedCommit]);
-      await writeProjectFile(repo, planPath, 'approved plan\n### Task rem-scope-1: remove the unauthorized change\n');
+      await writeProjectFile(repo, planPath, 'operator-resealed plan\n### Task rem-scope-1: remove the unauthorized change\n');
       await git(repo, ['add', planPath]);
       await git(repo, ['commit', '-q', '-m', 'chore(plan): record appended remediation tasks']);
       await mkdir(join(repo, '.pipeline'), { recursive: true });
@@ -1035,7 +1202,7 @@ describe('evaluateProtectedArtifactSealRotation', () => {
           baselineCommit,
           protectedArtifacts: [{
             path: planPath,
-            fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+            fingerprint: `sha256:${createHash('sha256').update('operator-resealed plan\n').digest('hex')}`,
           }],
           rebaselines: [],
         },
@@ -1182,28 +1349,100 @@ describe('evaluateProtectedArtifactSealRotation', () => {
         ]),
       }),
     }).toEqual({
-      equalContent: { permitted: false, condition: 'head-differs-from-base', path: authoredPath },
-      deletion: { permitted: false, condition: 'head-differs-from-base', path: authoredPath },
-      mixed: { permitted: false, condition: 'head-differs-from-base', path: authoredPath },
+      equalContent: {
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path: authoredPath,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'not-present',
+      },
+      deletion: {
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path: authoredPath,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'not-present',
+      },
+      mixed: {
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path: authoredPath,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'not-present',
+      },
     });
   });
 
-  it('fails closed distinctly when the sealed baseline object cannot resolve', async () => {
-    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
-    const seal = {
+  it('evaluates against the base tip alone when the sealed baseline object cannot resolve', async () => {
+    const path = '.docs/plans/feature.md';
+    const seal = (fingerprintedContent: string) => ({
       version: 2 as const,
       baselineCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
       protectedArtifacts: [{
-        path: '.docs/plans/feature.md',
-        fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+        path,
+        fingerprint: `sha256:${createHash('sha256').update(fingerprintedContent).digest('hex')}`,
       }],
       rebaselines: [],
-    };
+    });
 
+    // The base tip vouches for the workspace: nothing diverges, so the rotation
+    // is permitted even though the seal's own baseline is unreadable.
+    const undivergedRepo = await makeRepo({ [path]: 'approved plan\n' });
+    const undiverged = await evaluateProtectedArtifactSealRotationInRepository({
+      projectRoot: undivergedRepo,
+      seal: seal('approved plan\n'),
+      headCommit: await git(undivergedRepo, ['rev-parse', 'HEAD']),
+      baseTipRef: 'main',
+    });
+
+    // The base tip does NOT vouch for it: the feature amended the artifact, and
+    // the base-tip anchor refuses on its own — the unreadable baseline neither
+    // short-circuits the evaluation nor blinds it.
+    const divergedRepo = await makeRepo({ [path]: 'approved plan\n' });
+    await git(divergedRepo, ['checkout', '-q', '-b', 'feature']);
+    await writeProjectFile(divergedRepo, path, 'amended plan\n');
+    await git(divergedRepo, ['add', '.']);
+    await git(divergedRepo, ['commit', '-q', '-m', 'feature amends the plan']);
+    const diverged = await evaluateProtectedArtifactSealRotationInRepository({
+      projectRoot: divergedRepo,
+      seal: seal('approved plan\n'),
+      headCommit: await git(divergedRepo, ['rev-parse', 'HEAD']),
+      baseTipRef: 'main',
+    });
+
+    expect({ undiverged, diverged }).toEqual({
+      undiverged: { permitted: true, paths: [] },
+      diverged: {
+        permitted: false,
+        condition: 'head-differs-from-base',
+        path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'not-present',
+        headTouchedPath: true,
+        mergeBase: expect.any(String),
+      },
+    });
+  });
+
+  it('still fails closed as baseline-unresolvable when the probe fails with a readable baseline', async () => {
+    const path = '.docs/plans/feature.md';
+    const repo = await makeRepo({ [path]: 'approved plan\n' });
+
+    // The baseline commit is readable; the probe cannot resolve because the
+    // HEAD it is asked about is not. That is not the rewritten-baseline case,
+    // so the gate must keep refusing rather than falling through to the tip.
     await expect(evaluateProtectedArtifactSealRotationInRepository({
       projectRoot: repo,
-      seal,
-      headCommit: await git(repo, ['rev-parse', 'HEAD']),
+      seal: {
+        version: 2 as const,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+        protectedArtifacts: [{
+          path,
+          fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+        }],
+        rebaselines: [],
+      },
+      headCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
       baseTipRef: 'main',
     })).resolves.toEqual({ permitted: false, condition: 'baseline-unresolvable' });
   });
@@ -1751,7 +1990,7 @@ describe('verifyProtectedArtifactSeal', () => {
       verdict: { ok: false, reason: 'Protected artifact deleted: .docs/plans/feature.md' },
       gitInvocations: [
         ['ls-tree', '-r', '-z', '--name-only', baselineCommit, '--', ...PROTECTED_ARTIFACT_DIRECTORIES],
-        ['show', `${baselineCommit}:.docs/plans/feature.md`],
+        ['cat-file', '--batch', '--buffer'],
       ],
     });
   });
@@ -2437,8 +2676,44 @@ describe('verifyProtectedArtifactSeal', () => {
           path,
           mergeBase,
           headTouchedPath: true,
+          operatorResealExit: 'not-resealed',
+          engineAppendExit: 'not-present',
         }],
       });
+    });
+
+    it('names an unvouched recorded engine append without instructing a revert', async () => {
+      const path = '.docs/plans/other-feature.md';
+      const { repo } = await makeRewrittenRepo({
+        initial: { [path]: 'approved plan\n' },
+        baseAdvance: { 'src/base.ts': 'base work before rebase\n' },
+        featureCommit: { [path]: 'feature rewrite\n### Task rem-scope-1: repair\n' },
+      });
+      await writeFile(
+        join(repo, '.pipeline/engine-state.json'),
+        `${JSON.stringify({ appendedRemediationTaskIds: ['rem-scope-1'] })}\n`,
+      );
+      const events: ProtectedArtifactSealRebaselineEvent[] = [];
+
+      const verdict = await verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+        onRebaseline: (event) => { events.push(event); },
+      });
+
+      expect(verdict).toEqual({
+        ok: false,
+        reason: `Unvouched engine remediation append: ${path}\nOperator-reseal exit: not-resealed; engine-append exit: unvouched.`,
+      });
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'protected_artifact_rebaseline_refused',
+        condition: 'feature-authored:engine-append-unvouched',
+        verdictCondition: 'engine-append-unvouched',
+        path,
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'unvouched',
+      }));
     });
 
     it('refuses the incident-shaped rotation when only the workspace diverges from HEAD', async () => {
@@ -2482,6 +2757,8 @@ describe('verifyProtectedArtifactSeal', () => {
           path,
           mergeBase: await git(repo, ['merge-base', 'main', 'HEAD']),
           headTouchedPath: false,
+          operatorResealExit: 'not-resealed',
+          engineAppendExit: 'not-present',
         }],
       });
     });
@@ -2770,6 +3047,8 @@ describe('verifyProtectedArtifactSeal', () => {
           path,
           mergeBase,
           headTouchedPath: true,
+          operatorResealExit: 'not-resealed',
+          engineAppendExit: 'not-present',
         }],
       });
     });
@@ -2801,6 +3080,8 @@ describe('verifyProtectedArtifactSeal', () => {
         path,
         mergeBase,
         headTouchedPath: 'indeterminate',
+        operatorResealExit: 'not-resealed',
+        engineAppendExit: 'not-present',
       });
     });
 
@@ -2924,29 +3205,60 @@ describe('verifyProtectedArtifactSeal', () => {
       });
     });
 
-    it('is an INDETERMINATE fail-closed refusal, with its own reason, when the baseline object cannot be resolved', async () => {
-      const { repo } = await makeRewrittenRepo({
+    it('falls through to the base-tip anchor when the baseline object cannot be resolved', async () => {
+      // An unreadable baseline is the rewritten-history case itself, so it must
+      // not blind the gate. The base tip alone decides, and it decides both ways.
+      const stranded = async (options: Parameters<typeof makeRewrittenRepo>[0]) => {
+        const { repo } = await makeRewrittenRepo(options);
+        const seal = await readSeal(repo);
+        await writeFile(
+          join(repo, '.pipeline/protected-artifact-seal.json'),
+          `${JSON.stringify({ ...seal, baselineCommit: 'd'.repeat(40) }, null, 2)}\n`,
+        );
+        return repo;
+      };
+
+      // Base-ahead only: another feature's merged amendment is inherited, so the
+      // base tip vouches for it and the rotation is permitted.
+      const inheritedRepo = await stranded({
         initial: { '.docs/plans/other-feature.md': 'approved plan\n' },
         baseAdvance: { '.docs/plans/other-feature.md': 'amended by its owner\n' },
       });
-      const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
-      const seal = await readSeal(repo);
-      const missingBaseline = 'd'.repeat(40);
-      await writeFile(
-        sealPath,
-        `${JSON.stringify({ ...seal, baselineCommit: missingBaseline }, null, 2)}\n`,
-      );
-
-      const verdict = await verifyProtectedArtifactSeal({
-        projectRoot: repo,
+      const inherited = await verifyProtectedArtifactSeal({
+        projectRoot: inheritedRepo,
         featureDesc: 'mine',
         baseBranch: 'main',
       });
 
-      expect(verdict.ok).toBe(false);
-      // Never "rewritten, therefore rotatable" — a distinct, baseline-specific reason.
-      expect((verdict as { reason: string }).reason).toMatch(/baseline/i);
-      expect((await readSeal(repo)).baselineCommit).toBe(missingBaseline);
+      // Feature-authored amendment: the base tip does NOT vouch for it, and the
+      // refusal survives the unreadable baseline rather than being pre-empted.
+      const authoredRepo = await stranded({
+        initial: { '.docs/plans/mine.md': 'approved plan\n' },
+        baseAdvance: { 'src/base.ts': 'base work\n' },
+        featureCommit: { '.docs/plans/mine.md': 'amended by the build\n' },
+      });
+      const authored = await verifyProtectedArtifactSeal({
+        projectRoot: authoredRepo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+      });
+
+      expect({ inheritedOk: inherited.ok, authoredOk: authored.ok }).toEqual({
+        inheritedOk: true,
+        authoredOk: false,
+      });
+      expect(await readSeal(inheritedRepo)).toMatchObject({
+        baselineCommit: await git(inheritedRepo, ['rev-parse', 'HEAD']),
+        rebaselines: [expect.objectContaining({
+          trigger: 'defensive-history-rewrite',
+          fromCommit: 'd'.repeat(40),
+          paths: ['.docs/plans/other-feature.md'],
+        })],
+      });
+      expect((authored as { reason: string }).reason).toContain('.docs/plans/mine.md');
+      // The permitted rotation re-baselines onto the rewritten HEAD; the refusal
+      // leaves the stranded baseline exactly as it found it.
+      expect(await readSeal(authoredRepo)).toMatchObject({ baselineCommit: 'd'.repeat(40) });
     });
 
     it('REFUSES rotation and preserves the pre-existing failure when the base tip cannot be resolved', async () => {

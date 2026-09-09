@@ -195,8 +195,8 @@ parent directory it is restoring into — so this rule is the interim guard, not
 
 ## Validation Rules (This Repo)
 
-**Every change to this harness repo MUST be validated before committing.** This is not optional.
-Run the full validation suite and fix any failures before `git commit`.
+**Every change to this harness repo MUST be validated.** Run the full validation suite
+and fix any failures before declaring the work complete.
 
 ### Test Authoring Rules
 
@@ -217,11 +217,11 @@ fail, and how to fix it — is [`docs/contributing/validation.md`](docs/contribu
    `test/lint_shell.sh`. Catches shell bugs that parse cleanly but misbehave at runtime.
 2. **SKILL.md frontmatter** — Every `skills/*/SKILL.md` has YAML frontmatter with required
    fields: `name`, `description`, `enforcement`, `phase`.
-3. **Agent references** — Every `agents/*.md` referenced in skills or HARNESS.md exists on disk.
+3. **Agent references** — Every `agents/*.md` referenced in skills, HARNESS.md, or ARCHITECTURE.md exists on disk.
 4. **Cross-skill references** — Every `/skill-name` reference in SKILL.md files points to an
    existing `skills/` directory.
-5. **HARNESS.md model table** — Every skill directory has an entry in the model selection table.
-5a. **Table content drift** — The generated HARNESS.md model-selection-table section matches
+5. **ARCHITECTURE.md model table** — Every skill directory has an entry in the model selection table.
+5a. **Table content drift** — The generated ARCHITECTURE.md model-selection-table section matches
     the output of `bin/generate-model-table` (source: `model-table-metadata.ts` +
     `resolved-config.ts`); regenerate and commit if it drifts.
 5b. **SKILL.md pin agreement** — Every skill marked opus-tier in the model table pins
@@ -231,36 +231,19 @@ fail, and how to fix it — is [`docs/contributing/validation.md`](docs/contribu
 
 ### When to Validate
 
-- **Before every commit** in this repo
 - After editing any SKILL.md, agent, HARNESS.md, or bin/ script
 - The active host agent MUST run validation automatically — do not ask, do not skip
 
 ### Failure Handling
 
-If validation fails, fix the issue before committing. Do not commit with known validation
-failures. If a check is failing due to a legitimate structural change (e.g., renaming a skill),
-fix all references before committing.
+If validation fails, fix the issue before declaring the work complete. If a check is failing
+due to a legitimate structural change (e.g., renaming a skill), fix all references.
 
-## Documentation Upkeep
+## Worktree Policy
 
-Docs track features. Every change that adds or alters user-facing behavior MUST
-update the relevant documentation in the **same** PR:
-
-- New `ai-conductor` flags → update `docs/reference/cli.md`; new config keys → `docs/reference/configuration.md`.
-- New daemon options or operational behavior → update `docs/guides/running-the-daemon.md`, and the
-  affected runbook under `docs/runbooks/` if it changes recovery.
-- New skill → `docs/reference/skills.md`; new step → `docs/reference/steps.md`; new gate →
-  `docs/explanation/gates.md`; new hook → `docs/reference/settings-and-hooks.md`; new HARNESS.md rule →
-  the affected page in `docs/` (see `README.md`'s Documentation index).
-- Ordinary reader-visible changes update the canonical affected documentation. Leave README unchanged unless the README landing-page contract changes.
-- The README rule is a repository-local landing-page refinement of the global harness documentation convention.
-
-A PR is not complete while its affected canonical documentation is stale. For consumer projects without this custom-step configuration, the global harness documentation convention remains unchanged.
-
-## Branch Policy
-
-All work MUST happen on a feature branch — never commit directly to main.
-Create a branch before making changes, and open a PR to merge.
+All work MUST happen in an isolated git worktree on a feature branch. Create the worktree
+and branch before making changes; switching branches in the primary checkout is not sufficient.
+Never commit directly to main. Open a PR to merge.
 
 ## Release & Update Gates
 
@@ -341,6 +324,7 @@ for the full mechanism.
 
 HARNESS.md is the single source of truth for behavioral rules consumed by projects using this harness.
 
-- All behavioral changes (communication protocol, model selection, conventions) go in HARNESS.md
+- Execution rules (communication protocol, model selection obligations, conventions) go in HARNESS.md
+- Architecture, generated model-policy tables, and operator reference material go in ARCHITECTURE.md; it is not a mandatory session-start read
 - This shared instruction file describes the harness repo itself; HARNESS.md describes rules for projects
 - `hooks/claude/session-start-context.sh` detects when a consumer CLAUDE.md is missing the HARNESS.md reference and prints the required block; consumers must add it manually (not auto-applied)

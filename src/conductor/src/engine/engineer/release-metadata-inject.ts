@@ -21,6 +21,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseReleaseDisposition } from '../release-metadata.js';
+import type { GitRunner } from '../pr-labels.js';
 
 /** Shell runner for the `gh` CLI. Same shape as issue-ref.ts's GhRunner. */
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
@@ -35,6 +36,18 @@ export interface EnsureReleaseMetadataOpts {
   cwd: string;
   readTemplate?: FileReader;
   log?: (msg: string) => void;
+}
+
+/** Dependencies for composing explicit create arguments for an opted-in spec PR. */
+export interface BuildSpecPrCreateArgsOpts {
+  /** Repository root containing the opt-in PR template. */
+  cwd: string;
+  /** Named spec branch whose tip commit supplies the autofill-equivalent message. */
+  branch: string;
+  /** Injected Git runner; a read failure falls back to gh's existing --fill behavior. */
+  git: GitRunner;
+  /** Optional template seam so unit tests never read a real checkout. */
+  readTemplate?: FileReader;
 }
 
 const PR_TEMPLATE_PATH = '.github/pull_request_template.md';
@@ -55,6 +68,21 @@ export const DEFAULT_SPEC_RELEASE_BLOCK = [
 ].join('\n');
 
 /**
+ * Preserve an author declaration byte-for-byte, or append the default release
+ * block using the existing post-create repair's whitespace convention.
+ */
+export function composeSpecPrBody(body: string): string {
+  try {
+    parseReleaseDisposition(body);
+    return body;
+  } catch {
+    return body.trim() === ''
+      ? DEFAULT_SPEC_RELEASE_BLOCK
+      : `${body.replace(/\s+$/, '')}\n\n${DEFAULT_SPEC_RELEASE_BLOCK}`;
+  }
+}
+
+/**
  * Does this repository require a release disposition on its PRs?
  *
  * Decided from the target repo's own PR template rather than from a flag in this
@@ -70,6 +98,25 @@ export async function declaresReleaseDisposition(
   } catch {
     // Missing or unreadable template: the repository has not asked for this.
     return false;
+  }
+}
+
+/**
+ * Build explicit gh create arguments only for repositories that opted into the
+ * release-disposition contract. Failures intentionally return [] so callers
+ * retain the pre-existing `--fill` path and can still use post-create repair.
+ */
+export async function buildSpecPrCreateArgs(
+  opts: BuildSpecPrCreateArgsOpts,
+): Promise<string[]> {
+  if (!(await declaresReleaseDisposition(opts.cwd, opts.readTemplate))) return [];
+
+  try {
+    const { stdout } = await opts.git(['show', '-s', '--format=%B', opts.branch], { cwd: opts.cwd });
+    const body = String(stdout);
+    return ['--title', body.split(/\r?\n/, 1)[0]!, '--body', composeSpecPrBody(body)];
+  } catch {
+    return [];
   }
 }
 
@@ -98,20 +145,8 @@ export async function ensureReleaseMetadata(opts: EnsureReleaseMetadataOpts): Pr
       body = '';
     }
 
-    // The parser is the authority on "does this body declare a disposition?".
-    // Re-implementing that test here would let the two drift, and this guard
-    // exists precisely because the required check uses the parser's answer.
-    try {
-      parseReleaseDisposition(body);
-      return false; // already declared — never overwrite the author.
-    } catch {
-      // No parseable disposition: fall through and supply the default.
-    }
-
-    const newBody =
-      body.trim() === ''
-        ? DEFAULT_SPEC_RELEASE_BLOCK
-        : `${body.replace(/\s+$/, '')}\n\n${DEFAULT_SPEC_RELEASE_BLOCK}`;
+    const newBody = composeSpecPrBody(body);
+    if (newBody === body) return false; // already declared — never overwrite the author.
     await gh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
     return true;
   } catch (err: unknown) {

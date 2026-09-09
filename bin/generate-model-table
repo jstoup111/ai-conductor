@@ -1,6 +1,6 @@
 #!/bin/bash
 # generate-model-table — regenerates (or checks/prints pins for) the
-# generated model-selection table region in HARNESS.md.
+# generated model-selection table region in ARCHITECTURE.md.
 #
 # Runs the TypeScript tool directly from source via the local tsx binary
 # (src/conductor/node_modules/.bin/tsx) — deliberately not via a bundled

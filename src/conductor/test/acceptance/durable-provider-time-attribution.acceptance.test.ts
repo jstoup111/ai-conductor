@@ -230,7 +230,9 @@ describe('acceptance: durable provider-time attribution (#1101)', () => {
     expect(record).toMatch(/^## Cost$/m);
     expect(record).toMatch(/^input:\s*15$/m);
     expect(record).toMatch(/^output:\s*3$/m);
-    expect(record).toMatch(/^unmetered:\s*count:\s*1,\s*duration_ms:\s*0$/m);
+    // The terminal completion has no provider attribution; its two provider
+    // attempts above are already represented, so the completion is excluded.
+    expect(record).toMatch(/^unmetered:\s*count:\s*0,\s*duration_ms:\s*0$/m);
     expect(await git(['status', '--porcelain', '--', '.docs/shipped'])).toBe('');
     expect(await git(['show', `HEAD:.docs/shipped/${SLUG}.md`])).toContain(
       'provider_active_ms: 330',

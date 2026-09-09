@@ -85,6 +85,7 @@ describe('remediation case reconciler', () => {
       state: {
         version: 'v1',
         feature: FEATURE,
+        suppressions: [],
         cases: [{
           id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high',
           rationale: ACTION_CASE.rationale, confidence: 'high', resolution: 'open',

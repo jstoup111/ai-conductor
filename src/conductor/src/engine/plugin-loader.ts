@@ -247,6 +247,7 @@ export function registerBuiltins(
         pipelineDir: ctx.pipelineDir,
         feature: ctx.startContext.feature ?? 'unknown',
         project: ctx.startContext.project ?? 'unknown',
+        metrics: ctx.startContext.metrics,
       },
       ctx.emitter,
     );
