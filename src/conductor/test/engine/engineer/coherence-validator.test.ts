@@ -49,6 +49,62 @@ afterEach(async () => {
   await Promise.all(temporaryRepositories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
+describe('corrected failing criterion rows', () => {
+  const criterion = 'Story 1 happy: Given a widget, when shipped, then it arrives';
+  const stories = `# Stories
+
+## Story 1: Widget
+
+### Happy Path
+- Given a widget, when shipped, then it arrives
+`;
+  const plan = `# Plan
+
+### Task 1: Ship widget
+**Done when:**
+- The widget arrives.
+`;
+
+  function correctedRows(correction: string, taskId = 'task-1') {
+    const parsed = parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| criterion | ${criterion} | ${taskId} | fail | "The widget arrives." | diff-local | ${correction} |
+`);
+    if (!parsed.ok) throw new Error('expected corrected criterion row to parse');
+    return parsed.rows;
+  }
+
+  it.each([
+    ['plan', 'criterion:cannot-deliver-plan:1', 'correction: plan'],
+    ['architecture:adr-x#D2', 'criterion:cannot-deliver-architecture:1', 'constraint: adr-x#D2'],
+  ])('emits actionable %s cannot-deliver gaps', (correction, gapId, detail) => {
+    const result = checkCriterionCoverage(correctedRows(correction), stories, plan);
+    expect(result).toMatchObject({ ok: false, reason: 'criterion-gap' });
+    if (result.ok) return;
+    expect(result.gaps).toContainEqual(expect.objectContaining({ gapId, criterion }));
+    expect(result.gaps.find((gap) => gap.gapId === gapId)?.detail).toContain('task-1');
+    expect(result.gaps.find((gap) => gap.gapId === gapId)?.detail).toContain('The widget arrives.');
+    expect(result.gaps.find((gap) => gap.gapId === gapId)?.detail).toContain(detail);
+  });
+
+  it('preserves legacy verdict ids and suppresses cannot-deliver for an unresolvable task', () => {
+    const legacy = checkCriterionCoverage(
+      correctedRows('plan').map((row) => row.rowClass === 'criterion' ? { ...row, correction: undefined } : row),
+      stories,
+      plan,
+    );
+    expect(legacy.ok).toBe(false);
+    if (!legacy.ok) expect(legacy.gaps.map((gap) => gap.gapId)).toContain('criterion:verdict:1');
+
+    const missing = checkCriterionCoverage(correctedRows('plan', 'task-404'), stories, plan);
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) {
+      expect(missing.gaps.map((gap) => gap.gapId)).toContain('criterion:task-missing:1:404');
+      expect(missing.gaps.some((gap) => gap.gapId.startsWith('criterion:cannot-deliver-'))).toBe(false);
+    }
+  });
+});
+
 async function runGit(cwd: string, args: string[]): Promise<void> {
   await execFile('git', args, { cwd });
 }
@@ -2456,7 +2512,7 @@ ${row}
     if (result.ok) return;
 
     if (_label === 'wrong cell count') {
-      expect(result.detail).toMatchObject({ line: 3, message: expect.stringContaining('expected 6 and actual 5') });
+      expect(result.detail).toMatchObject({ line: 3, message: expect.stringContaining('expected 6 or 7 and actual 5') });
     } else if (_label === 'unknown verdict') {
       expect(result.detail).toMatchObject({ line: 3, message: expect.stringContaining('probably-covered') });
     } else if (_label === 'out-of-vocabulary disposition') {
@@ -2796,7 +2852,7 @@ describe('runCoherenceGate criterion fail-closed guard', () => {
         ideaFiles: new Set(['.docs/coherence/idea.md', '.docs/coherence-waivers/idea.md']),
         guard: new AuthoringGuard(worktreePath),
       }),
-    ).rejects.toThrow(/unparseable-criterion-row.*line 3.*expected 6 and actual 5/is);
+    ).rejects.toThrow(/unparseable-criterion-row.*line 3.*expected 6 or 7 and actual 5/is);
   });
 
   it('rejects unparseable story criteria even when a fresh waiver names criterion:stories-unparseable', async () => {
