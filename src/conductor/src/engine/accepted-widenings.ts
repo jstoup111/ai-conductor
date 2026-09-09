@@ -503,12 +503,54 @@ export function classifyOverScopeCriterion(
 }
 
 export interface OverScopeRenderableFinding { criterion: string; summary: string; relation: IntentRelation }
-export function renderOverScopeDecisionBlock(undecided: readonly OverScopeRenderableFinding[], refused: readonly OverScopeRenderableFinding[] = [], defects: readonly { kind: string; criterion?: string; message?: string }[] = []): string {
+
+/** An editable operator offer reconstructed only from engine-persisted case state. */
+export type OverScopePersistedOffer =
+  | {
+      readonly kind: 'pending';
+      readonly criterion: string;
+      readonly summary: string;
+      readonly relation: 'outside-visible';
+      readonly offerEntryId: string;
+      readonly originalSource: AcceptedWideningOriginalSource;
+      readonly originalCaseId: string;
+    }
+  | {
+      readonly kind: 'revise-decision';
+      readonly criterion: string;
+      readonly summary: string;
+      readonly relation: 'outside-visible';
+      readonly offerEntryId: string;
+      readonly originalSource: AcceptedWideningOriginalSource;
+      readonly originalCaseId: string;
+      readonly priorDecision: AcceptedWideningDecisionReference;
+    };
+
+function isPersistedOffer(value: OverScopeRenderableFinding | OverScopePersistedOffer): value is OverScopePersistedOffer {
+  return 'offerEntryId' in value;
+}
+
+export function renderOverScopeDecisionBlock(undecided: readonly (OverScopeRenderableFinding | OverScopePersistedOffer)[], refused: readonly OverScopeRenderableFinding[] = [], defects: readonly { kind: string; criterion?: string; message?: string }[] = []): string {
   const parts: string[] = [];
-  if (undecided.length) {
-    parts.push(`Blocking criteria awaiting a decision: ${undecided.map((f) => f.criterion).join(', ')}.`);
+  const editable = undecided.filter((finding) => finding.relation === 'outside-visible');
+  if (editable.length) {
+    parts.push(`Blocking criteria awaiting a decision: ${editable.map((f) => f.criterion).join(', ')}.`);
     parts.push('Edit each `decision` to `accept` or `refuse` with a `rationale`, then clear this halt.');
-    parts.push(`\`\`\`json over-scope-decisions\n${JSON.stringify(undecided.map((f) => ({ criterion: f.criterion, summary: f.summary, relation: f.relation, decision: 'pending' })), null, 2)}\n\`\`\``);
+    parts.push(`\`\`\`json over-scope-decisions\n${JSON.stringify(editable.map((finding) => {
+      if (!isPersistedOffer(finding)) {
+        return { criterion: finding.criterion, summary: finding.summary, relation: finding.relation, decision: 'pending' };
+      }
+      return {
+        ...(finding.kind === 'revise-decision' ? { kind: 'revise-decision', priorDecision: finding.priorDecision } : {}),
+        criterion: finding.criterion,
+        summary: finding.summary,
+        relation: finding.relation,
+        offerEntryId: finding.offerEntryId,
+        originalSource: finding.originalSource,
+        originalCaseId: finding.originalCaseId,
+        decision: 'pending',
+      };
+    }), null, 2)}\n\`\`\``);
   }
   if (refused.length) parts.push(`Refused — rework required: ${refused.map((f) => f.criterion).join(', ')}.`);
   if (defects.length) parts.push(`Unreadable scope decisions: ${defects.map((d) => d.message ? `${d.kind} (${d.message})` : d.criterion ? `${d.kind} (${d.criterion})` : d.kind).join(', ')}.`);
