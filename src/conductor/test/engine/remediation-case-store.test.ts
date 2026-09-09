@@ -1,12 +1,18 @@
-// Covers: task:2
+// Covers: task:1, task:2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
+import {
+  parseRemediationCaseDomainRecord,
+  RemediationCaseStore,
+  selectBuildReviewRemediationCases,
+  selectPrdWideningRemediationCases,
+} from '../../src/engine/remediation-case-store.js';
 import type {
+  RemediationCaseDomainRecord,
   RemediationCaseStoreFilesystem,
   RemediationCaseStoreState,
 } from '../../src/engine/remediation-case-store.js';
@@ -38,6 +44,26 @@ const CASE_STATE: RemediationCaseStoreState = {
   suppressions: [],
 };
 
+const PRD_WIDENING_CASE = {
+  id: 'prd-case-1',
+  domain: 'prd_widening',
+  originalSources: [{
+    sourceId: 'NC-1',
+    snapshot: 'Original outside-visible widening finding.',
+  }],
+  currentSources: [{
+    sourceId: 'NC-1',
+    snapshot: 'Reworded current widening finding.',
+    recordedAt: '2026-09-09T12:00:00.000Z',
+  }],
+  relationships: [{
+    currentSourceId: 'NC-1',
+    kind: 'same-case',
+    caseId: 'prd-case-1',
+    reason: 'The reworded finding concerns the original behavior.',
+  }],
+} as const;
+
 const temporaryDirectories: string[] = [];
 
 async function createProjectRoot(): Promise<string> {
@@ -54,6 +80,33 @@ afterEach(async () => {
 });
 
 describe('remediation case store', () => {
+  it('parses separate domain records and selects only their domain without sharing display ordinals', () => {
+    const buildReview = parseRemediationCaseDomainRecord({
+      ...CASE_STATE.cases[0],
+      sources: [{ ...CASE_STATE.cases[0].sources[0], sourceId: 'NC-1' }],
+    });
+    const prdWidening = parseRemediationCaseDomainRecord(PRD_WIDENING_CASE);
+
+    expect(buildReview).toMatchObject({ ok: true, record: { domain: 'build_review' } });
+    expect(prdWidening).toMatchObject({ ok: true, record: { domain: 'prd_widening' } });
+    if (!buildReview.ok || !prdWidening.ok) throw new Error('domain records must parse');
+
+    const records: readonly RemediationCaseDomainRecord[] = [buildReview.record, prdWidening.record];
+    const buildReviewCases = selectBuildReviewRemediationCases(records);
+    const prdWideningCases = selectPrdWideningRemediationCases(records);
+    expect(buildReviewCases).toEqual([buildReview.record]);
+    expect(prdWideningCases).toEqual([prdWidening.record]);
+    expect(buildReviewCases[0]?.sources[0]?.sourceId).toBe(prdWideningCases[0]?.originalSources[0]?.sourceId);
+  });
+
+  it.each([
+    ['a build-review effect', { ...PRD_WIDENING_CASE, effect: { kind: 'none' } }],
+    ['autonomous acceptance authority', { ...PRD_WIDENING_CASE, decision: 'accept' }],
+    ['autonomous refusal authority', { ...PRD_WIDENING_CASE, decision: 'refuse' }],
+  ])('rejects a PRD widening record carrying %s', (_description, record) => {
+    expect(parseRemediationCaseDomainRecord(record)).toEqual({ ok: false, reason: 'malformed-state' });
+  });
+
   it('returns an empty versioned state before any case has been persisted', async () => {
     const projectRoot = await createProjectRoot();
 

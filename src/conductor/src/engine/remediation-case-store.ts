@@ -10,7 +10,6 @@ import {
 import type {
   RemediationCaseConfidence,
   RemediationCaseDisposition,
-  RemediationCaseDomain,
   RemediationCasePriority,
   RemediationCaseSourceOutcome,
 } from './remediation-case-artifact.js';
@@ -45,7 +44,7 @@ export type RemediationCaseEffect =
 
 export interface RemediationCaseRecord {
   readonly id: string;
-  readonly domain: RemediationCaseDomain;
+  readonly domain: 'build_review';
   readonly disposition: RemediationCaseDisposition;
   readonly priority: RemediationCasePriority;
   readonly rationale: string;
@@ -53,6 +52,54 @@ export interface RemediationCaseRecord {
   readonly resolution: 'open' | 'resolved';
   readonly sources: readonly RemediationCaseSourceLink[];
   readonly effect: RemediationCaseEffect;
+}
+
+/** Immutable evidence captured for the finding that opened a PRD case. */
+export interface RemediationCasePrdWideningOriginalSourceSnapshot {
+  readonly sourceId: string;
+  readonly snapshot: string;
+}
+
+/** A later PRD finding, retained as evidence instead of replacing the original. */
+export interface RemediationCasePrdWideningCurrentSourceLink {
+  readonly sourceId: string;
+  readonly snapshot: string;
+  readonly recordedAt: string;
+}
+
+/**
+ * A reconciliation result relates findings only.  It intentionally contains
+ * neither an operator decision nor a build-review effect/disposition.
+ */
+export type RemediationCasePrdWideningRelationship =
+  | { readonly currentSourceId: string; readonly kind: 'same-case'; readonly caseId: string; readonly reason: string }
+  | { readonly currentSourceId: string; readonly kind: 'different'; readonly reason: string }
+  | { readonly currentSourceId: string; readonly kind: 'uncertain'; readonly candidateCaseIds: readonly string[]; readonly reason: string };
+
+/** Effect-free PRD widening history, separate from build-review case authority. */
+export interface RemediationCasePrdWideningRecord {
+  readonly id: string;
+  readonly domain: 'prd_widening';
+  readonly originalSources: readonly RemediationCasePrdWideningOriginalSourceSnapshot[];
+  readonly currentSources: readonly RemediationCasePrdWideningCurrentSourceLink[];
+  readonly relationships: readonly RemediationCasePrdWideningRelationship[];
+}
+
+/** The tagged case-record vocabulary for the version-two shared envelope. */
+export type RemediationCaseDomainRecord = RemediationCaseRecord | RemediationCasePrdWideningRecord;
+
+/** Return only autonomous BUILD-review records from the shared domain vocabulary. */
+export function selectBuildReviewRemediationCases(
+  records: readonly RemediationCaseDomainRecord[],
+): readonly RemediationCaseRecord[] {
+  return records.filter((record): record is RemediationCaseRecord => record.domain === 'build_review');
+}
+
+/** Return only effect-free PRD widening records from the shared domain vocabulary. */
+export function selectPrdWideningRemediationCases(
+  records: readonly RemediationCaseDomainRecord[],
+): readonly RemediationCasePrdWideningRecord[] {
+  return records.filter((record): record is RemediationCasePrdWideningRecord => record.domain === 'prd_widening');
 }
 
 /** Engine-owned history of a sub-floor finding; never operator authority. */
@@ -221,6 +268,91 @@ function parseCase(value: unknown):
     sources: sources as RemediationCaseSourceLink[],
     effect,
   } };
+}
+
+function parsePrdWideningOriginalSourceSnapshot(
+  value: unknown,
+): RemediationCasePrdWideningOriginalSourceSnapshot | undefined {
+  if (!isRecord(value) || !exactKeys(value, ['sourceId', 'snapshot']) ||
+    !boundedString(value.sourceId, MAX_REFERENCE_LENGTH) || !boundedString(value.snapshot)) return undefined;
+  return { sourceId: value.sourceId, snapshot: value.snapshot };
+}
+
+function parsePrdWideningCurrentSourceLink(
+  value: unknown,
+): RemediationCasePrdWideningCurrentSourceLink | undefined {
+  if (!isRecord(value) || !exactKeys(value, ['sourceId', 'snapshot', 'recordedAt']) ||
+    !boundedString(value.sourceId, MAX_REFERENCE_LENGTH) || !boundedString(value.snapshot) || !validTimestamp(value.recordedAt)) return undefined;
+  return { sourceId: value.sourceId, snapshot: value.snapshot, recordedAt: value.recordedAt };
+}
+
+function parsePrdWideningRelationship(
+  value: unknown,
+): RemediationCasePrdWideningRelationship | undefined {
+  if (!isRecord(value) || !boundedString(value.currentSourceId, MAX_REFERENCE_LENGTH) ||
+    !boundedString(value.reason)) return undefined;
+  if (value.kind === 'same-case' && exactKeys(value, ['currentSourceId', 'kind', 'caseId', 'reason']) &&
+    boundedString(value.caseId, MAX_REFERENCE_LENGTH)) {
+    return { currentSourceId: value.currentSourceId, kind: 'same-case', caseId: value.caseId, reason: value.reason };
+  }
+  if (value.kind === 'different' && exactKeys(value, ['currentSourceId', 'kind', 'reason'])) {
+    return { currentSourceId: value.currentSourceId, kind: 'different', reason: value.reason };
+  }
+  if (value.kind === 'uncertain' && exactKeys(value, ['currentSourceId', 'kind', 'candidateCaseIds', 'reason']) &&
+    Array.isArray(value.candidateCaseIds) && value.candidateCaseIds.length > 0 &&
+    value.candidateCaseIds.length <= MAX_CASES &&
+    value.candidateCaseIds.every((caseId) => boundedString(caseId, MAX_REFERENCE_LENGTH)) &&
+    new Set(value.candidateCaseIds).size === value.candidateCaseIds.length) {
+    return { currentSourceId: value.currentSourceId, kind: 'uncertain', candidateCaseIds: value.candidateCaseIds, reason: value.reason };
+  }
+  return undefined;
+}
+
+function parsePrdWideningCase(value: unknown): RemediationCasePrdWideningRecord | undefined {
+  if (!isRecord(value) || !exactKeys(value, ['id', 'domain', 'originalSources', 'currentSources', 'relationships']) ||
+    value.domain !== 'prd_widening' || !boundedString(value.id, MAX_REFERENCE_LENGTH) ||
+    !Array.isArray(value.originalSources) || value.originalSources.length === 0 ||
+    value.originalSources.length > MAX_SOURCES_PER_CASE || !Array.isArray(value.currentSources) ||
+    value.currentSources.length > MAX_SOURCES_PER_CASE || !Array.isArray(value.relationships) ||
+    value.relationships.length > MAX_SOURCES_PER_CASE) return undefined;
+  const originalSources = value.originalSources.map(parsePrdWideningOriginalSourceSnapshot);
+  const currentSources = value.currentSources.map(parsePrdWideningCurrentSourceLink);
+  const relationships = value.relationships.map(parsePrdWideningRelationship);
+  if (originalSources.some((source) => source === undefined) || currentSources.some((source) => source === undefined) ||
+    relationships.some((relationship) => relationship === undefined)) return undefined;
+  const originalSourceIds = originalSources.map((source) => source!.sourceId);
+  const currentSourceIds = currentSources.map((source) => source!.sourceId);
+  const relationshipSourceIds = relationships.map((relationship) => relationship!.currentSourceId);
+  if (new Set(originalSourceIds).size !== originalSourceIds.length ||
+    new Set(currentSourceIds).size !== currentSourceIds.length ||
+    new Set(relationshipSourceIds).size !== relationshipSourceIds.length ||
+    !relationshipSourceIds.every((sourceId) => currentSourceIds.includes(sourceId))) return undefined;
+  return {
+    id: value.id,
+    domain: 'prd_widening',
+    originalSources: originalSources as RemediationCasePrdWideningOriginalSourceSnapshot[],
+    currentSources: currentSources as RemediationCasePrdWideningCurrentSourceLink[],
+    relationships: relationships as RemediationCasePrdWideningRelationship[],
+  };
+}
+
+/**
+ * Parses one member of the shared version-two case envelope.  Task 2 owns
+ * migration and envelope loading; this contract stays independently usable by
+ * the migration and every domain-specific writer.
+ */
+export function parseRemediationCaseDomainRecord(value: unknown):
+  | { readonly ok: true; readonly record: RemediationCaseDomainRecord }
+  | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state' } {
+  if (!isRecord(value)) return { ok: false, reason: 'malformed-state' };
+  if (value.domain === 'build_review') return parseCase(value);
+  if (value.domain === 'prd_widening') {
+    const record = parsePrdWideningCase(value);
+    return record === undefined
+      ? { ok: false, reason: 'malformed-state' }
+      : { ok: true, record };
+  }
+  return { ok: false, reason: 'foreign-domain' };
 }
 
 function parseSuppression(value: unknown): RemediationCaseSuppressionEntry | undefined {

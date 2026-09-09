@@ -10,7 +10,12 @@ const MAX_REFERENCE_LENGTH = 256;
 const MAX_TEXT_LENGTH = 8_000;
 const MAX_ACTION_TASKS = 32;
 
-export type RemediationCaseDomain = 'build_review';
+/**
+ * Case history is shared storage, not shared gate authority.  A PRD widening
+ * record therefore has a domain of its own rather than borrowing the
+ * build-review disposition vocabulary.
+ */
+export type RemediationCaseDomain = 'build_review' | 'prd_widening';
 export type RemediationCaseSourceOutcome = 'acted' | 'deferred' | 'rejected' | 'merged';
 export type RemediationCaseDisposition = 'act' | 'defer' | 'reject';
 export type RemediationCasePriority = 'critical' | 'high' | 'medium' | 'low';
