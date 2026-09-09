@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-09T23:57:17.572Z
 Slug: bind-story-n-task-references-to-story-n-at-land
 Class: needs-human
 Halting step: prd_audit
