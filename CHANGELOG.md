@@ -56,6 +56,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Build review excludes paths whose feature-only changes are already patch-equivalent to the review base. ([implementation PR #2427](https://github.com/jstoup111/ai-conductor/pull/2427)).
 - DECIDE grants issued from linked worktrees now reach the daemon’s canonical repository store. ([implementation PR #2457](https://github.com/jstoup111/ai-conductor/pull/2457)).
 - The spec land gate now rejects newly added ADRs whose filenames lack a real date-prefixed canonical format. ([implementation PR #2450](https://github.com/jstoup111/ai-conductor/pull/2450)).
+- The post-commit feedback hook now runs only after commit-creating commands that produce a fresh commit. ([implementation PR #2425](https://github.com/jstoup111/ai-conductor/pull/2425)).
 
 ## Migration
 
