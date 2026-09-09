@@ -3121,6 +3121,34 @@ describe('engine/conductor', () => {
     }
   });
 
+  it.each(['step_completed', 'step_failed'] as const)(
+    'does not let %s close a non-validation parallel execution',
+    async (type) => {
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+      });
+      const emit = vi.spyOn(events, 'emit');
+      const executionEvents = conductor as unknown as {
+        emitExecutionEvent(event: ConductorEvent): Promise<void>;
+      };
+      await executionEvents.emitExecutionEvent({ type: 'parallel_started', step: 'build', branches: [] });
+      emit.mockClear();
+      const terminal: ConductorEvent = type === 'step_completed'
+        ? { type, step: 'build', status: 'done' }
+        : { type, step: 'build', error: 'late step failure', retryCount: 0 };
+      await executionEvents.emitExecutionEvent(terminal);
+      expect(emit).not.toHaveBeenCalled();
+
+      await conductor.closeOpenExecutionsForShutdown();
+      expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'parallel_failure', step: 'build',
+      }));
+    },
+  );
+
   it('suppresses a late normal terminal after daemon SIGTERM closed the execution', async () => {
     const conductor = new Conductor({
       projectRoot: dir,

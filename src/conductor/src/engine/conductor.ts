@@ -2196,7 +2196,8 @@ export class Conductor {
     const terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
       ? this.openExecutions.has(`step:${event.step}`)
         ? `step:${event.step}`
-        : this.openExecutions.has(`parallel:${event.step}`)
+        : getGroupForStep(event.step)?.name === 'validation'
+          && this.openExecutions.has(`parallel:${event.step}`)
           ? `parallel:${event.step}`
           : `step:${event.step}`
       : event.type === 'step_refused'
