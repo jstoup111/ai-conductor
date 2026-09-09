@@ -2807,6 +2807,45 @@ Return requests are accepted.
 });
 
 describe('runCoherenceGate criterion fail-closed guard', () => {
+  it('passes an exact fresh waiver for cannot-deliver and unknown-decision gaps, but rejects partial coverage', async () => {
+    const gaps: CoherenceGap[] = [
+      { layer: 'criterion', gapId: 'criterion:cannot-deliver-plan:2', artifact: 'stories / plan', item: 'plan correction' },
+      { layer: 'criterion', gapId: 'criterion:correction-unknown-decision:4', artifact: 'stories / plan', item: 'unknown decision' },
+    ];
+    const changedFiles = [{ status: 'A', path: '.docs/coherence-waivers/idea.md' }] as const;
+    const exact = await evaluateCoherenceWaiver({
+      gaps, changedFiles, root: '/repo',
+      readText: async () => 'Waives: criterion:cannot-deliver-plan:2, criterion:correction-unknown-decision:4\nRationale: both correction findings are accepted.\n',
+    });
+    expect(exact).toEqual({ ok: true });
+    const partial = await evaluateCoherenceWaiver({
+      gaps, changedFiles, root: '/repo',
+      readText: async () => 'Waives: criterion:cannot-deliver-plan:2\nRationale: only one finding is accepted.\n',
+    });
+    expect(partial).toMatchObject({ ok: false, reason: expect.stringContaining('criterion:correction-unknown-decision:4') });
+  });
+
+  it('rejects a malformed correction before evaluating a waiver', async () => {
+    const waiverSpy = vi.fn();
+    vi.resetModules();
+    vi.doMock('../../../src/engine/engineer/coherence-waiver.js', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../../../src/engine/engineer/coherence-waiver.js')>()),
+      evaluateCoherenceWaiver: waiverSpy,
+    }));
+    try {
+      const { runCoherenceGate: mockedGate } = await import('../../../src/engine/engineer/coherence-validator.js');
+      const worktreePath = await mkdtemp(join(tmpdir(), 'coherence-malformed-correction-'));
+      temporaryRepositories.push(worktreePath);
+      await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+      await writeFile(join(worktreePath, '.docs/coherence/idea.md'), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |\n| --- | --- | --- | --- | --- | --- |\n| criterion | Given a widget | task-1 | fail | evidence | diff-local | malformed |\n');
+      await expect(mockedGate({ worktreePath, canonicalPath: worktreePath, tier: 'M', track: 'technical', sourceRef: undefined, planStem: 'idea', storiesText: null, planText: null, prdText: null, outcomeBullets: [], ideaFiles: new Set(['.docs/coherence/idea.md']), guard: new AuthoringGuard(worktreePath) })).rejects.toThrow('unparseable-criterion-row');
+      expect(waiverSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock('../../../src/engine/engineer/coherence-waiver.js');
+      vi.resetModules();
+    }
+  });
+
   async function architectureCorrectionGateError(
     decisionRef: string,
     options: { addedAdr?: { name: string; content: string }; deletedAdr?: { name: string; content: string } } = {},
