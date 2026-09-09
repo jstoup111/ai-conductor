@@ -269,6 +269,31 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     expect(haltExists).toBe(true);
   });
 
+  it('completed rebase that drops feature content writes completed-rebase recovery at the conductor halt site', async () => {
+    const runner: StepRunner = {
+      run: vi.fn().mockResolvedValue({ success: true } satisfies StepRunResult),
+      resolveRebaseConflict: async (): Promise<ResolutionAttempt> => {
+        await gc(['rebase', '--skip']);
+        return { resolved: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: repo,
+      daemon: true,
+      mode: 'auto',
+      fromStep: 'rebase',
+    });
+
+    await conductor.run();
+
+    const halt = await readFile(join(repo, '.pipeline/HALT'), 'utf8');
+    expect(halt).toContain('Review the completed rebase and restore any missing feature content.');
+    expect(halt).not.toContain('git rebase --continue');
+  });
+
   // ── Test 4 ───────────────────────────────────────────────────────────────
 
   it('rebase_resolution_attempt event emitted with correct {index, cap} on at least one attempt', async () => {

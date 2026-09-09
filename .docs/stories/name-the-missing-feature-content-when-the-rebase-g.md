@@ -18,7 +18,7 @@ As an operator triaging a `needs-human` rebase halt, I want the rejection to tel
 
 - Given a completed rebase in which one pre-rebase commit subject is absent and the content that commit added is absent from the resulting tree, when the work-preservation guard rejects, then the rejection names that subject, its pre-rebase commit identity, and the file whose content failed the check.
 - Given the same condition reached through the shared acceptance-guard entry point used after an automated resolution, when that entry point rejects, then its reason names only the subject that is actually missing and its content evidence, not an unfiltered prefix of the pre-rebase subject list.
-- Given several pre-rebase subjects are absent and none of their content survives, when the guard rejects, then the rejection enumerates each missing subject with its own evidence rather than reporting a single unattributed failure.
+- Given several pre-rebase subjects are absent and none of their content survives, when the guard rejects, then the rejection enumerates up to a bounded number of missing subjects in pre-rebase order, each with its own evidence, and states how many further missing subjects were omitted.
 
 #### Negative Paths
 
@@ -29,7 +29,7 @@ As an operator triaging a `needs-human` rebase halt, I want the rejection to tel
 ### Done When
 
 - [ ] Real-local-Git guard cases assert the rejection text contains the absent commit subject, its abbreviated pre-rebase identity, and the path whose content failed.
-- [ ] A real-local-Git case with two independently dropped-and-unrecovered commits asserts both subjects appear in one rejection.
+- [ ] A real-local-Git case with two independently dropped-and-unrecovered commits asserts both subjects appear in one rejection, and a case exceeding the enumeration bound asserts the bounded entries plus the omitted-subject count.
 - [ ] The already-upstream case and the genuinely-lost case both keep their current verdicts, proving the accept/reject boundary did not move.
 - [ ] The shared acceptance-guard entry point's rejection reason contains the missing subject and omits pre-rebase subjects that survived.
 

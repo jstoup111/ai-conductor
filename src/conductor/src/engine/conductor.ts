@@ -13174,7 +13174,7 @@ export class Conductor {
     }
 
     if (outcome.kind === 'conflict_halt' && !sealRejectionReason) {
-      await writeHalt(this.projectRoot, outcome.conflicts, outcome.reason, this.events);
+      await writeHalt(this.projectRoot, outcome.conflicts, outcome.reason, this.events, outcome.resumeShape);
     }
 
     await recordRebaseStepCompletion(this.stateFilePath, outcome);
