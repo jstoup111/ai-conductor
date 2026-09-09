@@ -442,6 +442,7 @@ interface VisualizerStartContextInput {
   pipelineDir: string;
   branch: string | undefined;
   engineVersion: string | undefined;
+  harnessVersion: string | undefined;
 }
 
 /** Build identity for every visualizer without fabricating unavailable values. */
@@ -454,6 +455,7 @@ export function createVisualizerStartContext(
     feature: input.feature,
     branch: input.branch,
     engineVersion: input.engineVersion,
+    harnessVersion: input.harnessVersion,
     pipelineDir: input.pipelineDir,
   };
 }
@@ -1455,6 +1457,7 @@ async function main(): Promise<void> {
       feature: opts.featureDesc,
       branch: await resolveCurrentBranch(projectRoot),
       engineVersion: resolveEngineVersion(__dirname),
+      harnessVersion: await resolveHarnessVersion(__dirname),
       pipelineDir,
     }),
   };

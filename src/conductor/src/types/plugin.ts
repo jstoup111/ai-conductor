@@ -46,6 +46,7 @@ export interface VisualizerStartContext {
   branch?: string;
   feature?: string;
   engineVersion?: string;
+  harnessVersion?: string;
   pipelineDir?: string;
   /** False when a daemon-lifetime listener owns metrics for this event stream. */
   metrics?: boolean;

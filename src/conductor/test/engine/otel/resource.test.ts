@@ -127,6 +127,7 @@ describe('buildResource', () => {
         'conductor.project': '/workspace/explicit-project',
         'conductor.branch': 'not-supplied',
         'conductor.engine.version': 'not-supplied',
+        'service.version': 'not-supplied',
       },
       {
         'service.name': 'ai-conductor',
@@ -136,6 +137,7 @@ describe('buildResource', () => {
         'conductor.project': '/workspace/persisted-project',
         'conductor.branch': 'not-supplied',
         'conductor.engine.version': 'not-supplied',
+        'service.version': 'not-supplied',
       },
       {
         'service.name': 'ai-conductor',
@@ -145,6 +147,7 @@ describe('buildResource', () => {
         'conductor.project': 'p',
         'conductor.branch': 'not-supplied',
         'conductor.engine.version': 'not-supplied',
+        'service.version': 'not-supplied',
       },
       {
         'service.name': 'ai-conductor',
@@ -154,6 +157,7 @@ describe('buildResource', () => {
         'conductor.project': 'p',
         'conductor.branch': 'not-supplied',
         'conductor.engine.version': 'not-supplied',
+        'service.version': 'not-supplied',
       },
     ]);
   });
@@ -241,6 +245,7 @@ describe('buildResource', () => {
       workerName: 'worker-a',
       branch: 'feat/thing',
       engineVersion: '20260828T000000Z-abc',
+      harnessVersion: '0.105.0',
       runId: 'run-1',
     });
 
@@ -262,6 +267,41 @@ describe('buildResource', () => {
 
       expect(resource.attributes['conductor.run.id']).toBe('run-1');
       expect(resource.attributes['conductor.engine.version']).toBe('20260828T000000Z-abc');
+    });
+
+    it('the trace scope carries the released harness version separately from the engine dist id', () => {
+      const resource = buildResource(ctx(), 'traces');
+
+      expect(resource.attributes['service.version']).toBe('0.105.0');
+      expect(resource.attributes['conductor.engine.version']).toBe('20260828T000000Z-abc');
+    });
+
+    it('two trace scopes with different engine dist ids keep the same released harness version', () => {
+      const first = buildResource({ ...ctx(), engineVersion: 'dist-a' }, 'traces');
+      const second = buildResource({ ...ctx(), engineVersion: 'dist-b' }, 'traces');
+
+      expect(first.attributes['service.version']).toBe('0.105.0');
+      expect(second.attributes['service.version']).toBe('0.105.0');
+      expect(first.attributes['conductor.engine.version']).toBe('dist-a');
+      expect(second.attributes['conductor.engine.version']).toBe('dist-b');
+    });
+
+    it('the trace scope marks an omitted harness version as not supplied without throwing', () => {
+      const { harnessVersion: _drop, ...withoutHarnessVersion } = ctx();
+      const build = () => buildResource(withoutHarnessVersion, 'traces');
+
+      expect(build).not.toThrow();
+      expect(build().attributes['service.version']).toBe('not-supplied');
+    });
+
+    it.each([
+      ['undefined', undefined],
+      ['empty', ''],
+    ])('the trace scope marks a %s harness version as unresolved without throwing', (_name, harnessVersion) => {
+      const build = () => buildResource({ ...ctx(), harnessVersion }, 'traces');
+
+      expect(build).not.toThrow();
+      expect(build().attributes['service.version']).toBe('unresolved');
     });
 
     it('uses worker identity only for the metric scope', () => {
@@ -287,6 +327,13 @@ describe('buildResource', () => {
     it('two engine versions yield an identical metric attribute set, so target_info gains no series', () => {
       const first = buildResource({ ...ctx(), engineVersion: 'v1' }, 'metrics');
       const second = buildResource({ ...ctx(), engineVersion: 'v2' }, 'metrics');
+
+      expect(first.attributes).toEqual(second.attributes);
+    });
+
+    it('two released harness versions yield an identical metric attribute set, so target_info gains no series', () => {
+      const first = buildResource({ ...ctx(), harnessVersion: '0.105.0' }, 'metrics');
+      const second = buildResource({ ...ctx(), harnessVersion: '0.106.0' }, 'metrics');
 
       expect(first.attributes).toEqual(second.attributes);
     });

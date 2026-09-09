@@ -6,6 +6,9 @@
 **Complexity:** S
 **Conflict check:** Small-tier formal check skipped; the scoped intent conforms to the approved signal-scoped Resource contract — run-varying identity rides the trace scope only, and the metric scope keeps exactly its feature-stable attribute set.
 
+> **Amended 2026-09-09 by #2235:** After rebasing onto main, the existing metric Resource is worker-stable as required by approved Story 3 and ADR-014 Decision 8. Preserve its exact keys: `service.name`, `service.instance.id`, `conductor.project`, `conductor.worker`, `host.name`. This trace-only change does not redesign metric identity or add `service.version` to metrics.
+
+
 ## Summary
 
 Three bounded tasks deliver #2235: the trace Resource gains an OTel-standard `service.version` attribute holding the released harness version, the supported OTel start-context seam carries that value the same way it already carries the engine dist id, and both supported start boundaries resolve it from their own module directory using the resolver the version command already uses. Publish-time sidecar capture, dist backfill, backend span-metrics configuration, and dashboards are outside this slice.
@@ -30,6 +33,9 @@ Tests follow the repository's test-authoring rules. Resource behavior is unit-le
 
 - Operator approved Small scope, the technical track, the `service.version` attribute name, and all three stories on 2026-09-06 (delegated).
 - Verified: the Resource builder is signal-scoped — the metrics branch returns exactly five feature-stable attributes and returns early, and the traces branch adds the run id and the engine dist id.
+
+> **Amended 2026-09-09 by #2235:** After rebasing onto main, the existing metric Resource is worker-stable as required by approved Story 3 and ADR-014 Decision 8. Preserve its exact keys: `service.name`, `service.instance.id`, `conductor.project`, `conductor.worker`, `host.name`. This trace-only change does not redesign metric identity or add `service.version` to metrics.
+
 - Verified: the identity normalizer already maps an omitted property to `not-supplied` and an empty or undefined one to `unresolved`, and its key union is explicit and must be widened.
 - Verified: the supported OTel start-context interface declares branch and engine dist id as required `string | undefined` members, and both existing boundary tests carry compile-time fixtures proving that requirement.
 - Verified: the visualizer projects the start context into the resource context behind an own-property guard, and the shared visualizer start-context type declares its identity members as optional.
@@ -50,6 +56,9 @@ Tests follow the repository's test-authoring rules. Resource behavior is unit-le
 
 **Steps:**
 1. Add a released-harness-version property to the existing signal-scope unit fixture context and write RED cases: the trace scope exposes the release value under `service.version` while the dist-id attribute keeps its own value; two trace resources sharing one release value but different dist ids expose an identical `service.version`; an omitted property yields `not-supplied` and an explicitly undefined or empty one yields `unresolved`, with neither call throwing; the metric-scope exact-key case still lists exactly the five feature-stable keys; two metric resources built under different release values compare equal.
+
+> **Amended 2026-09-09 by #2235:** After rebasing onto main, the existing metric Resource is worker-stable as required by approved Story 3 and ADR-014 Decision 8. Preserve its exact keys: `service.name`, `service.instance.id`, `conductor.project`, `conductor.worker`, `host.name`. This trace-only change does not redesign metric identity or add `service.version` to metrics.
+
 2. Verify RED, then add the optional released-harness-version member to the resource context interface and widen the identity normalizer's key union to include it.
 3. Emit `service.version` in the traces branch only, immediately after the existing dist-id attribute, using the normalizer. Leave the metrics early return and its attribute object untouched, and keep the builder synchronous and non-throwing.
 4. Run the focused resource test file through ai-conductor scoped-run, run the repository typecheck target that covers test files, and commit.
@@ -59,6 +68,9 @@ Tests follow the repository's test-authoring rules. Resource behavior is unit-le
 2. Two trace resources sharing one release value but different dist ids expose an identical `service.version`.
 3. Omitted and unresolved release inputs expose `not-supplied` and `unresolved` respectively, and neither build throws.
 4. The metric-scope exact-key case supplies a release value and still asserts exactly the five feature-stable keys, and metric resources built under two different release values compare equal.
+
+> **Amended 2026-09-09 by #2235:** After rebasing onto main, the existing metric Resource is worker-stable as required by approved Story 3 and ADR-014 Decision 8. Preserve its exact keys: `service.name`, `service.instance.id`, `conductor.project`, `conductor.worker`, `host.name`. This trace-only change does not redesign metric identity or add `service.version` to metrics.
+
 
 ### Task 2: Thread the release value through the supported start seam
 **Story:** Story 1
@@ -109,6 +121,8 @@ Tests follow the repository's test-authoring rules. Resource behavior is unit-le
 | Story 2 negative: Given no candidate `VERSION` source for the running module holds a semver-shaped value, when a run exports a trace, then `service.version` is the explicit `0.0.0` unknown marker rather than an absent attribute, and the run still reaches its terminal export. | 3 | "A version source with no readable semver value exports `service.version` as `0.0.0` and the dispatch still produces its terminal `conductor.run` export." | diff-local |
 | Story 3 happy: Given a resource context supplies a released harness version, when the metric resource is built, then its attribute set is exactly the five feature-stable attributes and contains no `service.version`. | 1 | "The metric-scope exact-key case supplies a release value and still asserts exactly the five feature-stable keys, and metric resources built under two different release values compare equal." | diff-local |
 | Story 3 negative: Given two metric resources are built for one feature under different released harness versions, when their attribute sets are compared, then the sets are identical, so `target_info` gains no series. | 1 | "The metric-scope exact-key case supplies a release value and still asserts exactly the five feature-stable keys, and metric resources built under two different release values compare equal." | diff-local |
+
+> **Amended 2026-09-09 by #2235:** Both Story 3 rows above retain their no-new-metric-series outcome; their exact-key proof now refers to the existing worker-stable set named in amended Task 1 Done-when 4, matching the accepted story.
 
 ## Test dispositions and integration ownership
 
