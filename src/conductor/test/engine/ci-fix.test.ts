@@ -860,8 +860,9 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       expect(observed).toEqual(['worktree-present']);
       expect(queueDepth).toBe(0);
       expect(existsSync(worktreePath)).toBe(false);
-      // Exactly the add and the remove went through the queue.
-      expect(queuedOperations).toBe(2);
+      // The stale-registration reap, add, and final remove all go through
+      // the shared lifecycle queue.
+      expect(queuedOperations).toBe(3);
     } finally {
       await cleanup();
     }

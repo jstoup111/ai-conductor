@@ -340,6 +340,15 @@ export async function withResolveWorktree<T>(
     lifecycle ? lifecycle.run(work) : work();
 
   try {
+    // Reap this attempt's stale registration before removing its directory.
+    // A crashed attempt may have lost either the directory or both its
+    // checkout contents and metadata, so an absent registration is harmless.
+    try {
+      await mutateWorktree(() => execa('git', ['worktree', 'remove', '--force', worktreePath], { cwd: repoCwd }));
+    } catch {
+      // No prior registration is the usual case.
+    }
+
     // Remove stale worktree directory if it exists (crashed prior run)
     await rm(worktreePath, { recursive: true, force: true });
 
