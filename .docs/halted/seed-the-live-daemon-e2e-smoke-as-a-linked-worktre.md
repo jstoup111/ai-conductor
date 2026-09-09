@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-09T17:33:42.401Z
 Slug: seed-the-live-daemon-e2e-smoke-as-a-linked-worktre
 Class: needs-human
 Halting step: unknown
