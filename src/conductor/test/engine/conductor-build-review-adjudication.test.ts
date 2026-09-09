@@ -136,6 +136,8 @@ interface FixtureOptions {
   readonly rawVerdict?: 'PASS' | 'FAIL';
   /** Models an operator disposition arriving through the event spine mid-lap. */
   readonly acceptedFindingIds?: () => readonly string[];
+  /** Models the effective-verdict projection of sub-floor findings. */
+  readonly suppressedFindingIds?: readonly string[];
   readonly onLifecycleEvent?: (event: ConductorEvent) => void;
 }
 
@@ -189,14 +191,17 @@ async function fixture(options: FixtureOptions = {}) {
     ? (['testQuality'] as const) : ([] as const);
   const resolver: NonNullable<CompletionContext['buildReviewEffectiveResolver']> = vi.fn(async () => {
     const acceptedFindingIds = [...(options.acceptedFindingIds?.() ?? [])];
+    const suppressedFindingIds = [...(options.suppressedFindingIds ?? [])];
+    const effectivePass = clean || suppressedFindingIds.includes(FINDING_ID);
     return {
       ok: true as const,
       feature,
       effective: {
         rawVerdict: clean ? ('PASS' as const) : ('FAIL' as const),
-        verdict: clean ? ('PASS' as const) : ('FAIL' as const),
+        verdict: effectivePass ? ('PASS' as const) : ('FAIL' as const),
         acceptedFindingIds,
-        unresolvedFindingIds: mixed || scopeIncomplete || clean || acceptedFindingIds.includes(FINDING_ID) ? [] : [FINDING_ID],
+        unresolvedFindingIds: mixed || scopeIncomplete || effectivePass || acceptedFindingIds.includes(FINDING_ID) ? [] : [FINDING_ID],
+        suppressedFindingIds,
         skippedRubrics: [],
         infrastructureFailureRubrics: [...infrastructureRubrics],
         uncoveredInfrastructureFailureRubrics: [...uncovered],
@@ -242,7 +247,10 @@ async function fixture(options: FixtureOptions = {}) {
     daemon: true,
     config: {
       kickback_escalation: { enabled: false },
-      build_review: { adjudication: { enabled: options.adjudicationEnabled ?? true } },
+      build_review: {
+        adjudication: { enabled: options.adjudicationEnabled ?? true },
+        rubrics: { testQuality: { enabled: true, min_confidence: 70 } },
+      },
     },
     buildReviewEffectiveResolver: resolver,
     buildReviewChargeEffect: options.chargeEffect,
@@ -258,7 +266,7 @@ async function fixture(options: FixtureOptions = {}) {
   });
 
   return {
-    projectRoot, feature, dispatched, retryReasons, kickbacks, lifecycle, loopHalts, ghCalls,
+    projectRoot, feature, dispatched, retryReasons, kickbacks, lifecycle, loopHalts, ghCalls, resolver,
     remediateDispatches: () => remediateDispatches, artifactMtimes,
     readJson: async (relative: string): Promise<unknown> =>
       JSON.parse(await readFile(join(projectRoot, relative), 'utf8')) as unknown,
@@ -269,6 +277,17 @@ async function fixture(options: FixtureOptions = {}) {
 }
 
 describe('engine/conductor — build_review post-join adjudication wiring', () => {
+  it('passes a fully suppressed lap without adjudication or a kickback', async () => {
+    const run = await fixture({ suppressedFindingIds: [FINDING_ID] });
+
+    expect(run.remediateDispatches()).toBe(0);
+    expect(run.kickbacks).toEqual([]);
+    expect((await run.state()).build_review).toBe('done');
+    expect(vi.mocked(run.resolver).mock.calls.map((call) => call[2])).toContainEqual(expect.objectContaining({
+      minConfidence: { testQuality: 70 },
+    }));
+  });
+
   it('routes one adjudicated action through one dispatch, one charge, and a durable BUILD handoff', async () => {
     const run = await fixture();
 

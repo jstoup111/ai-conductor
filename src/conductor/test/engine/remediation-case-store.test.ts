@@ -35,6 +35,7 @@ const CASE_STATE: RemediationCaseStoreState = {
       status: 'reserved',
     },
   }],
+  suppressions: [],
 };
 
 const temporaryDirectories: string[] = [];
@@ -58,7 +59,7 @@ describe('remediation case store', () => {
 
     await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
       ok: true,
-      state: { version: 'v1', feature: FEATURE, cases: [] },
+      state: { version: 'v1', feature: FEATURE, cases: [], suppressions: [] },
     });
   });
 
@@ -73,6 +74,21 @@ describe('remediation case store', () => {
       ok: true,
       state: CASE_STATE,
     });
+  });
+
+  it('preserves one suppression per finding and accepts v1 state with no suppression list', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: undefined, nextState: {
+      ...state,
+      suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Low confidence finding.', confidence: 40, floor: 70, lastSeenLap: 'lap-first' }],
+    } }));
+    await store.mutate(async (state) => ({ value: undefined, nextState: {
+      ...state,
+      suppressions: [{ findingId: 'finding-1', rubric: 'testQuality', summary: 'Refreshed finding.', confidence: 45, floor: 70, lastSeenLap: 'lap-second' }],
+    } }));
+    const read = await store.read();
+    expect(read).toMatchObject({ ok: true, state: { suppressions: [{ findingId: 'finding-1', lastSeenLap: 'lap-second' }] } });
   });
 
   it.each([
@@ -116,6 +132,13 @@ describe('remediation case store', () => {
     ['a duplicate source id within one case', {
       ...CASE_STATE,
       cases: [{ ...CASE_STATE.cases[0], sources: [CASE_STATE.cases[0].sources[0], CASE_STATE.cases[0].sources[0]] }],
+    }, 'malformed-state'],
+    ['two suppression entries sharing one finding id', {
+      ...CASE_STATE,
+      suppressions: [
+        { findingId: 'finding-1', rubric: 'testQuality', summary: 'First copy.', confidence: 40, floor: 70, lastSeenLap: 'lap-first' },
+        { findingId: 'finding-1', rubric: 'testQuality', summary: 'Second copy.', confidence: 45, floor: 70, lastSeenLap: 'lap-second' },
+      ],
     }, 'malformed-state'],
   ])('fails closed for %s', async (_description, state, reason) => {
     const projectRoot = await createProjectRoot();
@@ -166,7 +189,7 @@ describe('remediation case store', () => {
     await expect(readFile(statePath, 'utf8')).resolves.toBe(original);
     await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({
       ok: true,
-      state: { version: 'v1', feature: FEATURE, cases: [] },
+      state: { version: 'v1', feature: FEATURE, cases: [], suppressions: [] },
     });
   });
 

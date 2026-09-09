@@ -1,6 +1,6 @@
 import type { BuildReviewAggregate, BuildReviewRawSourceProjection } from './build-review-aggregate.js';
 import { projectBuildReviewAggregateSources } from './build-review-aggregate.js';
-import type { RemediationCaseEffect, RemediationCaseRecord, RemediationCaseSourceLink } from './remediation-case-store.js';
+import type { RemediationCaseEffect, RemediationCaseRecord, RemediationCaseSourceLink, RemediationCaseSuppressionEntry } from './remediation-case-store.js';
 
 export const BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS = Object.freeze({
   maxCurrentSources: 512,
@@ -48,8 +48,8 @@ const ABSENT_TASK_STATUS: BuildReviewAdjudicationTaskStatus = Object.freeze({ pa
  *
  * The key set is the skill contract, not an implementation detail:
  * `skills/remediate/SKILL.md` selects its case branch on `mode` + `domain` and
- * then names `currentFindings`, `priorCases`, `planContract`, `taskStatus`, and
- * `effectPointers`. A context missing any of them routes a real dispatch into
+ * then names `currentFindings`, `priorCases`, `planContract`, `taskStatus`,
+ * `effectPointers`, and `suppressionHistory`. A context missing any of them routes a real dispatch into
  * the legacy gap-plan branch, whose output the case parser then rejects.
  */
 export interface BuildReviewAdjudicationContext {
@@ -64,6 +64,8 @@ export interface BuildReviewAdjudicationContext {
   readonly taskStatus: BuildReviewAdjudicationTaskStatus;
   /** Prior effect state plus durable BUILD-attempt evidence, one line per case. */
   readonly effectPointers: readonly string[];
+  /** Non-blocking suppression history; it is intentionally not a source set. */
+  readonly suppressionHistory: readonly RemediationCaseSuppressionEntry[];
 }
 
 export interface AssembleBuildReviewAdjudicationContextInput {
@@ -71,10 +73,13 @@ export interface AssembleBuildReviewAdjudicationContextInput {
   readonly priorCases: readonly RemediationCaseRecord[];
   /** Exact accepted-risk identities only; no summary or rubric-wide matching. */
   readonly operatorResolvedFindingIds?: ReadonlySet<string>;
+  /** Exact source identities settled from finalized durable case history. */
+  readonly excludedSourceIds?: ReadonlySet<string>;
   readonly planContract?: BuildReviewAdjudicationPlanContract;
   readonly taskStatus?: BuildReviewAdjudicationTaskStatus;
   /** Durable work-order attempt evidence; renders into `effectPointers`. */
   readonly attemptedCaseIds?: readonly string[];
+  readonly suppressions?: readonly RemediationCaseSuppressionEntry[];
 }
 
 export type BuildReviewAdjudicationContextStop =
@@ -234,7 +239,10 @@ export function assembleBuildReviewAdjudicationContext(
 ): AssembleBuildReviewAdjudicationContextResult {
   const rawSources = projectBuildReviewAggregateSources(input.aggregate);
   if (!rawSources) return { ok: false, stop: { code: 'invalid-aggregate' } };
-  const unresolvedSources = rawSources.filter((source) => !input.operatorResolvedFindingIds?.has(source.findingId));
+  const unresolvedSources = rawSources.filter((source) =>
+    !input.operatorResolvedFindingIds?.has(source.findingId) &&
+    !input.excludedSourceIds?.has(buildReviewAdjudicationSourceId(source)),
+  );
   if (unresolvedSources.length > LIMITS.maxCurrentSources) {
     return { ok: false, stop: { code: 'field-overflow', subject: 'current-source', field: 'currentFindings', limit: LIMITS.maxCurrentSources, actual: unresolvedSources.length } };
   }
@@ -272,6 +280,9 @@ export function assembleBuildReviewAdjudicationContext(
       const pointer = effectPointerFor(source, attempted);
       return pointer === undefined ? [] : [pointer];
     })),
+    suppressionHistory: Object.freeze([...(input.suppressions ?? [])]
+      .sort((left, right) => left.findingId.localeCompare(right.findingId))
+      .map((entry) => Object.freeze({ ...entry }))),
   });
   const actual = bytes(JSON.stringify(context));
   if (actual > LIMITS.maxSerializedBytes) {

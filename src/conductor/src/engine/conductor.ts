@@ -30,6 +30,7 @@ import {
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
+import { projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import { coordinateBuildReviewAdjudication } from './build-review-adjudication-coordinator.js';
 import { isBuildEligibleActionCase, isBuildReviewSettlementObligationCase } from './remediation-case-effects.js';
 import {
@@ -10791,7 +10792,11 @@ export class Conductor {
                   const effective = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
                     this.projectRoot,
                     verdictRaw,
-                    { emit: async (event) => { await this.events.emit(event); } },
+                    {
+                      emit: async (event) => { await this.events.emit(event); },
+                      minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(this.config).rubrics)
+                        .map(([id, policy]) => [id, policy.min_confidence])),
+                    },
                   );
                   // Old raw aggregate fixtures (and pre-adjudication callers)
                   // have no worktree identity from which a feature-local case
@@ -10834,17 +10839,34 @@ export class Conductor {
                     const latest = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
                       this.projectRoot,
                       verdictRaw,
-                      { emit: async (event) => { await this.events.emit(event); } },
+                      {
+                        emit: async (event) => { await this.events.emit(event); },
+                        minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(this.config).rubrics)
+                          .map(([id, policy]) => [id, policy.min_confidence])),
+                      },
                     );
                     if (!latest.ok) throw new Error(latest.reason);
                     return new Set(latest.effective.acceptedFindingIds);
                   };
                   const trackerRepo = await this.resolveTrackerRepoSlug();
+                  const floors = resolveBuildReviewConfig(this.config).rubrics;
+                  const suppressedFindingIds = effective.effective.suppressedFindingIds ?? [];
+                  // One shared projection with the effective-verdict seam that
+                  // already persisted these rows for this lap; the coordinator
+                  // re-runs that same idempotent upsert rather than owning a
+                  // second, divergent write.
+                  const suppressions = projectBuildReviewSuppressionEntries({
+                    aggregate,
+                    suppressedFindingIds,
+                    floors: Object.fromEntries(Object.entries(floors).map(([id, policy]) => [id, policy.min_confidence])),
+                  });
                   const adjudication = await coordinateBuildReviewAdjudication({
                     projectRoot: this.projectRoot,
                     feature: effective.feature,
                     aggregate,
                     operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
+                    suppressedFindingIds: new Set(suppressedFindingIds),
+                    suppressions,
                     resolveOperatorResolvedFindingIds,
                     mechanical,
                     chargeInput: {
@@ -10890,6 +10912,10 @@ export class Conductor {
                   }
                   if (adjudication.route === 'pass') {
                     await this.saveConductorStepStatus(state, step.name, 'done');
+                    // Story 7: the per-case trace explains a skipped dispatch. An
+                    // operator-resolved shortcut or a post-judge PASS was silent
+                    // before this feature and stays silent (prd-audit NC.3).
+                    if (adjudication.dispatchSkipped) this.log?.(adjudication.trace);
                     continue;
                   }
                   if (adjudication.route === 'build') {
@@ -10962,6 +10988,8 @@ export class Conductor {
                       this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
                     )(this.projectRoot, verdictRaw, {
                       emit: async (event) => { await this.events.emit(event); },
+                      minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(this.config).rubrics)
+                        .map(([id, policy]) => [id, policy.min_confidence])),
                     });
                     if (!rawBuildReviewFailIsEffectivelyAccepted(resolution)) return false;
                   } catch {

@@ -85,6 +85,7 @@ import { readBuildReviewBranchArtifact, writeBuildReviewBranchArtifact } from '.
 import { joinBuildReviewRubricOutcomes } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore } from './build-review-dispositions.js';
 import { resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
+import { persistBuildReviewSuppressions, projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
 import {
   bumpMechanicalFaultsInLedger,
   MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
@@ -2157,12 +2158,25 @@ export class DefaultStepRunner implements StepRunner {
     }
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
+      minConfidence: Object.fromEntries(Object.entries(config.rubrics).map(([id, policy]) => [id, policy.min_confidence])),
     });
+    // adr-2026-08-29 D4.6: one projection of this lap's sub-floor findings,
+    // shared by the visibility event (D4.5) and the durable-history seam below.
+    const suppressionEntries = effective.ok
+      ? projectBuildReviewSuppressionEntries({
+          aggregate,
+          suppressedFindingIds: effective.effective.suppressedFindingIds ?? [],
+          floors: Object.fromEntries(Object.entries(config.rubrics).map(([id, policy]) => [id, policy.min_confidence])),
+        })
+      : [];
     await this.events?.emit({
       type: 'build_review_outer_verdict',
       lapId,
       rawVerdict: aggregate.verdict,
       effectiveVerdict: effective.ok ? effective.effective.verdict : 'FAIL',
+      ...(suppressionEntries.length > 0
+        ? { suppressedFindings: suppressionEntries.map(({ findingId, rubric, confidence, floor }) => ({ findingId, rubric, confidence, floor })) }
+        : {}),
     });
     if (!effective.ok) {
       return { success: false, output: `${JSON.stringify(aggregate)}\n\nbuild_review disposition resolution failed: ${effective.reason}` };
@@ -2183,6 +2197,19 @@ export class DefaultStepRunner implements StepRunner {
           output: `build_review reduced-coverage evidence publication failed: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
+    }
+    // adr-2026-08-29 D4.6: durable suppression history is written HERE, before
+    // the pass/fail fork below, because D4.4 keeps a fully suppressed lap out
+    // of post-join judgement entirely — such a lap returns success and never
+    // reaches the adjudication coordinator. The coordinator reuses this same
+    // idempotent seam on the failing route, so there is exactly one writer.
+    const persistedSuppressions = await persistBuildReviewSuppressions({
+      projectRoot: this.projectDir,
+      feature: effective.feature,
+      suppressions: suppressionEntries,
+    });
+    if (!persistedSuppressions.ok) {
+      return { success: false, output: `build_review suppression history persistence failed: ${persistedSuppressions.reason}` };
     }
     if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
     // A judged finding is a completed review, even when another rubric had a
@@ -2502,6 +2529,7 @@ export class DefaultStepRunner implements StepRunner {
       model_fallback_ladder: this.modelPolicy.modelFallbackLadder,
       max_retries: resolved.max_retries,
       escalate: resolved.escalate,
+      min_confidence: 0,
     };
     const entryFor = (
       claim: ReturnType<typeof assembleCoverageBindingClaims>[number],

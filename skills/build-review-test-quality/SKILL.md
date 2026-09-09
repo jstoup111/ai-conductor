@@ -71,6 +71,7 @@ provider payload has this shape:
   "findings": [
     {
       "concernKind": "test-insensitive",
+      "confidence": 85,
       "summary": "string",
       "evidenceLocations": ["path:line"],
       "anchor": {
@@ -116,6 +117,9 @@ The only disposition statuses are `resolved`, `out-of-scope`, or `indeterminate`
   "occurrence": <0-based ordinal among equal-content regions in this path; omit when unique>}}`.
   `locus` is the immutable in-scope content-region reference. The anchor is never flattened to the
   finding's top level or rename it;
+- an optional integer `confidence` from 0 through 100: the grader's calibrated confidence in this
+  finding. Omit it only when no numeric calibration is available; an omitted confidence remains
+  blocking. The engine may suppress a reported confidence below an operator-configured floor; and
 - an actionable summary; and
 - concrete evidence locations from the supplied projection.
 

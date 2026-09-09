@@ -1070,7 +1070,10 @@ config key is the only off switch. When disabled, the step is marked `skipped` a
 is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved once per pass.
 
 `testQuality` accepts `enabled`, `llm_provider`, `model`, `effort`, `model_fallback_ladder`,
-`max_retries`, and `escalate`. It is off by default. When enabled, the engine derives a frozen,
+`max_retries`, `escalate`, and `min_confidence`. `min_confidence` is an integer from 0 through 100 and
+defaults to `0`; scored findings below it are reported as suppressed rather than failing the gate or
+remaining actionable through `build-review findings` / `build-review accept`. Unscored findings are
+never suppressed. `testQuality` is off by default. When enabled, the engine derives a frozen,
 feature-local typed scope from the graded diff, the active plan and stories, and established `Covers`
 bindings; it does not admit every declaration in a marked file. A production-only refactor, move, or
 rename with neither an established target nor a concrete candidate is a valid empty-scope PASS and

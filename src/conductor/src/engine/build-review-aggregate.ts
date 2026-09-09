@@ -67,6 +67,7 @@ export interface BuildReviewEffectiveVerdict {
   readonly verdict: 'PASS' | 'FAIL';
   readonly acceptedFindingIds: readonly string[];
   readonly unresolvedFindingIds: readonly string[];
+  readonly suppressedFindingIds: readonly string[];
   readonly skippedRubrics: readonly BuildReviewRubricId[];
   readonly infrastructureFailureRubrics: readonly BuildReviewRubricId[];
   /**
@@ -97,6 +98,7 @@ export interface BuildReviewRawSourceProjection {
   readonly anchor: BuildReviewFindingAnchor;
   readonly summary: string;
   readonly evidenceLocations: readonly string[];
+  readonly confidence?: number;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -336,6 +338,7 @@ export function projectBuildReviewAggregateSources(value: unknown): readonly Bui
         anchor: finding.anchor,
         summary: finding.summary,
         evidenceLocations: Object.freeze([...finding.evidenceLocations]),
+        ...(finding.confidence === undefined ? {} : { confidence: finding.confidence }),
       }));
     }
   }
@@ -351,11 +354,13 @@ export function deriveEffectiveBuildReviewVerdict(
   value: unknown,
   acceptedFindingIds: ReadonlySet<string> = new Set(),
   reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
+  minConfidence: Partial<Record<BuildReviewRubricId, number>> = {},
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
   const accepted: string[] = [];
   const unresolved: string[] = [];
+  const suppressed: string[] = [];
   const skipped: BuildReviewRubricId[] = [];
   const infrastructure: BuildReviewRubricId[] = [];
   const uncoveredInfrastructure: BuildReviewRubricId[] = [];
@@ -390,13 +395,15 @@ export function deriveEffectiveBuildReviewVerdict(
         rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
       });
       if (!identity) return undefined;
-      (acceptedFindingIds.has(identity.id) ? accepted : unresolved).push(identity.id);
+      if (acceptedFindingIds.has(identity.id)) accepted.push(identity.id);
+      else if (finding.confidence !== undefined && finding.confidence < (minConfidence[rubric] ?? 0)) suppressed.push(identity.id);
+      else unresolved.push(identity.id);
     }
   }
   return Object.freeze({
     rawVerdict: aggregate.verdict,
     verdict: judgedCount > 0 && unresolved.length === 0 && uncoveredInfrastructure.length === 0 && uncoveredScopeIncomplete.length === 0 ? 'PASS' : 'FAIL',
-    acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved),
+    acceptedFindingIds: Object.freeze(accepted), unresolvedFindingIds: Object.freeze(unresolved), suppressedFindingIds: Object.freeze(suppressed),
     skippedRubrics: Object.freeze(skipped), infrastructureFailureRubrics: Object.freeze(infrastructure),
     uncoveredInfrastructureFailureRubrics: Object.freeze(uncoveredInfrastructure),
     uncoveredScopeIncompleteRubrics: Object.freeze(uncoveredScopeIncomplete),
@@ -414,6 +421,7 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
   feature: BuildReviewFeatureIdentity,
   dispositions: readonly BuildReviewDispositionRecord[],
   reducedCoverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [],
+  minConfidence: Partial<Record<BuildReviewRubricId, number>> = {},
 ): BuildReviewEffectiveVerdict | undefined {
   const aggregate = parseBuildReviewAggregate(value);
   if (!aggregate) return undefined;
@@ -434,5 +442,6 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
     acceptedIds,
     reducedCoverage.filter((decision) => decision.kind === 'reduced-coverage' &&
       matchesBuildReviewReducedCoverageDisposition(feature, decision.identity, [decision])),
+    minConfidence,
   );
 }

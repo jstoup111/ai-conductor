@@ -38,6 +38,7 @@ const policy: ResolvedBuildReviewRubricPolicy = {
   model_fallback_ladder: ["sonnet"],
   max_retries: 1,
   escalate: false,
+  min_confidence: 0,
 };
 
 function config(testQualityEnabled: boolean): ResolvedBuildReviewConfig {
