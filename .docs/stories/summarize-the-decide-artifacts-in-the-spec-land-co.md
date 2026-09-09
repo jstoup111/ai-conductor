@@ -44,18 +44,20 @@ As a maintainer of the build evidence reader, I want the composed message to sta
 #### Negative Paths
 
 - Given artifact text that itself contains a line in that trailer grammar, when the body is composed, then that line does not appear in the composed message.
-- Given empty or unparseable plan and stories text, when the body is composed, then the composer returns the subject line alone and raises no error.
+- Given empty or unparseable plan and stories text but a derivable track, when the body is composed, then the composed message is the subject line, a blank line, and the track and tier line, and nothing else.
+- Given empty or unparseable plan and stories text and no derivable track either, when the body is composed, then the composer returns the subject line alone and raises no error.
 
 ### Done When
 
 - [ ] Unit cases assert that every rendered task line fails the exported task-trailer pattern the evidence reader applies.
 - [ ] A unit case with a trailer-shaped line inside the plan summary shows that line absent from the composed message.
-- [ ] A unit case with empty plan and stories text returns a message equal to the subject line and throws nothing.
+- [ ] A unit case with empty plan and stories text and a derivable track returns a message of exactly the subject line, a blank line, and the track line, and throws nothing.
+- [ ] A unit case with empty plan and stories text and no track returns a message equal to the subject line and throws nothing.
 
 ## Negative-category review
 
-Invalid and missing input is covered by the absent-Summary, absent-story-heading, and empty-text
-criteria — the composer's whole input surface is text already in memory, so malformed input is the
+Invalid and missing input is covered by the absent-Summary, absent-story-heading, empty-text-with-
+track, and nothing-derivable criteria — the composer's whole input surface is text already in memory, so malformed input is the
 only input failure mode available. Data integrity is covered by the trailer-grammar criteria: the
 one way this text can corrupt state is by being re-read as a commit trailer by the build evidence
 reader, and both a rendered line and a copied artifact line are asserted against that grammar.

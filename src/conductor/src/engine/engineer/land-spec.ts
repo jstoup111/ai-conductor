@@ -66,6 +66,7 @@ import { resolvePlanStoriesPath } from '../plan-stories-reference.js';
 import { scanPlanProtectedTargets } from '../plan-protected-targets.js';
 import { validatePlanDoneWhen } from '../plan-done-when.js';
 import { PLAN_TASK_HARD_STOP_BOUNDARY, validatePlanTaskCount } from '../plan-task-count.js';
+import { composeSpecCommitMessage } from './spec-commit-message.js';
 
 const execFile = promisify(execFileCb);
 
@@ -554,11 +555,19 @@ export async function landSpec(
   // can bleed in (FR-9). Commit in place on the worktree's branch — no checkout of the
   // primary tree (FR-2).
   await execFile('git', ['add', '.docs'], { cwd: worktreePath });
-  await execFile(
-    'git',
-    ['commit', '-m', `spec: land authored artifacts for "${idea}" [engineer/land]`],
-    { cwd: worktreePath, env: withEngineCommitEnv() },
-  );
+  const hasStagedDocs = await execFile('git', ['diff', '--cached', '--quiet'], { cwd: worktreePath })
+    .then(() => false)
+    .catch((error: { code?: number }) => {
+      if (error.code === 1) return true;
+      throw error;
+    });
+  if (hasStagedDocs) {
+    await execFile(
+      'git',
+      ['commit', '-m', composeSpecCommitMessage(idea, track, tier, storiesContent, planContent)],
+      { cwd: worktreePath, env: withEngineCommitEnv() },
+    );
+  }
 
   return { slug, branch, repoPath: worktreePath };
 }

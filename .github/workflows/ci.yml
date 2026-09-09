@@ -42,7 +42,12 @@ jobs:
       - name: Install integrity tooling
         run: |
           install_apt_packages() {
+            # ShellCheck and ripgrep come from Ubuntu. Restrict the update to
+            # that source so an unrelated preinstalled repository (for example
+            # Chrome) with a transient bad index cannot block these checks.
             timeout --foreground --kill-after=10s 60s sudo apt-get \
+              -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" \
+              -o Dir::Etc::sourceparts="-" \
               -o Acquire::Retries=0 \
               -o Acquire::http::Timeout=20 \
               -o Acquire::https::Timeout=20 \
@@ -81,7 +86,11 @@ jobs:
       - name: Install ShellCheck
         run: |
           install_apt_packages() {
+            # ShellCheck comes from Ubuntu. Restrict the update to that source
+            # so an unrelated preinstalled repository cannot block this check.
             timeout --foreground --kill-after=10s 60s sudo apt-get \
+              -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" \
+              -o Dir::Etc::sourceparts="-" \
               -o Acquire::Retries=0 \
               -o Acquire::http::Timeout=20 \
               -o Acquire::https::Timeout=20 \

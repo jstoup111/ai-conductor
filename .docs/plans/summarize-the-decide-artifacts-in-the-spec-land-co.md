@@ -38,6 +38,8 @@ or copies may satisfy that grammar. Rendered task lines therefore use a list-bul
 line copied out of an artifact that already matches the trailer grammar is dropped. Without that
 guard, a spec land commit could silently register as evidence for a build task.
 
+> **Amended 2026-09-09 by #2400 (preserving the previously operator-approved AB-2 correction):** Section omission is independent. Empty or unparseable plan and stories text suppresses only their sections. A resolved track still contributes the track and tier line; production defaults the track to `product`. The subject alone is returned only when nothing is derivable, including the track. The original bare-subject assertion above is superseded accordingly.
+
 The call site changes only the message argument of the existing commit invocation. No file read, no
 gate, no return value, and no subject line changes, so every existing land assertion holds.
 
@@ -93,6 +95,9 @@ the landed commit. No test spawns a real provider, network call, or hosting CLI.
 **Steps:**
 1. Write a failing case whose plan summary text contains a line already in the trailer grammar, asserting that line is absent from the composed message while the rest of the summary survives.
 2. Write a failing case with empty plan text and empty stories text, asserting the composed message equals the subject line alone and that the call throws nothing.
+
+> **Amended 2026-09-09 by #2400 (preserving the previously operator-approved AB-2 correction):** For this step, cover both cases: with a resolved track, expect the subject, a blank line, and the track line; with no track, expect the subject alone. Neither call throws.
+
 3. Write a failing case with a plan that has no Summary section and a stories text with no story heading, asserting the message carries no heading whose section is empty.
 4. Verify the cases fail, then extend the composer to drop any copied line matching the trailer grammar and to omit every section it cannot derive rather than emitting its heading.
 5. Verify the whole unit file passes and commit the focused change.
@@ -100,6 +105,9 @@ the landed commit. No test spawns a real provider, network call, or hosting CLI.
 **Done when:**
 1. A trailer-shaped line present in the artifact text does not appear anywhere in the composed message.
 2. Empty plan and stories text produce a message equal to the subject line, with no trailing blank line and no thrown error.
+
+> **Amended 2026-09-09 by #2400 (preserving the previously operator-approved AB-2 correction):** This Done-when has two cases: a resolved track yields the subject, a blank line, and the track line; no track yields the subject alone. Neither result has a trailing blank line, and neither call throws.
+
 3. A plan with no Summary section and a stories text with no story heading produce a message containing no heading followed by an empty section.
 
 ### Task 3: Commit the composed message from the land primitive
@@ -149,6 +157,8 @@ the landed commit. No test spawns a real provider, network call, or hosting CLI.
 | Story 2 negative: Given artifact text that itself contains a line in that trailer grammar, when the body is composed, then that line does not appear in the composed message. | 2 | "A trailer-shaped line present in the artifact text does not appear anywhere in the composed message." | diff-local |
 | Story 2 negative: Given empty or unparseable plan and stories text, when the body is composed, then the composer returns the subject line alone and raises no error. | 2 | "Empty plan and stories text produce a message equal to the subject line, with no trailing blank line and no thrown error." | diff-local |
 
+> **Amended 2026-09-09 by #2400 (preserving the previously operator-approved AB-2 correction):** The preceding coverage row for empty or unparseable artifacts now covers two Story 2 negative criteria, both owned by Task 2 and both diff-local: retain the track and tier when derivable, and return the subject alone only when the track is also unavailable. There are seven criteria rather than the original six stated below.
+
 ## Test dispositions and integration ownership
 
 All six criteria are diff-local: every one is decided by the composer's return value or by the
@@ -164,3 +174,17 @@ which is the boundary under test. No terminal validation task is added.
 ## Task Dependency Graph
 
 Task 1 -> Task 2 -> Task 3 -> Task 4
+
+### Task rem-as-built-rem-adr-001: src/conductor/test/engine/engineer/land-spec.test.ts — add a failing case that lands a valid worktree twice over a real temporary repository: assert the first land creates the enriched commit and the second land resolves successfully, creates NO new commit (HEAD sha and `git rev-list --count HEAD` unchanged), and returns the same slug, branch, and repoPath; keep every existing land assertion in this file unchanged so Task 3 Done-when 1-3 and Task 4 Done-when 1-3 coverage is preserved. Verify RED against current HEAD before touching production code.
+**Gate:** as-built
+**Rationale:** Verified 95%: the as-built gate classifies AB-1 as REMEDIABLE against an APPROVED, unchanged, still-applicable ADR whose decision 2 requires land to commit iff the `.docs` stage is non-empty (adr-2026-07-03-engineer-checkpoint-commits-idempotent-land decision 2), and the shipped seam at src/conductor/src/engine/engineer/land-spec.ts:557-562 runs `git add .docs` then `git commit` with no staged-diff check — this is conforming implementation drift, not an architectural question, so the route is build rather than architecture_review, and the review's own Resolution names the code fix. No active plan task admits it as an existing-task binding: Task 3's Done-when covers only the landed subject, the landed body content, and the unchanged return value, and Task 4 changes no production code, so the remedy is appended remediation work rather than a re-stage. Sweep of every non-test `git commit` call site under src/conductor/src/engine: the only unguarded add-then-commit is this one; halt-record.ts:163, shipped-record-cli.ts:249, and conductor.ts:4607 already gate on `git diff --cached --quiet`, so there is no sibling site of this shape and nothing is orphaned by the change. Regression guard: the fix adds a branch and removes nothing — the composed-message argument and its coverage from Task 3 Done-when 1-2 (landed subject byte-identical, landed body carries summary/track/tier/story headings/task count) and Task 4 Done-when 1-3 must keep passing unchanged on the non-empty path, and the new empty-stage case is additive.
+**Governing clause:** adr-2026-07-03-engineer-checkpoint-commits-idempotent-land decision 2
+**Done when:**
+- adr-2026-07-03-engineer-checkpoint-commits-idempotent-land decision 2 is satisfied by this task.
+
+### Task rem-as-built-rem-adr-002: src/conductor/src/engine/engineer/land-spec.ts:557-562 — after `git add .docs`, probe the stage with `git diff --cached --quiet` (same shape as halt-record.ts:163 and shipped-record-cli.ts:249: exit 0 = empty, exit 1 = staged changes) and invoke `git commit -m composeSpecCommitMessage(...)` only on the non-empty path; on the empty path skip the commit and return the same `{ slug, branch, repoPath }` unchanged. Leave the staged path scope (`.docs` only), the composed message argument, and `withEngineCommitEnv()` byte-identical on the non-empty path. Run src/conductor/test/engine/engineer/land-spec.test.ts and confirm rem-adr-001 goes GREEN with all pre-existing cases still passing.
+**Gate:** as-built
+**Rationale:** Verified 95%: the as-built gate classifies AB-1 as REMEDIABLE against an APPROVED, unchanged, still-applicable ADR whose decision 2 requires land to commit iff the `.docs` stage is non-empty (adr-2026-07-03-engineer-checkpoint-commits-idempotent-land decision 2), and the shipped seam at src/conductor/src/engine/engineer/land-spec.ts:557-562 runs `git add .docs` then `git commit` with no staged-diff check — this is conforming implementation drift, not an architectural question, so the route is build rather than architecture_review, and the review's own Resolution names the code fix. No active plan task admits it as an existing-task binding: Task 3's Done-when covers only the landed subject, the landed body content, and the unchanged return value, and Task 4 changes no production code, so the remedy is appended remediation work rather than a re-stage. Sweep of every non-test `git commit` call site under src/conductor/src/engine: the only unguarded add-then-commit is this one; halt-record.ts:163, shipped-record-cli.ts:249, and conductor.ts:4607 already gate on `git diff --cached --quiet`, so there is no sibling site of this shape and nothing is orphaned by the change. Regression guard: the fix adds a branch and removes nothing — the composed-message argument and its coverage from Task 3 Done-when 1-2 (landed subject byte-identical, landed body carries summary/track/tier/story headings/task count) and Task 4 Done-when 1-3 must keep passing unchanged on the non-empty path, and the new empty-stage case is additive.
+**Governing clause:** adr-2026-07-03-engineer-checkpoint-commits-idempotent-land decision 2
+**Done when:**
+- adr-2026-07-03-engineer-checkpoint-commits-idempotent-land decision 2 is satisfied by this task.

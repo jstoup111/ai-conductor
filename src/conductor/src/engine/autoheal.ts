@@ -6,7 +6,12 @@ import { originDefaultBranch, makeGitRunner } from './rebase.js';
 // dropped (feature #773, Task 11): the only remaining consumers were the now-
 // deleted derivation engine and its tests; all other callers import directly
 // from plan-task-parse.ts.
-import { TASK_HEADER_PATTERN, TASK_ID_PATTERN, parsePlanTaskPaths } from './plan-task-parse.js';
+import {
+  TASK_HEADER_PATTERN,
+  TASK_ID_PATTERN,
+  TASK_TRAILER_LINE_PATTERN,
+  parsePlanTaskPaths,
+} from './plan-task-parse.js';
 
 // #405: near-miss derive diagnostics (path-corroboration miss, pinned-stamp
 // demotion prevention) repeat on EVERY build-gate evaluation — H7 deliberately
@@ -438,7 +443,7 @@ const COMMIT_RECORD_FORMAT = '%H%x09%s%x00%(trailers)%x00%b%x1e';
  * quoted lines (`    Task: 9`, `> Task: 9` inside log excerpts) never match.
  */
 export function extractBodyTaskIds(body: string): string[] {
-  const lineRe = new RegExp(`^Task: (${TASK_ID_PATTERN})[ \\t]*$`);
+  const lineRe = new RegExp(TASK_TRAILER_LINE_PATTERN);
   const ids: string[] = [];
   for (const line of body.split('\n')) {
     const match = line.match(lineRe);

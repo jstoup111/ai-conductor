@@ -13,6 +13,20 @@ import { PROTECTED_ARTIFACT_DIRECTORIES, namesOwnFeature } from './protected-art
 // grammar instead of re-deriving a narrower ad hoc regex.)
 export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
 
+/**
+ * The commit-message line shape the build evidence reader treats as task
+ * routing telemetry: a flush-left `Task: <id>`, optionally followed by
+ * trailing horizontal whitespace. The trailing-whitespace tolerance is not
+ * cosmetic — Git's message cleanup (`git stripspace`) rewrites `Task: 71   `
+ * to `Task: 71`, so a producer that only rejects the exact form lets a copied
+ * line become real evidence after the commit is written.
+ *
+ * Exported so message *producers* (e.g. the spec land commit composer) drop
+ * exactly what the reader in `autoheal.ts` accepts, instead of re-deriving a
+ * narrower regex that drifts from it.
+ */
+export const TASK_TRAILER_LINE_PATTERN = `^Task: (${TASK_ID_PATTERN})[ \\t]*$`;
+
 export type PlanTaskReferenceResolution =
   | { kind: 'resolved'; ids: string[] }
   | { kind: 'unresolvable'; ids: string[] }
