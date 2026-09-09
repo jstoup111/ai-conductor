@@ -53,6 +53,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Autoresolve now verifies and pushes clean rebases before reporting a PR as refreshed. ([implementation PR #2472](https://github.com/jstoup111/ai-conductor/pull/2472)).
 - CI-fix remediation now treats completed legacy commit statuses as terminal. ([implementation PR #2458](https://github.com/jstoup111/ai-conductor/pull/2458)).
 - Build review excludes paths whose feature-only changes are already patch-equivalent to the review base. ([implementation PR #2427](https://github.com/jstoup111/ai-conductor/pull/2427)).
+- DECIDE grants issued from linked worktrees now reach the daemon’s canonical repository store. ([implementation PR #2457](https://github.com/jstoup111/ai-conductor/pull/2457)).
+- The spec land gate now rejects newly added ADRs whose filenames lack a real date-prefixed canonical format. ([implementation PR #2450](https://github.com/jstoup111/ai-conductor/pull/2450)).
 
 ## Migration
 
