@@ -145,21 +145,34 @@ ${indexedCriteria.map((criterion, index) => {
     ]);
   });
 
-  it('preserves legacy verdict ids and suppresses cannot-deliver for an unresolvable task', () => {
+  it('preserves the exact legacy fail verdict gap', () => {
     const legacy = checkCriterionCoverage(
       correctedRows('plan').map((row) => row.rowClass === 'criterion' ? { ...row, correction: undefined } : row),
       stories,
       plan,
     );
-    expect(legacy.ok).toBe(false);
-    if (!legacy.ok) expect(legacy.gaps.map((gap) => gap.gapId)).toContain('criterion:verdict:1');
+    expect(legacy).toEqual({
+      ok: false,
+      reason: 'criterion-gap',
+      gaps: [{
+        gapId: 'criterion:verdict:1',
+        criterion,
+        detail: `criterion row is marked fail: ${criterion}`,
+      }],
+    });
+  });
 
+  it('suppresses cannot-deliver when a corrected criterion cites an unresolvable task', () => {
     const missing = checkCriterionCoverage(correctedRows('plan', 'task-404'), stories, plan);
-    expect(missing.ok).toBe(false);
-    if (!missing.ok) {
-      expect(missing.gaps.map((gap) => gap.gapId)).toContain('criterion:task-missing:1:404');
-      expect(missing.gaps.some((gap) => gap.gapId.startsWith('criterion:cannot-deliver-'))).toBe(false);
-    }
+    expect(missing).toEqual({
+      ok: false,
+      reason: 'criterion-gap',
+      gaps: [{
+        gapId: 'criterion:task-missing:1:404',
+        criterion,
+        detail: `criterion "${criterion}" cites task 404, which does not exist in the plan`,
+      }],
+    });
   });
 });
 
