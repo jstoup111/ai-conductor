@@ -1,3 +1,4 @@
+// Covers: task:3, task:4, task:5, task:6, task:7, task:8
 /**
  * Acceptance specs for the rerun-vs-route retry classifier (#646).
  *
@@ -39,6 +40,8 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import { CoverageBindingPayloadError, DefaultStepRunner } from '../../src/engine/step-runners.js';
+import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { StepName } from '../../src/types/index.js';
 
 // ── shared fixtures ───────────────────────────────────────────────────────
@@ -134,14 +137,14 @@ describe('integration/retry-classify (#646)', () => {
 
   function collect() {
     const retryDecisions: Array<Record<string, unknown>> = [];
-    const stepRetries: Array<{ step: string; attempt: number }> = [];
+    const stepRetries: Array<{ step: string; attempt: number; reason: string }> = [];
     const kickbacks: Array<{ from: string; to: string }> = [];
     let halted = false;
     events.on('retry_decision' as never, ((e: Record<string, unknown>) => {
       retryDecisions.push(e);
     }) as never);
     events.on('step_retry', (e) => {
-      if (e.type === 'step_retry') stepRetries.push({ step: e.step, attempt: e.attempt });
+      if (e.type === 'step_retry') stepRetries.push({ step: e.step, attempt: e.attempt, reason: e.reason });
     });
     events.on('kickback', (e) => {
       if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to });
@@ -151,6 +154,549 @@ describe('integration/retry-classify (#646)', () => {
     });
     return { retryDecisions, stepRetries, kickbacks, halted: () => halted };
   }
+
+  // ── Task 3: terminal refusals route before the ordinary retry budget ───
+
+  async function expectNeedsHumanTerminalRoute(
+    { daemon, maxRetries }: { daemon: boolean; maxRetries: number },
+  ): Promise<void> {
+    const refusalReason = 'coverage binding needs a human decision';
+    let dispatches = 0;
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async () => {
+        dispatches++;
+        return {
+          success: false,
+          output: refusalReason,
+          refusal: { kind: 'needs-human', reason: refusalReason },
+        };
+      },
+    };
+    const { retryDecisions, stepRetries, halted } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon,
+      verifyArtifacts: false,
+      maxRetries,
+      fromStep: 'coverage_binding',
+    });
+
+    await conductor.run();
+
+    expect(dispatches).toBe(1);
+    expect(retryDecisions).toContainEqual(expect.objectContaining({
+      step: 'coverage_binding',
+      attempt: 1,
+      decision: 'route',
+      signal: 'terminal-refusal',
+    }));
+    expect(stepRetries).toHaveLength(0);
+    expect(halted()).toBe(true);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(`${refusalReason}\n`);
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+    expect(state.coverage_binding).toBe('refused');
+  }
+
+  it('Task 3: routes a needs-human refusal once before a three-attempt budget', async () => {
+    await expectNeedsHumanTerminalRoute({ daemon: true, maxRetries: 3 });
+  });
+
+  it('Task 3: routes a needs-human refusal in non-daemon mode', async () => {
+    await expectNeedsHumanTerminalRoute({ daemon: false, maxRetries: 3 });
+  });
+
+  it('Task 3: routes a needs-human refusal with a one-attempt budget', async () => {
+    await expectNeedsHumanTerminalRoute({ daemon: true, maxRetries: 1 });
+  });
+
+  it('Task 3: routes a coverage-binding does-not-assert refusal after one dispatch', async () => {
+    const featureDesc = 'coverage-binding-terminal-refusal';
+    const planPath = join(dir, 'plan.md');
+    const refusalProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: async () => ({
+        success: true,
+        output: '{"verdict":"does-not-assert","missingAssertion":"No check requires the record."}',
+        exitCode: 0,
+      }),
+    };
+    await seedTailAt(statePath, 'coverage_binding');
+    await mkdir(join(dir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(planPath, '### Task 1: Bind the claim\n**Done when:**\n- The service writes an audit record.\n');
+    await writeFile(
+      join(dir, '.docs', 'coherence', `${featureDesc}.md`),
+      '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n' +
+      '| --- | --- | --- | --- | --- | --- |\n' +
+      '| criterion | The service emits five records | task-1 | covered | "writes an audit record" | diff-local |\n',
+    );
+    const defaultRunner = new DefaultStepRunner(refusalProvider, 'coverage-terminal-refusal', dir, {
+      featureDesc,
+      planPath,
+      config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    let dispatches = 0;
+    const runner: StepRunner = {
+      run: async (step, state, options) => {
+        dispatches++;
+        return defaultRunner.run(step, state, options);
+      },
+    };
+    const { retryDecisions, stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 3,
+      fromStep: 'coverage_binding',
+      config: { coverage_binding: { judge: { enabled: true } } } as never,
+    });
+
+    await conductor.run();
+
+    expect(dispatches).toBe(1);
+    expect(retryDecisions).toContainEqual(expect.objectContaining({
+      step: 'coverage_binding',
+      attempt: 1,
+      decision: 'route',
+      signal: 'terminal-refusal',
+    }));
+    expect(stepRetries).toHaveLength(0);
+  });
+
+  // ── Task 4: non-refusal results keep the ordinary retry policy ─────────
+
+  it('Task 4: retries an ordinary failure through its full budget without terminal-refusal routing', async () => {
+    let dispatches = 0;
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async () => {
+        dispatches++;
+        return { success: false, output: 'provider exited 1' };
+      },
+    };
+    const { retryDecisions, stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 3,
+      fromStep: 'coverage_binding',
+    });
+
+    await conductor.run();
+
+    expect(dispatches).toBe(3);
+    expect(stepRetries).toHaveLength(2);
+    expect(retryDecisions).not.toContainEqual(expect.objectContaining({ signal: 'terminal-refusal' }));
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toMatch(
+      /coverage_binding.*retries exhausted/,
+    );
+  });
+
+  it('Task 4: a successful step emits no terminal-refusal retry decision', async () => {
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async (step) => step === 'coverage_binding'
+        ? { success: true, output: 'bound coverage' }
+        : { success: false, output: 'stop after the success observation' },
+    };
+    const { retryDecisions } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+      fromStep: 'coverage_binding',
+    });
+
+    await conductor.run();
+
+    expect(retryDecisions).not.toContainEqual(expect.objectContaining({ signal: 'terminal-refusal' }));
+  });
+
+  // ── Task 5: seal refusals retain their ordinary retry behavior ─────────
+
+  async function seedBuildOnly(): Promise<void> {
+    await seedTailAt(statePath, 'build');
+    const { ALL_STEPS } = await import('../../src/engine/steps.js');
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+    let afterBuild = false;
+    for (const step of ALL_STEPS) {
+      if (afterBuild) state[step.name] = 'done';
+      if (step.name === 'build') afterBuild = true;
+    }
+    await writeState(statePath, state as ConductState);
+  }
+
+  it('Task 5: a persistent seal refusal consumes all retries and keeps the protected-artifact halt', async () => {
+    const refusalReason = 'protected plan changed outside the authorized task';
+    let dispatches = 0;
+    await seedBuildOnly();
+    const runner: StepRunner = {
+      run: async () => {
+        dispatches++;
+        return {
+          success: false,
+          output: refusalReason,
+          refusal: { kind: 'seal', reason: refusalReason },
+        };
+      },
+    };
+    const { retryDecisions } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 3,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    expect(dispatches).toBe(3);
+    expect(retryDecisions).toHaveLength(0);
+    expect(retryDecisions).not.toContainEqual(expect.objectContaining({ signal: 'terminal-refusal' }));
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(`${refusalReason}\n`);
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('protected-artifact');
+  });
+
+  it('Task 5: a seal refusal that clears on attempt two completes without a halt', async () => {
+    let dispatches = 0;
+    await seedBuildOnly();
+    const runner: StepRunner = {
+      run: async () => {
+        dispatches++;
+        return dispatches === 1
+          ? {
+              success: false,
+              output: 'protected plan changed outside the authorized task',
+              refusal: { kind: 'seal', reason: 'protected plan changed outside the authorized task' },
+            }
+          : { success: true, output: 'build completed after reseal' };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 3,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    expect(dispatches).toBe(2);
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+    expect(state.build).toBe('done');
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('Task 5: a seal refusal writes its protected marker after attempt two', async () => {
+    const refusalReason = 'protected plan changed outside the authorized task';
+    let dispatches = 0;
+    await seedBuildOnly();
+    const runner: StepRunner = {
+      run: async () => {
+        dispatches++;
+        return {
+          success: false,
+          output: refusalReason,
+          refusal: { kind: 'seal', reason: refusalReason },
+        };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 2,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    expect(dispatches).toBe(2);
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('protected-artifact');
+  });
+
+  // ── Task 6: refusal output preserves the operator diagnostic ───────────
+
+  it('Task 6: a does-not-assert coverage-binding refusal carries its reason as output', async () => {
+    const featureDesc = 'coverage-binding-refusal-output';
+    const planPath = join(dir, 'plan.md');
+    const refusalProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: async () => ({
+        success: true,
+        output: '{"verdict":"does-not-assert","missingAssertion":"No check requires the record."}',
+        exitCode: 0,
+      }),
+    };
+    await mkdir(join(dir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(planPath, '### Task 1: Bind the claim\n**Done when:**\n- The service writes an audit record.\n');
+    await writeFile(
+      join(dir, '.docs', 'coherence', `${featureDesc}.md`),
+      '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n' +
+      '| --- | --- | --- | --- | --- | --- |\n' +
+      '| criterion | The service emits five records | task-1 | covered | "writes an audit record" | diff-local |\n',
+    );
+    const runner = new DefaultStepRunner(refusalProvider, 'coverage-refusal-output', dir, {
+      featureDesc,
+      planPath,
+      config: { coverage_binding: { judge: { enabled: true } } },
+    });
+
+    const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+
+    expect(result.success).toBe(false);
+    expect(result.refusal).toMatchObject({ kind: 'needs-human' });
+    expect(result.output).toBe(result.refusal?.reason);
+    expect(result.output?.trim()).not.toBe('');
+  });
+
+  it('Task 6: conductor records the coverage-binding refusal reason rather than a no-output diagnostic', async () => {
+    const featureDesc = 'coverage-binding-refusal-last-error';
+    const planPath = join(dir, 'plan.md');
+    const refusalProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: async () => ({
+        success: true,
+        output: '{"verdict":"does-not-assert","missingAssertion":"No check requires the record."}',
+        exitCode: 0,
+      }),
+    };
+    await seedTailAt(statePath, 'coverage_binding');
+    await mkdir(join(dir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(planPath, '### Task 1: Bind the claim\n**Done when:**\n- The service writes an audit record.\n');
+    await writeFile(
+      join(dir, '.docs', 'coherence', `${featureDesc}.md`),
+      '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n' +
+      '| --- | --- | --- | --- | --- | --- |\n' +
+      '| criterion | The service emits five records | task-1 | covered | "writes an audit record" | diff-local |\n',
+    );
+    const runner = new DefaultStepRunner(refusalProvider, 'coverage-refusal-last-error', dir, {
+      featureDesc,
+      planPath,
+      config: { coverage_binding: { judge: { enabled: true } } },
+    });
+    const { stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 2,
+      fromStep: 'coverage_binding',
+      config: {
+        coverage_binding: { judge: { enabled: true } },
+        retry_routing: { enabled: false },
+      } as never,
+    });
+
+    await conductor.run();
+
+    expect(stepRetries).toHaveLength(1);
+    expect(stepRetries[0]?.reason).toContain('coverage_binding refused: cited Done when checks do not assert the criterion.');
+    expect(stepRetries[0]?.reason).not.toMatch(/produced no output/);
+  });
+
+  it('Task 6: conductor records an interface-valid refusal reason when its output is omitted', async () => {
+    const refusalReason = 'coverage binding needs a human decision';
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async () => ({
+        success: false,
+        refusal: { kind: 'needs-human', reason: refusalReason },
+      }),
+    };
+    const { stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 2,
+      fromStep: 'coverage_binding',
+      config: { retry_routing: { enabled: false } } as never,
+    });
+
+    await conductor.run();
+
+    expect(stepRetries).toHaveLength(1);
+    expect(stepRetries[0]?.reason).toContain(refusalReason);
+    expect(stepRetries[0]?.reason).not.toMatch(/produced no output/);
+  });
+
+  // ── Task 7: refusal output does not displace other diagnostics ─────────
+
+  it('Task 7: a blank non-refusal result keeps the produced-no-output diagnostic', async () => {
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async () => ({ success: false, output: '   ' }),
+    };
+    const { stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 2,
+      fromStep: 'coverage_binding',
+    });
+
+    await conductor.run();
+
+    expect(stepRetries).toHaveLength(1);
+    expect(stepRetries[0]?.reason).toMatch(/produced no output/);
+  });
+
+  it('Task 7: a coverage-binding payload error keeps its infrastructure diagnostic', async () => {
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async () => ({
+        success: false,
+        output: 'a refusal-like output must not displace the typed failure',
+        infrastructureFailure: new CoverageBindingPayloadError('judge payload was malformed'),
+      }),
+    };
+    const { stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 2,
+      fromStep: 'coverage_binding',
+    });
+
+    await conductor.run();
+
+    expect(stepRetries).toHaveLength(1);
+    expect(stepRetries[0]?.reason).toBe(
+      'coverage-binding judge infrastructure failure: judge payload was malformed',
+    );
+  });
+
+  // ── Task 8: retry_routing kill switch restores ordinary retries ─────────
+
+  it('Task 8: disabled retry routing consumes the full refusal retry budget', async () => {
+    const refusalReason = 'coverage binding needs a human decision';
+    let dispatches = 0;
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async () => {
+        dispatches++;
+        return {
+          success: false,
+          output: refusalReason,
+          refusal: { kind: 'needs-human', reason: refusalReason },
+        };
+      },
+    };
+    const { retryDecisions, stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 3,
+      fromStep: 'coverage_binding',
+      config: { retry_routing: { enabled: false } } as never,
+    });
+
+    await conductor.run();
+
+    expect(dispatches).toBe(3);
+    expect(retryDecisions).not.toContainEqual(expect.objectContaining({ signal: 'terminal-refusal' }));
+    expect(stepRetries).toHaveLength(2);
+    for (const retry of stepRetries) expect(retry.reason).toContain(refusalReason);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(`${refusalReason}\n`);
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
+  it('Task 8: omitted retry routing keeps terminal-refusal routing enabled by default', async () => {
+    const refusalReason = 'coverage binding needs a human decision';
+    let dispatches = 0;
+    await seedTailAt(statePath, 'coverage_binding');
+    const runner: StepRunner = {
+      run: async () => {
+        dispatches++;
+        return {
+          success: false,
+          output: refusalReason,
+          refusal: { kind: 'needs-human', reason: refusalReason },
+        };
+      },
+    };
+    const { retryDecisions, stepRetries } = collect();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 3,
+      fromStep: 'coverage_binding',
+    });
+
+    await conductor.run();
+
+    expect(dispatches).toBe(1);
+    expect(retryDecisions).toContainEqual(expect.objectContaining({
+      step: 'coverage_binding',
+      attempt: 1,
+      decision: 'route',
+      signal: 'terminal-refusal',
+    }));
+    expect(stepRetries).toHaveLength(0);
+  });
 
   // ── Story 1: as-built BLOCKED stops on try 1 ────────────────────────────
 

@@ -9570,7 +9570,7 @@ export class Conductor {
             lastError =
               coverageBindingPayloadReason !== undefined
                 ? `coverage-binding judge infrastructure failure: ${coverageBindingPayloadReason}`
-                : runnerOutput ??
+                : runnerOutput ?? result.refusal?.reason ??
               `Step '${step.name}' produced no output — the step runner exited without a result ` +
                 `(the grader/subprocess likely failed to start or died before writing a verdict)`;
             retryHint = `Previous attempt failed: ${lastError}. Finish the work now.`;
@@ -9645,6 +9645,23 @@ export class Conductor {
             // owns its retry policy.
             const retryRoutingEnabled =
               this.config.retry_routing?.enabled ?? RETRY_ROUTING_DEFAULTS.enabled;
+            if (result.refusal !== undefined && retryRoutingEnabled && step.name !== 'build') {
+              const retryDecision = classifyRetryDecision({
+                step: step.name,
+                completion: { done: false },
+                attempt,
+                inputsUnchanged: false,
+                terminalRefusal: result.refusal.kind,
+              });
+              await emitTracked({
+                type: 'retry_decision',
+                step: step.name,
+                attempt,
+                decision: retryDecision.decision,
+                ...(retryDecision.signal ? { signal: retryDecision.signal } : {}),
+              });
+              if (retryDecision.decision === 'route') break;
+            }
             const isVerdictStep =
               step.name === 'architecture_review_as_built' ||
               step.name === 'prd_audit' ||

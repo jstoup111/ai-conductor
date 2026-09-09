@@ -2617,7 +2617,8 @@ export class DefaultStepRunner implements StepRunner {
         `Done when checks: ${entry.doneWhen.flat().join(' | ')}`,
         `Missing assertion: ${entry.missingAssertion}`,
       ].join('\n')).join('\n\n');
-      return { success: false, refusal: { kind: 'needs-human', reason: `coverage_binding refused: cited Done when checks do not assert the criterion.\n\n${detail}` } };
+      const reason = `coverage_binding refused: cited Done when checks do not assert the criterion.\n\n${detail}`;
+      return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
     }
     await writeEnvelope('done', entries);
     return { success: true, output: `coverage_binding judged ${entries.length} claim(s)` };

@@ -4843,6 +4843,61 @@ describe('engine/artifacts', () => {
       expect(r).toEqual({ decision: 'rerun' });
     });
 
+    // Covers: task:1
+    it('routes a needs-human terminal refusal before consulting retry signals', () => {
+      const r = classifyRetryDecision({
+        step: 'build',
+        completion: { done: false },
+        attempt: 1,
+        inputsUnchanged: false,
+        terminalRefusal: 'needs-human',
+      });
+
+      expect(r).toEqual({ decision: 'route', signal: 'terminal-refusal' });
+    });
+
+    // Covers: task:2
+    describe('terminal refusal kinds', () => {
+      it('leaves a seal refusal on the existing rerun path', () => {
+        const r = classifyRetryDecision({
+          step: 'build',
+          completion: { done: false },
+          attempt: 1,
+          inputsUnchanged: false,
+          terminalRefusal: 'seal',
+        });
+
+        expect(r).toEqual({ decision: 'rerun' });
+      });
+
+      it('routes a validation-verdict terminal refusal', () => {
+        const r = classifyRetryDecision({
+          step: 'build',
+          completion: { done: false },
+          attempt: 1,
+          inputsUnchanged: false,
+          terminalRefusal: 'validation-verdict',
+        });
+
+        expect(r).toEqual({ decision: 'route', signal: 'terminal-refusal' });
+      });
+
+      it('preserves the existing stale-run-identity result when terminalRefusal is absent', () => {
+        const r = classifyRetryDecision({
+          step: 'prd_audit',
+          completion: {
+            done: false,
+            routeClass: 'absent',
+            retrySignal: 'stale-run-identity',
+          },
+          attempt: 1,
+          inputsUnchanged: false,
+        });
+
+        expect(r).toEqual({ decision: 'rerun', signal: 'stale-run-identity' });
+      });
+    });
+
     it('routes a typed unretryable input failure on attempt 1', () => {
       const r = classifyRetryDecision({
         step: 'build_review',

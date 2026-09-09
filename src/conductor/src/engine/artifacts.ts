@@ -5057,12 +5057,16 @@ const RETRY_CLASSIFY_STEPS: ReadonlySet<StepName> = new Set<StepName>([
 
 export type RetryDecision =
   | { decision: 'rerun'; signal?: 'stale-run-identity' }
-  | { decision: 'route'; signal: 'named-route' | 'identical-repeat' | 'unretryable-inputs' };
+  | {
+      decision: 'route';
+      signal: 'named-route' | 'identical-repeat' | 'unretryable-inputs' | 'terminal-refusal';
+    };
 
 /**
  * Pure, synchronous rerun-vs-route classifier for the SHIP-tail verdict steps
- * (issue #646). Out of scope steps (e.g. `build`) always rerun. In scope,
- * signal (a) "named-route" fires when the step has a real, fresh, non-passing
+ * (issue #646). A terminal refusal is classified before the eligible-step
+ * check, so callers must keep out-of-scope steps such as `build` from this
+ * helper. In scope, signal (a) "named-route" fires when the step has a real, fresh, non-passing
  * decision to route on — `completion.routeClass === 'named-route'` for the
  * review steps, or `prdAuditNonClean` for prd_audit — regardless of attempt
  * number. Signal (b) "identical-repeat" fires only when the retry has already
@@ -5080,8 +5084,21 @@ export function classifyRetryDecision(input: {
   inputsUnchanged: boolean;
   prdAuditNonClean?: boolean;
   unretryableInputs?: { retryAfterStep: StepName };
+  terminalRefusal?: 'seal' | 'needs-human' | 'validation-verdict';
 }): RetryDecision {
-  const { step, completion, attempt, priorReason, inputsUnchanged, prdAuditNonClean, unretryableInputs } = input;
+  const {
+    step,
+    completion,
+    attempt,
+    priorReason,
+    inputsUnchanged,
+    prdAuditNonClean,
+    unretryableInputs,
+    terminalRefusal,
+  } = input;
+  if (terminalRefusal === 'needs-human' || terminalRefusal === 'validation-verdict') {
+    return { decision: 'route', signal: 'terminal-refusal' };
+  }
   if (!RETRY_CLASSIFY_STEPS.has(step)) return { decision: 'rerun' };
 
   if (unretryableInputs) return { decision: 'route', signal: 'unretryable-inputs' };
