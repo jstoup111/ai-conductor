@@ -1,7 +1,7 @@
 ---
 slug: hotfix-autoresolve-clean-push
 spec_hash: 4d3397b70f37da1f9fd99d41640f2437125f69ae7fbacd61871326ee065df5e7
-pr: local
+pr: https://github.com/jstoup111/ai-conductor/pull/2472
 shipped: 2026-09-09
 engine_version: 20260909T124054Z-7dc49b2ad3d5
 ---
