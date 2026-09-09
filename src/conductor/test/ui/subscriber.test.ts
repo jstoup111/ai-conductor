@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { Writable } from 'node:stream';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import type { UIRenderer } from '../../src/ui/types.js';
 import { TerminalSubscriber } from '../../src/ui/subscriber.js';
 import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
 import { createLiveRegion } from '../../src/ui/live-region.js';
