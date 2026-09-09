@@ -943,9 +943,10 @@ ready, otherwise the daemon leaves the authorization unconsumed.
 ai-conductor decide-grant --slug <slug> --step <step> --reason "<operator direction>"
 ```
 
-Records one explicit authorization for an autonomous run to enter a named DECIDE step. Run it from the
-main repository checkout. It writes `.daemon/grants/<slug>.json`; the daemon never creates this
-artifact itself.
+Records one explicit authorization for an autonomous run to enter a named DECIDE step. Run it from
+any directory inside the repository, including a linked feature worktree; the command resolves the
+main repository checkout before writing `.daemon/grants/<slug>.json`. The daemon never creates this
+artifact itself. Outside a repository, the command exits non-zero and records no grant.
 
 The grant lives in the daemon-owned `.daemon/` directory, **outside every feature worktree**, and
 that placement is the authorization boundary. It previously lived at

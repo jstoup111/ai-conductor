@@ -753,7 +753,7 @@ was refused. The daemon will not re-kick this class of halt.
 
 **Recovery:** Read that body first. Correct an unknown target, missing artifact, or wrong routing before
 authorizing anything. When the named DECIDE authoring pass is the intended operator decision, run these
-commands from the main repository checkout:
+commands from any directory inside the repository:
 
 ```bash
 ai-conductor decide-grant --slug <slug> --step <target-from-HALT> \
@@ -761,14 +761,15 @@ ai-conductor decide-grant --slug <slug> --step <target-from-HALT> \
 rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
 ```
 
-The first command writes a durable grant for only that target, into the daemon-owned
-`.daemon/grants/<slug>.json` in the main checkout. The conductor consumes it immediately before
-provider dispatch, so it cannot authorize another DECIDE step or a later retry.
+The first command resolves the main checkout and writes a durable grant for only that target into its
+daemon-owned `.daemon/grants/<slug>.json`. Outside a repository, it refuses without recording a
+grant. The conductor consumes it immediately before provider dispatch, so it cannot authorize another
+DECIDE step or a later retry.
 
 **Never hand-write a grant file.** The grant deliberately lives outside the feature worktree: a
 `decide-grant.json` written inside `.worktrees/<slug>/.pipeline/` authorizes nothing, because that
 directory is the build agent's own scratch space and an agent must not be able to authorize itself.
-Use the command from the main checkout.
+Use the command from any directory inside the repository; it resolves the main checkout itself.
 
 **`plan` is never grantable.** `ai-conductor decide-grant --step plan` exits non-zero, and the entry
 policy refuses `plan` before consulting any grant. If the HALT names `plan` as the requested target,

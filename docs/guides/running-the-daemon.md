@@ -912,18 +912,19 @@ for its exact gate and terminal requirements.
 ### DECIDE-entry halts need a grant
 
 A `needs-human` HALT that begins `DECIDE entry refused` is not retryable. After deciding that the
-named DECIDE step should be authored, record a one-use grant from the main repository checkout, then
-clear the halt:
+named DECIDE step should be authored, record a one-use grant from any directory inside that
+repository, then clear the halt:
 
 ```bash
 ai-conductor decide-grant --slug <slug> --step <step> --reason "<why this authoring pass is approved>"
 rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
 ```
 
-The grant is written to `.daemon/grants/<slug>.json` in the main checkout — deliberately outside the
-feature worktree, so a build agent cannot authorize its own DECIDE entry by writing a file into
-`.pipeline/`. `plan` is never grantable: the command rejects it and the entry policy refuses it
-regardless, so a halt requesting a plan revision is driven by hand and then cleared.
+The command resolves the main checkout and writes the grant to `.daemon/grants/<slug>.json` there —
+deliberately outside the feature worktree, so a build agent cannot authorize its own DECIDE entry by
+writing a file into `.pipeline/`. Outside a repository, it refuses without recording a grant. `plan`
+is never grantable: the command rejects it and the entry policy refuses it regardless, so a halt
+requesting a plan revision is driven by hand and then cleared.
 
 The grant is scoped to the exact step and consumed immediately before its provider dispatch. Clearing
 the halt alone only makes the feature eligible to be checked again; with no matching grant, it halts
