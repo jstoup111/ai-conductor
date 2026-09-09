@@ -668,7 +668,8 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     const run = makeRunFeature(featureDeps);
     await Promise.all([run({ slug: 'feature-a' }), run({ slug: 'feature-b' })]);
 
-    expect(lines).toEqual([
+    // Concurrent completion order is unspecified; ownership and multiplicity are not.
+    expect([...lines].sort()).toEqual([
       '[feature-a] ✋ feature-a halted — worktree kept (paused)',
       '[feature-b] ✋ feature-b halted — worktree kept (paused)',
     ]);
