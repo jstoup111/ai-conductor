@@ -163,8 +163,8 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       await seedValidators(dir, statePath);
       const events: ConductorEvent[] = [];
       const emitter = new ConductorEventEmitter();
-      emitter.on('loop_halt', event => events.push(event));
-      emitter.on('step_failed', event => events.push(event));
+      emitter.on('loop_halt', event => { events.push(event); });
+      emitter.on('step_failed', event => { events.push(event); });
       const store = createFilesystemConductStateStore(statePath);
       const applyBatch = vi.spyOn(store, 'applyBatch');
       applyBatch.mockImplementation(async (batch) => {
@@ -207,9 +207,11 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       });
       await conductor.run();
       const result = await readState(statePath);
+      if (!result.ok) throw result.error;
+      const state = result.value as Record<string, unknown>;
       expect(result.ok && result.value.prd_audit).not.toBe('done');
-      expect(result.ok && result.value.validation__prd_audit).not.toBe('done');
-      expect(result.ok && [result.value.architecture_review_as_built, result.value.validation__architecture_review_as_built])
+      expect(state.validation__prd_audit).not.toBe('done');
+      expect([state.architecture_review_as_built, state.validation__architecture_review_as_built])
         .toEqual(['done', 'done']);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
@@ -236,8 +238,10 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       await conductor.run();
       expect(calls).toEqual(['manual_test']);
       const result = await readState(statePath);
-      expect(result.ok && [result.value.manual_test, result.value.prd_audit, result.value.architecture_review_as_built,
-        result.value.validation__prd_audit, result.value.validation__architecture_review_as_built])
+      if (!result.ok) throw result.error;
+      const state = result.value as Record<string, unknown>;
+      expect([state.manual_test, state.prd_audit, state.architecture_review_as_built,
+        state.validation__prd_audit, state.validation__architecture_review_as_built])
         .toEqual(['done', 'done', 'done', 'done', 'done']);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });

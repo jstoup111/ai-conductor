@@ -9234,7 +9234,7 @@ describe('engine/conductor', () => {
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
     const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
 
-    it('a branch that never produces a completion marker (crashed/exhausted retries) halts the group loudly, zero kickback, no remediation.json, no partial join', async () => {
+    it('a branch that never produces a completion marker halts the group without kickback while retaining satisfied siblings', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
 
       const runner: StepRunner = {
@@ -9290,11 +9290,11 @@ describe('engine/conductor', () => {
       const result = await readState(statePath);
       expect(result.ok).toBe(true);
       const state = result.ok ? (result.value as Record<string, unknown>) : {};
-      // No member — including the ones that themselves passed — gets marked
-      // done: no partial join on a no-verdict outcome.
+      // The failed member still blocks the group, but satisfied siblings remain
+      // done so a resume does not discard their validated work.
       expect(state.manual_test).not.toBe('done');
-      expect(state.prd_audit).not.toBe('done');
-      expect(state.architecture_review_as_built).not.toBe('done');
+      expect(state.prd_audit).toBe('done');
+      expect(state.architecture_review_as_built).toBe('done');
     });
 
     it('FAIL verdict + a crashed sibling: same halt path, zero kickback events', async () => {
