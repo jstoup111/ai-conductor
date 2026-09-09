@@ -11,6 +11,12 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-09-09
+
+### Changed
+
+- Build review now limits test-quality checks to changed behavior and explicitly recovers uncertain coverage. ([implementation PR #2324](https://github.com/jstoup111/ai-conductor/pull/2324)).
+
 ## [1.1.0] - 2026-09-08
 
 ### Added
