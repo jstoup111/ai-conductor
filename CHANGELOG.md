@@ -28,6 +28,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Spec pull requests include a valid release disposition when they are opened. ([implementation PR #2407](https://github.com/jstoup111/ai-conductor/pull/2407)).
 - Keep harness execution context smaller while making optional architecture references available in both installed skill catalogs. ([implementation PR #2446](https://github.com/jstoup111/ai-conductor/pull/2446)).
 - Rate-limit retry waits now honor explicitly stated seconds, minutes, and hours. ([implementation PR #2456](https://github.com/jstoup111/ai-conductor/pull/2456)).
+- Rebase halts now identify missing feature content and provide the correct recovery steps. ([implementation PR #2396](https://github.com/jstoup111/ai-conductor/pull/2396)).
+- Telemetry no longer counts provider-free step completions as provider dispatches. ([implementation PR #2401](https://github.com/jstoup111/ai-conductor/pull/2401)).
 
 ## Migration
 
