@@ -4,6 +4,7 @@ import type { BuildReviewRubricId } from '../types/config.js';
 import type {
   BuildReviewInfrastructureFailure,
   BuildReviewLapId,
+  BuildReviewScopeIncompleteFault,
 } from './build-review-domain.js';
 import type { BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import type { BuildReviewFrozenInputs, BuildReviewSourceSnapshot, BuildReviewUnresolvedMarker } from './build-review-inputs.js';
@@ -24,6 +25,9 @@ export type BuildReviewProjectionJson =
   | { readonly [key: string]: BuildReviewProjectionJson };
 
 export interface BuildReviewTestQualityProjectionInput {
+  /** Conservative file union executed by the counterfactual runner. */
+  readonly runnerSelectors?: readonly string[];
+  /** Established quality targets; never expanded merely because a file ran. */
   readonly changedTestSelectors: readonly string[];
   /** Declared Covers references that did not resolve in the active feature. */
   readonly unresolvedMarkers: readonly BuildReviewUnresolvedMarker[];
@@ -69,7 +73,8 @@ export interface ChangedFileReference {
 interface CommonProjection<Rubric extends BuildReviewRubricId> {
   readonly rubric: Rubric;
   readonly contractVersion: 'v3';
-  readonly projectionVersion: 'v2';
+  /** Versioned frozen-input shape; v3 carries typed scope and pinned evidence. */
+  readonly projectionVersion: 'v3';
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
   /** Stable identity of the source content, independent of commit provenance. */
@@ -83,10 +88,23 @@ interface CommonProjection<Rubric extends BuildReviewRubricId> {
 }
 
 export interface TestQualityProjection extends CommonProjection<'testQuality'> {
+  /**
+   * File paths selected for conservative counterfactual execution. These are
+   * deliberately not the review's directly changed test targets: a setup or
+   * unresolved candidate may require its file to run without authorizing each
+   * sibling in that file as a quality target.
+   */
+  readonly runnerSelectors: readonly string[];
   readonly changedTestSelectors: readonly string[];
   readonly unresolvedMarkers: readonly BuildReviewUnresolvedMarker[];
   /** Frozen declared title chains, with an explicit selector-hash fallback marker. */
   readonly changedTestTitles: BuildReviewSourceSnapshot['changedTestTitles'];
+  /**
+   * The closed, frozen v3 analysis value. Assembly owns every source read;
+   * projection only canonicalizes this snapshot and therefore cannot observe
+   * a mutated worktree while deriving cache identity.
+   */
+  readonly testScope: BuildReviewProjectionJson;
   readonly testSuiteProof: BuildReviewProjectionJson;
   /** By-reference reverted-production identity; never embedded file content. */
   readonly revertedProductionManifest: readonly RevertedProductionFileReference[];
@@ -102,7 +120,7 @@ export type BuildReviewRubricProjections = {
 /** One current-lap reduced-coverage stamp, shared by every reader-facing surface. */
 export interface BuildReviewReducedCoverageEntry {
   readonly rubric: BuildReviewRubricId;
-  readonly cause: BuildReviewInfrastructureFailure['reason'];
+  readonly cause: BuildReviewInfrastructureFailure['reason'] | BuildReviewScopeIncompleteFault['reason'];
   readonly diagnostic: string;
   readonly operator: string;
   readonly rationale: string;
@@ -114,7 +132,7 @@ export type BuildReviewReducedCoverageEvidenceInput =
   | {
       readonly state: 'known';
       readonly records: readonly BuildReviewReducedCoverageDispositionRecord[];
-      readonly currentFailures: readonly BuildReviewInfrastructureFailure[];
+      readonly currentFailures: readonly (BuildReviewInfrastructureFailure | BuildReviewScopeIncompleteFault)[];
     };
 
 export type BuildReviewReducedCoverageEvidenceRenderResult =
@@ -242,14 +260,17 @@ export const BUILD_REVIEW_PROVENANCE_KEYS = Object.freeze([
 const PROVENANCE_KEY_SET: ReadonlySet<string> = new Set(BUILD_REVIEW_PROVENANCE_KEYS);
 
 /** Recursively drop every provenance-vocabulary key from a JSON value, at any depth. */
-function withoutProvenance(value: BuildReviewProjectionJson): BuildReviewProjectionJson {
-  if (Array.isArray(value)) return value.map(withoutProvenance);
+function withoutProvenance(value: BuildReviewProjectionJson, semanticScope = false): BuildReviewProjectionJson {
+  if (Array.isArray(value)) return value.map((entry) => withoutProvenance(entry, semanticScope));
   if (value !== null && typeof value === 'object') {
     const object = value as { readonly [key: string]: BuildReviewProjectionJson };
     return Object.fromEntries(
       Object.keys(object)
-        .filter((key) => !PROVENANCE_KEY_SET.has(key))
-        .map((key) => [key, withoutProvenance(object[key]!)]),
+        // Scope ids name engine-established binding/candidate evidence, not
+        // a cache-record instance.  Keep them semantic while retaining the
+        // legacy provenance treatment for record ids elsewhere.
+        .filter((key) => !(PROVENANCE_KEY_SET.has(key) && !(semanticScope && key === 'id')))
+        .map((key) => [key, withoutProvenance(object[key]!, semanticScope || key === 'testScope')]),
     );
   }
   return value;
@@ -328,8 +349,6 @@ export function deriveChangedFileReferences(diff: string): readonly ChangedFileR
 }
 
 function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectionSource, rubric: Rubric): Omit<CommonProjection<Rubric>, 'digest'> {
-  // The legacy stored projection envelope still has four keys during the
-  // registry migration, but its one live descriptor is testQuality.
   const descriptor = getBuildReviewRubricDescriptor('testQuality');
   const snapshot = source.inputs.sourceSnapshot;
   return {
@@ -354,9 +373,19 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
   const inputs = source.inputs;
   const testQuality = seal({
     ...common(source, 'testQuality'),
+    runnerSelectors: canonicalArray(source.testQuality.runnerSelectors ?? source.testQuality.changedTestSelectors) as readonly string[],
+    // Keep this legacy field while downstream result-v3 consumers migrate to
+    // source-bound targets. It is a review-target set, never an execution set.
     changedTestSelectors: canonicalArray(source.testQuality.changedTestSelectors) as readonly string[],
     unresolvedMarkers: canonicalArray((source.testQuality.unresolvedMarkers ?? []) as unknown as readonly BuildReviewProjectionJson[]) as unknown as readonly BuildReviewUnresolvedMarker[],
     changedTestTitles: inputs.sourceSnapshot.changedTestTitles,
+    testScope: canonicalize(json({
+      analysisVersion: inputs.sourceSnapshot.testScopeAnalysisVersion ?? 'test-scope-v1',
+      ...(inputs.sourceSnapshot.testScope ?? {
+        changedDeclarations: [], targets: [], candidates: [], notes: [], affectedGroups: [], sharedSources: [],
+      }),
+      evidence: inputs.sourceSnapshot.testScopeEvidence ?? [],
+    })),
     testSuiteProof: canonicalize(json(inputs.testSuiteProof)),
     revertedProductionManifest: canonicalArray(
       source.testQuality.revertedProductionManifest as unknown as readonly BuildReviewProjectionJson[],

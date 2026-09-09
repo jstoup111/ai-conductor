@@ -10809,12 +10809,13 @@ export class Conductor {
                     return;
                   }
                   if (effective.ok && !legacyAdjudicationInput) {
-                  // adr-2026-08-29 D3: only UNCOVERED infrastructure pins the
-                  // mechanical lane. Mapping the undifferentiated list to
-                  // `retry` treated a branch the operator had already covered
-                  // with an exact reduced-coverage decision as a live fault, so
-                  // a content-complete PASS was unreachable.
+                  // Only uncovered coverage faults pin the mechanical lane.
+                  // Mapping an undifferentiated list to `retry` treated a
+                  // branch the operator had already covered with an exact
+                  // reduced-coverage decision as a live fault, so a
+                  // content-complete PASS was unreachable.
                   const uncoveredInfrastructure = effective.effective.uncoveredInfrastructureFailureRubrics;
+                  const uncoveredScopeIncomplete = effective.effective.uncoveredScopeIncompleteRubrics ?? [];
                   const mechanicalLedger = await readKickbackLedgerResult(this.projectRoot);
                   if (mechanicalLedger.kind === 'unreadable') {
                     const reason = `build_review adjudication halted: ${mechanicalLedger.reason}`;
@@ -10826,7 +10827,7 @@ export class Conductor {
                   const mechanicalFaults = mechanicalLedger.kind === 'ok'
                     ? mechanicalLedger.ledger.gates.build_review?.mechanicalFaults ?? 0
                     : 0;
-                  const mechanical = uncoveredInfrastructure.length === 0
+                  const mechanical = uncoveredInfrastructure.length === 0 && uncoveredScopeIncomplete.length === 0
                     ? 'healthy'
                     : mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW ? 'halt' : 'retry';
                   const resolveOperatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> => {
@@ -10909,13 +10910,16 @@ export class Conductor {
                     continue;
                   }
                   // adr-2026-08-29 D3.2: no actionable content route remains
-                  // and infrastructure is uncovered. That is the MECHANICAL
+                  // and coverage is uncovered. That is the MECHANICAL
                   // lane — re-land build_review under its own bounded
                   // allowance. Falling through to the legacy raw route spent a
                   // semantic kickback and re-sent content the judgement had
                   // already finalized back to BUILD as raw reasons.
-                  const uncoveredRubric = uncoveredInfrastructure[0];
+                  const uncoveredRubric = uncoveredInfrastructure[0] ?? uncoveredScopeIncomplete[0];
                   const uncoveredResult = uncoveredRubric ? aggregate.results[uncoveredRubric] : undefined;
+                  const scopeFault = uncoveredRubric && uncoveredScopeIncomplete.includes(uncoveredRubric)
+                    ? aggregate.scopeIncomplete.find((fault) => fault.rubric === uncoveredRubric)
+                    : undefined;
                   const bumpedMechanicalFaults = await bumpMechanicalFaultsInLedgerResult(this.projectRoot, 'build_review',
                     uncoveredRubric && uncoveredResult?.kind === 'infrastructure-failure'
                       ? {
@@ -10924,7 +10928,14 @@ export class Conductor {
                           detail: uncoveredResult.detail ?? 'uncovered infrastructure failure on a settled lap',
                           lapId: aggregate.lapId,
                         }
-                      : undefined,
+                      : scopeFault === undefined
+                        ? undefined
+                        : {
+                            rubric: scopeFault.rubric,
+                            reason: scopeFault.reason,
+                            detail: scopeFault.detail,
+                            lapId: aggregate.lapId,
+                          },
                   );
                   if (bumpedMechanicalFaults.kind === 'unreadable') {
                     const reason = `build_review adjudication halted: ${bumpedMechanicalFaults.reason}`;

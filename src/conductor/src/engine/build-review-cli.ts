@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { BuildReviewDispositionStore, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult, type BuildReviewReducedCoverageListResult, type BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
-import { parseBuildReviewLapId } from './build-review-domain.js';
+import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId, type BuildReviewInfrastructureFailureReason } from './build-review-domain.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
@@ -86,19 +86,29 @@ type AcceptedDisposition = {
 
 type ExhaustedMechanicalFault = {
   readonly rubric: BuildReviewRubricId;
-  readonly cause: string;
+  readonly cause: BuildReviewInfrastructureFailureReason;
   readonly diagnostic: string;
 };
 
-/** Only an infrastructure result published after its mechanical allowance is exhausted is terminal. */
+/** The closed faults an operator may cover after the existing allowance is exhausted. */
+function reducedCoverageFault(result: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>['results'][BuildReviewRubricId]): ExhaustedMechanicalFault | undefined {
+  if (result.kind === 'infrastructure-failure') {
+    return { rubric: result.rubric, cause: result.reason, diagnostic: result.detail };
+  }
+  const scopeFault = result.kind === 'judged' ? deriveBuildReviewScopeIncompleteFault(result) : undefined;
+  return scopeFault && { rubric: scopeFault.rubric, cause: scopeFault.reason, diagnostic: scopeFault.detail };
+}
+
+/** Only a published mechanical fault after its allowance is exhausted is terminal. */
 function exhaustedMechanicalFaults(
   aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>,
   mechanicalFaults: number,
 ): readonly ExhaustedMechanicalFault[] {
   if (mechanicalFaults < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) return [];
-  return Object.values(aggregate.results).flatMap((result) => result.kind === 'infrastructure-failure'
-    ? [{ rubric: result.rubric, cause: result.reason, diagnostic: result.detail }]
-    : []);
+  return Object.values(aggregate.results).flatMap((result) => {
+    const fault = reducedCoverageFault(result);
+    return fault ? [fault] : [];
+  });
 }
 
 function acceptedDispositions(
@@ -197,11 +207,14 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     if (!effective) throw new Error('current findings are invalid');
     const accepted = acceptedDispositions(aggregate, feature, effective, records);
     const faults = exhaustedMechanicalFaults(aggregate, gateEntry?.mechanicalFaults ?? 0);
-    // `uncoveredInfrastructureFailureRubrics` is an engine routing projection,
-    // not part of this command's published machine contract; the operator
-    // already sees coverage through `Infrastructure failures` and the
-    // reduced-coverage decisions themselves. Keep the payload byte-stable.
-    const { uncoveredInfrastructureFailureRubrics: _uncovered, ...reported } = effective;
+    // Uncovered coverage projections are engine-routing-only. The operator
+    // already sees coverage through the rendered failures and reduced-coverage
+    // decisions, so keep this command's published machine contract byte-stable.
+    const {
+      uncoveredInfrastructureFailureRubrics: _uncoveredInfrastructure,
+      uncoveredScopeIncompleteRubrics: _uncoveredScopeIncomplete,
+      ...reported
+    } = effective;
     const output = {
       feature: command.feature, lapId: aggregate.lapId, snapshotDigest: aggregate.snapshotDigest, ...reported, acceptedDispositions: accepted,
       ...(gateEntry?.lastMechanicalFault === undefined ? {} : { lastMechanicalFault: gateEntry.lastMechanicalFault }),
@@ -362,9 +375,9 @@ export async function dispatchBuildReviewRecordReducedCoverage(
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
     const aggregate = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
     if (!aggregate || aggregate.lapId !== requestedLap) throw new Error('requested lap is not current');
-    const result = aggregate.results[rubric];
-    if (result.kind !== 'infrastructure-failure') {
-      return refuse('rubric-not-infrastructure-failure', `build-review record-reduced-coverage: '${rubric}' has no current infrastructure failure.`);
+    const fault = reducedCoverageFault(aggregate.results[rubric]);
+    if (!fault) {
+      return refuse('rubric-not-reduced-coverage-fault', `build-review record-reduced-coverage: '${rubric}' has no current infrastructure failure or scope-incomplete fault.`);
     }
     if (!feature) throw new Error('feature identity is unavailable');
     let stateRefusal: string | undefined;
@@ -373,7 +386,7 @@ export async function dispatchBuildReviewRecordReducedCoverage(
     const appended = await (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree).appendReducedCoverageIfCurrent({
       feature,
       rubric,
-      reason: result.reason,
+      reason: fault.cause,
       rationale: command.rationale.trim(),
       operator: operator.trim(),
     }, async (records) => {
@@ -382,16 +395,16 @@ export async function dispatchBuildReviewRecordReducedCoverage(
         stateRefusal = 'the inspected review lap changed';
         return false;
       }
-      const currentResult = current.results[rubric];
-      if (currentResult.kind !== 'infrastructure-failure' || currentResult.reason !== result.reason) {
-        stateRefusal = `the current '${rubric}' infrastructure failure changed`;
+      const currentFault = reducedCoverageFault(current.results[rubric]);
+      if (!currentFault || currentFault.cause !== fault.cause) {
+        stateRefusal = `the current '${rubric}' reduced-coverage fault changed`;
         return false;
       }
       if (((await readMechanicalFaults(worktree!)) ?? 0) < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
         stateRefusal = 'the mechanical-fault allowance remains';
         return false;
       }
-      if (records.some((record) => record.identity.rubric === rubric && record.identity.reason === result.reason)) {
+      if (records.some((record) => record.identity.rubric === rubric && record.identity.reason === fault.cause)) {
         stateRefusal = `reduced coverage is already recorded for '${rubric}'`;
         return false;
       }
@@ -407,7 +420,7 @@ export async function dispatchBuildReviewRecordReducedCoverage(
         feature: command.feature,
         lapId: requestedLap,
         rubric,
-        reason: result.reason,
+        reason: fault.cause,
         operator: operator.trim(),
         ts: new Date().toISOString(),
       });

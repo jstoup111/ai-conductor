@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:6, task:17
+// Covers: task:1, task:3, task:6, task:15, task:17
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -109,6 +109,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_rubric_result',
   'build_review_rubric_skipped',
   'build_review_cache_hit',
+  'build_review_scope_summary',
   'build_review_cache_discarded',
   'build_review_rubric_infrastructure_failure',
   'build_review_mechanical_allowance_exhausted',
@@ -147,6 +148,8 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'self_host_containment_verdict',
   'over_scope_decision',
   ...REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES,
+  'build_review_scope_summary',
+  'build_review_scope_incomplete',
 ] satisfies Array<ConductorEvent['type']>;
 
 const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
@@ -215,6 +218,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'rebase_conflict_halt',
   'ci_failed',
   'build_review_base',
+  'build_review_scope_incomplete',
   'build_review_stale_mirage_regrade',
   'auto_park_contradiction',
   'verdict_freshness',

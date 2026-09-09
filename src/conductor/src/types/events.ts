@@ -260,9 +260,30 @@ export type ConductorEvent =
   | { type: 'build_review_rubric_result'; rubric: string; lapId: string; verdict: 'PASS' | 'FAIL' }
   | { type: 'build_review_rubric_skipped'; rubric: string; lapId: string; reason: string }
   | { type: 'build_review_cache_hit'; rubric: string; lapId: string }
+  /** Frozen scope assessment for one rubric lap; routine detail stays in the shared ledger. */
+  | {
+      type: 'build_review_scope_summary';
+      rubric: string;
+      lapId: string;
+      establishedTargetCount: number;
+      candidateCount: number;
+      unresolvedReasons: readonly string[];
+    }
   /** adr-2026-08-21 D5: a cached judgement discarded because the judging engine or rubric skill text changed. */
   | { type: 'build_review_cache_discarded'; rubric: string; lapId: string; reason: 'engine-version-mismatch' | 'skill-digest-mismatch'; cachedEngineStamp?: string; currentEngineStamp: string }
   | { type: 'build_review_rubric_infrastructure_failure'; rubric: string; lapId: string; reason: string; excerpt?: string }
+  /** Valid scope judgment could not resolve a concrete candidate; not a malformed provider result. */
+  | {
+      type: 'build_review_scope_incomplete';
+      rubric: string;
+      lapId: string;
+      candidates: readonly {
+        candidateId: string;
+        sourceRegion: { path: string; startLine: number; endLine: number; contentHash: string; display: string };
+        obligationReferences: readonly string[];
+        missingEvidenceReason: string;
+      }[];
+    }
   | {
       /** The shared retry allowance was exhausted for a mechanical rubric failure. */
       type: 'build_review_mechanical_allowance_exhausted';
