@@ -133,7 +133,7 @@ describe('executeProviderCandidates', () => {
       memberId: 'scope',
       policy: {
         enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'xhigh',
-        model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra'], max_retries: 2, escalate: true,
+        model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra'], max_retries: 2, escalate: true, min_confidence: 0,
       },
       runtimes: new ProviderRuntimeSet([
         runtime('codex', { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: codexInvoke, }),

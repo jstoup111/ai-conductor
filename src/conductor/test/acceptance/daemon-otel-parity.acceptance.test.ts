@@ -10,7 +10,8 @@ import {
   type PushMetricExporter,
   type ResourceMetrics,
 } from '@opentelemetry/sdk-metrics';
-import { InMemorySpanExporter, type ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import { type ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import { CapturingSpanExporter as InMemorySpanExporter } from '../fixtures/capturing-span-exporter.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 
 const fixture = vi.hoisted(() => ({

@@ -1,7 +1,7 @@
 // Covers: task:2
 import { describe, expect, it, vi } from 'vitest';
 import { AggregationTemporality, InMemoryMetricExporter } from '@opentelemetry/sdk-metrics';
-import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
+import { CapturingSpanExporter as InMemorySpanExporter } from './fixtures/capturing-span-exporter.js';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { buildInteractiveVisualizers } from '../src/index.js';

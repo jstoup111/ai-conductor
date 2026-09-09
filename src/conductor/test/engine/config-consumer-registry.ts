@@ -205,6 +205,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.rubrics.model_fallback_ladder': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.max_retries': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.escalate': consumer(RESOLVED_CONFIG),
+  'build_review.rubrics.min_confidence': consumer(RESOLVED_CONFIG),
 
   // ── coverage_binding ────────────────────────────────────────────────────
   // The step runner consumes the resolved boolean; resolution is the sole

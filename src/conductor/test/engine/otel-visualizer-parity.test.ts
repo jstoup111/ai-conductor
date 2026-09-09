@@ -1,7 +1,8 @@
 // Covers: task:25
 import { describe, expect, it, vi } from 'vitest';
 import { AggregationTemporality, InMemoryMetricExporter } from '@opentelemetry/sdk-metrics';
-import { InMemorySpanExporter, type ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import { type ReadableSpan } from '@opentelemetry/sdk-trace-base';
+import { CapturingSpanExporter as InMemorySpanExporter } from '../fixtures/capturing-span-exporter.js';
 import { tmpdir } from 'node:os';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { otelEventTypes } from '../../src/engine/event-sinks.js';

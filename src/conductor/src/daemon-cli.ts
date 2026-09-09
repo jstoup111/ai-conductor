@@ -2570,6 +2570,14 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'build_review_cache_discarded':
       log(`${dot} ${chalk.yellow(`build_review cache discarded: ${event.rubric} (${event.reason}; cached ${event.cachedEngineStamp ?? 'pre-identity'} -> current ${event.currentEngineStamp})`)}`);
       break;
+    case 'build_review_outer_verdict':
+      for (const finding of event.suppressedFindings ?? []) {
+        log(`${dot} build_review suppressed ${finding.rubric}:${finding.findingId} (confidence ${finding.confidence} < floor ${finding.floor})`);
+      }
+      break;
+    case 'remediation_adjudication_completed':
+      log(`${dot} build_review adjudication completed (${event.caseIds.length} settled case${event.caseIds.length === 1 ? '' : 's'})`);
+      break;
     case 'contained_live_checkout_drift':
       log(`${dot} ${chalk.dim(`self-host contained; concurrent operator drift: ${event.summary}`)}`);
       break;
@@ -2878,6 +2886,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       const base = event.mergeBase ? event.mergeBase.slice(0, 12) : '(unknown)';
       log(
         `${dot} ${chalk.dim(`build_review stale-mirage regrade (base ${base}, count ${event.regradeCount})`)}`,
+      );
+      break;
+    }
+    case 'build_review_scope_incomplete': {
+      const candidates = event.candidates.map((candidate) => candidate.candidateId).join(', ');
+      log(
+        `${dot} ${chalk.yellow(`build_review scope incomplete (${event.rubric}; ${candidates || 'no candidates'})`)}`,
       );
       break;
     }

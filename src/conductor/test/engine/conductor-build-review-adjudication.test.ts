@@ -1,4 +1,4 @@
-// Covers: task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1
+// Covers: task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1
 //
 // Task 18's production-wiring clauses. Three build laps closed the components
 // and left the seam open: the coordinator was reachable, but the deferral
@@ -65,6 +65,24 @@ function passAggregate(): unknown {
   });
 }
 
+/** A valid judged lap whose only blocker is retained scope incompleteness. */
+function scopeIncompleteAggregate(): unknown {
+  return joinBuildReviewRubricOutcomes({
+    lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+    results: {
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
+        scopeResolutions: [{
+          candidateId: 'candidate:setup', status: 'indeterminate',
+          sourceRegion: { path: 'test/example.test.ts', startLine: 2, endLine: 3, contentHash: HASH, display: 'example setup' },
+          obligationReferences: ['story:S6.2'], missingEvidenceReason: 'the pinned binding is incomplete',
+        }],
+      },
+    },
+  });
+}
+
 function actionJudgement(): unknown {
   return {
     mode: 'case-v1', domain: 'build_review',
@@ -105,6 +123,8 @@ interface FixtureOptions {
    * actually reads for its mechanical state, so drive it there.
    */
   readonly reportUncoveredInfrastructure?: boolean;
+  /** Models the scope-only mechanical route after an indeterminate candidate. */
+  readonly scopeIncomplete?: 'covered' | 'uncovered';
   /** Writes durable `.pipeline` artifacts a previous process would have left. */
   readonly seedPipeline?: (projectRoot: string) => Promise<void>;
   readonly startFrom?: StepName;
@@ -116,6 +136,8 @@ interface FixtureOptions {
   readonly rawVerdict?: 'PASS' | 'FAIL';
   /** Models an operator disposition arriving through the event spine mid-lap. */
   readonly acceptedFindingIds?: () => readonly string[];
+  /** Models the effective-verdict projection of sub-floor findings. */
+  readonly suppressedFindingIds?: readonly string[];
   readonly onLifecycleEvent?: (event: ConductorEvent) => void;
 }
 
@@ -136,8 +158,9 @@ async function fixture(options: FixtureOptions = {}) {
   await writeState(statePath, state as ConductState);
 
   const mixed = options.infrastructure && options.infrastructure !== 'none';
+  const scopeIncomplete = options.scopeIncomplete !== undefined;
   const clean = options.rawVerdict === 'PASS';
-  const raw = clean ? passAggregate() : aggregate(mixed ? 'mixed' : 'judged');
+  const raw = clean ? passAggregate() : scopeIncomplete ? scopeIncompleteAggregate() : aggregate(mixed ? 'mixed' : 'judged');
 
   const dispatched: StepName[] = [];
   const artifactMtimes = new Map<string, number>();
@@ -164,19 +187,26 @@ async function fixture(options: FixtureOptions = {}) {
   const infrastructureRubrics = mixed || options.reportUncoveredInfrastructure ? (['testQuality'] as const) : ([] as const);
   const uncovered = options.infrastructure === 'uncovered' || options.reportUncoveredInfrastructure
     ? (['testQuality'] as const) : ([] as const);
+  const uncoveredScopeIncomplete = options.scopeIncomplete === 'uncovered'
+    ? (['testQuality'] as const) : ([] as const);
   const resolver: NonNullable<CompletionContext['buildReviewEffectiveResolver']> = vi.fn(async () => {
     const acceptedFindingIds = [...(options.acceptedFindingIds?.() ?? [])];
+    const suppressedFindingIds = [...(options.suppressedFindingIds ?? [])];
+    const effectivePass = clean || suppressedFindingIds.includes(FINDING_ID);
     return {
       ok: true as const,
       feature,
       effective: {
         rawVerdict: clean ? ('PASS' as const) : ('FAIL' as const),
-        verdict: clean ? ('PASS' as const) : ('FAIL' as const),
+        verdict: effectivePass ? ('PASS' as const) : ('FAIL' as const),
         acceptedFindingIds,
-        unresolvedFindingIds: mixed || clean || acceptedFindingIds.includes(FINDING_ID) ? [] : [FINDING_ID],
+        unresolvedFindingIds: mixed || scopeIncomplete || effectivePass || acceptedFindingIds.includes(FINDING_ID) ? [] : [FINDING_ID],
+        suppressedFindingIds,
         skippedRubrics: [],
         infrastructureFailureRubrics: [...infrastructureRubrics],
         uncoveredInfrastructureFailureRubrics: [...uncovered],
+        uncoveredScopeIncompleteRubrics: [...uncoveredScopeIncomplete],
+        ...(scopeIncomplete ? { scopeIncompleteRubrics: ['testQuality'] } : {}),
       },
     };
   }) as never;
@@ -217,7 +247,10 @@ async function fixture(options: FixtureOptions = {}) {
     daemon: true,
     config: {
       kickback_escalation: { enabled: false },
-      build_review: { adjudication: { enabled: options.adjudicationEnabled ?? true } },
+      build_review: {
+        adjudication: { enabled: options.adjudicationEnabled ?? true },
+        rubrics: { testQuality: { enabled: true, min_confidence: 70 } },
+      },
     },
     buildReviewEffectiveResolver: resolver,
     buildReviewChargeEffect: options.chargeEffect,
@@ -233,7 +266,7 @@ async function fixture(options: FixtureOptions = {}) {
   });
 
   return {
-    projectRoot, feature, dispatched, retryReasons, kickbacks, lifecycle, loopHalts, ghCalls,
+    projectRoot, feature, dispatched, retryReasons, kickbacks, lifecycle, loopHalts, ghCalls, resolver,
     remediateDispatches: () => remediateDispatches, artifactMtimes,
     readJson: async (relative: string): Promise<unknown> =>
       JSON.parse(await readFile(join(projectRoot, relative), 'utf8')) as unknown,
@@ -244,6 +277,17 @@ async function fixture(options: FixtureOptions = {}) {
 }
 
 describe('engine/conductor — build_review post-join adjudication wiring', () => {
+  it('passes a fully suppressed lap without adjudication or a kickback', async () => {
+    const run = await fixture({ suppressedFindingIds: [FINDING_ID] });
+
+    expect(run.remediateDispatches()).toBe(0);
+    expect(run.kickbacks).toEqual([]);
+    expect((await run.state()).build_review).toBe('done');
+    expect(vi.mocked(run.resolver).mock.calls.map((call) => call[2])).toContainEqual(expect.objectContaining({
+      minConfidence: { testQuality: 70 },
+    }));
+  });
+
   it('routes one adjudicated action through one dispatch, one charge, and a durable BUILD handoff', async () => {
     const run = await fixture();
 
@@ -744,5 +788,18 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     // The mechanical allowance bounds the re-land loop and then halts.
     expect(ledger.gates.build_review?.mechanicalFaults).toBe(3);
     expect(await run.haltMarker()).toContain('build_review adjudication halted');
+  });
+
+  it('takes the bounded mechanical lane for an uncovered indeterminate-only scope fault', async () => {
+    const run = await fixture({ scopeIncomplete: 'uncovered' });
+
+    expect(run.remediateDispatches()).toBe(0);
+    expect(run.dispatched).not.toContain('build');
+    expect(run.kickbacks).toEqual([]);
+    const ledger = await run.readJson('.pipeline/kickback-ledger.json') as {
+      gates: { build_review?: { count?: number; mechanicalFaults?: number; lastMechanicalFault?: { reason?: string } } };
+    };
+    expect(ledger.gates.build_review).toMatchObject({ count: 0, mechanicalFaults: 3, lastMechanicalFault: { reason: 'scope-incomplete' } });
+    expect(await run.haltMarker()).toContain('uncovered build-review coverage failure');
   });
 });

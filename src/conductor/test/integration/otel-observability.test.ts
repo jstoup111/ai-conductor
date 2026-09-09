@@ -26,7 +26,7 @@ import { EventPersister } from '../../src/engine/event-persister.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 // In-memory OTel exporters (deps added in Task 1 → RED until then)
-import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
+import { CapturingSpanExporter as InMemorySpanExporter } from '../fixtures/capturing-span-exporter.js';
 import { InMemoryMetricExporter, AggregationTemporality } from '@opentelemetry/sdk-metrics';
 
 /**

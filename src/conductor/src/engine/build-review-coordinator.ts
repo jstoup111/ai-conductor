@@ -2,13 +2,18 @@ import type { BuildReviewRubricId } from "../types/config.js";
 import {
   CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
   describeBuildReviewJudgedResultRejection,
+  parseBuildReviewCandidateScopeResolutions,
   parseBuildReviewDispatchFailure,
   buildReviewFindingReferenceContext,
+  deriveBuildReviewScopeIncompleteFault,
+  isLegacyBuildReviewTestScope,
   parseBuildReviewJudgedResult,
   type BuildReviewJudgedResult,
   type BuildReviewLapId,
   type BuildReviewCoordinatorFailureReason,
   type BuildReviewSkip,
+  type BuildReviewCandidateScopeCandidate,
+  type BuildReviewCandidateScopeResolutionContext,
 } from "./build-review-domain.js";
 import {
   BUILD_REVIEW_RUBRIC_IDS,
@@ -26,6 +31,7 @@ import {
   type BuildReviewBranchArtifact,
 } from "./build-review-artifacts.js";
 import type { BuildReviewFrozenInputs } from "./build-review-inputs.js";
+import { buildReviewScopeCandidateIdentityKey } from "./build-review-scope-identity.js";
 import {
   deriveBuildReviewRubricProjections,
   type BuildReviewRubricProjections,
@@ -148,7 +154,36 @@ export interface BuildReviewCoordinationInput {
     | "build_review_cache_hit"
     | "build_review_cache_discarded"
     | "build_review_rubric_infrastructure_failure"
+    | "build_review_scope_summary"
+    | "build_review_scope_incomplete"
     | "build_review_outer_verdict" }>) => Promise<void>;
+}
+
+async function emitScopeIncomplete(
+  emit: BuildReviewCoordinationInput['emit'],
+  result: BuildReviewJudgedResult,
+  lapId: BuildReviewLapId,
+): Promise<void> {
+  const fault = deriveBuildReviewScopeIncompleteFault(result);
+  if (!fault) return;
+  await emit?.({ type: 'build_review_scope_incomplete', rubric: fault.rubric, lapId, candidates: fault.candidates });
+}
+
+/** Publish the frozen scope assessment once when a valid rubric result settles. */
+async function emitScopeSummary(
+  emit: BuildReviewCoordinationInput['emit'],
+  input: BuildReviewCoordinationInput,
+): Promise<void> {
+  const scope = input.inputs.sourceSnapshot.testScope;
+  const unresolvedReasons = [...new Set(scope?.candidates.flatMap((candidate) => candidate.reasons) ?? [])].sort();
+  await emit?.({
+    type: 'build_review_scope_summary',
+    rubric: TEST_QUALITY_RUBRIC,
+    lapId: input.lapId,
+    establishedTargetCount: scope?.targets.length ?? input.inputs.sourceSnapshot.testQuality?.inScopeTests.length ?? 0,
+    candidateCount: scope?.candidates.length ?? 0,
+    unresolvedReasons,
+  });
 }
 
 /**
@@ -177,6 +212,7 @@ export function preflightProjection(preflight: TautologyPreflightResult): BuildR
     };
   }
   return {
+    runnerSelectors: preflight.counterfactualFileSelectors,
     changedTestSelectors: preflight.changedTestSelectors,
     unresolvedMarkers: [],
     revertedProductionManifest: preflight.revertedProductionManifest,
@@ -209,6 +245,7 @@ export function stampBuildReviewDispatchedCandidate(
     lapId: projection.lapId,
     snapshotDigest: projection.snapshotDigest,
     findings: source?.findings,
+    ...(source?.scopeResolutions === undefined ? {} : { scopeResolutions: source.scopeResolutions }),
     // The relocation audit is provider-owned EVIDENCE, not an envelope field:
     // the test-quality contract validates it as typed evidence, the
     // artifact persists it, and the aggregate consumes it. Pass it through and
@@ -219,6 +256,87 @@ export function stampBuildReviewDispatchedCandidate(
       ? {}
       : { counterfactualSensitivity: source.counterfactualSensitivity }),
   };
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+/**
+ * Extract the exact candidate authority already frozen into v3 `testScope`.
+ * The projection remains the only source: no live files, source readers, or
+ * second provider call participate in candidate settlement.
+ */
+export function buildReviewCandidateScopeResolutionContext(projection: BuildReviewRubricProjection): BuildReviewCandidateScopeResolutionContext {
+  const scope = record(projection.testScope);
+  const rawCandidates = Array.isArray(scope?.candidates) ? scope.candidates : [];
+  const evidence = Array.isArray(scope?.evidence) ? scope.evidence : [];
+  const candidates: BuildReviewCandidateScopeCandidate[] = [];
+  for (const rawCandidate of rawCandidates) {
+    const candidate = record(rawCandidate);
+    const directRegion = record(candidate?.sourceRegion);
+    // Fallback candidates are frozen by Task 5/8 as a source identity, not
+    // merely a parser span.  Two files routinely have declarations at the
+    // same offsets, so matching only side/start/end can silently bind a
+    // candidate to another file's evidence and duplicate its candidate id.
+    const candidateSource = record(candidate?.source);
+    const declaration = record(candidate?.declaration) ?? record(candidate?.diagnostic);
+    const span = record(declaration?.span);
+    const candidateIdentity = candidateSource && span
+      ? buildReviewScopeCandidateIdentityKey({
+          source: { fileName: candidateSource.fileName as string, side: candidateSource.side as 'base' | 'head' },
+          region: { start: span.start as number, end: span.end as number },
+        })
+      : undefined;
+    const matchedEvidence = evidence.map(record).find((entry) => {
+      const source = record(entry?.source); const region = record(entry?.region);
+      return candidateIdentity !== undefined && source && region &&
+        buildReviewScopeCandidateIdentityKey({
+          source: { fileName: source.fileName as string, side: source.side as 'base' | 'head' },
+          region: { start: region.start as number, end: region.end as number },
+        }) === candidateIdentity;
+    });
+    const evidenceSource = record(matchedEvidence?.source);
+    const evidenceRegion = record(matchedEvidence?.region);
+    const sourceRegion = directRegion
+      ? { path: directRegion.path, startLine: directRegion.startLine, endLine: directRegion.endLine, contentHash: directRegion.contentHash, display: directRegion.display }
+      : matchedEvidence && evidenceSource && evidenceRegion
+        ? {
+            path: evidenceSource.fileName,
+            startLine: matchedEvidence.startLine,
+            endLine: matchedEvidence.endLine,
+            contentHash: matchedEvidence.contentHash,
+            display: Array.isArray(declaration?.titleChain) && declaration!.titleChain.every((part) => typeof part === 'string')
+              ? declaration!.titleChain.join(' > ')
+              : typeof declaration?.message === 'string' ? declaration.message : `${evidenceSource.fileName} fallback candidate`,
+          }
+        : undefined;
+    const markerObligations = Array.isArray(candidate?.markers)
+      ? candidate!.markers.map(record).flatMap((marker) => {
+          const reference = record(marker?.reference);
+          return typeof reference?.kind === 'string' && typeof reference.id === 'string' ? [`${reference.kind}:${reference.id}`] : [];
+        })
+      : [];
+    const rawObligations = Array.isArray(candidate?.obligationReferences)
+      ? candidate!.obligationReferences
+      : [...new Set(markerObligations)];
+    const candidateId = typeof candidate?.candidateId === 'string'
+      ? candidate.candidateId
+      : typeof matchedEvidence?.id === 'string' ? matchedEvidence.id : undefined;
+    if (!candidate || !candidateId || !sourceRegion || !Array.isArray(rawObligations)) continue;
+    const contextCandidate = {
+      candidateId,
+      sourceRegion,
+      obligationReferences: rawObligations,
+    } as unknown as BuildReviewCandidateScopeCandidate;
+    const parsed = parseBuildReviewCandidateScopeResolutions([{
+      candidateId, status: 'resolved', sourceRegion,
+      obligationReferences: rawObligations, associationReason: 'engine candidate shape validation',
+    }], { candidates: [contextCandidate] });
+    if (!parsed) continue;
+    candidates.push(contextCandidate);
+  }
+  return { candidates: Object.freeze(candidates) };
 }
 
 /**
@@ -232,7 +350,13 @@ export function validateBuildReviewDispatchedResult(
   rubric: BuildReviewRubricId,
   projection: BuildReviewRubricProjection,
 ): BuildReviewJudgedResult | undefined {
-  const result = parseBuildReviewJudgedResult(candidate, buildReviewFindingReferenceContext(projection));
+  const scopeContext = buildReviewCandidateScopeResolutionContext(projection);
+  const source = record(candidate);
+  const scopeResolutions = source?.scopeResolutions === undefined
+    ? (scopeContext.candidates.length === 0 ? [] : undefined)
+    : parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext);
+  if (!scopeResolutions) return undefined;
+  const result = parseBuildReviewJudgedResult(candidate, buildReviewFindingReferenceContext(projection, scopeResolutions), scopeContext);
   // Treat the provider list as one boundary value.  Parsing individual
   // findings is insufficient: duplicate/colliding identities would otherwise
   // become two independently persisted branch facts.
@@ -252,11 +376,17 @@ export function describeBuildReviewDispatchedResultRejection(
   rubric: BuildReviewRubricId,
   projection: BuildReviewRubricProjection,
 ): string {
+  const scopeContext = buildReviewCandidateScopeResolutionContext(projection);
+  const source = record(candidate);
+  const scopeResolutions = source?.scopeResolutions === undefined
+    ? (scopeContext.candidates.length === 0 ? [] : undefined)
+    : parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext);
   return describeBuildReviewJudgedResultRejection(
     candidate,
     rubric,
     projection,
-    buildReviewFindingReferenceContext(projection),
+    buildReviewFindingReferenceContext(projection, scopeResolutions ?? []),
+    scopeContext,
   );
 }
 
@@ -267,10 +397,7 @@ function validWrittenArtifact(
 ): BuildReviewJudgedResult | undefined {
   const artifact = parseBuildReviewBranchArtifact(candidate);
   const result = artifact?.result;
-  const projectionBoundResult = result && parseBuildReviewJudgedResult(
-    result,
-    buildReviewFindingReferenceContext(projection),
-  );
+  const projectionBoundResult = result && validateBuildReviewDispatchedResult(result, rubric, projection);
   return artifact?.rubric === rubric && artifact.lapId === projection.lapId &&
     artifact.snapshotDigest === projection.snapshotDigest && projectionBoundResult?.kind === "judged" &&
     projectionBoundResult.rubric === rubric && projectionBoundResult.lapId === projection.lapId &&
@@ -288,7 +415,20 @@ export async function coordinateBuildReviewRubrics(
   const testQualityPolicy = input.config.rubrics.testQuality;
   const inScopeTests = input.inputs.sourceSnapshot.testQuality?.inScopeTests ?? [];
   const unresolvedMarkers = input.inputs.sourceSnapshot.testQuality?.unresolvedMarkers ?? [];
-  if (input.config.enabled && testQualityPolicy?.enabled && inScopeTests.length === 0) {
+  // The source-bound scope is authoritative. Legacy selector fields remain
+  // projection compatibility data and must not turn a refactor or note into
+  // a review target. A snapshot from before typed scope existed retains its
+  // legacy selector behavior solely for compatibility.
+  const typedScope = input.inputs.sourceSnapshot.testScope;
+  const hasEstablishedTargets = isLegacyBuildReviewTestScope(typedScope)
+    ? inScopeTests.length > 0
+    : (typedScope?.targets?.length ?? 0) > 0;
+  const hasConcreteCandidates = (typedScope?.candidates?.length ?? 0) > 0;
+  if (input.config.enabled && testQualityPolicy?.enabled && !hasEstablishedTargets && !hasConcreteCandidates) {
+    // An empty scope is still a settled scope assessment: publish its counts and
+    // unresolved reasons on the same event as every judged settlement, so a
+    // production-only refactor or pure move is observable rather than silent.
+    await emitScopeSummary(input.emit, input);
     await input.emit?.({
       type: "build_review_outer_verdict",
       lapId: input.lapId,
@@ -342,8 +482,15 @@ export async function coordinateBuildReviewRubrics(
   const derivedProjections = deriveBuildReviewRubricProjections({
     lapId: input.lapId,
     inputs: projectionInputs,
-    testQuality: preflight ? { ...preflightProjection(preflight), changedTestSelectors: inScopeTests, unresolvedMarkers } : {
-      changedTestSelectors: [], unresolvedMarkers, revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
+    testQuality: preflight ? {
+      ...preflightProjection(preflight),
+      runnerSelectors: preflight.classification === "infrastructure-failure"
+        ? preflight.changedTestSelectors
+        : preflight.counterfactualFileSelectors ?? preflight.scopedRun?.ranSelectors ?? preflight.changedTestSelectors,
+      changedTestSelectors: inScopeTests,
+      unresolvedMarkers,
+    } : {
+      runnerSelectors: [], changedTestSelectors: [], unresolvedMarkers, revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
     },
   });
   const projections = input.projections ?? derivedProjections;
@@ -417,14 +564,23 @@ export async function coordinateBuildReviewRubrics(
         currentEngineStamp: input.engineIdentity.engineStamp,
       });
     }
-    if (cache.kind === "hit") {
+    // A semantic cache identity proves only that the frozen input projection
+    // matches.  Re-run the same source-bound result predicate used for a
+    // fresh provider response before reusing the cached judgement: persisted
+    // candidate resolutions and finding anchors are evidence, never cache
+    // authority.  An invalid cached result is an ordinary miss so a fresh
+    // judgement can settle the current frozen scope.
+    const cachedResult = cache.kind === "hit"
+      ? validateBuildReviewDispatchedResult(cache.hit.result, branch.rubric, projection)
+      : undefined;
+    if (cache.kind === "hit" && cachedResult) {
       let result: BuildReviewJudgedResult | undefined;
       try {
         result = validWrittenArtifact(await input.writeArtifact({
           rubric: branch.rubric,
           lapId: projection.lapId,
           snapshotDigest: projection.snapshotDigest,
-          result: cache.hit.result,
+          result: cachedResult,
           provenance: cache.hit.provenance,
         }), branch.rubric, projection);
         resolved.set(branch.rubric, result
@@ -437,7 +593,11 @@ export async function coordinateBuildReviewRubrics(
         resolved.set(branch.rubric, infrastructure(branch.rubric, "artifact-write-failed"));
         await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "artifact-write-failed" });
       }
-      if (result) await input.emit?.({ type: "build_review_rubric_result", rubric: branch.rubric, lapId: input.lapId, verdict: result.verdict });
+      if (result) {
+        await input.emit?.({ type: "build_review_rubric_result", rubric: branch.rubric, lapId: input.lapId, verdict: result.verdict });
+        await emitScopeSummary(input.emit, input);
+        await emitScopeIncomplete(input.emit, result, input.lapId);
+      }
     } else {
       await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
       misses.push(branch);
@@ -506,6 +666,8 @@ export async function coordinateBuildReviewRubrics(
   for (const outcome of dispatched) {
     if (outcome.branch.kind === "dispatched") {
       await input.emit?.({ type: "build_review_rubric_result", rubric: outcome.rubric, lapId: input.lapId, verdict: outcome.branch.result.verdict });
+      await emitScopeSummary(input.emit, input);
+      await emitScopeIncomplete(input.emit, outcome.branch.result, input.lapId);
     } else if (outcome.branch.kind === "infrastructure-failure") {
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: outcome.rubric, lapId: input.lapId, reason: outcome.branch.reason });
     }

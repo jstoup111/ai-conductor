@@ -155,7 +155,7 @@ jobs:
           fi
           if grep -Rqx success live-provider-results; then
             echo "At least one live-provider E2E passed."
-          else
-            echo "No live-provider E2E passed."
-            exit 1
+            exit 0
           fi
+          echo "No live-provider E2E passed."
+          exit 1

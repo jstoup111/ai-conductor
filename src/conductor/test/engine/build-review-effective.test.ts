@@ -34,6 +34,27 @@ function aggregate(options: {
   } });
 }
 
+function scopeAggregate(resolution: 'indeterminate' | 'resolved', includeTestQualityFinding = false) {
+  const scopeResolution = resolution === 'indeterminate'
+    ? {
+        candidateId: 'candidate:setup', status: 'indeterminate' as const,
+        sourceRegion: { path: 'test/a.test.ts', startLine: 2, endLine: 3, contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'setup binding' },
+        obligationReferences: ['story:S6.2'], missingEvidenceReason: 'the pinned binding is incomplete',
+      }
+    : {
+        candidateId: 'candidate:setup', status: 'resolved' as const,
+        sourceRegion: { path: 'test/a.test.ts', startLine: 2, endLine: 3, contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'setup binding' },
+        obligationReferences: ['story:S6.2'], associationReason: 'Corrected pinned binding proves this candidate.',
+      };
+  const findings = includeTestQualityFinding ? [testQualityFinding] : [];
+  return joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
+    testQuality: {
+      kind: 'judged' as const, rubric: 'testQuality' as const, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: currentContractVersion,
+      findings, scopeResolutions: [scopeResolution], verdict: findings.length ? 'FAIL' as const : 'PASS' as const,
+    },
+  } });
+}
+
 const identityDeps = { resolveMainRoot: async () => root, realpath: async (path: string) => path };
 
 describe('live build-review effective resolver', () => {
@@ -76,6 +97,39 @@ describe('live build-review effective resolver', () => {
       '  Rationale: mechanical fault is covered',
       '  Decision time: 2026-08-14T00:00:00.000Z',
     ].join('\n') });
+  });
+
+  it('recomputes corrected pinned scope and renders an attributed scope-incomplete decision only while it remains current', async () => {
+    const coverage = [{
+      kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
+      identity: { rubric: 'testQuality' as const, reason: 'scope-incomplete' as const },
+      rationale: 'The association cannot be recovered.', operator: 'operator', acceptedAt: '2026-09-06T00:00:00.000Z',
+    }];
+    const resolve = (raw: ReturnType<typeof scopeAggregate>) => resolveEffectiveBuildReviewVerdict(worktree, raw, {
+      ...identityDeps,
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), listReducedCoverage: async () => ({ ok: true as const, records: coverage }) }),
+    });
+
+    await expect(resolve(scopeAggregate('indeterminate'))).resolves.toMatchObject({ ok: true, effective: { verdict: 'PASS', scopeIncompleteRubrics: ['testQuality'] }, reducedCoverageEvidence: [
+      '## Reduced build-review coverage', '', '- Rubric: `testQuality`', '  Cause: `scope-incomplete`',
+      '  Current diagnostic: candidate:setup (story:S6.2): the pinned binding is incomplete', '  Operator: operator',
+      '  Rationale: The association cannot be recovered.', '  Decision time: 2026-09-06T00:00:00.000Z',
+    ].join('\n') });
+    const corrected = await resolve(scopeAggregate('resolved'));
+    expect(corrected).toMatchObject({ ok: true, effective: { verdict: 'PASS' } });
+    expect(corrected).not.toHaveProperty('effective.scopeIncompleteRubrics');
+    expect(corrected).not.toHaveProperty('reducedCoverageEvidence');
+    await expect(resolve(scopeAggregate('indeterminate', true))).resolves.toMatchObject({ ok: true, effective: { verdict: 'FAIL', unresolvedFindingIds: [expect.any(String)] } });
+  });
+
+  it('keeps scope-incomplete blocking when reduced-coverage state cannot be read', async () => {
+    await expect(resolveEffectiveBuildReviewVerdict(worktree, scopeAggregate('indeterminate'), {
+      ...identityDeps,
+      createStore: () => ({
+        list: async () => ({ ok: true as const, records: [] }),
+        listReducedCoverage: async () => ({ ok: false as const, kind: 'unreadable' as const, message: 'state cannot be read' }),
+      }),
+    })).resolves.toMatchObject({ ok: false, reason: expect.stringContaining('state cannot be read') });
   });
 
   it('uses the production effective reducer to reject unknown, foreign, and non-identical coverage', () => {

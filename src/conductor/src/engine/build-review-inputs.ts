@@ -1,6 +1,5 @@
-import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { basename, dirname, join, relative } from 'node:path';
+import { basename, dirname, relative } from 'node:path';
 import { resolveFreshBase, type GitRunner } from './rebase.js';
 import {
   readBaseAdvanceHistory,
@@ -16,9 +15,28 @@ import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
-import { classifyTautologyPaths } from './build-review-test-quality-preflight.js';
-import { parseCoversMarkers } from './covers-marker.js';
-import { extractStoryCriterionIds } from './story-criteria.js';
+import {
+  analyzeBuildReviewTestScope,
+  type BuildReviewTestScope,
+  type BuildReviewTestScopeInput,
+  type BuildReviewTestSourceReference,
+  unavailableBuildReviewTestScope,
+} from './build-review-test-scope.js';
+import type { TestDeclarationSpan } from './build-review-test-declarations.js';
+import {
+  buildReviewScopeCandidateIdentityKey,
+  type BuildReviewScopeCandidateIdentityReference,
+} from './build-review-scope-identity.js';
+export {
+  buildReviewScopeCandidateIdentityKey,
+  type BuildReviewScopeCandidateIdentityReference,
+} from './build-review-scope-identity.js';
+import { discoverBuildReviewScopeDependencies } from './build-review-scope-dependencies.js';
+import {
+  BuildReviewScopeSource,
+  safeRepoRelativePath,
+  type BuildReviewPathChange,
+} from './build-review-scope-source.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -101,6 +119,22 @@ export interface BuildReviewSourceSnapshot {
   readonly changedTestTitles?: readonly BuildReviewChangedTestTitle[];
   /** Test-quality's closed, feature-local selector set. */
   readonly testQuality?: BuildReviewTestQualityScope;
+  /**
+   * Typed, source-bound test-quality analysis.  This is the authoritative
+   * assembly result; the compact legacy selector/title fields remain only
+   * until the v3 projection consumes this value directly.
+   */
+  readonly testScope?: BuildReviewTestScope;
+  /** Version of the syntax/binding analysis contract that produced testScope. */
+  readonly testScopeAnalysisVersion?: string;
+  /**
+   * Region bytes read from the same pinned blobs as `testScope`. Projection
+   * consumes these records directly; it must never refill them from HEAD or
+   * the worktree while deriving its identity.
+   */
+  readonly testScopeEvidence?: readonly BuildReviewPinnedScopeEvidence[];
+  /** Machine-readable changed paths from the pinned diff, retaining rename pairs. */
+  readonly sourceChanges?: readonly BuildReviewPathChange[];
 }
 
 /** One executable changed-test selector's declared title evidence. */
@@ -111,6 +145,18 @@ export interface BuildReviewChangedTestTitle {
   readonly staticExtractionFallback: boolean;
 }
 
+/** One compact, deduplicated source region that a v3 scope record references. */
+export interface BuildReviewPinnedScopeEvidence {
+  readonly id: string;
+  readonly source: { readonly fileName: string; readonly side: 'base' | 'head' };
+  readonly region: TestDeclarationSpan;
+  /** One-based source lines for the exact pinned character region. */
+  readonly startLine?: number;
+  readonly endLine?: number;
+  readonly content: string;
+  readonly contentHash: string;
+}
+
 /** A changed test whose declared Covers reference does not bind to this feature. */
 export interface BuildReviewUnresolvedMarker {
   readonly selector: string;
@@ -119,8 +165,10 @@ export interface BuildReviewUnresolvedMarker {
 
 /** Closed test-quality scope derived from the feature's active artifacts and graded diff. */
 export interface BuildReviewTestQualityScope {
-  /** Changed executable tests with at least one Covers reference bound to this feature. */
+  /** Changed executable tests with an established Covers binding in this feature. */
   readonly inScopeTests: readonly string[];
+  /** Conservative file union for counterfactual execution, including concrete candidates. */
+  readonly counterfactualFileSelectors: readonly string[];
   /** Changed-test markers that name no criterion, FR, or task in this feature. */
   readonly unresolvedMarkers: readonly BuildReviewUnresolvedMarker[];
 }
@@ -128,6 +176,8 @@ export interface BuildReviewTestQualityScope {
 /** Process-free proof inspection seam; it must never launch the aggregate suite. */
 export interface BuildReviewInputOptions {
   readonly inspectTestSuite?: () => Promise<FullSuiteInspectionResult>;
+  /** Test seam for a parser/analyzer failure; consumer source is never loaded. */
+  readonly analyzeTestScope?: (input: BuildReviewTestScopeInput) => BuildReviewTestScope;
 }
 
 /** The three distinguishable grading-provenance cases (Task 24). */
@@ -195,24 +245,29 @@ export class TestSuiteProofError extends Error {
  * its commit, means no exclusion.
  */
 async function engineAppendedPlanExclusion(
-  git: GitRunner,
+  source: BuildReviewScopeSource,
   mergeBaseSha: string,
   projectRoot: string,
-  planPath: string,
+  planRepoPath: string,
+  headSha: string,
 ): Promise<readonly string[]> {
   const recorded = await readRecordedAppendedRemediationTaskIds(projectRoot);
   if (recorded.length === 0) return [];
-  const pathspec = relative(projectRoot, planPath);
-  if (pathspec === '' || pathspec.startsWith('..')) return [];
+  let pathspec: string;
+  try {
+    pathspec = safeRepoRelativePath(planRepoPath);
+  } catch {
+    return [];
+  }
   // Both ends of the graded diff exactly: `<mergeBase>..HEAD`.
   const [base, head] = await Promise.all([
-    git(['show', `${mergeBaseSha}:${pathspec}`]),
-    git(['show', `HEAD:${pathspec}`]),
+    source.readAtOptional(mergeBaseSha, pathspec),
+    source.readAtOptional(headSha, pathspec),
   ]);
-  if (base.exitCode !== 0 || head.exitCode !== 0) return [];
+  if (base.kind === 'absent' || head.kind === 'absent') return [];
   return isEngineAppendedRemediationAmendment(
-    Buffer.from(base.stdout, 'utf-8'),
-    Buffer.from(head.stdout, 'utf-8'),
+    Buffer.from(base.value, 'utf-8'),
+    Buffer.from(head.value, 'utf-8'),
     recorded,
   )
     ? [`:(exclude)${pathspec}`]
@@ -231,15 +286,18 @@ function snapshotDigest(snapshot: Omit<BuildReviewSourceSnapshot, 'digest' | 'co
 
 function contentSnapshotDigest(snapshot: Pick<
   BuildReviewSourceSnapshot,
-  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'testQuality'
+  'diff' | 'planBody' | 'repairContext' | 'removalContext' | 'testQuality' | 'testScope' | 'testScopeAnalysisVersion' | 'testScopeEvidence'
 >): string {
-  const { diff, planBody, repairContext, removalContext, testQuality } = snapshot;
+  const { diff, planBody, repairContext, removalContext, testQuality, testScope, testScopeAnalysisVersion, testScopeEvidence } = snapshot;
   return `sha256:${createHash('sha256').update(JSON.stringify({
     diff: withoutDiffBlobIdentities(diff),
     planBody,
     repairContext: semanticRepairContext(repairContext),
     removalContext,
     testQuality,
+    testScope,
+    testScopeAnalysisVersion,
+    testScopeEvidence,
   })).digest('hex')}`;
 }
 
@@ -256,257 +314,297 @@ function semanticRepairContext(repairs: readonly TestSuiteRemediationRecord[]) {
   return repairs.map(({ gate, reason, diagnostic }) => ({ gate, reason, diagnostic }));
 }
 
-function changedPathsFromDiff(diff: string): readonly string[] {
-  return [...diff.matchAll(/^diff --git a\/(.+) b\/(.+)$/gm)].map((match) => match[2]!);
-}
-
-function activeStoriesPath(projectRoot: string, planPath: string, planBody: string): string | undefined {
-  const planRepoPath = relative(projectRoot, planPath).replaceAll('\\', '/');
+function activeStoriesPath(planRepoPath: string, planBody: string): string | undefined {
   const storiesRepoPath = resolvePlanStoriesPath(planRepoPath, planBody);
-  return storiesRepoPath === null ? undefined : join(projectRoot, storiesRepoPath);
+  return storiesRepoPath === null ? undefined : storiesRepoPath;
 }
 
-function markerReference(reference: { readonly kind: string; readonly id: string }): string {
+function isTestPath(path: string): boolean {
+  return /(?:^|\/)(?:test|tests)\//.test(path)
+    || /(?:^|\/)(?:__tests__|tests?|spec)\/.*\.(?:test|spec)\.[^/]+$|\.(?:test|spec)\.[^/]+$/i.test(path)
+    || /(?:^|\/)(?:__tests__|tests?|spec)\/.*(?:_test|_spec)\.[^/]+$/i.test(path);
+}
+
+function markerReferenceForScope(reference: { readonly kind: string; readonly id: string }): string {
   return reference.kind === 'task' ? `task:${reference.id}` : reference.id;
 }
 
-/**
- * Intersect changed executable tests with Covers references bound to the
- * feature's own active plan and its plan-selected stories artifact. The
- * artifact lookup is intentionally direct: a docs-directory scan could let
- * another feature's criterion silently widen this review.
- */
-async function snapshotTestQualityScope(
-  git: GitRunner,
-  headSha: string,
-  diff: string,
-  projectRoot: string,
-  planPath: string,
-  planBody: string,
-): Promise<BuildReviewTestQualityScope> {
-  const storiesPath = activeStoriesPath(projectRoot, planPath, planBody);
-  const storiesBody = storiesPath === undefined
-    ? ''
-    : await readFile(storiesPath, 'utf-8').catch(() => '');
-  // Criterion ids are positional — derived from each story's Given/When/Then
-  // bullets — because the stories skill never writes literal `S<n>.<m>` ids
-  // into the artifact body. A literal grep here would resolve nothing but
-  // incidental prose, silently dropping criterion-bound tests from scope.
-  const criterionIds = new Set(
-    extractStoryCriterionIds(storiesBody).map((id) => id.toUpperCase()),
-  );
-  const frIds = new Set(
-    [...storiesBody.matchAll(/\bFR-\d+\b/gi)].map((match) => match[0].toUpperCase()),
-  );
-  const taskIds = new Set(parsePlanTaskPaths(planBody).keys());
-  // Covers is the authoritative opt-in for test-quality review.  Do not
-  // pre-filter by a conventional test path: technical-track suites are often
-  // deliberately outside it, while a path-only file has no feature binding.
-  const planRelativePath = relative(projectRoot, planPath);
-  const selectors = changedPathsFromDiff(diff).filter(
-    (path) => path !== planRelativePath && !path.startsWith('.docs/'),
-  );
-  const sources = await Promise.all(selectors.map(async (selector) => {
-    const result = await git(['show', `${headSha}:${selector}`]);
-    return { selector, source: result.exitCode === 0 ? result.stdout : undefined };
-  }));
-  const inScopeTests: string[] = [];
-  const unresolvedMarkers: BuildReviewUnresolvedMarker[] = [];
-
-  for (const { selector, source } of sources) {
-    if (source === undefined) continue;
-    let bound = false;
-    for (const reference of parseCoversMarkers(source)) {
-      const resolved = reference.kind === 'criterion'
-        ? criterionIds.has(reference.id.toUpperCase())
-        : reference.kind === 'fr'
-          ? frIds.has(reference.id.toUpperCase())
-          : reference.kind === 'task'
-            ? taskIds.has(reference.id)
-            : false;
-      if (resolved) bound = true;
-      else unresolvedMarkers.push({ selector, reference: markerReference(reference) });
-    }
-    if (bound) inScopeTests.push(selector);
+function freezeRecursively<T>(value: T, seen = new WeakSet<object>()): T {
+  if (value === null || typeof value !== 'object' || seen.has(value)) return value;
+  seen.add(value);
+  for (const key of Reflect.ownKeys(value)) {
+    freezeRecursively((value as Record<PropertyKey, unknown>)[key], seen);
   }
+  return Object.freeze(value);
+}
 
-  return Object.freeze({
-    inScopeTests: Object.freeze(inScopeTests),
-    unresolvedMarkers: Object.freeze(unresolvedMarkers.sort((left, right) =>
-      `${left.selector}\u0000${left.reference}`.localeCompare(`${right.selector}\u0000${right.reference}`),
-    )),
+interface ScopedTestFile {
+  readonly path: string;
+  readonly basePath: string;
+  readonly baseText: string;
+  readonly headText: string;
+  readonly scope: BuildReviewTestScope;
+}
+
+function mergeTestScopes(scopes: readonly BuildReviewTestScope[]): BuildReviewTestScope {
+  return freezeRecursively({
+    changedDeclarations: scopes.flatMap((scope) => scope.changedDeclarations),
+    targets: scopes.flatMap((scope) => scope.targets),
+    candidates: scopes.flatMap((scope) => scope.candidates),
+    notes: scopes.flatMap((scope) => scope.notes),
+    affectedGroups: scopes.flatMap((scope) => scope.affectedGroups),
+    sharedSources: scopes.flatMap((scope) => scope.sharedSources),
   });
 }
 
-type StaticTestTitle = Pick<BuildReviewChangedTestTitle, 'titleText' | 'staticExtractionFallback'>;
+type PinnedScopeRegion = BuildReviewScopeCandidateIdentityReference;
+type PinnedScopeSourceSide = 'base' | 'head';
 
-const TEST_DECLARATION = /\b(describe|context|suite|it|test|specify)\s*\(/y;
-const TEST_SUITE_NAMES = new Set(['describe', 'context', 'suite']);
-
-function skipQuotedSource(source: string, index: number): number | undefined {
-  const quote = source[index]!;
-  for (let cursor = index + 1; cursor < source.length; cursor += 1) {
-    if (source[cursor] === '\\') {
-      cursor += 1;
-    } else if (source[cursor] === quote) {
-      return cursor + 1;
-    }
-  }
-  return undefined;
+function frozenScopeReference(
+  fileName: string,
+  region: TestDeclarationSpan,
+  side: PinnedScopeSourceSide = 'head',
+): PinnedScopeRegion {
+  return { source: { fileName, side }, region };
 }
 
-function skipRegexLiteral(source: string, index: number): number | undefined {
-  let inCharacterClass = false;
-  for (let cursor = index + 1; cursor < source.length; cursor += 1) {
-    if (source[cursor] === '\\') {
-      cursor += 1;
-    } else if (source[cursor] === '[') {
-      inCharacterClass = true;
-    } else if (source[cursor] === ']') {
-      inCharacterClass = false;
-    } else if (source[cursor] === '/' && !inCharacterClass) {
-      cursor += 1;
-      while (/[a-z]/i.test(source[cursor] ?? '')) cursor += 1;
-      return cursor;
-    } else if (source[cursor] === '\n' || source[cursor] === '\r') {
-      return undefined;
-    }
-  }
-  return undefined;
+function associationSide(kind: 'added' | 'removed'): PinnedScopeSourceSide {
+  return kind === 'removed' ? 'base' : 'head';
 }
 
-function regexCanStartAt(source: string, index: number): boolean {
-  let cursor = index - 1;
-  while (cursor >= 0 && /\s/.test(source[cursor]!)) cursor -= 1;
-  if (cursor < 0) return true;
-  if (/[([{:;,=!?&|^~+\-*%<>]/.test(source[cursor]!)) return true;
-  const precedingWord = source.slice(0, cursor + 1).match(/[A-Za-z_$][\w$]*$/)?.[0];
-  return precedingWord === 'return' || precedingWord === 'throw' || precedingWord === 'case';
-}
-
-/** Skip source trivia and literals so static extraction never treats their text as executable. */
-function skipNonCodeSource(source: string, index: number): number | undefined {
-  if (source[index] === "'" || source[index] === '"' || source[index] === '`') {
-    return skipQuotedSource(source, index);
-  }
-  if (source[index] === '/' && source[index + 1] === '/') {
-    const newline = source.indexOf('\n', index + 2);
-    return newline < 0 ? source.length : newline + 1;
-  }
-  if (source[index] === '/' && source[index + 1] === '*') {
-    const end = source.indexOf('*/', index + 2);
-    return end < 0 ? undefined : end + 2;
-  }
-  if (source[index] === '/' && regexCanStartAt(source, index)) {
-    return skipRegexLiteral(source, index);
-  }
-  return index;
-}
-
-function balancedSourceEnd(source: string, start: number, open: string, close: string): number | undefined {
-  let depth = 0;
-  for (let cursor = start; cursor < source.length; cursor += 1) {
-    const next = skipNonCodeSource(source, cursor);
-    if (next === undefined) return undefined;
-    if (next !== cursor) {
-      cursor = next - 1;
-    } else if (source[cursor] === open) {
-      depth += 1;
-    } else if (source[cursor] === close && --depth === 0) {
-      return cursor;
-    }
-  }
-  return undefined;
-}
-
-function staticTitleArgument(source: string, index: number): { title?: string; next: number } {
-  let cursor = index;
-  while (/\s/.test(source[cursor] ?? '')) cursor += 1;
-  if (source[cursor] !== "'" && source[cursor] !== '"' && source[cursor] !== '`') return { next: cursor };
-  const end = skipQuotedSource(source, cursor);
-  if (end === undefined) return { next: source.length };
-  const raw = source.slice(cursor + 1, end - 1);
-  return raw.includes('${')
-    ? { next: end }
-    : { title: raw.replace(/\\(.)/g, '$1'), next: end };
-}
-
-function callbackBody(source: string, callStart: number, callEnd: number): { start: number; end: number } | undefined {
-  const callbackSource = source.slice(callStart, callEnd);
-  const arrowOffset = callbackSource.indexOf('=>');
-  const functionOffset = /\bfunction\b/.exec(callbackSource)?.index;
-  const isFunctionCallback = functionOffset !== undefined && (arrowOffset < 0 || functionOffset < arrowOffset);
-  const callbackOffset = isFunctionCallback
-    ? functionOffset + callbackSource.slice(functionOffset).indexOf('{')
-    : arrowOffset;
-  if (callbackOffset < 0) return undefined;
-  let start = callStart + callbackOffset + (isFunctionCallback ? 0 : 2);
-  while (/\s/.test(source[start] ?? '')) start += 1;
-  if (source[start] !== '{') return { start, end: callEnd };
-  const end = balancedSourceEnd(source, start, '{', '}');
-  return end === undefined || end > callEnd ? undefined : { start: start + 1, end };
-}
-
-function staticTestTitles(source: string): readonly StaticTestTitle[] {
-  const titles: StaticTestTitle[] = [];
-  let malformed = false;
-const collect = (start: number, end: number, ancestors: readonly string[], inheritedFallback: boolean): void => {
-    for (let cursor = start; cursor < end;) {
-      const next = skipNonCodeSource(source, cursor);
-      if (next === undefined) {
-        malformed = true;
-        return;
-      }
-      if (next !== cursor) {
-        cursor = next;
-        continue;
-      }
-      TEST_DECLARATION.lastIndex = cursor;
-      const match = TEST_DECLARATION.exec(source);
-      if (match === null || match.index >= end) {
-        cursor += 1;
-        continue;
-      }
-      const callStart = cursor;
-      const callEnd = balancedSourceEnd(source, TEST_DECLARATION.lastIndex - 1, '(', ')');
-      if (callEnd === undefined || callEnd > end) {
-        malformed = true;
-        return;
-      }
-      const title = staticTitleArgument(source, TEST_DECLARATION.lastIndex);
-      const fallback = inheritedFallback || title.title === undefined;
-      if (TEST_SUITE_NAMES.has(match[1]!)) {
-        const body = callbackBody(source, title.next, callEnd);
-        if (body === undefined) malformed = true;
-        else collect(body.start, body.end, title.title === undefined ? ancestors : [...ancestors, title.title], fallback);
-      } else {
-        titles.push(fallback
-          ? { titleText: '', staticExtractionFallback: true }
-          : { titleText: [...ancestors, title.title!].join(' > '), staticExtractionFallback: false });
-      }
-      cursor = callEnd + 1;
-    }
+/**
+ * Extract every region the typed scope itself can cite, then capture its bytes
+ * from the assembly's immutable blob reader. This is intentionally a data
+ * copy, not a later source read by projection or a provider.
+ */
+async function pinScopeEvidence(
+  files: readonly ScopedTestFile[],
+  source: BuildReviewScopeSource,
+  mergeBaseSha: string,
+): Promise<readonly BuildReviewPinnedScopeEvidence[]> {
+  const references = new Map<string, PinnedScopeRegion>();
+  const add = (reference: PinnedScopeRegion): void => {
+    references.set(buildReviewScopeCandidateIdentityKey(reference), reference);
   };
-  collect(0, source.length, [], false);
-  return malformed || titles.length === 0
-    ? [{ titleText: '', staticExtractionFallback: true }]
-    : titles;
+  const addSourceReference = (reference: BuildReviewTestSourceReference): void => add(reference);
+  const addBinding = (binding: { readonly marker: { readonly span: TestDeclarationSpan }; readonly owner?: { readonly declaration: { readonly span: TestDeclarationSpan } } }, fileName: string, side: PinnedScopeSourceSide): void => {
+    add(frozenScopeReference(fileName, binding.marker.span, side));
+    if (binding.owner) add(frozenScopeReference(fileName, binding.owner.declaration.span, side));
+  };
+
+  for (const file of files) {
+    for (const target of file.scope.targets) {
+      add(frozenScopeReference(file.path, target.declaration.span));
+      for (const binding of target.bindings) addBinding(binding, file.path, 'head');
+      for (const change of target.associationChanges) addBinding(change.binding, file.path, associationSide(change.kind));
+    }
+    for (const candidate of file.scope.candidates) {
+      // Candidate evidence is identified by the analyzer's frozen source,
+      // not by its containing per-file assembly record. A merged scope may
+      // contain equal offsets from different paths; keeping this identity
+      // makes later candidate resolution source-bound rather than offset-only.
+      const candidateSource = candidate.source;
+      if (candidate.declaration) add(frozenScopeReference(
+        candidateSource.fileName,
+        candidate.declaration.span,
+        candidateSource.side,
+      ));
+      if (candidate.diagnostic) add(frozenScopeReference(
+        candidateSource.fileName,
+        candidate.diagnostic.span,
+        candidateSource.side,
+      ));
+      for (const marker of candidate.markers) add(frozenScopeReference(
+        candidateSource.fileName,
+        marker.span,
+        candidateSource.side,
+      ));
+      for (const change of candidate.associationChanges) {
+        addBinding(change.binding, candidateSource.fileName, associationSide(change.kind));
+      }
+      if (candidate.affectedGroup) {
+        add(frozenScopeReference(
+          candidateSource.fileName,
+          candidate.affectedGroup.suite.span,
+          candidateSource.side,
+        ));
+        addSourceReference(candidate.affectedGroup.setup);
+        candidate.affectedGroup.sharedSources.forEach(addSourceReference);
+        candidate.affectedGroup.unchangedDescendantBodies.forEach(addSourceReference);
+      }
+      if (candidate.affectedDependencies) {
+        for (const effect of candidate.affectedDependencies) for (const dependency of [...effect.chain, ...effect.changedSources]) {
+          add({ source: dependency.source });
+        }
+      }
+    }
+    for (const group of file.scope.affectedGroups) {
+      add(frozenScopeReference(file.path, group.suite.span));
+      addSourceReference(group.setup);
+      group.sharedSources.forEach(addSourceReference);
+      group.unchangedDescendantBodies.forEach(addSourceReference);
+    }
+    file.scope.sharedSources.forEach(addSourceReference);
+    for (const note of file.scope.notes) {
+      if (note.kind === 'declaration-uncertainty') add(frozenScopeReference(file.path, note.diagnostic.span));
+      else {
+        add(frozenScopeReference(file.path, note.declaration.span));
+        if (note.kind === 'unresolved-reference') add(frozenScopeReference(file.path, note.marker.span));
+      }
+    }
+  }
+
+  const records = await Promise.all([...references.values()].map(async (reference) => {
+    const commitSha = reference.source.side === 'base' ? mergeBaseSha : source.headSha;
+    const sourceRead = await source.readAtOptional(commitSha, reference.source.fileName);
+    // A missing optional base side (for example an added helper) has no
+    // invented empty payload. The concrete candidate still retains its source
+    // reference and later validation can classify unavailable evidence.
+    if (sourceRead.kind === 'absent') return undefined;
+    const sourceText = sourceRead.value;
+    const region = reference.region ?? { start: 0, end: sourceText.length };
+    const content = sourceText.slice(region.start, region.end);
+    return Object.freeze({
+      id: `source:${reference.source.side}:${reference.source.fileName}:${region.start}:${region.end}`,
+      source: Object.freeze({ ...reference.source }),
+      region: Object.freeze({ ...region }),
+      startLine: sourceText.slice(0, region.start).split('\n').length,
+      endLine: sourceText.slice(0, Math.max(region.start, region.end - 1)).split('\n').length,
+      content,
+      contentHash: `sha256:${createHash('sha256').update(content).digest('hex')}`,
+    } satisfies BuildReviewPinnedScopeEvidence);
+  }));
+  return Object.freeze(records
+    .filter((record): record is NonNullable<typeof record> => record !== undefined)
+    .sort((left, right) => left.id.localeCompare(right.id)));
 }
 
-async function snapshotChangedTestTitles(
-  git: GitRunner,
-  headSha: string,
-  diff: string,
-): Promise<readonly BuildReviewChangedTestTitle[]> {
-  const selectors = classifyTautologyPaths(changedPathsFromDiff(diff)).tests;
-  const titles = await Promise.all(selectors.map(async (selector) => {
-    const result = await git(['show', `${headSha}:${selector}`]);
-    const extracted = result.exitCode === 0
-      ? staticTestTitles(result.stdout)
-      : [{ titleText: '', staticExtractionFallback: true }];
-    return extracted.map((title) => Object.freeze({ selector, ...title }));
-  }));
-  return Object.freeze(titles.flat());
+/**
+ * Assemble test-quality evidence from the same immutable blob reader used by
+ * the plan and diff.  The analyzer receives bytes only; neither declaration
+ * discovery nor dependency traversal ever imports consumer source.
+ */
+async function snapshotTypedTestScope(
+  source: BuildReviewScopeSource,
+  changes: readonly BuildReviewPathChange[],
+  mergeBaseSha: string,
+  planBody: string,
+  storiesBody: string,
+  analyzer: (input: BuildReviewTestScopeInput) => BuildReviewTestScope,
+): Promise<{
+  readonly scope: BuildReviewTestScope;
+  readonly scopeEvidence: readonly BuildReviewPinnedScopeEvidence[];
+  readonly testQuality: BuildReviewTestQualityScope;
+  readonly changedTestTitles: readonly BuildReviewChangedTestTitle[];
+}> {
+  const renamedFrom = new Map(changes.flatMap((change) => change.kind === 'R' || change.kind === 'C'
+    ? [[change.path, change.oldPath] as const]
+    : []));
+  const changedPaths = new Set(changes.filter((change) => change.kind !== 'D').map((change) => change.path));
+  const changeByPath = new Map(changes.filter((change) => change.kind !== 'D').map((change) => [change.path, change]));
+  const paths = new Set([
+    ...changedPaths,
+    ...[...parsePlanTaskPaths(planBody).values()].flatMap((taskPaths) => [...taskPaths]),
+  ].filter(isTestPath));
+  const initial: ScopedTestFile[] = [];
+  for (const path of paths) {
+    const basePath = renamedFrom.get(path) ?? path;
+    const changed = changeByPath.get(path);
+    const [baseRead, headRead] = await Promise.all([
+      changed && changed.kind !== 'A'
+        ? source.readAtRequired(mergeBaseSha, basePath).then((value) => ({ kind: 'present' as const, value }))
+        : source.readAtOptional(mergeBaseSha, basePath),
+      changedPaths.has(path)
+        ? source.readRequired(path).then((value) => ({ kind: 'present' as const, value }))
+        : source.readOptional(path),
+    ]);
+    // A plan Files hint whose pinned HEAD source is absent is evidence of
+    // nothing. Changed paths are required frozen evidence and reject above.
+    if (headRead.kind === 'absent') continue;
+    const baseText = baseRead.kind === 'present' ? baseRead.value : undefined;
+    const headText = headRead.value;
+    const input: BuildReviewTestScopeInput = {
+      base: { source: { fileName: basePath, bytes: Buffer.from(baseText ?? '', 'utf-8') }, storiesText: storiesBody, planText: planBody },
+      head: { source: { fileName: path, bytes: Buffer.from(headText, 'utf-8') }, storiesText: storiesBody, planText: planBody },
+    };
+    let scope: BuildReviewTestScope;
+    try {
+      scope = analyzer(input);
+    } catch (error) {
+      scope = unavailableBuildReviewTestScope(input, error);
+    }
+    initial.push({ path, basePath, baseText: baseText ?? '', headText, scope });
+  }
+
+  const dependencies = await discoverBuildReviewScopeDependencies({
+    reader: {
+      read: async (side, path) => {
+        const result = await source.readAtOptional(side === 'base' ? mergeBaseSha : source.headSha, path);
+        return result.kind === 'present' ? result.value : undefined;
+      },
+    },
+    changedTestPaths: initial.filter((file) => file.scope.changedDeclarations.length > 0).map((file) => file.path),
+    planText: planBody,
+  });
+  const files = initial.map((file) => {
+    const input: BuildReviewTestScopeInput = {
+      base: { source: { fileName: file.basePath, bytes: Buffer.from(file.baseText, 'utf-8') }, storiesText: storiesBody, planText: planBody },
+      head: { source: { fileName: file.path, bytes: Buffer.from(file.headText, 'utf-8') }, storiesText: storiesBody, planText: planBody },
+      dependencyEffects: dependencies.effects,
+    };
+    try {
+      return { ...file, scope: analyzer(input) };
+    } catch (error) {
+      return { ...file, scope: unavailableBuildReviewTestScope(input, error) };
+    }
+  });
+  const scope = mergeTestScopes(files.map((file) => file.scope));
+  const scopeEvidence = await pinScopeEvidence(files, source, mergeBaseSha);
+  const establishedTargetFiles = files.filter((file) => file.scope.targets.length > 0);
+  const counterfactualFileSelectors = files
+    .filter((file) => file.scope.targets.length > 0 || file.scope.candidates.length > 0)
+    .map((file) => file.path)
+    .sort();
+  const unresolvedMarkers = files.flatMap((file) => file.scope.notes.flatMap((note) => note.kind === 'unresolved-reference'
+    ? [Object.freeze({ selector: file.path, reference: markerReferenceForScope(note.marker.reference) })]
+    : []));
+  // Kept as a compatibility projection until no live consumer remains. Its
+  // title regions must be the same established targets that v3 projects,
+  // never every changed declaration in a file that happens to contain one.
+  // Parser uncertainty remains a marked fallback only when this file has no
+  // established direct target at all.
+  const changedTestTitles: BuildReviewChangedTestTitle[] = files.flatMap<BuildReviewChangedTestTitle>((file) => {
+    const targets = file.scope.targets.filter((target) => target.declaration.kind === 'test');
+    if (targets.length > 0) return targets.map((target) => Object.freeze({
+      selector: target.source.fileName,
+      titleText: target.declaration.titleChain.join(' > '),
+      staticExtractionFallback: false,
+    }));
+    // No established target leaves legacy consumers with their pre-v3
+    // changed-declaration behavior; it must not weaken an existing target
+    // file by appending its unbound siblings.
+    const declarations = file.scope.changedDeclarations.filter((declaration) => declaration.kind === 'test');
+    if (declarations.length > 0) return declarations.map((declaration) => Object.freeze({
+      selector: file.path,
+      titleText: declaration.titleChain.join(' > '),
+      staticExtractionFallback: false,
+    }));
+    return file.scope.notes.some((note) => note.kind === 'declaration-uncertainty')
+      ? [Object.freeze({ selector: file.path, titleText: '', staticExtractionFallback: true })]
+      : [];
+  });
+  return Object.freeze({
+    scope,
+    scopeEvidence,
+    testQuality: Object.freeze({
+      inScopeTests: Object.freeze(establishedTargetFiles.map((file) => file.path)),
+      counterfactualFileSelectors: Object.freeze(counterfactualFileSelectors),
+      unresolvedMarkers: Object.freeze(unresolvedMarkers.sort((left, right) =>
+        `${left.selector}\u0000${left.reference}`.localeCompare(`${right.selector}\u0000${right.reference}`),
+      )),
+    }),
+    changedTestTitles: Object.freeze(changedTestTitles),
+  });
 }
 
 /**
@@ -542,7 +640,22 @@ export async function assembleBuildReviewInputs(
 
   const baseRef = resolution.ref;
 
-  const mergeBase = await git(['merge-base', baseRef, 'HEAD']);
+  // Freeze the graded tree before any diff or source reads. Every later Git
+  // revision expression uses this immutable identity rather than the mutable
+  // symbolic HEAD/worktree.
+  const headResult = await git(['rev-parse', 'HEAD']);
+  const liveHeadSha = headResult.stdout.trim();
+  if (headResult.exitCode !== 0 || !liveHeadSha) {
+    throw new MergeBaseError(
+      `git rev-parse HEAD failed: ${headResult.stderr || 'no HEAD found'}`,
+      baseRef,
+    );
+  }
+  const source = new BuildReviewScopeSource(git, liveHeadSha);
+  const projectRoot = projectRootForPlan(planPath);
+  const planRepoPath = safeRepoRelativePath(relative(projectRoot, planPath).replaceAll('\\', '/'));
+
+  const mergeBase = await git(['merge-base', baseRef, liveHeadSha]);
   const mergeBaseSha = mergeBase.stdout.trim();
   if (mergeBase.exitCode !== 0 || !mergeBaseSha) {
     throw new MergeBaseError(
@@ -552,45 +665,41 @@ export async function assembleBuildReviewInputs(
   }
 
   const planExclusion = await engineAppendedPlanExclusion(
-    git,
+    source,
     mergeBaseSha,
-    projectRootForPlan(planPath),
-    planPath,
+    projectRoot,
+    planRepoPath,
+    liveHeadSha,
   );
 
-  const diffResult = await git([
-    'diff',
-    `${mergeBaseSha}..HEAD`,
+  const diffArgs = [
     '--',
     '.',
     ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
     ...planExclusion,
+  ];
+  const diffResult = await git([
+    'diff', `${mergeBaseSha}..${liveHeadSha}`,
+    ...diffArgs,
   ]);
   if (diffResult.exitCode !== 0) {
     throw new MergeBaseError(
-      `git diff ${mergeBaseSha}..HEAD failed: ${diffResult.stderr || 'unknown error'}`,
+      `git diff ${mergeBaseSha}..${liveHeadSha} failed: ${diffResult.stderr || 'unknown error'}`,
       baseRef,
     );
   }
+  const changes = await source.inventory(mergeBaseSha, diffArgs);
 
-  // The snapshot's headSha anchors what the grader actually looks at — the
-  // live HEAD the diff above was computed against — and is what the lap
-  // identity derives from. It must NOT come from the test-suite evidence's
-  // provenanceHeadSha: when the drift budget preserves an attested PASS
-  // across laps, that provenance stays pinned at an older commit while build
-  // commits advance HEAD, making every aggregate stale by construction
-  // (discarded by the completion check's lap comparison). The proof's own
-  // provenance remains available, separately, as testSuiteProof.
-  const headResult = await git(['rev-parse', 'HEAD']);
-  const liveHeadSha = headResult.stdout.trim();
-  if (headResult.exitCode !== 0 || !liveHeadSha) {
-    throw new MergeBaseError(
-      `git rev-parse HEAD failed: ${headResult.stderr || 'no HEAD found'}`,
-      baseRef,
-    );
-  }
+  // Source artifacts are review evidence. The plan is required; a selected
+  // stories artifact is optional only for legacy/no-artifact plans, never a
+  // fallback to the live checkout.
+  const planBody = await source.readRequired(planRepoPath);
 
-  const planBody = await readFile(planPath, 'utf-8');
+  /*
+   * The snapshot's headSha anchors what the grader actually looks at — the
+   * pinned HEAD above — and is what the lap identity derives from. It must
+   * NOT come from test-suite evidence provenance.
+   */
 
   const featureRoot = dirname(dirname(dirname(planPath)));
   const planIsInFeatureRoot =
@@ -614,14 +723,16 @@ export async function assembleBuildReviewInputs(
   }
 
   const removalContext = deriveBuildReviewRemovals(diffResult.stdout);
-  const changedTestTitles = await snapshotChangedTestTitles(git, liveHeadSha, diffResult.stdout);
-  const testQuality = await snapshotTestQualityScope(
-    git,
-    liveHeadSha,
-    diffResult.stdout,
-    projectRootForPlan(planPath),
-    planPath,
+  const storiesPath = activeStoriesPath(planRepoPath, planBody);
+  const storiesRead = storiesPath === undefined ? undefined : await source.readOptional(storiesPath);
+  const storiesBody = storiesRead?.kind === 'present' ? storiesRead.value : '';
+  const typedTestScope = await snapshotTypedTestScope(
+    source,
+    changes,
+    mergeBaseSha,
     planBody,
+    storiesBody,
+    options.analyzeTestScope ?? analyzeBuildReviewTestScope,
   );
   const snapshotWithoutDigest = {
     baseRef,
@@ -639,8 +750,14 @@ export async function assembleBuildReviewInputs(
         line: assertion.line,
       }))),
     }),
-    changedTestTitles,
-    testQuality,
+    // Legacy title identity remains readable until result-v3 consumers move
+    // to the source-bound scope; it is not the v3 target set.
+    changedTestTitles: typedTestScope.changedTestTitles,
+    testQuality: typedTestScope.testQuality,
+    testScope: typedTestScope.scope,
+    testScopeAnalysisVersion: 'test-scope-v1',
+    testScopeEvidence: typedTestScope.scopeEvidence,
+    sourceChanges: changes,
   } satisfies Omit<BuildReviewSourceSnapshot, 'digest' | 'contentDigest'>;
   const sourceSnapshot = Object.freeze({
     ...snapshotWithoutDigest,

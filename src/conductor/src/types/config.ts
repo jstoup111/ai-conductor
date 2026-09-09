@@ -684,6 +684,7 @@ export interface BuildReviewRubricConfig {
   model_fallback_ladder?: string[];
   max_retries?: number;
   escalate?: boolean;
+  min_confidence?: number;
 }
 
 /** Per-rubric settings keyed by the closed {@link BuildReviewRubricId} set. */
