@@ -13224,6 +13224,16 @@ describe('engine/conductor', () => {
   );
 
   describe('rate-limit handling', () => {
+    beforeEach(() => {
+      // Freeze the deadline clock while leaving async I/O and timers real.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-09-01T00:00:00Z'));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it('waits and retries without burning retry budget on rate limit', async () => {
       let attempt = 0;
       const runner: StepRunner = {
