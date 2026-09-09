@@ -1,3 +1,4 @@
+// Covers: task:4
 // engineer-agent-hosted.test.ts
 //
 // Orphaned-primitives guard + agent-hosted execution conformance (ADR-008 Phase 9.3),
@@ -759,7 +760,7 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
     await writeFile(join(dir, '.docs', 'conflicts', `2026-06-28-${slug}.md`), '# Conflicts\n\nNone.\n');
     await writeFile(join(dir, '.docs', 'architecture', `${slug}.md`), '# Architecture\n\nDiagram.\n');
     await writeFile(
-      join(dir, '.docs', 'decisions', 'adr-001-streaming.md'),
+      join(dir, '.docs', 'decisions', 'adr-2026-09-08-streaming.md'),
       `# ADR-001\n\n**Status:** ${opts.adrStatus ?? 'APPROVED'}\n\n## Decision\n\n1. **Use streaming.**\n`,
     );
   }
@@ -778,7 +779,7 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
     expect(tracked).toMatch(/\.docs\/complexity\//);
     expect(tracked).toMatch(/\.docs\/conflicts\//);
     expect(tracked).toMatch(/\.docs\/architecture\//);
-    expect(tracked).toMatch(/\.docs\/decisions\/adr-001-streaming\.md/);
+    expect(tracked).toMatch(/\.docs\/decisions\/adr-2026-09-08-streaming\.md/);
   });
 
   it('Small: commits base artifacts + complexity, no architecture required', async () => {

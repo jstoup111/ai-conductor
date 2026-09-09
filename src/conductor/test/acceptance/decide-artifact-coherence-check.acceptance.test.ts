@@ -1,3 +1,4 @@
+// Covers: task:4
 // Acceptance specs for the DECIDE artifact coherence check
 // (jstoup111/ai-conductor#539, .docs/stories/decide-artifact-coherence-check.md,
 // PRD .docs/specs/2026-07-22-decide-artifact-coherence-check.md FR-1..14).
@@ -149,7 +150,7 @@ const PLAN = [
   '',
   '| Decision | Disposition | Task(s) | Evidence |',
   '| --- | --- | --- | --- |',
-  '| adr-coherence#D1 | task | task-1 | Given an unmapped outcome, when land validates, then it is rejected. |',
+  '| adr-2026-09-08-coherence#D1 | task | task-1 | Given an unmapped outcome, when land validates, then it is rejected. |',
   '',
 ].join('\n');
 
@@ -171,7 +172,7 @@ const COHERENCE = [
   '| story   | story-2   | task-2   | covered | "story 2 maps to task 2"     |',
   '| task    | task-1    | story-1  | covered | "task 1 maps to story 1"     |',
   '| task    | task-2    | story-2  | covered | "task 2 maps to story 2"     |',
-  '| adr     | adr-coherence | story-1 | covered | "ADR is adjudicated by story 1" |',
+  '| adr     | adr-2026-09-08-coherence | story-1 | covered | "ADR is adjudicated by story 1" |',
   '| criterion | Story 1 happy: Given a mapped outcome, when land validates, then it passes. | task-1 | covered | "Given a mapped outcome, when land validates, then it passes." | diff-local |',
   '| criterion | Story 1 negative: Given an unmapped outcome, when land validates, then it is rejected. | task-1 | covered | "Given an unmapped outcome, when land validates, then it is rejected." | diff-local |',
   '| criterion | Story 2 happy: Given a covered story, when land validates, then it passes. | task-2 | covered | "Given a covered story, when land validates, then it passes." | diff-local |',
@@ -269,7 +270,7 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
     // Plain markdown, NO ```mermaid block, so the render gate resolves to
     // no-diagrams and never needs mmdc.
     await w('architecture/coherence-demo.md', '# Architecture\n\nComponents A and B.\n');
-    await w('decisions/adr-coherence.md', APPROVED_ADR);
+    await w('decisions/adr-2026-09-08-coherence.md', APPROVED_ADR);
   }
 
   // NOTE: the `.docs/coherence/.gitkeep` signal used to be hand-planted here.
@@ -365,7 +366,7 @@ describe('Story 2 / FR-1 — mapping artifact authored + cross-checked at land',
     const wt = await seedWorktree('coherence demo', { plan });
     await expect(
       landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
-    ).rejects.toThrow(/adr-coherence#D1 \(missing\)/i);
+    ).rejects.toThrow(/adr-2026-09-08-coherence#D1 \(missing\)/i);
   });
 
   it('negative: a mapping row citing a nonexistent story id is refused (fabricated citation)', async () => {
@@ -440,7 +441,7 @@ describe('Story 3 / FR-2 — outcome coverage (outcome-<n>)', () => {
     await w('track/coherence-demo.md', '# Track\n\nTrack: product\n');
     await w('conflicts/coherence-demo.md', '# Conflicts\n\nClean.\n');
     await w('architecture/coherence-demo.md', '# Architecture\n\nComponents A and B.\n');
-    await w('decisions/adr-coherence.md', APPROVED_ADR);
+    await w('decisions/adr-2026-09-08-coherence.md', APPROVED_ADR);
 
     // Drop the row covering the second outcome bullet — an unmapped outcome.
     const gapped = COHERENCE.replace(

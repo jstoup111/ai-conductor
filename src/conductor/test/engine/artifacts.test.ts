@@ -92,6 +92,7 @@ import {
   PR_BODY_REGEN_ATTEMPT_MARKER,
   uncommittedPathsOrNull,
   isNoOwnerKey,
+  isCanonicalAdrFilename,
   parseAdrDecisions,
   parsePrdAuditReport,
   readRemediationPlanResult,
@@ -4425,6 +4426,27 @@ describe('engine/artifacts', () => {
         rejected: statuses.filter((status) => !status.approved && status.found !== null),
         unparseable: statuses.filter((status) => status.found === null),
       }).toEqual({ rejected: [], unparseable: [] });
+    });
+  });
+
+  describe('isCanonicalAdrFilename', () => {
+    it.each([
+      ['accepts a canonical single-word slug', 'adr-2026-09-08-canonical.md', true],
+      ['accepts a canonical multi-word slug', 'adr-2026-09-08-canonical-multi-word.md', true],
+      ['accepts leap day in a leap year', 'adr-2024-02-29-canonical.md', true],
+      ['rejects a sequential three-digit ADR number', 'adr-001-canonical.md', false],
+      ['rejects a sequential four-digit ADR number', 'adr-0001-canonical.md', false],
+      ['rejects month 13 despite its date shape', 'adr-2026-13-08-canonical.md', false],
+      ['rejects day 32 despite its date shape', 'adr-2026-09-32-canonical.md', false],
+      ['rejects leap day in a non-leap year', 'adr-2026-02-29-canonical.md', false],
+      ['rejects a blank slug', 'adr-2026-09-08-.md', false],
+      ['rejects an uppercase slug', 'adr-2026-09-08-Canonical.md', false],
+      ['rejects an underscore slug', 'adr-2026-09-08-canonical_slug.md', false],
+      ['rejects a doubled-hyphen slug', 'adr-2026-09-08-canonical--slug.md', false],
+      ['rejects a non-Markdown extension', 'adr-2026-09-08-canonical.txt', false],
+      ['rejects a name without the ADR prefix', '2026-09-08-canonical.md', false],
+    ])('%s', (_description, filename, expected) => {
+      expect(isCanonicalAdrFilename(filename)).toBe(expected);
     });
   });
 

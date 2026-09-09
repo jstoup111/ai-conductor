@@ -37,7 +37,9 @@ skip <slug>: merged spec cannot build — plan has no dependency tree ("## Task 
 skip <slug>: merged spec cannot build — missing or unparseable coherence artifact (.docs/coherence/<slug>.md) required for tier <tier>. Author it on the default branch; logged once.
 ```
 
-The first rejects an unapproved stories artifact. The second rejects a non-conforming ADR corpus:
+The first rejects an unapproved stories artifact. Before a spec can land, each newly added ADR must
+be named `adr-YYYY-MM-DD-lowercase-hyphenated-slug.md` using a real calendar date; ADRs already on
+the default branch keep their legacy names. The second rejects a non-conforming ADR corpus:
 discovery scans every `.docs/decisions/adr-*.md` file on the default branch once per pass, and any
 merged spec is blocked while any ADR's first declared status is not `APPROVED` or `SUPERSEDED`
 (including an ADR with no status declaration at all) — approving the offending ADR unblocks every
