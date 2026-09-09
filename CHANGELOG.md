@@ -21,6 +21,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The inline report shows kickbacks by source gate and BUILD re-entry counts. ([implementation PR #2451](https://github.com/jstoup111/ai-conductor/pull/2451)).
 - Daemon dispatches now establish and observe each worktree's canonical memory store before project setup. ([implementation PR #2397](https://github.com/jstoup111/ai-conductor/pull/2397)).
 - Maintainers can rerun release-PR maintenance from the default branch after an interrupted run. ([implementation PR #2473](https://github.com/jstoup111/ai-conductor/pull/2473)).
+- Daemon build progress lines now show how recently the feature branch received a commit. ([implementation PR #2459](https://github.com/jstoup111/ai-conductor/pull/2459)).
 
 ### Changed
 
@@ -61,6 +62,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The post-commit feedback hook now runs only after commit-creating commands that produce a fresh commit. ([implementation PR #2425](https://github.com/jstoup111/ai-conductor/pull/2425)).
 - Preserve test-quality findings when reviewers cite a uniquely resolved candidate's supplied source reference. ([implementation PR #2474](https://github.com/jstoup111/ai-conductor/pull/2474)).
 - Overlap scans now exclude paths changed only on the base branch, avoiding false overlap warnings. ([implementation PR #2455](https://github.com/jstoup111/ai-conductor/pull/2455)).
+- Coherence checks now report and validate corrections for criteria that a plan cannot deliver. ([implementation PR #2470](https://github.com/jstoup111/ai-conductor/pull/2470)).
 
 ## Migration
 
