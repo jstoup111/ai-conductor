@@ -4,34 +4,26 @@ spec_hash: 0cd809b8ccc2dd26aea8f1844e4f560e080cb2470207190499214a361e473ec3
 pr: https://github.com/jstoup111/ai-conductor/pull/2397
 shipped: 2026-09-09
 engine_version: 20260909T124054Z-7dc49b2ad3d5
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.1
-    summary: "src/conductor/src/engine/memory-cli.ts:140 — `conduct memory setup` now prints `failed: directory does not exist: <dir>` where it previously printed `directory does not exist: <dir>`; the plan required the CLI's console output to be unchanged"
-    accepted: true
-    decision: accept
-    rationale: "Operator: harmless prefix on an error message, exit code unchanged; accepted as-is."
 ---
 
 ## Cost
-input: 949885
-output: 140296
-cache_read: 22000850
+input: 974492
+output: 140846
+cache_read: 22093010
 cache_creation: 503688
-cost_usd: 18.3892
-dispatches: 13
+cost_usd: 18.4635
+dispatches: 14
 retries: 0
 halts: 2
 unmetered: count: 0, duration_ms: 0
 cost_unmetered: count: 0
 providers:
-  codex: input: 949789, output: 86723, cache_read: 18826112, cache_creation: 0, cost_usd: 9.8266, dispatches: 8, cost_unmetered: 0
+  codex: input: 974396, output: 87273, cache_read: 18918272, cache_creation: 0, cost_usd: 9.9008, dispatches: 9, cost_unmetered: 0
   claude: input: 96, output: 53573, cache_read: 3174738, cache_creation: 503688, cost_usd: 8.5626, dispatches: 5, cost_unmetered: 0
 
 ## Time
 state: partial
-reason: open-executions:parallel:prd_audit,step:finish
+reason: open-executions:parallel:prd_audit
 
 ## Build Review
 laps_to_pass: 1
