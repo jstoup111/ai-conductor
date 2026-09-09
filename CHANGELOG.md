@@ -40,6 +40,11 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Build-review failures now keep the actionable review verdict ahead of containment advisories. ([implementation PR #2428](https://github.com/jstoup111/ai-conductor/pull/2428)).
 - Preserve Codex token metering when completed usage is observed live but omitted from retained terminal output. ([implementation PR #2442](https://github.com/jstoup111/ai-conductor/pull/2442)).
 - Prevent build review from halting when a plan's Files list includes a directory hint. ([implementation PR #2469](https://github.com/jstoup111/ai-conductor/pull/2469)).
+- Full-suite verification automatically reclaims orphaned recovery claims without disturbing live recovery work. ([implementation PR #2444](https://github.com/jstoup111/ai-conductor/pull/2444)).
+- Daemon conflict resolution reliably recreates its temporary worktree after a prior attempt crashes. ([implementation PR #2437](https://github.com/jstoup111/ai-conductor/pull/2437)).
+- Build-review preflight deadlines now stop scoped test commands that do not exit after termination. ([implementation PR #2436](https://github.com/jstoup111/ai-conductor/pull/2436)).
+- As-built review verdicts formatted as Markdown headings now pass the release gate. ([implementation PR #2435](https://github.com/jstoup111/ai-conductor/pull/2435)).
+- Prevent operator-park boundary stops from being misreported as needs-human daemon halts. ([implementation PR #2431](https://github.com/jstoup111/ai-conductor/pull/2431)).
 
 ## Migration
 
