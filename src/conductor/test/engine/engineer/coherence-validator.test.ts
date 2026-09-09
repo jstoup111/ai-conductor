@@ -2807,6 +2807,55 @@ Return requests are accepted.
 });
 
 describe('runCoherenceGate criterion fail-closed guard', () => {
+  it.each([
+    ['numbered decision', '2. The ADR decision permits the correction.\n', 'adr-correction#D2'],
+    ['amendment-blockquote decision', '> **Amended 2026-09-08 by #1:**\n> 10. The amendment permits the correction.\n', 'adr-correction#D10'],
+  ])('resolves an architecture correction against a changed ADR %s without engaging the ADR layer', async (
+    _label,
+    adrDecision,
+    decisionRef,
+  ) => {
+    const worktreePath = await mkdtemp(join(tmpdir(), 'coherence-correction-decision-'));
+    temporaryRepositories.push(worktreePath);
+    await runGit(worktreePath, ['init', '--initial-branch=main']);
+    await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+    await runGit(worktreePath, ['config', 'user.name', 'Test User']);
+    await writeFile(join(worktreePath, 'README.md'), '# fixture\n');
+    await runGit(worktreePath, ['add', '.']);
+    await runGit(worktreePath, ['commit', '-m', 'seed fixture']);
+
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await mkdir(join(worktreePath, '.docs/decisions'), { recursive: true });
+    await writeFile(join(worktreePath, '.docs/decisions/adr-correction.md'), `# Correction ADR\n\n## Decisions\n\n${adrDecision}`);
+    await writeFile(
+      join(worktreePath, '.docs/coherence/idea.md'),
+      `| Row Class | Id | Cited Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| story | story-1 | task-1 | covered | fixture |
+| task | task-1 | story-1 | covered | fixture |
+| criterion | Story 1 happy: Given a widget, when shipped, then it arrives | task-1 | fail | "Deliver widget." | diff-local | architecture:${decisionRef} |
+`,
+    );
+
+    const ideaFiles = new Set(['.docs/coherence/idea.md']);
+    const required = resolveRequiredLayers(worktreePath, 'M', 'technical', [], ideaFiles);
+    expect(required.engaged && required.layers.has('adr')).toBe(false);
+    await expect(runCoherenceGate({
+      worktreePath,
+      canonicalPath: worktreePath,
+      tier: 'M',
+      track: 'technical',
+      sourceRef: undefined,
+      planStem: 'idea',
+      storiesText: `# Stories\n\n## Story 1: Widget\n\n### Happy Path\n- Given a widget, when shipped, then it arrives\n`,
+      planText: `# Plan\n\n### Task 1: Deliver widget\n**Story:** Story 1\n\n**Done when:**\n- Deliver widget.\n\n## Coverage Check\n\n| Criterion | Tasks | Done when quote | Disposition |\n| --- | --- | --- | --- |\n| Story 1 happy: Given a widget, when shipped, then it arrives | task-1 | "Deliver widget." | diff-local |\n`,
+      prdText: null,
+      outcomeBullets: [],
+      ideaFiles,
+      guard: new AuthoringGuard(worktreePath),
+    })).rejects.toThrow(/criterion:cannot-deliver-architecture:1/);
+  });
+
   // Covers: task:4 — run the land gate, rather than its shared parser helper,
   // over the same corpus text used by discovery. The fixture intentionally
   // lacks the surrounding plan, so the later fabricated-id failure proves the
