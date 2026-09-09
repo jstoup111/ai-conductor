@@ -205,6 +205,20 @@ read and follow [`.agents/skills/write-tests/SKILL.md`](.agents/skills/write-tes
 repository-local test-design guidance; it complements the provider-neutral `tdd` skill, which
 controls implementation order.
 
+### Test Process Isolation
+
+Tests of process guards MUST remain safe when the guard is absent or restored to its
+pre-change implementation by test-quality review. Mock the process boundary and verify
+that the production adapter reaches the mock before exercising destructive arguments;
+assert that refused calls never reach that boundary. A configured mock alone is not
+proof of isolation: imports cached by test setup can retain the real implementation.
+
+New or changed real-tmux fixtures MUST use a fixture-owned private socket for every
+command, including discovery and teardown. Never rely on session names, the ambient
+`TMUX` environment, or a production kill-switch to isolate a test from operator sessions.
+Use a mocked adapter until private-socket isolation is available. This is repository-local
+test-authoring policy; consumer projects do not inherit this repository's fixture machinery.
+
 ### Validation Suite
 
 Run `test/test_harness_integrity.sh`. The checks below are the ones you break most often; the script
