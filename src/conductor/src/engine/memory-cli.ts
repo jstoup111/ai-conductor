@@ -6,17 +6,17 @@
  * memory-setup entry is dispatched BEFORE the interactive pipeline boots.
  *
  * Behaviour:
- *   1. If `.memory/` is a real directory (pre-migration content): invoke
+ *   1. If `.memory/` is a non-empty real directory (pre-migration content): invoke
  *      `migrateMemory` (copy-verify-swap) to move it into the canonical store
  *      and replace it with a symlink.
- *   2. Otherwise (no `.memory/` yet or already a symlink): invoke
+ *   2. Otherwise (absent, empty, or already a symlink): invoke
  *      `ensureMemoryStore` to create the canonical store + symlink. Idempotent.
  *
  * The project prelude invokes this once before pipeline startup. This is the
  * SINGLE LIVE PATH for memory initialisation.
  */
 
-import { lstat, readlink } from 'fs/promises';
+import { lstat, readdir, readlink, rmdir } from 'fs/promises';
 import { join, isAbsolute, resolve as resolvePath } from 'path';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
@@ -74,9 +74,15 @@ export async function setupMemoryStore(
   }
 
   if (await memoryPathState(projectDir) === 'directory') {
-    onBranch?.('migrated');
-    await migrateMemory(projectDir);
-    return 'migrated';
+    const memoryPath = join(projectDir, '.memory');
+    if ((await readdir(memoryPath)).length > 0) {
+      onBranch?.('migrated');
+      await migrateMemory(projectDir);
+      return 'migrated';
+    }
+    // Fresh setup needs no backup/copy. rmdir refuses if entries appeared
+    // after readdir, so concurrent writes cannot be recursively discarded.
+    await rmdir(memoryPath);
   }
 
   onBranch?.('ensured');
@@ -130,7 +136,7 @@ export async function observeMemorySetup(
  *
  * Logic:
  *   - Resolve `dir` (default: cwd).
- *   - If `.memory/` is a real directory → `migrateMemory` (copy-verify-swap,
+ *   - If `.memory/` is a non-empty real directory → `migrateMemory` (copy-verify-swap,
  *     adr-2026-06-29-safe-reversible-memory-migration). On failure, prints the error and returns exit code 1.
  *   - Otherwise → `ensureMemoryStore` (create canonical dir + symlink,
  *     idempotent). On failure, prints the error and returns exit code 1.

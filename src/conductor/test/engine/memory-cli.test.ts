@@ -17,7 +17,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
-import { detectMemoryCommand, dispatchMemorySetup, observeMemorySetup } from '../../src/engine/memory-cli.js';
+import { detectMemoryCommand, dispatchMemorySetup, observeMemorySetup, setupMemoryStore } from '../../src/engine/memory-cli.js';
 
 const execFile = promisify(execFileCb);
 
@@ -147,9 +147,21 @@ describe('dispatchMemorySetup — .memory symlink creation (A14 live path)', () 
     expect(stat1.isSymbolicLink()).toBe(true);
   });
 
+  // Covers: task:2
+  it('links an empty directory through fresh setup without creating a migration backup', async () => {
+    const repo = await makeRepo('empty', tmpDir);
+    await mkdir(join(repo, '.memory'));
+
+    expect(await setupMemoryStore(repo)).toBe('ensured');
+    expect((await lstat(join(repo, '.memory'))).isSymbolicLink()).toBe(true);
+    expect(await readFile(join(repo, '.memory', 'index.md'), 'utf8')).toContain('# Memory Index');
+    await expect(lstat(join(repo, '.memory.pre-migrate.bak'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('prints the migrating notice before migrating, so a failed migration keeps the breadcrumb', async () => {
     const repo = await makeRepo('unwritable-cli', tmpDir);
     await mkdir(join(repo, '.memory'));
+    await writeFile(join(repo, '.memory', 'entry.md'), 'existing memory');
     await chmod(repo, 0o555);
     const logged: string[] = [];
     const errored: string[] = [];
@@ -188,6 +200,8 @@ describe('observeMemorySetup', () => {
     const absent = await makeRepo('absent', tmpDir);
     const symlink = await makeRepo('symlink', tmpDir);
     const directory = await makeRepo('directory', tmpDir);
+    const empty = await makeRepo('empty-observed', tmpDir);
+    await mkdir(join(empty, '.memory'));
     const legacyPath = join(directory, '.memory');
     await mkdir(join(legacyPath, 'decisions'), { recursive: true });
     await writeFile(join(legacyPath, 'decisions', 'legacy.md'), 'legacy', 'utf8');
@@ -200,16 +214,19 @@ describe('observeMemorySetup', () => {
     await observeMemorySetup(absent, events);
     await observeMemorySetup(symlink, events);
     await observeMemorySetup(directory, events);
+    await observeMemorySetup(empty, events);
 
-    for (const repo of [absent, symlink, directory]) {
+    for (const repo of [absent, symlink, directory, empty]) {
       expect((await lstat(join(repo, '.memory'))).isSymbolicLink()).toBe(true);
     }
     expect(await readFile(join(directory, '.memory', 'decisions', 'legacy.md'), 'utf8')).toBe('legacy');
     expect(await readlink(join(symlink, '.memory'))).toBe(symlinkTarget);
     expect(await readFile(join(symlink, '.memory', 'index.md'), 'utf8')).toBe(existingIndex);
+    await expect(lstat(join(empty, '.memory.pre-migrate.bak'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(emitted).toEqual([
       { type: 'memory_setup', before: 'absent', canonical: true },
       { type: 'memory_setup', before: 'symlink', canonical: true },
+      { type: 'memory_setup', before: 'directory', canonical: true },
       { type: 'memory_setup', before: 'directory', canonical: true },
     ]);
   });

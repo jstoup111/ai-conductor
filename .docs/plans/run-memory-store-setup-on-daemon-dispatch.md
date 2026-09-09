@@ -10,6 +10,8 @@
 
 Five bounded tasks deliver #2062 by running the existing memory-store setup on the daemon's worktree-preparation path and reporting the resulting placement as an event. Memory read paths, provider selection, the write-fallback design, the migration algorithm, and the inline prelude's behaviour are outside this small slice.
 
+> **Amended 2026-09-09 by #2062 (operator clarification of AB-1):** The operator approved fresh setup for an empty real `.memory/`: create the canonical symlink without a migration backup. Task 2 owns this setup-branch correction for both callers of its shared core. Non-empty directories still use the unchanged migration algorithm; existing migration progress/error output is retained for that branch. The migration ADR records the same clarification.
+
 ## Technical Approach
 
 The defect is a missing call, not missing behaviour. `dispatchMemorySetup` already performs exactly what the daemon path needs — migrate a real `.memory/` directory, otherwise ensure the canonical store — and both branches are idempotent. It is reached only from the inline prelude, so no daemon-dispatched worktree ever gets it.
@@ -80,6 +82,8 @@ Tests follow the repository's local test rules. The observer's cases are unit te
 2. The migrated fixture's entry content is readable through the canonical store after the observer runs.
 3. The already-canonical fixture's symlink target and existing store entries are byte-identical before and after.
 4. The existing CLI dispatch tests still pass unchanged, proving the extraction preserved its printing and exit-code contract.
+
+> **Amended 2026-09-09 by #2062:** Task 2 additionally completes only when an empty real directory becomes the canonical symlink through fresh setup, no `.memory.pre-migrate.bak` is created, and the daemon observer emits one `before: directory, canonical: true` event. Empty removal must use a non-recursive operation that refuses newly added entries. Existing migration-failure fixtures must contain an entry so they continue to exercise migration rather than the newly clarified fresh-setup branch.
 
 ### Task 3: Contain a setup failure so the dispatch survives it
 **Story:** Story 1 (negative path)

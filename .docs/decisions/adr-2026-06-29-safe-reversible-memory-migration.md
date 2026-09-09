@@ -58,6 +58,8 @@ Forces:
 Adopt **Option A**: **copy-verify-swap with a one-time pre-migration backup**, gated by a detect step.
 
 - **Detect → skip** for fresh/empty/already-migrated projects (FR-12, idempotent FR-11).
+
+> **Amended 2026-09-09 by #2062 (operator clarification):** For an empty real `.memory/`, “skip” means skip migration backup/copy/verify, while fresh setup replaces the empty directory with the canonical-store symlink required by the shared-placement ADR. The operator explicitly approved this behavior during recovery of `run-memory-store-setup-on-daemon-dispatch`. Remove only an empty directory; if it gains entries before removal, fail without discarding them. Non-empty directories retain the existing reversible migration path.
 - **Preserve-before-destroy:** the original is backed up and the symlink swap happens **only after**
   the canonical copy is verified complete; a failed verify **aborts with no destructive change** and
   restores the original (FR-11).

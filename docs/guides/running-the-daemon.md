@@ -641,7 +641,8 @@ process contract.
 ## Per-dispatch hook
 
 Before project preparation, every daemon dispatch ensures the worktree's `.memory/` path is linked
-to the canonical project memory store. A legacy real directory is migrated at that point. The daemon
+to the canonical project memory store. A legacy directory containing entries is migrated at that point;
+an empty directory receives the canonical symlink through fresh setup, without a migration backup. The daemon
 logs the observed pre-setup state and whether the final path is canonical; setup or telemetry failure
 is reported as a non-canonical result and does not prevent project preparation or dispatch.
 
