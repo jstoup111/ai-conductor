@@ -990,7 +990,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         { match: ['diff', 'abc1234..head123'], result: { stdout: 'diff --git a/:\(glob\)\* b/:\(glob\)\*\n+replayed\n' } },
       ]);
 
-      const inputs = await assembleBuildReviewInputs(git, planPath);
+      await expect(assembleBuildReviewInputs(git, planPath)).rejects.toMatchObject({
+        kind: 'invalid-path',
+        path: ':(glob)*',
+      } satisfies Partial<BuildReviewSourceReadError>);
 
       expect(calls.find((call) => call[0] === 'diff')).toEqual([
         'diff',
@@ -1001,7 +1004,6 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       ]);
       expect(calls.some((call) => call[0] === 'cherry')).toBe(true);
       expect(calls.some((call) => call[0] === 'log')).toBe(true);
-      expect(inputs.patchEquivalentExclusion).toBeUndefined();
     });
 
     // Covers: task:2
@@ -1870,7 +1872,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(inputs.diff).toContain('shared.ts');
       expect(inputs.diff).toContain('variant.ts');
 
-      const readOnlyCommands = new Set(['remote', 'symbolic-ref', 'rev-parse', 'ls-remote', 'merge-base', 'cherry', 'log', 'diff', 'show']);
+      const readOnlyCommands = new Set(['remote', 'symbolic-ref', 'rev-parse', 'ls-remote', 'merge-base', 'cherry', 'log', 'diff', 'show', 'ls-tree']);
       expect(calls.every((args) => readOnlyCommands.has(args[0]!))).toBe(true);
     });
 
