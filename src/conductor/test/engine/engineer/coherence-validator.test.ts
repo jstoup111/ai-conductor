@@ -2821,6 +2821,28 @@ describe('runCoherenceGate criterion fail-closed guard', () => {
     ]);
   });
 
+  it('rejects an architecture cannot-deliver finding without changing the plan or writing pipeline state', async () => {
+    const worktreePath = await mkdtemp(join(tmpdir(), 'coherence-cannot-deliver-no-side-effects-'));
+    temporaryRepositories.push(worktreePath);
+    await runGit(worktreePath, ['init', '--initial-branch=main']);
+    await runGit(worktreePath, ['config', 'user.email', 'test@example.com']);
+    await runGit(worktreePath, ['config', 'user.name', 'Test User']);
+    await writeFile(join(worktreePath, 'README.md'), '# fixture\n');
+    await runGit(worktreePath, ['add', 'README.md']);
+    await runGit(worktreePath, ['commit', '-m', 'seed fixture']);
+    const planPath = join(worktreePath, '.docs/plans/idea.md');
+    const planBytes = '# Plan\n\n### Task 1: Deliver widget\n**Story:** Story 1\n\n**Done when:**\n- Deliver widget.\n';
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await mkdir(join(worktreePath, '.docs/decisions'), { recursive: true });
+    await mkdir(join(worktreePath, '.docs/plans'), { recursive: true });
+    await writeFile(planPath, planBytes);
+    await writeFile(join(worktreePath, '.docs/decisions/adr-correction.md'), '# ADR\n\n## Decision\n\n1. Deliver widget.\n');
+    await writeFile(join(worktreePath, '.docs/coherence/idea.md'), '| Row Class | Id | Cited Ids | Verdict | Quote | Disposition | Correction |\n| --- | --- | --- | --- | --- | --- |\n| story | story-1 | task-1 | covered | fixture |\n| task | task-1 | story-1 | covered | fixture |\n| criterion | Story 1 happy: Given a widget, when shipped, then it arrives | task-1 | fail | "Deliver widget." | diff-local | architecture:adr-correction#D1 |\n');
+    await expect(runCoherenceGate({ worktreePath, canonicalPath: worktreePath, tier: 'M', track: 'technical', sourceRef: undefined, planStem: 'idea', storiesText: '# Stories\n\n## Story 1: Widget\n\n### Happy Path\n- Given a widget, when shipped, then it arrives\n', planText: planBytes, prdText: null, outcomeBullets: [], ideaFiles: new Set(['.docs/coherence/idea.md']), guard: new AuthoringGuard(worktreePath) })).rejects.toThrow('criterion:cannot-deliver-architecture:1');
+    expect(await readFile(planPath, 'utf-8')).toBe(planBytes);
+    await expect(readdir(join(worktreePath, '.pipeline'))).rejects.toThrow();
+  });
+
   it('passes an exact fresh waiver for cannot-deliver and unknown-decision gaps, but rejects partial coverage', async () => {
     const gaps: CoherenceGap[] = [
       { layer: 'criterion', gapId: 'criterion:cannot-deliver-plan:2', artifact: 'stories / plan', item: 'plan correction' },
