@@ -94,6 +94,7 @@ const eventSequences: Partial<Record<ConductorEvent['type'], ConductorEvent[]>> 
   feature_dispatch_started: [{ type: 'feature_dispatch_started', slug: 'feature-a', kind: 'initial' }],
   feature_dispatch_ended: [{ type: 'feature_dispatch_ended', slug: 'feature-a', outcome: 'complete' }],
   feature_shipped: [{ type: 'feature_shipped', slug: 'feature-a', active: { state: 'unavailable' } }],
+  memory_setup: [{ type: 'memory_setup', before: 'absent', canonical: true }],
   step_started: [{ type: 'step_started', step: 'build', index: 0 }],
   step_completed: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_completed', step: 'build', status: 'done' }],
   step_failed: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 }],
