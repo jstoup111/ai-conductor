@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-09T16:15:47.870Z
 Slug: gate-post-commit-derive-feedback-hook-on-commit-cr
 Class: needs-human
 Halting step: prd_audit
