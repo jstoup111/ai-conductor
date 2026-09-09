@@ -1,5 +1,5 @@
 /**
- * Covers: Story 1, Task 4
+ * Covers: task:4
  *
  * FR-9 — daemon self-restart on tmux respawn: production wiring coverage.
  *
