@@ -161,13 +161,17 @@ export async function withKickbackLedgerLease<T>(
   });
   let acquired = await lease.acquire();
   // A competing writer creates the lease directory just before it records
-  // owner metadata.  That tiny window is neither a live nor ambiguous owner;
-  // retry it briefly so concurrent ledger transactions remain serialized.
+  // owner metadata.  `writeFile` can also briefly expose the newly-created
+  // owner file before its contents are visible. Neither state is a live or
+  // ambiguous owner; retry it briefly so concurrent ledger transactions
+  // remain serialized. A persistent malformed owner still fails closed after
+  // this bounded initialization window.
   for (
     let retry = 0;
     !acquired.ok &&
       acquired.kind === 'recovery_refused' &&
-      acquired.message.includes('owner metadata is unavailable (ENOENT:') &&
+      (acquired.message.includes('owner metadata is unavailable (ENOENT:') ||
+        acquired.message.includes('owner metadata is invalid or ambiguous')) &&
       retry < 10;
     retry += 1
   ) {
