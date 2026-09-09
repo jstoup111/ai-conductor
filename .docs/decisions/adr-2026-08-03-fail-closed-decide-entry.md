@@ -181,6 +181,18 @@ HALT the daemon auto-clears is not a guard.
 `conduct decide-grant --slug <slug> --step <step> --reason "<why>"` writes
 `.pipeline/decide-grant.json`:
 
+> **Amended 2026-09-09 by #2457 (operator-approved):** The durable grant store is
+> `<main-repository-root>/.daemon/grants/<slug>.json`, outside the feature worktree.
+> This supersedes the worktree-local `.pipeline/decide-grant.json` location above.
+> The operator command resolves the main repository root before writing, whether
+> invoked from that checkout or a linked worktree, and refuses to write if root
+> resolution fails. The daemon reads and consumes the same canonical grant path;
+> a feature-local `.pipeline/decide-grant.json` authorizes nothing. Grants remain
+> explicit, scoped to one feature and permitted DECIDE step, single-use, and
+> independent of HALT clearing. This aligns D6 with the existing daemon-owned store
+> and the approved repository-root resolution feature; it does not expand which
+> steps may be granted.
+
 ```json
 { "version": 1, "step": "plan", "reason": "...", "grantedAt": "...", "grantedBy": "operator" }
 ```

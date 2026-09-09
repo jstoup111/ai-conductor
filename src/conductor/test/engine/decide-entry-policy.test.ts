@@ -1,7 +1,9 @@
+// Covers: task:2
 import { expect, it } from 'vitest';
 import {
   consumeOperatorGrant,
   decideEntryDisposition,
+  grantStorePath,
   readOperatorGrant,
   resolveGrantPath,
 } from '../../src/engine/decide-entry-policy.js';
@@ -201,6 +203,12 @@ it('applies every ordered autonomous DECIDE-entry disposition rule', () => {
 
 it('resolves the grant to the main checkout .daemon store, never the worktree', () => {
   expect(resolveGrantPath('/repo/.worktrees/my-feature')).toBe(
+    join('/repo', '.daemon', 'grants', 'my-feature.json'),
+  );
+});
+
+it('derives the same grant store path from a main root and feature slug', () => {
+  expect(grantStorePath('/repo', 'my-feature')).toBe(
     join('/repo', '.daemon', 'grants', 'my-feature.json'),
   );
 });

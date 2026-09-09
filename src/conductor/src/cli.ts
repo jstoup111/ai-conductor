@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { ViewMode } from './ui/types.js';
 import type {
   EffortLevel,
@@ -11,6 +11,8 @@ import type {
 import { scanPlanProtectedTargets } from './engine/plan-protected-targets.js';
 import { loadMergedConfigForRead, projectConfigPath, validateConfig } from './engine/config.js';
 import { readUserConfig, userConfigPath, writeUserConfig } from './engine/user-config.js';
+import { grantStorePath } from './engine/decide-entry-policy.js';
+import { resolveMainRepoRootStrict } from './engine/park-marker.js';
 
 const VALID_EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -404,6 +406,12 @@ export function detectKickbackBudgetCommand(argv: string[]): KickbackBudgetDispa
   return !values.has('--by') ? { kind: 'kickback-budget', action, feature, gate, rationale, format } : null;
 }
 
+export interface DecideGrantCommandDeps {
+  readonly resolveMainRoot?: (cwd: string) => Promise<string | null>;
+  readonly stdout?: (message: string) => void;
+  readonly stderr?: (message: string) => void;
+}
+
 /** Parse the explicit, operator-only DECIDE grant command without booting the pipeline. */
 export function detectDecideGrantCommand(argv: string[]): DecideGrantDispatch | null {
   if (argv[2] !== 'decide-grant') return null;
@@ -437,22 +445,32 @@ export function detectDecideGrantCommand(argv: string[]): DecideGrantDispatch | 
 export async function dispatchDecideGrantCommand(
   command: DecideGrantDispatch,
   cwd: string = process.cwd(),
+  deps: DecideGrantCommandDeps = {},
 ): Promise<number> {
+  const stdout = deps.stdout ?? ((message: string) => process.stdout.write(message));
+  const stderr = deps.stderr ?? ((message: string) => process.stderr.write(message));
   // `plan` is ungrantable — refused here as well as in the policy, so the operator
   // learns at the point of the mistake rather than from a HALT one dispatch later.
   if (command.step === 'plan') {
-    console.error(
+    stderr(
       "decide-grant: 'plan' cannot be granted — the daemon may not re-plan. " +
-        'Drive the plan revision interactively, then resume the feature.',
+        'Drive the plan revision interactively, then resume the feature.\n',
     );
     return 2;
   }
+
+  const mainRoot = await (deps.resolveMainRoot ?? resolveMainRepoRootStrict)(cwd);
+  if (mainRoot === null) {
+    stderr(`decide-grant: unresolved repository from '${cwd}'; grant was not recorded.\n`);
+    return 1;
+  }
+
   // The grant is daemon-owned and lives OUTSIDE the feature worktree: a build agent
   // writing its own `.pipeline/decide-grant.json` must not be able to authorize itself.
-  const grantsDir = join(cwd, '.daemon', 'grants');
-  await mkdir(grantsDir, { recursive: true });
+  const grantPath = grantStorePath(mainRoot, command.slug);
+  await mkdir(dirname(grantPath), { recursive: true });
   await writeFile(
-    join(grantsDir, `${command.slug}.json`),
+    grantPath,
     JSON.stringify({
       version: 1,
       step: command.step,
@@ -462,7 +480,7 @@ export async function dispatchDecideGrantCommand(
     }) + '\n',
     'utf-8',
   );
-  console.log(`DECIDE grant recorded for '${command.step}' in '${command.slug}'.`);
+  stdout(`DECIDE grant recorded for '${command.step}' in '${command.slug}' at '${grantPath}'.\n`);
   return 0;
 }
 

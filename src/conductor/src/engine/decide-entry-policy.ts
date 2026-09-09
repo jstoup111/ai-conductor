@@ -19,6 +19,10 @@ import { basename, dirname, join } from 'node:path';
  */
 const DAEMON_GRANT_DIR = join('.daemon', 'grants');
 
+export function grantStorePath(mainRoot: string, slug: string): string {
+  return join(mainRoot, DAEMON_GRANT_DIR, `${slug}.json`);
+}
+
 /**
  * The one DECIDE target no grant may ever unlock, even a well-formed
  * operator-written one (operator rule, 2026-08-09): the daemon must never re-plan.
@@ -41,7 +45,7 @@ export function resolveGrantPath(projectRoot: string): string | null {
   const slug = basename(projectRoot);
   const worktreesDir = dirname(projectRoot);
   if (basename(worktreesDir) !== '.worktrees') return null;
-  return join(dirname(worktreesDir), DAEMON_GRANT_DIR, `${slug}.json`);
+  return grantStorePath(dirname(worktreesDir), slug);
 }
 
 export interface OperatorGrant {
