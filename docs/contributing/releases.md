@@ -66,6 +66,14 @@ has no candidate, no release PR exists to merge and publication is a no-op. The 
 ordinary `main` pushes: it publishes only a merged `automation/release-pr` owned by the configured GitHub
 App and carrying successful, head-bound release-candidate audit evidence.
 
+### Re-run release-PR maintenance
+
+To reconcile the release PR after a failed or interrupted maintenance run, open the
+`release-pr-maintenance` workflow in GitHub Actions and select **Run workflow** on the repository's
+default branch. The workflow serializes this run with merge-triggered maintenance and renders from that
+branch's current commit. A manual run on any other ref fails before checkout and makes no release-branch
+changes.
+
 The release gate does **not** require `[Unreleased]` to be non-empty. Integrity owns the changelog's
 structure; the gate reads release metadata only for migration-block validation.
 

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -130,6 +131,92 @@ describe('structural: release workflow', () => {
     expect(script).toMatch(
       /latestTag:[^\n]*\[[^\]]*'describe'[^\]]*'--tags'[^\]]*'--abbrev=0'[^\]]*'--match'[^\]]*'v\*\.\*\.\*'[^\]]*\]/,
     );
+  });
+
+  it('admits manual release-PR maintenance while preserving merged-PR filtering', async () => {
+    const source = await readFile(resolve(REPO_ROOT, '.github/workflows/release-pr.yml'), 'utf8');
+    const workflow = job(loadYaml(source), 'release PR workflow');
+    const triggers = job(workflow.on, 'release PR workflow triggers');
+    const jobs = job(workflow.jobs, 'release PR workflow jobs');
+    const maintenance = job(jobs['release-pr-maintenance'], 'release PR maintenance job');
+    const checkout = (maintenance.steps as Array<Record<string, unknown>>)
+      .find((step) => step.uses === 'actions/checkout@v5');
+
+    expect(triggers.workflow_dispatch).toEqual({});
+    expect(job(triggers.pull_request, 'closed pull-request trigger').types).toEqual(['closed']);
+    expect(String(maintenance.if)).toMatch(
+      /github\.event_name\s*==\s*'workflow_dispatch'[\s\S]*github\.event\.pull_request\.merged\s*==\s*true[\s\S]*github\.event\.pull_request\.head\.ref\s*!=\s*'automation\/release-pr'/,
+    );
+    expect(job(checkout?.with, 'checkout inputs').ref)
+      .toBe('${{ github.event.pull_request.merge_commit_sha || github.sha }}');
+  });
+
+  it('shares job-level serialization and App credentials across release-PR triggers', async () => {
+    const source = await readFile(resolve(REPO_ROOT, '.github/workflows/release-pr.yml'), 'utf8');
+    const workflow = job(loadYaml(source), 'release PR workflow');
+    const triggers = job(workflow.on, 'release PR workflow triggers');
+    const permissions = job(workflow.permissions, 'release PR workflow permissions');
+    const jobs = job(workflow.jobs, 'release PR workflow jobs');
+    const maintenance = job(jobs['release-pr-maintenance'], 'release PR maintenance job');
+    const concurrency = job(maintenance.concurrency, 'release PR maintenance concurrency');
+    const steps = maintenance.steps as Array<Record<string, unknown>>;
+    const appToken = steps.find((step) => step.id === 'app-token');
+    const maintenanceScript = steps.find((step) => step.uses === 'actions/github-script@v9');
+
+    expect(triggers.workflow_dispatch).toEqual({});
+    expect(workflow.concurrency).toBeUndefined();
+    expect(Object.keys(jobs)).toEqual(['release-pr-maintenance']);
+    expect(concurrency).toEqual({
+      group: 'release-pr-maintenance',
+      'cancel-in-progress': false,
+    });
+
+    expect(appToken?.if).toBeUndefined();
+    expect(maintenanceScript?.if).toBeUndefined();
+    expect(job(maintenanceScript?.with, 'release PR maintenance script inputs')['github-token'])
+      .toBe('${{ steps.app-token.outputs.token }}');
+    expect(job(maintenanceScript?.env, 'release PR maintenance script environment').RELEASE_PR_APP_TOKEN)
+      .toBe('${{ steps.app-token.outputs.token }}');
+
+    expect(permissions).toEqual({
+      contents: 'read',
+      'pull-requests': 'read',
+    });
+    expect(Object.values(permissions)).not.toContain('write');
+  });
+
+  it('rejects manual release-PR maintenance away from the default branch before checkout', async () => {
+    const source = await readFile(resolve(REPO_ROOT, '.github/workflows/release-pr.yml'), 'utf8');
+    const workflow = job(loadYaml(source), 'release PR workflow');
+    const jobs = job(workflow.jobs, 'release PR workflow jobs');
+    const maintenance = job(jobs['release-pr-maintenance'], 'release PR maintenance job');
+    const steps = maintenance.steps as Array<Record<string, unknown>>;
+    const guard = steps[0];
+    const checkoutIndex = steps.findIndex((step) => step.uses === 'actions/checkout@v5');
+    const script = String(guard?.run ?? '');
+
+    expect(String(guard?.if)).toMatch(/github\.event_name\s*==\s*'workflow_dispatch'/);
+    expect(guard?.env).toEqual({
+      REQUESTED_REF: '${{ github.ref_name }}',
+      DEFAULT_BRANCH: '${{ github.event.repository.default_branch }}',
+    });
+    expect(checkoutIndex).toBeGreaterThan(0);
+    expect(script).not.toContain('${{');
+
+    const mismatched = spawnSync('bash', ['-c', script], {
+      encoding: 'utf8',
+      env: { REQUESTED_REF: 'feature/release-fix', DEFAULT_BRANCH: 'main' },
+    });
+    expect(mismatched.status).not.toBe(0);
+    expect(`${mismatched.stdout}${mismatched.stderr}`).toContain('main');
+    expect(`${mismatched.stdout}${mismatched.stderr}`).toContain('feature/release-fix');
+
+    const matched = spawnSync('bash', ['-c', script], {
+      encoding: 'utf8',
+      env: { REQUESTED_REF: 'main', DEFAULT_BRANCH: 'main' },
+    });
+    expect(matched.status).toBe(0);
+    expect(`${matched.stdout}${matched.stderr}`).toBe('');
   });
 
   it('wires the stable branch through a create-or-fast-forward GitHub ref adapter', async () => {
