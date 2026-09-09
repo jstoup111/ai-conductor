@@ -1,3 +1,4 @@
+// Covers: task:3
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
@@ -35,6 +36,8 @@ import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { scopedRunFailure } from '../../src/engine/build-review-test-quality-preflight.js';
+import type { BuildReviewScopedLauncher } from '../../src/engine/build-review-scoped-run.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -3759,6 +3762,28 @@ TIER: M`,
       dir = await mkdtemp(join(tmpdir(), 'build-review-runner-'));
       planPath = join(dir, 'plan.md');
       await writeFile(planPath, '# Plan\n\nDo the thing.\n', 'utf-8');
+    });
+
+    it('routes an expired counterfactual deadline to the guarded scoped-run timeout without launching', async () => {
+      const launcher = vi.fn<BuildReviewScopedLauncher>(() => {
+        throw new Error('the expired deadline must prevent launch');
+      });
+      const runner = new DefaultStepRunner(createMockProvider(), 'session-1', dir, {
+        config: { test_suite: { scoped_command: 'npm test -- {selectors}' } } as HarnessConfig,
+        buildReviewScopedLauncher: launcher,
+      });
+      const controller = new AbortController();
+      controller.abort();
+
+      const result = await (runner as unknown as {
+        runScopedTautologyCommand(cwd: string, selectors: readonly string[], signal: AbortSignal): Promise<{
+          kind: 'timeout'; stdout: string; stderr: string;
+        }>;
+      }).runScopedTautologyCommand('/counterfactual', ['test/engine/example.test.ts'], controller.signal);
+
+      expect(launcher).not.toHaveBeenCalled();
+      expect(result).toEqual({ kind: 'timeout', stdout: '', stderr: '' });
+      expect(scopedRunFailure(result)).toBe('scoped-run-timeout');
     });
 
     it('retains one public build_review step while delegating fan-out orchestration without a legacy provider call', async () => {
