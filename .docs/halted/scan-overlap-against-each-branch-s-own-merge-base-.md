@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-09T21:09:13.332Z
 Slug: scan-overlap-against-each-branch-s-own-merge-base-
 Class: plan-gap
 Halting step: prd_audit
