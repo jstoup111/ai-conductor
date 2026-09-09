@@ -18,6 +18,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators can set per-rubric confidence floors so low-confidence build-review findings do not block progress. ([implementation PR #2393](https://github.com/jstoup111/ai-conductor/pull/2393)).
 - Daemon OpenTelemetry exports now report queue depth, liveness, dispatch blockers, and feature lifecycle outcomes. ([implementation PR #2423](https://github.com/jstoup111/ai-conductor/pull/2423)).
 - Plan landing now halts oversized plans unless they include a documented scope exception. ([implementation PR #2410](https://github.com/jstoup111/ai-conductor/pull/2410)).
+- The inline report shows kickbacks by source gate and BUILD re-entry counts. ([implementation PR #2451](https://github.com/jstoup111/ai-conductor/pull/2451)).
 
 ### Changed
 
@@ -46,6 +47,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - As-built review verdicts formatted as Markdown headings now pass the release gate. ([implementation PR #2435](https://github.com/jstoup111/ai-conductor/pull/2435)).
 - Prevent operator-park boundary stops from being misreported as needs-human daemon halts. ([implementation PR #2431](https://github.com/jstoup111/ai-conductor/pull/2431)).
 - CI repair now uses daemon-owned configured verification before publication and directs repair agents to leave tests and pushing to the daemon. ([implementation PR #2468](https://github.com/jstoup111/ai-conductor/pull/2468)).
+- Restart the daemon idle-poll budget whenever it dispatches work. ([implementation PR #2452](https://github.com/jstoup111/ai-conductor/pull/2452)).
 
 ## Migration
 
