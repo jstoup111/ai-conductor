@@ -51,6 +51,11 @@ function fakeGit(
       if (entry.match.every((tok, i) =>
         args[i] === tok
         || (tok === 'HEAD' && i > 0)
+        // Some base-branch fixtures describe the merge-base in terms of the
+        // symbolic review ref. Assembly resolves that label before issuing
+        // the command, so accept the fixture alias without weakening the
+        // production command's pinned-identity contract.
+        || (tok === 'origin/main' && args[i] === 'base-tip123')
         || (tok.endsWith('..HEAD') && args[i]?.startsWith(tok.slice(0, -4)))
         || (tok.startsWith('HEAD:') && args[i]?.endsWith(tok.slice(4)))
       )) {
@@ -103,6 +108,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       { match: ['symbolic-ref', 'refs/remotes/origin/HEAD'], result: { exitCode: 0, stdout: 'refs/remotes/origin/main\n' } },
       { match: ['rev-parse', 'refs/remotes/origin/main'], result: { exitCode: 0, stdout: 'abc1234\n' } },
       { match: ['ls-remote', 'origin', 'main'], result: { exitCode: 0, stdout: 'abc1234\trefs/heads/main\n' } },
+      { match: ['rev-parse', 'origin/main'], result: { exitCode: 0, stdout: 'base-tip123\n' } },
       // The snapshot's headSha anchors what the grader looks at: live HEAD.
       // Kept equal to the injected proof's provenanceHeadSha ('head123') so
       // scenarios not about evidence reuse read unchanged.
@@ -122,9 +128,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         { match: ['symbolic-ref', 'refs/remotes/origin/HEAD'], result: { exitCode: 0, stdout: 'refs/remotes/origin/main\n' } },
         { match: ['rev-parse', 'refs/remotes/origin/main'], result: { exitCode: 0, stdout: 'abc1234\n' } },
         { match: ['ls-remote', 'origin', 'main'], result: { exitCode: 0, stdout: 'abc1234\trefs/heads/main\n' } },
+        { match: ['rev-parse', 'origin/main'], result: { exitCode: 0, stdout: 'base-tip456\n' } },
         { match: ['rev-parse', 'HEAD'], result: { exitCode: 0, stdout: 'live456\n' } },
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+        { match: ['merge-base', 'base-tip456', 'live456'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..live456'], result: { stdout: [
           'diff --git a/test/widget.test.ts b/test/widget.test.ts',
           '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+change',
         ].join('\n') } },
@@ -144,8 +151,6 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('fails input assembly when live HEAD cannot be resolved', async () => {
       const { git } = fakeGit([
         ...freshProbeScript.filter((entry) => !(entry.match[0] === 'rev-parse' && entry.match[1] === 'HEAD')),
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: 'diff --git a/a b/a\n+change\n' } },
         { match: ['rev-parse', 'HEAD'], result: { exitCode: 128, stderr: 'fatal: bad revision' } },
       ]);
 
@@ -155,8 +160,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('rejects a missing pinned plan blob instead of reading the live plan file', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: '' } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: '' } },
         { match: ['show', 'head123:plan.md'], result: { exitCode: 128, stderr: 'pinned blob missing' } },
       ]);
 
@@ -168,8 +173,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('rejects an unreadable plan-selected stories blob rather than assembling empty stories authority', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: '' } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: '' } },
         {
           match: ['show', 'head123:plan.md'],
           result: { stdout: '**Stories:** .docs/stories/selected.md\n\n### Task 1: source handling\n' },
@@ -184,11 +189,28 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       } satisfies Partial<BuildReviewSourceReadError>);
     });
 
+    it('uses the single frozen base and HEAD identities for every dependent read', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'merge123\n' } },
+        { match: ['cherry', '-v', 'base-tip123', 'head123'], result: { stdout: '- 1234567 replayed upstream patch\n' } },
+        { match: ['log', '--format=%H%x00', '--name-only', '--no-renames', '-z', 'merge123..head123'], result: { stdout: '1234567\0\0\nsrc/replayed.ts\0' } },
+        { match: ['diff', 'merge123..head123'], result: { stdout: 'diff --git a/src/replayed.ts b/src/replayed.ts\n+replayed\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(inputs.sourceSnapshot.headSha).toBe('head123');
+      const resolvedAt = calls.findIndex((args) => args[0] === 'rev-parse' && args[1] === 'HEAD');
+      expect(resolvedAt).toBeGreaterThanOrEqual(0);
+      expect(calls.slice(resolvedAt + 1).every((args) => !args.includes('HEAD') && !args.includes('origin/main'))).toBe(true);
+    });
+
     it('freezes one source snapshot and admits only an injected CURRENT test-suite proof', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: 'diff --git a/a b/a\n+change\n' } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: 'diff --git a/a b/a\n+change\n' } },
       ]);
       const inspectTestSuite = vi.fn(async () => CURRENT_PROOF);
 
@@ -207,8 +229,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('retains a declaration uncertainty rather than falling back to every title in a changed file', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
           'diff --git a/test/widget.test.ts b/test/widget.test.ts',
           '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+change',
           'diff --git a/test/dynamic.test.ts b/test/dynamic.test.ts',
@@ -228,8 +250,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('freezes the typed scope target for a changed bound declaration without admitting its unchanged sibling', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
           'diff --git a/test/widget.test.ts b/test/widget.test.ts',
           '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+changed assertion',
         ].join('\n') } },
@@ -273,8 +295,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('selects a changed hash-marked unsupported-language spec but not an unchanged one', async () => {
       const { git, calls } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
           'diff --git a/spec/example_spec.rb b/spec/example_spec.rb',
           '--- a/spec/example_spec.rb', '+++ b/spec/example_spec.rb', '+changed expectation',
         ].join('\n') } },
@@ -305,8 +327,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('selects a changed marked unsupported-language spec as one source-bound uncertainty candidate', async () => {
       const { git, calls } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
           'diff --git a/spec/example_spec.rb b/spec/example_spec.rb',
           '--- a/spec/example_spec.rb', '+++ b/spec/example_spec.rb', '+changed expectation',
         ].join('\n') } },
@@ -338,8 +360,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('retains a marker-only unsupported Go test as a source-bound uncertainty candidate', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
           'diff --git a/test/widget_test.go b/test/widget_test.go',
           '--- a/test/widget_test.go', '+++ b/test/widget_test.go', '+// Covers: task:8',
         ].join('\n') } },
@@ -364,8 +386,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('retains uncertainty but creates no candidate for an unmarked unsupported-language spec', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
           'diff --git a/spec/example_spec.rb b/spec/example_spec.rb',
           '--- a/spec/example_spec.rb', '+++ b/spec/example_spec.rb', '+changed expectation',
         ].join('\n') } },
@@ -385,8 +407,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('projects a bound changed target by content identity without admitting an unbound changed sibling in its file', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
           'diff --git a/test/widget.test.ts b/test/widget.test.ts',
           '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+two changed assertions',
         ].join('\n') } },
@@ -458,8 +480,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       ].join('\n');
       const { git, calls } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
           'diff --git a/test/side-effect.test.ts b/test/side-effect.test.ts',
           '--- a/test/side-effect.test.ts', '+++ b/test/side-effect.test.ts', '+candidate',
         ].join('\n') } },
@@ -500,8 +522,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('freezes one changed setup group with its opted-in unchanged bodies', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
           'diff --git a/test/group.test.ts b/test/group.test.ts',
           '--- a/test/group.test.ts', '+++ b/test/group.test.ts', '+setup',
         ].join('\n') } },
@@ -545,8 +567,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const headSource = baseSource.replace("seed('base')", "seed('head')");
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
           'diff --git a/test/alpha.test.ts b/test/alpha.test.ts',
           '--- a/test/alpha.test.ts', '+++ b/test/alpha.test.ts', '+changed group title',
           'diff --git a/test/beta.test.ts b/test/beta.test.ts',
@@ -609,8 +631,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('refuses a missing pinned HEAD blob for a changed test instead of silently emptying scope', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
           'diff --git a/test/missing.test.ts b/test/missing.test.ts',
           '--- a/test/missing.test.ts', '+++ b/test/missing.test.ts', '+missing',
         ].join('\n') } },
@@ -642,8 +664,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
       const baseline = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: diff } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: diff } },
         { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: Typed scope\n' } },
         { match: ['show', 'base123:test/widget.test.ts'], result: { stdout: baseSource } },
         { match: ['show', 'head123:test/widget.test.ts'], result: { stdout: headSource } },
@@ -672,8 +694,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const headSource = baseSource.replace('expect(true).toBe(true);', 'expect(true).toBe(false);');
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
           'diff --git a/test/widget.test.ts b/test/widget.test.ts',
           '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+change',
         ].join('\n') } },
@@ -695,8 +717,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('captures nested title chains declared through function suite callbacks', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: [
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: [
           'diff --git a/test/widget.test.ts b/test/widget.test.ts',
           '--- a/test/widget.test.ts', '+++ b/test/widget.test.ts', '+change',
         ].join('\n') } },
@@ -735,8 +757,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         const headSource = baseSource.replace('expect(true).toBe(true);', 'expect(true).toBe(false);');
         return assembleBuildReviewInputs(fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'base123\n' } },
-        { match: ['diff', 'base123..HEAD'], result: { stdout: diff } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
+        { match: ['diff', 'base123..head123'], result: { stdout: diff } },
         { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: Typed scope\n' } },
         { match: ['show', 'base123:test/widget.test.ts'], result: { stdout: baseSource } },
         { match: ['show', 'head123:test/widget.test.ts'], result: { stdout: headSource } },
@@ -794,9 +816,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         const { git } = fakeGit([
           { match: ['remote'], result: { exitCode: 0, stdout: '' } },
           { match: ['symbolic-ref', '--short', 'HEAD'], result: { stdout: `${baseRef}\n` } },
+          { match: ['rev-parse', baseRef], result: { stdout: `${baseRef}-tip\n` } },
           { match: ['rev-parse', 'HEAD'], result: { stdout: `${headSha}\n` } },
-          { match: ['merge-base', baseRef, 'HEAD'], result: { stdout: `${mergeBase}\n` } },
-          { match: ['diff', `${mergeBase}..HEAD`], result: { stdout: diff } },
+          { match: ['merge-base', `${baseRef}-tip`, headSha], result: { stdout: `${mergeBase}\n` } },
+          { match: ['diff', `${mergeBase}..${headSha}`], result: { stdout: diff } },
         ]);
 
         return (await assembleBuildReviewInputs(git, scopedPlanPath, {
@@ -848,7 +871,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('merge-base failure raises a typed MergeBaseError', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { exitCode: 1, stderr: 'fatal: no merge base' } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { exitCode: 1, stderr: 'fatal: no merge base' } },
       ]);
 
       await expect(assembleBuildReviewInputs(git, planPath)).rejects.toBeInstanceOf(
@@ -859,8 +882,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('empty diff signals no-diff (empty diff string returned)', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { exitCode: 0, stdout: 'abc1234\n' } },
-        { match: ['diff', 'abc1234..HEAD'], result: { exitCode: 0, stdout: '' } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { exitCode: 0, stdout: 'abc1234\n' } },
+        { match: ['diff', 'abc1234..head123'], result: { exitCode: 0, stdout: '' } },
       ]);
 
       const result = await assembleBuildReviewInputs(git, planPath);
@@ -871,8 +894,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('fresh base: returns base evidence with fresh=true and no fetch performed', async () => {
       const { git, calls } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { exitCode: 0, stdout: 'abc1234\n' } },
-        { match: ['diff', 'abc1234..HEAD'], result: { exitCode: 0, stdout: 'diff --git a/x b/x\n' } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { exitCode: 0, stdout: 'abc1234\n' } },
+        { match: ['diff', 'abc1234..head123'], result: { exitCode: 0, stdout: 'diff --git a/x b/x\n' } },
       ]);
 
       const result = await assembleBuildReviewInputs(git, planPath);
@@ -891,8 +914,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('excludes machinery-authored paths from the graded diff', async () => {
       const { git, calls } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { exitCode: 0, stdout: 'abc1234\n' } },
-        { match: ['diff', 'abc1234..HEAD'], result: { exitCode: 0, stdout: 'diff --git a/x b/x\n' } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { exitCode: 0, stdout: 'abc1234\n' } },
+        { match: ['diff', 'abc1234..head123'], result: { exitCode: 0, stdout: 'diff --git a/x b/x\n' } },
       ]);
 
       await assembleBuildReviewInputs(git, planPath);
@@ -906,6 +929,134 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         '.',
         ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
       ]);
+    });
+
+    // Covers: task:1
+    it('excludes paths touched exclusively by patch-equivalent commits from the graded diff', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'abc1234\n' } },
+        {
+          match: ['cherry', '-v', 'base-tip123', 'head123'],
+          result: { stdout: '- 1234567 replayed upstream patch\n+ 7654321 novel feature work\n' },
+        },
+        {
+          match: ['log', '--format=%H%x00', '--name-only', '--no-renames', '-z', 'abc1234..head123'],
+          result: { stdout: '7654321\0\0\nsrc/novel.ts\0\u0031' + '234567\0\0\nsrc/replayed.ts\0src/also-replayed.ts\0' },
+        },
+        { match: ['diff', 'abc1234..head123'], result: { stdout: 'diff --git a/src/novel.ts b/src/novel.ts\n+novel\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(calls.find((call) => call[0] === 'diff')).toEqual([
+        'diff',
+        'abc1234..head123',
+        '--',
+        '.',
+        ...MACHINERY_AUTHORED_PATHS.map((path) => `:(exclude)${path}`),
+        ':(exclude)src/also-replayed.ts',
+        ':(exclude)src/replayed.ts',
+      ]);
+      expect(inputs.patchEquivalentExclusion).toEqual({
+        filteredCommits: [{ sha: '1234567', subject: 'replayed upstream patch' }],
+        excludedPaths: ['src/also-replayed.ts', 'src/replayed.ts'],
+      });
+    });
+
+    it('keeps the graded-diff argv unchanged when Git reports no patch-equivalent commits', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'abc1234\n' } },
+        { match: ['cherry', '-v', 'base-tip123', 'head123'], result: { stdout: '+ 7654321 novel feature work\n' } },
+        { match: ['diff', 'abc1234..head123'], result: { stdout: 'diff --git a/src/novel.ts b/src/novel.ts\n+novel\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(calls.find((call) => call[0] === 'diff')).toEqual([
+        'diff',
+        'abc1234..head123',
+        '--',
+        '.',
+        ...MACHINERY_AUTHORED_PATHS.map((path) => `:(exclude)${path}`),
+      ]);
+      expect(calls.some((call) => call[0] === 'log')).toBe(false);
+      expect(inputs.patchEquivalentExclusion).toBeUndefined();
+    });
+
+    it('fails closed when Git cherry emits an unparseable record', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'abc1234\n' } },
+        { match: ['cherry', '-v', 'base-tip123', 'head123'], result: { stdout: '- 1234567 replayed upstream patch\n- not-a-sha malformed\n' } },
+        { match: ['diff', 'abc1234..head123'], result: { stdout: 'diff --git a/src/replayed.ts b/src/replayed.ts\n+replayed\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(calls.find((call) => call[0] === 'diff')).toEqual([
+        'diff',
+        'abc1234..head123',
+        '--',
+        '.',
+        ...MACHINERY_AUTHORED_PATHS.map((path) => `:(exclude)${path}`),
+      ]);
+      expect(calls.some((call) => call[0] === 'cherry')).toBe(true);
+      expect(calls.some((call) => call[0] === 'log')).toBe(false);
+      expect(inputs.patchEquivalentExclusion).toBeUndefined();
+    });
+
+    it('fails closed rather than interpreting a colon-prefixed path as pathspec magic', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'abc1234\n' } },
+        { match: ['cherry', '-v', 'base-tip123', 'head123'], result: { stdout: '- 1234567 replayed upstream patch\n' } },
+        {
+          match: ['log', '--format=%H%x00', '--name-only', '--no-renames', '-z', 'abc1234..head123'],
+          result: { stdout: '1234567\0\0\n:(glob)*\0' },
+        },
+        { match: ['diff', 'abc1234..head123'], result: { stdout: 'diff --git a/:\(glob\)\* b/:\(glob\)\*\n+replayed\n' } },
+      ]);
+
+      await expect(assembleBuildReviewInputs(git, planPath)).rejects.toMatchObject({
+        kind: 'invalid-path',
+        path: ':(glob)*',
+      } satisfies Partial<BuildReviewSourceReadError>);
+
+      expect(calls.find((call) => call[0] === 'diff')).toEqual([
+        'diff',
+        'abc1234..head123',
+        '--',
+        '.',
+        ...MACHINERY_AUTHORED_PATHS.map((path) => `:(exclude)${path}`),
+      ]);
+      expect(calls.some((call) => call[0] === 'cherry')).toBe(true);
+      expect(calls.some((call) => call[0] === 'log')).toBe(true);
+    });
+
+    // Covers: task:2
+    it('keeps a path reachable only through a merge commit graded', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'abc1234\n' } },
+        { match: ['cherry', '-v', 'base-tip123', 'head123'], result: { stdout: '- 1234567 merge replay\n' } },
+        // `git log --name-only` deliberately emits no paths for a merge
+        // record, so it cannot establish safe path ownership for exclusion.
+        {
+          match: ['log', '--format=%H%x00', '--name-only', '--no-renames', '-z', 'abc1234..head123'],
+          result: { stdout: '1234567\0\0' },
+        },
+        { match: ['diff', 'abc1234..head123'], result: { stdout: 'diff --git a/merge-only.ts b/merge-only.ts\n+resolved in merge\n' } },
+      ]);
+
+      const inputs = await assembleBuildReviewInputs(git, planPath);
+
+      expect(calls.find((call) => call[0] === 'diff')).toEqual([
+        'diff', 'abc1234..head123', '--', '.',
+        ...MACHINERY_AUTHORED_PATHS.map((path) => `:(exclude)${path}`),
+      ]);
+      expect(inputs.diff).toContain('merge-only.ts');
     });
 
     // The engine appends its own `### Task rem-*` blocks to the approved plan
@@ -933,15 +1084,15 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       await recordAppendedRemediationTaskIds(['rem-tautology-1', 'rem-root-cause-1']);
       const { git, calls } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'abc1234\n' } },
         { match: ['show', 'abc1234:plan.md'], result: { stdout: BASE_PLAN } },
         {
-          match: ['show', 'HEAD:plan.md'],
+          match: ['show', 'head123:plan.md'],
           result: {
             stdout: `${BASE_PLAN}\n### Task rem-tautology-1: strengthen the test\n- Files: test/a.test.ts\n\n### Task rem-root-cause-1: fix the cause\n- Files: src/a.ts\n`,
           },
         },
-        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/x b/x\n' } },
+        { match: ['diff', 'abc1234..head123'], result: { stdout: 'diff --git a/x b/x\n' } },
       ]);
 
       await assembleBuildReviewInputs(git, planPath);
@@ -960,16 +1111,16 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       await recordAppendedRemediationTaskIds(['rem-tautology-1']);
       const { git, calls } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'abc1234\n' } },
         { match: ['show', 'abc1234:plan.md'], result: { stdout: BASE_PLAN } },
         {
-          match: ['show', 'HEAD:plan.md'],
+          match: ['show', 'head123:plan.md'],
           result: {
             // A hand-authored task rides along with the engine's own append.
             stdout: `${BASE_PLAN}\n### Task rem-tautology-1: strengthen the test\n- Files: test/a.test.ts\n\n### Task 9: unplanned extra work\n- Files: src/b.ts\n`,
           },
         },
-        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/x b/x\n' } },
+        { match: ['diff', 'abc1234..head123'], result: { stdout: 'diff --git a/x b/x\n' } },
       ]);
 
       await assembleBuildReviewInputs(git, planPath);
@@ -986,8 +1137,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('keeps the plan in the graded diff when the engine recorded no appended remediation tasks', async () => {
       const { git, calls } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
-        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/x b/x\n' } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'abc1234\n' } },
+        { match: ['diff', 'abc1234..head123'], result: { stdout: 'diff --git a/x b/x\n' } },
       ]);
 
       await assembleBuildReviewInputs(git, planPath);
@@ -1014,8 +1165,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('derives removal context from the exact assembled diff', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
-        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/src/old.ts b/src/old.ts\ndeleted file mode 100644\n' } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'abc1234\n' } },
+        { match: ['diff', 'abc1234..head123'], result: { stdout: 'diff --git a/src/old.ts b/src/old.ts\ndeleted file mode 100644\n' } },
       ]);
       await expect(assembleBuildReviewInputs(git, planPath)).resolves.toMatchObject({
         removalContext: { deletedFiles: ['src/old.ts'], removedDeclarations: [], removedMembers: [] },
@@ -1025,8 +1176,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     it('returns an explicitly empty removal context for an additive diff', async () => {
       const { git } = fakeGit([
         ...freshProbeScript,
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { stdout: 'abc1234\n' } },
-        { match: ['diff', 'abc1234..HEAD'], result: { stdout: 'diff --git a/src/new.ts b/src/new.ts\n+export const added = true;\n' } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'abc1234\n' } },
+        { match: ['diff', 'abc1234..head123'], result: { stdout: 'diff --git a/src/new.ts b/src/new.ts\n+export const added = true;\n' } },
       ]);
       await expect(assembleBuildReviewInputs(git, planPath)).resolves.toMatchObject({
         removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
@@ -1041,9 +1192,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         { match: ['ls-remote', 'origin', 'main'], result: { exitCode: 0, stdout: 'fresh222\trefs/heads/main\n' } },
         // resolveBaseCore's fetch path (stale → refetch):
         { match: ['fetch', 'origin', 'main'], result: { exitCode: 0 } },
+        { match: ['rev-parse', 'origin/main'], result: { exitCode: 0, stdout: 'base-tip123\n' } },
         { match: ['rev-parse', 'HEAD'], result: { exitCode: 0, stdout: 'head123\n' } },
-        { match: ['merge-base', 'origin/main', 'HEAD'], result: { exitCode: 0, stdout: 'newbase\n' } },
-        { match: ['diff', 'newbase..HEAD'], result: { exitCode: 0, stdout: 'diff --git a/y b/y\n' } },
+        { match: ['merge-base', 'base-tip123', 'head123'], result: { exitCode: 0, stdout: 'newbase\n' } },
+        { match: ['diff', 'newbase..head123'], result: { exitCode: 0, stdout: 'diff --git a/y b/y\n' } },
       ]);
 
       const result = await assembleBuildReviewInputs(git, planPath);
@@ -1059,9 +1211,10 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       const { git } = fakeGit([
         { match: ['remote'], result: { exitCode: 0, stdout: '' } },
         { match: ['symbolic-ref', '--short', 'HEAD'], result: { exitCode: 0, stdout: 'feature/foo\n' } },
+        { match: ['rev-parse', 'feature/foo'], result: { exitCode: 0, stdout: 'feature-tip123\n' } },
         { match: ['rev-parse', 'HEAD'], result: { exitCode: 0, stdout: 'head123\n' } },
-        { match: ['merge-base', 'feature/foo', 'HEAD'], result: { exitCode: 0, stdout: 'localbase\n' } },
-        { match: ['diff', 'localbase..HEAD'], result: { exitCode: 0, stdout: '' } },
+        { match: ['merge-base', 'feature-tip123', 'head123'], result: { exitCode: 0, stdout: 'localbase\n' } },
+        { match: ['diff', 'localbase..head123'], result: { exitCode: 0, stdout: '' } },
       ]);
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -1632,5 +1785,140 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       // semantics on `BuildReviewInputs.fresh`.
       expect(result.fresh).toBe(false);
     });
+  });
+
+  describe('real local Git fixture (patch-equivalent stale-base window)', () => {
+    let dir: string;
+    let planPath: string;
+
+    async function git(...args: string[]): Promise<string> {
+      const { stdout } = await execFileAsync('git', ['-C', dir, ...args]);
+      return stdout.trim();
+    }
+
+    async function commit(message: string): Promise<void> {
+      await git('add', '-A');
+      await git('commit', '-m', message);
+    }
+
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), 'build-review-patch-equivalent-'));
+      planPath = join(dir, 'plan.md');
+      await writeFile(planPath, '# Plan\n\n### Task 2: patch-equivalent grading\n', 'utf-8');
+      await execFileAsync('git', ['init', '-b', 'main', dir]);
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await git('config', 'commit.gpgsign', 'false');
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await mkdir(join(dir, 'removed'), { recursive: true });
+      await writeFile(join(dir, 'base.txt'), 'base\n');
+      await writeFile(join(dir, 'removed/equivalent.ts'), 'remove upstream equivalent\n');
+      await writeFile(join(dir, 'removed/novel.ts'), 'remove novel\n');
+      await commit('initial base');
+
+      await git('checkout', '-b', 'feature/patch-equivalent');
+      await writeFile(join(dir, 'equivalent.ts'), 'already upstream\n');
+      await writeFile(join(dir, 'shared.ts'), 'equivalent portion\n');
+      await writeFile(join(dir, 'test/equivalent.test.ts'), "// Covers: task:2\nit('equivalent test', () => {});\n");
+      await rm(join(dir, 'removed/equivalent.ts'));
+      await commit('replay upstream patch');
+
+      await writeFile(join(dir, 'novel.ts'), 'novel work\n');
+      await writeFile(join(dir, 'shared.ts'), 'equivalent portion\nnovel portion\n');
+      await writeFile(join(dir, 'test/novel.test.ts'), "// Covers: task:2\nit('novel test', () => {});\n");
+      await rm(join(dir, 'removed/novel.ts'));
+      await commit('novel feature work');
+
+      await writeFile(join(dir, 'variant.ts'), 'feature variant\n');
+      await commit('modified upstream variant');
+
+      await git('checkout', 'main');
+      await mkdir(join(dir, 'test'), { recursive: true });
+      await writeFile(join(dir, 'equivalent.ts'), 'already upstream\n');
+      await writeFile(join(dir, 'shared.ts'), 'equivalent portion\n');
+      await writeFile(join(dir, 'test/equivalent.test.ts'), "// Covers: task:2\nit('equivalent test', () => {});\n");
+      await rm(join(dir, 'removed/equivalent.ts'));
+      await commit('independently absorb replay');
+      await writeFile(join(dir, 'variant.ts'), 'upstream variant\n');
+      await commit('upstream variant');
+
+      await git('remote', 'add', 'origin', dir);
+      await git('update-ref', 'refs/remotes/origin/main', 'refs/heads/main');
+      await git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+      await git('checkout', 'feature/patch-equivalent');
+    });
+
+    afterEach(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    function realGit(calls: string[][], failCherry = false): GitRunner {
+      return async (args) => {
+        calls.push(args);
+        if (failCherry && args[0] === 'cherry') return { exitCode: 1, stdout: '', stderr: 'probe failed' };
+        try {
+          const { stdout, stderr } = await execFileAsync('git', ['-C', dir, ...args]);
+          return { exitCode: 0, stdout, stderr };
+        } catch (err) {
+          const error = err as { code?: number; stdout?: string; stderr?: string };
+          return { exitCode: error.code ?? 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
+        }
+      };
+    }
+
+    async function assemble(calls: string[][], failCherry = false): Promise<BuildReviewFrozenInputs> {
+      return assembleInputs(realGit(calls, failCherry), planPath, {
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { ...CURRENT_PROOF.evidence, provenanceHeadSha: await git('rev-parse', 'HEAD') },
+        }),
+      });
+    }
+
+    // Covers: task:2
+    it('omits only equivalent paths from every derived graded input and uses read-only Git', async () => {
+      const calls: string[][] = [];
+      const inputs = await assemble(calls);
+      const projections = deriveBuildReviewRubricProjections({
+        lapId: parseBuildReviewLapId('patch-equivalent-fixture')!,
+        inputs,
+        testQuality: {
+          changedTestSelectors: inputs.sourceSnapshot.testQuality!.inScopeTests,
+          unresolvedMarkers: inputs.sourceSnapshot.testQuality!.unresolvedMarkers,
+          revertedProductionManifest: [], preflight: { classification: 'not-requested' },
+        },
+      });
+
+      expect(inputs.diff).not.toContain('equivalent.ts');
+      expect(inputs.diff).toContain('novel.ts');
+      expect(inputs.sourceSnapshot.changedTestTitles).toEqual([
+        { selector: 'test/novel.test.ts', titleText: 'novel test', staticExtractionFallback: false },
+      ]);
+      expect(inputs.sourceSnapshot.testQuality).toMatchObject({ inScopeTests: ['test/novel.test.ts'] });
+      expect(inputs.removalContext?.deletedFiles).toEqual(['removed/novel.ts']);
+      expect(projections.testQuality.changedFiles.map(({ path }) => path)).toEqual([
+        'novel.ts', 'removed/novel.ts', 'shared.ts', 'test/novel.test.ts', 'variant.ts',
+      ]);
+      expect(inputs.diff).toContain('shared.ts');
+      expect(inputs.diff).toContain('variant.ts');
+
+      const readOnlyCommands = new Set(['remote', 'symbolic-ref', 'rev-parse', 'ls-remote', 'merge-base', 'cherry', 'log', 'diff', 'show', 'ls-tree']);
+      expect(calls.every((args) => readOnlyCommands.has(args[0]!))).toBe(true);
+    });
+
+    it('fails closed to the mechanism-disabled graded diff when the probe fails', async () => {
+      const calls: string[][] = [];
+      const failedProbe = await assemble(calls, true);
+      const mergeBase = await git('merge-base', 'origin/main', 'HEAD');
+      const { stdout: disabledDiff } = await execFileAsync('git', [
+        '-C', dir, 'diff', `${mergeBase}..HEAD`, '--', '.',
+        ...MACHINERY_AUTHORED_PATHS.map((path) => `:(exclude)${path}`),
+      ]);
+
+      expect(failedProbe.diff).toBe(disabledDiff);
+      expect(failedProbe.diff).toContain('equivalent.ts');
+      expect(failedProbe.patchEquivalentExclusion).toBeUndefined();
+      expect(calls.find((args) => args[0] === 'log')).toBeUndefined();
+    });
+
   });
 });

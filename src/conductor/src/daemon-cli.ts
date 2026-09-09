@@ -2941,8 +2941,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // grading — routine telemetry, not a warning, so it stays dim
       // regardless of `fresh` (mirrors session_reset's styling).
       const base = event.mergeBase.slice(0, 12);
+      const filtered = event.filteredCommits === undefined || event.filteredCommits.length === 0
+        ? ''
+        : `; filtered ${event.filteredCommits.length} commits`;
       log(
-        `${dot} ${chalk.dim(`build_review base ${base} — fresh: ${event.fresh}`)}`,
+        `${dot} ${chalk.dim(`build_review base ${base} — fresh: ${event.fresh}${filtered}`)}`,
       );
       break;
     }

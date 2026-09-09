@@ -140,9 +140,11 @@ function fakeGit(blobs: ReadonlyMap<string, string>): { readonly git: GitRunner;
     if (args[0] === 'symbolic-ref' && args[1] === '--short') return { exitCode: 0, stdout: 'feature\n', stderr: '' };
     if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
     if (args[0] === 'rev-parse' && args[1] === 'refs/remotes/origin/main') return { exitCode: 0, stdout: `${fixtureBase}\n`, stderr: '' };
+    if (args[0] === 'rev-parse' && args[1] === 'origin/main') return { exitCode: 0, stdout: `${fixtureBase}\n`, stderr: '' };
     if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { exitCode: 0, stdout: `${fixtureHead}\n`, stderr: '' };
     if (args[0] === 'ls-remote') return { exitCode: 0, stdout: `${fixtureBase}\trefs/heads/main\n`, stderr: '' };
     if (args[0] === 'merge-base') return { exitCode: 0, stdout: `${fixtureBase}\n`, stderr: '' };
+    if (args[0] === 'cherry') return { exitCode: 0, stdout: '+ 7654321 portable fixture change\n', stderr: '' };
     if (args[0] === 'diff' && args.includes('--name-status')) {
       const path = [...blobs.keys()].find((key) => key.startsWith(`${fixtureHead}:test/`))?.slice(`${fixtureHead}:`.length);
       return { exitCode: 0, stdout: path ? `M\0${path}\0` : '', stderr: '' };

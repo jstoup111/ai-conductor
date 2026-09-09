@@ -275,6 +275,9 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
           stderr: '',
         };
       }
+      if (args[0] === 'rev-parse' && args[1] === 'main') {
+        return { exitCode: 0, stdout: 'fixture-base\n', stderr: '' };
+      }
       if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
         return { exitCode: 0, stdout: 'fixture-head\n', stderr: '' };
       }

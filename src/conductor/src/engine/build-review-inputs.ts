@@ -90,6 +90,12 @@ export interface BuildReviewInputs {
   testSuiteProof?: FullSuitePassEvidence;
   /** Immutable identity of every source value shared by the rubric fan-out. */
   sourceSnapshot?: BuildReviewSourceSnapshot;
+  /**
+   * Advisory record of feature work Git identified as already represented on
+   * the review base. This is deliberately outside the source snapshot: it
+   * explains the filtered diff but must not affect review identity or verdicts.
+   */
+  patchEquivalentExclusion?: BuildReviewPatchEquivalentExclusion;
 }
 
 /** Inputs returned after the proof gate has frozen a source snapshot. */
@@ -171,6 +177,12 @@ export interface BuildReviewTestQualityScope {
   readonly counterfactualFileSelectors: readonly string[];
   /** Changed-test markers that name no criterion, FR, or task in this feature. */
   readonly unresolvedMarkers: readonly BuildReviewUnresolvedMarker[];
+}
+
+/** Advisory provenance for paths excluded because Git found their patches upstream. */
+export interface BuildReviewPatchEquivalentExclusion {
+  readonly filteredCommits: readonly { readonly sha: string; readonly subject: string }[];
+  readonly excludedPaths: readonly string[];
 }
 
 /** Process-free proof inspection seam; it must never launch the aggregate suite. */
@@ -259,7 +271,7 @@ async function engineAppendedPlanExclusion(
   } catch {
     return [];
   }
-  // Both ends of the graded diff exactly: `<mergeBase>..HEAD`.
+  // Both ends of the graded diff exactly: `<mergeBase>..<frozen HEAD>`.
   const [base, head] = await Promise.all([
     source.readAtOptional(mergeBaseSha, pathspec),
     source.readAtOptional(headSha, pathspec),
@@ -272,6 +284,79 @@ async function engineAppendedPlanExclusion(
   )
     ? [`:(exclude)${pathspec}`]
     : [];
+}
+
+const GIT_SHA = /^[0-9a-f]{7,64}$/i;
+
+function patchEquivalentCommits(cherryOutput: string): readonly { readonly sha: string; readonly subject: string }[] | undefined {
+  const commits: { sha: string; subject: string }[] = [];
+  for (const line of cherryOutput.split('\n')) {
+    if (line === '') continue;
+    const match = /^([+-]) ([0-9a-f]{7,64}) (.+)$/i.exec(line);
+    if (match === null || !GIT_SHA.test(match[2]!)) return undefined;
+    if (match[1] === '-') commits.push({ sha: match[2]!, subject: match[3]! });
+  }
+  return commits;
+}
+
+function equivalentShaFor(
+  commitSha: string,
+  equivalentCommits: readonly { readonly sha: string; readonly subject: string }[],
+): string | undefined {
+  const matches = equivalentCommits.filter(({ sha }) => commitSha === sha || commitSha.startsWith(sha) || sha.startsWith(commitSha));
+  return matches.length === 1 ? matches[0]!.sha : undefined;
+}
+
+/**
+ * Keep Git's patch-equivalence judgement path-scoped: a path is excluded only
+ * if every range commit that touched it is one of `git cherry`'s minus records.
+ * Any failed or malformed attribution leaves the reviewed diff unchanged.
+ */
+async function patchEquivalentExclusion(
+  git: GitRunner,
+  baseTipSha: string,
+  mergeBaseSha: string,
+  headSha: string,
+): Promise<BuildReviewPatchEquivalentExclusion | undefined> {
+  const cherry = await git(['cherry', '-v', baseTipSha, headSha]);
+  if (cherry.exitCode !== 0) return undefined;
+  const filteredCommits = patchEquivalentCommits(cherry.stdout);
+  if (filteredCommits === undefined || filteredCommits.length === 0) return undefined;
+
+  const attribution = await git([
+    'log',
+    '--format=%H%x00',
+    '--name-only',
+    '--no-renames',
+    '-z',
+    `${mergeBaseSha}..${headSha}`,
+  ]);
+  if (attribution.exitCode !== 0 || attribution.stdout === '') return undefined;
+
+  const touchingCommits = new Map<string, Set<string>>();
+  const tokens = attribution.stdout.split('\0');
+  for (let cursor = 0; cursor < tokens.length - 1;) {
+    const sha = tokens[cursor++];
+    // `%x00` terminates the SHA and `--name-only -z` terminates the pretty
+    // record, making the second empty token a required, unambiguous boundary.
+    if (sha === undefined || !GIT_SHA.test(sha) || tokens[cursor++] !== '') return undefined;
+    while (cursor < tokens.length - 1 && !(GIT_SHA.test(tokens[cursor]!) && tokens[cursor + 1] === '')) {
+      const path = tokens[cursor++]!.replace(/^\n/, '');
+      if (path === '' || path.startsWith(':')) return undefined;
+      const commits = touchingCommits.get(path) ?? new Set<string>();
+      commits.add(sha);
+      touchingCommits.set(path, commits);
+    }
+  }
+
+  const excludedPaths = [...touchingCommits.entries()]
+    .filter(([, commits]) => commits.size > 0 && [...commits].every((sha) => equivalentShaFor(sha, filteredCommits) !== undefined))
+    .map(([path]) => path)
+    .sort();
+  return Object.freeze({
+    filteredCommits: Object.freeze(filteredCommits.map((commit) => Object.freeze(commit))),
+    excludedPaths: Object.freeze(excludedPaths),
+  });
 }
 
 function projectRootForPlan(planPath: string): string {
@@ -643,9 +728,17 @@ export async function assembleBuildReviewInputs(
 
   const baseRef = resolution.ref;
 
-  // Freeze the graded tree before any diff or source reads. Every later Git
-  // revision expression uses this immutable identity rather than the mutable
-  // symbolic HEAD/worktree.
+  // Freeze both revision identities before any dependent read. The symbolic
+  // labels can advance while this assembly is running; every source read below
+  // must therefore consume these immutable object names instead.
+  const baseTipResult = await git(['rev-parse', baseRef]);
+  const baseTipSha = baseTipResult.stdout.trim();
+  if (baseTipResult.exitCode !== 0 || !baseTipSha) {
+    throw new MergeBaseError(
+      `git rev-parse ${baseRef} failed: ${baseTipResult.stderr || 'no HEAD found'}`,
+      baseRef,
+    );
+  }
   const headResult = await git(['rev-parse', 'HEAD']);
   const liveHeadSha = headResult.stdout.trim();
   if (headResult.exitCode !== 0 || !liveHeadSha) {
@@ -658,11 +751,11 @@ export async function assembleBuildReviewInputs(
   const projectRoot = projectRootForPlan(planPath);
   const planRepoPath = safeRepoRelativePath(relative(projectRoot, planPath).replaceAll('\\', '/'));
 
-  const mergeBase = await git(['merge-base', baseRef, liveHeadSha]);
+  const mergeBase = await git(['merge-base', baseTipSha, liveHeadSha]);
   const mergeBaseSha = mergeBase.stdout.trim();
   if (mergeBase.exitCode !== 0 || !mergeBaseSha) {
     throw new MergeBaseError(
-      `git merge-base ${baseRef} HEAD failed: ${mergeBase.stderr || 'no merge base found'}`,
+      `git merge-base ${baseTipSha} ${liveHeadSha} failed: ${mergeBase.stderr || 'no merge base found'}`,
       baseRef,
     );
   }
@@ -674,12 +767,14 @@ export async function assembleBuildReviewInputs(
     planRepoPath,
     liveHeadSha,
   );
+  const equivalentExclusion = await patchEquivalentExclusion(git, baseTipSha, mergeBaseSha, liveHeadSha);
 
   const diffArgs = [
     '--',
     '.',
     ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
     ...planExclusion,
+    ...(equivalentExclusion?.excludedPaths.map((path) => `:(exclude)${path}`) ?? []),
   ];
   const diffResult = await git([
     'diff', `${mergeBaseSha}..${liveHeadSha}`,
@@ -782,5 +877,6 @@ export async function assembleBuildReviewInputs(
     repairProvenance,
     testSuiteProof: inspection.evidence,
     sourceSnapshot,
+    patchEquivalentExclusion: equivalentExclusion,
   };
 }

@@ -726,6 +726,10 @@ export type ConductorEvent =
       trackingRefSha: string | null;
       remoteHeadSha: string | null;
       fresh: boolean;
+      /** Advisory commit records Git found patch-equivalent to the review base. */
+      filteredCommits?: readonly { readonly sha: string; readonly subject: string }[];
+      /** Advisory paths excluded from the graded diff by those commit records. */
+      excludedPaths?: readonly string[];
     }
   | {
       /**
