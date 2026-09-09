@@ -33,6 +33,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Telemetry no longer counts provider-free step completions as provider dispatches. ([implementation PR #2401](https://github.com/jstoup111/ai-conductor/pull/2401)).
 - Recover sealed artifact verification when recorded remediation tasks append to a valid baseline. ([implementation PR #2394](https://github.com/jstoup111/ai-conductor/pull/2394)).
 - Require operator authorization before a halted feature resumes and provide budget recovery commands. ([implementation PR #2206](https://github.com/jstoup111/ai-conductor/pull/2206)).
+- Qualify partial feature-cost totals and suppress unpriced cost figures. ([implementation PR #2463](https://github.com/jstoup111/ai-conductor/pull/2463)).
+- Coherence artifacts now accept valid mapping tables that follow ordinary trailing tables or commentary. ([implementation PR #2402](https://github.com/jstoup111/ai-conductor/pull/2402)).
 
 ## Migration
 
