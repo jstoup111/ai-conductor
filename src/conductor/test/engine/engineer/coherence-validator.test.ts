@@ -2807,12 +2807,26 @@ Return requests are accepted.
 });
 
 describe('runCoherenceGate criterion fail-closed guard', () => {
+  it('keeps correction parsing and validation owned by their two engine modules', async () => {
+    const engineRoot = new URL('../../../src/engine/', import.meta.url).pathname;
+    const sourcePaths = (await readdir(engineRoot, { recursive: true }))
+      .filter((path) => path.endsWith('.ts'));
+    const correctionOwners = (await Promise.all(sourcePaths.map(async (path) => ({
+      path,
+      text: await readFile(join(engineRoot, path), 'utf-8'),
+    })))).filter(({ text }) => /(?:CriterionCorrection|parseCriterionCorrection|row\.correction)/.test(text)).map(({ path }) => path);
+    expect(correctionOwners).toEqual([
+      'coherence-parse.ts',
+      join('engineer', 'coherence-validator.ts'),
+    ]);
+  });
+
   it('passes an exact fresh waiver for cannot-deliver and unknown-decision gaps, but rejects partial coverage', async () => {
     const gaps: CoherenceGap[] = [
       { layer: 'criterion', gapId: 'criterion:cannot-deliver-plan:2', artifact: 'stories / plan', item: 'plan correction' },
       { layer: 'criterion', gapId: 'criterion:correction-unknown-decision:4', artifact: 'stories / plan', item: 'unknown decision' },
     ];
-    const changedFiles = [{ status: 'A', path: '.docs/coherence-waivers/idea.md' }] as const;
+    const changedFiles = [{ status: 'A', path: '.docs/coherence-waivers/idea.md' }];
     const exact = await evaluateCoherenceWaiver({
       gaps, changedFiles, root: '/repo',
       readText: async () => 'Waives: criterion:cannot-deliver-plan:2, criterion:correction-unknown-decision:4\nRationale: both correction findings are accepted.\n',
