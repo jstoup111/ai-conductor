@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-09T11:35:23.592Z
 Slug: mechanically-enforce-otel-handler-coverage-for-ote
 Class: needs-human
 Halting step: prd_audit
