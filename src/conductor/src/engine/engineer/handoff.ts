@@ -28,7 +28,7 @@ import type { AuthoredLedgerOpts } from './authored-ledger.js';
 import { recordAuthoredKey } from './authored-ledger.js';
 import { extractPrUrl } from '../state.js';
 import { injectIssueRef } from './issue-ref.js';
-import { ensureReleaseMetadata } from './release-metadata-inject.js';
+import { buildSpecPrCreateArgs, ensureReleaseMetadata } from './release-metadata-inject.js';
 import { mirrorIssueCriticalityLabels } from '../pr-criticality-labels.js';
 import type { GitRunner } from '../pr-labels.js';
 
@@ -179,15 +179,20 @@ export async function openSpecPr(
 
   await gitRunner(['push', '-u', 'origin', branch], { cwd });
 
+  const createArgs = await buildSpecPrCreateArgs({ cwd, branch, git: gitRunner });
+
   // 1. Invoke `gh pr create` with the spec branch in the worktree's cwd.
   //    The `--head` flag names the branch to open a PR for; `--fill` uses the
   //    branch name + last commit message as the title/body, and `--label spec`
   //    classifies the DECIDE deliverable atomically when the PR is created.
   let result: RunnerResult;
   try {
-    result = await runner(['pr', 'create', '--head', branch, '--fill', '--label', 'spec'], {
-      cwd,
-    });
+    result = await runner(
+      createArgs.length === 0
+        ? ['pr', 'create', '--head', branch, '--fill', '--label', 'spec']
+        : ['pr', 'create', '--head', branch, ...createArgs, '--label', 'spec'],
+      { cwd },
+    );
   } catch (err) {
     // 1a. Detect the no-remote condition: the runner rejected with an error whose
     //     message matches one of the NO_REMOTE_PATTERNS above.
