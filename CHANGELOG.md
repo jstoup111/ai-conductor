@@ -63,6 +63,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Preserve test-quality findings when reviewers cite a uniquely resolved candidate's supplied source reference. ([implementation PR #2474](https://github.com/jstoup111/ai-conductor/pull/2474)).
 - Overlap scans now exclude paths changed only on the base branch, avoiding false overlap warnings. ([implementation PR #2455](https://github.com/jstoup111/ai-conductor/pull/2455)).
 - Coherence checks now report and validate corrections for criteria that a plan cannot deliver. ([implementation PR #2470](https://github.com/jstoup111/ai-conductor/pull/2470)).
+- Composer can land required amendments to historical DECIDE artifacts without confusing them with the current feature's specification. ([implementation PR #2445](https://github.com/jstoup111/ai-conductor/pull/2445)).
 
 ## Migration
 
