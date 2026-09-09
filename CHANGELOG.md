@@ -11,11 +11,12 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.1.1] - 2026-09-09
+## [1.2.0] - 2026-09-09
 
 ### Added
 
 - Operators can set per-rubric confidence floors so low-confidence build-review findings do not block progress. ([implementation PR #2393](https://github.com/jstoup111/ai-conductor/pull/2393)).
+- Daemon OpenTelemetry exports now report queue depth, liveness, dispatch blockers, and feature lifecycle outcomes. ([implementation PR #2423](https://github.com/jstoup111/ai-conductor/pull/2423)).
 
 ### Changed
 
