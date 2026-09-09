@@ -983,6 +983,16 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
   });
 
   it('force-releases a wedged two-executor daemon after its scaled bound and drops the lock before exit', async () => {
+    // exitProcess records the exit instead of terminating this worker. Pair it
+    // with a recording sink so post-exit fixture cleanup cannot write to a
+    // stream that the real process-exit backstop has already closed.
+    const logLines: string[] = [];
+    const logModule = await import('../../src/engine/daemon-log.js');
+    const logSpy = vi.spyOn(logModule, 'openDaemonLog').mockResolvedValue({
+      write: (line) => { logLines.push(line); },
+      close: async () => {},
+      closeSync: () => {},
+    });
     const started: string[] = [];
     const exits: Array<{ code: number; lockPresent: boolean }> = [];
     let releaseWorkers: (() => void) | undefined;
@@ -1035,12 +1045,12 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
       await vi.advanceTimersByTimeAsync(1);
 
       expect(exits).toEqual([{ code: 1, lockPresent: false }]);
-      await expect(readFile(join(root, '.daemon', 'daemon.log'), 'utf8'))
-        .resolves.toContain('teardown force-release');
+      expect(logLines.join('\n')).toContain('teardown force-release');
     } finally {
       releaseWorkers?.();
       await daemon;
       vi.useRealTimers();
+      logSpy.mockRestore();
     }
   });
 
