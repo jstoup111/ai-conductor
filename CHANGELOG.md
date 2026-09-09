@@ -45,6 +45,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Build-review preflight deadlines now stop scoped test commands that do not exit after termination. ([implementation PR #2436](https://github.com/jstoup111/ai-conductor/pull/2436)).
 - As-built review verdicts formatted as Markdown headings now pass the release gate. ([implementation PR #2435](https://github.com/jstoup111/ai-conductor/pull/2435)).
 - Prevent operator-park boundary stops from being misreported as needs-human daemon halts. ([implementation PR #2431](https://github.com/jstoup111/ai-conductor/pull/2431)).
+- CI repair now uses daemon-owned configured verification before publication and directs repair agents to leave tests and pushing to the daemon. ([implementation PR #2468](https://github.com/jstoup111/ai-conductor/pull/2468)).
 
 ## Migration
 
