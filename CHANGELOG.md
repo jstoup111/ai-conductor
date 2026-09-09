@@ -38,6 +38,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Prevents shipment checks from treating quoted or incidental plan paths as declared plans. ([implementation PR #2362](https://github.com/jstoup111/ai-conductor/pull/2362)).
 - Build review now fails clearly when it cannot identify this feature's plan. ([implementation PR #2426](https://github.com/jstoup111/ai-conductor/pull/2426)).
 - Build-review failures now keep the actionable review verdict ahead of containment advisories. ([implementation PR #2428](https://github.com/jstoup111/ai-conductor/pull/2428)).
+- Preserve Codex token metering when completed usage is observed live but omitted from retained terminal output. ([implementation PR #2442](https://github.com/jstoup111/ai-conductor/pull/2442)).
 
 ## Migration
 
