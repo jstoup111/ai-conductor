@@ -35,6 +35,9 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Require operator authorization before a halted feature resumes and provide budget recovery commands. ([implementation PR #2206](https://github.com/jstoup111/ai-conductor/pull/2206)).
 - Qualify partial feature-cost totals and suppress unpriced cost figures. ([implementation PR #2463](https://github.com/jstoup111/ai-conductor/pull/2463)).
 - Coherence artifacts now accept valid mapping tables that follow ordinary trailing tables or commentary. ([implementation PR #2402](https://github.com/jstoup111/ai-conductor/pull/2402)).
+- Prevents shipment checks from treating quoted or incidental plan paths as declared plans. ([implementation PR #2362](https://github.com/jstoup111/ai-conductor/pull/2362)).
+- Build review now fails clearly when it cannot identify this feature's plan. ([implementation PR #2426](https://github.com/jstoup111/ai-conductor/pull/2426)).
+- Build-review failures now keep the actionable review verdict ahead of containment advisories. ([implementation PR #2428](https://github.com/jstoup111/ai-conductor/pull/2428)).
 
 ## Migration
 
