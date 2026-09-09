@@ -707,8 +707,9 @@ Event coverage is checked separately for the shared metrics listener and the tra
 The sink registry's `otel` flag drives the metrics listener's complete handler table; an
 `otelTrace: false` declaration marks a metrics-only event and excludes it from the visualizer.
 Other OTel-enabled events require a visualizer handler at compile time. Daemon backlog, dispatch,
-and shipment events are metrics-only, while `unattributed_progress` is excluded from both OTel
-consumers. Missing visualizer handlers at runtime report the event type through its warning callback.
+and shipment events are metrics-only. `provider_attempt` is also excluded from tracing; its
+existing persistence and optional legacy metrics accounting remain available. `unattributed_progress`
+is excluded from both OTel consumers. Missing visualizer handlers at runtime report the event type through its warning callback.
 Production visualizers continue exporting traces with their per-run meter disabled.
 
 The `conductor.step.duration` and `conductor.pipeline.closeout.duration` histograms use explicit

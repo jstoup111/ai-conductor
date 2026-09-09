@@ -190,16 +190,6 @@ export class OtelVisualizer implements VisualizerPlugin {
     step_failed: (event) => {
       this.spanManager!.onStepFailed(event);
     },
-    provider_attempt: (event) => {
-      const dispatch = this.dispatchMetering.observe(event);
-      if (dispatch) {
-        this.metricsRecorder?.onDispatch(
-          dispatch.step ?? event.step,
-          dispatch.tokenUsage,
-          dispatch.model,
-        );
-      }
-    },
     feature_usage_total: (event) => {
       this.metricsRecorder?.onFeatureUsageTotal(event);
     },
@@ -357,6 +347,20 @@ export class OtelVisualizer implements VisualizerPlugin {
       };
       this.eventHandlers.push([type, handler]);
       emitter.on(type, handler);
+    }
+
+    // Legacy direct callers may enable metrics; attempt accounting is never
+    // part of the traced handler table or a production trace-only subscription.
+    if (this.metricsRecorder) {
+      const handler: EventHandler = (event) => {
+        if (event.type !== 'provider_attempt') return;
+        const dispatch = this.dispatchMetering.observe(event);
+        if (dispatch) this.metricsRecorder?.onDispatch(
+          dispatch.step ?? event.step, dispatch.tokenUsage, dispatch.model,
+        );
+      };
+      this.eventHandlers.push(['provider_attempt', handler]);
+      emitter.on('provider_attempt', handler);
     }
 
     // T21: register SIGINT/SIGTERM handlers so an abrupt process termination
