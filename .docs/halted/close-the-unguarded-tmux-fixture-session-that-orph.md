@@ -1,22 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-09T21:29:59.717Z
+Status: halted
 Slug: close-the-unguarded-tmux-fixture-session-that-orph
-Class: needs-human
-Halting step: unknown
-Phase: unknown
+Class: plan-gap
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-close-the-unguarded-tmux-fixture-session-that-orph
-Head SHA: 4d38d6f25289ec4a14b02aa61029bfae2d24ee72
-Halted at: 2026-09-09T19:12:14.632Z
+Head SHA: 60134bc5279639b6b1572e5cde193b90641560cb
+Halted at: 2026-09-09T21:57:10.033Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: uncovered build-review coverage failure
-route: halt
-
+Validation group "prd_audit" halted: as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome
 ```
