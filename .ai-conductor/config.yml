@@ -18,7 +18,6 @@ daemon_concurrency: 3
 mergeable_autoresolve:
   enabled: true
   cooldownMinutes: 60
-  suiteCommand: npm --prefix src/conductor test
 
 ci_watch:
   enabled: true
