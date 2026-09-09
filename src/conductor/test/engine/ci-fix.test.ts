@@ -4,7 +4,7 @@
  * All gh interactions use fake runners; no real `gh` binary required.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { buildCiFixHint, isEligibleForCiFix, runCiFix, productionCiFixRunner } from '../../src/engine/ci-fix.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
@@ -540,7 +540,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         },
       };
 
-      const result = await runCiFix(entry, branch, hint, { fixRunner }, logger);
+      const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
 
       // Verify the result
       expect(result.kind).toBe('changed');
@@ -579,7 +579,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
 
       let threwError = false;
       try {
-        await runCiFix(entry, branch, hint, { fixRunner }, logger);
+        await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
       } catch (err) {
         threwError = true;
       }
@@ -619,7 +619,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       };
 
       // Should not throw, but should log the issue
-      const result = await runCiFix(entry, branch, hint, { fixRunner }, logger);
+      const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
 
       // Should return an aborted outcome (not throw)
       expect(result.kind).toBe('branch-gone');
@@ -655,7 +655,15 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         },
       };
 
-      const result = await runCiFix(entry, branch, hint, { fixRunner }, logger);
+      const verify = vi.fn(async (worktreePath: string) => {
+        expect(execSync('git log -1 --format=%s', { cwd: worktreePath }).toString().trim())
+          .toBe('ci fix commit');
+        expect(execSync('git log -1 --format=%s feat/fix', { cwd: originPath }).toString().trim())
+          .toBe('feature work');
+        return 0;
+      });
+      const result = await runCiFix(entry, branch, hint, { fixRunner, verify }, logger);
+      expect(verify).toHaveBeenCalledOnce();
 
       expect(result.kind).toBe('changed');
 
@@ -664,6 +672,29 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       expect(originLog).toContain('ci fix commit');
 
       expect(logs.some((l) => l.includes('refreshed'))).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('missing project suite configuration blocks publication through the production verifier', async () => {
+    const { repoPath, originPath, cleanup } = await createFixtureRepo();
+    try {
+      const logs: string[] = [];
+      const beforeSha = execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim();
+      const fixRunner = {
+        run: async ({ worktreePath }: { worktreePath: string }) => {
+          execSync('git commit --allow-empty -m "ci fix commit"', { cwd: worktreePath });
+          return { kind: 'changed' as const };
+        },
+      };
+      await runCiFix(
+        { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 },
+        'feat/fix', 'hint', { fixRunner }, (message) => logs.push(message),
+      );
+      expect(execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim()).toBe(beforeSha);
+      expect(logs.some((message) => message.includes('missing_config'))).toBe(true);
+      expect(logs.some((message) => message.includes('ci-fix-suite-gate') && message.includes('escalated'))).toBe(true);
     } finally {
       await cleanup();
     }
@@ -694,7 +725,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         entry,
         branch,
         hint,
-        { fixRunner, suiteCommand: 'exit 1' },
+        { fixRunner, verify: async () => 1 },
         logger,
       );
 
@@ -736,7 +767,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         },
       };
 
-      const result = await runCiFix(entry, branch, hint, { fixRunner }, logger);
+      const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
 
       expect(result.kind).toBe('changed');
 
@@ -775,7 +806,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         },
       };
 
-      const result = await runCiFix(entry, branch, hint, { fixRunner }, logger);
+      const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
 
       // Verify callback ran (stale worktree was cleaned)
       expect(callbackRan).toBe(true);
@@ -811,7 +842,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         },
       };
 
-      const result = await runCiFix(entry, branch, hint, { fixRunner }, logger);
+      const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
       expect(result.kind).toBe('changed');
 
       // Primary checkout must be fully clean — no staged/unstaged/untracked pollution.

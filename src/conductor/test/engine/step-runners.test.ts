@@ -4859,6 +4859,9 @@ TIER: M`,
       expect(opts.resume).toBe(false);
       expect(opts.dangerouslySkipPermissions).toBe(true);
       expect(opts.cwd).toBe('/wt/feature-x');
+      expect(opts.systemPrompt).toContain('Do not run tests');
+      expect(opts.systemPrompt).toContain('Do not push');
+      expect(opts.systemPrompt).toContain('The daemon owns all test execution');
       expect(opts.prompt).toContain("TypeError: Cannot read properties of undefined (reading 'foo')");
     });
   });

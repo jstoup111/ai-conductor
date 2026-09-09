@@ -16,12 +16,12 @@ import {
   isResolutionInFlight,
   withResolveWorktree,
   runAcceptanceGuards,
-  runSuiteGate,
   pushRefreshedBranch,
   type ResolveWorktreeLiveness,
 } from './autoresolve.js';
 import { makeGitRunner } from './rebase.js';
 import { execa } from 'execa';
+import { dispatchTestSuiteCommand } from './test-suite-cli.js';
 
 /**
  * Classify a ci-fix resolver error into a coarse category so logs and
@@ -417,8 +417,8 @@ export const productionCiFixRunner: CiFixRunner = {
  *
  * @param deps Dependencies for the fix execution
  * @param deps.fixRunner The injected {@link CiFixRunner} seam
- * @param deps.suiteCommand Optional suite command forwarded to {@link runSuiteGate}.
- *                           Undefined/empty → suite gate is a noop pass.
+ * @param deps.verify Optional test seam for the engine-owned configured verifier.
+ *                    Production reads test_suite from the repair worktree and fails closed.
  * @param deps.liveness Optional dispatcher-owned liveness seam forwarded to
  *                      {@link withResolveWorktree}: `worktreeLifecycle`
  *                      single-flights the transient worktree add/remove through
@@ -433,7 +433,7 @@ export async function runCiFix(
   hint: string,
   deps: {
     fixRunner: CiFixRunner;
-    suiteCommand?: string;
+    verify?: (worktreePath: string) => Promise<number>;
     liveness?: ResolveWorktreeLiveness;
   },
   logger?: (msg: string) => void,
@@ -514,8 +514,10 @@ export async function runCiFix(
         return fixOutcome;
       }
 
-      const suiteResult = await runSuiteGate(deps.suiteCommand, worktreePath, log);
-      if (!suiteResult.ok) {
+      const verify = deps.verify ?? ((projectRoot: string) =>
+        dispatchTestSuiteCommand({ kind: 'run' }, { projectRoot, print: log }));
+      const suiteExitCode = await verify(worktreePath);
+      if (suiteExitCode !== 0) {
         log(`${prUrl}: ci-fix suite gate failed`);
         logOutcome(log, prUrl, 'ci-fix-suite-gate', 'escalated');
         return fixOutcome;

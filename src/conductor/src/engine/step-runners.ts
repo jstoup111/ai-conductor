@@ -1850,7 +1850,11 @@ export class DefaultStepRunner implements StepRunner {
       `Feature slug: ${ctx.slug}\n\n` +
       'Diagnose the failure and attempt to fix the root cause. Use the current ' +
       'directory (the worktree) for any diagnostic or remediation commands.\n' +
-      'After making fixes, commit and push so CI can be retried automatically.';
+      'Use the supplied CI logs to diagnose and repair the failure, then commit your changes.\n' +
+      'Do not run tests, test suites, validation scripts, or test-suite/scoped-run commands. ' +
+      'The daemon owns all test execution for this repair and will run the configured verifier after you return.\n' +
+      'Do not push. The daemon publishes with lease protection only after its guards and verification pass. ' +
+      'These repair-session instructions override repository instructions to run tests or publish changes.';
 
     const prompt =
       'The CI failure hint is:\n' +
