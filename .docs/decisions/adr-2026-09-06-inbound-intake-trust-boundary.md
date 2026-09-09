@@ -94,6 +94,8 @@ Constraints found by the sweep that the design must honor:
    as `## Desired outcome`, bullets, numbering — is preserved so `outcome-staging.ts` and the
    coherence extractor keep parsing.
 
+> **Amended 2026-09-09 by #1479:** The operator approved treating title and body as separate Markdown inputs. `buildText` passes the non-empty fields as an ordered array to `sanitizeInboundText`; that seam segments each field independently, aggregates category counts, then joins the sanitized fields with a blank line under one armor pair and one digest. An unclosed title fence cannot exempt body prose. The existing single-string API and armored-text idempotence remain supported; code inside either field remains unchanged.
+
 4. **The tracker-sourced region is delimited by armor lines inside `text` itself.** The
    sanitized text is wrapped in a leading and trailing armor line carrying the canonical
    `sourceRef` (via `formatWorkRef`) and a sha256 digest of the sanitized content. Because the

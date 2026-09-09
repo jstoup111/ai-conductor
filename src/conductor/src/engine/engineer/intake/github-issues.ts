@@ -86,7 +86,7 @@ function buildText(
   const t = (title ?? '').trim();
   const b = (body ?? '').trim();
   if (t === '' && b === '') return null;
-  const sanitized = sanitizeInboundText([t, b].filter((s) => s !== '').join('\n\n'), workRef);
+  const sanitized = sanitizeInboundText([t, b].filter((s) => s !== ''), workRef);
   return {
     text: sanitized.text,
     inbound: { neutralizations: sanitized.neutralizations, digest: sanitized.digest },

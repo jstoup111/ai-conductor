@@ -117,3 +117,5 @@ sequenceDiagram
    echoed in the `claim` output and on the claim record.
 5. **Privilege narrowing is out of scope.** `--dangerously-skip-permissions` is untouched;
    filed as a separate intake so this boundary can land without a provider-launch change.
+
+> **Amended 2026-09-09 by #1479:** The operator approved treating title and body as separate Markdown inputs. `buildText` passes the non-empty fields as an ordered array to `sanitizeInboundText`; that seam segments each field independently, aggregates category counts, then joins the sanitized fields with a blank line under one armor pair and one digest. An unclosed title fence cannot exempt body prose. The existing single-string API and armored-text idempotence remain supported; code inside either field remains unchanged.

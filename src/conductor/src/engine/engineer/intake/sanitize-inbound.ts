@@ -129,13 +129,15 @@ function existingArmor(input: string, workRef: WorkRef): boolean {
  * armor. This is pure and idempotent: valid armor is returned unchanged, and
  * emitted markers never match a rule.
  */
-export function sanitizeInboundText(input: string, workRef: WorkRef): InboundSanitizeResult {
-  if (existingArmor(input, workRef)) {
+export function sanitizeInboundText(input: string | readonly string[], workRef: WorkRef): InboundSanitizeResult {
+  if (typeof input === 'string' && existingArmor(input, workRef)) {
     return { text: input, neutralizations: [], digest: digest(input.split('\n').slice(1, -1).join('\n')) };
   }
 
   const counts = new Map<InboundCategory, number>();
-  const body = segmentInboundText(input)
+  const fields = typeof input === 'string' ? [input] : input;
+  // Markdown state belongs to each tracker field, never to the joined envelope.
+  const body = fields.map((field) => segmentInboundText(field)
     .map((segment) => {
       if (segment.kind === 'code') return segment.lines.join('\n');
       return segment.lines
@@ -150,7 +152,7 @@ export function sanitizeInboundText(input: string, workRef: WorkRef): InboundSan
         })
         .join('\n');
     })
-    .join('\n');
+    .join('\n')).join('\n\n');
   const bodyDigest = digest(body);
   const text = [`<<< INBOUND sourceRef=${formatWorkRef(workRef)} digest=${bodyDigest} >>>`, body, ARMOR_CLOSE].join('\n');
   const neutralizations = [...counts].map(([category, count]) => ({ category, count }));
