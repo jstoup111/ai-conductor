@@ -26,6 +26,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Build review now limits test-quality checks to changed behavior and explicitly recovers uncertain coverage. ([implementation PR #2324](https://github.com/jstoup111/ai-conductor/pull/2324)).
 - OpenTelemetry traces now report the released harness version as service.version. ([implementation PR #2399](https://github.com/jstoup111/ai-conductor/pull/2399)).
+- Spec landing commits now summarize the DECIDE artifacts they contain. ([implementation PR #2400](https://github.com/jstoup111/ai-conductor/pull/2400)).
 
 ### Fixed
 
