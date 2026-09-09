@@ -6,21 +6,23 @@
  * memory-setup entry is dispatched BEFORE the interactive pipeline boots.
  *
  * Behaviour:
- *   1. If `.memory/` is a real directory (pre-migration content): invoke
+ *   1. If `.memory/` is a non-empty real directory (pre-migration content): invoke
  *      `migrateMemory` (copy-verify-swap) to move it into the canonical store
  *      and replace it with a symlink.
- *   2. Otherwise (no `.memory/` yet or already a symlink): invoke
+ *   2. Otherwise (absent, empty, or already a symlink): invoke
  *      `ensureMemoryStore` to create the canonical store + symlink. Idempotent.
  *
  * The project prelude invokes this once before pipeline startup. This is the
  * SINGLE LIVE PATH for memory initialisation.
  */
 
-import { lstat } from 'fs/promises';
+import { lstat, readdir, readlink, rmdir } from 'fs/promises';
 import { join, isAbsolute, resolve as resolvePath } from 'path';
 import { existsSync } from 'fs';
-import { ensureMemoryStore } from './memory-store.js';
+import { homedir } from 'os';
+import { ensureMemoryStore, projectKey } from './memory-store.js';
 import { migrateMemory } from './memory-migrate.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Dispatch type (mirrors RegistryDispatch pattern)
@@ -42,12 +44,99 @@ export function detectMemoryCommand(argv: string[]): MemoryDispatch | null {
   return null;
 }
 
+export type MemoryPathState = 'absent' | 'directory' | 'symlink';
+
+async function memoryPathState(projectDir: string): Promise<MemoryPathState> {
+  try {
+    const stat = await lstat(join(projectDir, '.memory'));
+    return stat.isSymbolicLink() ? 'symlink' : 'directory';
+  } catch {
+    return 'absent';
+  }
+}
+
+export type MemorySetupBranch = 'migrated' | 'ensured';
+
+/**
+ * Runs the idempotent setup branch without CLI output or exit-code mapping.
+ *
+ * `onBranch` is invoked with the selected branch BEFORE that branch's work
+ * begins, so a caller that reports progress still reports it when the work
+ * then throws. Callers that only need the outcome ignore it and use the
+ * resolved value.
+ */
+export async function setupMemoryStore(
+  projectDir: string,
+  onBranch?: (branch: MemorySetupBranch) => void,
+): Promise<MemorySetupBranch> {
+  if (!existsSync(projectDir)) {
+    throw new Error(`directory does not exist: ${projectDir}`);
+  }
+
+  if (await memoryPathState(projectDir) === 'directory') {
+    const memoryPath = join(projectDir, '.memory');
+    if ((await readdir(memoryPath)).length > 0) {
+      onBranch?.('migrated');
+      await migrateMemory(projectDir);
+      return 'migrated';
+    }
+    // Fresh setup needs no backup/copy. rmdir refuses if entries appeared
+    // after readdir, so concurrent writes cannot be recursively discarded.
+    await rmdir(memoryPath);
+  }
+
+  onBranch?.('ensured');
+  await ensureMemoryStore(projectDir);
+  return 'ensured';
+}
+
+async function isCanonicalMemoryPath(projectDir: string): Promise<boolean> {
+  try {
+    const target = await readlink(join(projectDir, '.memory'));
+    const home = process.env.HOME ?? process.env.USERPROFILE ?? homedir();
+    return target === join(home, '.ai-conductor', 'memory', await projectKey(projectDir), 'harness');
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Observes daemon memory setup without allowing setup or event failures to
+ * interrupt dispatch preparation.
+ */
+export async function observeMemorySetup(
+  projectDir: string,
+  events?: Pick<ConductorEventEmitter, 'emit'>,
+): Promise<void> {
+  const before = await memoryPathState(projectDir);
+  let reason: string | undefined;
+
+  try {
+    await setupMemoryStore(projectDir);
+  } catch (error) {
+    reason = error instanceof Error ? error.message : String(error);
+  }
+
+  let canonical = false;
+  try {
+    canonical = await isCanonicalMemoryPath(projectDir);
+  } catch (error) {
+    reason ??= error instanceof Error ? error.message : String(error);
+  }
+
+  try {
+    await events?.emit({ type: 'memory_setup', before, canonical, ...(reason ? { reason } : {}) });
+  } catch {
+    // Telemetry is best-effort; daemon dispatch must survive an observer fault.
+  }
+}
+
 /**
  * Execute `conduct memory setup [dir]`.
  *
  * Logic:
  *   - Resolve `dir` (default: cwd).
- *   - If `.memory/` is a real directory → `migrateMemory` (copy-verify-swap,
+ *   - If `.memory/` is a non-empty real directory → `migrateMemory` (copy-verify-swap,
  *     adr-2026-06-29-safe-reversible-memory-migration). On failure, prints the error and returns exit code 1.
  *   - Otherwise → `ensureMemoryStore` (create canonical dir + symlink,
  *     idempotent). On failure, prints the error and returns exit code 1.
@@ -58,30 +147,14 @@ export async function dispatchMemorySetup(d: MemoryDispatch): Promise<number> {
   const rawDir = d.dir ?? process.cwd();
   const projectDir = isAbsolute(rawDir) ? rawDir : resolvePath(process.cwd(), rawDir);
 
-  if (!existsSync(projectDir)) {
-    console.error(`conduct memory setup: directory does not exist: ${projectDir}`);
-    return 1;
-  }
-
-  const memPath = join(projectDir, '.memory');
-
   try {
-    let memStat: Awaited<ReturnType<typeof lstat>> | null = null;
-    try {
-      memStat = await lstat(memPath);
-    } catch {
-      // .memory does not exist — fall through to ensureMemoryStore.
-    }
-
-    if (memStat && !memStat.isSymbolicLink()) {
-      // Real directory (pre-migration content) — migrate it.
-      console.log(`conduct memory setup: migrating existing .memory/ in ${projectDir}`);
-      await migrateMemory(projectDir);
-    } else {
-      // No .memory/ yet, or already a symlink — ensure the canonical store.
-      await ensureMemoryStore(projectDir);
-    }
-
+    await setupMemoryStore(projectDir, (branch) => {
+      if (branch === 'migrated') {
+        // Real directory (pre-migration content) — announce before migrating so
+        // the breadcrumb survives a migration failure.
+        console.log(`conduct memory setup: migrating existing .memory/ in ${projectDir}`);
+      }
+    });
     console.log(`conduct memory setup: .memory/ is ready at ${projectDir}`);
     return 0;
   } catch (e) {

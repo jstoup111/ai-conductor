@@ -423,6 +423,9 @@ export class OtelVisualizer implements VisualizerPlugin {
   private handleEvent(event: ConductorEvent): void {
     if (!this.spanManager) return;
     switch (event.type) {
+      case 'memory_setup':
+        this.metricsRecorder?.onMemorySetup(event);
+        break;
       case 'step_started':
         this.spanManager.onStepStarted(event);
         break;

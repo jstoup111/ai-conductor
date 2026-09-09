@@ -1,7 +1,7 @@
-// Covers: task:6
+// Covers: task:4, task:6
 import { execFile } from 'node:child_process';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, lstat } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { promisify } from 'node:util';
@@ -51,17 +51,27 @@ import {
 } from '../../src/engine/daemon-deps.js';
 import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 import { buildWorkOrder } from '../../src/engine/work-order.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFileAsync = promisify(execFile);
 
 describe('engine/daemon-deps', () => {
   let dir: string;
+  let savedHome: string | undefined;
+  let savedProfile: string | undefined;
   beforeEach(async () => {
     vi.mocked(execa).mockReset();
+    vi.mocked(prepareWorktree).mockReset();
     dir = await mkdtemp(join(tmpdir(), 'daemon-deps-'));
     await mkdir(join(dir, '.pipeline'), { recursive: true });
+    savedHome = process.env.HOME;
+    savedProfile = process.env.USERPROFILE;
+    process.env.HOME = join(dir, 'home');
+    process.env.USERPROFILE = process.env.HOME;
   });
   afterEach(async () => {
+    process.env.HOME = savedHome;
+    process.env.USERPROFILE = savedProfile;
     await rm(dir, { recursive: true, force: true });
     watcherHandlers.clear();
     watcher.on.mockClear();
@@ -220,6 +230,30 @@ describe('engine/daemon-deps', () => {
       undefined,
       expect.objectContaining({ baseSha: 'base-sha', events, dispatchStart: true, dispatchStartTimeoutSeconds: 7 }),
     );
+  });
+
+  it('sets up memory and emits its placement verdict before project preparation', async () => {
+    vi.mocked(prepareWorktree).mockImplementation(async (path) => {
+      expect((await lstat(join(path, '.memory'))).isSymbolicLink()).toBe(true);
+    });
+    vi.mocked(execa).mockResolvedValue({ stdout: 'base-sha' } as Awaited<ReturnType<typeof execa>>);
+    const d = makeFeatureRunnerDeps({
+      projectRoot: dir,
+      worktreeBase: join(dir, '.worktrees'),
+      baseBranch: 'main',
+      runConductorInWorktree: async () => {},
+    });
+    const path = join(dir, 'feature');
+    await mkdir(path);
+    const events = new ConductorEventEmitter();
+    const emit = vi.spyOn(events, 'emit');
+
+    await d.prepareWorktree!({ path, branch: 'feat/feature' }, undefined, events);
+
+    expect(prepareWorktree).toHaveBeenCalledOnce();
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'memory_setup', before: 'absent', canonical: true,
+    }));
   });
 
   it('threads the dispatched work order pin into preparation without resolving the moving branch tip', async () => {

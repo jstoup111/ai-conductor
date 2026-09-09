@@ -22,6 +22,7 @@ export class MetricsListener {
 
   /** The handler table is the source of truth for both subscription and projection. */
   static readonly METRICS_HANDLERS: Record<OtelEventType, MetricsHandler> = {
+    memory_setup: (listener, event) => (listener.feature(event) ?? listener.recorder).onMemorySetup(event as Extract<OtelEvent, { type: 'memory_setup' }>),
     daemon_backlog_snapshot: (listener, event) => listener.recorder.onDaemonBacklog(event as Extract<OtelEvent, { type: 'daemon_backlog_snapshot' }>),
     feature_dispatch_started: (listener, event) => {
       const dispatch = event as Extract<OtelEvent, { type: 'feature_dispatch_started' }>;

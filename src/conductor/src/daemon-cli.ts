@@ -2612,6 +2612,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'project_setup':
       log(`${dot} project setup ${event.ran ? 'ran' : 'skipped'} (${event.reason})`);
       break;
+    case 'memory_setup': {
+      const reason = event.reason ? ` (${event.reason})` : '';
+      log(`${dot} memory setup ${event.canonical ? 'canonical' : 'non-canonical'} (before: ${event.before})${reason}`);
+      break;
+    }
     case 'operator_rewind':
       log(
         `${chalk.yellow('↶ REWIND:')} ${event.target} (operator; demoted ${event.demoted.join(', ') || 'none'})`,

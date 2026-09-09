@@ -92,6 +92,10 @@ export class MetricsRecorder {
 
   onRunClose(outcome: RunOutcome): void { this.instruments.runOutcomesCounter.add(1, this.withIdentity({ outcome })); }
 
+  onMemorySetup(event: Extract<ConductorEvent, { type: 'memory_setup' }>): void {
+    this.instruments.memorySetupCounter.add(1, this.withIdentity({ before: event.before, canonical: event.canonical }));
+  }
+
   onDaemonBacklog(snapshot: Extract<ConductorEvent, { type: 'daemon_backlog_snapshot' }>): void {
     for (const state of BACKLOG_STATES) {
       this.instruments.daemonBacklogGauge.record(snapshot.counts[state], this.withIdentity({ state }));
@@ -125,6 +129,7 @@ const BACKLOG_STATES = ['eligible', 'waiting', 'blocked', 'gated', 'parked'] as 
 const BLOCK_REASONS = ['paused', 'build_auth_missing', 'gh_version', 'episode_active'] as const;
 
 interface MetricInstruments {
+  memorySetupCounter: Counter;
   durationHistogram: Histogram; retriesCounter: Counter; dispatchesCounter: Counter;
   featureCostGauge: Gauge; featureStepCostGauge: Gauge; featureStepTokensGauge: Gauge;
   closeoutDurationHistogram: Histogram; runOutcomesCounter: Counter;
@@ -139,6 +144,7 @@ function createInstruments(meter: Meter): MetricInstruments {
   const counter = (name: string, description: string) => meter.createCounter(name, { description });
   const gauge = (name: string, description: string, unit?: string) => meter.createGauge(name, { description, ...(unit ? { unit } : {}) });
   return {
+    memorySetupCounter: counter('conductor.memory.setup', 'Memory setup observations by prior state and canonical placement'),
     durationHistogram: histogram('conductor.step.duration', 'Duration of conductor steps in milliseconds; quantiles saturate above 8 h (largest finite bucket boundary)'),
     retriesCounter: counter('conductor.step.retries', 'Number of retries per conductor step'),
     dispatchesCounter: counter('conductor.step.dispatches', 'Number of conductor step dispatches classified by metering status'),

@@ -10,6 +10,8 @@
 
 Five bounded tasks deliver #2062 by running the existing memory-store setup on the daemon's worktree-preparation path and reporting the resulting placement as an event. Memory read paths, provider selection, the write-fallback design, the migration algorithm, and the inline prelude's behaviour are outside this small slice.
 
+> **Amended 2026-09-09 by #2062 (operator clarification of AB-1):** The operator approved fresh setup for an empty real `.memory/`: create the canonical symlink without a migration backup. Task 2 owns this setup-branch correction for both callers of its shared core. Non-empty directories still use the unchanged migration algorithm; existing migration progress/error output is retained for that branch. The migration ADR records the same clarification.
+
 ## Technical Approach
 
 The defect is a missing call, not missing behaviour. `dispatchMemorySetup` already performs exactly what the daemon path needs — migrate a real `.memory/` directory, otherwise ensure the canonical store — and both branches are idempotent. It is reached only from the inline prelude, so no daemon-dispatched worktree ever gets it.
@@ -19,6 +21,8 @@ Add the call at the daemon's dispatch preparation binding in `daemon-deps.ts`, i
 `dispatchMemorySetup` writes progress lines to the console and maps failure to an exit code, which is right for a CLI and wrong for a daemon path: a raw console line for a fact an event already carries is the second-channel pattern the setup-marker decision record forbids on this exact function's neighbour. Extract the branch selection into a non-printing core in the same module that returns which branch ran and throws on failure, leave `dispatchMemorySetup` delegating to it with its printing and exit codes intact, and give the daemon path a separate fail-open observer in that module: it classifies `.memory/` before the call, runs the core, re-reads the path afterwards to decide whether it is canonical, emits one `memory_setup` event, and never throws. Deciding "canonical" by observing the path after the fact, rather than by trusting the branch that ran, keeps the report honest when the store is in a state neither branch fully resolved.
 
 The event carries the state observed before setup, a boolean canonical verdict, and an optional failure reason. Registration is three places and no more: the union in `types/events.ts`, the exhaustive sink map in `event-sinks.ts` (persisted and rendered, not audited, not OTel), and the `renderDaemonEvent` switch in `daemon-cli.ts`. Persistence is derived from the sink map by the existing persister, so no persister change is needed, and the daemon dashboard's own subscription list is unrelated to the feature log this event belongs to.
+
+> **Amended 2026-09-09 by #2062:** AB-2 identifies that the OTel exclusion conflicts with ADR-014 Decision 1. Task 1 includes OTel subscription and translation through the existing metrics listener and recorder. The `conductor.memory.setup` counter records each observation, including before the first step, with `before` and `canonical` attributes and the established project/worker/feature identity. Failure text stays in the event and log, not metric labels. Persistence, rendering, and audit disposition remain as specified.
 
 Tests follow the repository's local test rules. The observer's cases are unit tests in the memory CLI test file, which already establishes the pattern this work reuses: redirect `HOME` and `USERPROFILE` to a temporary directory in `beforeEach`, build a real local git repository with an `origin` remote so the project key is stable, and restore the environment in `afterEach`. Search for that fixture pair in the existing memory tests rather than inventing a new one. The daemon binding test reuses the existing daemon-deps convention of mocking the worktree-prepare module and asserting on the binding's observable calls, so the real observer runs against a temporary worktree while the project setup boundary stays mocked. The renderer test follows the existing per-event daemon render tests, which call the exported renderer directly with a collecting log. No test may reach a real provider, network, or package registry, and none of these needs a conductor run.
 
@@ -56,6 +60,8 @@ Tests follow the repository's local test rules. The observer's cases are unit te
 2. The sink map compiles as an exhaustive record over the union with the new variant declared.
 3. The scoped test run for the sink test file passes and the typecheck target covering tests is clean.
 
+> **Amended 2026-09-09 by #2062:** In Task 1 Steps 1 and 4 and Done when 1, OTel is included, not excluded, to satisfy ADR-014 Decision 1. Task 1 also owns `src/conductor/src/engine/otel/metrics-listener.ts`, `metrics.ts`, `otel-visualizer.ts`, and `src/conductor/test/engine/otel/memory-setup.test.ts`. Done when: an event emitted before any step starts produces one `conductor.memory.setup` observation for successful and failed placement through the real emitter, listener, recorder, and an in-memory exporter; failure text is absent from metric attributes. Existing OTel tests and the sink test must pass. Document the counter in the daemon guide and README.
+
 ### Task 2: Extract a non-printing setup core and add a fail-open observer
 **Story:** Story 1
 **Type:** happy-path
@@ -76,6 +82,8 @@ Tests follow the repository's local test rules. The observer's cases are unit te
 2. The migrated fixture's entry content is readable through the canonical store after the observer runs.
 3. The already-canonical fixture's symlink target and existing store entries are byte-identical before and after.
 4. The existing CLI dispatch tests still pass unchanged, proving the extraction preserved its printing and exit-code contract.
+
+> **Amended 2026-09-09 by #2062:** Task 2 additionally completes only when an empty real directory becomes the canonical symlink through fresh setup, no `.memory.pre-migrate.bak` is created, and the daemon observer emits one `before: directory, canonical: true` event. Empty removal must use a non-recursive operation that refuses newly added entries. Existing migration-failure fixtures must contain an entry so they continue to exercise migration rather than the newly clarified fresh-setup branch.
 
 ### Task 3: Contain a setup failure so the dispatch survives it
 **Story:** Story 1 (negative path)
