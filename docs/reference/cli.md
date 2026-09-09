@@ -290,7 +290,7 @@ ai-conductor daemon [--concurrency <n>] [--max-items <n>] [--continuous] [--max-
 | `--max-cost <tokens>` | integer | unset | Total output-token ceiling for the run. |
 | `--max-runtime <seconds>` | integer | unset | Wall-clock ceiling for the run. |
 | `--idle-poll <seconds>` | integer | `60` | Seconds between polls when the backlog is empty. |
-| `--max-idle-polls <n>` | integer | unbounded | Stop after this many consecutive empty polls. |
+| `--max-idle-polls <n>` | integer | unbounded | Stop after this many consecutive empty polls; dispatching a feature restarts the count. |
 | `--no-watch` | boolean | watcher on | Drops the HALT-marker filesystem watcher and relies on polling alone. Not listed in `--help`. |
 | `--completed`, `--all` | boolean | `false` | Include already-processed features in the startup dashboard's console output. The persisted log sink never includes them. Not listed in `--help`. |
 

@@ -805,7 +805,8 @@ Three things shape the run itself. Every flag, its default, and its exact parsin
    from merged configuration; without either, it uses the serial default, `1`. The explicit flag wins.
    At `N=1`, the daemon preserves the recorded serial dispatch and maintenance ordering.
 2. **Bound a `--continuous` run.** With no `--max-items`, `--max-cost`, `--max-runtime`, or
-   `--max-idle-polls` it warns and then runs until you `Ctrl-C` it.
+   `--max-idle-polls` it warns and then runs until you `Ctrl-C` it. Dispatching a feature restarts
+   the consecutive empty-poll count used by `--max-idle-polls`.
 3. **Pass `--idle-poll` explicitly** if the polling interval matters. Its effective default does not
    match its help text.
 
