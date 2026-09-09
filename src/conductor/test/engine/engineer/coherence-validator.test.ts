@@ -162,6 +162,18 @@ ${indexedCriteria.map((criterion, index) => {
     });
   });
 
+  it.each(['fail', 'gap'] as const)('retains the legacy %s diagnostic before a missing-task diagnostic', (verdict) => {
+    const result = checkCriterionCoverage(
+      correctedRows('plan', 'task-404').map((row) => row.rowClass === 'criterion' ? { ...row, correction: undefined, verdict } : row),
+      stories,
+      plan,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.gaps.map((gap) => gap.gapId)).toEqual([
+      'criterion:verdict:1', 'criterion:task-missing:1:404',
+    ]);
+  });
+
   it('suppresses cannot-deliver when a corrected criterion cites an unresolvable task', () => {
     const missing = checkCriterionCoverage(correctedRows('plan', 'task-404'), stories, plan);
     expect(missing).toEqual({

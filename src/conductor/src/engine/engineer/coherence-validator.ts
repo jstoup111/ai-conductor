@@ -457,6 +457,16 @@ export function checkCriterionCoverage(
       continue;
     }
 
+    // Legacy verdict diagnostics must survive later disposition/task failures.
+    // Corrected fail rows use the new diagnostic only after their tasks resolve.
+    if (row.verdict !== 'covered' && !(row.verdict === 'fail' && row.correction)) {
+      gaps.push({
+        gapId: `criterion:verdict:${index + 1}`,
+        criterion: row.criterion,
+        detail: `criterion row is marked ${row.verdict}: ${row.criterion}`,
+      });
+    }
+
     if (!row.disposition) {
       gaps.push({
         gapId: `criterion:disposition-missing:${index + 1}`,
@@ -485,23 +495,15 @@ export function checkCriterionCoverage(
     }
     const citedTaskIds = taskResolution.ids;
 
-    if (row.verdict !== 'covered') {
-      if (row.verdict === 'fail' && row.correction) {
-        const correctionDetail = row.correction.layer === 'architecture'
-          ? `constraint: ${row.correction.decisionRef}`
-          : 'correction: plan';
-        gaps.push({
-          gapId: `criterion:cannot-deliver-${row.correction.layer}:${index + 1}`,
-          criterion: row.criterion,
-          detail: `criterion "${row.criterion}" cannot be delivered by cited tasks ${row.citedIds.join(', ')}; quote: ${row.quote}; ${correctionDetail}`,
-        });
-      } else {
-        gaps.push({
-          gapId: `criterion:verdict:${index + 1}`,
-          criterion: row.criterion,
-          detail: `criterion row is marked ${row.verdict}: ${row.criterion}`,
-        });
-      }
+    if (row.verdict === 'fail' && row.correction) {
+      const correctionDetail = row.correction.layer === 'architecture'
+        ? `constraint: ${row.correction.decisionRef}`
+        : 'correction: plan';
+      gaps.push({
+        gapId: `criterion:cannot-deliver-${row.correction.layer}:${index + 1}`,
+        criterion: row.criterion,
+        detail: `criterion "${row.criterion}" cannot be delivered by cited tasks ${row.citedIds.join(', ')}; quote: ${row.quote}; ${correctionDetail}`,
+      });
     }
 
     const quote = normalizeWhitespace(row.quote);
