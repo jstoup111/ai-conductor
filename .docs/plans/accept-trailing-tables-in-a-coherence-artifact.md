@@ -125,7 +125,7 @@ the shape this change accepts.
 **Story:** Story 1
 **Story:** Story 2
 **Type:** happy-path
-**Files:** src/conductor/test/engine/coherence-corpus.ts, src/conductor/test/engine/coherence-parse.test.ts, src/conductor/test/engine/daemon-backlog.test.ts
+**Files:** src/conductor/test/engine/coherence-corpus.ts, src/conductor/test/engine/coherence-parse.test.ts, src/conductor/test/engine/daemon-backlog.test.ts, src/conductor/test/engine/engineer/coherence-validator.test.ts
 **Dependencies:** 2, 3
 
 **Steps:**

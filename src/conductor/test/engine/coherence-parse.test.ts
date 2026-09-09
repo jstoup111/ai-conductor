@@ -1,4 +1,4 @@
-// Covers: task:2, task:3
+// Covers: task:1, task:2, task:3, task:4
 // Test: direct coherence parser import isolation
 
 import { readFileSync } from 'node:fs';
@@ -115,6 +115,23 @@ describe('parseCoherenceArtifact', () => {
     });
   });
 
+  it('rejects an unknown data row class before a trailing separator row', () => {
+    const result = parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| widget | task:3 | story:3 | covered | evidence |
+| --- | --- | --- | --- | --- |
+`);
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'unparseable-coherence-artifact',
+      detail: {
+        line: 3,
+        message: expect.stringContaining('unknown coherence row class "widget"'),
+      },
+    });
+  });
+
   it.each([
     ['verdict', 'probably-covered', 'diff-local'],
     ['disposition', 'covered', 'maybe-local'],
@@ -180,6 +197,158 @@ ${row}
     });
   });
 
+  it('returns only mapping rows when an ordinary-prose table follows the mapping table', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| task | task:1 | story:1 | covered | "mapping evidence" |
+
+| Topic | Notes |
+| --- | --- |
+| Follow-up | This is ordinary prose in a table. |
+`),
+    ).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'task',
+          id: 'task:1',
+          citedIds: ['story:1'],
+          verdict: 'covered',
+          quote: 'mapping evidence',
+        },
+      ],
+    });
+  });
+
+  it('rejects a trailing table whose first row is prose before a stranded task mapping row', () => {
+    const result = parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| task | task:1 | story:1 | covered | "mapping evidence" |
+
+| Topic | Notes | Details | Status | Evidence |
+| --- | --- | --- | --- | --- |
+| Follow-up | This is ordinary prose. | No mapping. | noted | prose evidence |
+| task | task:2 | story:1 | covered | "stranded mapping evidence" |
+`);
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'unparseable-coherence-artifact',
+      detail: {
+        line: 8,
+        message: expect.stringContaining(
+          'mapping rows must appear in a table whose first data row is a mapping row',
+        ),
+      },
+    });
+  });
+
+  it('ignores a trailing table containing only ordinary-prose data rows', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| task | task:1 | story:1 | covered | "mapping evidence" |
+
+| Topic | Notes |
+| --- | --- |
+| Follow-up | This is ordinary prose in a table. |
+| Next step | This is more ordinary prose in a table. |
+`),
+    ).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'task',
+          id: 'task:1',
+          citedIds: ['story:1'],
+          verdict: 'covered',
+          quote: 'mapping evidence',
+        },
+      ],
+    });
+  });
+
+  it('preserves mapping rows separated by a blank-line paragraph', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| task | task:1 | story:1 | covered | "first mapping evidence" |
+
+This paragraph explains the mappings below.
+
+| task | task:2 | story:2 | covered | "second mapping evidence" |
+`),
+    ).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'task',
+          id: 'task:1',
+          citedIds: ['story:1'],
+          verdict: 'covered',
+          quote: 'first mapping evidence',
+        },
+        {
+          rowClass: 'task',
+          id: 'task:2',
+          citedIds: ['story:2'],
+          verdict: 'covered',
+          quote: 'second mapping evidence',
+        },
+      ],
+    });
+  });
+
+  it('preserves a story mapping table followed by a valid task mapping table', () => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| story | story:1 | outcome:1 | covered | "story mapping evidence" |
+
+| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| task | task:2 | story:1 | covered | "task mapping evidence" |
+`),
+    ).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'story',
+          id: 'story:1',
+          citedIds: ['outcome:1'],
+          verdict: 'covered',
+          quote: 'story mapping evidence',
+        },
+        {
+          rowClass: 'task',
+          id: 'task:2',
+          citedIds: ['story:1'],
+          verdict: 'covered',
+          quote: 'task mapping evidence',
+        },
+      ],
+    });
+  });
+
+  it('reports the second data-row width in a later task mapping table', () => {
+    const result = parseCoherenceArtifact(`| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+| story | story:1 | outcome:1 | covered | "story mapping evidence" |
+
+| Mapping kind | Mapping id | Cited ids | Status | Evidence |
+| --- | --- | --- | --- | --- |
+| task | task:2 | story:1 | covered | "first task mapping evidence" |
+| task | task:3 | story:1 | covered |
+`);
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'unparseable-coherence-artifact',
+      detail: { line: 8, message: 'legacy row expected 5 and actual 4 cells' },
+    });
+  });
+
   it.each([
     ['id', '| task |  | story:3 | covered | evidence |', 'legacy row has empty id'],
     ['verdict', '| task | task:3 | story:3 |  | evidence |', 'legacy row has empty verdict'],
@@ -196,8 +365,8 @@ ${row}
     });
   });
 
-  // Covers: task:6
-  it('preserves legacy acceptances and enumerates only shared-parser acceptance expansions', () => {
+  // Covers: task:4, task:6
+  it('preserves legacy acceptances and pins the widened shared-parser corpus boundary', () => {
     const observations = coherenceRegressionCorpus.map((fixture) => ({
       ...fixture,
       oracleAccepted: retiredHasCoherenceTableDataRow(fixture.content),
@@ -209,7 +378,7 @@ ${row}
       observations
         .filter(({ oracleAccepted, parserAccepted }) => oracleAccepted && !parserAccepted)
         .map(({ slug }) => slug),
-    ).toEqual(['decide-artifact-coherence-check']);
+    ).toEqual([]);
     expect(observations
       .filter(({ oracleAccepted, parserAccepted }) => !oracleAccepted && parserAccepted)
       .map(({ name }) => name),
@@ -217,6 +386,40 @@ ${row}
       'five-wide header over six-wide separator and criterion row',
       'six-wide header over five-wide separator and legacy row',
     ]);
+
+    expect(observations.filter(({ parserAccepted }) => parserAccepted).map(({ name }) => name)).toEqual([
+      'minimal valid table',
+      'ragged mixed legacy and criterion rows',
+      'five-wide header over six-wide separator and criterion row',
+      'six-wide header over five-wide separator and legacy row',
+      'zero-criterion legacy artifact',
+      'shipped second-table artifact',
+      'two mapping tables',
+    ]);
+
+    const twoMappingTables = coherenceRegressionCorpus.find(({ slug }) => slug === 'two-mapping-tables');
+    if (twoMappingTables?.content === undefined || twoMappingTables.content === null) {
+      throw new Error('missing two-mapping-tables corpus fixture');
+    }
+    expect(parseCoherenceArtifact(twoMappingTables.content)).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'story',
+          id: 'story:1',
+          citedIds: ['outcome:1'],
+          verdict: 'covered',
+          quote: 'fixture',
+        },
+        {
+          rowClass: 'task',
+          id: 'task:2',
+          citedIds: ['story:1'],
+          verdict: 'covered',
+          quote: 'fixture',
+        },
+      ],
+    });
   });
 });
 

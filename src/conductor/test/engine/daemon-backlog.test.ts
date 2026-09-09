@@ -1,4 +1,4 @@
-// Covers: task:5
+// Covers: task:5, task:4
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile as fsReadFile, readdir } from 'fs/promises';
 import { join } from 'path';
@@ -575,7 +575,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     );
   });
 
-  // Covers: task:6 — the retired acceptance corpus is exercised through
+  // Covers: task:4, task:6 — the retired acceptance corpus is exercised through
   // discovery as well as directly through the shared parser.
   it('makes every retired-predicate acceptance visible through un-deduped discovery', async () => {
     await mkdir(join(dir, '.docs/coherence'), { recursive: true });
@@ -614,6 +614,26 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       'five-wide header over six-wide separator and criterion row',
       'six-wide header over five-wide separator and legacy row',
     ]);
+    expect(observations.filter(({ parserAccepted }) => parserAccepted).map(({ name }) => name)).toEqual([
+      'minimal valid table',
+      'ragged mixed legacy and criterion rows',
+      'five-wide header over six-wide separator and criterion row',
+      'six-wide header over five-wide separator and legacy row',
+      'zero-criterion legacy artifact',
+      'shipped second-table artifact',
+      'two mapping tables',
+    ]);
+    expect(observations.filter(({ parserAccepted }) => !parserAccepted).map(({ name }) => name)).toContain(
+      'stranded mapping row in prose table',
+    );
+    expect(observations.filter(({ oracleAccepted, parserAccepted }) => oracleAccepted && !parserAccepted)).toEqual([]);
+    const shippedSecondTable = coherenceRegressionCorpus.find(
+      ({ slug }) => slug === 'decide-artifact-coherence-check',
+    );
+    if (shippedSecondTable?.content === undefined || shippedSecondTable.content === null) {
+      throw new Error('missing shipped second-table corpus fixture');
+    }
+    expect(parseCoherenceArtifact(shippedSecondTable.content)).toMatchObject({ ok: true });
     const visibility = observations
       .filter(({ oracleAccepted }) => oracleAccepted)
       .map(({ slug, parserAccepted }) => {
@@ -634,8 +654,22 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       { slug: 'minimal-valid-table', disposition: 'eligible', parserAccepted: true },
       { slug: 'ragged-mixed-rows', disposition: 'eligible', parserAccepted: true },
       { slug: 'zero-criterion-legacy', disposition: 'eligible', parserAccepted: true },
-      { slug: 'decide-artifact-coherence-check', disposition: 'blocked-missing-coherence', parserAccepted: false },
+      { slug: 'decide-artifact-coherence-check', disposition: 'eligible', parserAccepted: true },
+      { slug: 'two-mapping-tables', disposition: 'eligible', parserAccepted: true },
     ]);
+
+    for (const fixture of observations.filter(({ parserAccepted, content }) => !parserAccepted && content !== null)) {
+      const parsed = parseCoherenceArtifact(fixture.content);
+      expect(parsed.ok).toBe(false);
+      // Empty and table-less artifacts are intentionally parser refusals
+      // without structural details. Every structural refusal, including the
+      // stranded mapping row, must surface its precise diagnostic in discovery.
+      if (parsed.ok || parsed.detail === undefined) continue;
+      const blocked = result.blocked.find((item) => item.slug === fixture.slug);
+      expect(blocked?.reason).toBe('missing-coherence');
+      expect(blocked?.remedy).toContain(`line ${parsed.detail.line}`);
+      expect(blocked?.remedy).toContain(parsed.detail.message);
+    }
 
     for (const fixture of observations.filter(({ oracleAccepted, parserAccepted }) => oracleAccepted && !parserAccepted)) {
       const parsed = parseCoherenceArtifact(fixture.content);

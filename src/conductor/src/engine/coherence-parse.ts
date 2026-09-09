@@ -156,11 +156,13 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
   }
 
   const lines = text.split('\n');
-  const tableRowLines: Array<{ cells: string[]; line: number }> = [];
+  const tableRowLines: Array<Array<{ cells: string[]; line: number }>> = [[]];
+  let currentTableRowLines = tableRowLines[0];
   let sawHeader = false;
   let sawSeparator = false;
 
-  for (const [index, line] of lines.entries()) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     const lineNumber = index + 1;
     const cells = splitRow(line);
     if (cells === null) continue;
@@ -178,15 +180,50 @@ export function parseCoherenceArtifact(text: string | null): CoherenceParseResul
       sawSeparator = true;
       continue;
     }
-    tableRowLines.push({ cells, line: lineNumber });
+    if (currentTableRowLines === tableRowLines[0] && currentTableRowLines.length === 0) {
+      currentTableRowLines.push({ cells, line: lineNumber });
+      continue;
+    }
+    let nextPipeLineIndex = index + 1;
+    let nextCells: string[] | null = null;
+    while (nextPipeLineIndex < lines.length && nextCells === null) {
+      nextCells = splitRow(lines[nextPipeLineIndex]);
+      nextPipeLineIndex += 1;
+    }
+    if (nextCells !== null && isSeparatorRow(nextCells)) {
+      currentTableRowLines = [];
+      tableRowLines.push(currentTableRowLines);
+      index = nextPipeLineIndex - 1;
+      continue;
+    }
+    currentTableRowLines.push({ cells, line: lineNumber });
   }
 
-  if (!sawHeader || !sawSeparator || tableRowLines.length === 0) {
+  if (!sawHeader || !sawSeparator || tableRowLines[0].length === 0) {
     return { ok: false, reason: 'unparseable-coherence-artifact' };
   }
 
   const rows: CoherenceRow[] = [];
-  for (const { cells, line } of tableRowLines) {
+  const coherenceTableRows = [...tableRowLines[0]];
+  for (const tableRows of tableRowLines.slice(1)) {
+    const firstRowClass = tableRows[0]?.cells[0].trim().toLowerCase();
+    if (firstRowClass === 'criterion' || LEGACY_ROW_CLASSES.has(firstRowClass ?? '')) {
+      coherenceTableRows.push(...tableRows);
+      continue;
+    }
+    const strandedMappingRow = tableRows.find(({ cells }) => {
+      const rowClass = cells[0].trim().toLowerCase();
+      return rowClass === 'criterion' || LEGACY_ROW_CLASSES.has(rowClass);
+    });
+    if (strandedMappingRow !== undefined) {
+      return structuralParseFailure('unparseable-coherence-artifact', {
+        line: strandedMappingRow.line,
+        message: 'mapping rows must appear in a table whose first data row is a mapping row',
+      });
+    }
+  }
+
+  for (const { cells, line } of coherenceTableRows) {
     const rawRowClass = cells[0];
     const rowClass = rawRowClass.trim().toLowerCase();
     if (rowClass === 'criterion') {
