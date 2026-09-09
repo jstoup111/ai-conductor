@@ -9292,7 +9292,7 @@ describe('engine/conductor', () => {
       const state = result.ok ? (result.value as Record<string, unknown>) : {};
       // The failed member still blocks the group, but satisfied siblings remain
       // done so a resume does not discard their validated work.
-      expect(state.manual_test).not.toBe('done');
+      expect(state.manual_test).toBe('failed');
       expect(state.prd_audit).toBe('done');
       expect(state.architecture_review_as_built).toBe('done');
     });
