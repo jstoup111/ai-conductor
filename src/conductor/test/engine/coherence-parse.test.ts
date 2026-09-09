@@ -78,8 +78,50 @@ describe('parseCoherenceArtifact', () => {
       reason: 'unparseable-criterion-row',
       detail: {
         line: 3,
-        message: expect.stringContaining('expected 6 and actual 5'),
+        message: expect.stringContaining('expected 6 or 7 and actual 5'),
       },
+    });
+  });
+
+  it.each([
+    ['plan', { layer: 'plan' }],
+    ['architecture:adr-x#D2', { layer: 'architecture', decisionRef: 'adr-x#D2' }],
+  ])('accepts a seven-cell fail row with a %s correction', (correction, expectedCorrection) => {
+    expect(
+      parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget | task:3 | fail | evidence | diff-local | ${correction} |
+`),
+    ).toEqual({
+      ok: true,
+      rows: [
+        {
+          rowClass: 'criterion',
+          criterion: 'Given a widget',
+          citedIds: ['task:3'],
+          verdict: 'fail',
+          quote: 'evidence',
+          disposition: 'diff-local',
+          correction: expectedCorrection,
+        },
+      ],
+    });
+  });
+
+  it.each([
+    ['an unknown correction', 'fail', 'rewrite-plan', 'unknown criterion correction "rewrite-plan"'],
+    ['an empty architecture correction', 'fail', 'architecture:', 'architecture correction must reference a decision'],
+    ['a correction on a covered row', 'covered', 'plan', 'only a fail row may carry a correction'],
+  ])('rejects %s', (_label, verdict, correction, message) => {
+    const result = parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget | task:3 | ${verdict} | evidence | diff-local | ${correction} |
+`);
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'unparseable-criterion-row',
+      detail: { line: 3, message },
     });
   });
 
