@@ -17,6 +17,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - Operators can set per-rubric confidence floors so low-confidence build-review findings do not block progress. ([implementation PR #2393](https://github.com/jstoup111/ai-conductor/pull/2393)).
 - Daemon OpenTelemetry exports now report queue depth, liveness, dispatch blockers, and feature lifecycle outcomes. ([implementation PR #2423](https://github.com/jstoup111/ai-conductor/pull/2423)).
+- Plan landing now halts oversized plans unless they include a documented scope exception. ([implementation PR #2410](https://github.com/jstoup111/ai-conductor/pull/2410)).
 
 ### Changed
 
@@ -30,6 +31,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Rate-limit retry waits now honor explicitly stated seconds, minutes, and hours. ([implementation PR #2456](https://github.com/jstoup111/ai-conductor/pull/2456)).
 - Rebase halts now identify missing feature content and provide the correct recovery steps. ([implementation PR #2396](https://github.com/jstoup111/ai-conductor/pull/2396)).
 - Telemetry no longer counts provider-free step completions as provider dispatches. ([implementation PR #2401](https://github.com/jstoup111/ai-conductor/pull/2401)).
+- Recover sealed artifact verification when recorded remediation tasks append to a valid baseline. ([implementation PR #2394](https://github.com/jstoup111/ai-conductor/pull/2394)).
 
 ## Migration
 
