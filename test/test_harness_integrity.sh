@@ -67,39 +67,18 @@ warn_check() {
 echo ""
 echo -e "${BOLD}1. Bash syntax${NC}"
 
-for script in "${HARNESS_DIR}"/bin/*; do
-  [ -f "$script" ] || continue
-  name=$(basename "$script")
-  # Only check files with bash shebang
-  if head -1 "$script" | grep -q "bash"; then
-    bash -n "$script" 2>/dev/null
-    assert "${name}" $?
-  fi
-done
-
-# Also check hook scripts
-for script in "${HARNESS_DIR}"/hooks/claude/*.sh; do
-  [ -f "$script" ] || continue
-  name="hooks/claude/$(basename "$script")"
+syntax_script_count=0
+while IFS= read -r script; do
+  [ -n "$script" ] || continue
+  name="${script#"${HARNESS_DIR}/"}"
   bash -n "$script" 2>/dev/null
   assert "${name}" $?
-done
+  syntax_script_count=$((syntax_script_count + 1))
+done < <(bash "${HARNESS_DIR}/test/lint_shell.sh" --list)
 
-# Check test scripts
-for script in "${HARNESS_DIR}"/test/*.sh; do
-  [ -f "$script" ] || continue
-  name="test/$(basename "$script")"
-  bash -n "$script" 2>/dev/null
-  assert "${name}" $?
-done
-
-# Check .github/scripts scripts
-for script in "${HARNESS_DIR}"/.github/scripts/*.sh; do
-  [ -f "$script" ] || continue
-  name=".github/scripts/$(basename "$script")"
-  bash -n "$script" 2>/dev/null
-  assert "${name}" $?
-done
+if [ "$syntax_script_count" -eq 0 ]; then
+  assert "shell syntax enumeration returned no files (remediation: fix test/lint_shell.sh)" 1
+fi
 
 # ── 1b. ShellCheck static analysis ───────────────────────────────────────────
 # Check 1 proves each script *parses*; this proves it is not one of the classes
@@ -153,6 +132,9 @@ else
       ;;
   esac
 fi
+
+bash "${HARNESS_DIR}/test/test_lint_shell_enumeration.sh"
+assert "shell script enumeration regression suite" $?
 
 # ── 1c. No NUL bytes in tracked text source ─────────────────────────────────
 # A raw NUL control character committed into a source file makes that file
