@@ -53,7 +53,7 @@ async function appendAuthorizationEvent(
   event: Extract<ConductorEvent, { type: 'kickback_budget_adjustment_authorized' }>,
   appendEvent?: typeof appendCloseoutEvent,
 ): Promise<void> {
-  if (appendEvent) await appendEvent(worktree, event);
+  if (appendEvent) appendEvent(worktree, event);
   else await appendKickbackBudgetAuthorizationEvent(worktree, event);
   const events = new ConductorEventEmitter();
   const persister = new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events);
