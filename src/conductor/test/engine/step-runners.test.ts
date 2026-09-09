@@ -4381,6 +4381,7 @@ TIER: M`,
         if (args[0] === 'show' && args[1] === `head:${planRepoPath}`) return { exitCode: 0, stdout: '# Plan\n', stderr: '' };
         if (args[0] === 'show' && args[1] === `head:.docs/stories/${basename(planRepoPath)}`) return { exitCode: 0, stdout: '# Stories\n', stderr: '' };
         if (args[0] === 'show' && args[1] === 'head:x') return { exitCode: 0, stdout: 'export const x = true;\n', stderr: '' };
+        if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '', stderr: '' };
         return { exitCode: 1, stdout: '', stderr: '' };
       };
       return git;
