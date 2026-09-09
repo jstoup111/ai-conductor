@@ -140,21 +140,26 @@ The five legacy row classes — `outcome`, `fr`, `story`, `task`, and `adr` — 
 | Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |
 ```
 
-The `criterion` row class uses six cells because its subject is the exact criterion text and its coverage
-claim needs grounded task evidence plus a locality decision:
+The `criterion` row class uses six required cells because its subject is the exact criterion text and its
+coverage claim needs grounded task evidence plus a locality decision. A seventh, optional `Correction`
+cell is permitted only on a `fail` row:
 
 ```markdown
-| Row class | Criterion | Cited task id(s) | Verdict | Quote | Disposition |
-| criterion | <exact extracted criterion> | task-<id>[, ...] | covered | <verbatim task-body span> | diff-local |
+| Row class | Criterion | Cited task id(s) | Verdict | Quote | Disposition | Correction |
+| criterion | <exact extracted criterion> | task-<id>[, ...] | fail | <verbatim Done when span> | diff-local | plan |
 ```
 
 Criterion text must match one extracted happy- or negative-path story criterion exactly. The verdict is
-one of `covered`, `gap`, or `fail`; the disposition is `diff-local` or `outside-diff`. Unknown values,
-missing cells, an empty criterion, and an empty cited-task list make the row unparseable. The quote may
+one of `covered`, `gap`, or `fail`; the disposition is `diff-local` or `outside-diff`. A correction is
+either `plan` or `architecture:adr-<stem>#D<n>`; the latter must name a decision enumerated from a
+non-deleted ADR in the current change set. Unknown values, missing required cells, a correction on a
+non-`fail` row, an empty criterion, and an empty cited-task list make the row unparseable. The quote may
 span lines because comparison normalizes whitespace, but it must otherwise be an exact substring of at
-least one cited task's body. The land gate requires a one-to-one criterion set and accepts only `covered`
-plus `diff-local` without a waiver. Already-landed coherence artifacts with no criterion rows remain valid
-for daemon discovery and BUILD.
+least one cited task's `Done when:` block. A corrected `fail` row reports a waivable
+`criterion:cannot-deliver-plan:<n>` or `criterion:cannot-deliver-architecture:<n>` gap; an unresolved
+architecture decision additionally reports `criterion:correction-unknown-decision:<n>`. The land gate
+requires a one-to-one criterion set and accepts only `covered` plus `diff-local` without a waiver.
+Already-landed coherence artifacts with no criterion rows remain valid for daemon discovery and BUILD.
 
 ### Write guards
 

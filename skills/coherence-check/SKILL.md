@@ -113,7 +113,13 @@ The artifact is a Markdown table (or one table per row class) with these columns
    do not require its completion, so they can ground a claim the builder is not
    obliged to satisfy. The disposition is exactly `diff-local` or
    `outside-diff`; only `diff-local` is non-negative and lands without a
-   coherence waiver.
+   coherence waiver. A seventh optional correction cell is allowed only when
+   the verdict is `fail`: use `plan`, or
+   `architecture:adr-<stem>#D<n>` for a decision enumerated from a non-deleted
+   ADR in the current change set. A corrected failure records a waivable
+   `criterion:cannot-deliver-<layer>:<n>` gap; an unknown architecture decision
+   also reports `criterion:correction-unknown-decision:<n>`. Do not use the
+   correction cell on `covered` or `gap` rows.
 
 ### 4b. Verdict Vocabulary
 
@@ -180,13 +186,14 @@ verdict says what is wrong with it. For a contradiction, prefix its Notes with `
 counterpart id and the specific opposing text, so a reader can adjudicate without
 re-deriving the finding.
 
-Use `CANNOT-DELIVER:` for an achievability failure (§4g). Criterion rows have exactly six cells
-and no Notes cell: keep their exact criterion text, task ids, verdict, verbatim `Done when` quote,
-and disposition intact. Put the explanation in a prose paragraph directly below the table, naming
-the criterion, cited task id, quoted check, and any binding ADR decision. Do not add a seventh cell,
-append commentary to the quote, or create another table for these notes. This prefix is explanatory
-prose, not a verdict, disposition, gap id, or correction-layer routing signal; the existing criterion
-`fail` verdict supplies the blocking result. Do not invent an achievability-specific gap-id form.
+Use `CANNOT-DELIVER:` for an achievability failure (§4g). Criterion rows have six required cells
+and no Notes cell; a `fail` row may add the optional seventh correction cell described in §4a.
+Keep the exact criterion text, task ids, verdict, verbatim `Done when` quote, and disposition
+intact. Put the explanation in a prose paragraph directly below the table, naming the criterion,
+cited task id, quoted check, and any binding ADR decision. Do not append commentary to the quote
+or create another table for these notes. This prefix is explanatory prose, not a verdict,
+disposition, gap id, or correction-layer routing signal. Do not invent an achievability-specific
+gap-id form.
 
 ### 4d. Consistency Pass — Contradiction and Oscillation
 
