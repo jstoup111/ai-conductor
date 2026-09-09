@@ -69,27 +69,28 @@ no longer costs the whole audit but can never be silently dropped.
 - [ ] A gate-level test proves a report with any rejected row cannot satisfy the prd_audit gate, and the halt/blocking reason text contains each rejected row's key text and reason
 - [ ] Report-level fault fixtures (no PRD marker, no table) still return the whole-report mechanical-fault result
 
-## Story 4: NC decisions bind key and summary; mismatch re-asks
+## Story 4: NC decisions retain authority across equivalent findings
 
-As the operator, I want my accept/refuse decision on a no-owner finding to apply on a later
-audit lap only when both its key and its summary match the re-reported finding, so that a
-decision I recorded never silently applies to a different finding.
+As the operator, I want my explicit decision on a no-owner finding preserved and applied to the same behavior on later laps, so that wording and report-local keys cannot discard it or authorize a different behavior.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given an accepted decision recorded for NC.1 with summary "unplanned npm test change", when a later lap's report lists NC.1 with the identical summary and relation outside-visible, then the finding classifies as accepted and does not block
-- Given a criterion-keyed decision for S4.1, when a later lap re-reports S4.1 OVER_SCOPE with different summary wording, then the decision still applies (criterion-only matching for story-criterion keys is unchanged)
+- Given an accepted decision on an NC finding, when a later report repeats its source and current validated binding, then it remains accepted without another operator decision
+- Given the same widening reworded or renumbered, when reconciliation validates its relationship to the original decided case, then the original accept or refuse remains authoritative
+- Given a criterion-keyed decision for S4.1, when a later report changes its summary, then its criterion-based decision remains applicable
+- Given a valid cleared decision about an original finding that no longer uses the same current-report key, when capture runs, then it preserves the original decision before reconciling the current report
 
 #### Negative Paths
-- Given an accepted decision recorded for NC.1 with summary "unplanned npm test change", when a later lap's report lists the same substance renumbered as NC.2, then the finding classifies as blocking-undecided and the halt offers a fresh decision entry for it
-- Given an accepted decision recorded for NC.1, when a later lap's report lists NC.1 with a reworded summary, then the finding classifies as blocking-undecided and the operator is re-asked — the recorded decision is never applied to the mismatched finding
-- Given a `HALT.cleared` decision entry naming a key the current report does not flag, when decisions are harvested, then nothing is recorded for that entry and the defect is surfaced by name (existing D7 behavior over the widened key space)
+- Given a materially different widening sharing an NC ordinal or similar summary, when reconciliation runs, then it does not inherit the earlier approval
+- Given uncertain equivalence or stale reconciliation evidence, when completion is checked, then no automatic acceptance occurs and the original decision remains preserved
+- Given an altered immutable offer reference or missing rationale, when capture runs, then the entry produces a named defect and cannot grant authority
+- Given an old cleared acceptance replayed after an explicit refusal, when capture runs again, then the replay does not override the later refusal
 
 ### Done When
-- [ ] `accepted-widenings.json` entries for NC keys carry the summary they bind to, and the matcher requires both fields for NC entries while criterion entries keep criterion-only matching
-- [ ] Tests cover apply-on-match, re-ask-on-renumber, and re-ask-on-reword for NC entries
-- [ ] Last-decision-wins holds per matched identity for NC entries as it does for criteria
+- [ ] The persisted original decision and later current-source relationship remain separately attributable after restart
+- [ ] Routing and artifact completion agree on accepted, refused, and unresolved current findings
+- [ ] Capture and reconciliation expose distinct defect results, retaining valid historical authority when current matching fails
 
 ## Story 5: No-owner findings route uniformly and never become work
 
