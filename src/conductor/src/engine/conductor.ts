@@ -9111,9 +9111,13 @@ export class Conductor {
           // Task 10: Integrate episode coordinator for deadline-aware backoff.
           // Task 18: Deadline-first — use parsed timezone-aware deadline if available.
           if (result.rateLimited) {
+            // Capture the clock once so a fallback duration is not shortened by
+            // the elapsed milliseconds between constructing and consuming its
+            // synthetic deadline.
+            const rateLimitNow = Date.now();
             // Task 18: Prefer deadline-first (parsed from message) over escalation (waitSeconds)
-            const deadline = result.deadline ?? Date.now() + (result.waitSeconds ?? 300) * 1000;
-            let waitMs = deadline - Date.now();
+            const deadline = result.deadline ?? rateLimitNow + (result.waitSeconds ?? 300) * 1000;
+            let waitMs = deadline - rateLimitNow;
             // Ensure waitMs is positive (defensive guard against clock skew or past deadlines)
             if (waitMs <= 0) {
               waitMs = 1;
