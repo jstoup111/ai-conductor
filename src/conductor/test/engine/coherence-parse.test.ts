@@ -143,20 +143,36 @@ describe('parseCoherenceArtifact', () => {
     ).toEqual(fixtures.map(({ sixCellCriterionRows }) => sixCellCriterionRows));
   });
 
-  it.each([
-    ['an unknown correction', 'fail', 'rewrite-plan', 'unknown criterion correction "rewrite-plan"'],
-    ['an empty architecture correction', 'fail', 'architecture:', 'architecture correction must reference a decision'],
-    ['a correction on a covered row', 'covered', 'plan', 'only a fail row may carry a correction'],
-  ])('rejects %s', (_label, verdict, correction, message) => {
-    const result = parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+  it('rejects an unknown correction with its exact line-numbered detail', () => {
+    expect(parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
 | --- | --- | --- | --- | --- | --- |
-| criterion | Given a widget | task:3 | ${verdict} | evidence | diff-local | ${correction} |
-`);
-
-    expect(result).toMatchObject({
+| criterion | Given a widget | task:3 | fail | evidence | diff-local | rewrite-plan |
+`)).toEqual({
       ok: false,
       reason: 'unparseable-criterion-row',
-      detail: { line: 3, message },
+      detail: { line: 3, message: 'unknown criterion correction "rewrite-plan"' },
+    });
+  });
+
+  it('rejects an empty architecture correction with its exact line-numbered detail', () => {
+    expect(parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget | task:3 | fail | evidence | diff-local | architecture: |
+`)).toEqual({
+      ok: false,
+      reason: 'unparseable-criterion-row',
+      detail: { line: 3, message: 'architecture correction must reference a decision' },
+    });
+  });
+
+  it('rejects a correction on a covered row with its exact line-numbered detail', () => {
+    expect(parseCoherenceArtifact(`| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition | Correction |
+| --- | --- | --- | --- | --- | --- |
+| criterion | Given a widget | task:3 | covered | evidence | diff-local | plan |
+`)).toEqual({
+      ok: false,
+      reason: 'unparseable-criterion-row',
+      detail: { line: 3, message: 'only a fail row may carry a correction' },
     });
   });
 
