@@ -725,8 +725,10 @@ so dashboards can chart terminal runs without deriving counts from trace-query m
 Dispatch metrics use the same projection as the shipped-record cost rollup. Every invoked
 `provider_attempt` contributes one `conductor.step.dispatches` point, including failed attempts; an
 unavailable provider that was never invoked does not. A successful attempt suppresses its matching
-`step_completed` compatibility record, while an unmatched completion remains a legacy fallback. This
-keeps OTel dispatch counts, token totals, and costs aligned with `## Cost` in the shipped record.
+`step_completed` compatibility record, while an unmatched completion remains a legacy fallback only
+when it carries token usage, provider attribution, or a model. Provider-free completions do not count
+as dispatches. This keeps OTel dispatch counts, token totals, and costs aligned with `## Cost` in the
+shipped record.
 
 Every authoritative dispatch still emits `conductor.step.dispatches` with `step` and a `metering`
 attribute of `fully-metered`, `cost-unmetered`, or `unmetered`. A terminal step also emits a

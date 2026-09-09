@@ -20,11 +20,18 @@ tokens but has no USD cost (subscription billing). Modeling reality requires thr
 |---|---|---|---|
 | `fully-metered` | yes | yes | Claude (`total_cost_usd`) |
 | `cost-unmetered` | **yes** | **no** | Codex (`turn.completed.usage`, subscription) |
-| `unmetered` | no | no | non-LLM steps; parse failure; interactive dispatches |
+| `unmetered` | no | no | non-LLM **dispatches**; parse failure; interactive dispatches |
 
 The existing `unmetered` keeps its exact present meaning (the third row). The second row is
 **new and additive** — which is what makes every committed record already on main keep
 parsing correctly.
+
+**Amended 2026-09-07** (`adr-2026-07-27-cost-unmetered-is-a-first-class-state` D5-D7, feature
+`stop-counting-provider-free-step-completions-as-un`, #1906): the table classifies **dispatches**.
+A `step_completed` record that no invoked provider attempt matched and that carries no
+`tokenUsage`, `actualProvider`, `preferredProvider` or `model` never called a provider, so it is
+excluded before classification — it is neither metered nor unmetered and has no row here. A
+non-LLM step that *did* invoke a provider and reported no usage is still the third row.
 
 This preserves ADR-2026-07-22-b's governing principle — *"a partial total is visibly
 partial"* — and extends it: a total that omits Codex cost must be visibly partial too,

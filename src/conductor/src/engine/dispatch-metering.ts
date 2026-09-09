@@ -14,7 +14,8 @@ export interface DispatchMeteringObservation {
  *
  * `provider_attempt` is authoritative. A successful attempt suppresses the
  * matching `step_completed` compatibility record; an unmatched completion is
- * retained for ledgers produced before provider-attempt metering existed.
+ * retained only when it carries provider evidence, for ledgers produced before
+ * provider-attempt metering existed.
  */
 export class DispatchMeteringTracker {
   private readonly unmatchedSuccessfulAttempts = new Map<string, number>();
@@ -53,6 +54,7 @@ export class DispatchMeteringTracker {
         }
       }
 
+      if (!DispatchMeteringTracker.hasProviderEvidence(record)) return undefined;
       return DispatchMeteringTracker.toObservation(record, step, provider);
     }
 
@@ -61,6 +63,19 @@ export class DispatchMeteringTracker {
 
   private static key(step: string, provider: string): string {
     return `${step}\0${provider}`;
+  }
+
+  private static hasProviderEvidence(record: Record<string, unknown>): boolean {
+    return DispatchMeteringTracker.isTokenUsage(record.tokenUsage)
+      || (typeof record.actualProvider === 'string' && record.actualProvider.length > 0)
+      || (typeof record.preferredProvider === 'string' && record.preferredProvider.length > 0)
+      || (typeof record.model === 'string' && record.model.length > 0);
+  }
+
+  private static isTokenUsage(value: unknown): value is TokenUsage {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+    const record = value as Record<string, unknown>;
+    return typeof record.input === 'number' && typeof record.output === 'number';
   }
 
   private static toObservation(

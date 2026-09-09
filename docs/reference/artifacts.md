@@ -628,8 +628,10 @@ normalized. Changing that computation is a breaking change to persisted identity
 (`input`, `output`, `cache_read`, `cache_creation`, `cost_usd`, `dispatches`, `retries`, `halts`,
 `unmetered`, and a `providers:` sub-block when non-empty). Appending is safe because the parser stops at
 the closing `---`. Its dispatch ledger treats invoked `provider_attempt` events as authoritative,
-deduplicates their matching successful `step_completed` events, and retains unmatched completions as
-a legacy fallback. The OTel dispatch counters use this same projection. After each terminal step,
+deduplicates their matching successful `step_completed` events, and retains an unmatched completion
+as a legacy fallback only when it carries provider evidence (token usage, a provider, or a model).
+Provider-free step completions are not dispatches. The OTel dispatch counters use this same projection.
+After each terminal step,
 the engine emits a non-persisted `feature_cost_snapshot` projection carrying cumulative whole-feature,
 per-step cost, and per-step token dimensions. `feature_usage_total` at closeout carries the resulting
 whole-feature values to the same OTel `conductor.feature.cost` gauge, so the last successful snapshot,
