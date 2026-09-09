@@ -95,6 +95,8 @@ Tests stay at unit level and inject every boundary. The visualizer test file alr
 2. `npm run typecheck` and `npm run typecheck:test` both pass, and the file's pre-existing missing-declaration `@ts-expect-error` still holds.
 3. The unchanged sink registry test file passes, so the four accessors return the same members they returned before the change.
 
+> **Amended 2026-09-09 by #1490:** The operator declined provider-attempt tracing because halts and retries already provide the needed trace detail. Set `provider_attempt` to `otelTrace: false`, remove it from the traced handler table and trace subscription set, and preserve its existing persistence and optional legacy metrics accounting. The mapped coverage contract follows the remaining registry-derived traced set, including upstream additions such as `memory_setup`; the historical fifteen-type counts below are superseded. Task 4 proves the production `metrics: false` visualizer never subscribes to attempts and emits no attempt span event. This resolves PG-3 without adding telemetry.
+
 ### Task 2: Route traced events through a compile-checked handler table
 **Story:** Story 1
 **Type:** happy-path

@@ -41,7 +41,7 @@ const tracedHandlerTable = {
   step_started: () => undefined,
   step_completed: () => undefined,
   step_failed: () => undefined,
-  provider_attempt: () => undefined,
+  memory_setup: () => undefined,
   feature_usage_total: () => undefined,
   feature_cost_snapshot: () => undefined,
   step_retry: () => undefined,
@@ -102,14 +102,7 @@ const tracedEventSamples: {
     maxAttempts: 3,
     reason: 'transient failure',
   },
-  provider_attempt: {
-    type: 'provider_attempt',
-    step: 'build',
-    provider: 'claude',
-    outcome: 'success',
-    invoked: true,
-    model: 'test-model',
-  },
+  memory_setup: { type: 'memory_setup', before: 'absent', canonical: true },
   gate_verdict: { type: 'gate_verdict', step: 'build', satisfied: true },
   kickback: { type: 'kickback', from: 'build_review', to: 'build', count: 1 },
   pipeline_closeout: {
@@ -233,6 +226,7 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
         ),
         {
           runId: 'test-registry-subscriptions',
+          metrics: false,
           feature: 'test-feature',
           project: 'test-project',
           spanExporter,
@@ -275,6 +269,26 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
       spans: spanExporter.getFinishedSpans(),
       metrics: metricExporter.getMetrics(),
     }).toEqual({ subscriptions: expect.not.arrayContaining(['gate_blocked']), spans: [], metrics: [] });
+  });
+
+  it('does not subscribe to provider attempts when exporting traces only', async () => {
+    const on = vi.spyOn(emitter, 'on');
+    const vis = new OtelVisualizer(
+      resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, pipelineDir),
+      { runId: 'attempt-exclusion', feature: 'test-feature', project: 'test-project',
+        metrics: false, spanExporter, metricExporter },
+    );
+    vis.start(emitter);
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'provider_attempt', step: 'build', provider: 'claude',
+      invoked: true, outcome: 'failure' });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await vis.stop();
+    expect(on.mock.calls.map(([type]) => type)).not.toContain('provider_attempt');
+    expect(otelTracedEventTypes()).not.toContain('provider_attempt');
+    const spans = spanExporter.getFinishedSpans();
+    expect(spans.map((span) => span.name)).toContain('build');
+    expect(spans.flatMap((span) => span.events).map((event) => event.name)).not.toContain('provider_attempt');
   });
 
   it('subscribes to gate_blocked when the mocked sink registry declares it traced', async () => {
