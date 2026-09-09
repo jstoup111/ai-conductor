@@ -66,7 +66,7 @@ prepare_checkout() {
   cp -r "$HARNESS_DIR/skills" "$CHECKOUT/skills"
   cp -r "$HARNESS_DIR/hooks" "$CHECKOUT/hooks"
   cp -r "$HARNESS_DIR/src" "$CHECKOUT/src"
-  cp "$HARNESS_DIR/HARNESS.md" "$CHECKOUT/HARNESS.md"
+  cp "$HARNESS_DIR/HARNESS.md" "$HARNESS_DIR/ARCHITECTURE.md" "$CHECKOUT/"
   cp "$HARNESS_DIR/VERSION" "$CHECKOUT/VERSION"
 
   mkdir -p "$(dirname "$CORRUPTION_SENTINEL")"

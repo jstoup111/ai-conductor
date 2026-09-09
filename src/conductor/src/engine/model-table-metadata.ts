@@ -10,10 +10,10 @@ export const MODEL_FREE_ENGINE_STEPS = [
 // Model-table metadata
 //
 // Human-readable "Why" text for each engine step, keyed by StepName. This is
-// the single source the generated HARNESS.md model-selection table (and the
+// the single source the generated ARCHITECTURE.md model-selection table (and the
 // completeness test in test/model-table-metadata.test.ts) draw from. It
 // consolidates rationale that used to live beside the autonomous model
-// defaults, plus the prose "Why" column from HARNESS.md's hand-authored
+// defaults, plus the prose "Why" column from ARCHITECTURE.md's hand-authored
 // model-selection table.
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -100,7 +100,7 @@ export const PIN_EXEMPT_SKILLS: readonly string[] = [
 // Extra model-table rows
 //
 // Rows for skills/agents that are NOT engine steps (no StepName / no entry in
-// CLAUDE_MODEL_POLICY.stepModels) but that HARNESS.md's model-selection table
+// CLAUDE_MODEL_POLICY.stepModels) but that ARCHITECTURE.md's model-selection table
 // still documents on the supported-host interactive path: domain-reviewer/evaluator
 // (dispatched sub-agents), code-review/composer/debugging/simplify/engineer (skills
 // with their own model pin but no engine step), conduct/pr (orchestration
