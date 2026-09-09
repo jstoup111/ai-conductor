@@ -1,27 +1,23 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-11T20:40:48.820Z
+Status: halted
 Slug: one-transient-failure-in-a-validation-group-member
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: build
+Phase: BUILD
 Branch: feat/daemon-one-transient-failure-in-a-validation-group-member
-Head SHA: 13fb5ee4326afddfe0e09d81512673c07caa151b
-Halted at: 2026-09-11T19:15:12.893Z
+Head SHA: 90060bffa79dbb696d7545ed45b47ad86f90ae88
+Halted at: 2026-09-09T04:03:31.879Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-rebase completed — parked for human review
-feature commit(s) lost during resolution: chore: reseal rebased repair evidence boundary (ca509b8be0cf; empty commit diff)
-
-Resume procedure:
-  1. Review the completed rebase and restore any missing feature content.
-  2. Confirm the working tree is clean.
-  3. rm .pipeline/HALT
-  4. Re-queue the feature for the daemon.
+Provider preparation exhausted.
+step: build
+phase: preparing
+attempt: 7bcb1368-b720-40a4-812c-e08219ff116c:build:5
+elapsed_ms: 300000
+recovery_count: 1
 ```
