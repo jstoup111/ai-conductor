@@ -1,3 +1,4 @@
+// Covers: task:5
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -1006,6 +1007,48 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
 });
 
 describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
+  it('renders an unparked halted slug with its reason and clear-to-resume remedy', () => {
+    const out = renderDashboard({
+      halted: [{ slug: 'held-by-halt', reason: 'needs human DECIDE' }],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+      parked: [],
+    });
+
+    expect(out).toBe([
+      '── inherited state ──────────────────────────────────────────',
+      'PARKED (0)',
+      'HALTED (1)',
+      "  • held-by-halt — reason: needs human DECIDE; remedy: clear this row's .pipeline/HALT to resume",
+      'IN-PROGRESS (0)',
+      'ELIGIBLE (0)',
+      '─────────────────────────────────────────────────────────────',
+    ].join('\n'));
+  });
+
+  it('renders a parked halted slug only in PARKED without increasing HALTED', () => {
+    const out = renderDashboard({
+      halted: [{ slug: 'held-by-halt', reason: 'needs human DECIDE' }],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+      parked: [{ slug: 'held-by-halt', provenance: 'operator' }],
+    });
+
+    expect(out).toBe([
+      '── inherited state ──────────────────────────────────────────',
+      'PARKED (1)',
+      '  • held-by-halt — operator-parked; remedy: run conduct daemon unpark for this row',
+      'HALTED (0)',
+      'IN-PROGRESS (0)',
+      'ELIGIBLE (0)',
+      '─────────────────────────────────────────────────────────────',
+    ].join('\n'));
+  });
+
   it('renders one reason and remedy for every excluded row', () => {
     const out = renderDashboard({
       halted: [

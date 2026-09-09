@@ -1,3 +1,4 @@
+// Covers: task:2
 /**
  * Tests for the daemon terminal-marker guarantee in Conductor.run().
  *
@@ -31,6 +32,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { Conductor, resolveLastStep } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
+import { readHaltClass } from '../../src/engine/halt-marker.js';
 
 // A runner that should never be invoked in these tests (the loop exits before
 // dispatching, or runs nothing). Throws loudly if called so a misfire is caught.
@@ -243,6 +245,79 @@ describe('conductor/terminal-marker-guarantee', () => {
 
     expect(emittedReason).toBeDefined();
     expect(emittedReason).toBe(halt.replace(/\n$/, ''));
+  });
+
+  it('daemon: a markerless blocked-gate exit without a park-boundary reader still HALTs needs-human with diagnostics', async () => {
+    await writeState(statePath, {
+      complexity_tier: 'M',
+      build: 'pending',
+    } as ConductState);
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'manual_test',
+      escalateBuildFailure: NOOP_ESCALATION,
+    });
+
+    const termination = await conductor.run();
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    const expectedExitIndex = ALL_STEPS.findIndex(({ name }) => name === 'manual_test');
+
+    expect({
+      termination,
+      halt,
+      haltClass: await readHaltClass(dir),
+    }).toMatchObject({
+      termination: undefined,
+      halt: expect.stringMatching(
+        new RegExp(`last step: manual_test[\\s\\S]*last event: gate_blocked, exit index: ${expectedExitIndex}`),
+      ),
+      haltClass: 'needs-human',
+    });
+  });
+
+  it('daemon: a markerless blocked-gate exit whose boundary reader reports no park still HALTs needs-human', async () => {
+    await writeState(statePath, {
+      complexity_tier: 'M',
+      build: 'pending',
+    } as ConductState);
+
+    const operatorParkBoundary = async () => false;
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: NO_DISPATCH_RUNNER,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'manual_test',
+      featureSlug: 'markerless-no-park',
+      operatorParkBoundary,
+      escalateBuildFailure: NOOP_ESCALATION,
+    });
+
+    const termination = await conductor.run();
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    const expectedExitIndex = ALL_STEPS.findIndex(({ name }) => name === 'manual_test');
+
+    expect({
+      termination,
+      halt,
+      haltClass: await readHaltClass(dir),
+    }).toMatchObject({
+      termination: undefined,
+      halt: expect.stringMatching(
+        new RegExp(`last step: manual_test[\\s\\S]*last event: gate_blocked, exit index: ${expectedExitIndex}`),
+      ),
+      haltClass: 'needs-human',
+    });
   });
 
   it('daemon: with no breadcrumb and no last event, the backstop still HALTs and names the absence', async () => {
