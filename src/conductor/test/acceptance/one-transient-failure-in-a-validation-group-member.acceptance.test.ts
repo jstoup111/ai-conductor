@@ -15,9 +15,13 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 const PRD_PASS = [
   '# PRD Audit',
   '',
-  '| FR | Verdict | Gap-class | Evidence | Accepted? |',
-  '|--|--|--|--|--|',
-  '| FR-1 | ALIGNED | | evidence.ts:1 | yes |',
+  '**PRD:** none',
+  '',
+  '## Verdict Table',
+  '',
+  '| Criterion | Grade | Plan task | Evidence |',
+  '|---|---|---|---|',
+  '| S1.1 | PASS | — | evidence.ts:1 |',
   '',
 ].join('\n');
 
