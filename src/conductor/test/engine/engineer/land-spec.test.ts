@@ -286,6 +286,70 @@ describe('Task 3: landSpec commits the DECIDE artifact summary', () => {
     expect(message).toContain('Stories:\n- Story 1: Explain the landed decision\n- Story 2: Keep the commit evidence inert');
     expect(message).toContain('Tasks: 3\n- Task 1\n- Task 2\n- Task 3');
   });
+
+  it('succeeds without a duplicate commit when valid artifacts are landed twice', async () => {
+    const idea = 'dep bump';
+    const dir = await seedValidWorktree(idea);
+    await mkdir(join(dir, '.docs', 'track'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'complexity'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs', 'stories', 'dep-bump.md'),
+      [
+        '# Stories: dep bump',
+        '',
+        '**Status:** Accepted',
+        '',
+        '## Story 1: Land idempotently',
+        '### Acceptance Criteria',
+        '#### Happy Path',
+        '- Given valid artifacts, when land runs twice, then the second run does not add a commit.',
+        '',
+      ].join('\n'),
+    );
+    await writeFile(
+      join(dir, '.docs', 'plans', 'dep-bump.md'),
+      [
+        '# Implementation Plan: dep bump',
+        '',
+        '**Stories:** .docs/stories/dep-bump.md',
+        '',
+        '## Summary',
+        '',
+        'Keep repeated land operations idempotent.',
+        '',
+        '### Task 1: Land once',
+        '**Story:** Story 1',
+        '**Done when:**',
+        '- Given valid artifacts, when land runs, then the commit succeeds.',
+        '- The commit remains reviewable.',
+        '',
+        '## Coverage Check',
+        '',
+        '| Criterion | Task ids | Quote | Disposition |',
+        '| --- | --- | --- | --- |',
+        '| Story 1 happy: Given valid artifacts, when land runs twice, then the second run does not add a commit. | 1 | "Given valid artifacts, when land runs, then the commit succeeds." | diff-local |',
+        '',
+      ].join('\n'),
+    );
+    await writeFile(join(dir, '.docs', 'track', 'dep-bump.md'), '# Track\n\nTrack: technical\n');
+    await writeFile(join(dir, '.docs', 'complexity', 'dep-bump.md'), '# Complexity\n\nTier: S\n');
+
+    const gh: GhRunner = async () => ({ stdout: 'operator\n' });
+    const first = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+    const firstMessage = await git(['log', '-1', '--format=%B'], dir);
+    expect(firstMessage).toContain('Summary:\nKeep repeated land operations idempotent.');
+    expect(firstMessage).toContain('Track: technical; Tier: S');
+    expect(firstMessage).toContain('Stories:\n- Story 1: Land idempotently');
+    expect(firstMessage).toContain('Tasks: 1\n- Task 1');
+
+    const headBeforeSecondLand = await git(['rev-parse', 'HEAD'], dir);
+    const countBeforeSecondLand = await git(['rev-list', '--count', 'HEAD'], dir);
+    const second = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(second).toEqual(first);
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBeforeSecondLand);
+    expect(await git(['rev-list', '--count', 'HEAD'], dir)).toBe(countBeforeSecondLand);
+  });
 });
 
 describe('Task 4: landSpec keeps degraded DECIDE artifacts landable', () => {
