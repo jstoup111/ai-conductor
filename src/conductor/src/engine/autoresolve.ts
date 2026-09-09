@@ -881,7 +881,7 @@ export async function escalate(
  *   1. Create isolated worktree at the feature branch tip (withResolveWorktree)
  *   2. Determine the base to rebase onto (resolveBase, auto-discovers origin/main)
  *   3. Capture pre-rebase feature commit subjects (for work-preservation guards)
- *   4. Start the rebase; if no conflicts → return refreshed (already current)
+ *   4. Start the rebase; clean rebases skip resolution, not verification or publication
  *   5. Run Tier1 (deterministic .docs/ resolution)
  *   6. If conflicts remain, run Tier2 (bounded assistant dispatch via resolver)
  *   7. Run acceptance guards (rebase state, branch current, commits preserved)
@@ -932,56 +932,54 @@ export async function resolveConflictingPr(
     // Start the rebase; this will fail with conflicts if base and feature diverged
     const rebaseAttempt = await git(['rebase', '--autostash', baseRef]);
     if (rebaseAttempt.exitCode === 0) {
-      // No conflicts — branch is already current or cleanly rebased
-      log(`${prUrl}: rebase completed without conflicts, no resolution needed`);
-      logOutcome(log, prUrl, 'rebase-clean', 'refreshed');
-      return { kind: 'refreshed' };
-    }
-
-    // Check for actual conflicted files
-    const conflicts = await conflictedFiles(git);
-    if (conflicts.length === 0) {
-      // Rebase failed but no unmerged files — treat as escalation-worthy error
-      log(`${prUrl}: rebase failed without conflicts; escalating`);
-      await escalate(prUrl, 'rebase-error', rebaseAttempt.stderr.trim(), {
-        runGh: deps.runGh,
-        cwd: repoCwd,
-        log,
-      });
-      logOutcome(log, prUrl, 'rebase-error', 'escalated');
-      return { kind: 'escalated' };
-    }
-
-    // Rebase paused with conflicts — enter resolution pipeline
-
-    // Stage 1: Deterministic .docs/ resolution
-    const tier1Result = await runTier1(git, worktreePath);
-    log(`${prUrl}: tier1 resolved ${tier1Result.resolved.length} file(s); ${tier1Result.remaining.length} remain`);
-
-    // Stage 2: Assistant dispatch for remaining conflicts
-    let tier2Outcome: RebaseOutcome | null = null;
-    if (tier1Result.remaining.length > 0) {
-      tier2Outcome = await runTier2(
-        git,
-        worktreePath,
-        baseRef,
-        tier1Result.remaining,
-        config.attemptCap,
-        deps.resolver,
-      );
-      log(`${prUrl}: tier2 outcome: ${tier2Outcome.kind}`);
-
-      // If tier2 failed (unresolved conflicts), escalate immediately
-      if (tier2Outcome.kind === 'conflict_halt') {
-        const reason = tier2Outcome.reason || 'could not resolve remaining conflicts';
-        await escalate(prUrl, 'tier2-resolve', reason, {
+      log(`${prUrl}: rebase completed without conflicts; verifying before publication`);
+    } else {
+      // Check for actual conflicted files
+      const conflicts = await conflictedFiles(git);
+      if (conflicts.length === 0) {
+        // Rebase failed but no unmerged files — treat as escalation-worthy error
+        log(`${prUrl}: rebase failed without conflicts; escalating`);
+        await escalate(prUrl, 'rebase-error', rebaseAttempt.stderr.trim(), {
           runGh: deps.runGh,
           cwd: repoCwd,
           log,
         });
-        logOutcome(log, prUrl, 'tier2-resolve', 'escalated');
+        logOutcome(log, prUrl, 'rebase-error', 'escalated');
         return { kind: 'escalated' };
       }
+
+      // Rebase paused with conflicts — enter resolution pipeline
+
+      // Stage 1: Deterministic .docs/ resolution
+      const tier1Result = await runTier1(git, worktreePath);
+      log(`${prUrl}: tier1 resolved ${tier1Result.resolved.length} file(s); ${tier1Result.remaining.length} remain`);
+
+      // Stage 2: Assistant dispatch for remaining conflicts
+      let tier2Outcome: RebaseOutcome | null = null;
+      if (tier1Result.remaining.length > 0) {
+        tier2Outcome = await runTier2(
+          git,
+          worktreePath,
+          baseRef,
+          tier1Result.remaining,
+          config.attemptCap,
+          deps.resolver,
+        );
+        log(`${prUrl}: tier2 outcome: ${tier2Outcome.kind}`);
+
+        // If tier2 failed (unresolved conflicts), escalate immediately
+        if (tier2Outcome.kind === 'conflict_halt') {
+          const reason = tier2Outcome.reason || 'could not resolve remaining conflicts';
+          await escalate(prUrl, 'tier2-resolve', reason, {
+            runGh: deps.runGh,
+            cwd: repoCwd,
+            log,
+          });
+          logOutcome(log, prUrl, 'tier2-resolve', 'escalated');
+          return { kind: 'escalated' };
+        }
+      }
+
     }
 
     // Work-preservation guards: verify the rebase succeeded correctly
