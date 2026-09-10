@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-10T22:54:46.078Z
+Status: halted
 Slug: record-land-gate-rejections-on-the-event-spine
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-record-land-gate-rejections-on-the-event-spine
-Head SHA: 0dcaf62bee965a76f71cdebf503d86cee10962db
-Halted at: 2026-09-10T12:20:08.464Z
+Head SHA: 795511d40c4575235f2aa20fc2fd14737aeaa720
+Halted at: 2026-09-10T23:28:27.019Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
