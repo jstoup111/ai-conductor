@@ -1,26 +1,24 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-10T10:14:40.903Z
+Status: halted
 Slug: export-the-telemetry-dimensions-the-engine-already
-Class: plan-gap
-Halting step: acceptance_specs
-Phase: BUILD
+Class: needs-human
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-export-the-telemetry-dimensions-the-engine-already
-Head SHA: 53badef09658f71a5f77a2081369dd90d0773eed
-Halted at: 2026-09-10T03:53:45.909Z
+Head SHA: dec32ea3dee02138f00af539510cf70461cdb59d
+Halted at: 2026-09-10T12:32:21.125Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Acceptance-spec authoring is blocked by an impossible event-order contract in the accepted stories and plan.
+Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-3 (adr-014-otel-observability-exporter decision 7), AB-4 (—)
 
-Story 2 requires every retry point to carry model, effort, provider, and tier, but at `step_retry` time the existing event spine has no tier: `provider_attempt` carries provider/model, and `step_retry` carries only optional escalated model/effort. Task 5 nevertheless requires recording the retry immediately from cached prior observations.
-
-Story 3 requires dispatch points to carry fallback, but Task 6 requires recording the point when `provider_attempt` arrives; the preferred provider needed to derive fallback is supplied only by the later `step_completed` event.
-
-Writing a non-vacuous acceptance RED spec would therefore freeze an unapproved choice: buffer observations until close, or add the missing dimensions to earlier events. Return to DECIDE and amend the story/architecture/plan so the event timing and source for each label are explicit, then clear `.pipeline/HALT` and `.pipeline/HALT.class` to resume.
+Blocking findings:
+AB-1 (REMEDIABLE; Task 4): Production `provider_attempt` events never populate `preferredProvider`, so required fallback labels are unreachable.
+AB-2 (REMEDIABLE; adr-014-otel-observability-exporter decision 10): Dispatch points cannot carry required effort/tier, and failed-duration/span paths drop resolved dimensions.
+AB-3 (DESIGN; adr-014-otel-observability-exporter decision 7): Tasks 9–10 changed a metrics-enabled `OtelVisualizer` path that every production root disables under the one-listener architecture.
+AB-4 (DESIGN; —): The approved latest-observation plan overwrites the only fallback reason before the successful fallback span closes, leaving Story 4's sealed outcome undelivered.
 ```
