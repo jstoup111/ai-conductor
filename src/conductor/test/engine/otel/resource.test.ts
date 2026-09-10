@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:4
+// Covers: task:1, task:2, task:4, task:11
 /**
  * T7: buildResource(ctx) — OTel Resource builder.
  * FR-6: service.name, conductor.run.id, conductor.feature, conductor.project.
@@ -347,7 +347,7 @@ describe('buildResource', () => {
       expect(buildResource(broken, 'metrics').attributes['service.instance.id']).toBe('project-a/worker-a');
     });
 
-    it('carries custom attributes on both signals without allowing conductor-key collisions or changing absent-attribute resources', () => {
+    it('carries custom attributes on both signals without allowing conductor-key collisions or changing the pre-attributes resources', () => {
       const custom = {
         'deployment.environment.name': 'staging',
         'team.name': 'platform',

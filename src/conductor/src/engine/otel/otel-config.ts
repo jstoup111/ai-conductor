@@ -46,6 +46,7 @@ function resolveAttributes(attributes: unknown): {
       warnings: ['otel.attributes must be a mapping from namespaced attribute keys to literal string values.'],
     };
   }
+  if (Object.keys(attributes).length === 0) return undefined;
 
   const resolved: Array<[string, string]> = [];
   const warnings: string[] = [];

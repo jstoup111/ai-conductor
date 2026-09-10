@@ -1,4 +1,4 @@
-// Covers: task:2, task:6, task:10
+// Covers: task:2, task:6, task:10, task:11
 import { describe, expect, it, vi } from 'vitest';
 import { AggregationTemporality, InMemoryMetricExporter } from '@opentelemetry/sdk-metrics';
 import { CapturingSpanExporter as InMemorySpanExporter } from './fixtures/capturing-span-exporter.js';
@@ -146,7 +146,11 @@ describe('interactive OTel wiring', () => {
     const emitter = new ConductorEventEmitter();
     const spanExporter = new InMemorySpanExporter();
     const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const rendererErrors: Array<{ error: string }> = [];
     buildExporters.mockReturnValue({ spanExporter, metricExporter });
+    emitter.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') rendererErrors.push({ error: event.error });
+    });
     vi.stubEnv('OTEL_RESOURCE_ATTRIBUTES', 'deployment.environment=from-environment,team.name=from-environment');
     const config = { otel: { exporter: 'otlp', endpoint: 'http://fake-collector:4318' } } as HarnessConfig;
     const context: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = {
@@ -183,6 +187,7 @@ describe('interactive OTel wiring', () => {
         'deployment.environment': 'from-environment',
         'team.name': 'from-environment',
       }));
+      expect(rendererErrors.filter(({ error }) => /attributes/i.test(error))).toEqual([]);
     } finally {
       vi.unstubAllEnvs();
       await rm(pipelineDir, { recursive: true, force: true });

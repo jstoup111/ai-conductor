@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:11
 import { describe, it, expect } from 'vitest';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 
@@ -384,14 +384,14 @@ describe('resolveOtelConfig', () => {
       });
     });
 
-    it('keeps both absent and empty attributes configurations enabled', () => {
-      expect([
-        resolveOtelConfig({ otel: { exporter: 'file' } }, PIPELINE_DIR),
-        resolveOtelConfig({ otel: { exporter: 'file', attributes: {} } }, PIPELINE_DIR),
-      ]).toMatchObject([
-        { enabled: true },
-        { enabled: true, attributes: {}, attributeWarnings: [] },
-      ]);
+    it('resolves an empty attributes map exactly like an absent map without leaking placeholders', () => {
+      // Regression guard: these are the pre-attributes default exporter fixtures.
+      const absent = resolveOtelConfig({ otel: { exporter: 'file' } }, PIPELINE_DIR);
+      const empty = resolveOtelConfig({ otel: { exporter: 'file', attributes: {} } }, PIPELINE_DIR);
+
+      expect(empty).toEqual(absent);
+      expect(Object.hasOwn(absent, 'attributes')).toBe(false);
+      expect(Object.hasOwn(absent, 'attributeWarnings')).toBe(false);
     });
 
     it('drops an attribute key without a namespace while retaining valid siblings', () => {
