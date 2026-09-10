@@ -7,7 +7,7 @@
 ## Summary
 
 Adds one static, validated `otel.attributes` map that rides every exported signal — trace Resource,
-metric Resource, and every metric data point — in interactive and daemon runs, in 10 tasks.
+metric Resource, and every metric data point — in interactive and daemon runs, in 11 tasks.
 
 ## Technical Approach
 
