@@ -10,6 +10,7 @@ import {
   EVENT_SINKS,
   auditedEventTypes,
   otelEventTypes,
+  otelTracedEventTypes,
   persistedEventTypes,
   renderedEventTypes,
   type SinkDeclaration,
@@ -340,14 +341,64 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('derives OpenTelemetry subscriptions from the sink registry without duplicates', () => {
-    const declared = Object.entries(EVENT_SINKS)
-      .filter(([, sinks]) => sinks.otel)
-      .map(([type]) => type);
-    const subscribed = otelEventTypes();
+  it('pins OpenTelemetry metrics-only and traced subscriptions', () => {
+    const metricsOnly = [
+      'daemon_backlog_snapshot',
+      'feature_dispatch_started',
+      'feature_dispatch_ended',
+      'feature_shipped',
+      'memory_setup',
+      'provider_attempt',
+      'feature_usage_total',
+      'feature_cost_snapshot',
+      'unattributed_progress',
+    ] satisfies Array<ConductorEvent['type']>;
+    const traced = [
+      'step_started',
+      'step_completed',
+      'step_failed',
+      'step_retry',
+      'feature_complete',
+      'build_stall',
+      'build_progress',
+      'build_no_progress',
+      'pipeline_closeout',
+      'gate_verdict',
+      'kickback',
+      'loop_halt',
+    ] satisfies Array<ConductorEvent['type']>;
+    const subscribed = [
+      'daemon_backlog_snapshot',
+      'feature_dispatch_started',
+      'feature_dispatch_ended',
+      'feature_shipped',
+      'memory_setup',
+      'step_started',
+      'step_completed',
+      'step_failed',
+      'provider_attempt',
+      'feature_usage_total',
+      'feature_cost_snapshot',
+      'step_retry',
+      'feature_complete',
+      'build_stall',
+      'build_progress',
+      'build_no_progress',
+      'pipeline_closeout',
+      'gate_verdict',
+      'kickback',
+      'loop_halt',
+      'unattributed_progress',
+    ] satisfies Array<ConductorEvent['type']>;
 
-    expect(new Set(subscribed)).toEqual(new Set(declared));
-    expect(subscribed).toHaveLength(new Set(subscribed).size);
+    expect(otelEventTypes()).toEqual(subscribed);
+    expect(otelTracedEventTypes()).toEqual(traced);
+    for (const type of metricsOnly) {
+      expect(otelEventTypes()).toContain(type);
+      expect(otelTracedEventTypes()).not.toContain(type);
+    }
+    expect(otelEventTypes()).toEqual(expect.arrayContaining(['step_started']));
+    expect(otelTracedEventTypes()).toEqual(expect.arrayContaining(['step_started']));
   });
 
   it('declares feature cost snapshots as OpenTelemetry-only ledger projections', () => {
