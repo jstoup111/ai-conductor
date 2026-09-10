@@ -73,7 +73,7 @@ describe('renderDaemonEvent', () => {
     })).toEqual(['· ✋ manual_test status write refused: skipped → stale (restage ship tail after build kickback)']);
   });
 
-  it('renders every confidence-suppressed build-review finding', () => {
+  it('renders every confidence-suppressed build-review finding alongside the outer verdict', () => {
     expect(lines({
       type: 'build_review_outer_verdict', lapId: 'lap-current', rawVerdict: 'FAIL', effectiveVerdict: 'PASS',
       suppressedFindings: [
@@ -83,14 +83,16 @@ describe('renderDaemonEvent', () => {
     })).toEqual([
       '· build_review suppressed testQuality:sha256:one (confidence 69 < floor 70)',
       '· build_review suppressed testQuality:sha256:two (confidence 40 < floor 50)',
+      '·   build_review [lap-curr] outer verdict: PASS (raw: FAIL)',
     ]);
   });
 
-  it('emits no build-review suppression lines when suppressed findings are absent or empty', () => {
-    expect(lines({ type: 'build_review_outer_verdict', lapId: 'lap-current', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' })).toEqual([]);
+  it('emits the outer verdict without suppression lines when suppressed findings are absent or empty', () => {
+    expect(lines({ type: 'build_review_outer_verdict', lapId: 'lap-current', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' }))
+      .toEqual(['·   build_review [lap-curr] outer verdict: PASS (raw: FAIL)']);
     expect(lines({
       type: 'build_review_outer_verdict', lapId: 'lap-current', rawVerdict: 'FAIL', effectiveVerdict: 'PASS', suppressedFindings: [],
-    })).toEqual([]);
+    })).toEqual(['·   build_review [lap-curr] outer verdict: PASS (raw: FAIL)']);
   });
 
   it('renders tail diagnostics without source record contents', () => {
