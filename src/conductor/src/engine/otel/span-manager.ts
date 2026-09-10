@@ -164,7 +164,18 @@ export class SpanManager {
       this.warn(`provider_attempt for '${step}' received but no open span exists — ignoring`);
       return;
     }
-    state.dispatch = observation;
+    // Candidate observations can be partial. Keep the latest known value for
+    // each dimension so a failed close is still attributable, but keep the
+    // first fallback reason: later fallback candidates commonly omit it.
+    state.dispatch = {
+      ...state.dispatch,
+      ...observation,
+      ...(state.dispatch?.fallbackReason === undefined && observation.fallbackReason !== undefined
+        ? { fallbackReason: observation.fallbackReason }
+        : state.dispatch?.fallbackReason !== undefined
+          ? { fallbackReason: state.dispatch.fallbackReason }
+          : {}),
+    };
   }
 
   private setDispatchAttributes(
@@ -179,7 +190,8 @@ export class SpanManager {
   ): void {
     const provider = event.provider ?? state.dispatch?.provider;
     const preferredProvider = event.preferredProvider ?? state.dispatch?.preferredProvider;
-    if (event.model !== undefined) state.span.setAttribute('conductor.model', event.model);
+    const model = event.model ?? state.dispatch?.model;
+    if (model !== undefined) state.span.setAttribute('conductor.model', model);
     if (event.effort !== undefined) state.span.setAttribute('conductor.effort', event.effort);
     if (event.tier !== undefined) state.span.setAttribute('conductor.complexity_tier', event.tier);
     if (provider !== undefined) state.span.setAttribute('conductor.provider', provider);
