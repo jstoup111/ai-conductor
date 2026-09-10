@@ -33,6 +33,7 @@ import {
   parsePlanTaskBodies,
   parsePlanTaskDoneWhen,
   parsePlanTaskPaths,
+  parsePlanTaskStoryIds,
   resolveCitedPlanTaskIds,
 } from '../plan-task-parse.js';
 import {
@@ -610,11 +611,7 @@ function extractTaskStoryIds(planText: string | null): Map<string, Set<string>> 
   if (currentId) blocks.push({ id: currentId, text: currentLines.join('\n') });
 
   for (const block of blocks) {
-    const storyRefRe = /\*\*Story:\*\*\s*(?:story|epic)?\s*([A-Za-z0-9.\-]+)/gi;
-    let storyMatch: RegExpExecArray | null;
-    while ((storyMatch = storyRefRe.exec(block.text)) !== null) {
-      const storyId = storyMatch[1];
-      if (/^(n\/?a|prerequisite|none|all)$/i.test(storyId)) continue;
+    for (const storyId of parsePlanTaskStoryIds(block.text)) {
       if (!map.has(storyId)) map.set(storyId, new Set());
       map.get(storyId)!.add(block.id);
     }
@@ -803,6 +800,8 @@ export interface OrphanTaskFinding {
   gapId: string;
   /** The task's title, taken from its `### Task <id>: <title>` heading. */
   title: string;
+  /** Why a cited story reference could not be bound, when the task cited one. */
+  detail?: string;
 }
 
 export type OrphanTaskResult =
@@ -853,15 +852,7 @@ function extractTypeLineRaw(blockText: string): string | null {
 
 /** Story ids (e.g. `1`, `1.2`) cited on a task block's `**Story:**` line(s). */
 function extractCitedStoryIdsFromBlock(blockText: string): string[] {
-  const ids: string[] = [];
-  const storyRefRe = /\*\*Story:\*\*[ \t]*(?:story|epic)?[ \t]*([A-Za-z0-9.\-]+)/gi;
-  let m: RegExpExecArray | null;
-  while ((m = storyRefRe.exec(blockText)) !== null) {
-    const id = m[1];
-    if (/^(n\/?a|prerequisite|none|all)$/i.test(id)) continue;
-    ids.push(id);
-  }
-  return ids;
+  return parsePlanTaskStoryIds(blockText);
 }
 
 const SUPPORTING_TYPES: ReadonlySet<string> = new Set(['infrastructure', 'refactor']);
@@ -911,7 +902,12 @@ export function checkOrphanTasks(
     const isSupportingType = SUPPORTING_TYPES.has(type);
     if (isSupportingType && declaresSupportingPurpose(storyLineRaw)) continue;
 
-    gaps.push({ gapId: `task-${task.id}`, title: task.title });
+    const detail = citedStoryIds.length > 0
+      ? `Unbindable **Story:** reference: ${citedStoryIds.join(', ')}. Accepted spellings: story-N, Story N, bare N, epic-N.`
+      : storyLineRaw === null || storyLineRaw.length === 0
+        ? 'The story-reference line is absent.'
+        : undefined;
+    gaps.push({ gapId: `task-${task.id}`, title: task.title, detail });
   }
 
   if (gaps.length > 0) return { ok: false, reason: 'orphan-task', gaps };
@@ -1235,7 +1231,7 @@ export function validateCoherence(inputs: ValidateCoherenceInputs): ValidateCohe
         layer: 'orphan-task',
         gapId: gap.gapId,
         artifact: 'plan',
-        item: gap.title,
+        item: gap.detail ? `${gap.title} — ${gap.detail}` : gap.title,
       });
     }
   }

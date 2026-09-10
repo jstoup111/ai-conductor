@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:5
 // Test: coherence artifact parser (coherence-validator.ts)
 //
 // Covers parseCoherenceArtifact(text | null):
@@ -7,6 +7,9 @@
 //   - zero-byte/whitespace-only text → 'empty-coherence-artifact'
 //   - corrupted/unparseable table → 'unparseable-coherence-artifact'
 //   - three distinct error kinds, never collapsed into one generic error
+// Covers checkOrphanTasks(storiesText, planText):
+//   - unbindable cited story references name the cited id and accepted spellings
+//   - absent and empty story-reference lines name their absence without inventing an id
 
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -1251,6 +1254,40 @@ describe('checkOrphanTasks', () => {
     expect(result.gaps[0].gapId).toBe('task-4');
   });
 
+  it.each(['story-99', 'Story 99', '99', 'epic-99'])(
+    'names the unbindable cited id and accepted spellings for %s',
+    (storyReference) => {
+      const planText = `# Plan
+
+### Task 7: Build missing-story gizmo
+**Story:** ${storyReference} (happy path)
+**Type:** happy-path
+**Files:** src/gizmo.ts
+`;
+      const result = validateCoherence({
+        rows: [],
+        outcomeBullets: [],
+        prdText: null,
+        storiesText: STORIES_TEXT,
+        planText,
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+
+      const orphanGap = result.gaps.find((gap) => gap.layer === 'orphan-task');
+      expect(orphanGap).toMatchObject({
+        gapId: 'task-7',
+        item: expect.stringContaining('Build missing-story gizmo'),
+      });
+      expect(orphanGap?.item).toContain('99');
+      expect(orphanGap?.item).toContain('story-N');
+      expect(orphanGap?.item).toContain('Story N');
+      expect(orphanGap?.item).toContain('bare N');
+      expect(orphanGap?.item).toContain('epic-N');
+      expect(result.report).toContain(orphanGap?.item ?? '');
+    },
+  );
+
   it('reports task-<id> for an infrastructure task with an empty/missing **Story:** line', () => {
     const planText = `# Plan
 
@@ -1280,6 +1317,82 @@ describe('checkOrphanTasks', () => {
     expect(result.reason).toBe('orphan-task');
     expect(result.gaps).toHaveLength(1);
     expect(result.gaps[0].gapId).toBe('task-6');
+  });
+
+  it.each([
+    [
+      'has no **Story:** line',
+      `### Task 8: Missing story line
+**Type:** happy-path
+**Files:** src/missing-story-line.ts`,
+      'task-8',
+      'Missing story line',
+    ],
+    [
+      'has an empty **Story:** line',
+      `### Task 9: Empty story line
+**Story:**
+**Type:** happy-path
+**Files:** src/empty-story-line.ts`,
+      'task-9',
+      'Empty story line',
+    ],
+    [
+      'is an infrastructure task with no **Story:** line',
+      `### Task 10: Missing infrastructure story line
+**Type:** infrastructure
+**Files:** test/missing-infrastructure-story-line.ts`,
+      'task-10',
+      'Missing infrastructure story line',
+    ],
+    [
+      'is an infrastructure task with an empty **Story:** line',
+      `### Task 11: Empty infrastructure story line
+**Story:**
+**Type:** infrastructure
+**Files:** test/empty-infrastructure-story-line.ts`,
+      'task-11',
+      'Empty infrastructure story line',
+    ],
+    [
+      'is a refactor task with no **Story:** line',
+      `### Task 12: Missing refactor story line
+**Type:** refactor
+**Files:** src/missing-refactor-story-line.ts`,
+      'task-12',
+      'Missing refactor story line',
+    ],
+    [
+      'is a refactor task with an empty **Story:** line',
+      `### Task 13: Empty refactor story line
+**Story:**
+**Type:** refactor
+**Files:** src/empty-refactor-story-line.ts`,
+      'task-13',
+      'Empty refactor story line',
+    ],
+  ])('reports that the story-reference line is absent when a task %s', (_shape, task, gapId, title) => {
+    const result = validateCoherence({
+      rows: [],
+      outcomeBullets: [],
+      prdText: null,
+      storiesText: STORIES_TEXT,
+      planText: `# Plan
+
+${task}
+`,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    const orphanGap = result.gaps.find((gap) => gap.layer === 'orphan-task');
+    expect(orphanGap).toEqual({
+      layer: 'orphan-task',
+      gapId,
+      artifact: 'plan',
+      item: `${title} — The story-reference line is absent.`,
+    });
+    expect(result.report).toContain(orphanGap?.item ?? '');
   });
 });
 

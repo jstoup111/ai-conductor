@@ -129,6 +129,11 @@ const ledgerStatuses: ReadonlySet<LedgerStatus> = new Set([
 const TRANSIENT_LEASE_OWNER_METADATA_FAILURE =
   'Unable to recover intake ledger lease: owner metadata is invalid or ambiguous';
 const TRANSIENT_LEASE_OWNER_METADATA_RETRIES = 10;
+// The ledger is shared by every local engineer process. Unlike a conduct-state
+// update, a burst of independently started intake commands can queue several
+// filesystem operations behind one another, so its bounded wait must tolerate
+// ordinary scheduler and filesystem contention.
+const LEDGER_LEASE_WAIT_TIMEOUT_MS = 5_000;
 
 function isTransientLeaseOwnerMetadataFailure(
   acquired: Awaited<ReturnType<ConductStateLease['acquire']>>,
@@ -321,7 +326,10 @@ async function withLedgerLease<T>(lease: ConductStateLease, body: () => Promise<
  * - Dedup key is source\0sourceRef; cross-repo same-number issues are distinct.
  */
 export function createLedger(path: string, options: CreateLedgerOptions = {}): Ledger {
-  const lease = options.lease ?? createConductStateLease(path, { label: 'intake ledger' });
+  const lease = options.lease ?? createConductStateLease(path, {
+    label: 'intake ledger',
+    waitTimeoutMs: LEDGER_LEASE_WAIT_TIMEOUT_MS,
+  });
 
   return {
     async known(source: string, sourceRef: string): Promise<boolean> {

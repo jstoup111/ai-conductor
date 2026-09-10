@@ -198,15 +198,15 @@ read-only check that reports every offending task/path pair. Land repeats the sa
 the plan being landed, so a plan cannot bypass the rule by skipping the authoring command. Both gates
 apply at every tier and judge only the current plan, not historical plans already merged.
 
-The coherence gate is itself layered. It disengages entirely at tier S, and it does not apply retroactively:
-a change set with no coherence artifact path in it is treated as a legacy change, not a violation. Once
-engaged, the story, criterion, orphan-task, and coverage-table layers are always required; the
-functional-requirement layer only on the product track; the outcome layer only when outcomes exist; and
-the ADR layer whenever the current spec change set contains a `.docs/decisions/adr-*` path, including a
-deletion. The ADR row pool itself contains only non-deleted ADRs, so a deletion-only change engages the
-layer but passes with no ADR row. It aggregates every waivable gap rather than stopping at the first, and
-reports them as one error. Already-landed specs whose coherence artifacts predate criterion rows remain
-valid for daemon discovery and BUILD. See [composer loop](../guides/engineer-loop.md).
+The coherence gate is itself layered. Tier S always engages its criterion layer, carried directly in the
+plan. At other tiers, a change set with no coherence artifact path is treated as a legacy change rather
+than a violation. Once engaged, the story, criterion, orphan-task, and coverage-table layers are always
+required; the functional-requirement layer only on the product track; the outcome layer only when outcomes
+exist; and the ADR layer whenever the current spec change set contains a `.docs/decisions/adr-*` path,
+including a deletion. The ADR row pool itself contains only non-deleted ADRs, so a deletion-only change
+engages the layer but passes with no ADR row. It aggregates every waivable gap rather than stopping at the
+first, and reports them as one error. Already-landed specs whose coherence artifacts predate criterion
+rows remain valid for daemon discovery and BUILD. See [composer loop](../guides/engineer-loop.md).
 
 When that ADR pool contains citable decisions, the plan must also carry an `## Architecture Obligation
 Coverage` table with exactly one row per `<adr-stem>#D<n>`. A row dispositions the decision to real plan
@@ -225,6 +225,11 @@ that disposition; it does not infer locality from the criterion's prose. Omitted
 non-covered, ungrounded, and missing-disposition rows are also coverage gaps. A malformed criterion row or
 a stories artifact with no parseable criteria is defective evidence and fails before waiver evaluation.
 See [artifacts](../reference/artifacts.md#coherence-mapping-shape) for the row format.
+
+Each task's leading `**Story:**` line cites its story with `story-N`, `Story N`, bare `N`, or `epic-N`;
+the cited id may include dots or hyphens. A task that cites no declared story is reported as an orphan. The
+failure names the unbindable id and these accepted spellings; a missing or empty reference line is reported
+as absent rather than assigned an invented id.
 
 The functional-requirement layer checks both directions, because coverage alone is only half of a tie-out.
 Forward, a PRD requirement no story cites — or whose only citing stories no task covers — is a gap.

@@ -42,7 +42,11 @@ import {
 import { currentCommitSha } from './project-prelude.js';
 import { createEngineStateStore } from './engine-state-store.js';
 import { extractPrdFrIds } from './prd-fr-ids.js';
-import { parsePlanTaskPaths, resolvePlanTaskReference } from './plan-task-parse.js';
+import {
+  parsePlanTaskPaths,
+  parsePlanTaskStoryIds,
+  resolvePlanTaskReference,
+} from './plan-task-parse.js';
 import {
   deriveEffectiveBuildReviewVerdict,
   parseBuildReviewAggregate,
@@ -5407,16 +5411,9 @@ export function collectPlanCoverage(planText: string): Set<string> {
   const set = new Set<string>();
 
   for (const block of splitOnHeadings(planText, /^###\s+/)) {
-    // Story id(s) this task references. Strip an optional `Story `/`Epic `
-    // prefix word so `**Story:** Story 1` and `**Story:** 1` both yield `1`.
-    const ids = new Set<string>();
-    const storyRef = /\*\*Story:\*\*\s*(?:story|epic)?\s*([A-Za-z0-9.\-]+)/gi;
-    let m: RegExpExecArray | null;
-    while ((m = storyRef.exec(block)) !== null) {
-      const id = m[1];
-      if (/^(n\/?a|prerequisite|none|all)$/i.test(id)) continue;
-      ids.add(id);
-    }
+    // Story id(s) this task references. The shared parser accepts optional
+    // Story/Epic prefixes and filters sentinel values.
+    const ids = new Set(parsePlanTaskStoryIds(block));
     if (ids.size === 0) continue;
 
     // Path type(s) this task covers: prefer an explicit `**Type:**` line, then
