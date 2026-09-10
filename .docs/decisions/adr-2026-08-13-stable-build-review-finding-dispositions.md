@@ -126,6 +126,15 @@ Wire a `build-review` command family before pipeline startup:
 - `accept` requires the feature, exact inspected lap ID, one current unresolved finding ID, and a
   non-empty rationale.
 
+> **Amended 2026-09-09 by #2409:** `findings` also renders autonomous case outcomes.
+>
+> **D4.1** `findings` additionally opens the feature's remediation case store under the same
+>   guarded, version-checked, domain-filtered read discipline as the disposition store and prints
+>   every case: id, disposition, resolution, source ids, effect state, and for a refuted case the
+>   refuted claim, each assertion verdict, and the judge rationale. Autonomous outcomes are labeled
+>   as such and rendered distinctly from operator dispositions; an unreadable or unrenderable case
+>   store blocks the listing rather than disappearing. `accept` is unchanged.
+
 `accept` requires an interactive TTY and resolves machine-scoped operator identity through the
 existing user-config then `gh` chain. Unresolved identity refuses. Provider sessions use piped stdin,
 so maker, remediation, grader, and daemon-spawned agent subprocesses cannot pass the TTY gate. The

@@ -58,6 +58,16 @@ build entered via a kickback ends, classify it:
   reviewer-wrong case (task genuinely complete, reviewer wrong): it HALTs with both artifacts on the
   first no-work + unchanged-verdict cycle instead of ping-ponging.
 
+> **Amended 2026-09-09 by #2409:** the reviewer-wrong case gains a judged exit that composes with
+> this guard rather than bypassing it.
+>
+> - **D2.1** When the build_review post-join judge admits a refutation of a re-raised finding
+>   (adr-2026-08-29-build-review-remediate-case-adjudication D7.1–D7.4), the effective build_review
+>   verdict passes, so this gate is not consulted and the cycle ends under the #1831 amendment
+>   ("a passing effective review ... ends the cycle even without a changed code tree"). D2's HALT is
+>   unchanged for an unrefuted unchanged verdict; the refutation lane never edits, clears, or reads
+>   the D2 baseline.
+
 An optional config toggle (`kickback_escalation.enabled`, default `true`, mirroring
 `build_progress_halt.enabled`) lets an operator revert to the prior re-kick-until-cap behaviour.
 
