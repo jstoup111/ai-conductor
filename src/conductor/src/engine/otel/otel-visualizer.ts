@@ -39,6 +39,7 @@ import type { ResolvedOtelConfig } from './otel-config.js';
 import { buildResource } from './resource.js';
 import { buildExporters } from './transport.js';
 import { SpanManager } from './span-manager.js';
+import { DispatchMeteringTracker } from '../dispatch-metering.js';
 
 // ── Bounded-warning exporter wrappers (FR-8) ────────────────────────────────
 
@@ -115,6 +116,8 @@ export class OtelVisualizer implements VisualizerPlugin {
   private readonly projectNameOverride?: string;
   private tracerProvider: BasicTracerProvider | null = null;
   private spanManager: SpanManager | null = null;
+  /** Selects authoritative invoked attempts before they reach open span state. */
+  private readonly dispatchMetering = new DispatchMeteringTracker();
   /**
    * Bounded warning emitter (FR-8). When ctx.onWarning is provided, this is a
    * once-wrapper shared by both the exporter callback path AND the stop() flush
@@ -314,16 +317,10 @@ export class OtelVisualizer implements VisualizerPlugin {
         this.spanManager.onStepFailed(event);
         break;
       case 'provider_attempt':
-        this.spanManager.onProviderAttempt(event.step, {
-          step: event.step,
-          provider: event.provider,
-          ...(event.preferredProvider !== undefined ? { preferredProvider: event.preferredProvider } : {}),
-          ...(event.model !== undefined ? { model: event.model } : {}),
-          ...(event.effort !== undefined ? { effort: event.effort } : {}),
-          ...(event.tier !== undefined ? { tier: event.tier } : {}),
-          ...(event.tokenUsage !== undefined ? { tokenUsage: event.tokenUsage } : {}),
-          ...(event.fallbackReason !== undefined ? { fallbackReason: event.fallbackReason } : {}),
-        });
+        {
+          const observation = this.dispatchMetering.observe(event);
+          if (observation !== undefined) this.spanManager.onProviderAttempt(event.step, observation);
+        }
         break;
       case 'step_retry':
         this.spanManager.onStepRetry(event);
