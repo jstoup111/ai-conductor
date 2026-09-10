@@ -208,10 +208,13 @@ describe('conduct-state lease', () => {
       },
     };
     const diagnostics: unknown[] = [];
+    let now = 0;
 
     const acquired = await createConductStateLease(statePath, {
       filesystem,
       label: 'intake ledger',
+      now: () => now,
+      wait: async (milliseconds) => { now += milliseconds; },
       pid: 202,
       newToken: () => 'next-owner',
       processIsLive: () => false,
