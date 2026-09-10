@@ -28,7 +28,7 @@ Every criterion below is diff-local: it describes controlled behavior of changed
 
 ### Task 1: Pass commit lookup values separately from JavaScript source
 
-**Story:** 1 — S1.1, S1.2, S1.N1, S1.N3
+**Story:** 1 — S1.1, S1.2, S1.3, S1.5
 **Type:** happy-path
 
 **Steps:**
@@ -50,7 +50,7 @@ Every criterion below is diff-local: it describes controlled behavior of changed
 
 ### Task 2: Distinguish commit lookup processing errors from non-matches
 
-**Story:** 1 — S1.N2
+**Story:** 1 — S1.4
 **Type:** negative-path
 
 **Steps:**
@@ -71,7 +71,7 @@ Every criterion below is diff-local: it describes controlled behavior of changed
 
 ### Task 3: Make permission configuration literal and truthful on failure
 
-**Story:** 2 — S2.1, S2.2, S2.N1, S2.N2, S2.N3 (permissions)
+**Story:** 2 — S2.1, S2.2, S2.3, S2.4, S2.5 (permissions)
 **Type:** happy-path
 
 **Steps:**
@@ -92,7 +92,7 @@ Every criterion below is diff-local: it describes controlled behavior of changed
 
 ### Task 4: Make hook configuration literal and propagate its failure
 
-**Story:** 2 — S2.1, S2.2, S2.N1, S2.N2, S2.N3 (hooks)
+**Story:** 2 — S2.1, S2.2, S2.3, S2.4, S2.5 (hooks)
 **Type:** happy-path
 
 **Steps:**
@@ -137,7 +137,7 @@ Every criterion below is diff-local: it describes controlled behavior of changed
 
 ### Task 6: Classify shell expansions inside direct interpreter command strings
 
-**Story:** 4 — S4.1, S4.N1 (command-source forms)
+**Story:** 4 — S4.1, S4.3 (command-source forms)
 **Type:** infrastructure
 
 **Steps:**
@@ -158,7 +158,7 @@ Every criterion below is diff-local: it describes controlled behavior of changed
 
 ### Task 7: Recognize expanded interpreter heredoc source
 
-**Story:** 4 — S4.1, S4.N1 (stdin/heredoc forms)
+**Story:** 4 — S4.1, S4.3 (stdin/heredoc forms)
 **Type:** infrastructure
 
 **Steps:**
@@ -179,7 +179,7 @@ Every criterion below is diff-local: it describes controlled behavior of changed
 
 ### Task 8: Scan shipped files and actual generated hook exports
 
-**Story:** 4 — S4.2, S4.N2, S4.N3
+**Story:** 4 — S4.2, S4.4, S4.5
 **Type:** infrastructure
 
 **Steps:**
@@ -202,7 +202,7 @@ Every criterion below is diff-local: it describes controlled behavior of changed
 
 ### Task 9: Wire interpreter-source validation into repository integrity
 
-**Story:** 4 — S4.1, S4.2, S4.N2; integrity entrypoint
+**Story:** 4 — S4.1, S4.2, S4.4; integrity entrypoint
 **Type:** infrastructure
 
 **Steps:**
@@ -274,23 +274,23 @@ Tasks 6–7 are pure classification units consumed by Task 8; they do not each r
 | --- | --- | --- | --- |
 | Story 1 happy: S1.1: Given a local repository whose path contains spaces, single/double quotes, backslashes, or interpreter-looking text, and a status file containing a matching supplied single-line Task trailer value, when the generated commit-msg hook validates it, then lookup succeeds, without a syntax failure or unintended sentinel side effect. Exercise the trailer variants separately from repository-path variants; preserve Git's existing trailer parsing rather than defining multiline trailer values. | 1 | "The rendered commit-msg integration accepts matching literal trailer/path variants (spaces, single/double quotes, backslashes, interpreter-looking text), rejects absent literal IDs, and leaves all harmless execution sentinels absent." | diff-local |
 | Story 1 happy: S1.2: Given a numeric ID or its string equivalent in a valid task-status file, when the matching trailer is validated, then the same match succeeds. Given an existing exemption or a missing trailer/status file, when the hook runs, then its existing pass-through behavior remains intact. | 1 | "The same rendered hook accepts numeric and string-equivalent IDs; existing merge/amend/rebase/engine exemptions, missing trailer/status-file pass-through, task-N/unknown-ID rejection, advisory scope-check behavior, and chained-hook behavior retain their observed results." | diff-local |
-| Story 1 negative: S1.N1 (S1.1): Given an absent task ID containing quotes, backslashes, or interpreter-looking text, when the hook validates it, then it rejects as an ordinary non-match and no sentinel side effect occurs. The ID must not become a different existing ID through source interpretation. | 1 | "The rendered commit-msg integration accepts matching literal trailer/path variants (spaces, single/double quotes, backslashes, interpreter-looking text), rejects absent literal IDs, and leaves all harmless execution sentinels absent." | diff-local |
-| Story 1 negative: S1.N2 (S1.1): Given a present status file that is malformed or unreadable, or an unavailable/failing Node interpreter, when lookup is required, then the hook rejects with a contextual processing-error diagnostic distinguishable from an ordinary non-match; it never prints a successful match or hides the error behind a not-found fallback. | 2 | "Rendered-hook integration rejects malformed JSON, required-read failure, missing Node, and failing Node with a contextual processing-error diagnostic rather than the ordinary ID-not-found message." | diff-local |
-| Story 1 negative: S1.N3 (S1.2): Given a task-N trailer or a genuinely absent numeric/string ID, when validation is required, then existing rejection behavior remains. Missing evidence trailers do not become a new rejection condition, and advisory scope-check results do not become blockers. | 1 | "The same rendered hook accepts numeric and string-equivalent IDs; existing merge/amend/rebase/engine exemptions, missing trailer/status-file pass-through, task-N/unknown-ID rejection, advisory scope-check behavior, and chained-hook behavior retain their observed results." | diff-local |
+| Story 1 negative: S1.3 (S1.1): Given an absent task ID containing quotes, backslashes, or interpreter-looking text, when the hook validates it, then it rejects as an ordinary non-match and no sentinel side effect occurs. The ID must not become a different existing ID through source interpretation. | 1 | "The rendered commit-msg integration accepts matching literal trailer/path variants (spaces, single/double quotes, backslashes, interpreter-looking text), rejects absent literal IDs, and leaves all harmless execution sentinels absent." | diff-local |
+| Story 1 negative: S1.4 (S1.1): Given a present status file that is malformed or unreadable, or an unavailable/failing Node interpreter, when lookup is required, then the hook rejects with a contextual processing-error diagnostic distinguishable from an ordinary non-match; it never prints a successful match or hides the error behind a not-found fallback. | 2 | "Rendered-hook integration rejects malformed JSON, required-read failure, missing Node, and failing Node with a contextual processing-error diagnostic rather than the ordinary ID-not-found message." | diff-local |
+| Story 1 negative: S1.5 (S1.2): Given a task-N trailer or a genuinely absent numeric/string ID, when validation is required, then existing rejection behavior remains. Missing evidence trailers do not become a new rejection condition, and advisory scope-check results do not become blockers. | 1 | "The same rendered hook accepts numeric and string-equivalent IDs; existing merge/amend/rebase/engine exemptions, missing trailer/status-file pass-through, task-N/unknown-ID rejection, advisory scope-check behavior, and chained-hook behavior retain their observed results." | diff-local |
 | Story 2 happy: S2.1: Given settings, temporary-file, and harness-directory paths containing quotes, backslashes, spaces, newlines, or interpreter-looking text supported by the filesystem, when either configuration helper runs, then it reads/writes the exact intended paths and preserves literal hook-directory strings in settings. No unintended sentinel side effect occurs. This criterion covers configuration serialization, not new support for every downstream shell command-path grammar. | 3, 4 | "The real configure_hooks integration writes exact settings and hook-directory strings for quotes, backslashes, spaces, newlines, and interpreter-looking text; repeated merges preserve unrelated/custom hooks without duplicate managed entries and without sentinel execution." | diff-local |
 | Story 2 happy: S2.2: Given pre-existing unrelated settings and custom hook/permission entries, when the helpers configure settings and repeat the same operation, then unrelated values remain unchanged and managed entries are not duplicated. | 3, 4 | "The real configure_hooks integration writes exact settings and hook-directory strings for quotes, backslashes, spaces, newlines, and interpreter-looking text; repeated merges preserve unrelated/custom hooks without duplicate managed entries and without sentinel execution." | diff-local |
-| Story 2 negative: S2.N1 (S2.1): Given an unavailable/failing Python interpreter, unreadable input, malformed settings JSON, or unwritable target, when either helper runs, then that helper returns nonzero and reports which configuration operation failed, with no success message. The existing installation caller continues with its incomplete-configuration warning policy. | 3, 4 | "Missing/failing Python and read/parse/write failure cases return nonzero with contextual failure output and no success report; malformed input remains byte-identical and the existing installation caller warns and continues." | diff-local |
-| Story 2 negative: S2.N2 (S2.2): Given malformed settings that cannot be parsed, when configuration fails, then the original settings bytes remain unchanged rather than being replaced with a new default document. For write failures, no atomic rollback guarantee beyond current behavior is introduced; the failure must be surfaced. | 3, 4 | "Missing/failing Python and read/parse/write failure cases return nonzero with contextual failure output and no success report; malformed input remains byte-identical and the existing installation caller warns and continues." | diff-local |
-| Story 2 negative: S2.N3 (S2.1/S2.2): Given a valid path containing text that resembles Python or shell operations, when either helper runs, then only its intended configuration effects occur and existing unrelated settings survive. | 3, 4 | "The real configure_hooks integration writes exact settings and hook-directory strings for quotes, backslashes, spaces, newlines, and interpreter-looking text; repeated merges preserve unrelated/custom hooks without duplicate managed entries and without sentinel execution." | diff-local |
+| Story 2 negative: S2.3 (S2.1): Given an unavailable/failing Python interpreter, unreadable input, malformed settings JSON, or unwritable target, when either helper runs, then that helper returns nonzero and reports which configuration operation failed, with no success message. The existing installation caller continues with its incomplete-configuration warning policy. | 3, 4 | "Missing/failing Python and read/parse/write failure cases return nonzero with contextual failure output and no success report; malformed input remains byte-identical and the existing installation caller warns and continues." | diff-local |
+| Story 2 negative: S2.4 (S2.2): Given malformed settings that cannot be parsed, when configuration fails, then the original settings bytes remain unchanged rather than being replaced with a new default document. For write failures, no atomic rollback guarantee beyond current behavior is introduced; the failure must be surfaced. | 3, 4 | "Missing/failing Python and read/parse/write failure cases return nonzero with contextual failure output and no success report; malformed input remains byte-identical and the existing installation caller warns and continues." | diff-local |
+| Story 2 negative: S2.5 (S2.1/S2.2): Given a valid path containing text that resembles Python or shell operations, when either helper runs, then only its intended configuration effects occur and existing unrelated settings survive. | 3, 4 | "The real configure_hooks integration writes exact settings and hook-directory strings for quotes, backslashes, spaces, newlines, and interpreter-looking text; repeated merges preserve unrelated/custom hooks without duplicate managed entries and without sentinel execution." | diff-local |
 | Story 3 happy: S3.1: Given valid existing pipeline state with string-valued steps plus unrelated non-string fields, when the actual session-start hook runs, then it reports the same done/skipped count over string-valued steps and continues the remaining context output. | 5 | "The actual session-start hook reports the expected done/skipped count over string-valued state, treats quoted/interpreter-looking JSON content literally without sentinel execution or additional state mutation, and completes its remaining context output." | diff-local |
 | Story 3 happy: S3.2: Given no pipeline state file, when the hook runs, then it omits the pipeline summary quietly and continues normal context output. | 5 | "Absent state quietly omits the summary; malformed/unreadable state or missing/failing Python produces a contextual stderr warning, no fabricated success summary, and continued output with the existing non-blocking summary exit policy." | diff-local |
-| Story 3 negative: S3.N1 (S3.1): Given malformed/unreadable state or an unavailable/failing Python interpreter while state is present, when the hook runs, then it emits a contextual stderr warning, emits no fabricated successful summary, continues its remaining output, and exits according to its existing non-blocking summary policy. | 5 | "Absent state quietly omits the summary; malformed/unreadable state or missing/failing Python produces a contextual stderr warning, no fabricated success summary, and continued output with the existing non-blocking summary exit policy." | diff-local |
-| Story 3 negative: S3.N2 (S3.1/S3.2): Given interpreter-looking or quoted text in state keys/values, when the hook reads the JSON, then it only contributes according to the existing string-value/count rules and causes no unintended execution or additional state mutation. An absent file is not misreported as a parsing error. | 5 | "The actual session-start hook reports the expected done/skipped count over string-valued state, treats quoted/interpreter-looking JSON content literally without sentinel execution or additional state mutation, and completes its remaining context output." | diff-local |
+| Story 3 negative: S3.3 (S3.1): Given malformed/unreadable state or an unavailable/failing Python interpreter while state is present, when the hook runs, then it emits a contextual stderr warning, emits no fabricated successful summary, continues its remaining output, and exits according to its existing non-blocking summary policy. | 5 | "Absent state quietly omits the summary; malformed/unreadable state or missing/failing Python produces a contextual stderr warning, no fabricated success summary, and continued output with the existing non-blocking summary exit policy." | diff-local |
+| Story 3 negative: S3.4 (S3.1/S3.2): Given interpreter-looking or quoted text in state keys/values, when the hook reads the JSON, then it only contributes according to the existing string-value/count rules and causes no unintended execution or additional state mutation. An absent file is not misreported as a parsing error. | 5 | "The actual session-start hook reports the expected done/skipped count over string-valued state, treats quoted/interpreter-looking JSON content literally without sentinel execution or additional state mutation, and completes its remaining context output." | diff-local |
 | Story 4 happy: S4.1: Given shipped scripts and rendered hook assets using fixed Python or Node source with separately supplied data, when the repository interpreter-source validation entrypoint runs, then it succeeds. Quoted heredocs, literal dollar characters protected from shell expansion, multiline constant source, and argv/stdin/environment data transport are accepted. | 6, 7, 9 | "Static source with separately passed argv/stdin/environment data, protected literal dollar characters, comments and safe multiline words passes the classifier; malformed recognized source is reported, and no fixture code is executed." | diff-local |
 | Story 4 happy: S4.2: Given a new shipped shell script or new rendered hook asset in the declared inventory, when validation runs, then that input is included automatically or an unclassified generated export makes the inventory check fail visibly; it cannot be silently omitted. Scope includes bin entrypoints and shell libraries, hooks, and rendered git/session hook assets; test fixtures and documentation examples are not production inputs. | 8, 9 | "The inventory entrypoint discovers newly added shipped bin/hook scripts and shell libraries plus all rendered string exports from both hook-asset modules; unsafe additions fail with source/location while safe additions pass." | diff-local |
-| Story 4 negative: S4.N1 (S4.1): Given a direct Python -c/heredoc or Node -e/--eval source containing shell parameter expansion, command substitution, or backticks, including multiline variants, when validation runs, then it exits nonzero and identifies the source asset and location. Unsafe fixture text is inspected without being executed. | 6, 7 | "Classifier unit fixtures reject shell parameter, command-substitution, and backtick expansion inside direct Python -c and Node -e/--eval source, including multiline words, escaped newlines, and --eval=source, with source name and line." | diff-local |
-| Story 4 negative: S4.N2 (S4.2): Given a newly added unsafe shipped script or unsafe rendered hook, when validation runs through its real entrypoint, then it rejects that addition. An empty inventory, required input read failure, render failure, or unclassified generated hook export is a validation failure, not success over partial inputs. | 8, 9 | "Required file-read failure, empty shipped/generated inventory, generated-module load failure, and an unclassified generated export each produce nonzero validation status rather than success over a partial scan." | diff-local |
-| Story 4 negative: S4.N3 (S4.1/S4.2): Given an unsafe specimen only in a documentation example or test fixture, when the production inventory scan runs, then that out-of-scope specimen does not fail the production scan; it still remains available as explicit checker test input. | 8 | "Documentation and test-only unsafe specimens do not enter the production inventory; explicit classifier fixtures still inspect them without execution." | diff-local |
+| Story 4 negative: S4.3 (S4.1): Given a direct Python -c/heredoc or Node -e/--eval source containing shell parameter expansion, command substitution, or backticks, including multiline variants, when validation runs, then it exits nonzero and identifies the source asset and location. Unsafe fixture text is inspected without being executed. | 6, 7 | "Classifier unit fixtures reject shell parameter, command-substitution, and backtick expansion inside direct Python -c and Node -e/--eval source, including multiline words, escaped newlines, and --eval=source, with source name and line." | diff-local |
+| Story 4 negative: S4.4 (S4.2): Given a newly added unsafe shipped script or unsafe rendered hook, when validation runs through its real entrypoint, then it rejects that addition. An empty inventory, required input read failure, render failure, or unclassified generated hook export is a validation failure, not success over partial inputs. | 8, 9 | "Required file-read failure, empty shipped/generated inventory, generated-module load failure, and an unclassified generated export each produce nonzero validation status rather than success over a partial scan." | diff-local |
+| Story 4 negative: S4.5 (S4.1/S4.2): Given an unsafe specimen only in a documentation example or test fixture, when the production inventory scan runs, then that out-of-scope specimen does not fail the production scan; it still remains available as explicit checker test input. | 8 | "Documentation and test-only unsafe specimens do not enter the production inventory; explicit classifier fixtures still inspect them without execution." | diff-local |
 
 For rows spanning both installer helpers or both source forms, the cited tasks jointly provide coverage; the exact quote is one cited task’s obligation, and the sibling task carries the complementary named cases. There are no new ADR files with citable decisions in this change set, so an Architecture Obligation Coverage table is not required.
 

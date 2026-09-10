@@ -19,9 +19,9 @@ As a harness operator, I want supplied task trailers and repository paths to be 
 - S1.2: Given a numeric ID or its string equivalent in a valid task-status file, when the matching trailer is validated, then the same match succeeds. Given an existing exemption or a missing trailer/status file, when the hook runs, then its existing pass-through behavior remains intact.
 
 #### Negative Paths
-- S1.N1 (S1.1): Given an absent task ID containing quotes, backslashes, or interpreter-looking text, when the hook validates it, then it rejects as an ordinary non-match and no sentinel side effect occurs. The ID must not become a different existing ID through source interpretation.
-- S1.N2 (S1.1): Given a present status file that is malformed or unreadable, or an unavailable/failing Node interpreter, when lookup is required, then the hook rejects with a contextual processing-error diagnostic distinguishable from an ordinary non-match; it never prints a successful match or hides the error behind a not-found fallback.
-- S1.N3 (S1.2): Given a task-N trailer or a genuinely absent numeric/string ID, when validation is required, then existing rejection behavior remains. Missing evidence trailers do not become a new rejection condition, and advisory scope-check results do not become blockers.
+- S1.3 (S1.1): Given an absent task ID containing quotes, backslashes, or interpreter-looking text, when the hook validates it, then it rejects as an ordinary non-match and no sentinel side effect occurs. The ID must not become a different existing ID through source interpretation.
+- S1.4 (S1.1): Given a present status file that is malformed or unreadable, or an unavailable/failing Node interpreter, when lookup is required, then the hook rejects with a contextual processing-error diagnostic distinguishable from an ordinary non-match; it never prints a successful match or hides the error behind a not-found fallback.
+- S1.5 (S1.2): Given a task-N trailer or a genuinely absent numeric/string ID, when validation is required, then existing rejection behavior remains. Missing evidence trailers do not become a new rejection condition, and advisory scope-check results do not become blockers.
 
 ### Done When
 - [ ] The rendered hook accepts matching unusual literal values and numeric/string IDs in a real temporary Git fixture.
@@ -30,7 +30,7 @@ As a harness operator, I want supplied task trailers and repository paths to be 
 
 ### Coverage Disposition
 
-S1.1/S1.N1/S1.N2: lower-layer integration of the actual generated hook with temporary Git/status files and a controlled scope-check launcher. S1.2/S1.N3: retain sufficient existing hook integration proof and extend only uncovered cases. No full daemon or new end-to-end flow is needed.
+S1.1/S1.3/S1.4: lower-layer integration of the actual generated hook with temporary Git/status files and a controlled scope-check launcher. S1.2/S1.5: retain sufficient existing hook integration proof and extend only uncovered cases. No full daemon or new end-to-end flow is needed.
 
 ## Story 2: Installer configuration preserves literal paths and reports failures
 
@@ -43,9 +43,9 @@ As an installer user, I want permissions and hooks to be configured at the exact
 - S2.2: Given pre-existing unrelated settings and custom hook/permission entries, when the helpers configure settings and repeat the same operation, then unrelated values remain unchanged and managed entries are not duplicated.
 
 #### Negative Paths
-- S2.N1 (S2.1): Given an unavailable/failing Python interpreter, unreadable input, malformed settings JSON, or unwritable target, when either helper runs, then that helper returns nonzero and reports which configuration operation failed, with no success message. The existing installation caller continues with its incomplete-configuration warning policy.
-- S2.N2 (S2.2): Given malformed settings that cannot be parsed, when configuration fails, then the original settings bytes remain unchanged rather than being replaced with a new default document. For write failures, no atomic rollback guarantee beyond current behavior is introduced; the failure must be surfaced.
-- S2.N3 (S2.1/S2.2): Given a valid path containing text that resembles Python or shell operations, when either helper runs, then only its intended configuration effects occur and existing unrelated settings survive.
+- S2.3 (S2.1): Given an unavailable/failing Python interpreter, unreadable input, malformed settings JSON, or unwritable target, when either helper runs, then that helper returns nonzero and reports which configuration operation failed, with no success message. The existing installation caller continues with its incomplete-configuration warning policy.
+- S2.4 (S2.2): Given malformed settings that cannot be parsed, when configuration fails, then the original settings bytes remain unchanged rather than being replaced with a new default document. For write failures, no atomic rollback guarantee beyond current behavior is introduced; the failure must be surfaced.
+- S2.5 (S2.1/S2.2): Given a valid path containing text that resembles Python or shell operations, when either helper runs, then only its intended configuration effects occur and existing unrelated settings survive.
 
 ### Done When
 - [ ] Both existing configuration functions pass literal-path and repeated-merge cases against temporary settings files.
@@ -54,7 +54,7 @@ As an installer user, I want permissions and hooks to be configured at the exact
 
 ### Coverage Disposition
 
-S2.1/S2.2/S2.N1/S2.N2/S2.N3: lower-layer integration through the existing installer functions and real temporary JSON files. Fake unrelated installation/process boundaries; invoke no dependency installer. Missing-interpreter and write/read failure cases use controlled process/file conditions, not assumptions about permissions under a privileged test runner.
+S2.1/S2.2/S2.3/S2.4/S2.5: lower-layer integration through the existing installer functions and real temporary JSON files. Fake unrelated installation/process boundaries; invoke no dependency installer. Missing-interpreter and write/read failure cases use controlled process/file conditions, not assumptions about permissions under a privileged test runner.
 
 ## Story 3: Session-start summary reports processing failures without blocking
 
@@ -67,8 +67,8 @@ As a Claude harness user, I want the existing pipeline summary to remain accurat
 - S3.2: Given no pipeline state file, when the hook runs, then it omits the pipeline summary quietly and continues normal context output.
 
 #### Negative Paths
-- S3.N1 (S3.1): Given malformed/unreadable state or an unavailable/failing Python interpreter while state is present, when the hook runs, then it emits a contextual stderr warning, emits no fabricated successful summary, continues its remaining output, and exits according to its existing non-blocking summary policy.
-- S3.N2 (S3.1/S3.2): Given interpreter-looking or quoted text in state keys/values, when the hook reads the JSON, then it only contributes according to the existing string-value/count rules and causes no unintended execution or additional state mutation. An absent file is not misreported as a parsing error.
+- S3.3 (S3.1): Given malformed/unreadable state or an unavailable/failing Python interpreter while state is present, when the hook runs, then it emits a contextual stderr warning, emits no fabricated successful summary, continues its remaining output, and exits according to its existing non-blocking summary policy.
+- S3.4 (S3.1/S3.2): Given interpreter-looking or quoted text in state keys/values, when the hook reads the JSON, then it only contributes according to the existing string-value/count rules and causes no unintended execution or additional state mutation. An absent file is not misreported as a parsing error.
 
 ### Done When
 - [ ] The real hook produces the expected count from a fixed fixture and completes its remaining output.
@@ -77,7 +77,7 @@ As a Claude harness user, I want the existing pipeline summary to remain accurat
 
 ### Coverage Disposition
 
-S3.1/S3.2/S3.N1/S3.N2: lower-layer integration of the actual session-start script in a temporary project, using real local state and controlled interpreter failures. The fixed-path source-expansion cleanup is also covered by Story 4's static rule; it is not represented as a currently exploitable arbitrary-path bug.
+S3.1/S3.2/S3.3/S3.4: lower-layer integration of the actual session-start script in a temporary project, using real local state and controlled interpreter failures. The fixed-path source-expansion cleanup is also covered by Story 4's static rule; it is not represented as a currently exploitable arbitrary-path bug.
 
 ## Story 4: Repository validation rejects unsafe interpreter-source construction
 
@@ -90,9 +90,9 @@ As a harness maintainer, I want validation to catch recurrence in shipped shell 
 - S4.2: Given a new shipped shell script or new rendered hook asset in the declared inventory, when validation runs, then that input is included automatically or an unclassified generated export makes the inventory check fail visibly; it cannot be silently omitted. Scope includes bin entrypoints and shell libraries, hooks, and rendered git/session hook assets; test fixtures and documentation examples are not production inputs.
 
 #### Negative Paths
-- S4.N1 (S4.1): Given a direct Python -c/heredoc or Node -e/--eval source containing shell parameter expansion, command substitution, or backticks, including multiline variants, when validation runs, then it exits nonzero and identifies the source asset and location. Unsafe fixture text is inspected without being executed.
-- S4.N2 (S4.2): Given a newly added unsafe shipped script or unsafe rendered hook, when validation runs through its real entrypoint, then it rejects that addition. An empty inventory, required input read failure, render failure, or unclassified generated hook export is a validation failure, not success over partial inputs.
-- S4.N3 (S4.1/S4.2): Given an unsafe specimen only in a documentation example or test fixture, when the production inventory scan runs, then that out-of-scope specimen does not fail the production scan; it still remains available as explicit checker test input.
+- S4.3 (S4.1): Given a direct Python -c/heredoc or Node -e/--eval source containing shell parameter expansion, command substitution, or backticks, including multiline variants, when validation runs, then it exits nonzero and identifies the source asset and location. Unsafe fixture text is inspected without being executed.
+- S4.4 (S4.2): Given a newly added unsafe shipped script or unsafe rendered hook, when validation runs through its real entrypoint, then it rejects that addition. An empty inventory, required input read failure, render failure, or unclassified generated hook export is a validation failure, not success over partial inputs.
+- S4.5 (S4.1/S4.2): Given an unsafe specimen only in a documentation example or test fixture, when the production inventory scan runs, then that out-of-scope specimen does not fail the production scan; it still remains available as explicit checker test input.
 
 ### Done When
 - [ ] Classification fixtures prove rejection and acceptance across the declared Python/Node forms without executing specimen code.
@@ -101,7 +101,7 @@ As a harness maintainer, I want validation to catch recurrence in shipped shell 
 
 ### Coverage Disposition
 
-S4.1/S4.N1: unit classification fixtures. S4.2/S4.N2/S4.N3: narrow entrypoint integration over a controlled source tree and rendered-asset inventory, plus the integrity caller wiring. No recursive aggregate-suite invocation from tests and no third-party service calls.
+S4.1/S4.3: unit classification fixtures. S4.2/S4.4/S4.5: narrow entrypoint integration over a controlled source tree and rendered-asset inventory, plus the integrity caller wiring. No recursive aggregate-suite invocation from tests and no third-party service calls.
 
 ## Negative-category assessment
 
