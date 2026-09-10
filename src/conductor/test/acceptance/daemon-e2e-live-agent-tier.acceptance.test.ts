@@ -115,6 +115,10 @@ describe('live-agent daemon E2E tier (#1124)', () => {
       requiredSource(WORKFLOW_PATH),
       requiredSource(join(REPO_ROOT, '.github/workflows/ci.yml')),
     ]);
+    const providerSmokeStep = workflow.slice(
+      workflow.indexOf('      - name: Run provider release smoke in gate mode'),
+      workflow.indexOf('      - name: Record live-provider outcome'),
+    );
 
     expect(workflow).toMatch(/workflow_dispatch\s*:/);
     expect(workflow).toMatch(/name:\s*Require one successful live-provider E2E/);
@@ -134,6 +138,7 @@ describe('live-agent daemon E2E tier (#1124)', () => {
     expect(workflow).toMatch(/if\s+grep\s+-Rqx\s+success\s+live-provider-results;\s+then[\s\S]*exit\s+0/);
     expect(workflow).toMatch(/live-provider-gate:[\s\S]*COMPLETE_SMOKE_RESULT[\s\S]*grep\s+-Rqx\s+success\s+live-provider-results[\s\S]*exit\s+0[\s\S]*No live-provider E2E passed\.[\s\S]*exit\s+1/);
     expect(workflow).toMatch(/id:\s*provider-smoke\s+continue-on-error:\s*true/);
+    expect(providerSmokeStep).not.toMatch(/exit\s+0/);
     expect(ci.slice(ci.indexOf('ci-gate:'))).not.toMatch(/live-daemon-e2e|daemon-e2e-live/);
   });
 

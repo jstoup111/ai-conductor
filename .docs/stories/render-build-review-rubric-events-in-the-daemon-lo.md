@@ -8,6 +8,12 @@ Tier: S
 
 Approved by the operator on 2026-09-06 (delegated). Scope is the daemon-log renderer's treatment of the six build_review rubric events that already ride the event spine. The union, the emitters, the persisted ledger, and the TTY dashboard are untouched.
 
+> **Amended 2026-09-10 by operator:** A disabled registered rubric must remain a
+> non-dispatched skipped branch long enough to emit its existing
+> `build_review_rubric_skipped` occurrence. An enabled container with no
+> dispatchable rubrics still returns deterministic `PASS` with reason
+> `build_review_no_rubrics`; no provider, preflight, or cache work runs.
+
 ## Story 1: Attribute in-flight rubric branches while a lap is running
 
 As a daemon operator watching a review lap, I want each rubric branch named as it starts and when it is served from cache, so that I can tell which branch ran, which settled, and which is still outstanding without parsing a side-channel file.
@@ -21,13 +27,13 @@ As a daemon operator watching a review lap, I want each rubric branch named as i
 
 #### Negative Paths
 
-- Given two rubric events for the same rubric belong to different laps, when the daemon renders both, then each line carries a short lap tag derived from its own lap identifier so the two branches are not conflated.
+- Given two rubric events for the same rubric belong to different laps, when the daemon renders both, then each line carries its full lap identifier so the two branches are not conflated by prefix collisions.
 
 ### Done When
 
 - [ ] A rendered start line contains the rubric name and a started marker, and no serialized JSON object.
 - [ ] A rendered cache-hit line for the same rubric is textually distinguishable from a fresh start line.
-- [ ] Two rendered lines for one rubric under different lap identifiers carry different lap tags.
+- [ ] Two rendered lines for one rubric under different lap identifiers carry their distinct full lap identifiers.
 
 ## Story 2: Distinguish settled rubric outcomes at a glance
 

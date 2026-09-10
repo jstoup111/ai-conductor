@@ -24,16 +24,16 @@ export const EVENT_SINKS = {
   config_deprecated_key: { render: false, persist: true, audit: false, otel: false },
   contained_live_checkout_drift: { render: true, persist: true, audit: false, otel: false },
   self_host_containment_verdict: { render: true, persist: true, audit: false, otel: false },
-  build_review_rubric_started: { render: false, persist: true, audit: false, otel: false },
+  build_review_rubric_started: { render: true, persist: true, audit: false, otel: false },
   build_review_rubric_prompt: { render: false, persist: true, audit: false, otel: false },
-  build_review_rubric_result: { render: false, persist: true, audit: false, otel: false },
-  build_review_rubric_skipped: { render: false, persist: true, audit: false, otel: false },
-  build_review_cache_hit: { render: false, persist: true, audit: false, otel: false },
+  build_review_rubric_result: { render: true, persist: true, audit: false, otel: false },
+  build_review_rubric_skipped: { render: true, persist: true, audit: false, otel: false },
+  build_review_cache_hit: { render: true, persist: true, audit: false, otel: false },
   build_review_scope_summary: { render: false, persist: true, audit: false, otel: false },
   // adr-2026-08-21 D5: discards are attributable in the daemon log, the
   // ledger, and the audit trail by rubric and cause.
   build_review_cache_discarded: { render: true, persist: true, audit: true, otel: false },
-  build_review_rubric_infrastructure_failure: { render: false, persist: true, audit: false, otel: false },
+  build_review_rubric_infrastructure_failure: { render: true, persist: true, audit: false, otel: false },
   build_review_scope_incomplete: { render: true, persist: true, audit: false, otel: false },
   build_review_mechanical_allowance_exhausted: { render: false, persist: true, audit: false, otel: false },
   // These are written by the external build-review CLI to the pipeline-owned

@@ -2601,6 +2601,10 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
   }
 }
 
+function buildReviewLapTag(lapId: string): string {
+  return lapId;
+}
+
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
@@ -2638,14 +2642,38 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'build_review_cache_discarded':
       log(`${dot} ${chalk.yellow(`build_review cache discarded: ${event.rubric} (${event.reason}; cached ${event.cachedEngineStamp ?? 'pre-identity'} -> current ${event.currentEngineStamp})`)}`);
       break;
-    case 'build_review_outer_verdict':
-      for (const finding of event.suppressedFindings ?? []) {
-        log(`${dot} build_review suppressed ${finding.rubric}:${finding.findingId} (confidence ${finding.confidence} < floor ${finding.floor})`);
-      }
-      break;
     case 'remediation_adjudication_completed':
       log(`${dot} build_review adjudication completed (${event.caseIds.length} settled case${event.caseIds.length === 1 ? '' : 's'})`);
       break;
+    case 'build_review_rubric_started':
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} started`);
+      break;
+    case 'build_review_cache_hit':
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} cache hit`);
+      break;
+    case 'build_review_rubric_result':
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} ${event.verdict}`);
+      break;
+    case 'build_review_rubric_skipped':
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} skipped: ${event.reason}`);
+      break;
+    case 'build_review_outer_verdict': {
+      for (const finding of event.suppressedFindings ?? []) {
+        log(`${dot} build_review suppressed ${finding.rubric}:${finding.findingId} (confidence ${finding.confidence} < floor ${finding.floor})`);
+      }
+      const raw = event.rawVerdict === event.effectiveVerdict ? '' : ` (raw: ${event.rawVerdict})`;
+      const reason = event.reason ? ` — ${event.reason}` : '';
+      const unresolvedMarkers = event.unresolvedMarkers
+        ? ` — unresolved markers: ${event.unresolvedMarkers.length}`
+        : '';
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] outer verdict: ${event.effectiveVerdict}${raw}${reason}${unresolvedMarkers}`);
+      break;
+    }
+    case 'build_review_rubric_infrastructure_failure': {
+      const excerpt = event.excerpt ? ` — ${event.excerpt}` : '';
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} infrastructure failure: ${event.reason}${excerpt}`);
+      break;
+    }
     case 'contained_live_checkout_drift':
       log(`${dot} ${chalk.dim(`self-host contained; concurrent operator drift: ${event.summary}`)}`);
       break;
