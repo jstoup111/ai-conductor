@@ -75,7 +75,6 @@ export class MetricsListener {
       listener.feature(kickback)?.onKickback(kickback.from, kickback.to);
     },
     loop_halt: (listener, event) => listener.closeFeature(event, 'halted'),
-    unattributed_progress: () => {},
   };
 
   start(emitter: ConductorEventEmitter): void {

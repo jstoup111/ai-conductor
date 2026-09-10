@@ -1,14 +1,44 @@
 // Covers: task:1
 import { describe, expect, it } from 'vitest';
 
-import { EVENT_SINKS, type SinkDeclaration } from '../src/engine/event-sinks.js';
+import {
+  EVENT_SINKS,
+  otelEventTypes,
+  otelTracedEventTypes,
+  type OtelTracedEventType,
+  type SinkDeclaration,
+} from '../src/engine/event-sinks.js';
 import type { ConductorEvent } from '../src/types/events.js';
 
 const { provider_stream_progress: _omitted, ...missingProviderStreamProgress } = EVENT_SINKS;
 // @ts-expect-error -- every ConductorEvent type requires a sink declaration.
 missingProviderStreamProgress satisfies Record<ConductorEvent['type'], SinkDeclaration>;
 
+const tracedEventType: OtelTracedEventType = 'loop_halt';
+// @ts-expect-error -- gate_blocked does not declare the OTel sink.
+const untracedEventType: OtelTracedEventType = 'gate_blocked';
+void tracedEventType;
+void untracedEventType;
+// @ts-expect-error -- daemon backlog is metric-owned, not visualizer-owned.
+const metricOnlyEventType: OtelTracedEventType = 'daemon_backlog_snapshot';
+void metricOnlyEventType;
+
 describe('event sink registry', () => {
+  it('keeps metrics-only events covered without subscribing the trace visualizer', () => {
+    const metricsOnly = [
+      'daemon_backlog_snapshot', 'feature_dispatch_started',
+      'feature_dispatch_ended', 'feature_shipped',
+    ];
+    expect(otelEventTypes()).toEqual(expect.arrayContaining(metricsOnly));
+    for (const type of metricsOnly) expect(otelTracedEventTypes()).not.toContain(type);
+    expect(otelTracedEventTypes()).toContain('step_started');
+  });
+
+  it('keeps unattributed progress off both OTel owners', () => {
+    expect(otelEventTypes()).not.toContain('unattributed_progress');
+    expect(otelTracedEventTypes()).not.toContain('unattributed_progress');
+  });
+
   it('renders and persists setup repair dispositions without audit or OTel subscriptions', () => {
     expect(EVENT_SINKS.setup_repair).toEqual({
       render: true,

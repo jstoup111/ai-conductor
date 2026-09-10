@@ -703,6 +703,15 @@ property is `not-supplied`. The metric Resource uses daemon-stable identity: `se
 carry `project` and `worker`; feature-scoped instruments also carry `feature`. A new dispatch
 therefore does not create a new metric Resource series for the same daemon worker.
 
+Event coverage is checked separately for the shared metrics listener and the trace visualizer.
+The sink registry's `otel` flag drives the metrics listener's complete handler table; an
+`otelTrace: false` declaration marks a metrics-only event and excludes it from the visualizer.
+Other OTel-enabled events require a visualizer handler at compile time. Daemon backlog, dispatch,
+and shipment events, `memory_setup`, `feature_usage_total`, and `feature_cost_snapshot` are metrics-only. `provider_attempt` is also excluded from tracing; its
+existing persistence and optional legacy metrics accounting remain available. `unattributed_progress`
+is excluded from both OTel consumers. Missing visualizer handlers at runtime report the event type through its warning callback.
+Production visualizers continue exporting traces with their per-run meter disabled.
+
 The `conductor.step.duration` and `conductor.pipeline.closeout.duration` histograms use explicit
 duration buckets through 8 hours; quantiles saturate above that largest finite bucket boundary.
 

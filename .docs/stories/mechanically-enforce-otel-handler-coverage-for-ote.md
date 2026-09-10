@@ -6,7 +6,7 @@ Track: technical
 
 Tier: S
 
-Approved by the operator on 2026-09-06 (delegated). Scope is the binding between the sink table's traced declaration and the OTel visualizer's per-event routing. Halt outcomes, span closure on termination, and the traced membership of any event type are already delivered and remain unchanged.
+Approved by the operator on 2026-09-06 (delegated). Scope is the binding between the sink table's traced declaration and the OTel visualizer's per-event routing. Halt outcomes and span closure on termination are already delivered and remain unchanged. `unattributed_progress`, `provider_attempt`, `memory_setup`, `feature_usage_total`, and `feature_cost_snapshot` are excluded from tracing. The latter three remain metric inputs owned by MetricsListener in production. Provider-attempt accounting and persistence remain unchanged; halts and retries retain their existing trace coverage.
 
 ## Story 1: Every traced event type reaches a handler
 
@@ -15,7 +15,7 @@ As an engine contributor, I want a traced event type to be routed rather than dr
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the sink table declares an event type as traced, when the visualizer starts and that event is emitted, then the visualizer routes it to the handler that owns it and records that type's span or metric effect.
+- Given the sink table declares an event type as traced, when the visualizer starts and that event is emitted, then the visualizer routes it to the handler that owns it and records that type's existing span effect.
 - Given a started visualizer, when its handled event-type set is compared with the traced set derived from the sink table, then the two sets are equal.
 
 #### Negative Paths
@@ -24,7 +24,7 @@ As an engine contributor, I want a traced event type to be routed rather than dr
 ### Done When
 - [ ] A unit test asserts the visualizer's handled event-type set equals the set returned by the traced-type accessor, with no missing and no extra member.
 - [ ] A unit test that makes the traced set contain one type with no handler entry observes exactly one warning naming that type, and the emit resolves without throwing.
-- [ ] The sixteen currently traced types keep their existing span and metric effects, proven by the existing OTel visualizer, span-manager, parity, wiring and observability test files passing unchanged.
+- [ ] The registry-derived traced types (excluding the metrics-only types and `unattributed_progress`) keep their existing span effects; metrics-only events retain their existing metric effects, proven by the OTel visualizer, span-manager, parity, wiring and observability test files passing.
 
 ## Story 2: Untraced event types stay off the OTel surface
 
@@ -33,7 +33,7 @@ As an engine contributor, I want an event declared untraced to remain a recorded
 ### Acceptance Criteria
 
 #### Happy Path
-- Given an event type declared as not traced, when it is emitted on the bus, then the visualizer never subscribes to it and exports no span, span event, or metric for it.
+- Given an event type declared as not traced, when it is emitted on the bus with the production trace-only visualizer, then that visualizer never subscribes to it and exports no span, span event, or metric for it.
 
 #### Negative Paths
 - Given a handler table that omits a traced event type, or one that names a type the sink table declares untraced, when the repository type-checks its tests, then compilation fails on that table.
@@ -42,6 +42,7 @@ As an engine contributor, I want an event declared untraced to remain a recorded
 - [ ] A unit test observes no subscription and no exported span or metric for a declared-untraced event type.
 - [ ] The same test's mocked-registry variant observes the subscription appear when that type is declared traced, proving the negative assertion is not vacuous.
 - [ ] The test typecheck project passes with assertions proving a handler table missing a traced key and a handler table carrying an untraced key are both unassignable.
+- [ ] The production trace-only visualizer never subscribes to `provider_attempt` and records no attempt span event; an ordinary step span still exports.
 
 ## Negative-category review
 

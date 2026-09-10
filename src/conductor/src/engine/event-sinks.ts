@@ -5,17 +5,19 @@ export interface SinkDeclaration {
   persist: boolean;
   audit: boolean;
   otel: boolean;
+  /** OTel events are visualizer-owned by default; false declares metrics-only ownership. */
+  otelTrace?: false;
 }
 
 export const EVENT_SINKS = {
-  daemon_backlog_snapshot: { render: false, persist: true, audit: false, otel: true },
-  feature_dispatch_started: { render: false, persist: true, audit: false, otel: true },
-  feature_dispatch_ended: { render: false, persist: true, audit: false, otel: true },
-  feature_shipped: { render: false, persist: true, audit: false, otel: true },
+  daemon_backlog_snapshot: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
+  feature_dispatch_started: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
+  feature_dispatch_ended: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
+  feature_shipped: { render: false, persist: true, audit: false, otel: true, otelTrace: false },
   operator_rewind: { render: true, persist: true, audit: true, otel: false },
   setup_repair: { render: true, persist: true, audit: false, otel: false },
   project_setup: { render: true, persist: true, audit: false, otel: false },
-  memory_setup: { render: true, persist: true, audit: false, otel: true },
+  memory_setup: { render: true, persist: true, audit: false, otel: true, otelTrace: false },
   plan_growth: { render: true, persist: true, audit: false, otel: false },
   coverage_binding_judged: { render: false, persist: true, audit: false, otel: false },
   coverage_binding_disabled: { render: false, persist: true, audit: false, otel: false },
@@ -60,14 +62,14 @@ export const EVENT_SINKS = {
   step_failed: { render: true, persist: true, audit: false, otel: true },
   step_refused: { render: true, persist: true, audit: true, otel: false },
   step_status_write_refused: { render: true, persist: true, audit: true, otel: false },
-  provider_attempt: { render: true, persist: true, audit: false, otel: true },
+  provider_attempt: { render: true, persist: true, audit: false, otel: true, otelTrace: false },
   // Per-interval progress would flood .daemon/daemon.log; daemon status reads the ledger directly.
   provider_stream_progress: { render: false, persist: true, audit: false, otel: false },
   scratch_cleanup_reclaimed: { render: true, persist: true, audit: false, otel: false },
   scratch_cleanup_retained: { render: true, persist: true, audit: false, otel: false },
   scratch_cleanup_failed: { render: true, persist: true, audit: false, otel: false },
-  feature_usage_total: { render: true, persist: true, audit: false, otel: true },
-  feature_cost_snapshot: { render: false, persist: false, audit: false, otel: true },
+  feature_usage_total: { render: true, persist: true, audit: false, otel: true, otelTrace: false },
+  feature_cost_snapshot: { render: false, persist: false, audit: false, otel: true, otelTrace: false },
   provider_fallback: { render: true, persist: true, audit: false, otel: false },
   session_policy: { render: true, persist: true, audit: false, otel: false },
   step_retry: { render: true, persist: true, audit: true, otel: true },
@@ -141,19 +143,24 @@ export const EVENT_SINKS = {
   auto_park_contradiction: { render: true, persist: false, audit: false, otel: false },
   zero_work_product: { render: false, persist: false, audit: false, otel: false },
   unattributed_dispatch: { render: false, persist: false, audit: false, otel: false },
-  unattributed_progress: { render: true, persist: true, audit: false, otel: true },
+  unattributed_progress: { render: true, persist: true, audit: false, otel: false },
   halt_cleared: { render: false, persist: false, audit: true, otel: false },
   kickback_budget_adjustment_authorized: { render: false, persist: true, audit: true, otel: false },
   ci_failed: { render: true, persist: false, audit: false, otel: false },
   attribution_divergence: { render: false, persist: true, audit: false, otel: false },
   acceptance_red: { render: false, persist: true, audit: false, otel: false },
-} satisfies Record<ConductorEvent['type'], SinkDeclaration>;
+} as const satisfies Record<ConductorEvent['type'], SinkDeclaration>;
 
 export type OtelEventType = {
   [Type in keyof typeof EVENT_SINKS]: (typeof EVENT_SINKS)[Type]['otel'] extends true ? Type : never;
 }[keyof typeof EVENT_SINKS];
 
-function eventTypesFor(sink: keyof SinkDeclaration): ConductorEvent['type'][] {
+export type OtelTracedEventType = {
+  [Type in OtelEventType]: (typeof EVENT_SINKS)[Type] extends { readonly otelTrace: false }
+    ? never : Type;
+}[OtelEventType];
+
+function eventTypesFor(sink: keyof Omit<SinkDeclaration, 'otelTrace'>): ConductorEvent['type'][] {
   return (Object.keys(EVENT_SINKS) as ConductorEvent['type'][])
     .filter((type) => EVENT_SINKS[type][sink]);
 }
@@ -172,4 +179,12 @@ export function renderedEventTypes(): ConductorEvent['type'][] {
 
 export function otelEventTypes(): OtelEventType[] {
   return eventTypesFor('otel') as OtelEventType[];
+}
+
+/** Visualizer subscriptions; metrics-only events remain covered by MetricsListener. */
+export function otelTracedEventTypes(): OtelTracedEventType[] {
+  return otelEventTypes().filter((type): type is OtelTracedEventType => {
+    const declaration = EVENT_SINKS[type];
+    return !('otelTrace' in declaration && declaration.otelTrace === false);
+  });
 }

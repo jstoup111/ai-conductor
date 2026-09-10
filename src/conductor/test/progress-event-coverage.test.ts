@@ -28,9 +28,10 @@ const UNATTRIBUTED_PROGRESS_EVENT: ConductorEvent = {
 
 /**
  * Guard against subscriber drift: every progress/stall event kind must be
- * persisted by the exhaustive sink registry and handled by the four remaining
+ * persisted by the exhaustive sink registry and handled by the three remaining
  * consumers that dispatch through string-literal arrays or switch statements.
- * Missing a kind silently drops the event for that consumer.
+ * OTel derives subscriptions from that same registry and its compile-checked
+ * handler table is covered in engine/otel/otel-visualizer.test.ts.
  */
 describe('progress event coverage guard', () => {
   it('accepts the exact unattributed_progress payload in the ConductorEvent union', () => {
@@ -57,7 +58,6 @@ describe('progress event coverage guard', () => {
     { name: 'ui/subscriber.ts eventTypes', file: join(SRC_ROOT, 'ui', 'subscriber.ts') },
     { name: 'daemon-cli.ts renderer switch', file: join(SRC_ROOT, 'daemon-cli.ts') },
     { name: 'ui/create-renderer.ts TTY renderer switch', file: join(SRC_ROOT, 'ui', 'create-renderer.ts') },
-    { name: 'engine/otel/otel-visualizer.ts subscription list', file: join(SRC_ROOT, 'engine', 'otel', 'otel-visualizer.ts') },
   ];
 
   for (const { name, file } of lists) {

@@ -316,6 +316,19 @@ Relevant existing facts (evidence):
 >    stay within Decision 4: bounded in-memory work, no I/O; the snapshot's counts are computed by
 >    the discovery pass that already ran, before the event is emitted.
 
+> **Amended 2026-09-09 by #2395 (as-built AB-1, shared-listener integration):** Decision 9's
+> requirement for a visualizer `handleEvent` case is superseded for `daemon_backlog_snapshot`,
+> `feature_dispatch_started`, `feature_dispatch_ended`, and `feature_shipped`: each requires an
+> `EVENT_SINKS` row and a `MetricsListener` handler, not a visualizer handler or subscription.
+> These four events are metrics-only on the OTel surface; their typed-event and persistence
+> obligations above remain unchanged. This corrects the stale clause to match Decision 7 and
+> condition C3 of the approved
+> `architecture-review-2026-09-06-no-daemon-level-metrics-queue-depth-halts-and-gate.md`, which
+> already requires listener cases and limits the visualizer to span cases. The operator's
+> shared-listener integration direction is retained: metrics coverage includes these four
+> events, while the visualizer's exhaustively checked traced set excludes them. No no-op
+> visualizer handlers or duplicate metric recording are required to satisfy this decision.
+
 > **Amended 2026-09-08 by #1937 (as-built decisions AB-6, AB-7, AB-10):** “traces are
 > unaffected” in Decision 7 is literal: the trace Resource, including its existing
 > `service.instance.id`, remains byte-identical to the pre-feature trace Resource. Decision 8's

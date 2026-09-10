@@ -1,4 +1,4 @@
-// Covers: task:2, task:5, task:6, task:8, task:10
+// Covers: task:2, task:3, task:4, task:5, task:6, task:8, task:10
 /**
  * T9: OtelVisualizer — provider/processor setup (off hot path).
  * T17: hot-path guard — emit() resolves promptly even when the transport blocks.
@@ -16,7 +16,12 @@ import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { createOtelVisualizer } from '../../../src/engine/otel/create-otel-visualizer.js';
-import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
+import {
+  OtelVisualizer,
+  type OtelEventHandlerTable,
+} from '../../../src/engine/otel/otel-visualizer.js';
+import { otelTracedEventTypes, type OtelTracedEventType } from '../../../src/engine/event-sinks.js';
+import type { ConductorEvent } from '../../../src/types/index.js';
 import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import {
   InMemoryMetricExporter,
@@ -31,6 +36,83 @@ class CapturingSpanExporter extends InMemorySpanExporter {
     return Promise.resolve();
   }
 }
+
+const tracedHandlerTable = {
+  step_started: () => undefined,
+  step_completed: () => undefined,
+  step_failed: () => undefined,
+  step_retry: () => undefined,
+  gate_verdict: () => undefined,
+  kickback: () => undefined,
+  feature_complete: () => undefined,
+  loop_halt: () => undefined,
+  build_progress: () => undefined,
+  build_no_progress: () => undefined,
+  build_stall: () => undefined,
+  pipeline_closeout: () => undefined,
+} satisfies OtelEventHandlerTable;
+
+const { loop_halt: _omittedTracedHandler, ...handlerTableMissingTracedType } = tracedHandlerTable;
+// @ts-expect-error a handler table must cover every sink-registry OTel type.
+const missingTracedHandler: OtelEventHandlerTable = handlerTableMissingTracedType;
+void missingTracedHandler;
+
+const handlerForUntracedType: OtelEventHandlerTable = {
+  ...tracedHandlerTable,
+  // @ts-expect-error a handler table cannot include an event the sink registry keeps off OTel.
+  gate_blocked: () => undefined,
+};
+void handlerForUntracedType;
+
+/**
+ * One representative event per traced type, keyed by a mapped record over
+ * `OtelTracedEventType`. The key set is the traced set *by construction*: a
+ * traced type with no sample fails as TS2741 and a sample for a type the sink
+ * table keeps untraced fails as TS2353. Every sample below is emitted on a real
+ * `ConductorEventEmitter` so the equality is proven through the production
+ * subscribe-and-dispatch path rather than through an accessor that only a test
+ * can call.
+ */
+const tracedEventSamples: {
+  [Type in OtelTracedEventType]: Extract<ConductorEvent, { type: Type }>;
+} = {
+  step_started: { type: 'step_started', step: 'build', index: 0 },
+  build_progress: { type: 'build_progress', step: 'build', resolved: 1, total: 3 },
+  build_no_progress: {
+    type: 'build_no_progress',
+    step: 'build',
+    quietMinutes: 5,
+    resolved: 1,
+    total: 3,
+  },
+  build_stall: {
+    type: 'build_stall',
+    step: 'build',
+    reason: 'no_task_progress',
+    resolvedBefore: 1,
+    resolvedAfter: 1,
+  },
+  step_retry: {
+    type: 'step_retry',
+    step: 'build',
+    attempt: 2,
+    maxAttempts: 3,
+    reason: 'transient failure',
+  },
+  gate_verdict: { type: 'gate_verdict', step: 'build', satisfied: true },
+  kickback: { type: 'kickback', from: 'build_review', to: 'build', count: 1 },
+  pipeline_closeout: {
+    type: 'pipeline_closeout',
+    obligation: 'simplify',
+    startedAt: 1,
+    endedAt: 2,
+    ts: 2,
+  },
+  step_completed: { type: 'step_completed', step: 'build', status: 'done' },
+  step_failed: { type: 'step_failed', step: 'build', error: 'boom', retryCount: 0 },
+  feature_complete: { type: 'feature_complete' },
+  loop_halt: { type: 'loop_halt', step: 'build', reason: 'kickback cap' },
+};
 
 describe('OtelVisualizer — T9: provider/processor setup', () => {
   let tempDir: string;
@@ -49,6 +131,11 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
 
   afterEach(async () => {
     await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('keeps untraced event types out of the OTel handler table', () => {
+    expect(otelTracedEventTypes()).not.toContain('gate_blocked');
+    expect(new Set(otelTracedEventTypes())).toEqual(new Set(Object.keys(tracedHandlerTable)));
   });
 
   it('constructs without throwing given a valid enabled config with injected exporters', () => {
@@ -100,11 +187,11 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
     return vis.stop();
   });
 
-  it('subscribes to exactly the event types derived by otelEventTypes()', async () => {
+  it('subscribes to exactly the event types derived by otelTracedEventTypes()', async () => {
     vi.resetModules();
     const expectedEventTypes = ['renderer_error'];
     vi.doMock('../../../src/engine/event-sinks.js', () => ({
-      otelEventTypes: () => expectedEventTypes,
+      otelTracedEventTypes: () => expectedEventTypes,
     }));
 
     try {
@@ -119,6 +206,7 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
         ),
         {
           runId: 'test-registry-subscriptions',
+          metrics: false,
           feature: 'test-feature',
           project: 'test-project',
           spanExporter,
@@ -134,6 +222,184 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
       vi.doUnmock('../../../src/engine/event-sinks.js');
       vi.resetModules();
     }
+  });
+
+  it('does not subscribe to or export telemetry for declared-untraced gate_blocked events', async () => {
+    const on = vi.spyOn(emitter, 'on');
+    const vis = new OtelVisualizer(
+      resolveOtelConfig(
+        { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+        pipelineDir,
+      ),
+      {
+        runId: 'test-untraced-gate-blocked',
+        feature: 'test-feature',
+        project: 'test-project',
+        spanExporter,
+        metricExporter,
+      },
+    );
+
+    vis.start(emitter);
+    await emitter.emit({ type: 'gate_blocked', step: 'build', reason: 'blocked' });
+    await vis.stop();
+
+    expect({
+      subscriptions: on.mock.calls.map(([type]) => type),
+      spans: spanExporter.getFinishedSpans(),
+      metrics: metricExporter.getMetrics(),
+    }).toEqual({ subscriptions: expect.not.arrayContaining(['gate_blocked']), spans: [], metrics: [] });
+  });
+
+  it.each<ConductorEvent>([
+    { type: 'provider_attempt', step: 'build', provider: 'claude', invoked: true, outcome: 'failure' },
+    { type: 'memory_setup', before: 'absent', canonical: true },
+    { type: 'feature_cost_snapshot', costUsd: 0, costComplete: true, byDimension: [], tokensByDimension: [] },
+    { type: 'feature_usage_total', dispatches: 1, meteredDispatches: 1, unmeteredDispatches: 0, costUsd: 0, inputTokens: 1, outputTokens: 1 },
+  ])('does not subscribe to metrics-only $type when exporting traces only', async (event) => {
+    const on = vi.spyOn(emitter, 'on');
+    const vis = new OtelVisualizer(
+      resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, pipelineDir),
+      { runId: 'attempt-exclusion', feature: 'test-feature', project: 'test-project',
+        metrics: false, spanExporter, metricExporter },
+    );
+    vis.start(emitter);
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit(event);
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await vis.stop();
+    expect(on.mock.calls.map(([type]) => type)).not.toContain(event.type);
+    expect(otelTracedEventTypes()).not.toContain(event.type);
+    const spans = spanExporter.getFinishedSpans();
+    expect(spans.map((span) => span.name)).toContain('build');
+    expect(spans.flatMap((span) => span.events).map((event) => event.name)).not.toContain(event.type);
+  });
+
+  it('subscribes to gate_blocked when the mocked sink registry declares it traced', async () => {
+    vi.resetModules();
+    vi.doMock('../../../src/engine/event-sinks.js', () => ({
+      otelTracedEventTypes: () => ['gate_blocked'],
+    }));
+
+    try {
+      const { OtelVisualizer: FreshOtelVisualizer } = await import('../../../src/engine/otel/otel-visualizer.js');
+      const { ConductorEventEmitter: FreshConductorEventEmitter } = await import('../../../src/ui/events.js');
+      const freshEmitter = new FreshConductorEventEmitter();
+      const on = vi.spyOn(freshEmitter, 'on');
+      const vis = new FreshOtelVisualizer(
+        resolveOtelConfig(
+          { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+          pipelineDir,
+        ),
+        {
+          runId: 'test-traced-gate-blocked',
+          feature: 'test-feature',
+          project: 'test-project',
+          spanExporter,
+          metricExporter,
+        },
+      );
+
+      vis.start(freshEmitter);
+
+      expect(on.mock.calls.map(([type]) => type)).toContain('gate_blocked');
+      await vis.stop();
+    } finally {
+      vi.doUnmock('../../../src/engine/event-sinks.js');
+      vi.resetModules();
+    }
+  });
+
+  it('warns once when the traced registry includes an event with no handler, while handled events still record effects', async () => {
+    vi.resetModules();
+    const unhandledType = 'renderer_error';
+    vi.doMock('../../../src/engine/event-sinks.js', () => ({
+      otelTracedEventTypes: () => ['step_started', unhandledType],
+    }));
+
+    try {
+      const { OtelVisualizer: FreshOtelVisualizer } = await import('../../../src/engine/otel/otel-visualizer.js');
+      const { ConductorEventEmitter: FreshConductorEventEmitter } = await import('../../../src/ui/events.js');
+      const freshEmitter = new FreshConductorEventEmitter();
+      const freshSpanExporter = new CapturingSpanExporter();
+      const warn = vi.fn();
+      const vis = new FreshOtelVisualizer(
+        resolveOtelConfig(
+          { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+          pipelineDir,
+        ),
+        {
+          runId: 'test-unhandled-traced-event',
+          feature: 'test-feature',
+          project: 'test-project',
+          spanExporter: freshSpanExporter,
+          metricExporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
+          onWarning: warn,
+        },
+      );
+
+      vis.start(freshEmitter);
+      await freshEmitter.emit({ type: 'step_started', step: 'build', index: 0 });
+      await freshEmitter.emit({
+        type: unhandledType,
+        rendererName: 'test-renderer',
+        error: 'extra traced event',
+      });
+      await vis.stop();
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining(unhandledType));
+      expect(freshSpanExporter.getFinishedSpans().map((span) => span.name)).toContain('build');
+    } finally {
+      vi.doUnmock('../../../src/engine/event-sinks.js');
+      vi.resetModules();
+    }
+  });
+
+  it('routes every traced event type through the bus with no unhandled-type report', async () => {
+    // The sample table's keys are the traced set by construction (mapped record
+    // over OtelTracedEventType), and this asserts the compile-time set the
+    // handler table is bound to is the same set the visualizer subscribes from
+    // at runtime.
+    expect(new Set(Object.keys(tracedEventSamples))).toEqual(new Set(otelTracedEventTypes()));
+
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      pipelineDir,
+    );
+    const warn = vi.fn();
+    const vis = new OtelVisualizer(resolved, {
+      runId: 'test-handler-coverage',
+      feature: 'test-feature',
+      project: 'test-project',
+      spanExporter,
+      metricExporter,
+      onWarning: warn,
+    });
+
+    vis.start(emitter);
+
+    // Drive each traced type through the real subscribe-and-dispatch path. A
+    // traced type with no handler entry reports itself through onWarning (the
+    // sibling mocked-registry test proves that report is not vacuous), so zero
+    // warnings across the whole traced set means every traced type was routed.
+    for (const event of Object.values(tracedEventSamples)) {
+      await emitter.emit(event as ConductorEvent);
+    }
+
+    // The visualizer's warning seam is shared with SpanManager's own bounded
+    // notices (e.g. a terminal event with no open span), so scope the assertion
+    // to the unhandled-type report this criterion is about.
+    const unhandledReports = warn.mock.calls
+      .map(([msg]) => String(msg))
+      .filter((msg) => msg.includes('no handler for traced event type'));
+    expect(unhandledReports).toEqual([]);
+
+    await vis.stop();
+
+    // Non-vacuity for the dispatch itself: the routed events produced real
+    // exported telemetry rather than being silently discarded.
+    expect(spanExporter.getFinishedSpans().length).toBeGreaterThan(0);
   });
 
   it('records a bus-emitted loop_halt as the halted root span outcome', async () => {
@@ -156,6 +422,24 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
 
     const root = spanExporter.getFinishedSpans().find((span) => !span.parentSpanContext)!;
     expect(root.attributes['conductor.run.outcome']).toBe('halted');
+  });
+
+  it('exports traces when the shared listener owns metrics', async () => {
+    const vis = new OtelVisualizer(resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, pipelineDir,
+    ), { metrics: false, spanExporter, metricExporter });
+    const on = vi.spyOn(emitter, 'on');
+    try {
+      vis.start(emitter, { runId: 'trace-only-run', feature: 'trace-only-feature' });
+      expect(on.mock.calls.map(([type]) => type)).not.toContain('daemon_backlog_snapshot');
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+      await emitter.emit({ type: 'loop_halt', step: 'build', reason: 'test halt' });
+    } finally {
+      await vis.stop();
+    }
+    expect(spanExporter.getFinishedSpans().find((span) => !span.parentSpanContext)
+      ?.attributes['conductor.run.outcome']).toBe('halted');
+    expect(metricExporter.getMetrics()).toEqual([]);
   });
 
   it('uses identity supplied to start() for exported spans', async () => {
