@@ -1,4 +1,4 @@
-// Covers: task:12
+// Covers: task:3, task:12
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,7 @@ import {
   projectBuildReviewSuppressionEntries,
 } from '../../src/engine/build-review-suppression-history.js';
 import { RemediationCaseStore, remediationCaseStorePath } from '../../src/engine/remediation-case-store.js';
+import type { RemediationCasePrdWideningRecord } from '../../src/engine/remediation-case-store.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -25,6 +26,16 @@ afterEach(async () => {
 });
 
 const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
+
+const PRD_WIDENING_CASE: RemediationCasePrdWideningRecord = {
+  id: 'prd-case-1',
+  domain: 'prd_widening',
+  originalSources: [{ sourceId: 'NC-1', snapshot: 'Original widening finding.' }],
+  currentSources: [{ sourceId: 'NC-1', snapshot: 'Reworded widening finding.', recordedAt: '2026-09-09T12:00:00.000Z' }],
+  relationships: [{
+    currentSourceId: 'NC-1', kind: 'same-case', caseId: 'prd-case-1', reason: 'The finding concerns the same behavior.',
+  }],
+};
 
 function lapAggregate(lapId: string) {
   return joinBuildReviewRubricOutcomes({
@@ -105,6 +116,31 @@ describe('persistBuildReviewSuppressions', () => {
     const persisted = await new RemediationCaseStore(root, feature).read();
     if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
     expect(persisted.state.suppressions).toEqual([secondLap, absentAfterwards]);
+  });
+
+  it('retains PRD widening history while upserting build-review suppressions', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await store.mutate(async (state) => ({
+      value: undefined,
+      nextState: {
+        version: 'v2', feature: state.feature, cases: state.cases,
+        prdWideningCases: [PRD_WIDENING_CASE], suppressions: state.suppressions ?? [],
+      },
+    }));
+    const suppression = {
+      findingId: 'testQuality:finding-1', rubric: 'testQuality', summary: 'The sub-floor finding.',
+      confidence: 40, floor: 70, lastSeenLap: 'lap-1',
+    } as const;
+
+    await expect(persistBuildReviewSuppressions({
+      projectRoot: root, feature, store, suppressions: [suppression],
+    })).resolves.toEqual({ ok: true });
+
+    await expect(store.read()).resolves.toMatchObject({
+      ok: true,
+      state: { prdWideningCases: [PRD_WIDENING_CASE], suppressions: [suppression] },
+    });
   });
 
   it('writes nothing at all when the lap suppressed nothing', async () => {
