@@ -74,7 +74,19 @@ const defaultFilesystem: ConductStateLeaseFilesystem = {
     await mkdir(dirname(path), { recursive: true });
     await mkdir(path);
   },
-  writeOwner: (path, contents) => writeFile(path, contents, { encoding: 'utf8', flag: 'wx' }),
+  // A contender may begin recovery as soon as the lease directory appears.
+  // Publish ownership with a rename so it sees either no owner (initializing)
+  // or the complete record, never a transient empty/truncated JSON document.
+  async writeOwner(path, contents): Promise<void> {
+    const temporaryPath = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporaryPath, contents, { encoding: 'utf8', flag: 'wx' });
+      await rename(temporaryPath, path);
+    } catch (error) {
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  },
   readOwner: (path) => readFile(path, 'utf8'),
   writeRecoveryClaim: (path, contents) => writeFile(path, contents, { encoding: 'utf8', flag: 'wx' }),
   async readRecoveryClaim(path): Promise<string | null> {
