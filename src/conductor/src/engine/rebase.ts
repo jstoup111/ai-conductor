@@ -622,7 +622,12 @@ export async function writeSealHalt(
 
 // ── Outcome model ────────────────────────────────────────────────────────────
 
-export type RebaseOutcome =
+export interface RebaseQuarantine {
+  paths: string[];
+  directory: string;
+}
+
+type RebaseOutcomeKind =
   | {
       kind: 'noop';
       /** Complete rebase delta when the base advanced without touching code/test paths. */
@@ -650,7 +655,12 @@ export type RebaseOutcome =
       reason: string;
       /** A completed rebase failed a post-resolution acceptance guard. */
       resumeShape?: RebaseResumeShape;
+      /** Git refused before creating rebase state; `--continue` is invalid. */
+      startFailure?: boolean;
     };
+
+/** A quarantine applies to every outcome after an untracked-collision heal. */
+export type RebaseOutcome = RebaseOutcomeKind & { quarantine?: RebaseQuarantine };
 
 /** A protected-artifact refusal raised before git starts a rebase. */
 export class ProtectedArtifactSealRejection extends Error {
@@ -870,7 +880,8 @@ export async function performRebase(
   // conflict" the operator can't resolve. Autostash stashes those changes, rebases,
   // and reapplies them — so a clean rebase still succeeds with a dirty tree. (A
   // genuine overlap makes the autostash pop conflict, still caught below.)
-  const rebase = await git(['rebase', '--autostash', base.ref]);
+  const rebaseArgs = ['rebase', '--autostash', base.ref];
+  const rebase = await git(rebaseArgs);
   if (rebase.exitCode === 0) {
     const outcome = await classifyClean(git, preTree, mergeBase);
     // Every clean rebase that reaches here rewrites commit shas (the parent
@@ -885,12 +896,55 @@ export async function performRebase(
   // Non-zero → conflicts (or another error). Inspect unmerged paths.
   const conflicts = await conflictedFiles(git);
   if (conflicts.length === 0) {
+    // Git can refuse before it creates rebase state when an untracked file
+    // would be overwritten. Heal only that exact, parser-confirmed refusal;
+    // all other zero-conflict failures remain a never-started human halt.
+    if (!(await rebaseStateActive(git, projectRoot))) {
+      const paths = parseUntrackedOverwriteRefusal(rebase.stderr);
+      if (paths.length > 0) {
+        try {
+          const confirmed = await confirmUntrackedRebasePaths(git, projectRoot, paths);
+          const directory = await moveRebaseUntrackedPathsToQuarantine(projectRoot, confirmed);
+          const quarantine = { paths: confirmed, directory };
+          const retry = await git(rebaseArgs);
+          if (retry.exitCode === 0) {
+            const outcome = await classifyClean(git, preTree, mergeBase);
+            await translateCompletedRebase();
+            return { ...outcome, quarantine };
+          }
+          const retryConflicts = await conflictedFiles(git);
+          if (retryConflicts.length > 0) {
+            return {
+              kind: 'conflict_halt',
+              conflicts: retryConflicts,
+              reason: 'rebase conflict requires human resolution',
+              quarantine,
+            };
+          }
+          return {
+            kind: 'conflict_halt',
+            conflicts: [],
+            reason: retry.stderr.trim() || 'rebase failed without reported conflicts',
+            startFailure: !(await rebaseStateActive(git, projectRoot)),
+            quarantine,
+          };
+        } catch (error) {
+          return {
+            kind: 'conflict_halt',
+            conflicts: [],
+            reason: `${rebase.stderr.trim() || 'rebase failed without reported conflicts'}\n${(error as Error).message}`,
+            startFailure: true,
+          };
+        }
+      }
+    }
     // No unmerged files but rebase failed — treat as a HALT-worthy error,
     // leaving the rebase in whatever state git left it.
     return {
       kind: 'conflict_halt',
       conflicts: [],
       reason: rebase.stderr.trim() || 'rebase failed without reported conflicts',
+      startFailure: !(await rebaseStateActive(git, projectRoot)),
     };
   }
 

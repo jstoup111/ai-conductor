@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 
 import {
   confirmUntrackedRebasePaths,
@@ -10,6 +12,8 @@ import {
   REBASE_UNTRACKED_QUARANTINE_DIR,
   type GitRunner,
 } from '../../src/engine/rebase.js';
+
+const execFile = promisify(execFileCb);
 
 const refusal = [
   'error: The following untracked working tree files would be overwritten by checkout:',
@@ -67,6 +71,44 @@ describe('engine/rebase — refusal before rebase starts', () => {
         .rejects.toThrow('second.txt');
       await expect(readFile(join(root, 'first.txt'), 'utf8')).resolves.toBe('first\n');
       await expect(readFile(join(quarantine, 'second.txt'), 'utf8')).resolves.toBe('already here\n');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('moves an untracked collision aside and retries the rebase once', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-start-blocked-git-'));
+    const g = (args: string[]) => execFile('git', args, { cwd: root });
+    try {
+      await g(['init', '-q', '-b', 'main']);
+      await g(['config', 'user.email', 't@example.test']);
+      await g(['config', 'user.name', 'Test']);
+      await writeFile(join(root, 'initial.txt'), 'initial\n');
+      await g(['add', '.']);
+      await g(['commit', '-q', '-m', 'initial']);
+
+      await g(['checkout', '-q', '-b', 'feature']);
+      await writeFile(join(root, 'feature.txt'), 'feature\n');
+      await g(['add', 'feature.txt']);
+      await g(['commit', '-q', '-m', 'feature']);
+      await g(['checkout', '-q', 'main']);
+      await writeFile(join(root, 'generated.txt'), 'base version\n');
+      await g(['add', 'generated.txt']);
+      await g(['commit', '-q', '-m', 'base']);
+      await g(['checkout', '-q', 'feature']);
+      await writeFile(join(root, 'generated.txt'), 'untracked version\n');
+
+      const outcome = await (await import('../../src/engine/rebase.js')).performRebase(
+        (await import('../../src/engine/rebase.js')).makeGitRunner(root),
+        root,
+        'main',
+      );
+
+      expect(outcome.kind).not.toBe('conflict_halt');
+      await expect(readFile(join(root, 'generated.txt'), 'utf8')).resolves.toBe('base version\n');
+      await expect(
+        readFile(join(root, REBASE_UNTRACKED_QUARANTINE_DIR, 'generated.txt'), 'utf8'),
+      ).resolves.toBe('untracked version\n');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
