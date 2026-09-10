@@ -103,12 +103,20 @@ export function wireDaemonOtel(
     exportIntervalMillis: 60_000,
   });
   const provider = new MeterProvider({ resource: buildResource({
+    attributes: resolved.attributes,
     pipelineDir: join(context.mainRoot, '.pipeline'), project: context.project,
     projectName: resolved.projectName ?? context.projectName ?? basename(context.mainRoot), workerName,
   }, 'metrics'), readers: [reader] });
   const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('conductor', '1.0.0'), {
     project: resolved.projectName ?? context.projectName ?? 'unknown', worker: workerName,
-  }));
+  }, resolved.attributes));
+  if (resolved.attributeWarnings?.length) {
+    void context.rootEvents.emit({
+      type: 'renderer_error',
+      rendererName: 'otel',
+      error: `[otel] ${resolved.attributeWarnings.join(' ')}`,
+    }).catch(() => {});
+  }
   listener.start(context.rootEvents);
   const settleMetricLifecycle = guardMetricLifecycle(context.rootEvents);
   let stopped: Promise<void> | undefined;
