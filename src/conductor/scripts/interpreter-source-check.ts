@@ -6,9 +6,16 @@ export interface InterpreterSourceFinding {
 
 type Word = { text: string; line: number; expandable: string[]; closed: boolean; openQuote?: "'" | '"'; regions: string[] };
 type Heredoc = { delimiter: string; expanding: boolean; stripTabs: boolean; interpreter: boolean; line: number };
-const expansion = /(?<!\\)(?:\$\{|\$\(|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9]|\$[@*#?$!\-$]|`)/g;
+const expansion = /(?:\$\{|\$\(|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9]|\$[@*#?$!\-$]|`)/g;
 const interpreter = /^(?:\/[^\s/]+)*\/(?:python3?|node)$|^(?:python3?|node)$/;
-const findingsIn = (value: string): string[] => [...value.matchAll(expansion)].map((match) => match[0]);
+/** A dollar is escaped only after an odd-length run of backslashes. */
+const findingsIn = (value: string): string[] => [...value.matchAll(expansion)]
+  .filter((match) => {
+    let backslashes = 0;
+    for (let index = match.index - 1; index >= 0 && value[index] === '\\'; index -= 1) backslashes += 1;
+    return backslashes % 2 === 0;
+  })
+  .map((match) => match[0]);
 
 /**
  * Reads one shell word without evaluating it. Single quoted parts are data.
@@ -105,8 +112,23 @@ function heredocDelimiter(word: string): Pick<Heredoc, 'delimiter' | 'expanding'
   return { delimiter, expanding: !quoted };
 }
 
-function heredocsOnLine(line: string, words: Word[], lineNumber: number): Heredoc[] {
-  const executable = words.find((word) => interpreter.test(word.text));
+function directInterpreterIndex(words: Word[]): number {
+  let index = 0;
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]?.text ?? '')) index += 1;
+  while (['env', 'command', 'exec'].includes(words[index]?.text ?? '')) {
+    index += 1;
+    while (/^(?:[A-Za-z_][A-Za-z0-9_]*=|-[A-Za-z])/.test(words[index]?.text ?? '')) index += 1;
+  }
+  return interpreter.test(words[index]?.text ?? '') ? index : -1;
+}
+
+function heredocsOnLine(line: string, commands: Word[][], lineNumber: number): Heredoc[] {
+  const executable = commands
+    .map((words) => {
+      const index = directInterpreterIndex(words);
+      return index >= 0 ? words[index] : undefined;
+    })
+    .find((word) => word !== undefined);
   return [...line.matchAll(/<<(-?)\s*([^\s;|&]+)/g)].map((match) => ({
     ...heredocDelimiter(match[2]), stripTabs: match[1] === '-',
     interpreter: Boolean(executable && /python3?$/.test(executable.text)), line: lineNumber,
@@ -136,7 +158,7 @@ export function checkInterpreterSource(sourceName: string, text: string): Interp
     }
     const commands = commandsOnLine(lines[index], index + 1);
     for (const words of commands) {
-      const executable = words.findIndex((word) => interpreter.test(word.text));
+      const executable = directInterpreterIndex(words);
       if (executable < 0) continue;
       const command = words[executable].text;
       const args = words.slice(executable + 1);
@@ -181,7 +203,7 @@ export function checkInterpreterSource(sourceName: string, text: string): Interp
       }
       else if (source.expandable.length > 0) findings.push({ sourceName, line: source.line, message: 'shell expansion in interpreter command source' });
     }
-    pending.push(...heredocsOnLine(lines[index], commands.flat(), index + 1));
+    pending.push(...heredocsOnLine(lines[index], commands, index + 1));
   }
   for (const here of pending) {
     if (here.interpreter) findings.push({ sourceName, line: here.line, message: 'unterminated interpreter heredoc' });

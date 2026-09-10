@@ -17,6 +17,17 @@ describe('checkInterpreterSource', () => {
     expect(checkInterpreterSource('safe.sh', "node -e 'console.log(process.argv[1])' -- \"$VALUE\"\npython3 - \"$VALUE\" <<'PY'\nprint('$')\nPY")).toEqual([]);
   });
 
+  it('does not mistake interpreter-looking argument data for a command', () => {
+    expect(checkInterpreterSource('argument-data.sh', 'printf %s node -e "$VALUE"\nprintf %s python3 <<PY\nprint($VALUE)\nPY')).toEqual([]);
+  });
+
+  it('recognizes direct interpreters after shell command prefixes', () => {
+    expect(checkInterpreterSource('prefixed.sh', 'VALUE=1 env node -e "console.log($VALUE)"\ncommand python3 -c "print($VALUE)"')).toEqual([
+      expect.objectContaining({ line: 1, message: 'shell expansion in interpreter command source' }),
+      expect.objectContaining({ line: 2, message: 'shell expansion in interpreter command source' }),
+    ]);
+  });
+
   it('keeps literal dollars in single-quoted source and reports physical multiline locations', () => {
     expect(checkInterpreterSource('literal.sh', "node -e 'console.log($VALUE)'\npython3 -c \"print(\\\n${VALUE})\"")).toEqual([
       expect.objectContaining({ sourceName: 'literal.sh', line: 2, message: 'shell expansion in interpreter command source' }),
@@ -80,6 +91,13 @@ describe('checkInterpreterSource', () => {
     expect(checkInterpreterSource('unquoted.sh', `python3 <<${delimiter}\nprint($LITERAL)\n${terminator}`)).toEqual([
       expect.objectContaining({ sourceName: 'unquoted.sh', line: 2, message: 'shell expansion in interpreter heredoc source' }),
     ]);
+  });
+
+  it('uses backslash-run parity for expanding heredoc bodies', () => {
+    expect(checkInterpreterSource('even-backslashes.sh', 'python3 <<PY\nprint(\\\\$VALUE)\nPY')).toEqual([
+      expect.objectContaining({ line: 2, message: 'shell expansion in interpreter heredoc source' }),
+    ]);
+    expect(checkInterpreterSource('odd-backslashes.sh', 'python3 <<PY\nprint(\\\\\\$VALUE)\nPY')).toEqual([]);
   });
 
   it.each([
