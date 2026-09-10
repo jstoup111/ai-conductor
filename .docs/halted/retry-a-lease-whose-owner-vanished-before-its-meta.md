@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-10T10:54:26.268Z
 Slug: retry-a-lease-whose-owner-vanished-before-its-meta
 Class: needs-human
 Halting step: unknown
