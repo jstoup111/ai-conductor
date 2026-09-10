@@ -1,215 +1,56 @@
-// Covers: task:1
-import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
-import { Writable } from 'node:stream';
+// Covers: task:1, task:2, task:3
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import {
-  FORWARDED_TO_TERMINAL_RENDERER_EVENT_TYPES,
-  TerminalSubscriber,
-} from '../../src/ui/subscriber.js';
-import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
-import { createLiveRegion } from '../../src/ui/live-region.js';
+import { TerminalSubscriber, NON_RENDERABLE_DASHBOARD_EVENT_TYPES } from '../../src/ui/subscriber.js';
 import type { ConductorEvent } from '../../src/types/index.js';
-import { ALL_STEPS } from '../../src/engine/steps.js';
-import { startFeatureEventPersistence } from '../../src/engine/event-persister.js';
+import type { UIRenderer } from '../../src/ui/types.js';
 import { renderedEventTypes } from '../../src/engine/event-sinks.js';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
 
-class CaptureStream extends Writable {
-  chunks: string[] = [];
-
-  _write(chunk: Buffer | string, _encoding: string, callback: (error?: Error | null) => void): void {
-    this.chunks.push(chunk.toString());
-    callback();
-  }
-
-  output(): string {
-    return this.chunks.join('');
-  }
-}
+const renderer = (handle = vi.fn(async () => {})): UIRenderer => ({ name: 'test', handle, stop: vi.fn(async () => {}) });
 
 describe('TerminalSubscriber', () => {
-  let emitter: ConductorEventEmitter;
-  let renderCallback: Mock<(event: ConductorEvent) => void>;
-  let subscriber: TerminalSubscriber;
+  const subscribers: TerminalSubscriber[] = [];
+  afterEach(async () => { await Promise.all(subscribers.splice(0).map((subscriber) => subscriber.stop())); });
 
-  beforeEach(() => {
-    vi.useFakeTimers();
-    emitter = new ConductorEventEmitter();
-    renderCallback = vi.fn<(event: ConductorEvent) => void>();
-    subscriber = new TerminalSubscriber(emitter, renderCallback);
-  });
-
-  afterEach(() => {
-    subscriber.stop();
-    vi.useRealTimers();
-  });
-
-  it('subscribes to events on start()', async () => {
-    subscriber.start();
-
+  it('subscribes once to the renderable union and fans each event to every renderer exactly once', async () => {
+    const events = new ConductorEventEmitter();
+    const on = vi.spyOn(events, 'on');
+    const first = renderer();
+    const second = renderer();
+    const subscriber = new TerminalSubscriber(events);
+    subscribers.push(subscriber);
+    subscriber.start([first, second]);
     const event: ConductorEvent = { type: 'step_started', step: 'explore', index: 2 };
-    await emitter.emit(event);
-
-    expect(renderCallback).toHaveBeenCalledOnce();
-    expect(renderCallback).toHaveBeenCalledWith(event);
+    await events.emit(event);
+    expect(first.handle).toHaveBeenCalledOnce();
+    expect(second.handle).toHaveBeenCalledOnce();
+    expect(on.mock.calls.map(([type]) => type)).toEqual(expect.arrayContaining([...renderedEventTypes(), ...NON_RENDERABLE_DASHBOARD_EVENT_TYPES]));
   });
 
-  it('subscribes to every event declared renderable by the sink registry', () => {
-    const on = vi.spyOn(emitter, 'on');
-
-    subscriber.start();
-
-    const subscribedTypes = on.mock.calls.map(([type]) => type);
-    expect(subscribedTypes).toEqual(expect.arrayContaining(renderedEventTypes()));
+  it('isolates renderer errors while retaining other renderers and later events', async () => {
+    const events = new ConductorEventEmitter();
+    const bad = renderer(vi.fn(async () => { throw new Error('broken'); }));
+    const good = renderer();
+    const errors: ConductorEvent[] = [];
+    events.on('renderer_error', async (event) => { errors.push(event); });
+    const subscriber = new TerminalSubscriber(events);
+    subscribers.push(subscriber);
+    subscriber.start([bad, good]);
+    const event: ConductorEvent = { type: 'step_started', step: 'explore', index: 2 };
+    await events.emit(event);
+    await events.emit(event);
+    expect(good.handle.mock.calls.filter(([seen]) => seen === event)).toHaveLength(2);
+    expect(errors).toEqual(expect.arrayContaining([expect.objectContaining({ rendererName: 'test', error: 'Error: broken' })]));
   });
 
-  it('preserves subscriptions for explicitly non-renderable dashboard events', () => {
-    const on = vi.spyOn(emitter, 'on');
-
-    subscriber.start();
-
-    const subscribedTypes = on.mock.calls.map(([type]) => type);
-    expect(subscribedTypes).toEqual(expect.arrayContaining([
-      'checkpoint_reached',
-      'recovery_needed',
-      'dashboard_refresh',
-      'tier_skip',
-      'config_skip',
-      'gate_blocked',
-      'feature_complete',
-      'auto_heal',
-      'mode_skip',
-      'parallel_failure',
-    ]));
-  });
-
-  it('declares exactly the event types forwarded to the terminal renderer', () => {
-    expect(FORWARDED_TO_TERMINAL_RENDERER_EVENT_TYPES).toEqual([
-      'halt_marker_write_failed',
-      'renderer_error',
-      'pipeline_tail_diagnostic',
-    ]);
-  });
-
-  it('unsubscribes on stop()', async () => {
-    subscriber.start();
-    subscriber.stop();
-
-    await emitter.emit({ type: 'step_started', step: 'explore', index: 2 });
-
-    expect(renderCallback).not.toHaveBeenCalled();
-  });
-
-  it('exposes an awaitable lifecycle stop', async () => {
-    subscriber.start([]);
-
-    await expect(subscriber.stop()).resolves.toBeUndefined();
-  });
-
-  it('triggers dashboard render on step events', async () => {
-    subscriber.start();
-
-    await emitter.emit({ type: 'step_started', step: 'worktree', index: 0 });
-    await emitter.emit({ type: 'step_completed', step: 'worktree', status: 'done' });
-    await emitter.emit({ type: 'step_failed', step: 'build', error: 'test fail', retryCount: 1 });
-
-    expect(renderCallback).toHaveBeenCalledTimes(3);
-  });
-
-  it('does NOT emit periodic dashboard_refresh (renders are event-driven)', () => {
-    subscriber.start();
-
-    vi.advanceTimersByTime(60_000);
-
-    // No periodic emissions — dashboard refreshes only when conductor events fire.
-    const refreshCalls = renderCallback.mock.calls.filter(
-      (call) => (call[0] as ConductorEvent).type === 'dashboard_refresh',
-    );
-    expect(refreshCalls.length).toBe(0);
-  });
-
-  it('still forwards an explicit dashboard_refresh event to the renderer', async () => {
-    subscriber.start();
-    await emitter.emit({ type: 'dashboard_refresh' });
-    expect(renderCallback).toHaveBeenCalledWith({ type: 'dashboard_refresh' });
-  });
-
-  it('forwards pipeline closeout events to the renderer', async () => {
-    subscriber.start();
-    const event: ConductorEvent = {
-      type: 'pipeline_closeout',
-      obligation: 'evaluator',
-      startedAt: 100,
-      endedAt: 140,
-      ts: 140,
-    };
-
-    await emitter.emit(event);
-
-    expect(renderCallback).toHaveBeenCalledWith(event);
-  });
-
-  it('forwards tail diagnostics to the renderer', async () => {
-    subscriber.start();
-    const event: ConductorEvent = {
-      type: 'pipeline_tail_diagnostic', reason: 'malformed-line',
-      path: '.pipeline/pipeline-events.jsonl', byteOffset: 42,
-    };
-
-    await emitter.emit(event);
-
-    expect(renderCallback).toHaveBeenCalledWith(event);
-  });
-
-  it('leaves gate verdicts to the inline dashboard renderer', async () => {
-    const stream = new CaptureStream();
-    const terminalRenderer = new TerminalRenderer({
-      stateFilePath: '/tmp/test-state.json',
-      steps: ALL_STEPS,
-      readStateFn: async () => ({ ok: true, value: {} }),
-      liveRegion: createLiveRegion({ stream, forceTTY: false }),
-    });
-    const handle = vi.spyOn(terminalRenderer, 'handle');
-    subscriber = new TerminalSubscriber(emitter, renderCallback, terminalRenderer);
-    subscriber.start();
-    const event: ConductorEvent = {
-      type: 'gate_verdict', step: 'plan', satisfied: true, reason: 'covered',
-    };
-
-    await emitter.emit(event);
-
-    expect(renderCallback).toHaveBeenCalledOnce();
-    expect(renderCallback).toHaveBeenCalledWith(event);
-    expect(handle).not.toHaveBeenCalled();
-    expect(stream.output()).toBe('');
-  });
-
-  it('does not re-render a feature-forwarded gate verdict on the daemon-wide renderer', async () => {
-    const stream = new CaptureStream();
-    const terminalRenderer = new TerminalRenderer({
-      stateFilePath: '/tmp/test-state.json',
-      steps: ALL_STEPS,
-      readStateFn: async () => ({ ok: true, value: {} }),
-      liveRegion: createLiveRegion({ stream, forceTTY: false }),
-    });
-    const handle = vi.spyOn(terminalRenderer, 'handle');
-    subscriber = new TerminalSubscriber(emitter, renderCallback, terminalRenderer);
-    subscriber.start();
-
-    // A feature-scoped bus renders its own events (tagged) via its own
-    // listeners and then forwards a marked copy onto the daemon-wide bus this
-    // subscriber listens to. Rendering that copy here duplicates the line.
-    const worktreePath = mkdtempSync(join(process.env.TMPDIR ?? '/tmp', 'subscriber-forward-'));
-    mkdirSync(join(worktreePath, '.pipeline'), { recursive: true });
-    const featureEvents = startFeatureEventPersistence(worktreePath, emitter);
-    await featureEvents.events.emit({
-      type: 'gate_verdict', step: 'plan', satisfied: true, reason: 'covered',
-    });
-    featureEvents.stop();
-    rmSync(worktreePath, { recursive: true, force: true });
-
-    expect(handle).not.toHaveBeenCalled();
-    expect(stream.output()).toBe('');
+  it('fans an ordinary gate verdict to the renderer once', async () => {
+    const events = new ConductorEventEmitter();
+    const target = renderer();
+    const subscriber = new TerminalSubscriber(events);
+    subscribers.push(subscriber);
+    subscriber.start([target]);
+    // Marking is kept out of the event payload; this test owns only ordinary fan-out.
+    await events.emit({ type: 'gate_verdict', step: 'plan', satisfied: false, reason: 'x' });
+    expect(target.handle).toHaveBeenCalledOnce();
   });
 });

@@ -86,7 +86,6 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
-import { createRenderer } from '../../src/ui/create-renderer.js';
 import { createLiveRegion } from '../../src/ui/live-region.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -541,12 +540,12 @@ describe('#993 call site 3 — dashboard status shows the current feature\'s fil
     expect(output).not.toContain(A_CONFLICT);
   });
 
-  it('[REGRESSION] TS-993-3 H2: the create dashboard renders the current feature\'s file and not the neighbour\'s', async () => {
+  it('[REGRESSION] TS-993-3 H2: the terminal dashboard renders the current feature\'s file and not the neighbour\'s', async () => {
     await seed(dir, A_CONFLICT, '# Conflicts for feature A\n');
     await seed(dir, B_CONFLICT, '# Conflicts for feature B\n');
 
     const stream = new CaptureStream();
-    const render = createRenderer({
+    const render = new TerminalRenderer({
       stateFilePath: join(dir, 'conduct-state.json'),
       featureDesc: FEATURE_B,
       steps: ALL_STEPS,
@@ -555,7 +554,7 @@ describe('#993 call site 3 — dashboard status shows the current feature\'s fil
       liveRegion: createLiveRegion({ stream, forceTTY: false }),
     });
 
-    await render({ type: 'step_completed', step: 'conflict_check', status: 'done' });
+    await render.handle({ type: 'step_completed', step: 'conflict_check', status: 'done' });
 
     const output = stream.output();
     expect(output).toContain(B_CONFLICT);

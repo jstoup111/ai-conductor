@@ -4,12 +4,11 @@ import { Writable } from 'node:stream';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createRenderer } from '../../src/ui/create-renderer.js';
+import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
 import { createLiveRegion } from '../../src/ui/live-region.js';
 import type { ConductorEvent, ConductState } from '../../src/types/index.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { renderedEventTypes } from '../../src/engine/event-sinks.js';
-import { FORWARDED_TO_TERMINAL_RENDERER_EVENT_TYPES } from '../../src/ui/subscriber.js';
 
 const DEDICATED_RENDERER_EVENT_TYPES = new Set<ConductorEvent['type']>([
   'step_started', 'step_completed', 'step_failed', 'step_retry', 'rate_limit', 'session_reset',
@@ -19,6 +18,11 @@ const DEDICATED_RENDERER_EVENT_TYPES = new Set<ConductorEvent['type']>([
   'build_progress', 'unattributed_progress', 'build_no_progress', 'pipeline_closeout',
   'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'loop_converged',
 ]);
+
+const createRenderer = (opts: ConstructorParameters<typeof TerminalRenderer>[0]) => {
+  const terminal = new TerminalRenderer(opts);
+  return terminal.handle.bind(terminal);
+};
 
 class CaptureStream extends Writable {
   chunks: string[] = [];
@@ -150,8 +154,7 @@ describe('createRenderer', () => {
 
   it('summarizes every renderable event without a dedicated renderer branch', async () => {
     const fallbackTypes = renderedEventTypes().filter(
-      (type) => !DEDICATED_RENDERER_EVENT_TYPES.has(type)
-        && !FORWARDED_TO_TERMINAL_RENDERER_EVENT_TYPES.includes(type),
+      (type) => !DEDICATED_RENDERER_EVENT_TYPES.has(type),
     );
 
     for (const type of fallbackTypes) {
@@ -161,11 +164,12 @@ describe('createRenderer', () => {
     }
   });
 
-  it('does not summarize forwarded or non-renderable branchless events', async () => {
+  it('does not summarize non-renderable branchless events', async () => {
     await renderer({ type: 'renderer_error', rendererName: 'inline', error: 'render failed' });
     await renderer({ type: 'coverage_binding_judged' } as ConductorEvent);
 
-    expect(stream.output()).toBe('');
+    expect(stream.output()).toContain('Renderer error');
+    expect(stream.output()).not.toContain('coverage_binding_judged');
   });
 
   it('writes pipeline closeout details to the live region', async () => {

@@ -303,7 +303,6 @@ describe('artifact resolution production wiring', () => {
     const artifacts = source('engine/artifacts.ts');
     const conductor = source('engine/conductor.ts');
     const terminalRenderer = source('ui/terminal-renderer.ts');
-    const createRenderer = source('ui/create-renderer.ts');
     const predicateInventory = objectPropertyNames(artifacts, 'CUSTOM_COMPLETION_PREDICATES');
     const runtimePredicateInventory = Object.keys(CUSTOM_COMPLETION_PREDICATES).sort();
     const violations: string[] = [];
@@ -333,11 +332,6 @@ describe('artifact resolution production wiring', () => {
       )
     ) {
       violations.push('TerminalRenderer.collectArtifacts does not reach getArtifactStatus');
-    }
-    if (
-      !callsSymbol(createRenderer, namedBody(createRenderer, 'collectArtifacts'), 'getArtifactStatus')
-    ) {
-      violations.push('createRenderer collectArtifacts does not reach getArtifactStatus');
     }
     if (!hasExportedFunction(artifacts, 'findArtifactFiles') || typeof findArtifactFiles !== 'function') {
       violations.push('findArtifactFiles is not retained as an exported raw corpus API');

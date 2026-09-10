@@ -44,7 +44,7 @@ import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
 import { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import { renderDaemonEvent } from '../../src/daemon-cli.js';
 import { createLiveRegion } from '../../src/ui/live-region.js';
-import { createRenderer } from '../../src/ui/create-renderer.js';
+import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { TerminalSubscriber } from '../../src/ui/subscriber.js';
 import type { ConductorEvent } from '../../src/types/index.js';
@@ -247,14 +247,14 @@ describe('BUILD post-task tail telemetry acceptance', () => {
     }
 
     const terminalStream = new CaptureStream();
-    const renderer = createRenderer({
+    const renderer = new TerminalRenderer({
       stateFilePath: join(pipelineDir, 'conduct-state.json'),
       steps: [],
       readStateFn: async () => ({ ok: true, value: {} }),
       liveRegion: createLiveRegion({ stream: terminalStream, forceTTY: false }),
     });
-    const terminal = new TerminalSubscriber(emitter, renderer);
-    terminal.start();
+    const terminal = new TerminalSubscriber(emitter);
+    terminal.start([renderer]);
 
     const closeout = {
       type: 'pipeline_closeout',

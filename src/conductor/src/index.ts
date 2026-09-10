@@ -83,7 +83,6 @@ import {
 import { dispatchKickbackBudgetCommand } from './engine/kickback-budget-cli.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from './engine/build-review-cli.js';
 import type { ConductState, StepName } from './types/index.js';
-import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
 import { sendNotification } from './ui/notifications.js';
 import { scanResumableFeatures, selectFeature, formatResumeMenu } from './engine/resume.js';
@@ -112,7 +111,7 @@ import {
   resolveHarnessVersion,
 } from './engine/version-report.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
-import type { UISubscriber } from "./ui/types.js";
+import type { UIRenderer } from "./ui/types.js";
 import type {
   VisualizerFactory,
   VisualizerFactoryContext,
@@ -1385,8 +1384,6 @@ async function main(): Promise<void> {
     viewMode: opts.view,
     tailLines: opts.tailLines,
   };
-  const renderEvent = createRenderer(rendererOpts);
-
   // Initialize plugin registry and discover plugins
   const registry = new PluginRegistry();
 
@@ -1396,7 +1393,7 @@ async function main(): Promise<void> {
 
   // Discover and register external plugins, then built-ins
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-  registerCliBuiltins(registry, events, renderEvent, config, rendererOpts);
+  const subscriber = registerCliBuiltins(registry, events, config, rendererOpts);
   registry.markInitialized();
   validateRegisteredProviderSelections({
     config: config ?? {},
@@ -1426,12 +1423,8 @@ async function main(): Promise<void> {
   );
 
   // Select UI subscriber based on config (default: 'terminal')
-  const subscriber = registry.get<UISubscriber>(
-    'ui_renderer',
-    config?.ui_renderer ?? 'terminal'
-  );
-
-  subscriber.start([]);
+  const renderer = registry.get<UIRenderer>('ui_renderer', config?.ui_renderer ?? 'terminal');
+  subscriber.start([renderer]);
 
   // Wire EventPersister: appends every ConductorEvent as a JSON line to .pipeline/events.jsonl
   const eventsLogPath = join(pipelineDir, 'events.jsonl');

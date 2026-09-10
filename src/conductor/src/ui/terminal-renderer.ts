@@ -11,8 +11,9 @@ import {
   STEP_ARTIFACT_GLOBS,
 } from '../engine/artifacts.js';
 import { createLiveRegion, type LiveRegion } from './live-region.js';
-import { formatProgressDelta } from '../engine/format-retry-line.js';
+import { formatProgressDelta, displayBuildPosition } from '../engine/format-retry-line.js';
 import { formatFeatureUsageTotal } from '../execution/provider-diagnostics.js';
+import { renderedEventTypes } from '../engine/event-sinks.js';
 
 export interface TerminalRendererOptions {
   stateFilePath: string;
@@ -58,6 +59,7 @@ export class TerminalRenderer implements UIRenderer {
   private currentStep: DashboardSnapshot['currentStep'];
   private lastStepTail: DashboardSnapshot['lastStepTail'];
   private spinner: Ora | null = null;
+  private readonly fallbackEventTypes: Set<ConductorEvent['type']>;
 
   constructor(opts: TerminalRendererOptions) {
     this.stateFilePath = opts.stateFilePath;
@@ -69,6 +71,7 @@ export class TerminalRenderer implements UIRenderer {
     this.region = opts.liveRegion ?? createLiveRegion();
     this.viewMode = opts.viewMode ?? 'full';
     this.tailLines = opts.tailLines ?? 20;
+    this.fallbackEventTypes = new Set(renderedEventTypes().filter((type) => !DEDICATED_EVENT_TYPES.has(type)));
   }
 
   private stopSpinner(): void {
@@ -132,6 +135,10 @@ export class TerminalRenderer implements UIRenderer {
           this.lastStepTail = { step: event.step, lines: event.tail };
         }
         this.region.resume();
+        if (event.step === 'build' && event.treeBefore !== undefined && event.treeAfter !== undefined) {
+          const treeAnnotation = event.treeBefore === null || event.treeAfter === null ? 'tree unknown' : event.treeBefore === event.treeAfter ? `tree ${event.treeAfter.slice(0, 7)} unchanged` : `tree ${event.treeBefore.slice(0, 7)}..${event.treeAfter.slice(0, 7)}`;
+          this.region.log(`  ${chalk.green('✓')} build ${chalk.green(event.status)} (${treeAnnotation})`);
+        }
         await this.renderDashboard();
         this.notify('Conductor', `Step completed: ${event.step}`);
         break;
@@ -264,12 +271,50 @@ export class TerminalRenderer implements UIRenderer {
         this.region.log(chalk.yellow(`  ⚠ Pipeline tail ${event.reason}: ${event.path}${offset}`));
         break;
       }
+      case 'when_skip': {
+        this.currentStep = undefined;
+        const undefinedNote = event.undefinedKey ? chalk.dim(` (key "${event.undefinedKey}" undefined → false)`) : '';
+        this.region.log(chalk.dim(`  ⊘ ${event.step} skipped — when: ${event.expression}${undefinedNote}`));
+        await this.renderDashboard();
+        break;
+      }
+      case 'parallel_started':
+        this.region.log(chalk.cyan(`  ⇶ ${event.step} — parallel [${event.branches.join(', ')}] started`));
+        break;
+      case 'parallel_completed':
+        this.currentStep = undefined;
+        this.region.log(chalk.green(`  ✓ ${event.step} — parallel [${event.branches.join(', ')}] completed`));
+        await this.renderDashboard();
+        break;
+      case 'parallel_failure':
+        this.region.log(chalk.red(`  ✗ ${event.step} — branch "${event.branch}" failed: ${event.error}`));
+        break;
+      case 'build_progress': {
+        const task = event.currentTaskId ? ` — ${event.currentTaskId}${event.currentTaskName ? ` ${event.currentTaskName}` : ''}` : '';
+        const resolved = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId || event.currentTaskName));
+        this.region.log(chalk.cyan(`  ⠿ ${event.step} — progress ${resolved}/${event.total}${task}`));
+        break;
+      }
+      case 'unattributed_progress': {
+        const before = event.headBefore?.slice(0, 12) ?? '(none)';
+        const after = event.headAfter?.slice(0, 12) ?? '(none)';
+        this.region.log(chalk.dim(`  · ${event.step} — unattributed progress on attempt ${event.attempt}: ${event.resolvedCount} resolved (${before} → ${after})`));
+        break;
+      }
+      case 'build_no_progress': {
+        const task = event.currentTaskId ? ` — stuck on ${event.currentTaskId}` : '';
+        const resolved = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId));
+        this.region.log(chalk.yellow(`  ⚠ ${event.step} — no progress for ${event.quietMinutes}m (${resolved}/${event.total})${task}`));
+        break;
+      }
+      case 'pipeline_closeout':
+        this.region.log(chalk.green(`  ✓ closeout ${event.obligation} (${event.endedAt - event.startedAt}ms)`));
+        break;
+      case 'build_stall':
+        this.region.log(chalk.bold.red(`  ⛔ ${event.step} — build stalled (${event.reason}): ${event.resolvedBefore}→${event.resolvedAfter} resolved`));
+        break;
       case 'gate_verdict':
-        if (event.satisfied) {
-          this.region.log(
-            chalk.green(`  gate ${event.step}: satisfied${event.reason ? ` — ${event.reason}` : ''}`),
-          );
-        } else {
+        if (!event.satisfied) {
           this.region.log(
             chalk.dim(`  gate ${event.step}: unsatisfied${event.reason ? ` — ${event.reason}` : ''}`),
           );
@@ -291,6 +336,12 @@ export class TerminalRenderer implements UIRenderer {
       case 'loop_converged':
         this.region.log(chalk.green('  ✓ gate loop converged'));
         break;
+      default:
+        if (this.fallbackEventTypes.has(event.type)) {
+          const step = 'step' in event && event.step ? ` — ${event.step}` : '';
+          this.region.log(chalk.dim(`  · ${event.type}${step}`));
+        }
+        break;
     }
   }
 
@@ -299,3 +350,7 @@ export class TerminalRenderer implements UIRenderer {
     this.region.clear();
   }
 }
+
+const DEDICATED_EVENT_TYPES = new Set<ConductorEvent['type']>([
+  'step_started', 'step_completed', 'step_failed', 'step_retry', 'feature_usage_total', 'provider_fallback', 'session_policy', 'rate_limit', 'session_reset', 'credentials_park_progress', 'tier_skip', 'config_skip', 'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached', 'renderer_error', 'pipeline_tail_diagnostic', 'when_skip', 'parallel_started', 'parallel_completed', 'parallel_failure', 'build_progress', 'unattributed_progress', 'build_no_progress', 'pipeline_closeout', 'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
+]);

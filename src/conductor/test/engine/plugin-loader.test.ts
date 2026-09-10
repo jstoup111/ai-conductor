@@ -543,7 +543,8 @@ describe('registerBuiltins — terminal halt-marker sink', () => {
       readStateFn: async () => ({ ok: true, value: {} }),
       liveRegion: createLiveRegion({ stream, forceTTY: false }),
     });
-    subscriber.start();
+    const renderer = registry.get<{ handle: (event: unknown) => Promise<void>; stop: () => Promise<void> }>('ui_renderer', 'terminal');
+    subscriber.start([renderer as never]);
 
     await events.emit({
       type: 'halt_marker_write_failed',
@@ -553,5 +554,17 @@ describe('registerBuiltins — terminal halt-marker sink', () => {
     subscriber.stop();
 
     expect(stream.output()).toContain('halt marker write failed: /tmp/.pipeline/HALT — permission denied');
+  });
+
+  it('registers terminal as a renderer and never registers the subscriber as ui_renderer', () => {
+    const registry = new PluginRegistry();
+    const subscriber = registerBuiltins(registry, new ConductorEventEmitter(), {
+      stateFilePath: '/tmp/conduct-state.json', steps: ALL_STEPS,
+      readStateFn: async () => ({ ok: true, value: {} }),
+    });
+    registry.markInitialized();
+    expect(registry.get('ui_renderer', 'terminal')).toHaveProperty('handle');
+    expect(registry.list('ui_renderer')).toEqual(['terminal']);
+    expect(registry.get('ui_renderer', 'terminal')).not.toBe(subscriber);
   });
 });

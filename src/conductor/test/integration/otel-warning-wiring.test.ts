@@ -109,8 +109,8 @@ describe('FR-8: onWarning wired at production construction site (createOtelVisua
         readStateFn: async () => ({ ok: true as const, value: {} }),
         liveRegion: createLiveRegion({ stream: terminalStream, forceTTY: false }),
       });
-      const terminalSubscriber = new TerminalSubscriber(events, async () => {}, terminalRenderer);
-      terminalSubscriber.start();
+      const terminalSubscriber = new TerminalSubscriber(events);
+      terminalSubscriber.start([terminalRenderer]);
 
       // PRODUCTION construction path — the built-in visualizer:otel factory
       // calls this exact function.

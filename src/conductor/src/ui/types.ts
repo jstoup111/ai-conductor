@@ -15,6 +15,8 @@ import type {
 } from '../engine/conductor.js';
 
 export interface UIRenderer {
+  /** Stable diagnostic label used when the subscriber reports renderer_error. */
+  name?: string;
   handle(event: ConductorEvent): Promise<void>;
   stop(): Promise<void>;
 }

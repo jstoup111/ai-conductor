@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vite
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { TerminalSubscriber } from '../../src/ui/subscriber.js';
 import type { ConductorEvent } from '../../src/types/index.js';
+import type { UIRenderer } from '../../src/ui/types.js';
 
 describe('TerminalSubscriber event forwarding', () => {
   let emitter: ConductorEventEmitter;
@@ -12,8 +13,8 @@ describe('TerminalSubscriber event forwarding', () => {
     vi.useFakeTimers();
     emitter = new ConductorEventEmitter();
     renderCallback = vi.fn<(event: ConductorEvent) => void>();
-    subscriber = new TerminalSubscriber(emitter, renderCallback);
-    subscriber.start();
+    subscriber = new TerminalSubscriber(emitter);
+    subscriber.start([{ name: 'capture', handle: async (event) => { renderCallback(event); }, stop: async () => {} } as UIRenderer]);
   });
 
   afterEach(() => {

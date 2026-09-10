@@ -33,9 +33,9 @@ function asRenderer(subscriber: JsonStdoutSubscriber, name = 'json-stdout'): UIR
 describe('TerminalSubscriber subscription list', () => {
   it('subscribes to build_progress, build_no_progress, and build_stall', async () => {
     const emitter = new ConductorEventEmitter();
-    const onRender = vi.fn();
-    const subscriber = new TerminalSubscriber(emitter, onRender);
-    subscriber.start();
+    const onRender = vi.fn(async () => {});
+    const subscriber = new TerminalSubscriber(emitter);
+    subscriber.start([{ name: 'capture', handle: onRender, stop: async () => {} }]);
 
     const progress: ConductorEvent = { type: 'build_progress', step: 'build', resolved: 1, total: 2 };
     const noProgress: ConductorEvent = {
