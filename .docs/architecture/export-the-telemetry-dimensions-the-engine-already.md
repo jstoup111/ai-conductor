@@ -1,5 +1,12 @@
 # Components: OTel dispatch dimensions (#1940)
 
+> **Amended 2026-09-10 by operator:** The production topology remains one
+> event-fed `MetricsListener` plus spans-only `OtelVisualizer` wiring. Provider
+> attempt events carry preferred provider, resolved effort, and tier. Dispatch
+> state retains dimensions needed by failed closure and retains an unavailable
+> preferred-provider reason across later attempts so successful fallback spans
+> export the reason without creating a second metric path.
+
 **Last updated:** 2026-09-09
 **Scope:** How the dimensions the engine already resolves per dispatch — provider and fallback, reasoning effort, complexity tier, model — and the unexported `TokenUsage` detail reach
 metric data points and step spans through `src/conductor/src/engine/otel/`. Approach A: direct

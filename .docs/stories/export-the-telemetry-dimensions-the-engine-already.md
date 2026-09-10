@@ -1,5 +1,11 @@
 **Status:** Accepted
 
+> **Amended 2026-09-10 by operator:** Preserve ADR-014's single production
+> metrics listener. `OtelVisualizer` remains spans-only in production and this
+> feature must remove its dead duplicate metric work. The fallback reason from
+> an unavailable preferred-provider attempt must survive later candidate
+> observations and be exported when the successful fallback span closes.
+
 # Stories: export-the-telemetry-dimensions-the-engine-already
 
 Technical track, Tier M. Governing decisions: adr-014-otel-observability-exporter D10 (label placement contract) and D11 (dimensions ride existing events). Source: jstoup111/ai-conductor#1940. Spec owner is out of scope by operator decision.
