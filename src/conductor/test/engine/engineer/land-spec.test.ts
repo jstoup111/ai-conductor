@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4
+// Covers: task:1, task:2, task:3, task:4
 // land-spec.test.ts — Story 2 (Slice B): landSpec fails CLOSED on unresolved
 // identity (adr-2026-07-01-machine-scoped-operator-identity, D3).
 //
@@ -173,7 +173,10 @@ async function seedNamedTierMWorktree(
   );
   await writeFile(join(dir, '.docs', 'complexity', `${slug}.md`), '# Complexity\n\nTier: M\n');
   await writeFile(join(dir, '.docs', 'conflicts', `${datePrefix}${conflictStem}.md`), '# Conflicts\n\nNone.\n');
-  await writeFile(join(dir, '.docs', 'architecture', `${slug}.md`), '# Architecture\n\nApproved.\n');
+  await writeFile(
+    join(dir, '.docs', 'architecture', `${slug}.md`),
+    '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n',
+  );
   await writeFile(join(dir, '.docs', 'decisions', `${slug}.md`), '# Review\n\nApproved.\n');
   if (options.coherenceStem !== undefined) {
     await mkdir(join(dir, '.docs', 'coherence'), { recursive: true });
@@ -1168,6 +1171,59 @@ describe('Task 2: idea-scoped track+spec pickers (#488)', () => {
   });
 });
 
+describe('Task 1: non-Small architecture diagrams at land', () => {
+  const idea = 'clean rubric judgements rejected as invalid provid';
+  const slug = 'clean-rubric-judgements-rejected-as-invalid-provid';
+  const architecturePath = `.docs/architecture/${slug}.md`;
+  const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+  function renderDeps() {
+    return {
+      hasTool: async () => true,
+      writeTemp: async () => '/tmp/non-small-architecture.mmd',
+      runMmdc: async () => ({ ok: true }),
+    };
+  }
+
+  it('lands a non-Small architecture artifact with one fenced mermaid diagram', async () => {
+    const dir = await seedNamedTierMWorktree(idea, slug);
+    await writeFile(
+      join(dir, architecturePath),
+      '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n',
+    );
+
+    const result = await landSpec(target(), idea, dir, undefined, {
+      ownerConfig: {}, gh, renderDeps: renderDeps(),
+    });
+
+    expect(result.branch).toBeTruthy();
+  });
+
+  it('rejects a non-Small architecture artifact containing only a diagram heading and prose, naming its path', async () => {
+    const dir = await seedNamedTierMWorktree(idea, slug);
+    await writeFile(
+      join(dir, architecturePath),
+      '# Architecture\n\n## Diagram\n\nThe architecture diagram is documented here.\n',
+    );
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh, renderDeps: renderDeps() }),
+    ).rejects.toThrow(architecturePath);
+  });
+
+  it('rejects mid-sentence mermaid fence prose specifically for a missing fenced mermaid diagram', async () => {
+    const dir = await seedNamedTierMWorktree(idea, slug);
+    await writeFile(
+      join(dir, architecturePath),
+      '# Architecture\n\nThe diagram begins with ```mermaid but never opens a fenced block.\n',
+    );
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh, renderDeps: renderDeps() }),
+    ).rejects.toThrow(/fenced mermaid diagram/i);
+  });
+});
+
 describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/decisions pickers', () => {
   it('stories picker: validates the idea\'s stories content, ignoring a newer-mtime legacy stories file on main', async () => {
     // Legacy stories file committed on `main` BEFORE the worktree is created,
@@ -1336,7 +1392,10 @@ describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/dec
 
     // Now seed the idea's own DECIDE artifacts — landing must succeed and use them.
     await writeFile(join(dir, '.docs', 'conflicts', 'dep-bump.md'), '# Conflicts\n\nNone.\n');
-    await writeFile(join(dir, '.docs', 'architecture', 'dep-bump.md'), '# Architecture\n\nDiagram.\n');
+    await writeFile(
+      join(dir, '.docs', 'architecture', 'dep-bump.md'),
+      '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n',
+    );
     await writeFile(join(dir, '.docs', 'decisions', 'dep-bump.md'), '# Review\n\nApproved.\n');
 
     const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
@@ -1592,7 +1651,10 @@ describe('Task 8: protected-target land gate blast radius', () => {
       await mkdir(join(dir, '.docs', 'architecture'), { recursive: true });
       await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
       await writeFile(join(dir, '.docs', 'conflicts', 'dep-bump.md'), '# Conflicts\n\nNone.\n');
-      await writeFile(join(dir, '.docs', 'architecture', 'dep-bump.md'), '# Architecture\n\nApproved.\n');
+      await writeFile(
+        join(dir, '.docs', 'architecture', 'dep-bump.md'),
+        '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n',
+      );
       await writeFile(join(dir, '.docs', 'decisions', 'dep-bump.md'), '# Review\n\nApproved.\n');
     }
 

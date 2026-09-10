@@ -1,3 +1,4 @@
+// Covers: task:1
 /**
  * RED acceptance specs for #1293.
  *
@@ -201,7 +202,10 @@ async function makeLandFixture(
       await mkdir(join(worktree, '.docs', directory), { recursive: true });
     }
     await writeFile(join(worktree, '.docs', 'conflicts', `${slug}.md`), '# Conflict check\n\nVerdict: PASS\n');
-    await writeFile(join(worktree, '.docs', 'architecture', `${slug}.md`), '# Architecture\n');
+    await writeFile(
+      join(worktree, '.docs', 'architecture', `${slug}.md`),
+      '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n',
+    );
     await writeFile(join(worktree, '.docs', 'decisions', `${slug}.md`), '# Architecture review\n\nVerdict: APPROVED\n');
   }
 

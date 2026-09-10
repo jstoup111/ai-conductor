@@ -1,4 +1,4 @@
-// Covers: task:3, task:4
+// Covers: task:1, task:3, task:4
 // Acceptance specs for the DECIDE artifact coherence check
 // (jstoup111/ai-conductor#539, .docs/stories/decide-artifact-coherence-check.md,
 // PRD .docs/specs/2026-07-22-decide-artifact-coherence-check.md FR-1..14).
@@ -267,9 +267,7 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
     await mkdir(join(dir, '.docs', 'architecture'), { recursive: true });
     await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
     await w(`conflicts/${stem}.md`, '# Conflicts\n\nClean.\n');
-    // Plain markdown, NO ```mermaid block, so the render gate resolves to
-    // no-diagrams and never needs mmdc.
-    await w('architecture/coherence-demo.md', '# Architecture\n\nComponents A and B.\n');
+    await w('architecture/coherence-demo.md', '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n');
     await w('decisions/adr-2026-09-08-coherence.md', APPROVED_ADR);
   }
 
@@ -440,7 +438,7 @@ describe('Story 3 / FR-2 — outcome coverage (outcome-<n>)', () => {
     await w('complexity/coherence-demo.md', '# Complexity\n\nTier: M\n');
     await w('track/coherence-demo.md', '# Track\n\nTrack: product\n');
     await w('conflicts/coherence-demo.md', '# Conflicts\n\nClean.\n');
-    await w('architecture/coherence-demo.md', '# Architecture\n\nComponents A and B.\n');
+    await w('architecture/coherence-demo.md', '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n');
     await w('decisions/adr-2026-09-08-coherence.md', APPROVED_ADR);
 
     // Drop the row covering the second outcome bullet — an unmapped outcome.

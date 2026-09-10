@@ -61,7 +61,12 @@ import {
 } from './outcome-staging.js';
 import { runCoherenceGate } from './coherence-validator.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
-import { checkDiagramsForFile, defaultRenderDeps, type RenderDeps } from '../mermaid-renderer.js';
+import {
+  checkDiagramsForFile,
+  defaultRenderDeps,
+  extractMermaidBlocks,
+  type RenderDeps,
+} from '../mermaid-renderer.js';
 import { resolvePlanStoriesPath } from '../plan-stories-reference.js';
 import { scanPlanProtectedTargets } from '../plan-protected-targets.js';
 import { validatePlanDoneWhen } from '../plan-done-when.js';
@@ -346,6 +351,12 @@ export async function landSpec(
         `landSpec: complexity tier is "${tier}" (non-Small) but required DECIDE artifact ` +
           `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing in ".docs/". ` +
           'Run /conflict-check, /architecture-diagram, and /architecture-review before landing.',
+      );
+    }
+    if (architectureFile && extractMermaidBlocks(await readFile(architectureFile, 'utf-8')).length === 0) {
+      throw new Error(
+        `landSpec: non-Small architecture artifact "${architectureFile}" is missing a fenced mermaid diagram. ` +
+          'Regenerate the diagram through /architecture-diagram before landing.',
       );
     }
   }
