@@ -25,7 +25,6 @@ export const FORWARDED_TO_TERMINAL_RENDERER_EVENT_TYPES: readonly ConductorEvent
   'halt_marker_write_failed',
   'renderer_error',
   'pipeline_tail_diagnostic',
-  'gate_verdict',
 ];
 
 export class TerminalSubscriber implements UISubscriber {
