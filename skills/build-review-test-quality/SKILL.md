@@ -17,7 +17,8 @@ finding identity, the stamped result envelope, and the outer gate verdict.
 Use only the supplied projection version `v3`. Its closed input contains:
 
 - the lap ID, snapshot digest, and top-level `contentDigest`;
-- the in-scope changed tests: only changed tests with a resolvable `Covers:` binding to an approved
+- the in-scope changed tests: only changed tests with a current-feature-owned, resolvable `Covers:`
+  binding introduced or updated after the review base, pointing to an approved
   story criterion, an active feature requirement (`FR-N`), or a task `Done when:` check, represented
   as immutable content-region references;
 - the changed diff by reference (`changedFiles`: per-file path, change kind, and hunk ranges),
@@ -26,7 +27,8 @@ Use only the supplied projection version `v3`. Its closed input contains:
 - typed reverted-production preflight evidence, including its source identities, classification,
   scoped-run result, executed selectors, and bounded failure excerpt when applicable.
 - any concrete fallback candidates in `testScope`, each with its engine-established candidate ID,
-  pinned source region, and allowed Covers obligation references.
+  pinned source region, and allowed Covers obligation references. Unchanged legacy bare markers
+  are excluded before projection; their ordinals never gain authority from the active plan.
 
 The session runs inside the feature worktree. The diff content is not embedded: read referenced
 files and obtain any per-path diff with `git diff <mergeBase>..HEAD -- <path>` (or the merge-base

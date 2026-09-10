@@ -65,8 +65,10 @@ Per phase: SETUP 1, UNDERSTAND 1, DECIDE 9, BUILD 4, SHIP 5.
 `test_suite` is the sole engine-native BUILD verifier. Static wiring reachability is retired.
 `build_review` currently runs only its optional `testQuality` rubric. The engine freezes the base/HEAD
 source and active feature artifacts, then derives established test regions and concrete uncertain
-candidates from changed declarations, feature-local `Covers` bindings, and relevant shared setup or
-helper evidence. It does not make every title in a changed marked file a review target. A candidate's
+candidates from changed declarations, current-feature-owned `Covers` bindings introduced or updated
+after the review base, and relevant shared setup or helper evidence. An unchanged bare marker remains
+owned by the feature that landed it; a coincidentally matching active-plan ordinal cannot make it
+current authority. The engine does not make every title in a changed marked file a review target. A candidate's
 file can be selected for conservative counterfactual execution without making unchanged sibling tests
 quality targets.
 

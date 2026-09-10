@@ -91,14 +91,17 @@ function fixtureSources(fixture: Fixture): { readonly base: string; readonly hea
   if (!header) throw new Error('portable fixture must retain a file-header ambiguity');
 
   const render = (side: 'base' | 'head') => {
-    const lines = [`// Covers: ${header.marker ?? 'S9.99'}`, testLine(header.title, side === 'base' ? 'base' : 'head')];
+    const lines = [
+      ...markerLine(side === 'base' ? header.baseMarker : header.marker ?? 'S9.99'),
+      testLine(header.title, side === 'base' ? 'base' : 'head'),
+    ];
     for (const body of fixture.changedBodies) {
       if (body === header) continue;
-      lines.push(...markerLine(side === 'base' ? body.baseMarker ?? body.marker : body.marker));
+      lines.push(...markerLine(side === 'base' ? body.baseMarker : body.marker));
       lines.push(testLine(body.title, side === 'base' ? 'base' : 'head'));
     }
     lines.push(
-      `// Covers: ${fixture.sharedEvidence.marker}`,
+      ...(side === 'head' ? [`// Covers: ${fixture.sharedEvidence.marker}`] : []),
       `describe(${JSON.stringify(fixture.sharedEvidence.suite)}, () => {`,
       `  beforeEach(() => { seed(${JSON.stringify(side === 'base' ? fixture.sharedEvidence.baseSetup : fixture.sharedEvidence.headSetup)}); });`,
       ...fixture.sharedEvidence.retainedBodies.map((title) => `  ${testLine(title, 'stable')}`),

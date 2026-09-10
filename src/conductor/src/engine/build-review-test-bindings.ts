@@ -290,6 +290,14 @@ function associationKey(binding: Exclude<BuildReviewTestBinding, UnboundTestDecl
   ]);
 }
 
+/** Exact semantic identity for deciding whether HEAD introduced this feature's association. */
+export function sameCoversMarkerAssociation(
+  left: Exclude<BuildReviewTestBinding, UnboundTestDeclaration>,
+  right: Exclude<BuildReviewTestBinding, UnboundTestDeclaration>,
+): boolean {
+  return associationKey(left) === associationKey(right);
+}
+
 /**
  * Compares only association semantics, not source offsets.  A deleted marker
  * is retained as base-side evidence and is deliberately never reintroduced

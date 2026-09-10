@@ -9,9 +9,17 @@ const storiesText = `
 - Given a marker, when it binds, then it is retained
 `;
 
-function scope(baseText: string, headText: string, fileName = 'test/example.test.ts') {
+function scope(
+  baseText: string,
+  headText: string,
+  fileName = 'test/example.test.ts',
+  markerOwnership: 'current-feature' | 'inherited' = 'current-feature',
+) {
+  const pinnedBase = markerOwnership === 'current-feature'
+    ? baseText.replace(/^(\s*(?:\/\/|\/\*)?\s*Covers\s*:)[^\r\n]*(?:\r?\n)?/gm, '')
+    : baseText;
   return analyzeBuildReviewTestScope({
-    base: { source: { fileName, bytes: Buffer.from(baseText) }, storiesText, planText: '### Task 7: Example\n' },
+    base: { source: { fileName, bytes: Buffer.from(pinnedBase) }, storiesText, planText: '### Task 7: Example\n' },
     head: { source: { fileName, bytes: Buffer.from(headText) }, storiesText, planText: '### Task 7: Example\n' },
   });
 }
@@ -76,7 +84,7 @@ describe('build-review test scope association evidence', () => {
   it('merges group-binding and dependency facts for one changed suite into one settleable candidate', () => {
     const result = analyzeBuildReviewTestScope({
       base: {
-        source: { fileName: 'test/orders.test.ts', bytes: Buffer.from("// Covers: S2.1\ndescribe.each([['base']])('orders %s', () => { it('creates', () => { expect(true).toBe(true); }); });\n") },
+        source: { fileName: 'test/orders.test.ts', bytes: Buffer.from("describe.each([['base']])('orders %s', () => { it('creates', () => { expect(true).toBe(true); }); });\n") },
         storiesText,
         planText: '### Task 7: Example\n',
       },
@@ -119,20 +127,14 @@ describe('build-review test scope association evidence', () => {
     }
   });
 
-  it('keeps a removed marker as a concrete association candidate but never gives its former target final authority', () => {
+  it('does not retain an inherited removed marker as active-feature authority', () => {
     const result = scope(
       `// Covers: S2.1\nit('same body', () => { expect(true).toBe(true); });`,
       `it('same body', () => { expect(true).toBe(true); });`,
     );
 
     expect(result.targets).toEqual([]);
-    expect(result.candidates).toMatchObject([
-      {
-        declaration: { titleChain: ['same body'] },
-        reasons: ['binding-removed'],
-        associationChanges: [{ kind: 'removed', binding: { marker: { reference: { id: 'S2.1' } } } }],
-      },
-    ]);
+    expect(result.candidates).toEqual([]);
   });
 
   it('records a marker-only edit while granting final authority only to the HEAD association', () => {
@@ -147,7 +149,6 @@ describe('build-review test scope association evidence', () => {
         declaration: { titleChain: ['same body'] },
         bindings: [{ marker: { reference: { kind: 'task', id: '7' } } }],
         associationChanges: [
-          { kind: 'removed', binding: { marker: { reference: { kind: 'criterion', id: 'S2.1' } } } },
           { kind: 'added', binding: { marker: { reference: { kind: 'task', id: '7' } } } },
         ],
       }],
@@ -172,6 +173,60 @@ describe('build-review test scope association evidence', () => {
       targets: [],
       candidates: [{ declaration: { titleChain: ['changed'] }, reasons: ['conflicting-associations'] }],
     });
+  });
+
+  it('does not attribute an inherited bare file-header task marker to the active feature', () => {
+    const result = scope(
+      `// Covers: task:7\nimport { it } from 'vitest';\nit('changed', () => { expect(1).toBe(1); });`,
+      `// Covers: task:7\nimport { it } from 'vitest';\nit('changed', () => { expect(1).toBe(2); });`,
+      'test/example.test.ts',
+      'inherited',
+    );
+
+    expect(result).toMatchObject({
+      changedDeclarations: [{ titleChain: ['changed'] }],
+      targets: [],
+      candidates: [],
+      notes: [{ kind: 'unbound', declaration: { titleChain: ['changed'] } }],
+    });
+  });
+
+  it('does not attribute an inherited bare declaration marker to the active feature', () => {
+    const result = scope(
+      `// Covers: task:7\nit('changed', () => { expect(1).toBe(1); });`,
+      `// Covers: task:7\nit('changed', () => { expect(1).toBe(2); });`,
+      'test/example.test.ts',
+      'inherited',
+    );
+
+    expect(result).toMatchObject({
+      changedDeclarations: [{ titleChain: ['changed'] }],
+      targets: [],
+      candidates: [],
+      notes: [{ kind: 'unbound', declaration: { titleChain: ['changed'] } }],
+    });
+  });
+
+  it('does not let a newly added matching task marker bless an inherited sibling association', () => {
+    const result = analyzeBuildReviewTestScope({
+      base: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("// Covers: task:7\nit('legacy', () => { expect(1).toBe(1); });\n") },
+        storiesText,
+        planText: '### Task 7: Example\n',
+      },
+      head: {
+        source: { fileName: 'test/example.test.ts', bytes: Buffer.from("// Covers: task:7\nit('legacy', () => { expect(1).toBe(2); });\n// Covers: task:7\nit('current', () => { expect(true).toBe(true); });\n") },
+        storiesText,
+        planText: '### Task 7: Example\n',
+      },
+    });
+
+    expect(result.targets).toMatchObject([
+      { declaration: { titleChain: ['current'] }, bindings: [{ marker: { reference: { kind: 'task', id: '7' } } }] },
+    ]);
+    expect(result.targets).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ declaration: expect.objectContaining({ titleChain: ['legacy'] }) }),
+    ]));
   });
 
   it('retains a HEAD source identity for equal-span candidates from different files', () => {
@@ -252,6 +307,8 @@ describe('build-review test scope association evidence', () => {
     const result = scope(
       `// Covers: S2.1\nwithEnvironment(it)('unsupported', () => {});\nit('later', () => { expect(1).toBe(1); });`,
       `// Covers: S2.1\nwithEnvironment(it)('unsupported', () => {});\nit('later', () => { expect(1).toBe(2); });`,
+      'test/example.test.ts',
+      'inherited',
     );
 
     expect(result).toMatchObject({
@@ -267,7 +324,7 @@ describe('build-review test scope association evidence', () => {
   it('establishes an FR-bound changed test as a target instead of an empty scope with an unresolved note', () => {
     const frStories = '## Story 2: Binding\n\nThis story delivers FR-4.\n\n#### Happy Path\n- Given a marker, when it binds, then it is retained\n';
     const result = analyzeBuildReviewTestScope({
-      base: { source: { fileName: 'test/example.test.ts', bytes: Buffer.from("// Covers: FR-4\nit('fr body', () => { expect('base').toBe('base'); });\n") }, storiesText: frStories, planText: '### Task 7: Example\n' },
+      base: { source: { fileName: 'test/example.test.ts', bytes: Buffer.from("it('fr body', () => { expect('base').toBe('base'); });\n") }, storiesText: frStories, planText: '### Task 7: Example\n' },
       head: { source: { fileName: 'test/example.test.ts', bytes: Buffer.from("// Covers: FR-4\nit('fr body', () => { expect('head').toBe('head'); });\n") }, storiesText: frStories, planText: '### Task 7: Example\n' },
     });
 

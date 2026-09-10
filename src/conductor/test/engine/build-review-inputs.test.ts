@@ -257,7 +257,6 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         ].join('\n') } },
         { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: Typed frozen scope\n' } },
         { match: ['show', 'base123:test/widget.test.ts'], result: { stdout: [
-          '// Covers: task:8',
           "it('changed assertion', () => { expect(true).toBe(true); });",
           "it('unchanged sibling', () => { expect(true).toBe(true); });",
         ].join('\n') } },
@@ -333,7 +332,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           '--- a/spec/example_spec.rb', '+++ b/spec/example_spec.rb', '+changed expectation',
         ].join('\n') } },
         { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
-        { match: ['show', 'base123:spec/example_spec.rb'], result: { stdout: '// Covers: task:8\n# base expectation\n' } },
+        { match: ['show', 'base123:spec/example_spec.rb'], result: { stdout: '# base expectation\n' } },
         { match: ['show', 'head123:spec/example_spec.rb'], result: { stdout: '// Covers: task:8\n# changed expectation\n' } },
         { match: ['show', 'head123:spec/unchanged_spec.rb'], result: { stdout: '// Covers: task:8\n# unchanged expectation\n' } },
       ]);
@@ -414,7 +413,6 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         ].join('\n') } },
         { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: Typed scope\n' } },
         { match: ['show', 'base123:test/widget.test.ts'], result: { stdout: [
-          '// Covers: task:8',
           "it('bound assertion', () => { expect(true).toBe(true); });",
           "it('unbound sibling', () => { expect(true).toBe(true); });",
         ].join('\n') } },
@@ -486,7 +484,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
           '--- a/test/side-effect.test.ts', '+++ b/test/side-effect.test.ts', '+candidate',
         ].join('\n') } },
         { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
-        { match: ['show', 'base123:test/side-effect.test.ts'], result: { stdout: sourceText.replace('true);', 'false);') } },
+        { match: ['show', 'base123:test/side-effect.test.ts'], result: { stdout: sourceText.replace('// Covers: task:8\n', '').replace('true);', 'false);') } },
         { match: ['show', 'head123:test/side-effect.test.ts'], result: { stdout: sourceText } },
       ]);
 
@@ -529,7 +527,6 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         ].join('\n') } },
         { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: typed scope\n' } },
         { match: ['show', 'base123:test/group.test.ts'], result: { stdout: [
-          '// Covers: task:8',
           "describe('group', () => { beforeEach(() => seed('base')); it('one', () => {}); it('two', () => {}); });",
         ].join('\n') } },
         { match: ['show', 'head123:test/group.test.ts'], result: { stdout: [
@@ -560,11 +557,8 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
     });
 
     it('keeps same-offset cross-file candidates bound to their own pinned source evidence', async () => {
-      const baseSource = [
-        '// Covers: task:8',
-        "describe('same', () => { beforeEach(() => seed('base')); it('same body', () => {}); });",
-      ].join('\n');
-      const headSource = baseSource.replace("seed('base')", "seed('head')");
+      const baseSource = "describe('same', () => { beforeEach(() => seed('base')); it('same body', () => {}); });";
+      const headSource = `// Covers: task:8\n${baseSource.replace("seed('base')", "seed('head')")}`;
       const { git } = fakeGit([
         ...freshProbeScript,
         { match: ['merge-base', 'base-tip123', 'head123'], result: { stdout: 'base123\n' } },
@@ -1333,7 +1327,6 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       await writeFile(frozenPlan, '**Stories:** .docs/stories/frozen.md\n\n### Task 1: frozen\n');
       await writeFile(frozenStories, '# Frozen stories\n\n## Story 1: frozen\n\n#### Happy Path\n- Given frozen bytes, when assembled, then they remain pinned\n');
       await writeFile(join(dir, 'test/old name.test.ts'), [
-        '// Covers: S1.1',
         '// Retained rename fixture context.',
         '// These unchanged lines keep Git rename detection meaningful.',
         '// They are also intentionally inert test-source trivia.',
