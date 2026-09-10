@@ -341,7 +341,7 @@ describe('daemon OTel visualizer wiring', () => {
     const actualWire = await vi.importActual<typeof import('../src/engine/otel/wire.js')>(
       '../src/engine/otel/wire.js',
     );
-    const daemonOtel = await actualWire.wireDaemonOtel(config, {
+    const daemonOtel = actualWire.wireDaemonOtel(config, {
       mainRoot: '/tmp/daemon-otel-root',
       project: '/tmp/daemon-otel-project',
       projectName: 'daemon-otel-project',
