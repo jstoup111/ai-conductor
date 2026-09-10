@@ -124,6 +124,7 @@ export class SpanManager {
       provider: event.actualProvider,
       preferredProvider: event.preferredProvider,
     });
+    this.setTokenUsageAttributes(state.span, event.tokenUsage);
     state.span.setAttribute('conductor.step.status', event.status);
     state.span.setAttribute('conductor.retry.count', state.retryCount);
     state.span.setStatus({ code: SpanStatusCode.OK });
@@ -190,6 +191,25 @@ export class SpanManager {
     }
     if (state.dispatch?.fallbackReason !== undefined) {
       state.span.setAttribute('conductor.fallback.reason', state.dispatch.fallbackReason);
+    }
+  }
+
+  private setTokenUsageAttributes(
+    span: Span,
+    tokenUsage: Extract<ConductorEvent, { type: 'step_completed' }>['tokenUsage'],
+  ): void {
+    if (!tokenUsage) return;
+    if (Number.isFinite(tokenUsage.reasoningOutput)) {
+      span.setAttribute('conductor.usage.reasoning_output', tokenUsage.reasoningOutput!);
+    }
+    if (Number.isFinite(tokenUsage.numTurns)) {
+      span.setAttribute('conductor.usage.turns', tokenUsage.numTurns!);
+    }
+    if (Number.isFinite(tokenUsage.durationMs)) {
+      span.setAttribute('conductor.usage.duration_ms', tokenUsage.durationMs!);
+    }
+    if (tokenUsage.costSource !== undefined) {
+      span.setAttribute('conductor.cost.source', tokenUsage.costSource);
     }
   }
 
