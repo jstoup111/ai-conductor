@@ -2,6 +2,7 @@ import type {
   AuthenticationReadiness,
   LLMProvider,
   ProviderLifecycleCapability,
+  ProviderNativeSchemaCapability,
   SelfHostAuthContext,
   SelfHostAuthPreparation,
   SpawnPermit,
@@ -20,6 +21,7 @@ export interface ProviderRuntime {
   key: string;
   provider: LLMProvider;
   lifecycleCapability?: ProviderLifecycleCapability;
+  nativeSchemaCapability?: ProviderNativeSchemaCapability;
   policy: ProviderModelPolicy;
   builtIn: boolean;
   availability: ModelAvailability;
@@ -51,6 +53,12 @@ export class ProviderRuntimeSet {
   lifecycleCapabilityFor(key: string): ProviderLifecycleCapability | undefined {
     const runtime = this.runtimes.get(key);
     return runtime?.lifecycleCapability ?? runtime?.provider.lifecycleCapability;
+  }
+
+  /** Resolves the selected adapter's declared native output-schema capability. */
+  nativeSchemaCapabilityFor(key: string): ProviderNativeSchemaCapability | undefined {
+    const runtime = this.runtimes.get(key);
+    return runtime?.nativeSchemaCapability ?? runtime?.provider.nativeSchemaCapability;
   }
 
   /**
@@ -106,6 +114,7 @@ export function createProviderRuntimeSet(
         key,
         provider,
         lifecycleCapability: provider.lifecycleCapability,
+        nativeSchemaCapability: provider.nativeSchemaCapability,
         policy,
         builtIn: hasBuiltInProviderModelPolicy(key),
         availability: new ModelAvailability(policy.modelFallbackLadder, warn),

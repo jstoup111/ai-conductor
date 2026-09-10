@@ -1,4 +1,4 @@
-// Covers: task:5
+// Covers: task:3, task:5
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,7 +6,10 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
-import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
+import type {
+  RemediationCasePrdWideningRecord,
+  RemediationCaseRecord,
+} from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore, remediationCaseStorePath } from '../../src/engine/remediation-case-store.js';
 import type { RemediationCaseGraph } from '../../src/engine/remediation-case-validator.js';
 
@@ -42,6 +45,16 @@ const ACTION_CASE = {
   confidence: 'high',
   effect: { kind: 'action', route: 'build', tasks: [{ title: 'Cover the changed behavior' }] },
 } as const;
+
+const PRD_WIDENING_CASE: RemediationCasePrdWideningRecord = {
+  id: 'prd-case-1',
+  domain: 'prd_widening',
+  originalSources: [{ sourceId: 'NC-1', snapshot: 'Original widening finding.' }],
+  currentSources: [{ sourceId: 'NC-1', snapshot: 'Reworded widening finding.', recordedAt: RECORDED_AT }],
+  relationships: [{
+    currentSourceId: 'NC-1', kind: 'same-case', caseId: 'prd-case-1', reason: 'The finding concerns the same behavior.',
+  }],
+};
 
 function durableAction(overrides: Partial<RemediationCaseRecord> = {}): RemediationCaseRecord {
   return {
@@ -83,9 +96,10 @@ describe('remediation case reconciler', () => {
       // Nothing prior was absent, so no unreferenced case transitioned.
       resolvedAbsentCaseIds: [],
       state: {
-        version: 'v1',
+        version: 'v2',
         feature: FEATURE,
         suppressions: [],
+        prdWideningCases: [],
         cases: [{
           id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high',
           rationale: ACTION_CASE.rationale, confidence: 'high', resolution: 'open',
@@ -122,6 +136,28 @@ describe('remediation case reconciler', () => {
           ],
         }],
       },
+    });
+  });
+
+  it('retains PRD widening history while reconciling a build-review case', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({
+      value: undefined,
+      nextState: {
+        version: 'v2', feature: state.feature, cases: state.cases,
+        prdWideningCases: [PRD_WIDENING_CASE], suppressions: state.suppressions ?? [],
+      },
+    }));
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph(ACTION_CASE), recordedAt: RECORDED_AT, generateId: generatedIds('case-1', 'effect-1'),
+    });
+
+    expect(result).toMatchObject({ ok: true, state: { prdWideningCases: [PRD_WIDENING_CASE] } });
+    await expect(store.read()).resolves.toMatchObject({
+      ok: true,
+      state: { prdWideningCases: [PRD_WIDENING_CASE] },
     });
   });
 

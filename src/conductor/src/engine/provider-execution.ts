@@ -270,6 +270,17 @@ function unsupportedLifecycleProviderResult(providerKey: string): InvokeResult {
   };
 }
 
+/** Fail closed before dispatch rather than requesting an unconstrained answer. */
+function unsupportedNativeSchemaProviderResult(providerKey: string): InvokeResult {
+  return {
+    success: false,
+    output: `Provider ${providerKey} cannot enforce the requested native output schema: missing native output schema capability. Recovery action: select or update a provider that declares nativeSchemaCapability.nativeOutputSchema and returns InvokeResult.finalStructuredResult from its terminal result envelope.`,
+    exitCode: 1,
+    nativeSchemaUnsupported: true,
+    providerInvocationSkipped: true,
+  };
+}
+
 export function classifyProviderAttempt(
   result: InvokeResult,
 ): ProviderUnavailableClassification | undefined {
@@ -660,19 +671,24 @@ export async function executeProviderCandidates({
     const requiresLifecycleCapability = candidateOptions.spawnPermit !== undefined;
     const supportsLifecycleCapability =
       runtimes.lifecycleCapabilityFor(providerKey)?.synchronousSpawnPermit === true;
+    const requiresNativeSchemaCapability = candidateOptions.nativeSchema !== undefined;
+    const supportsNativeSchemaCapability =
+      runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
     const result = requiresLifecycleCapability && !supportsLifecycleCapability
       ? unsupportedLifecycleProviderResult(providerKey)
-      : withCandidateSafety
-        ? await withCandidateSafety(
-            {
-              step,
-              providerKey,
-              model: resolved.model,
-              effort: resolved.effort,
-            },
-            invoke,
-          )
-        : await invoke();
+      : requiresNativeSchemaCapability && !supportsNativeSchemaCapability
+        ? unsupportedNativeSchemaProviderResult(providerKey)
+        : withCandidateSafety
+          ? await withCandidateSafety(
+              {
+                step,
+                providerKey,
+                model: resolved.model,
+                effort: resolved.effort,
+              },
+              invoke,
+            )
+          : await invoke();
     const invokedModel = invocation?.invokedModel;
     const suppression = invocation?.sessionPolicySuppression;
     const emittedProviders = sessionPolicyDiagnostics.get(sessions) ?? new Set<string>();
