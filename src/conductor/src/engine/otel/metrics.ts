@@ -26,6 +26,14 @@ export const DURATION_BUCKET_BOUNDARIES_MS = [
   3_600_000, 7_200_000, 14_400_000, 28_800_000,
 ];
 
+export interface DispatchDimensions {
+  model?: string;
+  effort?: string;
+  provider?: string;
+  tier?: string;
+  fallback?: boolean;
+}
+
 export class MetricsRecorder {
   private readonly instruments: MetricInstruments;
 
@@ -47,16 +55,20 @@ export class MetricsRecorder {
 
   onStepClose(
     step: string, durationMs: number, retryCount: number, tokenUsage?: TokenUsage, model?: string, recordDispatch = true,
+    dimensions?: DispatchDimensions,
   ): void {
-    this.instruments.durationHistogram.record(durationMs, this.withIdentity({ step }));
-    if (retryCount > 0) this.instruments.retriesCounter.add(retryCount, this.withIdentity({ step }));
-    if (recordDispatch) this.onDispatch(step, tokenUsage, model);
+    const attrs = this.withDimensions({ step }, dimensions);
+    this.instruments.durationHistogram.record(durationMs, this.withIdentity(attrs));
+    if (retryCount > 0) this.instruments.retriesCounter.add(retryCount, this.withIdentity(attrs));
+    if (recordDispatch) this.onDispatch(step, tokenUsage, model, dimensions);
   }
 
-  onDispatch(step: string, tokenUsage?: TokenUsage, _model?: string): void {
-    this.instruments.dispatchesCounter.add(1, this.withIdentity({ step, metering: classifyMetering(tokenUsage) }));
+  onDispatch(step: string, tokenUsage?: TokenUsage, _model?: string, dimensions?: DispatchDimensions): void {
+    this.instruments.dispatchesCounter.add(1, this.withIdentity(this.withDimensions({ step, metering: classifyMetering(tokenUsage) }, dimensions)));
   }
-  onRetry(step: string): void { this.instruments.retriesCounter.add(1, this.withIdentity({ step })); }
+  onRetry(step: string, dimensions?: DispatchDimensions): void {
+    this.instruments.retriesCounter.add(1, this.withIdentity(this.withDimensions({ step }, dimensions)));
+  }
 
   onFeatureCostSnapshot(event: Extract<ConductorEvent, { type: 'feature_cost_snapshot' }>): void {
     if (!Number.isFinite(event.costUsd)) return;
@@ -122,6 +134,16 @@ export class MetricsRecorder {
   onStall(reason: string): void { this.instruments.daemonStallsCounter.add(1, this.withIdentity({ reason })); }
 
   private static readonly TOKEN_KINDS = ['input', 'output', 'cacheRead', 'cacheCreation'] as const;
+  private withDimensions(attrs: Attributes, dimensions?: DispatchDimensions): Attributes {
+    if (dimensions === undefined) return attrs;
+    const merged = { ...attrs } as Attributes;
+    if (dimensions.model !== undefined) merged.model = dimensions.model;
+    if (dimensions.effort !== undefined) merged.effort = dimensions.effort;
+    if (dimensions.provider !== undefined) merged.provider = dimensions.provider;
+    if (dimensions.tier !== undefined) merged.tier = dimensions.tier;
+    if (dimensions.fallback !== undefined) merged.fallback = dimensions.fallback;
+    return merged;
+  }
   private withIdentity(attrs: Attributes): Attributes { return { ...attrs, ...this.identityAttrs }; }
 }
 
