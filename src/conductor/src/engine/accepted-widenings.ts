@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
@@ -97,6 +97,34 @@ export type AcceptedWideningDecisionReadResult =
 export type AcceptedWideningDecisionAppendResult =
   | { readonly ok: true; readonly decision: AcceptedWideningDecision }
   | { readonly ok: false; readonly reason: 'invalid-decision' | 'malformed-state' | 'unsupported-version' | 'foreign-feature' | 'lock-timeout' | 'lock-failed' | 'unreadable' | 'atomic-replace-failed' | 'lease-operation-failed' };
+
+/** A version-one authority row retained only long enough to migrate it safely. */
+export interface LegacyOverScopeDecision {
+  readonly criterion: string;
+  readonly summary: string;
+  readonly decision: 'accept' | 'refuse';
+  readonly rationale: string;
+  readonly operator: string;
+  readonly decidedAt: string;
+}
+
+/** The digest binds deterministic migration identities to this exact legacy input. */
+export interface LegacyOverScopeDecisionDocument {
+  readonly version: 1;
+  readonly documentId: string;
+  readonly decisions: readonly LegacyOverScopeDecision[];
+}
+
+export type LegacyOverScopeDecisionReadResult =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'legacy'; readonly document: LegacyOverScopeDecisionDocument }
+  | { readonly kind: 'malformed' }
+  | { readonly kind: 'unsupported'; readonly version: unknown }
+  | { readonly kind: 'unreadable' };
+
+export type AcceptedWideningLegacyMigrationResult =
+  | { readonly ok: true; readonly kind: 'migrated' | 'already-migrated' }
+  | { readonly ok: false; readonly reason: 'legacy-changed' | 'malformed-state' | 'unsupported-version' | 'foreign-feature' | 'lock-timeout' | 'lock-failed' | 'unreadable' | 'atomic-replace-failed' | 'lease-operation-failed' };
 
 const decisionStoreFilesystem: AcceptedWideningDecisionStoreFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
@@ -295,6 +323,61 @@ export class AcceptedWideningDecisionStore {
     }
   }
 
+  /**
+   * Replaces one verified v1 document with its complete v2 projection in one
+   * atomic transition. Case snapshots are deliberately written by the caller
+   * first, so a failed transition leaves only harmless source history behind.
+   */
+  async migrateLegacy(
+    document: LegacyOverScopeDecisionDocument,
+    decisions: readonly AcceptedWideningDecision[],
+  ): Promise<AcceptedWideningLegacyMigrationResult> {
+    const next = parseDecisionState({
+      version: ACCEPTED_WIDENINGS_STORE_VERSION,
+      feature: this.feature,
+      decisions,
+    });
+    if (next.kind !== 'valid') return { ok: false, reason: 'malformed-state' };
+    const acquired = await this.acquire();
+    if (!('ok' in acquired)) return { ok: false, reason: acquired.reason };
+    try {
+      let serialized: string;
+      try {
+        serialized = await this.filesystem.readFile(this.path);
+      } catch (error) {
+        return isMissingDecisionStore(error)
+          ? { ok: false, reason: 'legacy-changed' }
+          : { ok: false, reason: 'unreadable' };
+      }
+      let raw: unknown;
+      try {
+        raw = JSON.parse(serialized);
+      } catch {
+        return { ok: false, reason: 'malformed-state' };
+      }
+      if (!isObjectRecord(raw)) return { ok: false, reason: 'malformed-state' };
+      if (raw.version === 1) {
+        if (!hasExactKeys(raw, ['version', 'decisions']) || !Array.isArray(raw.decisions) ||
+          !raw.decisions.every(isOverScopeDecision)) return { ok: false, reason: 'malformed-state' };
+        if (legacyDocumentId(serialized) !== document.documentId) return { ok: false, reason: 'legacy-changed' };
+        return await this.atomicReplace(next.state)
+          ? { ok: true, kind: 'migrated' }
+          : { ok: false, reason: 'atomic-replace-failed' };
+      }
+      if (raw.version !== ACCEPTED_WIDENINGS_STORE_VERSION) return { ok: false, reason: 'unsupported-version' };
+      const existing = parseDecisionState(raw);
+      if (existing.kind !== 'valid') return { ok: false, reason: 'malformed-state' };
+      if (!sameDecisionFeature(existing.state.feature, this.feature)) return { ok: false, reason: 'foreign-feature' };
+      return JSON.stringify(existing.state.decisions) === JSON.stringify(next.state.decisions)
+        ? { ok: true, kind: 'already-migrated' }
+        : { ok: false, reason: 'legacy-changed' };
+    } catch {
+      return { ok: false, reason: 'lease-operation-failed' };
+    } finally {
+      await acquired.release();
+    }
+  }
+
   async append(input: unknown): Promise<AcceptedWideningDecisionAppendResult> {
     const parsedInput = parseDecisionInput(input);
     if (!parsedInput) return { ok: false, reason: 'invalid-decision' };
@@ -373,13 +456,49 @@ function parseDecisionInput(value: unknown): Omit<AcceptedWideningDecision, 'id'
   };
 }
 
-export interface OverScopeDecision { criterion: string; summary: string; decision: 'accept' | 'refuse'; rationale: string; operator: string; decidedAt: string }
+export type OverScopeDecision = LegacyOverScopeDecision;
 interface OverScopeDecisionsFile { version: 1; decisions: OverScopeDecision[] }
 
 function isOverScopeDecision(value: unknown): value is OverScopeDecision {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const entry = value as Record<string, unknown>;
   return typeof entry.criterion === 'string' && entry.criterion.trim().length > 0 && typeof entry.summary === 'string' && entry.summary.trim().length > 0 && (entry.decision === 'accept' || entry.decision === 'refuse') && typeof entry.rationale === 'string' && entry.rationale.trim().length > 0 && typeof entry.operator === 'string' && entry.operator.trim().length > 0 && typeof entry.decidedAt === 'string' && entry.decidedAt.trim().length > 0;
+}
+
+function legacyDocumentId(serialized: string): string {
+  return `legacy-document-${createHash('sha256').update(serialized).digest('hex')}`;
+}
+
+/**
+ * Reads the retired authority document without re-binding it to a current
+ * report. Corruption stays distinct from absence so migration never replaces
+ * an unreadable source with an empty v2 authority history.
+ */
+export async function readLegacyOverScopeDecisionDocument(
+  projectRoot: string,
+): Promise<LegacyOverScopeDecisionReadResult> {
+  let serialized: string;
+  try {
+    serialized = await readFile(join(projectRoot, ACCEPTED_WIDENINGS_PATH), 'utf8');
+  } catch (error) {
+    return isMissingDecisionStore(error) ? { kind: 'absent' } : { kind: 'unreadable' };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    return { kind: 'malformed' };
+  }
+  if (!isObjectRecord(parsed)) return { kind: 'malformed' };
+  if (parsed.version !== 1) return { kind: 'unsupported', version: parsed.version };
+  if (!hasExactKeys(parsed, ['version', 'decisions']) || !Array.isArray(parsed.decisions) ||
+    parsed.decisions.length > MAX_DECISIONS || !parsed.decisions.every(isOverScopeDecision)) {
+    return { kind: 'malformed' };
+  }
+  return {
+    kind: 'legacy',
+    document: { version: 1, documentId: legacyDocumentId(serialized), decisions: parsed.decisions },
+  };
 }
 
 /** Non-conforming (including the retired `entries` schema) deliberately reads as absent. */
