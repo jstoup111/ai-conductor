@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-10T17:01:34.077Z
 Slug: export-the-telemetry-dimensions-the-engine-already
 Class: protected-artifact
 Halting step: build
