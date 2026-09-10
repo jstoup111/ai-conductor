@@ -283,6 +283,7 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         kind: 'conflict_halt',
         conflicts: [],
         reason: rebaseStderr,
+        startFailure: true,
       });
       expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
     } finally {
@@ -315,6 +316,7 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         kind: 'conflict_halt',
         conflicts: [],
         reason: rebaseStderr,
+        startFailure: true,
       });
       expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
     } finally {
@@ -1548,6 +1550,7 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
       'rebase_mergeable_skip',
       'rebase_changed',
       'rebase_conflict_halt',
+      'rebase_untracked_quarantined',
     ] as const) {
       events.on(t, (e) => {
         seen.push(e.type);
@@ -1570,6 +1573,25 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
       'rebase_conflict_halt',
     ]);
     expect(conflictHalt).toMatchObject({ step: 'rebase' });
+  });
+
+  it('reports a quarantine before its healed outcome', async () => {
+    const events = new ConductorEventEmitter();
+    const seen: string[] = [];
+    for (const type of ['rebase_untracked_quarantined', 'rebase_changed', 'rebase_conflict_halt'] as const) {
+      events.on(type, (event) => seen.push(event.type));
+    }
+    const quarantine = { paths: ['generated.txt'], directory: '.pipeline/rebase-untracked-quarantine' };
+
+    await emitRebaseEvent(events, { kind: 'changed', changedCodePaths: ['generated.txt'], quarantine });
+    await emitRebaseEvent(events, {
+      kind: 'conflict_halt', conflicts: [], reason: 'still refused', startFailure: true, quarantine,
+    });
+
+    expect(seen).toEqual([
+      'rebase_untracked_quarantined', 'rebase_changed',
+      'rebase_untracked_quarantined', 'rebase_conflict_halt',
+    ]);
   });
 
   it('best-effort: emission failure does not throw', async () => {

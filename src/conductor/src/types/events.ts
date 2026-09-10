@@ -1113,6 +1113,12 @@ export type ConductorEvent =
       conflicts: string[];
     }
   | {
+      /** Untracked files were moved aside before retrying a refused rebase. */
+      type: 'rebase_untracked_quarantined';
+      paths: string[];
+      directory: string;
+    }
+  | {
       /**
        * Residue: pre-image shas cited by evidence but with no patch-id
        * match post-rebase (dropped or content-changed). Surfaced instead of
