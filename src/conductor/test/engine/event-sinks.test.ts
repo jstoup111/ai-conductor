@@ -357,7 +357,7 @@ describe('event sink subscriptions', () => {
       rendered: renderedEventTypes().includes('feature_cost_snapshot'),
       persisted: persistedEventTypes().includes('feature_cost_snapshot'),
     }).toEqual({
-      sinks: { render: false, persist: false, audit: false, otel: true },
+      sinks: { render: false, persist: false, audit: false, otel: true, otelTrace: false },
       otel: true,
       rendered: false,
       persisted: false,
