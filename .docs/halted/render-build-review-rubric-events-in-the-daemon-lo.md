@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-10T01:14:33.849Z
+Status: halted
 Slug: render-build-review-rubric-events-in-the-daemon-lo
 Class: plan-gap
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-render-build-review-rubric-events-in-the-daemon-lo
-Head SHA: b99fe51a3c1644880a555cc46bcf09572b827e1e
-Halted at: 2026-09-08T05:06:19.839Z
+Head SHA: f0f798c39e1c0e4246c4b85ace0ed409b5e3212f
+Halted at: 2026-09-10T04:01:45.876Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
