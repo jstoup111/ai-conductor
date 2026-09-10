@@ -1657,7 +1657,9 @@ describe('DefaultStepRunner', () => {
         attempts: [
           {
             provider: 'codex',
+            preferredProvider: 'codex',
             model: 'gpt-5.6-terra',
+            effort: 'medium',
             tokenUsage: { input: 11, output: 4 },
             outcome: 'success',
             invoked: true,
@@ -1675,7 +1677,9 @@ describe('DefaultStepRunner', () => {
         attempts: [
           {
             provider: 'claude',
+            preferredProvider: 'claude',
             model: 'opus',
+            effort: 'high',
             tokenUsage: { input: 7, output: 3 },
             outcome: 'success',
             invoked: true,

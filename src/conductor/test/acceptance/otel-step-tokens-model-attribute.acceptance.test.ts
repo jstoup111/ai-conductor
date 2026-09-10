@@ -2,7 +2,7 @@
  * Acceptance specs for cumulative feature token dimensions.
  *
  * This drives the real event path from a feature_cost_snapshot through the
- * visualizer and verifies the exported gauge's model labels.
+ * MetricsListener and verifies the exported gauge's model labels.
  *
  * Story 6's negative path (OTel disabled/unconfigured must never block
  * ship-time rollup or `conduct kpi`) is proven structurally, not duplicated
@@ -20,10 +20,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
-import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
-import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
-import { InMemoryMetricExporter, AggregationTemporality } from '@opentelemetry/sdk-metrics';
+import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
+import { MetricsRecorder } from '../../src/engine/otel/metrics.js';
+import { InMemoryMetricExporter, AggregationTemporality, MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 
 function findTokensMetric(exporter: InMemoryMetricExporter) {
   return exporter
@@ -33,15 +32,11 @@ function findTokensMetric(exporter: InMemoryMetricExporter) {
 }
 
 let tempDir: string;
-let pipelineDir: string;
-let spanExporter: InMemorySpanExporter;
 let metricExporter: InMemoryMetricExporter;
 let emitter: ConductorEventEmitter;
 
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), 'otel-model-attr-'));
-  pipelineDir = join(tempDir, '.pipeline');
-  spanExporter = new InMemorySpanExporter();
   metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
   emitter = new ConductorEventEmitter();
 });
@@ -50,18 +45,16 @@ afterEach(async () => {
   await rm(tempDir, { recursive: true, force: true });
 });
 
-function makeVisualizer(): OtelVisualizer {
-  const resolved = resolveOtelConfig(
-    { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
-    pipelineDir,
-  );
-  return new OtelVisualizer(resolved, {
-    runId: 'test-model-attr',
-    feature: 'test-feature',
-    project: 'test-project',
-    spanExporter,
-    metricExporter,
+function makeVisualizer(): { start(emitter: ConductorEventEmitter): void; stop(): Promise<void> } {
+  const provider = new MeterProvider({
+    readers: [new PeriodicExportingMetricReader({ exporter: metricExporter, exportIntervalMillis: 60_000 })],
   });
+  const listener = new MetricsListener(
+    new MetricsRecorder(provider.getMeter('token-model-acceptance'), { project: 'test-project', worker: 'test-worker', feature: 'test-feature' }),
+    undefined,
+    'test-feature',
+  );
+  return { start: (emitter) => listener.start(emitter), stop: async () => { listener.stop(); await provider.shutdown(); } };
 }
 
 describe('acceptance: conductor.feature.step.tokens carries the model attribute from a feature_cost_snapshot', () => {

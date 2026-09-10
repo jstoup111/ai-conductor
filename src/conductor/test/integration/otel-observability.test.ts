@@ -25,9 +25,11 @@ import { EventPersister } from '../../src/engine/event-persister.js';
 // ── Modules under construction (do not exist yet → RED) ──────────────────────
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
+import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
+import { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 // In-memory OTel exporters (deps added in Task 1 → RED until then)
 import { CapturingSpanExporter as InMemorySpanExporter } from '../fixtures/capturing-span-exporter.js';
-import { InMemoryMetricExporter, AggregationTemporality } from '@opentelemetry/sdk-metrics';
+import { InMemoryMetricExporter, AggregationTemporality, MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 
 /**
  * A representative SDLC run: 3 steps, one with a retry, one carrying tokenUsage,
@@ -159,10 +161,18 @@ describe('OTel Observability — Phase 1 acceptance', () => {
   // ── FR-5: metrics ──────────────────────────────────────────────────────────
   describe('Story: duration/retry/token metrics (FR-5)', () => {
     it('emits a step.duration histogram and a retries counter; token gauges only when present', async () => {
-      const vis = startVisualizer();
+      const provider = new MeterProvider({
+        readers: [new PeriodicExportingMetricReader({ exporter: metricExporter, exportIntervalMillis: 60_000 })],
+      });
+      const listener = new MetricsListener(
+        new MetricsRecorder(provider.getMeter('observability-acceptance'), { project: 'james-stoup-agents', worker: 'test-worker', feature: 'otel-phase-1' }),
+        undefined,
+        'otel-phase-1',
+      );
+      listener.start(emitter);
       await emitRepresentativeRun(emitter);
-      await vis.stop();
-      await metricExporter.forceFlush?.();
+      listener.stop();
+      await provider.shutdown();
 
       const names = metricExporter
         .getMetrics()
