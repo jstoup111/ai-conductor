@@ -76,11 +76,15 @@ describe('OtelVisualizer', () => {
     expect(metricExporter.getMetrics()).toEqual([]);
   });
 
-  it('ignores lifecycle-only provider attempts before updating open step span state', async () => {
+  it('ignores lifecycle-only provider attempts without overwriting an invoked attempt on the step span', async () => {
     const visualizer = makeVisualizer();
     visualizer.start(emitter, { runId: 'run-1', feature: 'feature', project: 'project' });
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', provider: 'claude', preferredProvider: 'codex',
+      invoked: true, outcome: 'success',
+    });
     await emitter.emit({
       type: 'provider_attempt', step: 'build', provider: 'provider-lifecycle', invoked: false,
       outcome: 'success', lifecycle: { phase: 'settled', attemptId: 'attempt-1', recoveryCount: 0 },
@@ -90,6 +94,10 @@ describe('OtelVisualizer', () => {
     await visualizer.stop();
 
     expect(spanExporter.getFinishedSpans().find((span) => span.name === 'build')?.attributes)
-      .not.toHaveProperty('conductor.provider');
+      .toMatchObject({
+        'conductor.provider': 'claude',
+        'conductor.provider.preferred': 'codex',
+        'conductor.fallback': true,
+      });
   });
 });
