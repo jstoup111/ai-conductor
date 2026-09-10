@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-10T13:11:04.352Z
 Slug: export-the-telemetry-dimensions-the-engine-already
 Class: needs-human
 Halting step: prd_audit
