@@ -328,6 +328,43 @@ Relevant existing facts (evidence):
 > and replaces it on a state transition. This keeps oldest eligible/waiting/blocked/gated/parked age
 > truthful when a feature moves between states.
 
+> **Amended 2026-09-09 by #1940 (dispatch dimensions: label placement contract):** the label
+> sets enumerated by the #1938 and #1937 amendments name `project`, `worker`, `feature`, `step`,
+> `kind`, `model`, `source`, `metering`, `obligation`, `outcome`, `haltClass`, `state`, `reason`
+> and nothing else, so `conductor.step.duration` and `conductor.step.retries` carry `step` alone,
+> `provider_attempt` reaches the `MetricsListener` as a no-op, and reasoning effort and complexity
+> tier ride no step event at all. Two decisions extend the contract; Decisions 1–9 stand.
+>
+> 10. **Bounded dispatch dimensions are data-point labels; unbounded or numeric detail is
+>     trace-only.** `model`, `effort` (`low|medium|high|xhigh|max`), `provider`, and `tier`
+>     (`S|M|L`) join `step` as data-point attributes on `conductor.step.duration`,
+>     `conductor.step.retries`, and `conductor.step.dispatches`; `conductor.step.dispatches`
+>     additionally carries `fallback` (`true` when the preferred provider is not the provider that
+>     produced the result, else `false`). Every one of these value sets is closed and small, so the
+>     growth bound of the #1938 amendment holds: series multiply only by combinations that actually
+>     dispatched. The same values are set as span attributes on the step span
+>     (`conductor.model`, `conductor.effort`, `conductor.provider`, `conductor.provider.preferred`,
+>     `conductor.complexity_tier`, `conductor.fallback`). `fallbackReason` (free text) and the `TokenUsage`
+>     detail — `reasoningOutput`, `numTurns`, `durationMs`, `costSource` — are **span attributes
+>     only** (`conductor.fallback.reason`, `conductor.usage.reasoning_output`,
+>     `conductor.usage.turns`, `conductor.usage.duration_ms`, `conductor.cost.source`) and are never
+>     data-point labels. An absent value is omitted, never filled with a placeholder, and
+>     `durationMs`/`costSource` stay absent where the provider reports none
+>     (adr-2026-07-27-cost-unmetered-is-a-first-class-state). Spec owner and any other operator
+>     identity are excluded from both signals; exporting "who" is a separate decision (privacy).
+>
+> 11. **Dimensions travel on the events that already describe the dispatch; no new event type and
+>     no parallel channel.** `step_completed` and `step_failed` gain optional `effort` and `tier`
+>     fields, populated from the resolved invocation policy and the run's `complexity_tier` at the
+>     existing emit site, the same additive-field path `model`, `preferredProvider`, and
+>     `actualProvider` already ride (precedent: adr-2026-07-05-retry-as-escalation-ladder §6).
+>     `provider`, `fallbackReason`, `model` and `tokenUsage` are read from the existing
+>     `provider_attempt` event through the existing `DispatchMeteringTracker` (which already
+>     selects each invoked dispatch exactly once and drops lifecycle-only rows), so the
+>     `MetricsListener` `provider_attempt` handler becomes a real projection and the interactive
+>     `OtelVisualizer` switch records the same attributes. Both projections stay within Decision 4:
+>     bounded, in-memory, no I/O.
+
 ## Consequences
 
 **Positive**
