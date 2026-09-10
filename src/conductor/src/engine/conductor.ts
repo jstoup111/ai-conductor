@@ -9793,6 +9793,10 @@ export class Conductor {
                 attempt: attempt + 1,
                 maxAttempts: stepMaxRetries,
                 reason: lastError,
+                ...(result.model !== undefined && { model: result.model }),
+                ...(result.effort !== undefined && { effort: result.effort }),
+                ...(result.actualProvider !== undefined && { provider: result.actualProvider }),
+                ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
                 ...(step.name === 'build' && { resolvedBefore: resolvedTasksBefore }),
                 ...(resolved.escalate && {
                   escalatedModel: escNext.model,
@@ -10606,6 +10610,10 @@ export class Conductor {
                   attempt: attempt + 1,
                   maxAttempts: stepMaxRetries,
                   reason: completion.reason ?? 'completion check failed',
+                  ...(result.model !== undefined && { model: result.model }),
+                  ...(result.effort !== undefined && { effort: result.effort }),
+                  ...(result.actualProvider !== undefined && { provider: result.actualProvider }),
+                  ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
                   resolvedBefore: retryResolvedBefore,
                   resolvedAfter: retryResolvedAfter,
                   ...(resolved.escalate && {
@@ -10785,6 +10793,8 @@ export class Conductor {
             step: step.name,
             error: lastError,
             retryCount: attempt,
+            ...(failedStepResult?.effort !== undefined && { effort: failedStepResult.effort }),
+            ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
             ...(failedStepResult?.observedIntervals
               ? { observedIntervals: failedStepResult.observedIntervals }
               : {}),
@@ -12275,6 +12285,8 @@ export class Conductor {
             tail,
             tokenUsage: stepResult?.tokenUsage,
             model: stepResult?.model,
+            ...(stepResult?.effort !== undefined && { effort: stepResult.effort }),
+            ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
             unmetered: stepResult?.tokenUsage ? undefined : true,
             preferredProvider: stepResult?.preferredProvider,
             actualProvider: stepResult?.actualProvider,
