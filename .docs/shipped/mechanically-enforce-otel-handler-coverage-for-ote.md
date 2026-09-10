@@ -4,18 +4,6 @@ spec_hash: 19c2ecb679cfc95d34ab0e600715322e2e9dd5d3a2724f1654539b8326e9d5e7
 pr: https://github.com/jstoup111/ai-conductor/pull/2395
 shipped: 2026-09-10
 engine_version: 20260909T231115Z-a985c68b5d37
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.1
-    summary: "src/conductor/src/engine/event-sinks.ts:13-16 — `daemon_backlog_snapshot`, `feature_dispatch_started`, `feature_dispatch_ended` and `feature_shipped` gained `otelTrace: false`; no plan task or amendment names these four, but .docs/decisions/adr-014-otel-observability-exporter.md:319-331 (amended in this diff) declares them metrics-only on the OTel surface, and the merge-base visualizer switch never had a case for any of them, so no span effect was removed"
-    accepted: true
-  - gate: architecture_review_as_built
-    finding: AB-1
-    class: REMEDIABLE
-    governing_clause: "adr-014-otel-observability-exporter Decision 7"
-    outcome: remediated
-    summary: "`unattributed_progress` is declared metrics-only but omitted from the exhaustive `MetricsListener` table, so both production OTel roots fail during listener startup and the reviewed handler-coverage path is unreachable."
 ---
 
 ## Cost
@@ -35,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:parallel:prd_audit,step:finish
+reason: open-executions:parallel:prd_audit
 
 ## Build Review
 laps_to_pass: 2
