@@ -1,23 +1,22 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-10T10:22:26.465Z
+Status: halted
 Slug: record-land-gate-rejections-on-the-event-spine
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-record-land-gate-rejections-on-the-event-spine
-Head SHA: 428a72d49be349600d2b21571cda8f329c5f653a
-Halted at: 2026-09-08T03:57:28.311Z
+Head SHA: 0dcaf62bee965a76f71cdebf503d86cee10962db
+Halted at: 2026-09-10T12:20:08.464Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-1 (Story 1)
+Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-2 (adr-008-agent-hosted-loop-and-in-chat-authoring cross-repo isolation)
 
 Blocking findings:
-AB-1 (DESIGN; Story 1): Pre-`landSpec` land rejections bypass the recorder, and the advertised `target-path-missing` classifier rung has no production path or approved durable destination when the target root is unavailable.
+AB-1 (REMEDIABLE; Task 1): Two target-resolved land gates throw plain errors and collapse to `unclassified` instead of carrying stable identifiers naming their gates.
+AB-2 (DESIGN; adr-008-agent-hosted-loop-and-in-chat-authoring cross-repo isolation): Recording `target-path-missing` can recreate and write beneath the missing canonical target, conflicting with the approved error-before-any-write boundary.
 ```
