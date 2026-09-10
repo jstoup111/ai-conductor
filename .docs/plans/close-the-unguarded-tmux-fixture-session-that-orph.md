@@ -55,6 +55,8 @@ Use the suite's established real-tmux fixture pattern for the restart-wiring cha
 2. No tmux process is started on a refused call, proven by asserting the session does not exist afterwards.
 3. With the kill-switch unset, a respawn against an absent session returns a non-zero exit code and throws nothing.
 
+> **Amended 2026-09-10 by #1616:** Task 1 Step 2 and Done when 3 cover both refused verbs, `new-session` and `respawn-pane`, when the kill-switch is unset, as Story 2 already requires. Each unit case must reach the mocked process adapter with unchanged argv and return its exit result without a guard exception. The mock-connection assertion runs first; no real tmux call is required. This repairs the missing unit proof identified by PG-1 without changing production behavior.
+
 ### Task 2: Refuse an argv that carries no resolvable session target
 **Story:** Story 2 (negative path)
 **Type:** negative-path

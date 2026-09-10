@@ -1,4 +1,31 @@
-import { describe, it, expect, vi } from 'vitest';
+// Covers: task:1, task:2, task:3
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { spawnSync } from 'node:child_process';
+
+// Guard tests must remain harmless during RED and test-quality's production
+// rollback. In particular, targetless `respawn-pane -k` selects the live pane.
+// Mock the OS boundary, keeping the actual runner and guard under test.
+// setup.ts imports daemon-launch and caches this adapter before file mocks.
+vi.hoisted(() => { vi.resetModules(); });
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawnSync: vi.fn(() => ({
+      pid: 0, output: [null, '', ''], stdout: '', stderr: '', status: 1, signal: null,
+    })),
+  };
+});
+
+beforeEach(async () => {
+  vi.mocked(spawnSync).mockClear();
+  // Prove the real adapter is connected to the fake before any destructive
+  // argv is exercised, including when production is restored by preflight.
+  const { defaultTmuxRunner } = await import('../../src/engine/daemon-tmux.js');
+  defaultTmuxRunner(['-V'], { inherit: false });
+  expect(spawnSync).toHaveBeenCalledWith('tmux', ['-V'], expect.any(Object));
+  vi.mocked(spawnSync).mockClear();
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED unit specs for the NOT-YET-BUILT module `src/engine/daemon-tmux.ts`
@@ -27,11 +54,9 @@ import { describe, it, expect, vi } from 'vitest';
 //   TmuxNotInstalledError                  → exported Error subclass; message mentions 'tmux'
 // ─────────────────────────────────────────────────────────────────────────────
 
-const TMUX_MOD = '../../src/engine/daemon-tmux.js';
-
 async function load(): Promise<Record<string, unknown>> {
   // Throws (RED) when the module does not exist yet — the intended pre-impl failure.
-  return (await import(TMUX_MOD)) as Record<string, unknown>;
+  return (await import('../../src/engine/daemon-tmux.js')) as Record<string, unknown>;
 }
 
 function requireFn(mod: Record<string, unknown>, name: string): (...args: any[]) => any {
@@ -698,16 +723,38 @@ describe('requireTmux: throws TmuxNotInstalledError when tmux is absent', () => 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// defaultTmuxRunner — kill-switch guard: refuses to spawn real cc-daemon-*
-// tmux sessions when AI_CONDUCTOR_NO_REAL_EXEC=1 is set (test isolation guard
+// defaultTmuxRunner — kill-switch guard: refuses to spawn real tmux sessions
+// when AI_CONDUCTOR_NO_REAL_EXEC=1 is set (test isolation guard
 // against real tmux daemons leaking out of the test suite and persisting).
 // ─────────────────────────────────────────────────────────────────────────────
-describe('defaultTmuxRunner: AI_CONDUCTOR_NO_REAL_EXEC kill-switch guards cc-daemon sessions', () => {
+describe('defaultTmuxRunner: AI_CONDUCTOR_NO_REAL_EXEC kill-switch guards real tmux sessions', () => {
+  it.each(['has-session', 'capture-pane', 'kill-session'])('returns the ordinary tmux result for %s against an absent session when the kill-switch is set', async (verb) => {
+    const runner = requireFn(await load(), 'defaultTmuxRunner');
+    const sessionName = `cc-daemon-guardtest-absent-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const argsByVerb: Record<string, string[]> = {
+      'has-session': ['has-session', '-t', `=${sessionName}`],
+      'capture-pane': ['capture-pane', '-p', '-t', `=${sessionName}:`],
+      'kill-session': ['kill-session', '-t', `=${sessionName}`],
+    };
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      const result = runner(argsByVerb[verb], { inherit: false });
+      expect(result).toMatchObject({ code: expect.any(Number), stdout: expect.any(String) });
+      expect(result.code).toBe(1);
+      expect(spawnSync).toHaveBeenCalledTimes(1);
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+    }
+  });
+
   it('throws instead of creating a real cc-daemon-* session when the kill-switch is set', async () => {
     const mod = await load();
     const runner = requireFn(mod, 'defaultTmuxRunner');
-    const hasSessionFn = requireFn(mod, 'hasSession');
-    const killSessionFn = requireFn(mod, 'killSession');
     const sessionName = 'cc-daemon-guardtest-abc123';
     const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
@@ -724,18 +771,13 @@ describe('defaultTmuxRunner: AI_CONDUCTOR_NO_REAL_EXEC kill-switch guards cc-dae
       expect(thrown).toBeInstanceOf(Error);
       expect((thrown as Error).message).toContain('AI_CONDUCTOR_NO_REAL_EXEC');
       expect((thrown as Error).message).toContain(sessionName);
-
-      // Verify via real tmux that no session was actually created.
-      const exists = await hasSessionFn(sessionName);
-      expect(exists).toBe(false);
+      expect(spawnSync).not.toHaveBeenCalled();
     } finally {
       if (prevFlag === undefined) {
         delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
       } else {
         process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
       }
-      // Clean up any accidentally created session.
-      await killSessionFn(sessionName);
     }
   });
 
@@ -755,6 +797,7 @@ describe('defaultTmuxRunner: AI_CONDUCTOR_NO_REAL_EXEC kill-switch guards cc-dae
       expect(thrown).toBeInstanceOf(Error);
       expect((thrown as Error).message).toContain('AI_CONDUCTOR_NO_REAL_EXEC');
       expect((thrown as Error).message).toContain(sessionName);
+      expect(spawnSync).not.toHaveBeenCalled();
     } finally {
       if (prevFlag === undefined) {
         delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
@@ -764,18 +807,127 @@ describe('defaultTmuxRunner: AI_CONDUCTOR_NO_REAL_EXEC kill-switch guards cc-dae
     }
   });
 
-  it('does NOT guard non-cc-daemon session names (test-fixture sessions stay usable) (#377)', async () => {
+  it('throws instead of creating a real unprefixed session when the kill-switch is set', async () => {
     const mod = await load();
     const runner = requireFn(mod, 'defaultTmuxRunner');
+    const sessionName = 'test-wiring-guardtest-123456';
     const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
     try {
-      // A respawn-pane against a non-prefixed (absent) session must reach real
-      // tmux and fail with a plain non-zero exit — NOT the kill-switch throw.
-      const result = runner(['respawn-pane', '-k', '-t', '=test-wiring-nope:', 'sleep 1'], {
+      let thrown: unknown;
+      try {
+        runner(['new-session', '-d', '-s', sessionName, '-c', '/tmp', 'sleep 1'], { inherit: false });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain('AI_CONDUCTOR_NO_REAL_EXEC');
+      expect((thrown as Error).message).toContain(sessionName);
+      expect(spawnSync).not.toHaveBeenCalled();
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+    }
+  });
+
+  it('throws instead of respawning a pane in a real unprefixed session when the kill-switch is set', async () => {
+    const mod = await load();
+    const runner = requireFn(mod, 'defaultTmuxRunner');
+    const sessionName = 'test-wiring-guardtest-789abc';
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      let thrown: unknown;
+      try {
+        runner(['respawn-pane', '-k', '-t', `=${sessionName}:`, 'sleep 1'], { inherit: false });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain('AI_CONDUCTOR_NO_REAL_EXEC');
+      expect((thrown as Error).message).toContain(sessionName);
+      expect(spawnSync).not.toHaveBeenCalled();
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+    }
+  });
+
+  it.each([
+    ['respawn-pane', '-k', '-t', '=test-wiring-nope:', 'sleep 1'],
+    ['new-session', '-d', '-s', 'test-wiring-guard-unit', 'sleep 1'],
+  ])('passes %s through to the process adapter when the kill-switch is unset', async (...args) => {
+    const mod = await load();
+    const runner = requireFn(mod, 'defaultTmuxRunner');
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    try {
+      const result = runner(args, {
         inherit: false,
       });
-      expect(result.code).not.toBe(0);
+      expect(result.code).toBe(1);
+      expect(spawnSync).toHaveBeenCalledTimes(1);
+      expect(spawnSync).toHaveBeenCalledWith('tmux', args, expect.any(Object));
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+    }
+  });
+
+  it('refuses new-session without -s because its target is unresolved', async () => {
+    const runner = requireFn(await load(), 'defaultTmuxRunner');
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      expect(() => runner(['new-session', '-d', '-c', '/tmp', 'sleep 1'], { inherit: false }))
+        .toThrow(/AI_CONDUCTOR_NO_REAL_EXEC.*new-session.*target.*unresolved/i);
+      expect(spawnSync).not.toHaveBeenCalled();
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+    }
+  });
+
+  it('refuses respawn-pane without -t because its target is unresolved', async () => {
+    const runner = requireFn(await load(), 'defaultTmuxRunner');
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      expect(() => runner(['respawn-pane', '-k', 'sleep 1'], { inherit: false }))
+        .toThrow(/AI_CONDUCTOR_NO_REAL_EXEC.*respawn-pane.*target.*unresolved/i);
+      expect(spawnSync).not.toHaveBeenCalled();
+    } finally {
+      if (prevFlag === undefined) {
+        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+      } else {
+        process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
+      }
+    }
+  });
+
+  it.each([
+    ['new-session', ['new-session', '-d', '-s', '', '-c', '/tmp', 'sleep 1']],
+    ['respawn-pane', ['respawn-pane', '-k', '-t', '', 'sleep 1']],
+  ])('refuses %s with an empty target because it is unresolved', async (verb, args) => {
+    const runner = requireFn(await load(), 'defaultTmuxRunner');
+    const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
+    try {
+      expect(() => runner(args, { inherit: false }))
+        .toThrow(new RegExp(`AI_CONDUCTOR_NO_REAL_EXEC.*${verb}.*target.*unresolved`, 'i'));
+      expect(spawnSync).not.toHaveBeenCalled();
     } finally {
       if (prevFlag === undefined) {
         delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;

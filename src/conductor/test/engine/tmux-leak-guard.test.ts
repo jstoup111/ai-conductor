@@ -1,3 +1,7 @@
+/**
+ * Covers: task:5
+ */
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Test: tmux-leak-guard (#377) — the suite-level net that catches kill-switch
 // escapes: any `cc-daemon-*` session created during the run is killed at
@@ -311,6 +315,41 @@ describe('reapLeakedDaemonSessions (#437) — uncorroborated sessions are report
 });
 
 describe('sweepStaleDaemonSessions — permanent-baseline-blindspot fix', () => {
+  it('reaps a stranded restart-wiring fixture while leaving an operator session alone', () => {
+    const calls: string[][] = [];
+    const fixtureSession = 'cc-daemon-restart-wiring-stranded-fixture';
+    const operatorSession = 'cc-daemon-operator-checkout';
+    const runner: TmuxRunner = (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'list-sessions') {
+        return { code: 0, stdout: `${fixtureSession}\n${operatorSession}\n`, stderr: '' };
+      }
+      if (args[0] === 'display-message') {
+        const target = args[3];
+        if (target === `=${fixtureSession}:`) {
+          return { code: 0, stdout: `${os.tmpdir()}/daemon-restart-wiring-stranded\n`, stderr: '' };
+        }
+        if (target === `=${operatorSession}:`) {
+          return { code: 0, stdout: '/home/user/code/ai-conductor\n', stderr: '' };
+        }
+      }
+      if (args[0] === 'kill-session') {
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      throw new Error(`unexpected tmux invocation: ${args.join(' ')}`);
+    };
+
+    const result = sweepStaleDaemonSessions(runner);
+
+    expect(result.killed).toEqual([
+      `${fixtureSession} (pane cwd: ${os.tmpdir()}/daemon-restart-wiring-stranded)`,
+    ]);
+    expect(calls.filter((args) => args[0] === 'kill-session')).toEqual([
+      ['kill-session', '-t', `=${fixtureSession}`],
+    ]);
+    expect(result.killed.some((line) => line.includes(operatorSession))).toBe(false);
+  });
+
   it('kills a pre-existing tmpdir-rooted session with NO baseline involved at all', () => {
     const calls: string[][] = [];
     const runner: TmuxRunner = (args: string[]) => {
