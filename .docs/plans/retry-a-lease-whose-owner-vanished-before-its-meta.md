@@ -43,6 +43,14 @@ Tests extend the existing lease unit test file and its in-memory shared filesyst
 **Files:** src/conductor/src/engine/conduct-state-lease.ts, src/conductor/test/engine/conduct-state-lease.test.ts
 **Dependencies:** none
 
+> **Amended 2026-09-10 by operator:** Commit `d6337d883` already implements the
+> missing-owner bounded-wait behavior before this feature entered BUILD, so Task 1
+> cannot establish RED against the current implementation. Treat Task 1 as
+> characterization-first: add the release-before-owner-read fixture and prove
+> successful acquisition with no recovery diagnostic against the existing
+> production behavior. Do not rewrite production solely to manufacture RED.
+> Tasks 2–4 remain gap-driven where their assertions are not already covered.
+
 **Steps:**
 1. Add a unit test that acquires the lease with the existing in-memory filesystem, then has a second lease contend through a wrapper whose directory-creation seam releases the held lease before rethrowing the already-held error, so the recovery read finds no owner file.
 2. Assert the contender acquires successfully, that its own owner metadata is recorded, that no recovery diagnostic is emitted, and that its release succeeds. Establish RED against the current refusal.
