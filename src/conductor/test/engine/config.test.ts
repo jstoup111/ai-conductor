@@ -94,6 +94,19 @@ steps:
       expect(result.ok).toBe(true);
     });
 
+    it('loads OTel attributes without an unknown-key warning', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'otel:\n  exporter: file\n  attributes:\n    service.name: conductor\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok) return;
+      expect(result.warnings).not.toContain('Unknown key in otel: "attributes"');
+    });
+
     it('rejects config when version too low', async () => {
       const configYaml = `harness_version: ">=2.0.0"\n`;
       await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), configYaml);
