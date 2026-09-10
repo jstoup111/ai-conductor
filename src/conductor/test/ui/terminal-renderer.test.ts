@@ -1,10 +1,21 @@
-// Covers: task:4
+// Covers: task:2, task:3, task:4
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Writable } from 'node:stream';
 import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
 import { createLiveRegion } from '../../src/ui/live-region.js';
 import type { ConductorEvent, ConductState } from '../../src/types/index.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
+import { renderedEventTypes } from '../../src/engine/event-sinks.js';
+
+const DEDICATED_RENDERER_EVENT_TYPES = new Set<ConductorEvent['type']>([
+  'step_started', 'step_completed', 'step_failed', 'step_retry', 'feature_usage_total', 'rate_limit', 'session_reset',
+  'credentials_park_progress', 'provider_fallback', 'session_policy', 'when_skip',
+  'parallel_started', 'parallel_completed', 'parallel_failure', 'tier_skip', 'config_skip',
+  'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached',
+  'build_progress', 'unattributed_progress', 'build_no_progress', 'pipeline_closeout',
+  'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
+  'renderer_error', 'pipeline_tail_diagnostic',
+]);
 
 class CaptureStream extends Writable {
   chunks: string[] = [];
@@ -125,16 +136,16 @@ describe('TerminalRenderer', () => {
     );
   });
 
-  it('renders satisfied gate verdicts without provider-completion glyphs', async () => {
+  it('does not render satisfied gate verdicts', async () => {
     await renderer.handle({ type: 'gate_verdict', step: 'plan', satisfied: true, reason: 'covered' });
 
-    expect(stream.output()).toBe('  gate plan: satisfied — covered\n');
+    expect(stream.output()).toBe('');
   });
 
-  it('renders a reasonless satisfied verdict without a trailing separator', async () => {
+  it('does not render a reasonless satisfied gate verdict', async () => {
     await renderer.handle({ type: 'gate_verdict', step: 'plan', satisfied: true });
 
-    expect(stream.output()).toBe('  gate plan: satisfied\n');
+    expect(stream.output()).toBe('');
   });
 
   it('renders typed credential-park progress without a lifecycle restart', async () => {
@@ -215,6 +226,67 @@ describe('TerminalRenderer', () => {
   it('implements UIRenderer interface (handle + stop)', () => {
     expect(typeof renderer.handle).toBe('function');
     expect(typeof renderer.stop).toBe('function');
+  });
+
+  it('renders build tree movement only for build completion', async () => {
+    await renderer.handle({
+      type: 'step_completed', step: 'build', status: 'done',
+      treeBefore: 'abc123456', treeAfter: 'abc123456',
+    });
+    expect(stream.output()).toContain('tree abc1234 unchanged');
+
+    stream.reset();
+    await renderer.handle({
+      type: 'step_completed', step: 'plan', status: 'done',
+      treeBefore: 'abc123456', treeAfter: 'def567890',
+    });
+    expect(stream.output()).not.toContain('tree abc1234');
+  });
+
+  it('renders loop-halt and convergence outcomes', async () => {
+    await renderer.handle({ type: 'loop_halt', reason: 're-open cap reached' });
+    await renderer.handle({ type: 'loop_converged' });
+
+    expect(stream.output()).toContain('loop halted: re-open cap reached');
+    expect(stream.output()).toContain('gate loop converged');
+  });
+
+  it('renders kickback and unsatisfied-gate details, including omitted reasons', async () => {
+    await renderer.handle({ type: 'kickback', from: 'build_review', to: 'build', count: 2 });
+    await renderer.handle({
+      type: 'gate_verdict', step: 'build_review', satisfied: false, reason: 'evidence is stale',
+    });
+    await renderer.handle({ type: 'gate_verdict', step: 'build_review', satisfied: false });
+
+    expect(stream.output()).toContain('kickback: build_review re-opened build (×2)');
+    expect(stream.output()).toContain('gate build_review: unsatisfied — evidence is stale');
+    expect(stream.output()).toContain('gate build_review: unsatisfied');
+  });
+
+  it('summarizes every renderable event without a dedicated renderer branch', async () => {
+    const fallbackTypes = renderedEventTypes().filter(
+      (type) => !DEDICATED_RENDERER_EVENT_TYPES.has(type),
+    );
+
+    for (const type of fallbackTypes) {
+      stream.reset();
+      await renderer.handle({ type } as ConductorEvent);
+      expect(stream.output()).toContain(type);
+    }
+  });
+
+  it('does not summarize non-renderable branchless events', async () => {
+    await renderer.handle({ type: 'coverage_binding_judged' } as ConductorEvent);
+
+    expect(stream.output()).not.toContain('coverage_binding_judged');
+  });
+
+  it('writes pipeline closeout details to the live region', async () => {
+    await renderer.handle({
+      type: 'pipeline_closeout', obligation: 'evaluator', startedAt: 100, endedAt: 140, ts: 140,
+    });
+
+    expect(stream.output()).toContain('closeout evaluator (40ms)');
   });
 
   describe('artifact dashboard lines', () => {
