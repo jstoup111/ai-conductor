@@ -364,6 +364,52 @@ Relevant existing facts (evidence):
 >     `MetricsListener` `provider_attempt` handler becomes a real projection and the interactive
 >     `OtelVisualizer` switch records the same attributes. Both projections stay within Decision 4:
 >     bounded, in-memory, no I/O.
+> **Amended 2026-09-09 by #2056 (operator-supplied static attributes):** the `otel:` block
+> carries transport settings plus the two identity overrides (`project_name`, `worker_name`) and
+> nothing an operator can use to tag exports with local concepts — environment, team, tenant. The
+> SDK's `OTEL_RESOURCE_ATTRIBUTES` detector is not wired (`buildResource` builds each Resource from a
+> fixed literal), so those values are dropped even when the SDK detects them. Two decisions extend
+> the contract; every earlier decision stands. Where #1940's amendment closes the data-point label
+> set, D12 is the single sanctioned extension of that set, and D12's key rule keeps the two disjoint.
+>
+> 12. **Operator metadata is one static, validated `otel.attributes` map.** `otel.attributes` is a
+>     mapping from attribute key to string value under the existing `otel:` block — an
+>     existing-block key like `project_name`, not a new block, resolved once in `resolveOtelConfig`
+>     and carried on `ResolvedOtelConfig`. Values are configuration literals: no environment-variable
+>     reference, no template expansion, no per-feature or per-step override, so every value is
+>     constant for a worker process's lifetime. A key MUST be namespaced (contain at least one `.`,
+>     the OTel attribute-naming convention) and MUST NOT begin with `service.`, `conductor.`, or
+>     `host.`; because every conductor data-point label (`project`, `worker`, `feature`, `step`, and
+>     the rest of the closed set) is bare, the dot rule alone makes collision with any present or
+>     future data-point label impossible without maintaining a denylist. A value MUST be a non-empty
+>     string. The map is bounded at 16 entries. An entry that breaks any rule is dropped and
+>     reported by key on the exporter's existing warning path (`renderer_error`, rendererName
+>     `otel`) and the exporter stays enabled with the remaining valid entries — unlike `headers`,
+>     whose failure disables the exporter, because a mislabeled dimension is not a credential
+>     failure and telemetry should keep flowing. A run is never failed or delayed by this map.
+>     `OTEL_RESOURCE_ATTRIBUTES` remains unread: an environment source cannot be validated at
+>     configuration time, does not propagate uniformly across the daemon dispatch boundary, and
+>     would land on the Resource only, which D13 shows is not queryable on every backend.
+>
+> 13. **Static attributes ride every signal: both Resources and every metric data point.** The
+>     resolved map is placed on the trace Resource, on the worker-stable metric Resource, and — via
+>     the `MetricsRecorder` identity seam — on every metric data point, at the three existing
+>     construction sites (`wireDaemonOtel`, `wireInteractiveOtelMetrics`, the per-dispatch
+>     `OtelVisualizer`), with no new construction site and no per-event injection. Resource placement
+>     preserves unified-service-tagging correlation across signals; data-point placement is required
+>     because backends turn data-point attributes into tags without collector configuration while
+>     Resource attributes are backend-dependent (Datadog maps only semantic-convention Resource keys
+>     unless `resource_attributes_as_tags` is enabled, which dumps every Resource attribute). The
+>     boundedness reasoning of the 2026-08-28 and #1937 amendments holds unchanged: a static value has
+>     exactly one value per worker, so it adds labels to existing series and mints none — `target_info`
+>     stays one row per worker and cardinality-priced backends bill no new series. Merge order is a
+>     contract: in `buildResource` and in `withIdentity`, conductor-owned attributes are written
+>     after the custom map, so a custom key can never replace an identity or outcome attribute even
+>     if it escaped D12's validation. Proof obligations: a test asserts the exported metric Resource
+>     carries the custom keys and still exactly the conductor keys of Decision 8; a test asserts a
+>     data point carries the custom keys and that a colliding custom key does not replace `project`;
+>     a test asserts that with no `attributes` block every exported Resource and data point is
+>     byte-identical to today's.
 
 ## Consequences
 
