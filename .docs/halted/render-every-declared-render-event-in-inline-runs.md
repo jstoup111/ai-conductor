@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-10T10:24:09.590Z
 Slug: render-every-declared-render-event-in-inline-runs
 Class: needs-human
 Halting step: unknown
