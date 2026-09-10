@@ -14,6 +14,7 @@ import {
   isCodeOrTestPath,
   filterCodeOrTestPaths,
   writeHalt,
+  writeRebaseOutcomeHalt,
   writeSealHalt,
   applyRebaseVerdicts,
   recordRebaseStepCompletion,
@@ -725,6 +726,22 @@ describe('engine/rebase — HALT (FR-8)', () => {
         `  3. rm .pipeline/HALT\n` +
         `  4. Re-queue the feature for the daemon.\n`,
     );
+  });
+
+  it('writes a never-started recovery note without a rebase-continue instruction', async () => {
+    await writeRebaseOutcomeHalt(dir, {
+      kind: 'conflict_halt',
+      conflicts: [],
+      reason: 'error: The following untracked working tree files would be overwritten by checkout:',
+      startFailure: true,
+      quarantine: { paths: ['generated.txt'], directory: '.pipeline/rebase-untracked-quarantine' },
+    });
+    const note = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    expect(note).toContain('rebase did not start');
+    expect(note).toContain('generated.txt');
+    expect(note).toContain('Clear .pipeline/HALT and .pipeline/HALT.class');
+    expect(note).toContain('No git rebase is in progress');
+    expect(note).not.toContain('  2. git rebase --continue');
   });
 
   it('returns the marker write result for seal HALTs without an emitter', async () => {
