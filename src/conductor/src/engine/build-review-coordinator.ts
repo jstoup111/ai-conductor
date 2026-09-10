@@ -75,7 +75,7 @@ export interface BuildReviewCoordinatorHooks {
 
 export type BuildReviewClassification =
   | { kind: "gate-disabled" }
-  | { kind: "passed"; verdict: "PASS"; reason: "build_review_no_rubrics" }
+  | { kind: "passed"; verdict: "PASS"; reason: "build_review_no_rubrics"; branches: readonly BuildReviewSkip[] }
   | { kind: "refused"; reason: "no-enabled-rubrics" | "no-valid-judgement" }
   | { kind: "ready"; branches: readonly BuildReviewClassifiedBranch[] };
 
@@ -482,6 +482,14 @@ export async function coordinateBuildReviewRubrics(
 
   const classification = classifyBuildReviewRubricBranches(input.config, []);
   if (classification.kind === "passed") {
+    for (const branch of classification.branches) {
+      await input.emit?.({
+        type: "build_review_rubric_skipped",
+        rubric: branch.rubric,
+        lapId: input.lapId,
+        reason: branch.reason,
+      });
+    }
     await input.emit?.({
       type: "build_review_outer_verdict",
       lapId: input.lapId,
@@ -490,7 +498,7 @@ export async function coordinateBuildReviewRubrics(
       reason: classification.reason,
       ...(unresolvedMarkers.length > 0 ? { unresolvedMarkers } : {}),
     });
-    return classification;
+    return { kind: "passed", verdict: "PASS", reason: classification.reason };
   }
   if (classification.kind !== "ready") return classification;
 
@@ -735,14 +743,14 @@ export function classifyBuildReviewRubricBranches(
   const policies = config.rubrics as unknown as Partial<Record<string, ResolvedBuildReviewRubricPolicy>>;
   const branches = BUILD_REVIEW_RUBRIC_IDS.flatMap((registeredRubric): BuildReviewClassifiedBranch[] => {
     const policy = policies[registeredRubric];
-    if (!policy?.enabled) return [];
     const rubric = registeredRubric as unknown as BuildReviewRubricId;
+    if (!policy?.enabled) return [{ kind: "skipped", rubric, reason: "disabled" }];
     const descriptor = getBuildReviewRubricDescriptor(registeredRubric);
     return [{ rubric, skillName: descriptor.skillName, policy }];
   });
 
   if (!branches.some((branch): branch is BuildReviewDispatchableRubric => !("kind" in branch))) {
-    return { kind: "passed", verdict: "PASS", reason: "build_review_no_rubrics" };
+    return { kind: "passed", verdict: "PASS", reason: "build_review_no_rubrics", branches };
   }
   return { kind: "ready", branches };
 }

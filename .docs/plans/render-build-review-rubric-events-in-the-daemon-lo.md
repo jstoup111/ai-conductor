@@ -10,6 +10,14 @@
 
 Five bounded tasks deliver #1592 by adding daemon-log renderer cases for the six build_review rubric events that already ride the event spine. The union, the emitters, the persisted ledger, the TTY dashboard, and the operator viewer question owned by #1585 are outside this slice.
 
+> **Amended 2026-09-10 by operator:** The as-built review proved the skip
+> occurrence unreachable because disabled registered rubrics were discarded by
+> classification. Extend Task 3 to retain each disabled rubric as a typed,
+> non-dispatched skip, emit `build_review_rubric_skipped`, and then preserve the
+> existing empty-container `PASS` (`build_review_no_rubrics`). Add coordinator
+> coverage proving the skip occurrence is emitted without preflight, cache, or
+> provider work. This is the approved narrow production-reachability correction.
+
 ## Technical Approach
 
 The whole change lives in `renderDaemonEventUnsafe` in `src/conductor/src/daemon-cli.ts`. That switch already renders `build_review_cache_discarded`, `build_review_base`, and `build_review_stale_mirage_regrade`, and ends in `default: break;`, which is why the six rubric events are silently dropped today. New cases are added next to the existing build_review cases and follow the conventions those cases already establish: a leading dimmed `·`, an optional glyph, and a message whose first token names the step. `renderDaemonEvent` wraps the switch in a try/catch, so a formatting fault degrades to one dropped line; nothing in this slice weakens that.

@@ -126,6 +126,12 @@ describe("build-review coordinator: registered dispatch", () => {
     expect(input.readCache).not.toHaveBeenCalled();
     expect(input.dispatchModel).not.toHaveBeenCalled();
     expect(emit).toHaveBeenCalledWith({
+      type: "build_review_rubric_skipped",
+      rubric: "testQuality",
+      lapId: "lap-current",
+      reason: "disabled",
+    });
+    expect(emit).toHaveBeenCalledWith({
       type: "build_review_outer_verdict",
       lapId: "lap-current",
       rawVerdict: "PASS",
