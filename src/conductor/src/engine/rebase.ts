@@ -1791,6 +1791,13 @@ export async function emitRebaseEvent(
   outcome: RebaseOutcome,
 ): Promise<void> {
   try {
+    if (outcome.quarantine) {
+      await events.emit({
+        type: 'rebase_untracked_quarantined',
+        paths: outcome.quarantine.paths,
+        directory: outcome.quarantine.directory,
+      });
+    }
     switch (outcome.kind) {
       case 'noop':
         await events.emit(
