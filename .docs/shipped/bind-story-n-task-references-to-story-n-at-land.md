@@ -4,6 +4,14 @@ spec_hash: c009f089651a7a81c151b773bc14fa4b8b90aa6a7bc133f0d03c3759bac1e144
 pr: https://github.com/jstoup111/ai-conductor/pull/2404
 shipped: 2026-09-10
 engine_version: 20260909T231115Z-a985c68b5d37
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/src/engine/engineer/intake/ledger.ts:329 — commit e60c6349f raises the intake ledger's lease wait budget from the 1s default to a new `LEDGER_LEASE_WAIT_TIMEOUT_MS = 5_000`; no plan task declares this file and no story criterion covers intake leases"
+    accepted: true
+    decision: accept
+    rationale: "Previously approved by the operator: the 1s intake-ledger lease wait produced real lease-acquisition failures under concurrent daemon builds, so the 5s bounded wait is accepted as shipped in this feature. Operator reaffirmed that prior approval in this conversation; this is the same timeout change under revised reviewer wording."
 ---
 
 ## Cost
