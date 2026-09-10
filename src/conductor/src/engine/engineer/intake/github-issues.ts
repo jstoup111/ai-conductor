@@ -19,15 +19,14 @@ import { parseSourceRef } from '../issue-ref.js';
 import {
   createGithubTrackerClient,
   DEFAULT_ASSIGNED_ISSUES_LIMIT,
+  type GhRunner,
   type TrackerClient,
 } from '../../tracker-client.js';
 import { formatWorkRef, type WorkRef } from '../source-ref.js';
 import { sanitizeInboundText, type InboundSanitizeResult } from './sanitize-inbound.js';
+export { type GhRunner };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-/** Shell runner for the `gh` CLI. Mirrors the engineer loop's GhRunner shape. */
-export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
 
 /** Minimal registry surface the adapter needs: the list of repos to poll. */
 export interface IntakeRepoRegistry {
