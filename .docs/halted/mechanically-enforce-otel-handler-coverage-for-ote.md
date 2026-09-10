@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-09T23:33:48.814Z
+Status: halted
 Slug: mechanically-enforce-otel-handler-coverage-for-ote
 Class: plan-gap
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-mechanically-enforce-otel-handler-coverage-for-ote
-Head SHA: a4bc6ddeb3cb8f47d7575ea9a708cb1e49f1dd45
-Halted at: 2026-09-09T11:57:00.104Z
+Head SHA: bfc928b8096ff907821d880af050e6aabc5f9aeb
+Halted at: 2026-09-10T00:49:38.762Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
