@@ -912,7 +912,7 @@ describe('Task 3: dispatch metering classification', () => {
     }))).toEqual([
       { value: 1, attributes: { step: 'explore', metering: 'fully-metered', project: 'test-project', worker: 'unknown', feature: 'test-feature' } },
       { value: 1, attributes: { step: 'plan', metering: 'cost-unmetered', project: 'test-project', worker: 'unknown', feature: 'test-feature' } },
-      { value: 1, attributes: { step: 'build', metering: 'unmetered', project: 'test-project', worker: 'unknown', feature: 'test-feature' } },
+      { value: 1, attributes: { step: 'build', metering: 'unmetered', provider: 'claude', project: 'test-project', worker: 'unknown', feature: 'test-feature' } },
     ]);
   });
 });
@@ -933,7 +933,7 @@ describe('Task 4: unmetered close observability', () => {
     expect(dispatches.dataPoints
       .filter((dataPoint) => dataPoint.attributes['step'] === 'build')
       .map((dataPoint) => ({ value: dataPoint.value, attributes: dataPoint.attributes }))).toEqual([
-        { value: 1, attributes: { step: 'build', metering: 'unmetered', project: 'test-project', worker: 'unknown', feature: 'test-feature' } },
+        { value: 1, attributes: { step: 'build', metering: 'unmetered', provider: 'claude', project: 'test-project', worker: 'unknown', feature: 'test-feature' } },
       ]);
     expect(findMetric(metricExporter, 'conductor.step.duration')?.dataPoints).toContainEqual(
       expect.objectContaining({ attributes: expect.objectContaining({ step: 'build' }) }),
