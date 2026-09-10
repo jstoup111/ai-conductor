@@ -13,7 +13,7 @@ import {
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/state.js';
 
-// Covers: S1.1, S1.2, S1.3, task:1, task:2
+// Covers: S1.1, S1.2, S1.3, S2.1, task:1, task:2, task:3
 
 const temporaryDirectories: string[] = [];
 
@@ -248,6 +248,73 @@ describe('conduct-state lease', () => {
     expect(diagnostics).toEqual([{ kind: 'refused', statePath, reason: 'ownership_changed' }]);
     expect(shared.owner).toBe(ownerBeforeAttempt);
     await held.handle.release();
+  });
+
+  it('waits between retries when a held lease has no owner metadata', async () => {
+    const statePath = '/worktree/ownerless/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    await shared.acquireDirectory(`${statePath}.lease`);
+    let now = 0;
+    let acquisitionAttempts = 0;
+    const waitDelays: number[] = [];
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async acquireDirectory(path): Promise<void> {
+        acquisitionAttempts += 1;
+        await shared.acquireDirectory(path);
+      },
+    };
+
+    const result = await createConductStateLease(statePath, {
+      filesystem,
+      now: () => now,
+      wait: async (milliseconds) => {
+        waitDelays.push(milliseconds);
+        now += milliseconds;
+      },
+      waitTimeoutMs: 5,
+      retryDelayMs: 5,
+    }).acquire();
+
+    expect(result).toMatchObject({ ok: false, kind: 'timeout' });
+    expect(waitDelays).toEqual([5]);
+    expect(acquisitionAttempts).toBe(waitDelays.length + 1);
+    expect(now).toBe(5);
+  });
+
+  it('retries a vanished lease without waiting', async () => {
+    const statePath = '/worktree/vanished/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared,
+      pid: 101,
+      newToken: () => 'departing-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    let released = false;
+    const waitDelays: number[] = [];
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async writeRecoveryClaim(path, contents): Promise<void> {
+        if (!released) {
+          released = true;
+          await held.handle.release();
+        }
+        await shared.writeRecoveryClaim(path, contents);
+      },
+    };
+
+    const acquired = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 202,
+      newToken: () => 'next-owner',
+      processIsLive: () => false,
+      wait: async (milliseconds) => { waitDelays.push(milliseconds); },
+    }).acquire();
+
+    expect(acquired).toMatchObject({ ok: true });
+    expect(waitDelays).toEqual([]);
+    if (acquired.ok) await expect(acquired.handle.release()).resolves.toEqual({ ok: true });
   });
 
   it('waits for a concurrent creator to publish owner metadata before recovering the lease', async () => {
