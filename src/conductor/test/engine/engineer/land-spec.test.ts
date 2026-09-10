@@ -1224,6 +1224,57 @@ describe('Task 1: non-Small architecture diagrams at land', () => {
   });
 });
 
+describe('Task 2: non-Small architecture diagram gate scope at land', () => {
+  const idea = 'dep bump';
+  const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+  it('lands a Small-tier spec that authors no architecture artifact', async () => {
+    const dir = await seedValidWorktree(idea);
+    await mkdir(join(dir, '.docs', 'complexity'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), SMALL_TIER_STORIES);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), SMALL_TIER_PLAN);
+    await writeFile(join(dir, '.docs', 'complexity', 'dep-bump.md'), '# Complexity\n\nTier: S\n');
+
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+  });
+
+  it('ignores a diagram-free architecture artifact inherited from the base branch', async () => {
+    await mkdir(join(repoPath, '.docs', 'architecture'), { recursive: true });
+    await writeFile(
+      join(repoPath, '.docs', 'architecture', 'unrelated-feature.md'),
+      '# Architecture\n\nThis inherited document has no diagram.\n',
+    );
+    await git(['add', '.docs/architecture/unrelated-feature.md']);
+    await git(['commit', '-m', 'add unrelated inherited architecture artifact']);
+
+    const nonSmallIdea = 'clean rubric judgements rejected as invalid provid';
+    const slug = 'clean-rubric-judgements-rejected-as-invalid-provid';
+    const dir = await seedNamedTierMWorktree(nonSmallIdea, slug);
+
+    const result = await landSpec(target(), nonSmallIdea, dir, undefined, {
+      ownerConfig: {},
+      gh,
+      renderDeps: {
+        hasTool: async () => true,
+        writeTemp: async () => join(dir, 'inherited-architecture.mmd'),
+        runMmdc: async () => ({ ok: true }),
+      },
+    });
+
+    expect(result.branch).toBeTruthy();
+  });
+
+  it('preserves legacy land behavior when no complexity artifact exists', async () => {
+    const dir = await seedValidWorktree(idea);
+
+    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+  });
+});
+
 describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/decisions pickers', () => {
   it('stories picker: validates the idea\'s stories content, ignoring a newer-mtime legacy stories file on main', async () => {
     // Legacy stories file committed on `main` BEFORE the worktree is created,
