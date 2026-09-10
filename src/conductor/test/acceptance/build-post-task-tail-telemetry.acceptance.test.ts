@@ -26,6 +26,8 @@ import { CapturingSpanExporter as InMemorySpanExporter } from '../fixtures/captu
 import {
   AggregationTemporality,
   InMemoryMetricExporter,
+  MeterProvider,
+  PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics';
 
 import { BuildProgressWatcher } from '../../src/engine/build-progress-watcher.js';
@@ -38,6 +40,8 @@ import {
 } from '../../src/engine/event-sinks.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
+import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
+import { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import { renderDaemonEvent } from '../../src/daemon-cli.js';
 import { createLiveRegion } from '../../src/ui/live-region.js';
 import { createRenderer } from '../../src/ui/create-renderer.js';
@@ -220,7 +224,16 @@ describe('BUILD post-task tail telemetry acceptance', () => {
       spanExporter,
       metricExporter,
     });
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter: metricExporter, exportIntervalMillis: 60_000 })],
+    });
+    const metrics = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('closeout-tail'), { project: 'ai-conductor', worker: 'test-worker', feature: 'build-post-task-tail-telemetry' }),
+      undefined,
+      'build-post-task-tail-telemetry',
+    );
     otel.start(emitter);
+    metrics.start(emitter);
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
 
     const originalEngineLedger = '{"type":"step_started","step":"build","ts":1}\n';
@@ -263,6 +276,8 @@ describe('BUILD post-task tail telemetry acceptance', () => {
       tail.stop();
       terminal.stop();
       persister.stop();
+      metrics.stop();
+      await provider.shutdown();
       await otel.stop();
     }
 

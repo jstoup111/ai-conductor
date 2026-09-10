@@ -114,7 +114,7 @@ export class MetricsListener {
   private closeFeature(event: OtelEvent, outcome: 'complete' | 'halted'): void {
     const metric = this.feature(event);
     const slug = this.featureOf(event);
-    if (metric) {
+    if (metric && (!slug || !this.terminal.has(slug))) {
       metric.onRunClose(outcome);
       if (slug) this.terminal.add(slug);
     }

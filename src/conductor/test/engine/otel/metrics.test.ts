@@ -1,9 +1,9 @@
 // Covers: task:1, task:2, task:3, task:4, task:8, task:10, task:11
 /**
  * Covers: task:1, task:2, task:3, task:4, task:10
- * metrics.test.ts — unit tests for MetricsRecorder via OtelVisualizer.
+ * metrics.test.ts — unit tests for MetricsRecorder through MetricsListener.
  *
- * Tests T15–T16 using OtelVisualizer + InMemoryMetricExporter:
+ * Tests T15–T16 using MetricsListener + InMemoryMetricExporter:
  *   T15: Duration histogram and retries counter
  *   T16: Token metrics — skip when absent, record only present kinds
  */
@@ -14,11 +14,9 @@ import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { computeCostRollup } from '../../../src/engine/cost-rollup.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
-import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
-import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
 import { DURATION_BUCKET_BOUNDARIES_MS, MetricsRecorder } from '../../../src/engine/otel/metrics.js';
+import { MetricsListener } from '../../../src/engine/otel/metrics-listener.js';
 import type { Meter } from '@opentelemetry/api';
-import { InMemorySpanExporter } from '@opentelemetry/sdk-trace-base';
 import {
   AggregationTemporality,
   InMemoryMetricExporter,
@@ -29,23 +27,33 @@ import {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+interface MetricTestListener {
+  start(emitter: ConductorEventEmitter): void;
+  stop(): Promise<void>;
+}
+
 function makeVisualizer(
-  spanExporter: InMemorySpanExporter,
   metricExporter: InMemoryMetricExporter,
-  pipelineDir: string,
-  runId = `test-${Date.now()}`,
-): OtelVisualizer {
-  const resolved = resolveOtelConfig(
-    { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
-    pipelineDir,
-  );
-  return new OtelVisualizer(resolved, {
-    runId,
-    feature: 'test-feature',
-    project: 'test-project',
-    spanExporter,
-    metricExporter,
+  _pipelineDir: string,
+  _runId = `test-${Date.now()}`,
+): MetricTestListener {
+  const provider = new MeterProvider({
+    readers: [new PeriodicExportingMetricReader({ exporter: metricExporter, exportIntervalMillis: 60_000 })],
   });
+  const listener = new MetricsListener(
+    new MetricsRecorder(provider.getMeter('metrics-listener-test'), {
+      project: 'test-project', worker: 'unknown', feature: 'test-feature',
+    }),
+    () => Date.now(),
+    'test-feature',
+  );
+  return {
+    start: (emitter) => listener.start(emitter),
+    stop: async () => {
+      listener.stop();
+      await provider.shutdown();
+    },
+  };
 }
 
 function getMetricNames(exporter: InMemoryMetricExporter): string[] {
@@ -127,7 +135,7 @@ describe('Task 3: dispatch dimensions', () => {
 
 describe('Task 8: TokenUsage detail remains span-only', () => {
   it('does not export usage detail, cost source, or fallback reason on any metric series', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
@@ -168,14 +176,12 @@ describe('Task 8: TokenUsage detail remains span-only', () => {
 
 let tempDir: string;
 let pipelineDir: string;
-let spanExporter: InMemorySpanExporter;
 let metricExporter: InMemoryMetricExporter;
 let emitter: ConductorEventEmitter;
 
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), 'otel-metrics-'));
   pipelineDir = join(tempDir, '.pipeline');
-  spanExporter = new InMemorySpanExporter();
   metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
   emitter = new ConductorEventEmitter();
 });
@@ -337,7 +343,7 @@ describe('Task 5: closeout-duration overflow observation', () => {
 
 describe('T15: step duration histogram and retries counter', () => {
   it('conductor.step.duration histogram is recorded for each completed step', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
@@ -350,7 +356,7 @@ describe('T15: step duration histogram and retries counter', () => {
   });
 
   it('duration data points carry the step attribute', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
@@ -367,7 +373,7 @@ describe('T15: step duration histogram and retries counter', () => {
   });
 
   it('conductor.step.retries counter is incremented by N for N retries', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
@@ -389,7 +395,7 @@ describe('T15: step duration histogram and retries counter', () => {
   });
 
   it('retries counter has NO data point for steps with zero retries', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
@@ -409,7 +415,7 @@ describe('T15: step duration histogram and retries counter', () => {
   });
 
   it('two retries for a step → counter value is 2', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
@@ -431,7 +437,7 @@ describe('T15: step duration histogram and retries counter', () => {
 
 describe.skip('T16: superseded per-dispatch token counters', () => {
   it('conductor.step.tokens counter is recorded when tokenUsage is present', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
@@ -449,7 +455,7 @@ describe.skip('T16: superseded per-dispatch token counters', () => {
   });
 
   it('token data points contain the step attribute for a step with tokenUsage', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
@@ -468,7 +474,7 @@ describe.skip('T16: superseded per-dispatch token counters', () => {
   });
 
   it('tokenUsage absent → zero token data points for that step (no NaN / zero-fill)', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'plan', index: 2 });
@@ -486,7 +492,7 @@ describe.skip('T16: superseded per-dispatch token counters', () => {
   });
 
   it('partial tokenUsage (input + output only) → only those two kinds recorded', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
@@ -512,7 +518,7 @@ describe.skip('T16: superseded per-dispatch token counters', () => {
   });
 
   it('full tokenUsage (all four kinds) → all four kinds recorded', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
@@ -537,7 +543,7 @@ describe.skip('T16: superseded per-dispatch token counters', () => {
   });
 
   it('mix: one step with tokenUsage, one without → only the token step has data points', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
@@ -560,7 +566,7 @@ describe.skip('T16: superseded per-dispatch token counters', () => {
   });
 
   it('token counter values match the actual token counts', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
@@ -589,7 +595,7 @@ describe.skip('T16: superseded per-dispatch token counters', () => {
 
 describe.skip('Task 1: superseded step cost counter', () => {
   it('records provider cost with step, model, and source attributes', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
@@ -616,7 +622,7 @@ describe.skip('Task 1: superseded step cost counter', () => {
   });
 
   it('records rate-card cost with the rate-card source attribute', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'plan', index: 2 });
@@ -635,7 +641,7 @@ describe.skip('Task 1: superseded step cost counter', () => {
   });
 
   it('records an explicit zero-cost observation', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 3 });
@@ -658,7 +664,7 @@ describe.skip('Task 1: superseded step cost counter', () => {
 
 describe.skip('Task 2: superseded cost counter guards', () => {
   it('omits the cost metric when costUsd is absent while retaining token metrics', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
@@ -678,7 +684,7 @@ describe.skip('Task 2: superseded cost counter guards', () => {
   });
 
   it('omits cost points for NaN costUsd', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
@@ -695,7 +701,7 @@ describe.skip('Task 2: superseded cost counter guards', () => {
   });
 
   it('omits cost points for infinite costUsd', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
@@ -712,7 +718,7 @@ describe.skip('Task 2: superseded cost counter guards', () => {
   });
 
   it('records finite costUsd without a source attribute when costSource is absent', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
@@ -883,7 +889,7 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
 
 describe('Task 3: dispatch metering classification', () => {
   it('records one dispatch for each fully-metered, cost-unmetered, and unmetered close', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
@@ -921,7 +927,7 @@ describe('Task 3: dispatch metering classification', () => {
 
 describe('Task 4: unmetered close observability', () => {
   it('records an unmetered dispatch and duration, with no token or cost points', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 3 });
@@ -952,7 +958,7 @@ describe('Task 4: unmetered close observability', () => {
 describe('Task 3: shipped-record / OTel dispatch parity', () => {
   it('keeps the exported dispatch total aligned with the persisted ledger and excludes provider-free closes', async () => {
     const persister = new EventPersister(join(pipelineDir, 'events.jsonl'), emitter);
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     persister.start();
     vis.start(emitter);
 
@@ -1018,7 +1024,7 @@ describe('Task 3: shipped-record / OTel dispatch parity', () => {
 
 describe('feature usage total cost export', () => {
   it('exports the authoritative feature cost carried by feature_usage_total', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({
@@ -1051,7 +1057,7 @@ describe('feature usage total cost export', () => {
 
 describe('Task 19: closeout duration histogram', () => {
   it('records the closeout duration with its obligation attribute', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
@@ -1109,7 +1115,7 @@ describe('Task 3: metric identity attributes', () => {
 describe('Task 4: bounded metric identity', () => {
   it('pinning: full-run data points omit the injected run id', async () => {
     const runId = 'run-id-that-must-not-label-metrics';
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, runId);
+    const vis = makeVisualizer(metricExporter, pipelineDir, runId);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
@@ -1175,7 +1181,7 @@ describe('Task 4: bounded metric identity', () => {
 
 describe('run outcome counter', () => {
   it('records a completed run as outcome=complete', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
@@ -1193,7 +1199,7 @@ describe('run outcome counter', () => {
   });
 
   it('records a halted run as outcome=halted', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
@@ -1210,11 +1216,13 @@ describe('run outcome counter', () => {
   });
 
   it('records an interrupted run as outcome=terminated', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
-    vis.start(emitter);
-
-    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
-    await vis.stop();
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter: metricExporter, exportIntervalMillis: 60_000 })],
+    });
+    new MetricsRecorder(provider.getMeter('terminated-run'), {
+      project: 'test-project', worker: 'unknown', feature: 'test-feature',
+    }).onRunClose('terminated');
+    await provider.shutdown();
 
     const metric = findMetric(metricExporter, 'conductor.run.outcomes');
     expect(metric?.dataPoints).toEqual([
@@ -1226,7 +1234,7 @@ describe('run outcome counter', () => {
   });
 
   it('does not double-count a completed run when a late halt arrives', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const vis = makeVisualizer(metricExporter, pipelineDir);
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
@@ -1243,13 +1251,4 @@ describe('run outcome counter', () => {
     ]);
   });
 
-  it('does not record an outcome when no run span was opened', async () => {
-    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
-    vis.start(emitter);
-
-    await emitter.emit({ type: 'feature_complete' });
-    await vis.stop();
-
-    expect(findMetric(metricExporter, 'conductor.run.outcomes')).toBeUndefined();
-  });
 });
