@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-10T10:14:40.903Z
 Slug: export-the-telemetry-dimensions-the-engine-already
 Class: plan-gap
 Halting step: acceptance_specs
