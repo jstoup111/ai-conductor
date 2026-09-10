@@ -129,4 +129,18 @@ describe('checkInterpreterSource', () => {
   it('terminates after case-pattern separators at end of line', () => {
     expect(checkInterpreterSource('case.sh', 'case "$name" in\n  conduct-ts)\n    true\n    ;;\nesac')).toEqual([]);
   });
+
+  it('continues at the suffix of a closed multiline source word', () => {
+    expect(checkInterpreterSource('multiline-suffix.sh', 'node -e "\nconsole.log(process.argv[1])\n"; python3 -c "print($VALUE)"')).toEqual([
+      expect.objectContaining({ line: 3, message: 'shell expansion in interpreter command source' }),
+    ]);
+    expect(checkInterpreterSource('multiline-suffix-safe.sh', 'node -e "\nconsole.log(process.argv[1])\n"; python3 -c "print(process.argv[1])"')).toEqual([]);
+  });
+
+  it('associates queued heredocs with their own command', () => {
+    expect(checkInterpreterSource('mixed-heredocs.sh', "python3 <<'PY'; cat <<EOF\nprint('$')\nPY\n$VALUE\nEOF")).toEqual([]);
+    expect(checkInterpreterSource('mixed-heredocs-unsafe.sh', 'python3 <<PY; cat <<\'EOF\'\nprint($VALUE)\nPY\n$LITERAL\nEOF')).toEqual([
+      expect.objectContaining({ line: 2, message: 'shell expansion in interpreter heredoc source' }),
+    ]);
+  });
 });
