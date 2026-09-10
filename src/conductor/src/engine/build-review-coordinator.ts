@@ -749,8 +749,19 @@ export function classifyBuildReviewRubricBranches(
     return [{ rubric, skillName: descriptor.skillName, policy }];
   });
 
-  if (!branches.some((branch): branch is BuildReviewDispatchableRubric => !("kind" in branch))) {
-    return { kind: "passed", verdict: "PASS", reason: "build_review_no_rubrics", branches };
+  const dispatchableBranches = branches.filter(
+    (branch): branch is BuildReviewDispatchableRubric => !("kind" in branch),
+  );
+  if (dispatchableBranches.length === 0) {
+    const skippedBranches = branches.filter(
+      (branch): branch is BuildReviewSkip => branch.kind === "skipped",
+    );
+    return {
+      kind: "passed",
+      verdict: "PASS",
+      reason: "build_review_no_rubrics",
+      branches: skippedBranches,
+    };
   }
   return { kind: "ready", branches };
 }
