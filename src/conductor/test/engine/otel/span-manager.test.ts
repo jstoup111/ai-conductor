@@ -495,6 +495,53 @@ describe('T13: step span attributes', () => {
     expect(span.attributes).not.toHaveProperty('conductor.fallback.reason');
   });
 
+  it('retains the latest complete attempted dimensions when a step fails', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', provider: 'claude', preferredProvider: 'codex',
+      model: 'sonnet', fallbackReason: 'codex unavailable', invoked: true, outcome: 'failure',
+    });
+    await emitter.emit({
+      type: 'step_failed', step: 'build', error: 'provider failed', retryCount: 1,
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'build')!;
+    expect(span.attributes).toMatchObject({
+      'conductor.model': 'sonnet',
+      'conductor.provider': 'claude',
+      'conductor.provider.preferred': 'codex',
+      'conductor.fallback': true,
+      'conductor.fallback.reason': 'codex unavailable',
+    });
+  });
+
+  it('preserves the first applicable fallback reason across candidate attempts', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', provider: 'codex', preferredProvider: 'codex',
+      fallbackReason: 'codex unavailable', invoked: true, outcome: 'unavailable',
+    });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', provider: 'claude', preferredProvider: 'codex',
+      invoked: true, outcome: 'success',
+    });
+    await emitter.emit({
+      type: 'step_completed', step: 'build', status: 'done', actualProvider: 'claude' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'build')!;
+    expect(span.attributes['conductor.fallback.reason']).toBe('codex unavailable');
+  });
+
   it('warns and does not create a span for an attempt without an open step', async () => {
     const warnings: string[] = [];
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (message) =>
