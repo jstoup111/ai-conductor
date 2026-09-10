@@ -18,6 +18,7 @@ import type { TokenUsage } from '../../execution/llm-provider.js';
 import type { ConductorEvent } from '../../types/events.js';
 import type { RunOutcome } from './span-manager.js';
 import { classifyMetering } from '../metering.js';
+import type { DispatchMeteringObservation } from '../dispatch-metering.js';
 
 /** Explicit duration histogram boundaries, from 10 ms through 8 hours. */
 export const DURATION_BUCKET_BOUNDARIES_MS = [
@@ -25,6 +26,48 @@ export const DURATION_BUCKET_BOUNDARIES_MS = [
   30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
   3_600_000, 7_200_000, 14_400_000, 28_800_000,
 ];
+
+export interface DispatchDimensions {
+  model?: string;
+  effort?: string;
+  provider?: string;
+  tier?: string;
+  fallback?: boolean;
+}
+
+const STEP_DIMENSION_KEYS = ['model', 'effort', 'provider', 'tier'] as const;
+const DISPATCH_DIMENSION_KEYS = [...STEP_DIMENSION_KEYS, 'fallback'] as const;
+type DimensionKeys = readonly (keyof DispatchDimensions)[];
+
+type DispatchDimensionEvent = Extract<ConductorEvent, {
+  type: 'provider_attempt' | 'step_completed' | 'step_failed' | 'step_retry';
+}>;
+
+/** Project event and dispatch-observation fields into metric-safe dimensions. */
+export function dispatchDimensionsFrom(
+  event: DispatchDimensionEvent,
+  observation?: DispatchMeteringObservation,
+): DispatchDimensions {
+  const eventModel = 'model' in event ? event.model : undefined;
+  const eventProvider = event.type === 'step_completed'
+    ? event.actualProvider
+    : 'provider' in event ? event.provider : undefined;
+  const provider = eventProvider ?? observation?.provider;
+  const preferredProvider = 'preferredProvider' in event
+    ? event.preferredProvider ?? observation?.preferredProvider
+    : observation?.preferredProvider;
+  return {
+    ...(eventModel !== undefined || observation?.model !== undefined
+      ? { model: eventModel ?? observation?.model }
+      : {}),
+    ...('effort' in event && event.effort !== undefined ? { effort: event.effort } : {}),
+    ...(provider !== undefined ? { provider } : {}),
+    ...('tier' in event && event.tier !== undefined ? { tier: event.tier } : {}),
+    ...(preferredProvider !== undefined && provider !== undefined
+      ? { fallback: preferredProvider !== provider }
+      : {}),
+  };
+}
 
 export class MetricsRecorder {
   private readonly instruments: MetricInstruments;
@@ -46,17 +89,52 @@ export class MetricsRecorder {
   }
 
   onStepClose(
-    step: string, durationMs: number, retryCount: number, tokenUsage?: TokenUsage, model?: string, recordDispatch = true,
+    step: string, durationMs: number, retryCount: number, tokenUsage?: TokenUsage,
+    recordDispatch?: boolean, dimensions?: DispatchDimensions,
+  ): void;
+  /** @deprecated Pass `recordDispatch` and `dimensions` without a model argument. */
+  onStepClose(
+    step: string, durationMs: number, retryCount: number, tokenUsage?: TokenUsage,
+    legacyModel?: string, recordDispatch?: boolean, dimensions?: DispatchDimensions,
+  ): void;
+  onStepClose(
+    step: string, durationMs: number, retryCount: number, tokenUsage?: TokenUsage,
+    recordDispatchOrLegacyModel?: boolean | string,
+    dimensionsOrRecordDispatch?: DispatchDimensions | boolean,
+    legacyDimensions?: DispatchDimensions,
   ): void {
-    this.instruments.durationHistogram.record(durationMs, this.withIdentity({ step }));
-    if (retryCount > 0) this.instruments.retriesCounter.add(retryCount, this.withIdentity({ step }));
-    if (recordDispatch) this.onDispatch(step, tokenUsage, model);
+    const legacySignature = typeof dimensionsOrRecordDispatch === 'boolean';
+    const recordDispatch = typeof recordDispatchOrLegacyModel === 'boolean'
+      ? recordDispatchOrLegacyModel
+      : legacySignature ? dimensionsOrRecordDispatch : true;
+    const dimensions = typeof recordDispatchOrLegacyModel === 'boolean'
+      ? dimensionsOrRecordDispatch as DispatchDimensions | undefined
+      : legacySignature ? legacyDimensions : dimensionsOrRecordDispatch as DispatchDimensions | undefined;
+    const attrs = this.withDimensions({ step }, dimensions, STEP_DIMENSION_KEYS);
+    this.instruments.durationHistogram.record(durationMs, this.withIdentity(attrs));
+    if (retryCount > 0) this.instruments.retriesCounter.add(retryCount, this.withIdentity(attrs));
+    if (recordDispatch) this.onDispatch(step, tokenUsage, dimensions);
   }
 
-  onDispatch(step: string, tokenUsage?: TokenUsage, _model?: string): void {
-    this.instruments.dispatchesCounter.add(1, this.withIdentity({ step, metering: classifyMetering(tokenUsage) }));
+  onDispatch(step: string, tokenUsage?: TokenUsage, dimensions?: DispatchDimensions): void;
+  /** @deprecated Pass `dimensions` without a model argument. */
+  onDispatch(step: string, tokenUsage?: TokenUsage, legacyModel?: string, dimensions?: DispatchDimensions): void;
+  onDispatch(
+    step: string, tokenUsage?: TokenUsage, dimensionsOrLegacyModel?: DispatchDimensions | string,
+    legacyDimensions?: DispatchDimensions,
+  ): void {
+    const dimensions = legacyDimensions ?? (
+      typeof dimensionsOrLegacyModel === 'string' ? undefined : dimensionsOrLegacyModel
+    );
+    this.instruments.dispatchesCounter.add(1, this.withIdentity(this.withDimensions(
+      { step, metering: classifyMetering(tokenUsage) }, dimensions, DISPATCH_DIMENSION_KEYS,
+    )));
   }
-  onRetry(step: string): void { this.instruments.retriesCounter.add(1, this.withIdentity({ step })); }
+  onRetry(step: string, dimensions?: DispatchDimensions): void {
+    this.instruments.retriesCounter.add(1, this.withIdentity(this.withDimensions(
+      { step }, dimensions, STEP_DIMENSION_KEYS,
+    )));
+  }
 
   onFeatureCostSnapshot(event: Extract<ConductorEvent, { type: 'feature_cost_snapshot' }>): void {
     if (!Number.isFinite(event.costUsd)) return;
@@ -122,6 +200,19 @@ export class MetricsRecorder {
   onStall(reason: string): void { this.instruments.daemonStallsCounter.add(1, this.withIdentity({ reason })); }
 
   private static readonly TOKEN_KINDS = ['input', 'output', 'cacheRead', 'cacheCreation'] as const;
+  private withDimensions(
+    attrs: Attributes,
+    dimensions: DispatchDimensions | undefined,
+    keys: DimensionKeys,
+  ): Attributes {
+    if (dimensions === undefined) return attrs;
+    const merged = { ...attrs } as Attributes;
+    for (const key of keys) {
+      const value = dimensions[key];
+      if (value !== undefined) merged[key] = value;
+    }
+    return merged;
+  }
   private withIdentity(attrs: Attributes): Attributes { return { ...attrs, ...this.identityAttrs }; }
 }
 

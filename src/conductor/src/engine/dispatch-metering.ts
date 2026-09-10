@@ -4,7 +4,11 @@ import type { TokenUsage } from '../execution/llm-provider.js';
 export interface DispatchMeteringObservation {
   step?: string;
   provider?: string;
+  preferredProvider?: string;
+  fallbackReason?: string;
   model?: string;
+  effort?: string;
+  tier?: string;
   tokenUsage?: TokenUsage;
   unmetered?: boolean;
 }
@@ -37,7 +41,7 @@ export class DispatchMeteringTracker {
         );
       }
 
-      return DispatchMeteringTracker.toObservation(record, step, provider);
+      return DispatchMeteringTracker.toObservation(record, step, provider, true);
     }
 
     if (record.type === 'step_completed') {
@@ -82,6 +86,7 @@ export class DispatchMeteringTracker {
     record: Record<string, unknown>,
     step?: string,
     provider?: string,
+    includeAttemptFallbackDetails = false,
   ): DispatchMeteringObservation {
     const tokenUsage = typeof record.tokenUsage === 'object' && record.tokenUsage !== null
       ? record.tokenUsage as TokenUsage
@@ -89,7 +94,19 @@ export class DispatchMeteringTracker {
     return {
       ...(step ? { step } : {}),
       ...(provider ? { provider } : {}),
+      ...(includeAttemptFallbackDetails
+        && typeof record.preferredProvider === 'string'
+        && record.preferredProvider.length > 0
+        ? { preferredProvider: record.preferredProvider }
+        : {}),
+      ...(includeAttemptFallbackDetails
+        && typeof record.fallbackReason === 'string'
+        && record.fallbackReason.length > 0
+        ? { fallbackReason: record.fallbackReason }
+        : {}),
       ...(typeof record.model === 'string' ? { model: record.model } : {}),
+      ...(typeof record.effort === 'string' ? { effort: record.effort } : {}),
+      ...(typeof record.tier === 'string' ? { tier: record.tier } : {}),
       ...(tokenUsage ? { tokenUsage } : {}),
       ...(record.unmetered === true ? { unmetered: true } : {}),
     };

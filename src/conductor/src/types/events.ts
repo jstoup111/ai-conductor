@@ -1,4 +1,5 @@
 import type { StepName, StepStatus, ComplexityTier } from './steps.js';
+import type { EffortLevel } from './config.js';
 import type { BootstrapMode } from './state.js';
 import type {
   AuthenticationReadinessState,
@@ -180,7 +181,10 @@ export interface ProviderAttemptEvent {
   outcome: 'success' | 'failure' | 'unavailable';
   /** False when a cached run-wide unavailability avoided process dispatch. */
   invoked: boolean;
+  preferredProvider?: string;
   model?: string;
+  effort?: EffortLevel;
+  tier?: ComplexityTier;
   tokenUsage?: TokenUsage;
   observedIntervals?: readonly ObservedInterval[];
   reason?: string;
@@ -447,6 +451,8 @@ export type ConductorEvent =
       tail?: string[];
       tokenUsage?: TokenUsage;
       model?: string;
+      effort?: EffortLevel;
+      tier?: ComplexityTier;
       unmetered?: boolean;
       /** Preferred provider resolved for this step, when provider routing is active. */
       preferredProvider?: string;
@@ -462,6 +468,8 @@ export type ConductorEvent =
       step: StepName;
       error: string;
       retryCount: number;
+      effort?: EffortLevel;
+      tier?: ComplexityTier;
       observedIntervals?: readonly ObservedInterval[];
     }
   | {
@@ -584,6 +592,11 @@ export type ConductorEvent =
       attempt: number; // 1-based: "attempt 2 of 3"
       maxAttempts: number;
       reason: string;
+      /** Dimensions of the failed attempt, distinct from upcoming escalation fields below. */
+      model?: string;
+      effort?: EffortLevel;
+      provider?: string;
+      tier?: ComplexityTier;
       resolvedBefore?: number;
       resolvedAfter?: number;
       /**

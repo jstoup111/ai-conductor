@@ -27,12 +27,14 @@ import {
   Context,
 } from '@opentelemetry/api';
 import type { ConductorEvent } from '../../types/events.js';
+import type { DispatchMeteringObservation } from '../dispatch-metering.js';
 
 interface StepState {
   span: Span;
   index: number;
   retryCount: number;
   startTimeMs: number;
+  dispatch?: DispatchMeteringObservation;
 }
 
 export type RunOutcome = 'complete' | 'halted' | 'terminated';
@@ -115,6 +117,14 @@ export class SpanManager {
     }
     const durationMs = Date.now() - state.startTimeMs;
 
+    this.setDispatchAttributes(state, {
+      model: event.model,
+      effort: event.effort,
+      tier: event.tier,
+      provider: event.actualProvider,
+      preferredProvider: event.preferredProvider,
+    });
+    this.setTokenUsageAttributes(state.span, event.tokenUsage);
     state.span.setAttribute('conductor.step.status', event.status);
     state.span.setAttribute('conductor.retry.count', state.retryCount);
     state.span.setStatus({ code: SpanStatusCode.OK });
@@ -134,6 +144,10 @@ export class SpanManager {
     }
     const durationMs = Date.now() - state.startTimeMs;
 
+    this.setDispatchAttributes(state, {
+      effort: event.effort,
+      tier: event.tier,
+    });
     state.span.setAttribute('conductor.step.status', 'failed');
     // Use event.retryCount for failed steps (authoritative source on failure).
     state.span.setAttribute('conductor.retry.count', event.retryCount);
@@ -142,6 +156,75 @@ export class SpanManager {
     this.openSteps.delete(event.step);
 
     this.callbacks?.onStepClose?.(event.step, durationMs, event.retryCount);
+  }
+
+  onProviderAttempt(step: string, observation: DispatchMeteringObservation): void {
+    const state = this.openSteps.get(step);
+    if (!state) {
+      this.warn(`provider_attempt for '${step}' received but no open span exists — ignoring`);
+      return;
+    }
+    // Candidate observations can be partial. Keep the latest known value for
+    // each dimension so a failed close is still attributable, but keep the
+    // first fallback reason: later fallback candidates commonly omit it.
+    state.dispatch = {
+      ...state.dispatch,
+      ...observation,
+      ...(state.dispatch?.fallbackReason === undefined && observation.fallbackReason !== undefined
+        ? { fallbackReason: observation.fallbackReason }
+        : state.dispatch?.fallbackReason !== undefined
+          ? { fallbackReason: state.dispatch.fallbackReason }
+          : {}),
+    };
+  }
+
+  private setDispatchAttributes(
+    state: StepState,
+    event: {
+      model?: string;
+      effort?: string;
+      tier?: string;
+      provider?: string;
+      preferredProvider?: string;
+    },
+  ): void {
+    const provider = event.provider ?? state.dispatch?.provider;
+    const preferredProvider = event.preferredProvider ?? state.dispatch?.preferredProvider;
+    const model = event.model ?? state.dispatch?.model;
+    const effort = event.effort ?? state.dispatch?.effort;
+    const tier = event.tier ?? state.dispatch?.tier;
+    if (model !== undefined) state.span.setAttribute('conductor.model', model);
+    if (effort !== undefined) state.span.setAttribute('conductor.effort', effort);
+    if (tier !== undefined) state.span.setAttribute('conductor.complexity_tier', tier);
+    if (provider !== undefined) state.span.setAttribute('conductor.provider', provider);
+    if (preferredProvider !== undefined) {
+      state.span.setAttribute('conductor.provider.preferred', preferredProvider);
+    }
+    if (provider !== undefined && preferredProvider !== undefined) {
+      state.span.setAttribute('conductor.fallback', preferredProvider !== provider);
+    }
+    if (state.dispatch?.fallbackReason !== undefined) {
+      state.span.setAttribute('conductor.fallback.reason', state.dispatch.fallbackReason);
+    }
+  }
+
+  private setTokenUsageAttributes(
+    span: Span,
+    tokenUsage: Extract<ConductorEvent, { type: 'step_completed' }>['tokenUsage'],
+  ): void {
+    if (!tokenUsage) return;
+    if (Number.isFinite(tokenUsage.reasoningOutput)) {
+      span.setAttribute('conductor.usage.reasoning_output', tokenUsage.reasoningOutput!);
+    }
+    if (Number.isFinite(tokenUsage.numTurns)) {
+      span.setAttribute('conductor.usage.turns', tokenUsage.numTurns!);
+    }
+    if (Number.isFinite(tokenUsage.durationMs)) {
+      span.setAttribute('conductor.usage.duration_ms', tokenUsage.durationMs!);
+    }
+    if (tokenUsage.costSource !== undefined) {
+      span.setAttribute('conductor.cost.source', tokenUsage.costSource);
+    }
   }
 
   // ── Span events ────────────────────────────────────────────────────────────

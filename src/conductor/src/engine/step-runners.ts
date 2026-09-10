@@ -793,7 +793,7 @@ export class DefaultStepRunner implements StepRunner {
     // conductor session (see runBuildReview() for the resolveRebaseConflict
     // fresh-uuid/resume:false pattern).
     if (step === 'build_review') {
-      return this.runBuildReview();
+      return this.runBuildReview(state.complexity_tier);
     }
     if (step === 'coverage_binding') {
       return this.runCoverageBinding(state);
@@ -1374,6 +1374,7 @@ export class DefaultStepRunner implements StepRunner {
         ? { observedIntervals: result.observedIntervals }
         : {}),
       ...(result.resolvedModel ? { model: result.resolvedModel } : {}),
+      ...(result.resolvedEffort !== undefined ? { effort: result.resolvedEffort } : {}),
       preferredProvider: result.preferredProvider,
       ...(result.actualProvider
         ? { actualProvider: result.actualProvider }
@@ -2000,6 +2001,7 @@ export class DefaultStepRunner implements StepRunner {
   private async runRubricBuildReview(
     inputs: BuildReviewFrozenInputs,
     config: ReturnType<typeof resolveBuildReviewConfig>,
+    tier: ConductState['complexity_tier'],
   ): Promise<StepRunResult> {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
@@ -2024,7 +2026,7 @@ export class DefaultStepRunner implements StepRunner {
         writeFile,
         rename,
       }),
-      dispatchModel: async (branch, projection) => this.dispatchBuildReviewRubric(branch, projection),
+      dispatchModel: async (branch, projection) => this.dispatchBuildReviewRubric(branch, projection, tier),
       writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
         readFile: async (path) => readFile(path, 'utf-8'),
         mkdir: async (path) => { await mkdir(path, { recursive: true }); },
@@ -2244,6 +2246,7 @@ export class DefaultStepRunner implements StepRunner {
   private async dispatchBuildReviewRubric(
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
+    tier?: ConductState['complexity_tier'],
   ): Promise<unknown> {
     const label: Record<BuildReviewDispatchableRubric['rubric'], string> = { testQuality: 'Test Quality' };
     const contractShape = renderBuildReviewProviderPayloadShape(branch.rubric);
@@ -2283,6 +2286,7 @@ export class DefaultStepRunner implements StepRunner {
             config: this.config,
             runId: this.runId,
             taskAttribution: this.taskAttribution,
+            tier,
             withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
             prepareCandidateSelfHost:
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
@@ -2572,6 +2576,7 @@ export class DefaultStepRunner implements StepRunner {
             step: 'coverage_binding', memberId: digest, policy: auxiliaryPolicy,
             runtimes: this.providerRuntimes!, sessions: this.sessionStore!.beginBranch(`coverage-binding:${digest}`),
             config: this.config, runId: this.runId, taskAttribution: this.taskAttribution,
+            tier: state.complexity_tier,
             withCandidateSafety: this.withCandidateSafety, prepareCandidateSelfHost: this.prepareCandidateSelfHost,
             onAttempt: this.providerAttempt, warn: this.providerWarn,
             options,
@@ -2624,7 +2629,7 @@ export class DefaultStepRunner implements StepRunner {
     return { success: true, output: `coverage_binding judged ${entries.length} claim(s)` };
   }
 
-  private async runBuildReview(): Promise<StepRunResult> {
+  private async runBuildReview(tier?: ConductState['complexity_tier']): Promise<StepRunResult> {
     // Resolve the plan for THIS feature — never the unscoped `.docs/plans/*.md`
     // sort()[last] guess (#407): with several features in flight the shared plans
     // directory holds many files, and picking the alphabetically-last one graded
@@ -2805,7 +2810,7 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     return withBaseFreshness(withContainmentAdvisory(
-      await this.runRubricBuildReview(inputs, buildReviewConfig),
+      await this.runRubricBuildReview(inputs, buildReviewConfig, tier),
     ));
   }
 

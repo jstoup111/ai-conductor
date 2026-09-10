@@ -20,8 +20,10 @@ import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
+import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
+import { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import { CapturingSpanExporter as InMemorySpanExporter } from '../fixtures/capturing-span-exporter.js';
-import { InMemoryMetricExporter, AggregationTemporality } from '@opentelemetry/sdk-metrics';
+import { InMemoryMetricExporter, AggregationTemporality, MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 
 // ── Shared fixture ─────────────────────────────────────────────────────────────
 
@@ -207,8 +209,19 @@ describe('T22-otlp: OTLP transport (in-memory exporters) — structure assertion
       spanExporter,
       metricExporter,
     });
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter: metricExporter, exportIntervalMillis: 60_000 })],
+    });
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('otlp-exporter'), { project: 'test-project', worker: 'test-worker', feature: 'e2e-test' }),
+      undefined,
+      'e2e-test',
+    );
     vis.start(emitter);
+    listener.start(emitter);
     await runFixture(emitter);
+    listener.stop();
+    await provider.shutdown();
     await vis.stop();
 
     const metricNames = metricExporter

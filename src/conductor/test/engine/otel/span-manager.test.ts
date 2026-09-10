@@ -1,5 +1,5 @@
 /**
- * Covers: task:1
+ * Covers: task:1, task:7, task:8
  *
  * span-manager.test.ts — unit tests for SpanManager via OtelVisualizer.
  *
@@ -16,6 +16,7 @@ import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
+import type { StepName } from '../../../src/types/steps.js';
 import { resolveOtelConfig } from '../../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../../src/engine/otel/otel-visualizer.js';
 import { CapturingSpanExporter as InMemorySpanExporter } from '../../fixtures/capturing-span-exporter.js';
@@ -439,6 +440,129 @@ describe('T12: step span negatives — orphan and re-run', () => {
 // ── T13: Step span attributes ─────────────────────────────────────────────────
 
 describe('T13: step span attributes', () => {
+  it('records dispatch dimensions and fallback details on the completed step span', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({
+      type: 'provider_attempt',
+      step: 'build',
+      provider: 'claude',
+      preferredProvider: 'codex',
+      fallbackReason: 'codex unavailable',
+      invoked: true,
+      outcome: 'success',
+    });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      model: 'sonnet',
+      effort: 'medium',
+      tier: 'S',
+      preferredProvider: 'codex',
+      actualProvider: 'claude',
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'build')!;
+    expect(span.attributes).toMatchObject({
+      'conductor.model': 'sonnet',
+      'conductor.effort': 'medium',
+      'conductor.complexity_tier': 'S',
+      'conductor.provider': 'claude',
+      'conductor.provider.preferred': 'codex',
+      'conductor.fallback': true,
+      'conductor.fallback.reason': 'codex unavailable',
+    });
+  });
+
+  it('omits the fallback reason when the provider attempt did not report one', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', provider: 'claude', invoked: true, outcome: 'success',
+    });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'build')!;
+    expect(span.attributes).not.toHaveProperty('conductor.fallback.reason');
+  });
+
+  it('retains the latest complete attempted dimensions when a step fails', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', provider: 'claude', preferredProvider: 'codex',
+      model: 'sonnet', effort: 'medium', tier: 'S', fallbackReason: 'codex unavailable',
+      invoked: true, outcome: 'failure',
+    });
+    await emitter.emit({
+      type: 'step_failed', step: 'build', error: 'provider failed', retryCount: 1,
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'build')!;
+    expect(span.attributes).toMatchObject({
+      'conductor.model': 'sonnet',
+      'conductor.effort': 'medium',
+      'conductor.complexity_tier': 'S',
+      'conductor.provider': 'claude',
+      'conductor.provider.preferred': 'codex',
+      'conductor.fallback': true,
+      'conductor.fallback.reason': 'codex unavailable',
+    });
+  });
+
+  it('preserves the first applicable fallback reason across candidate attempts', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', provider: 'codex', preferredProvider: 'codex',
+      fallbackReason: 'codex unavailable', invoked: true, outcome: 'unavailable',
+    });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', provider: 'claude', preferredProvider: 'codex',
+      invoked: true, outcome: 'success',
+    });
+    await emitter.emit({
+      type: 'step_completed', step: 'build', status: 'done', actualProvider: 'claude' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'build')!;
+    expect(span.attributes['conductor.fallback.reason']).toBe('codex unavailable');
+  });
+
+  it('warns and does not create a span for an attempt without an open step', async () => {
+    const warnings: string[] = [];
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (message) =>
+      warnings.push(message),
+    );
+    vis.start(emitter);
+
+    await expect(emitter.emit({
+      type: 'provider_attempt', step: 'build', provider: 'claude', invoked: true, outcome: 'success',
+    })).resolves.toBeUndefined();
+    await vis.stop();
+
+    expect({ warnings, spans: spanExporter.getFinishedSpans() }).toEqual({
+      warnings: ["provider_attempt for 'build' received but no open span exists — ignoring"],
+      spans: [],
+    });
+  });
+
   it('closed step span carries conductor.step, conductor.step.index, conductor.step.status, conductor.retry.count', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
@@ -495,6 +619,72 @@ describe('T13: step span attributes', () => {
     const span = spanExporter.getFinishedSpans().find((s) => s.name === 'stories')!;
     expect(span.attributes['conductor.step.status']).toBe('failed');
     expect(span.attributes['conductor.retry.count']).toBe(2);
+  });
+});
+
+// ── Task 8: TokenUsage span-only detail ────────────────────────────────────
+
+describe('Task 8: TokenUsage detail on step spans', () => {
+  it('exports only present finite usage detail attributes', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    const complete = async (
+      step: StepName,
+      index: number,
+      tokenUsage?: Extract<import('../../../src/types/events.js').ConductorEvent, { type: 'step_completed' }>['tokenUsage'],
+    ) => {
+      await emitter.emit({ type: 'step_started', step, index });
+      await emitter.emit({ type: 'step_completed', step, status: 'done', tokenUsage });
+    };
+
+    await complete('bootstrap', 0, {
+      input: 100,
+      output: 50,
+      reasoningOutput: 1200,
+      numTurns: 7,
+      durationMs: 84_000,
+      costSource: 'provider',
+    });
+    await complete('memory', 1, {
+      input: 100,
+      output: 50,
+      costSource: 'rate-card',
+    });
+    await complete('assess', 2, { input: 100, output: 50, reasoningOutput: 4, numTurns: 2 });
+    await complete('explore', 3);
+    await complete('complexity', 4, { input: 100, output: 50, reasoningOutput: Number.NaN });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const usageAttributes = (step: string) => {
+      const attributes = spanExporter.getFinishedSpans().find((span) => span.name === step)!.attributes;
+      return Object.fromEntries(Object.entries(attributes).filter(([key]) => (
+        key.startsWith('conductor.usage.') || key === 'conductor.cost.source'
+      )));
+    };
+
+    expect({
+      full: usageAttributes('bootstrap'),
+      rateCard: usageAttributes('memory'),
+      codex: usageAttributes('assess'),
+      none: usageAttributes('explore'),
+      nonFinite: usageAttributes('complexity'),
+    }).toEqual({
+      full: {
+        'conductor.usage.reasoning_output': 1200,
+        'conductor.usage.turns': 7,
+        'conductor.usage.duration_ms': 84_000,
+        'conductor.cost.source': 'provider',
+      },
+      rateCard: { 'conductor.cost.source': 'rate-card' },
+      codex: {
+        'conductor.usage.reasoning_output': 4,
+        'conductor.usage.turns': 2,
+      },
+      none: {},
+      nonFinite: {},
+    });
   });
 });
 

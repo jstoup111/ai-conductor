@@ -59,7 +59,10 @@ export interface ProviderAttemptMetadata {
   taskAttributionDiagnostic?: TaskAttributionDiagnosticCode;
   /** Sanitized source selected by the Codex provider, when it reported one. */
   authenticationSource?: 'api-key' | 'cached-login';
+  preferredProvider?: string;
   model?: string;
+  effort?: EffortLevel;
+  tier?: ComplexityTier;
   tokenUsage?: TokenUsage;
   observedIntervals?: readonly ObservedInterval[];
   outcome: 'success' | 'failure' | 'unavailable';
@@ -481,7 +484,10 @@ export interface BuildProviderAttemptMetadataInput {
   taskId?: string;
   taskAttributionDiagnostic?: TaskAttributionDiagnosticCode;
   result: InvokeResult;
+  preferredProvider?: string;
   resolvedModel: string;
+  resolvedEffort?: EffortLevel;
+  tier?: ComplexityTier;
   invokedModel?: string;
   unavailable?: ProviderCandidateFailureClassification;
   nextProvider?: string;
@@ -494,7 +500,10 @@ export function buildProviderAttemptMetadata({
   taskId,
   taskAttributionDiagnostic,
   result,
+  preferredProvider,
   resolvedModel,
+  resolvedEffort,
+  tier,
   invokedModel,
   unavailable,
   nextProvider,
@@ -508,7 +517,10 @@ export function buildProviderAttemptMetadata({
     ...(taskId ? { taskId } : {}),
     ...(taskAttributionDiagnostic ? { taskAttributionDiagnostic } : {}),
     ...(result.authentication ? { authenticationSource: result.authentication.source } : {}),
+    ...(invoked && preferredProvider?.trim() ? { preferredProvider } : {}),
     ...(invoked ? { model: invokedModel ?? resolvedModel } : {}),
+    ...(invoked && resolvedEffort ? { effort: resolvedEffort } : {}),
+    ...(invoked && tier ? { tier } : {}),
     ...(invoked && result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
     ...(invoked && result.observedIntervals
       ? { observedIntervals: result.observedIntervals }
@@ -700,7 +712,10 @@ export async function executeProviderCandidates({
       taskId,
       taskAttributionDiagnostic,
       result: safeResult,
+      preferredProvider,
       resolvedModel: resolved.model,
+      resolvedEffort: resolved.effort,
+      tier,
       invokedModel,
       unavailable,
       nextProvider,
