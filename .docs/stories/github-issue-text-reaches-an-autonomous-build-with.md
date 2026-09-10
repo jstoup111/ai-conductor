@@ -65,6 +65,7 @@ As every consumer of `Envelope.text`, I want the untrusted region to begin and e
 #### Negative Paths
 - Given an issue body containing a line shaped like an armor line outside every fenced, indented, and quoted region and outside the matching outer pair, when the adapter polls it, then that lookalike is neutralized as `[neutralized:armor-lookalike]` while a lookalike inside a fenced, indented, or quoted region stays byte-identical, because only the outer pair is honored as a delimiter.
 - Given the seam's signature takes an already-parsed `WorkRef` rather than a string, when the adapter calls it with the reference it parsed for `sourceRef`, then the armor line's reference round-trips through `parseWorkRef` unchanged and an unparseable reference is unrepresentable at this boundary, so no capture-time throw or drop can occur.
+- Given a registry entry whose resolved GitHub repository target is empty, when the adapter polls, then it logs the invalid target and skips that entry before fetching issues, while subsequent valid repositories are still polled and captured.
 
 ### Done When
 - [ ] Armor lines are outside every Markdown section (no `#` prefix, no bullet), inert under every rule, and the digest is over the sanitized body only.

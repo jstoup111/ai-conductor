@@ -144,6 +144,8 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 
 > **Amended 2026-09-09 by #1479:** The operator approved treating title and body as separate Markdown inputs. `buildText` passes the non-empty fields as an ordered array to `sanitizeInboundText`; that seam segments each field independently, aggregates category counts, then joins the sanitized fields with a blank line under one armor pair and one digest. An unclosed title fence cannot exempt body prose. The existing single-string API and armored-text idempotence remain supported; code inside either field remains unchanged.
 
+> **Amended 2026-09-10 by #1479:** The operator explicitly approved retaining the empty-repository guard (NC.1). Task 5 also owns rejecting an empty resolved GitHub repository target before fetching issues: log `github-issues: skipping invalid repository target`, skip only that registry entry, and continue polling subsequent valid repositories. This is an empty-name check, not broader repository-name validation. The existing `poll() invalid repository targets` regression proves no request for the empty target and successful capture from the next valid repository.
+
 ### Task 6: Additive Envelope.inbound field with pass-through and malformed-drop in parseEnvelope
 **Story:** Story 4 — happy path 3 (queue round-trip); negative paths 2 and 3
 **Type:** infrastructure
