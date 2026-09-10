@@ -1,5 +1,12 @@
 # ADR 014: OpenTelemetry Observability Exporter
 
+> **Operator clarification — 2026-09-10:** Decision 7 remains authoritative:
+> production metrics have exactly one event-fed `MetricsListener`; per-dispatch
+> visualizers remain spans-only and must not duplicate metric recording.
+> Decision 10's fallback reason is attempt-chain context: an unavailable
+> preferred-provider reason survives subsequent candidate observations until
+> the successful fallback span closes.
+
 **Date:** 2026-06-28
 **Status:** APPROVED
 **Deciders:** James (operator), Claude (architecture-review)

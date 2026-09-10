@@ -1,5 +1,15 @@
 # Implementation Plan: Export the dispatch dimensions the engine already holds
 
+> **Amended 2026-09-10 by operator:** Resolve as-built findings AB-1–AB-4 in
+> BUILD. Carry `preferredProvider`, resolved effort, and tier on production
+> `provider_attempt` events; retain the latest complete dispatch dimensions for
+> failed duration/span closure; preserve the first applicable fallback reason
+> across the candidate chain until successful fallback closure. Keep ADR-014's
+> single `MetricsListener` architecture by removing the duplicate/dead
+> `OtelVisualizer` metric implementation introduced by Tasks 9–10 while keeping
+> its span enrichment. Existing tests should assert these production paths, not
+> a metrics-enabled visualizer path.
+
 **Date:** 2026-09-09
 **Design:** .docs/decisions/architecture-review-2026-09-09-export-the-telemetry-dimensions-the-engine-already.md
 **Stories:** .docs/stories/export-the-telemetry-dimensions-the-engine-already.md
