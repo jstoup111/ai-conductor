@@ -132,6 +132,25 @@ Filter one feature's narrative with `ai-conductor daemon logs | grep '\[<slug>\]
 lines are daemon-wide, not feature work. The exact shapes and the slug length bound are in
 [artifacts](../reference/artifacts.md#line-shapes).
 
+### Build-review rubric progress
+
+During `build_review`, the daemon log names each rubric branch and its full lap identifier. This
+lets you distinguish concurrent or retried review laps without reading `.pipeline/events.jsonl`:
+
+```text
+·   build_review [<lap-id>] <rubric> started
+·   build_review [<lap-id>] <rubric> cache hit
+·   build_review [<lap-id>] <rubric> PASS
+·   build_review [<lap-id>] <rubric> skipped: <reason>
+·   build_review [<lap-id>] <rubric> infrastructure failure: <reason> — <excerpt>
+·   build_review [<lap-id>] outer verdict: <effective> (raw: <raw>)
+```
+
+`skipped` is not a judged failure. An infrastructure failure is also distinct from a judged `FAIL`;
+it means the rubric could not run. The `raw:` suffix appears only when a deterministic policy changed
+the effective verdict. The optional excerpt, deterministic reason, and unresolved-marker count are
+included only when the event supplies them.
+
 ### Protected-artifact rebaselines
 
 The daemon distinguishes a stale pre-rebase seal from a genuine protected-artifact mutation:
