@@ -18,6 +18,7 @@ import type { TokenUsage } from '../../execution/llm-provider.js';
 import type { ConductorEvent } from '../../types/events.js';
 import type { RunOutcome } from './span-manager.js';
 import { classifyMetering } from '../metering.js';
+import type { DispatchMeteringObservation } from '../dispatch-metering.js';
 
 /** Explicit duration histogram boundaries, from 10 ms through 8 hours. */
 export const DURATION_BUCKET_BOUNDARIES_MS = [
@@ -32,6 +33,36 @@ export interface DispatchDimensions {
   provider?: string;
   tier?: string;
   fallback?: boolean;
+}
+
+type DispatchDimensionEvent = Extract<ConductorEvent, {
+  type: 'provider_attempt' | 'step_completed' | 'step_failed' | 'step_retry';
+}>;
+
+/** Project event and dispatch-observation fields into metric-safe dimensions. */
+export function dispatchDimensionsFrom(
+  event: DispatchDimensionEvent,
+  observation?: DispatchMeteringObservation,
+): DispatchDimensions {
+  const eventModel = 'model' in event ? event.model : undefined;
+  const eventProvider = event.type === 'step_completed'
+    ? event.actualProvider
+    : 'provider' in event ? event.provider : undefined;
+  const provider = eventProvider ?? observation?.provider;
+  const preferredProvider = 'preferredProvider' in event
+    ? event.preferredProvider ?? observation?.preferredProvider
+    : observation?.preferredProvider;
+  return {
+    ...(eventModel !== undefined || observation?.model !== undefined
+      ? { model: eventModel ?? observation?.model }
+      : {}),
+    ...('effort' in event && event.effort !== undefined ? { effort: event.effort } : {}),
+    ...(provider !== undefined ? { provider } : {}),
+    ...('tier' in event && event.tier !== undefined ? { tier: event.tier } : {}),
+    ...(preferredProvider !== undefined && provider !== undefined
+      ? { fallback: preferredProvider !== provider }
+      : {}),
+  };
 }
 
 export class MetricsRecorder {

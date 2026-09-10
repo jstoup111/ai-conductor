@@ -47,11 +47,17 @@ import type { ResolvedOtelConfig } from './otel-config.js';
 import { buildResource } from './resource.js';
 import { buildExporters } from './transport.js';
 import { SpanManager } from './span-manager.js';
-import { MetricsRecorder } from './metrics.js';
+import { dispatchDimensionsFrom, type DispatchDimensions, MetricsRecorder } from './metrics.js';
 import {
   DispatchMeteringTracker,
   type DispatchMeteringObservation,
 } from '../dispatch-metering.js';
+
+interface PendingDispatch {
+  observation?: DispatchMeteringObservation;
+  dimensions?: DispatchDimensions;
+  recordDispatch: boolean;
+}
 
 // ── Bounded-warning exporter wrappers (FR-8) ────────────────────────────────
 
@@ -268,7 +274,7 @@ export class OtelVisualizer implements VisualizerPlugin {
   /** Shared dispatch selector used by both OTel and the shipped-record rollup. */
   private readonly dispatchMetering = new DispatchMeteringTracker();
   /** Legacy completion fallback handed through the span-close callback. */
-  private readonly pendingDispatch = new Map<string, DispatchMeteringObservation | undefined>();
+  private readonly pendingDispatch = new Map<string, PendingDispatch>();
 
   // ── VisualizerPlugin contract ──────────────────────────────────────────────
 
@@ -432,24 +438,45 @@ export class OtelVisualizer implements VisualizerPlugin {
       case 'step_completed':
         // Provider attempts are authoritative; unmatched completions retain
         // compatibility with older emitters that only populated this event.
-        this.pendingDispatch.set(event.step, this.dispatchMetering.observe(event));
+        {
+          const compatibilityDispatch = this.dispatchMetering.observe(event);
+          const observation = compatibilityDispatch ?? this.pendingDispatch.get(event.step)?.observation;
+          this.pendingDispatch.set(event.step, {
+            observation,
+            dimensions: dispatchDimensionsFrom(event, observation),
+            recordDispatch: compatibilityDispatch !== undefined,
+          });
+        }
         this.spanManager.onStepCompleted(event);
         // Cleanup: on the orphan path (no open span), onStepClose never fires and
         // the entry would leak. onStepClose deletes the entry synchronously when it
         // runs; if it did, this is a no-op. If it didn't (orphan), we clean up here.
         this.pendingDispatch.delete(event.step);
         break;
-      case 'step_failed':
+      case 'step_failed': {
+        const compatibilityDispatch = this.dispatchMetering.observe(event);
+        const observation = compatibilityDispatch ?? this.pendingDispatch.get(event.step)?.observation;
+        this.pendingDispatch.set(event.step, {
+          observation,
+          dimensions: dispatchDimensionsFrom(event, observation),
+          recordDispatch: compatibilityDispatch !== undefined,
+        });
         this.spanManager.onStepFailed(event);
         break;
+      }
       case 'provider_attempt': {
         const dispatch = this.dispatchMetering.observe(event);
         if (dispatch) {
           this.spanManager.onProviderAttempt(dispatch.step ?? event.step, dispatch);
+          this.pendingDispatch.set(dispatch.step ?? event.step, {
+            observation: dispatch,
+            recordDispatch: false,
+          });
           this.metricsRecorder?.onDispatch(
             dispatch.step ?? event.step,
             dispatch.tokenUsage,
             dispatch.model,
+            dispatchDimensionsFrom(event, dispatch),
           );
         }
         break;
@@ -462,6 +489,7 @@ export class OtelVisualizer implements VisualizerPlugin {
         break;
       case 'step_retry':
         this.spanManager.onStepRetry(event);
+        this.metricsRecorder?.onRetry(event.step, dispatchDimensionsFrom(event));
         break;
       case 'gate_verdict':
         this.spanManager.onGateVerdict(event);
@@ -531,13 +559,14 @@ export class OtelVisualizer implements VisualizerPlugin {
       onStepClose: (step, durationMs, retryCount) => {
         const dispatch = this.pendingDispatch.get(step);
         this.pendingDispatch.delete(step);
-          this.metricsRecorder?.onStepClose(
+        this.metricsRecorder?.onStepClose(
           step,
           durationMs,
-          retryCount,
-          dispatch?.tokenUsage,
-          dispatch?.model,
-          dispatch !== undefined,
+          0,
+          dispatch?.observation?.tokenUsage,
+          dispatch?.observation?.model,
+          dispatch?.recordDispatch ?? false,
+          dispatch?.dimensions,
         );
       },
       onRunClose: (outcome) => {
