@@ -21,7 +21,7 @@ describe('Conductor step close events', () => {
 
     const events = new ConductorEventEmitter();
     const completed: ConductorEvent[] = [];
-    events.on('step_completed', (event) => completed.push(event));
+    events.on('step_completed', (event) => { completed.push(event); });
     const conductor = new Conductor({
       projectRoot,
       stateFilePath,
