@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-10T00:45:11.018Z
 Slug: report-the-prd-input-gate-surface-accurately-in-re
 Class: needs-human
 Halting step: prd_audit
