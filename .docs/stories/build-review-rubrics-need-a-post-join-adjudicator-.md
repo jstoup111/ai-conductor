@@ -193,8 +193,8 @@ semantic non-progress stops instead of cycling.
 
 #### Negative Paths
 
-- Given BUILD already attempted an action case and a later complete lap binds a current finding to that unresolved case, when routing is derived, then no new or free BUILD route occurs and the gate halts `needs-human` with both current and prior evidence even if the tree moved.
-- Given an action case was marked resolved and an equivalent finding reappears, when reconciliation runs, then the gate halts as a regression of the prior case rather than resetting its history or consuming another kickback.
+- Given BUILD already attempted an action case and a later complete lap binds a current finding to that unresolved case with any disposition other than an admitted `refute` row, when routing is derived, then no new or free BUILD route occurs and the gate halts `needs-human` with both current and prior evidence even if the tree moved.
+- Given an action case not resolved by refutation was marked resolved and an equivalent finding reappears, when reconciliation runs, then the gate halts as a regression of the prior case rather than resetting its history or consuming another kickback.
 
 ### Done When
 
