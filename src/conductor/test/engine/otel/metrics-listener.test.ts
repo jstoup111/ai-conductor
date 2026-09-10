@@ -41,6 +41,39 @@ function attributesForInstrument(
 }
 
 describe('MetricsListener dispatch dimensions', () => {
+  it('retains the latest complete dispatch dimensions when a step fails', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const emitter = new ConductorEventEmitter();
+    let now = 100;
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      () => now,
+      'feature',
+    );
+    listener.start(emitter);
+
+    try {
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+      await emitter.emit({
+        type: 'provider_attempt', step: 'build', provider: 'claude', model: 'opus', effort: 'high', tier: 'M', invoked: true, outcome: 'failure',
+      });
+      now = 125;
+      await emitter.emit({ type: 'step_failed', step: 'build', error: 'failed', retryCount: 0 });
+      await provider.forceFlush();
+
+      expect(attributesFor(exporter, 'conductor.step.duration', 'build')).toEqual({
+        step: 'build', model: 'opus', effort: 'high', provider: 'claude', tier: 'M',
+        project: 'project', worker: 'worker', feature: 'feature',
+      });
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
+  });
+
   it('counts invoked attempts once with provider and explicit fallback state', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     const provider = new MeterProvider({
@@ -58,7 +91,7 @@ describe('MetricsListener dispatch dimensions', () => {
       await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
       await emitter.emit({
         type: 'provider_attempt', step: 'build', provider: 'claude', preferredProvider: 'codex',
-        invoked: true, outcome: 'success',
+        model: 'opus', effort: 'high', tier: 'M', invoked: true, outcome: 'success',
       });
       await emitter.emit({
         type: 'provider_attempt', step: 'plan', provider: 'claude', preferredProvider: 'claude',
@@ -77,7 +110,7 @@ describe('MetricsListener dispatch dimensions', () => {
       await provider.forceFlush();
 
       expect(attributesForInstrument(exporter, 'conductor.step.dispatches')).toEqual([
-        { step: 'build', metering: 'unmetered', provider: 'claude', fallback: true, project: 'project', worker: 'worker', feature: 'feature' },
+        { step: 'build', metering: 'unmetered', model: 'opus', effort: 'high', provider: 'claude', tier: 'M', fallback: true, project: 'project', worker: 'worker', feature: 'feature' },
         { step: 'plan', metering: 'unmetered', provider: 'claude', fallback: false, project: 'project', worker: 'worker', feature: 'feature' },
         { step: 'finish', metering: 'unmetered', provider: 'claude', project: 'project', worker: 'worker', feature: 'feature' },
       ]);
