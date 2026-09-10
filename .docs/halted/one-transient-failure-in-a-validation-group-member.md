@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-10T01:14:30.207Z
 Slug: one-transient-failure-in-a-validation-group-member
 Class: needs-human
 Halting step: build
