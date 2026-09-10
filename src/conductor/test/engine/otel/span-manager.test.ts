@@ -638,7 +638,7 @@ describe('Task 8: TokenUsage detail on step spans', () => {
       await emitter.emit({ type: 'step_completed', step, status: 'done', tokenUsage });
     };
 
-    await complete('full-usage', 0, {
+    await complete('bootstrap', 0, {
       input: 100,
       output: 50,
       reasoningOutput: 1200,
@@ -646,14 +646,14 @@ describe('Task 8: TokenUsage detail on step spans', () => {
       durationMs: 84_000,
       costSource: 'provider',
     });
-    await complete('rate-card-usage', 1, {
+    await complete('memory', 1, {
       input: 100,
       output: 50,
       costSource: 'rate-card',
     });
-    await complete('codex-usage', 2, { input: 100, output: 50, reasoningOutput: 4, numTurns: 2 });
-    await complete('no-usage', 3);
-    await complete('non-finite-usage', 4, { input: 100, output: 50, reasoningOutput: Number.NaN });
+    await complete('assess', 2, { input: 100, output: 50, reasoningOutput: 4, numTurns: 2 });
+    await complete('explore', 3);
+    await complete('complexity', 4, { input: 100, output: 50, reasoningOutput: Number.NaN });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
@@ -665,11 +665,11 @@ describe('Task 8: TokenUsage detail on step spans', () => {
     };
 
     expect({
-      full: usageAttributes('full-usage'),
-      rateCard: usageAttributes('rate-card-usage'),
-      codex: usageAttributes('codex-usage'),
-      none: usageAttributes('no-usage'),
-      nonFinite: usageAttributes('non-finite-usage'),
+      full: usageAttributes('bootstrap'),
+      rateCard: usageAttributes('memory'),
+      codex: usageAttributes('assess'),
+      none: usageAttributes('explore'),
+      nonFinite: usageAttributes('complexity'),
     }).toEqual({
       full: {
         'conductor.usage.reasoning_output': 1200,
