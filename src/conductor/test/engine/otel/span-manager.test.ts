@@ -443,24 +443,16 @@ describe('T13: step span attributes', () => {
   it('records dispatch dimensions and fallback details on the completed step span', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
-    const { spanManager } = vis as unknown as {
-      spanManager: {
-        onProviderAttempt(
-          step: string,
-          observation: {
-            provider?: string;
-            preferredProvider?: string;
-            fallbackReason?: string;
-          },
-        ): void;
-      };
-    };
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
-    spanManager.onProviderAttempt('build', {
+    await emitter.emit({
+      type: 'provider_attempt',
+      step: 'build',
       provider: 'claude',
       preferredProvider: 'codex',
       fallbackReason: 'codex unavailable',
+      invoked: true,
+      outcome: 'success',
     });
     await emitter.emit({
       type: 'step_completed',
@@ -490,12 +482,11 @@ describe('T13: step span attributes', () => {
   it('omits the fallback reason when the provider attempt did not report one', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
-    const { spanManager } = vis as unknown as {
-      spanManager: { onProviderAttempt(step: string, observation: { provider?: string }): void };
-    };
 
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
-    spanManager.onProviderAttempt('build', { provider: 'claude' });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', provider: 'claude', invoked: true, outcome: 'success',
+    });
     await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
@@ -510,11 +501,10 @@ describe('T13: step span attributes', () => {
       warnings.push(message),
     );
     vis.start(emitter);
-    const { spanManager } = vis as unknown as {
-      spanManager: { onProviderAttempt(step: string, observation: { provider?: string }): void };
-    };
 
-    expect(() => spanManager.onProviderAttempt('build', { provider: 'claude' })).not.toThrow();
+    await expect(emitter.emit({
+      type: 'provider_attempt', step: 'build', provider: 'claude', invoked: true, outcome: 'success',
+    })).resolves.toBeUndefined();
     await vis.stop();
 
     expect({ warnings, spans: spanExporter.getFinishedSpans() }).toEqual({
