@@ -78,6 +78,7 @@ export class MetricsRecorder {
       project: 'unknown',
       worker: 'unknown',
     },
+    private readonly customAttrs: Attributes = {},
     instruments?: MetricInstruments,
   ) {
     this.instruments = instruments ?? createInstruments(meter);
@@ -85,7 +86,7 @@ export class MetricsRecorder {
 
   /** Bind a feature without creating a second set of OTel instruments. */
   forFeature(feature: string): MetricsRecorder {
-    return new MetricsRecorder({} as Meter, { ...this.identityAttrs, feature }, this.instruments);
+    return new MetricsRecorder({} as Meter, { ...this.identityAttrs, feature }, this.customAttrs, this.instruments);
   }
 
   onStepClose(
@@ -213,7 +214,7 @@ export class MetricsRecorder {
     }
     return merged;
   }
-  private withIdentity(attrs: Attributes): Attributes { return { ...attrs, ...this.identityAttrs }; }
+  private withIdentity(attrs: Attributes): Attributes { return { ...this.customAttrs, ...attrs, ...this.identityAttrs }; }
 }
 
 const BACKLOG_STATES = ['eligible', 'waiting', 'blocked', 'gated', 'parked'] as const;
