@@ -708,8 +708,8 @@ The sink registry's `otel` flag drives the metrics listener's complete handler t
 `otelTrace: false` declaration marks a metrics-only event and excludes it from the visualizer.
 Other OTel-enabled events require a visualizer handler at compile time. Daemon backlog, dispatch,
 and shipment events, `memory_setup`, `feature_usage_total`, and `feature_cost_snapshot` are metrics-only. `provider_attempt` is also excluded from tracing; its
-existing persistence and optional legacy metrics accounting remain available. `unattributed_progress`
-is excluded from both OTel consumers. Missing visualizer handlers at runtime report the event type through its warning callback.
+metrics projection records the authoritative invoked dispatch. `unattributed_progress` is excluded
+from both OTel consumers. Missing visualizer handlers at runtime report the event type through its warning callback.
 Production visualizers continue exporting traces with their per-run meter disabled.
 
 The `conductor.step.duration` and `conductor.pipeline.closeout.duration` histograms use explicit
@@ -741,8 +741,11 @@ when it carries token usage, provider attribution, or a model. Provider-free com
 as dispatches. This keeps OTel dispatch counts, token totals, and costs aligned with `## Cost` in the
 shipped record.
 
-Every authoritative dispatch still emits `conductor.step.dispatches` with `step` and a `metering`
-attribute of `fully-metered`, `cost-unmetered`, or `unmetered`. A terminal step also emits a
+Step duration and retry points carry `model`, `effort`, `provider`, and `tier` when each is resolved;
+undefined dimensions are omitted. Every authoritative dispatch emits `conductor.step.dispatches`
+with `step`, `metering` (`fully-metered`, `cost-unmetered`, or `unmetered`), and the same resolved
+dimensions. Dispatches also carry `fallback=true` or `false` when both the preferred and invoked
+providers are known; duration and retry points never carry `fallback`. A terminal step also emits a
 non-persisted `feature_cost_snapshot` from the feature's durable event ledger. The snapshot records
 the cumulative `conductor.feature.cost` USD gauge, plus `conductor.feature.step.cost` by `step`,
 `model` when known, and `source` when known (`provider` or `rate-card`), and
