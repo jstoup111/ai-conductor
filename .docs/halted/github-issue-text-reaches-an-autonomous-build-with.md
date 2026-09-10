@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-10T10:34:24.017Z
 Slug: github-issue-text-reaches-an-autonomous-build-with
 Class: needs-human
 Halting step: prd_audit
