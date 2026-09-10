@@ -29,12 +29,17 @@ import {
 import type { ConductorEvent } from '../../types/events.js';
 import type { DispatchMeteringObservation } from '../dispatch-metering.js';
 
+interface SpanDispatchObservation extends DispatchMeteringObservation {
+  effort?: string;
+  tier?: string;
+}
+
 interface StepState {
   span: Span;
   index: number;
   retryCount: number;
   startTimeMs: number;
-  dispatch?: DispatchMeteringObservation;
+  dispatch?: SpanDispatchObservation;
 }
 
 export type RunOutcome = 'complete' | 'halted' | 'terminated';
@@ -158,7 +163,7 @@ export class SpanManager {
     this.callbacks?.onStepClose?.(event.step, durationMs, event.retryCount);
   }
 
-  onProviderAttempt(step: string, observation: DispatchMeteringObservation): void {
+  onProviderAttempt(step: string, observation: SpanDispatchObservation): void {
     const state = this.openSteps.get(step);
     if (!state) {
       this.warn(`provider_attempt for '${step}' received but no open span exists — ignoring`);
@@ -191,9 +196,11 @@ export class SpanManager {
     const provider = event.provider ?? state.dispatch?.provider;
     const preferredProvider = event.preferredProvider ?? state.dispatch?.preferredProvider;
     const model = event.model ?? state.dispatch?.model;
+    const effort = event.effort ?? state.dispatch?.effort;
+    const tier = event.tier ?? state.dispatch?.tier;
     if (model !== undefined) state.span.setAttribute('conductor.model', model);
-    if (event.effort !== undefined) state.span.setAttribute('conductor.effort', event.effort);
-    if (event.tier !== undefined) state.span.setAttribute('conductor.complexity_tier', event.tier);
+    if (effort !== undefined) state.span.setAttribute('conductor.effort', effort);
+    if (tier !== undefined) state.span.setAttribute('conductor.complexity_tier', tier);
     if (provider !== undefined) state.span.setAttribute('conductor.provider', provider);
     if (preferredProvider !== undefined) {
       state.span.setAttribute('conductor.provider.preferred', preferredProvider);

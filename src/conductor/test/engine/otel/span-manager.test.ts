@@ -502,7 +502,8 @@ describe('T13: step span attributes', () => {
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
     await emitter.emit({
       type: 'provider_attempt', step: 'build', provider: 'claude', preferredProvider: 'codex',
-      model: 'sonnet', fallbackReason: 'codex unavailable', invoked: true, outcome: 'failure',
+      model: 'sonnet', effort: 'medium', tier: 'S', fallbackReason: 'codex unavailable',
+      invoked: true, outcome: 'failure',
     });
     await emitter.emit({
       type: 'step_failed', step: 'build', error: 'provider failed', retryCount: 1,
@@ -513,6 +514,8 @@ describe('T13: step span attributes', () => {
     const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'build')!;
     expect(span.attributes).toMatchObject({
       'conductor.model': 'sonnet',
+      'conductor.effort': 'medium',
+      'conductor.complexity_tier': 'S',
       'conductor.provider': 'claude',
       'conductor.provider.preferred': 'codex',
       'conductor.fallback': true,

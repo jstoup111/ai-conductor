@@ -319,6 +319,8 @@ export class OtelVisualizer implements VisualizerPlugin {
           provider: event.provider,
           ...(event.preferredProvider !== undefined ? { preferredProvider: event.preferredProvider } : {}),
           ...(event.model !== undefined ? { model: event.model } : {}),
+          ...(event.effort !== undefined ? { effort: event.effort } : {}),
+          ...(event.tier !== undefined ? { tier: event.tier } : {}),
           ...(event.tokenUsage !== undefined ? { tokenUsage: event.tokenUsage } : {}),
           ...(event.fallbackReason !== undefined ? { fallbackReason: event.fallbackReason } : {}),
         });
