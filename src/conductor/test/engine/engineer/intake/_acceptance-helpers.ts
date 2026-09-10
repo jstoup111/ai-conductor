@@ -38,7 +38,9 @@ export function makeFakeGh(state: FakeGhState) {
         throw err;
       }
       const issues = state.issuesByRepo[repo] ?? [];
-      return { stdout: JSON.stringify(issues.map((i) => ({ number: i.number, title: i.title, body: i.body, labels: (i.labels ?? []).map((l) => ({ name: l })) }))) };
+      const limitIndex = args.indexOf('--limit');
+      const limit = limitIndex >= 0 ? Number(args[limitIndex + 1]) : 30;
+      return { stdout: JSON.stringify(issues.slice(0, limit).map((i) => ({ number: i.number, title: i.title, body: i.body, labels: (i.labels ?? []).map((l) => ({ name: l })) }))) };
     }
     if (args[0] === 'issue' && args[1] === 'comment') {
       state.comments.push({ ref: refFromArgs(args), body: bodyFromArgs(args) });
