@@ -780,6 +780,7 @@ each sample already represents the whole feature total at that moment.
 | `otel.headers` | mapping | No; non-empty mappings only with `exporter: otlp` and HTTP/protobuf | header name to `{ env: <non-empty variable name> }` | absent; no headers are sent |
 | `otel.project_name` | string | No | any non-blank name | project root basename |
 | `otel.worker_name` | string | No | any non-blank name | OS hostname |
+| `otel.attributes` | mapping | No | At most 16 namespaced keys with non-empty literal string values; keys beginning `service.`, `conductor.`, or `host.` are reserved | absent; no custom attributes |
 
 The failure mode is silent-disable-with-an-error-string, not a halt. An unknown exporter yields
 `{ enabled: false, error: "Unknown otel exporter '<x>'. Valid options: otlp, file." }`; `otlp` without an
@@ -821,6 +822,22 @@ half of `service.instance.id` as well.
 
 `otel.worker_name` is trimmed before use. An absent or blank value falls back to the OS hostname,
 then `unknown` if hostname resolution fails. It is the worker half of metric `service.instance.id`.
+
+`otel.attributes` adds static attributes to every exported trace Resource, metric Resource, and
+metric data point. Each key and value is trimmed. Keys must contain a dot and must not begin with
+`service.`, `conductor.`, or `host.`; values must be literal, non-empty strings. Invalid entries
+and entries after the first 16 are dropped without disabling export, and OTel reports the dropped
+entries as one warning. Conductor-owned Resource and metric identity attributes always take
+precedence over a supplied attribute with the same name.
+
+```yaml
+otel:
+  exporter: otlp
+  endpoint: https://collector.example.test
+  attributes:
+    deployment.environment.name: staging
+    team.name: platform
+```
 
 > **Known limitation.** `otel.protocol` is passed through entirely unvalidated
 > (`otel-config.ts:60`) even though the type restricts it to `'http/protobuf' | 'grpc'`
