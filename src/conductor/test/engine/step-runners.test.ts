@@ -4998,6 +4998,81 @@ TIER: M`,
   });
 });
 
+describe('auxiliary provider dispatch tier telemetry', () => {
+  const rubric = { rubric: 'testQuality' as const, skillName: 'build-review-test-quality', policy: {
+    enabled: true, llm_provider: 'claude' as const, model: 'opus', effort: 'high' as const,
+    model_fallback_ladder: ['opus'], max_retries: 1, escalate: false,
+  } };
+  const projection = {
+    rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v2',
+    lapId: 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8', snapshotDigest: 'sha256:projection',
+    digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [],
+    removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, changedTestSelectors: [],
+    testSuiteProof: {}, revertedProductionManifest: [], preflight: {}, repairContext: [],
+  } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
+
+  it.each([
+    ['M' as const, { tier: 'M' }],
+    [undefined, {}],
+  ])('records tier metadata for a build-review rubric dispatch (%s)', async (tier, expected) => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'build-review-tier-'));
+    const attempts: ProviderAttemptEvent[] = [];
+    const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"findings":[]}', exitCode: 0 });
+    const runner = new DefaultStepRunner(createMockProvider(), 'tier-build-review', projectDir, {
+      config: { llm_provider: ['claude'] },
+      providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('claude', invoke)]),
+      sessionStore: new ProviderSessionStore(), configuredProviders: ['claude'],
+      providerAttempt: (step, attempt) => attempts.push({ type: 'provider_attempt', step, ...attempt }),
+    });
+
+    try {
+      await (runner as unknown as {
+        dispatchBuildReviewRubric: (branch: typeof rubric, value: typeof projection, valueTier?: ConductState['complexity_tier']) => Promise<unknown>;
+      }).dispatchBuildReviewRubric(rubric, projection, tier);
+
+      const invocation = attempts.find((attempt) => attempt.invoked);
+      expect(invocation).toBeDefined();
+      expect(invocation).toMatchObject(expected);
+      expect('tier' in invocation!).toBe(tier !== undefined);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['M' as const, { tier: 'M' }],
+    [undefined, {}],
+  ])('records tier metadata for a coverage-binding dispatch (%s)', async (tier, expected) => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'coverage-binding-tier-'));
+    const featureDesc = 'coverage-binding-tier';
+    const planPath = join(projectDir, 'plan.md');
+    const attempts: ProviderAttemptEvent[] = [];
+    const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"asserts"}', exitCode: 0 });
+    await mkdir(join(projectDir, '.docs', 'coherence'), { recursive: true });
+    await writeFile(planPath, '### Task 1: Bind the claim\n**Done when:**\n- The service emits the required record.\n');
+    await writeFile(join(projectDir, '.docs', 'coherence', `${featureDesc}.md`), '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n| --- | --- | --- | --- | --- | --- |\n| criterion | The service emits the required record | task-1 | covered | "emits the required record" | diff-local |\n');
+    const runner = new DefaultStepRunner(createMockProvider(), 'tier-coverage-binding', projectDir, {
+      featureDesc, planPath, config: {
+        coverage_binding: { judge: { enabled: true } }, llm_provider: ['claude'],
+        steps: { coverage_binding: { llm_provider: 'claude' } },
+      },
+      providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('claude', invoke)]),
+      sessionStore: new ProviderSessionStore(), configuredProviders: ['claude'],
+      providerAttempt: (step, attempt) => attempts.push({ type: 'provider_attempt', step, ...attempt }),
+    });
+
+    try {
+      await expect(runner.run('coverage_binding', tier === undefined ? {} : { complexity_tier: tier })).resolves.toMatchObject({ success: true });
+      const invocation = attempts.find((attempt) => attempt.invoked);
+      expect(invocation).toBeDefined();
+      expect(invocation).toMatchObject(expected);
+      expect('tier' in invocation!).toBe(tier !== undefined);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('extractJudgedResultCandidate', () => {
   const judged = { kind: 'judged', rubric: 'testQuality', contractVersion: 'v3', findings: [] };
 
