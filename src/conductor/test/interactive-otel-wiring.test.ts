@@ -1,4 +1,4 @@
-// Covers: task:2, task:6
+// Covers: task:2, task:6, task:10
 import { describe, expect, it, vi } from 'vitest';
 import { AggregationTemporality, InMemoryMetricExporter } from '@opentelemetry/sdk-metrics';
 import { CapturingSpanExporter as InMemorySpanExporter } from './fixtures/capturing-span-exporter.js';
@@ -137,6 +137,54 @@ describe('interactive OTel wiring', () => {
         runId: 'persisted-interactive-run',
       });
     } finally {
+      await rm(pipelineDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not read OTEL_RESOURCE_ATTRIBUTES when no operator attributes are declared', async () => {
+    const pipelineDir = await mkdtemp(join(process.env.TMPDIR!, 'interactive-otel-'));
+    const emitter = new ConductorEventEmitter();
+    const spanExporter = new InMemorySpanExporter();
+    const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    buildExporters.mockReturnValue({ spanExporter, metricExporter });
+    vi.stubEnv('OTEL_RESOURCE_ATTRIBUTES', 'deployment.environment=from-environment,team.name=from-environment');
+    const config = { otel: { exporter: 'otlp', endpoint: 'http://fake-collector:4318' } } as HarnessConfig;
+    const context: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = {
+      config,
+      pipelineDir,
+      emitter,
+      startContext: {
+        feature: 'interactive-feature',
+        project: '/interactive-project',
+        pipelineDir,
+        branch: undefined,
+        engineVersion: undefined,
+        harnessVersion: undefined,
+      },
+    };
+
+    try {
+      const visualizers = buildInteractiveVisualizers(new PluginRegistry(), config, context);
+      await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+      await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+      await emitter.emit({ type: 'feature_complete', featureDesc: 'interactive-feature' });
+      await Promise.all(visualizers.map((visualizer) => visualizer.stop()));
+
+      const exportedAttributes = [
+        spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')?.resource.attributes,
+        metricExporter.getMetrics()[0]?.resource.attributes,
+        ...metricExporter.getMetrics()
+          .flatMap((batch) => batch.scopeMetrics)
+          .flatMap((scope) => scope.metrics)
+          .flatMap((metric) => metric.dataPoints.map((point) => point.attributes)),
+      ];
+
+      expect(exportedAttributes).not.toContainEqual(expect.objectContaining({
+        'deployment.environment': 'from-environment',
+        'team.name': 'from-environment',
+      }));
+    } finally {
+      vi.unstubAllEnvs();
       await rm(pipelineDir, { recursive: true, force: true });
     }
   });
