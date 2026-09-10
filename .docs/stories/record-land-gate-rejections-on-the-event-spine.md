@@ -6,9 +6,9 @@ Track: technical
 
 Tier: S
 
-Approved by the operator on 2026-09-06 (delegated). Scope is the spec-landing command's rejection path: a stable gate identifier per rejection, one new persisted event carrying that identifier and the reason, and emission onto the target repository's existing event ledger. Backfill of historical rejections, precision reporting, and gate-strictness changes remain outside this slice.
+Approved by the operator on 2026-09-06 (delegated), and narrowed by the operator on 2026-09-10. Scope begins after the target repository has been resolved: every rejection raised by the landing primitive gets a stable gate identifier, one new persisted event carrying that identifier and the reason, and emission onto that target repository's existing event ledger. Pre-target command failures, backfill of historical rejections, precision reporting, and gate-strictness changes remain outside this slice.
 
-## Story 1: Record every land rejection as a spine event naming its gate
+## Story 1: Record every target-resolved land-gate rejection as a spine event naming its gate
 
 ### Acceptance Criteria
 
@@ -43,7 +43,7 @@ Approved by the operator on 2026-09-06 (delegated). Scope is the spec-landing co
 
 ### Done When
 
-- [ ] Classifier unit cases cover a gate-identified error, a missing-target-path error, an unrecognised error, and an over-cap reason.
+- [ ] Classifier unit cases cover a gate-identified error, target disappearance after initial resolution, an unrecognised error, and an over-cap reason.
 - [ ] The truncation cap keeps a serialized rejection record small enough for a single atomic append, and the truncated marker is asserted.
 - [ ] A command test with an unwritable ledger location asserts the unchanged stderr text and the unchanged nonzero exit code.
 

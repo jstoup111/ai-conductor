@@ -136,6 +136,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'feature_shipped',
   ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
+  'land_gate_rejected',
   'test_suite_verification',
   'gate_verdict',
   // S7.5: the budget basis on a post-rebase preservation is only observable

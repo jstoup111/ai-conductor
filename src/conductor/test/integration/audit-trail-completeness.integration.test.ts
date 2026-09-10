@@ -58,6 +58,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   feature_dispatch_started: 'not-audited-by-design',
   feature_dispatch_ended: 'not-audited-by-design',
   feature_shipped: 'not-audited-by-design',
+  // Command rejection telemetry is persisted but has no audit-trail projection.
+  land_gate_rejected: 'not-audited-by-design',
   project_setup: 'not-audited-by-design',
   memory_setup: 'not-audited-by-design',
   setup_repair: 'not-audited-by-design',
@@ -207,6 +209,13 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   feature_dispatch_started: { type: 'feature_dispatch_started', slug: 'feature', kind: 'initial' },
   feature_dispatch_ended: { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete' },
   feature_shipped: { type: 'feature_shipped', slug: 'feature', active: { state: 'unavailable' } },
+  land_gate_rejected: {
+    type: 'land_gate_rejected',
+    gate: 'stories-not-approved',
+    reason: 'stories artifact is not approved',
+    project: 'alpha',
+    worktreePath: '/tmp/alpha-worktree',
+  },
   project_setup: { type: 'project_setup', ran: false, reason: 'marker-valid' },
   memory_setup: { type: 'memory_setup', before: 'absent', canonical: true },
   setup_repair: {
