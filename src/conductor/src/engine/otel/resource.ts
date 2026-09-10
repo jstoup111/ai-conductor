@@ -7,6 +7,7 @@ import { resourceFromAttributes, type Resource } from '@opentelemetry/resources'
 const SERVICE_NAME = 'ai-conductor';
 
 export interface ResourceContext {
+  attributes?: Record<string, string>;
   /** Absolute path to the .pipeline directory. Used to read conduct-session-id. */
   pipelineDir: string;
   /** Feature name / description. Defaults to 'unknown'. */
@@ -72,6 +73,7 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
   // skipped here: it writes the session-id file as a side effect, and the
   // metric scope has no use for the value.
   if (signal === 'metrics') return resourceFromAttributes({
+    ...ctx.attributes,
     'service.name': SERVICE_NAME,
     'service.instance.id': `${projectName}/${workerName}`,
     'conductor.project': project,
@@ -80,6 +82,7 @@ export function buildResource(ctx: ResourceContext, signal: ResourceSignal = 'tr
   });
 
   return resourceFromAttributes({
+    ...ctx.attributes,
     ...traceStable,
     'conductor.run.id': ctx.runId ?? resolveRunId(ctx.pipelineDir),
     'conductor.engine.version': normalizeIdentity(ctx, 'engineVersion'),
