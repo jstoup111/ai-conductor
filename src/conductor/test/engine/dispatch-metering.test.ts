@@ -77,4 +77,37 @@ describe('engine/dispatch-metering', () => {
       type: 'provider_attempt', step: 'build', provider: 'codex', ...event,
     })).toEqual(expected);
   });
+
+  it('carries preferred-provider fallback details from an invoked attempt', () => {
+    const tracker = new DispatchMeteringTracker();
+
+    expect(tracker.observe({
+      type: 'provider_attempt',
+      step: 'build',
+      provider: 'claude',
+      preferredProvider: 'codex',
+      fallbackReason: 'codex unavailable',
+      invoked: true,
+      outcome: 'success',
+    })).toEqual({
+      step: 'build',
+      provider: 'claude',
+      preferredProvider: 'codex',
+      fallbackReason: 'codex unavailable',
+    });
+  });
+
+  it('ignores lifecycle provider-attempt rows', () => {
+    const tracker = new DispatchMeteringTracker();
+
+    expect(tracker.observe({
+      type: 'provider_attempt',
+      step: 'build',
+      provider: 'provider-lifecycle',
+      preferredProvider: 'codex',
+      fallbackReason: 'codex unavailable',
+      invoked: false,
+      outcome: 'success',
+    })).toBeUndefined();
+  });
 });
