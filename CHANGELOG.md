@@ -66,6 +66,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Coherence checks now report and validate corrections for criteria that a plan cannot deliver. ([implementation PR #2470](https://github.com/jstoup111/ai-conductor/pull/2470)).
 - Composer can land required amendments to historical DECIDE artifacts without confusing them with the current feature's specification. ([implementation PR #2445](https://github.com/jstoup111/ai-conductor/pull/2445)).
 - Plan coherence validation accepts common Story reference spellings and clearly reports unbindable or absent references. ([implementation PR #2404](https://github.com/jstoup111/ai-conductor/pull/2404)).
+- Prevent inherited test coverage markers from being misattributed to unrelated features. ([implementation PR #2487](https://github.com/jstoup111/ai-conductor/pull/2487)).
+- Daemon logs now show build-review rubric progress and outcomes. ([implementation PR #2449](https://github.com/jstoup111/ai-conductor/pull/2449)).
 
 ## Migration
 
