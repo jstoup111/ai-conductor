@@ -27,6 +27,9 @@ export const DURATION_BUCKET_BOUNDARIES_MS = [
   3_600_000, 7_200_000, 14_400_000, 28_800_000,
 ];
 
+/** Labels owned by Conductor rather than an operator-supplied attribute map. */
+export const RESERVED_CONDUCTOR_LABEL_KEYS = ['project', 'worker', 'feature', 'step'] as const;
+
 export interface DispatchDimensions {
   model?: string;
   effort?: string;
@@ -71,6 +74,7 @@ export function dispatchDimensionsFrom(
 
 export class MetricsRecorder {
   private readonly instruments: MetricInstruments;
+  private readonly customAttrs: Attributes;
 
   constructor(
     meter: Meter,
@@ -78,10 +82,13 @@ export class MetricsRecorder {
       project: 'unknown',
       worker: 'unknown',
     },
-    private readonly customAttrs: Attributes = {},
+    customAttrs: Attributes = {},
     instruments?: MetricInstruments,
   ) {
     this.instruments = instruments ?? createInstruments(meter);
+    this.customAttrs = Object.fromEntries(
+      Object.entries(customAttrs).filter(([key]) => !RESERVED_CONDUCTOR_LABEL_KEYS.includes(key as typeof RESERVED_CONDUCTOR_LABEL_KEYS[number])),
+    );
   }
 
   /** Bind a feature without creating a second set of OTel instruments. */

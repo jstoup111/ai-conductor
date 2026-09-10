@@ -14,7 +14,11 @@ import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { computeCostRollup } from '../../../src/engine/cost-rollup.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
-import { DURATION_BUCKET_BOUNDARIES_MS, MetricsRecorder } from '../../../src/engine/otel/metrics.js';
+import {
+  DURATION_BUCKET_BOUNDARIES_MS,
+  MetricsRecorder,
+  RESERVED_CONDUCTOR_LABEL_KEYS,
+} from '../../../src/engine/otel/metrics.js';
 import { MetricsListener } from '../../../src/engine/otel/metrics-listener.js';
 import type { Meter } from '@opentelemetry/api';
 import {
@@ -206,7 +210,10 @@ describe('Task 5: operator attributes at the metrics identity seam', () => {
     const provider = new MeterProvider({
       readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
     });
-    const custom = { environment: 'staging', project: 'operator-project', worker: 'operator-worker', feature: 'operator-feature', step: 'operator-step' };
+    const custom = {
+      environment: 'staging',
+      ...Object.fromEntries(RESERVED_CONDUCTOR_LABEL_KEYS.map((key) => [key, `operator-${key}`])),
+    };
     const recorder = new MetricsRecorder(
       provider.getMeter('task-5-custom-attributes'),
       { project: 'conductor-project', worker: 'conductor-worker' },
@@ -245,11 +252,11 @@ describe('Task 5: operator attributes at the metrics identity seam', () => {
         duration: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', step: 'build' },
         retries: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', step: 'build' },
         dispatches: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', step: 'build', metering: 'unmetered' },
-        featureCost: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', step: 'operator-step', cost_complete: true },
+        featureCost: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', cost_complete: true },
         gateVerdict: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', step: 'build', outcome: 'pass' },
-        daemonBacklog: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'operator-feature', step: 'operator-step', state: 'eligible' },
-        sameMapFirst: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'operator-feature', step: 'operator-step' },
-        sameMapSecond: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'operator-feature', step: 'operator-step' },
+        daemonBacklog: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', state: 'eligible' },
+        sameMapFirst: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker' },
+        sameMapSecond: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker' },
         noMap: { project: 'conductor-project', worker: 'conductor-worker' },
       });
     } finally {
