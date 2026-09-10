@@ -21,13 +21,13 @@ As a daemon operator watching a review lap, I want each rubric branch named as i
 
 #### Negative Paths
 
-- Given two rubric events for the same rubric belong to different laps, when the daemon renders both, then each line carries a short lap tag derived from its own lap identifier so the two branches are not conflated.
+- Given two rubric events for the same rubric belong to different laps, when the daemon renders both, then each line carries its full lap identifier so the two branches are not conflated by prefix collisions.
 
 ### Done When
 
 - [ ] A rendered start line contains the rubric name and a started marker, and no serialized JSON object.
 - [ ] A rendered cache-hit line for the same rubric is textually distinguishable from a fresh start line.
-- [ ] Two rendered lines for one rubric under different lap identifiers carry different lap tags.
+- [ ] Two rendered lines for one rubric under different lap identifiers carry their distinct full lap identifiers.
 
 ## Story 2: Distinguish settled rubric outcomes at a glance
 

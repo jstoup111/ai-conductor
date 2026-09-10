@@ -16,7 +16,7 @@ The whole change lives in `renderDaemonEventUnsafe` in `src/conductor/src/daemon
 
 Attribution is delivered by adjacency, not by enriching the provider event. `build_review_rubric_started` is emitted for each cache miss before the fan-out dispatches, so a labeled start line lands immediately before the `build_review via <provider>` line the operator already sees, and the set of start lines with no matching settle line is exactly the outstanding set. Changing `provider_attempt` to carry a rubric would be a union change, which the stories' machine-consumer criterion forbids.
 
-Every rubric event carries `lapId`. Each rendered rubric line carries a short lap tag — the first eight characters of `lapId` — so two laps interleaved in one log file stay separable. This matters because a rejected rubric discards a whole lap and a stale aggregate can replay settled findings, and diagnosing that starts with knowing which lap a line belongs to. The tag is derived at render time from a field already on the event; nothing is stamped anywhere.
+Every rubric event carries `lapId`. Each rendered rubric line carries that identifier in full, so two laps interleaved in one log file stay separable even when their identifiers share a long prefix. This matters because a rejected rubric discards a whole lap and a stale aggregate can replay settled findings, and diagnosing that starts with knowing which lap a line belongs to. The identifier is read directly from the event at render time; nothing is stamped anywhere.
 
 Line shapes, all rendered with the step name first so existing `grep build_review` habits keep working: a start line marks the rubric started; a cache-hit line marks it served from cache; a result line states `PASS` or `FAIL` as judged; a skip line states `skipped` with the event's reason; an infrastructure-failure line states `infrastructure failure` with the event's reason and, when present, its excerpt — deliberately different wording from the judged `FAIL` line so the two never read alike; and the outer-verdict line states the effective verdict, adds the raw verdict only when it differs, and appends the deterministic reason and the unresolved-marker count when the event supplies them. `reason`, `excerpt`, and `unresolvedMarkers` are optional in the union, so each is read defensively and omitted from the line when absent.
 
@@ -48,9 +48,9 @@ All five tasks edit the same switch and the same new test file, so they are genu
 
 **Steps:**
 1. Create the new renderer unit-test file, following the local pattern: mock `execa` at module scope, import the exported `renderDaemonEvent`, set `chalk.level = 0` in `beforeEach` and restore the original level in `afterEach`, and collect lines through an injected callback. Search the sibling `daemon-render-*` test files for a comparable fixture shape rather than inventing one.
-2. Write failing cases asserting that a rubric start event renders one line naming the step, naming the rubric, marking it started, and carrying a short lap tag, and that a cache-hit event for the same rubric renders a line marking it served from cache.
+2. Write failing cases asserting that a rubric start event renders one line naming the step, naming the rubric, marking it started, and carrying the full lap identifier, and that a cache-hit event for the same rubric renders a line marking it served from cache.
 3. Verify both fail (RED) against the current `default: break;` fall-through.
-4. Add the two cases to the switch beside the existing build_review cases, deriving the lap tag from the first eight characters of the event's lap identifier, and reusing the file's existing dimmed-dot and glyph conventions.
+4. Add the two cases to the switch beside the existing build_review cases, rendering the event's full lap identifier and reusing the file's existing dimmed-dot and glyph conventions.
 5. Verify both pass (GREEN), run the file's narrow test invocation and the typecheck target that covers the test directory, and commit.
 
 **Done when:**
@@ -69,11 +69,11 @@ All five tasks edit the same switch and the same new test file, so they are genu
 1. Write a failing case that renders two start events for the same rubric under two different lap identifiers and asserts the two lines differ, with each carrying the tag derived from its own identifier.
 2. Write a failing case for a lap identifier shorter than the tag length, asserting the line renders the whole identifier without throwing and without padding.
 3. Verify both fail (RED).
-4. Extract the lap-tag derivation into one small local helper in the renderer file and use it from every rubric case, so the tag cannot drift between cases.
+4. Extract the lap-identifier rendering into one small local helper in the renderer file and use it from every rubric case, so the representation cannot drift between cases.
 5. Verify both pass (GREEN), rerun the narrow test invocation, and commit.
 
 **Done when:**
-1. Two rendered lines for one rubric under different lap identifiers carry different lap tags.
+1. Two rendered lines for one rubric under different lap identifiers carry their distinct full identifiers.
 2. A lap identifier shorter than the tag length renders in full without throwing.
 3. Every rubric case in the switch derives its tag through the single shared helper.
 
@@ -138,7 +138,7 @@ All five tasks edit the same switch and the same new test file, so they are genu
 | --- | --- | --- | --- |
 | Story 1 happy: Given a rubric branch begins a fresh dispatch, when the daemon renders its start event, then the log line names the build_review step, names that rubric, and marks the branch as started. | 1 | "A rendered start line contains the step name, the rubric name, and a started marker." | diff-local |
 | Story 1 happy: Given a rubric branch is served from a cached judgement, when the daemon renders its cache-hit event, then the log line names that rubric and marks the branch as served from cache rather than freshly dispatched. | 1 | "A rendered cache-hit line for the same rubric is textually distinguishable from the start line." | diff-local |
-| Story 1 negative: Given two rubric events for the same rubric belong to different laps, when the daemon renders both, then each line carries a short lap tag derived from its own lap identifier so the two branches are not conflated. | 2 | "Two rendered lines for one rubric under different lap identifiers carry different lap tags." | diff-local |
+| Story 1 negative: Given two rubric events for the same rubric belong to different laps, when the daemon renders both, then each line carries its full lap identifier so the two branches are not conflated by prefix collisions. | 2 | "Two rendered lines for one rubric under different lap identifiers carry their distinct full identifiers." | diff-local |
 | Story 2 happy: Given a rubric branch settles with a judged verdict, when the daemon renders its result event, then the log line names that rubric and states PASS or FAIL as judged. | 3 | "A result line names the rubric and states PASS or FAIL as judged." | diff-local |
 | Story 2 happy: Given a rubric branch is neutrally skipped before dispatch, when the daemon renders its skip event, then the log line names that rubric, marks it skipped rather than failed, and carries the skip reason. | 3 | "A skip line carries its reason verbatim and contains no failure wording." | diff-local |
 | Story 2 happy: Given a lap reaches its outer verdict, when the daemon renders that event, then the log line states the effective verdict, additionally states the raw verdict whenever the two differ, and carries the deterministic pass reason and unresolved-marker count when the event supplies them. | 4 | "An outer-verdict line whose raw and effective verdicts differ names both." | diff-local |

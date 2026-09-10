@@ -27,13 +27,13 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
   it('labels a started rubric branch with its lap tag', () => {
     expect(lines({
       type: 'build_review_rubric_started', rubric: 'testQuality', lapId: 'lap-12345678',
-    })).toEqual(['·   build_review [lap-1234] testQuality started']);
+    })).toEqual(['·   build_review [lap-12345678] testQuality started']);
   });
 
   it('labels a cached rubric branch distinctly from a fresh start', () => {
     expect(lines({
       type: 'build_review_cache_hit', rubric: 'testQuality', lapId: 'lap-12345678',
-    })).toEqual(['·   build_review [lap-1234] testQuality cache hit']);
+    })).toEqual(['·   build_review [lap-12345678] testQuality cache hit']);
   });
 
   it('keeps starts from separate laps distinguishable', () => {
@@ -44,8 +44,8 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
       type: 'build_review_rubric_started', rubric: 'testQuality', lapId: 'second-lap-5678',
     });
 
-    expect(first).toEqual(['·   build_review [first-la] testQuality started']);
-    expect(second).toEqual(['·   build_review [second-l] testQuality started']);
+    expect(first).toEqual(['·   build_review [first-lap-1234] testQuality started']);
+    expect(second).toEqual(['·   build_review [second-lap-5678] testQuality started']);
     expect(first).not.toEqual(second);
   });
 
@@ -58,7 +58,7 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
   it.each(['PASS', 'FAIL'] as const)('states a judged %s result', (verdict) => {
     expect(lines({
       type: 'build_review_rubric_result', rubric: 'testQuality', lapId: 'lap-12345678', verdict,
-    })).toEqual([`·   build_review [lap-1234] testQuality ${verdict}`]);
+    })).toEqual([`·   build_review [lap-12345678] testQuality ${verdict}`]);
   });
 
   it('renders a neutral skip with its reason verbatim', () => {
@@ -67,7 +67,7 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
       reason: 'disabled by configuration',
     });
 
-    expect(line).toBe('·   build_review [lap-1234] testQuality skipped: disabled by configuration');
+    expect(line).toBe('·   build_review [lap-12345678] testQuality skipped: disabled by configuration');
     expect(line).not.toContain('FAIL');
     expect(line).not.toContain('failure');
   });
@@ -75,20 +75,20 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
   it('names an agreeing outer verdict once', () => {
     expect(lines({
       type: 'build_review_outer_verdict', lapId: 'lap-12345678', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
-    })).toEqual(['·   build_review [lap-1234] outer verdict: PASS']);
+    })).toEqual(['·   build_review [lap-12345678] outer verdict: PASS']);
   });
 
   it('names both outer verdicts when the effective verdict differs', () => {
     expect(lines({
       type: 'build_review_outer_verdict', lapId: 'lap-12345678', rawVerdict: 'FAIL', effectiveVerdict: 'PASS',
-    })).toEqual(['·   build_review [lap-1234] outer verdict: PASS (raw: FAIL)']);
+    })).toEqual(['·   build_review [lap-12345678] outer verdict: PASS (raw: FAIL)']);
   });
 
   it('includes an outer verdict reason only when supplied', () => {
     expect(lines({
       type: 'build_review_outer_verdict', lapId: 'lap-12345678', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
       reason: 'no enabled rubrics',
-    })).toEqual(['·   build_review [lap-1234] outer verdict: PASS — no enabled rubrics']);
+    })).toEqual(['·   build_review [lap-12345678] outer verdict: PASS — no enabled rubrics']);
   });
 
   it('includes the unresolved-marker count only when supplied', () => {
@@ -98,7 +98,7 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
         { selector: 'test/a.test.ts', reference: 'task:1' },
         { selector: 'test/b.test.ts', reference: 'task:2' },
       ],
-    })).toEqual(['·   build_review [lap-1234] outer verdict: PASS — unresolved markers: 2']);
+    })).toEqual(['·   build_review [lap-12345678] outer verdict: PASS — unresolved markers: 2']);
   });
 
   it('renders an infrastructure failure with its reason and optional excerpt', () => {
@@ -106,12 +106,12 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
       type: 'build_review_rubric_infrastructure_failure', rubric: 'testQuality', lapId: 'lap-12345678',
       reason: 'scoped run timed out', excerpt: 'timed out after 30 seconds',
     })).toEqual([
-      '·   build_review [lap-1234] testQuality infrastructure failure: scoped run timed out — timed out after 30 seconds',
+      '·   build_review [lap-12345678] testQuality infrastructure failure: scoped run timed out — timed out after 30 seconds',
     ]);
     expect(lines({
       type: 'build_review_rubric_infrastructure_failure', rubric: 'testQuality', lapId: 'lap-12345678',
       reason: 'scoped run timed out',
-    })).toEqual(['·   build_review [lap-1234] testQuality infrastructure failure: scoped run timed out']);
+    })).toEqual(['·   build_review [lap-12345678] testQuality infrastructure failure: scoped run timed out']);
   });
 
   it('keeps infrastructure failure distinct from judged failure in plain text', () => {

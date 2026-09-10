@@ -2602,7 +2602,7 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
 }
 
 function buildReviewLapTag(lapId: string): string {
-  return lapId.slice(0, 8);
+  return lapId;
 }
 
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
