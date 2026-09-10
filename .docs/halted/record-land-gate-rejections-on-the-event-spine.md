@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-10T22:54:46.078Z
 Slug: record-land-gate-rejections-on-the-event-spine
 Class: needs-human
 Halting step: prd_audit
