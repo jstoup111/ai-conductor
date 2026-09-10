@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:1, task:3
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
@@ -403,6 +403,50 @@ describe('DefaultStepRunner', () => {
     const { observedIntervals, result } = await run();
 
     expect(result.observedIntervals?.[0]).toBe(observedIntervals[0]);
+  });
+
+  it('forwards resolved effort only when the provider-aware result resolves it', async () => {
+    const providerExecutor = vi.fn()
+      .mockResolvedValueOnce({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        resolvedEffort: 'high',
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+        attempts: [],
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+        attempts: [],
+      });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: {
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([
+          interactiveRuntime('codex', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 }))),
+        ]),
+        sessions: new ProviderSessionStore(),
+        executor: providerExecutor,
+      },
+    });
+
+    const results = [
+      await runner.run('build', emptyState),
+      await runner.run('build', emptyState),
+    ];
+
+    expect(results.map((result) => ({
+      hasEffort: Object.hasOwn(result, 'effort'),
+      effort: (result as { effort?: string }).effort,
+    }))).toEqual([
+      { hasEffort: true, effort: 'high' },
+      { hasEffort: false, effort: undefined },
+    ]);
   });
 
   it('forwards task-local attribution to provider-aware normal dispatch', async () => {
@@ -1607,6 +1651,7 @@ describe('DefaultStepRunner', () => {
         output: 'codex built',
         tokenUsage: { input: 11, output: 4 },
         model: 'gpt-5.6-terra',
+        effort: 'medium',
         preferredProvider: 'codex',
         actualProvider: 'codex',
         attempts: [
@@ -1624,6 +1669,7 @@ describe('DefaultStepRunner', () => {
         output: 'claude explored',
         tokenUsage: { input: 7, output: 3 },
         model: 'opus',
+        effort: 'high',
         preferredProvider: 'claude',
         actualProvider: 'claude',
         attempts: [

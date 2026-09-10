@@ -1262,6 +1262,8 @@ export interface StepRunResult {
    * used for this invocation (post model-availability/ladder resolution).
    */
   model?: string;
+  /** Resolved provider effort level actually used for this invocation. */
+  effort?: EffortLevel;
   /**
    * Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o): base-
    * freshness evidence from `assembleBuildReviewInputs`, set on every
