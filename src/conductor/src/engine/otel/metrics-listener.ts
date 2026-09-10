@@ -3,7 +3,7 @@ import type { ConductorEventEmitter, EventHandler } from '../../ui/events.js';
 import { otelEventTypes, type OtelEventType } from '../event-sinks.js';
 import { DispatchMeteringTracker } from '../dispatch-metering.js';
 import { forwardedFeatureOf } from '../event-persister.js';
-import { MetricsRecorder, type DispatchDimensions } from './metrics.js';
+import { dispatchDimensionsFrom, MetricsRecorder } from './metrics.js';
 
 type OtelEvent = Extract<ConductorEvent, { type: OtelEventType }>;
 type MetricsHandler = (listener: MetricsListener, event: OtelEvent) => void;
@@ -63,7 +63,7 @@ export class MetricsListener {
     feature_cost_snapshot: (listener, event) => listener.feature(event)?.onFeatureCostSnapshot(event as Extract<OtelEvent, { type: 'feature_cost_snapshot' }>),
     step_retry: (listener, event) => {
       const retry = event as Extract<OtelEvent, { type: 'step_retry' }>;
-      listener.feature(retry)?.onRetry(retry.step, MetricsListener.dimensionsOf(retry));
+      listener.feature(retry)?.onRetry(retry.step, dispatchDimensionsFrom(retry));
     },
     feature_complete: (listener, event) => listener.closeFeature(event, 'complete'),
     build_stall: (listener, event) => listener.recorder.onStall((event as Extract<OtelEvent, { type: 'build_stall' }>).reason),
@@ -123,7 +123,7 @@ export class MetricsListener {
     const featureStarts = this.starts.get(slug);
     const start = featureStarts?.get(event.step);
     const compatibilityDispatch = this.observeDispatch(event);
-    if (start !== undefined) metric.onStepClose(event.step, Math.max(0, this.now() - start), 0, event.type === 'step_completed' ? event.tokenUsage : undefined, event.type === 'step_completed' ? event.model : undefined, compatibilityDispatch !== undefined, MetricsListener.dimensionsOf(event));
+    if (start !== undefined) metric.onStepClose(event.step, Math.max(0, this.now() - start), 0, event.type === 'step_completed' ? event.tokenUsage : undefined, event.type === 'step_completed' ? event.model : undefined, compatibilityDispatch !== undefined, dispatchDimensionsFrom(event, compatibilityDispatch));
     featureStarts?.delete(event.step);
     if (featureStarts?.size === 0) this.starts.delete(slug);
   }
@@ -132,13 +132,7 @@ export class MetricsListener {
     const observation = this.observeDispatch(event);
     const metric = this.feature(event);
     if (!observation || !metric) return;
-    metric.onDispatch(event.step, observation.tokenUsage, observation.model, {
-      ...(observation.model !== undefined ? { model: observation.model } : {}),
-      ...(observation.provider !== undefined ? { provider: observation.provider } : {}),
-      ...(observation.preferredProvider !== undefined
-        ? { fallback: observation.preferredProvider !== observation.provider }
-        : {}),
-    });
+    metric.onDispatch(event.step, observation.tokenUsage, observation.model, dispatchDimensionsFrom(event, observation));
   }
 
   private observeDispatch(event: Extract<OtelEvent, { type: 'provider_attempt' | 'step_completed' | 'step_failed' }>) {
@@ -149,15 +143,6 @@ export class MetricsListener {
     return tracker.observe(event);
   }
 
-  private static dimensionsOf(event: Extract<OtelEvent, { type: 'step_completed' | 'step_failed' | 'step_retry' }>): DispatchDimensions {
-    return {
-      ...('model' in event && typeof event.model === 'string' ? { model: event.model } : {}),
-      ...(event.effort !== undefined ? { effort: event.effort } : {}),
-      ...('actualProvider' in event && typeof event.actualProvider === 'string' ? { provider: event.actualProvider } : {}),
-      ...('provider' in event && typeof event.provider === 'string' ? { provider: event.provider } : {}),
-      ...(event.tier !== undefined ? { tier: event.tier } : {}),
-    };
-  }
 }
 
 /** Lists OTel sink rows that lack a real listener projection. */
