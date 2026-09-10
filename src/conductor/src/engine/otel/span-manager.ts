@@ -27,12 +27,14 @@ import {
   Context,
 } from '@opentelemetry/api';
 import type { ConductorEvent } from '../../types/events.js';
+import type { DispatchMeteringObservation } from '../dispatch-metering.js';
 
 interface StepState {
   span: Span;
   index: number;
   retryCount: number;
   startTimeMs: number;
+  dispatch?: DispatchMeteringObservation;
 }
 
 export type RunOutcome = 'complete' | 'halted' | 'terminated';
@@ -115,6 +117,13 @@ export class SpanManager {
     }
     const durationMs = Date.now() - state.startTimeMs;
 
+    this.setDispatchAttributes(state, {
+      model: event.model,
+      effort: event.effort,
+      tier: event.tier,
+      provider: event.actualProvider,
+      preferredProvider: event.preferredProvider,
+    });
     state.span.setAttribute('conductor.step.status', event.status);
     state.span.setAttribute('conductor.retry.count', state.retryCount);
     state.span.setStatus({ code: SpanStatusCode.OK });
@@ -134,6 +143,10 @@ export class SpanManager {
     }
     const durationMs = Date.now() - state.startTimeMs;
 
+    this.setDispatchAttributes(state, {
+      effort: event.effort,
+      tier: event.tier,
+    });
     state.span.setAttribute('conductor.step.status', 'failed');
     // Use event.retryCount for failed steps (authoritative source on failure).
     state.span.setAttribute('conductor.retry.count', event.retryCount);
@@ -142,6 +155,42 @@ export class SpanManager {
     this.openSteps.delete(event.step);
 
     this.callbacks?.onStepClose?.(event.step, durationMs, event.retryCount);
+  }
+
+  onProviderAttempt(step: string, observation: DispatchMeteringObservation): void {
+    const state = this.openSteps.get(step);
+    if (!state) {
+      this.warn(`provider_attempt for '${step}' received but no open span exists — ignoring`);
+      return;
+    }
+    state.dispatch = observation;
+  }
+
+  private setDispatchAttributes(
+    state: StepState,
+    event: {
+      model?: string;
+      effort?: string;
+      tier?: string;
+      provider?: string;
+      preferredProvider?: string;
+    },
+  ): void {
+    const provider = event.provider ?? state.dispatch?.provider;
+    const preferredProvider = event.preferredProvider ?? state.dispatch?.preferredProvider;
+    if (event.model !== undefined) state.span.setAttribute('conductor.model', event.model);
+    if (event.effort !== undefined) state.span.setAttribute('conductor.effort', event.effort);
+    if (event.tier !== undefined) state.span.setAttribute('conductor.complexity_tier', event.tier);
+    if (provider !== undefined) state.span.setAttribute('conductor.provider', provider);
+    if (preferredProvider !== undefined) {
+      state.span.setAttribute('conductor.provider.preferred', preferredProvider);
+    }
+    if (provider !== undefined && preferredProvider !== undefined) {
+      state.span.setAttribute('conductor.fallback', preferredProvider !== provider);
+    }
+    if (state.dispatch?.fallbackReason !== undefined) {
+      state.span.setAttribute('conductor.fallback.reason', state.dispatch.fallbackReason);
+    }
   }
 
   // ── Span events ────────────────────────────────────────────────────────────

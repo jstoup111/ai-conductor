@@ -445,6 +445,7 @@ export class OtelVisualizer implements VisualizerPlugin {
       case 'provider_attempt': {
         const dispatch = this.dispatchMetering.observe(event);
         if (dispatch) {
+          this.spanManager.onProviderAttempt(dispatch.step ?? event.step, dispatch);
           this.metricsRecorder?.onDispatch(
             dispatch.step ?? event.step,
             dispatch.tokenUsage,
