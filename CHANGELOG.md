@@ -11,6 +11,72 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-10
+
+### Added
+
+- Operators can set per-rubric confidence floors so low-confidence build-review findings do not block progress. ([implementation PR #2393](https://github.com/jstoup111/ai-conductor/pull/2393)).
+- Daemon OpenTelemetry exports now report queue depth, liveness, dispatch blockers, and feature lifecycle outcomes. ([implementation PR #2423](https://github.com/jstoup111/ai-conductor/pull/2423)).
+- Plan landing now halts oversized plans unless they include a documented scope exception. ([implementation PR #2410](https://github.com/jstoup111/ai-conductor/pull/2410)).
+- The inline report shows kickbacks by source gate and BUILD re-entry counts. ([implementation PR #2451](https://github.com/jstoup111/ai-conductor/pull/2451)).
+- Daemon dispatches now establish and observe each worktree's canonical memory store before project setup. ([implementation PR #2397](https://github.com/jstoup111/ai-conductor/pull/2397)).
+- Maintainers can rerun release-PR maintenance from the default branch after an interrupted run. ([implementation PR #2473](https://github.com/jstoup111/ai-conductor/pull/2473)).
+- Daemon build progress lines now show how recently the feature branch received a commit. ([implementation PR #2459](https://github.com/jstoup111/ai-conductor/pull/2459)).
+- OpenTelemetry visualizations now enforce complete event-handler coverage for traced events. ([implementation PR #2395](https://github.com/jstoup111/ai-conductor/pull/2395)).
+- OpenTelemetry exports now label step duration, retry, and dispatch metrics with resolved provider, model, effort, and tier dimensions. ([implementation PR #2486](https://github.com/jstoup111/ai-conductor/pull/2486)).
+- Operators can add static namespaced attributes to all OpenTelemetry exports. ([implementation PR #2490](https://github.com/jstoup111/ai-conductor/pull/2490)).
+
+### Changed
+
+- Build review now limits test-quality checks to changed behavior and explicitly recovers uncertain coverage. ([implementation PR #2324](https://github.com/jstoup111/ai-conductor/pull/2324)).
+- OpenTelemetry traces now report the released harness version as service.version. ([implementation PR #2399](https://github.com/jstoup111/ai-conductor/pull/2399)).
+- Spec landing commits now summarize the DECIDE artifacts they contain. ([implementation PR #2400](https://github.com/jstoup111/ai-conductor/pull/2400)).
+
+### Fixed
+
+- Resolved intake issues now receive a resolution comment and close only when `compose forget` is given `--resolved-by <reference>`. ([implementation PR #2403](https://github.com/jstoup111/ai-conductor/pull/2403)).
+- Spec pull requests include a valid release disposition when they are opened. ([implementation PR #2407](https://github.com/jstoup111/ai-conductor/pull/2407)).
+- Keep harness execution context smaller while making optional architecture references available in both installed skill catalogs. ([implementation PR #2446](https://github.com/jstoup111/ai-conductor/pull/2446)).
+- Rate-limit retry waits now honor explicitly stated seconds, minutes, and hours. ([implementation PR #2456](https://github.com/jstoup111/ai-conductor/pull/2456)).
+- Rebase halts now identify missing feature content and provide the correct recovery steps. ([implementation PR #2396](https://github.com/jstoup111/ai-conductor/pull/2396)).
+- Telemetry no longer counts provider-free step completions as provider dispatches. ([implementation PR #2401](https://github.com/jstoup111/ai-conductor/pull/2401)).
+- Recover sealed artifact verification when recorded remediation tasks append to a valid baseline. ([implementation PR #2394](https://github.com/jstoup111/ai-conductor/pull/2394)).
+- Require operator authorization before a halted feature resumes and provide budget recovery commands. ([implementation PR #2206](https://github.com/jstoup111/ai-conductor/pull/2206)).
+- Qualify partial feature-cost totals and suppress unpriced cost figures. ([implementation PR #2463](https://github.com/jstoup111/ai-conductor/pull/2463)).
+- Coherence artifacts now accept valid mapping tables that follow ordinary trailing tables or commentary. ([implementation PR #2402](https://github.com/jstoup111/ai-conductor/pull/2402)).
+- Prevents shipment checks from treating quoted or incidental plan paths as declared plans. ([implementation PR #2362](https://github.com/jstoup111/ai-conductor/pull/2362)).
+- Build review now fails clearly when it cannot identify this feature's plan. ([implementation PR #2426](https://github.com/jstoup111/ai-conductor/pull/2426)).
+- Build-review failures now keep the actionable review verdict ahead of containment advisories. ([implementation PR #2428](https://github.com/jstoup111/ai-conductor/pull/2428)).
+- Preserve Codex token metering when completed usage is observed live but omitted from retained terminal output. ([implementation PR #2442](https://github.com/jstoup111/ai-conductor/pull/2442)).
+- Prevent build review from halting when a plan's Files list includes a directory hint. ([implementation PR #2469](https://github.com/jstoup111/ai-conductor/pull/2469)).
+- Full-suite verification automatically reclaims orphaned recovery claims without disturbing live recovery work. ([implementation PR #2444](https://github.com/jstoup111/ai-conductor/pull/2444)).
+- Daemon conflict resolution reliably recreates its temporary worktree after a prior attempt crashes. ([implementation PR #2437](https://github.com/jstoup111/ai-conductor/pull/2437)).
+- Build-review preflight deadlines now stop scoped test commands that do not exit after termination. ([implementation PR #2436](https://github.com/jstoup111/ai-conductor/pull/2436)).
+- As-built review verdicts formatted as Markdown headings now pass the release gate. ([implementation PR #2435](https://github.com/jstoup111/ai-conductor/pull/2435)).
+- Prevent operator-park boundary stops from being misreported as needs-human daemon halts. ([implementation PR #2431](https://github.com/jstoup111/ai-conductor/pull/2431)).
+- CI repair now uses daemon-owned configured verification before publication and directs repair agents to leave tests and pushing to the daemon. ([implementation PR #2468](https://github.com/jstoup111/ai-conductor/pull/2468)).
+- Restart the daemon idle-poll budget whenever it dispatches work. ([implementation PR #2452](https://github.com/jstoup111/ai-conductor/pull/2452)).
+- Terminal step refusals now halt immediately instead of consuming retry attempts. ([implementation PR #2461](https://github.com/jstoup111/ai-conductor/pull/2461)).
+- Autoresolve now verifies and pushes clean rebases before reporting a PR as refreshed. ([implementation PR #2472](https://github.com/jstoup111/ai-conductor/pull/2472)).
+- CI-fix remediation now treats completed legacy commit statuses as terminal. ([implementation PR #2458](https://github.com/jstoup111/ai-conductor/pull/2458)).
+- Build review excludes paths whose feature-only changes are already patch-equivalent to the review base. ([implementation PR #2427](https://github.com/jstoup111/ai-conductor/pull/2427)).
+- DECIDE grants issued from linked worktrees now reach the daemon’s canonical repository store. ([implementation PR #2457](https://github.com/jstoup111/ai-conductor/pull/2457)).
+- The spec land gate now rejects newly added ADRs whose filenames lack a real date-prefixed canonical format. ([implementation PR #2450](https://github.com/jstoup111/ai-conductor/pull/2450)).
+- The post-commit feedback hook now runs only after commit-creating commands that produce a fresh commit. ([implementation PR #2425](https://github.com/jstoup111/ai-conductor/pull/2425)).
+- Preserve test-quality findings when reviewers cite a uniquely resolved candidate's supplied source reference. ([implementation PR #2474](https://github.com/jstoup111/ai-conductor/pull/2474)).
+- Overlap scans now exclude paths changed only on the base branch, avoiding false overlap warnings. ([implementation PR #2455](https://github.com/jstoup111/ai-conductor/pull/2455)).
+- Coherence checks now report and validate corrections for criteria that a plan cannot deliver. ([implementation PR #2470](https://github.com/jstoup111/ai-conductor/pull/2470)).
+- Composer can land required amendments to historical DECIDE artifacts without confusing them with the current feature's specification. ([implementation PR #2445](https://github.com/jstoup111/ai-conductor/pull/2445)).
+- Plan coherence validation accepts common Story reference spellings and clearly reports unbindable or absent references. ([implementation PR #2404](https://github.com/jstoup111/ai-conductor/pull/2404)).
+- Prevent inherited test coverage markers from being misattributed to unrelated features. ([implementation PR #2487](https://github.com/jstoup111/ai-conductor/pull/2487)).
+- Daemon logs now show build-review rubric progress and outcomes. ([implementation PR #2449](https://github.com/jstoup111/ai-conductor/pull/2449)).
+
+## Migration
+
+```bash migration
+./bin/install --update
+```
+
 ## [1.1.0] - 2026-09-08
 
 ### Added
