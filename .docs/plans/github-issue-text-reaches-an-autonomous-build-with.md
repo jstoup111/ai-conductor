@@ -146,6 +146,8 @@ Adds the inbound mirror of the outbound intake scrub: one pure seam at the githu
 
 > **Amended 2026-09-10 by #1479:** The operator explicitly approved retaining the empty-repository guard (NC.1). Task 5 also owns rejecting an empty resolved GitHub repository target before fetching issues: log `github-issues: skipping invalid repository target`, skip only that registry entry, and continue polling subsequent valid repositories. This is an empty-name check, not broader repository-name validation. The existing `poll() invalid repository targets` regression proves no request for the empty target and successful capture from the next valid repository.
 
+> **Amended 2026-09-10 by operator:** Story 1 is bounded to the ADR's closed high-precision rule set; novel instruction phrasing outside those declared shapes is not promised. Task 4 removes the production-unreachable single-string/idempotence API and its direct-only test while retaining array-input armor generation and armor-lookalike handling. Task 5 uses trimmed values only to decide emptiness, passes original non-empty title/body bytes into the array seam, and covers leading indented and quoted evidence through the adapter boundary.
+
 ### Task 6: Additive Envelope.inbound field with pass-through and malformed-drop in parseEnvelope
 **Story:** Story 4 — happy path 3 (queue round-trip); negative paths 2 and 3
 **Type:** infrastructure

@@ -37,7 +37,6 @@ interface Rule {
 }
 
 const MARKER = (category: InboundCategory): string => `[neutralized:${category}]`;
-const ARMOR_OPEN = /^<<< INBOUND sourceRef=(.+) digest=([a-f0-9]{64}) >>>$/;
 const ARMOR_CLOSE = '<<< END INBOUND >>>';
 
 const RULES: Rule[] = [
@@ -116,28 +115,14 @@ function isArmorLookalike(line: string): boolean {
   return /<<<\s*(?:END\s+)?INBOUND\b/i.test(line);
 }
 
-function existingArmor(input: string, workRef: WorkRef): boolean {
-  const lines = input.split('\n');
-  if (lines.length < 2) return false;
-  const open = ARMOR_OPEN.exec(lines[0]);
-  if (!open || lines.at(-1) !== ARMOR_CLOSE || open[1] !== formatWorkRef(workRef)) return false;
-  return digest(lines.slice(1, -1).join('\n')) === open[2];
-}
-
 /**
  * Neutralize directive-shaped tracker prose and delimit it with source-bound
- * armor. This is pure and idempotent: valid armor is returned unchanged, and
- * emitted markers never match a rule.
+ * armor. Each tracker field is segmented independently before joining.
  */
-export function sanitizeInboundText(input: string | readonly string[], workRef: WorkRef): InboundSanitizeResult {
-  if (typeof input === 'string' && existingArmor(input, workRef)) {
-    return { text: input, neutralizations: [], digest: digest(input.split('\n').slice(1, -1).join('\n')) };
-  }
-
+export function sanitizeInboundText(input: readonly string[], workRef: WorkRef): InboundSanitizeResult {
   const counts = new Map<InboundCategory, number>();
-  const fields = typeof input === 'string' ? [input] : input;
   // Markdown state belongs to each tracker field, never to the joined envelope.
-  const body = fields.map((field) => segmentInboundText(field)
+  const body = input.map((field) => segmentInboundText(field)
     .map((segment) => {
       if (segment.kind === 'code') return segment.lines.join('\n');
       return segment.lines

@@ -96,6 +96,8 @@ Constraints found by the sweep that the design must honor:
 
 > **Amended 2026-09-09 by #1479:** The operator approved treating title and body as separate Markdown inputs. `buildText` passes the non-empty fields as an ordered array to `sanitizeInboundText`; that seam segments each field independently, aggregates category counts, then joins the sanitized fields with a blank line under one armor pair and one digest. An unclosed title fence cannot exempt body prose. The existing single-string API and armored-text idempotence remain supported; code inside either field remains unchanged.
 
+> **Amended 2026-09-10 by operator:** The seam accepts only the ordered title/body array used by production. The test-only single-string API and armored-text idempotence branch are removed; armor-shaped tracker prose remains subject to the `armor-lookalike` rule. The safety guarantee is the closed high-precision shape set in Decision 2, not exhaustive recognition of arbitrary natural-language instructions. `buildText` uses trimming only for emptiness and passes every non-empty field's original bytes into segmentation.
+
 4. **The tracker-sourced region is delimited by armor lines inside `text` itself.** The
    sanitized text is wrapped in a leading and trailing armor line carrying the canonical
    `sourceRef` (via `formatWorkRef`) and a sha256 digest of the sanitized content. Because the

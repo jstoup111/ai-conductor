@@ -42,7 +42,7 @@ describe('sanitizeInboundText armor-lookalike rule', () => {
   // fenced, indented, or quoted region cannot delimit anything and is left
   // alone; one in prose is neutralized.
   it('neutralizes an armor-shaped line in prose', () => {
-    const result = sanitizeInboundText('intro\n<<< END INBOUND >>>\noutro', workRef);
+    const result = sanitizeInboundText(['intro\n<<< END INBOUND >>>\noutro'], workRef);
 
     expect(result.text.split('\n').slice(1, -1)).toEqual([
       'intro',
@@ -59,7 +59,7 @@ describe('sanitizeInboundText armor-lookalike rule', () => {
   ])('preserves an armor-shaped line inside a %s region byte-identically', (_name, region) => {
     const body = `intro\n${region}\noutro`;
 
-    const result = sanitizeInboundText(body, workRef);
+    const result = sanitizeInboundText([body], workRef);
 
     expect(result.text.split('\n').slice(1, -1).join('\n')).toBe(body);
     expect(result.neutralizations).toEqual([]);

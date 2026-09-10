@@ -119,3 +119,5 @@ sequenceDiagram
    filed as a separate intake so this boundary can land without a provider-launch change.
 
 > **Amended 2026-09-09 by #1479:** The operator approved treating title and body as separate Markdown inputs. `buildText` passes the non-empty fields as an ordered array to `sanitizeInboundText`; that seam segments each field independently, aggregates category counts, then joins the sanitized fields with a blank line under one armor pair and one digest. An unclosed title fence cannot exempt body prose. The existing single-string API and armored-text idempotence remain supported; code inside either field remains unchanged.
+
+> **Amended 2026-09-10 by operator:** The production array input is now the only sanitizer API; the unreachable single-string/idempotence branch is removed. The rule set remains a deliberately high-precision closed set rather than an exhaustive natural-language classifier, and `buildText` preserves original non-empty field bytes through segmentation.

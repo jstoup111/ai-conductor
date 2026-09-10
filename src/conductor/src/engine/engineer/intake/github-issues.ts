@@ -83,10 +83,10 @@ function buildText(
   body: string | undefined,
   workRef: WorkRef,
 ): { text: string; inbound: Pick<InboundSanitizeResult, 'neutralizations' | 'digest'> } | null {
-  const t = (title ?? '').trim();
-  const b = (body ?? '').trim();
-  if (t === '' && b === '') return null;
-  const sanitized = sanitizeInboundText([t, b].filter((s) => s !== ''), workRef);
+  const t = title ?? '';
+  const b = body ?? '';
+  if (t.trim() === '' && b.trim() === '') return null;
+  const sanitized = sanitizeInboundText([t, b].filter((s) => s.trim() !== ''), workRef);
   return {
     text: sanitized.text,
     inbound: { neutralizations: sanitized.neutralizations, digest: sanitized.digest },
