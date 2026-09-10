@@ -29,17 +29,12 @@ import {
 import type { ConductorEvent } from '../../types/events.js';
 import type { DispatchMeteringObservation } from '../dispatch-metering.js';
 
-interface SpanDispatchObservation extends DispatchMeteringObservation {
-  effort?: string;
-  tier?: string;
-}
-
 interface StepState {
   span: Span;
   index: number;
   retryCount: number;
   startTimeMs: number;
-  dispatch?: SpanDispatchObservation;
+  dispatch?: DispatchMeteringObservation;
 }
 
 export type RunOutcome = 'complete' | 'halted' | 'terminated';
@@ -163,7 +158,7 @@ export class SpanManager {
     this.callbacks?.onStepClose?.(event.step, durationMs, event.retryCount);
   }
 
-  onProviderAttempt(step: string, observation: SpanDispatchObservation): void {
+  onProviderAttempt(step: string, observation: DispatchMeteringObservation): void {
     const state = this.openSteps.get(step);
     if (!state) {
       this.warn(`provider_attempt for '${step}' received but no open span exists — ignoring`);

@@ -7,6 +7,8 @@ export interface DispatchMeteringObservation {
   preferredProvider?: string;
   fallbackReason?: string;
   model?: string;
+  effort?: string;
+  tier?: string;
   tokenUsage?: TokenUsage;
   unmetered?: boolean;
 }
@@ -103,6 +105,8 @@ export class DispatchMeteringTracker {
         ? { fallbackReason: record.fallbackReason }
         : {}),
       ...(typeof record.model === 'string' ? { model: record.model } : {}),
+      ...(typeof record.effort === 'string' ? { effort: record.effort } : {}),
+      ...(typeof record.tier === 'string' ? { tier: record.tier } : {}),
       ...(tokenUsage ? { tokenUsage } : {}),
       ...(record.unmetered === true ? { unmetered: true } : {}),
     };

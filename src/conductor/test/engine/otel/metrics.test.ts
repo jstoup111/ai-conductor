@@ -101,7 +101,7 @@ describe('Task 3: dispatch dimensions', () => {
     );
 
     try {
-      const dimensions = { model: 'opus', effort: 'high', provider: 'claude', tier: 'M' };
+      const dimensions = { model: 'opus', effort: 'high', provider: 'claude', tier: 'M', fallback: true };
       recorder.onStepClose('full', 10, 0, undefined, undefined, false, dimensions);
       recorder.onRetry('full', dimensions);
       recorder.onDispatch('full', undefined, undefined, dimensions);
@@ -111,19 +111,26 @@ describe('Task 3: dispatch dimensions', () => {
       const attributes = (name: string, step: string) => findMetric(exporter, name)?.dataPoints
         .find((point) => point.attributes.step === step)?.attributes;
       const full = { step: 'full', model: 'opus', effort: 'high', provider: 'claude', tier: 'M', project: 'test-project', worker: 'test-worker', feature: 'test-feature' };
+      const allowedKeys = {
+        'conductor.step.duration': ['step', 'model', 'effort', 'provider', 'tier', 'project', 'worker', 'feature'],
+        'conductor.step.retries': ['step', 'model', 'effort', 'provider', 'tier', 'project', 'worker', 'feature'],
+        'conductor.step.dispatches': ['step', 'metering', 'model', 'effort', 'provider', 'tier', 'fallback', 'project', 'worker', 'feature'],
+      } as const;
 
       expect({
         duration: attributes('conductor.step.duration', 'full'),
         retries: attributes('conductor.step.retries', 'full'),
         dispatches: attributes('conductor.step.dispatches', 'full'),
         modelOnly: attributes('conductor.step.duration', 'model-only'),
-        allowedKeys: ['conductor.step.duration', 'conductor.step.retries', 'conductor.step.dispatches'].flatMap((name) => (
-          findMetric(exporter, name)?.dataPoints.flatMap((point) => Object.keys(point.attributes)) ?? []
-        )).every((key) => ['step', 'metering', 'model', 'effort', 'provider', 'tier', 'fallback', 'project', 'worker', 'feature'].includes(key)),
+        allowedKeys: Object.entries(allowedKeys).every(([name, keys]) => (
+          findMetric(exporter, name)?.dataPoints.every((point) => (
+            Object.keys(point.attributes).every((key) => (keys as readonly string[]).includes(key))
+          )) ?? true
+        )),
       }).toEqual({
         duration: full,
         retries: full,
-        dispatches: { ...full, metering: 'unmetered' },
+        dispatches: { ...full, metering: 'unmetered', fallback: true },
         modelOnly: { step: 'model-only', model: 'opus', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
         allowedKeys: true,
       });

@@ -120,6 +120,44 @@ describe('MetricsListener dispatch dimensions', () => {
     }
   });
 
+  it('keeps fallback on dispatches while omitting it from duration and retries', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const emitter = new ConductorEventEmitter();
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      undefined,
+      'feature',
+    );
+    listener.start(emitter);
+
+    try {
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+      await emitter.emit({
+        type: 'provider_attempt', step: 'build', provider: 'claude', preferredProvider: 'codex',
+        model: 'opus', effort: 'high', tier: 'M', invoked: true, outcome: 'success',
+      });
+      await emitter.emit({
+        type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'retry',
+        model: 'opus', effort: 'high', provider: 'claude', tier: 'M',
+      });
+      await emitter.emit({
+        type: 'step_completed', step: 'build', status: 'done', actualProvider: 'claude',
+        model: 'opus', effort: 'high', tier: 'M',
+      });
+      await provider.forceFlush();
+
+      expect(attributesFor(exporter, 'conductor.step.duration', 'build')).not.toHaveProperty('fallback');
+      expect(attributesFor(exporter, 'conductor.step.retries', 'build')).not.toHaveProperty('fallback');
+      expect(attributesFor(exporter, 'conductor.step.dispatches', 'build')).toMatchObject({ fallback: true });
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
+  });
+
   it('projects close and retry dimensions without retaining them for dimensionless or orphan events', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     const provider = new MeterProvider({
