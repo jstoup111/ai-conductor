@@ -23,6 +23,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Maintainers can rerun release-PR maintenance from the default branch after an interrupted run. ([implementation PR #2473](https://github.com/jstoup111/ai-conductor/pull/2473)).
 - Daemon build progress lines now show how recently the feature branch received a commit. ([implementation PR #2459](https://github.com/jstoup111/ai-conductor/pull/2459)).
 - OpenTelemetry visualizations now enforce complete event-handler coverage for traced events. ([implementation PR #2395](https://github.com/jstoup111/ai-conductor/pull/2395)).
+- OpenTelemetry exports now label step duration, retry, and dispatch metrics with resolved provider, model, effort, and tier dimensions. ([implementation PR #2486](https://github.com/jstoup111/ai-conductor/pull/2486)).
 
 ### Changed
 
