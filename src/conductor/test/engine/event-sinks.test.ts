@@ -348,7 +348,6 @@ describe('event sink subscriptions', () => {
       'feature_dispatch_ended',
       'feature_shipped',
       'memory_setup',
-      'provider_attempt',
       'feature_usage_total',
       'feature_cost_snapshot',
     ] satisfies Array<ConductorEvent['type']>;
@@ -356,6 +355,7 @@ describe('event sink subscriptions', () => {
       'step_started',
       'step_completed',
       'step_failed',
+      'provider_attempt',
       'step_retry',
       'feature_complete',
       'build_stall',
