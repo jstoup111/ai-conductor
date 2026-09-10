@@ -36,7 +36,7 @@ As an operator charting latency, I want `conductor.step.duration` and `conductor
 
 #### Happy Path
 - Given a completed `build` step dispatched on `claude` with model `opus`, effort `high`, tier `M`, when the metrics listener records its duration, then the histogram data point carries attributes `step=build`, `model=opus`, `effort=high`, `provider=claude`, `tier=M` alongside the existing identity attributes
-- Given a `step_retry` for that same step, when the retries counter is incremented, then the data point carries the same `model`, `effort`, `provider`, and `tier` values as the step's duration point
+- Given a failed dispatch is followed by `step_retry`, when the retries counter is incremented, then the retry event and data point carry the failed attempt's resolved `model`, `effort`, and actual `provider`, plus the run's `tier`
 
 #### Negative Paths
 - Given a completed step whose event carries no `model`, when its duration is recorded, then the data point has no `model` attribute and no `unknown` value is emitted
@@ -45,6 +45,7 @@ As an operator charting latency, I want `conductor.step.duration` and `conductor
 
 ### Done When
 - [ ] `MetricsRecorder` duration and retry recording accept a dimension set (`model`, `effort`, `provider`, `tier`) and merge only the defined members into the data-point attributes
+- [ ] `step_retry` declares optional `model`, `effort`, `provider`, and `tier` fields and its emit site populates them from the failed attempt's result plus current run state; the metrics listener projects the retry directly from that event without relying on later observations
 - [ ] A unit test asserts the exact attribute set on a duration point and a retries point for a fully resolved step, and asserts absence of each attribute when its source is undefined
 - [ ] No attribute outside adr-014 D10's list appears on `conductor.step.duration` or `conductor.step.retries`
 
@@ -57,7 +58,7 @@ As an operator, I want `conductor.step.dispatches` to carry `provider` and `fall
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a step with preferred provider `codex` whose successful `provider_attempt` came from `claude`, when the dispatch is counted, then the data point carries `provider=claude` and `fallback=true` in addition to the existing `step` and `metering` attributes
+- Given a step with preferred provider `codex` whose `provider_attempt` came from `claude`, when the attempt event is emitted and the dispatch is counted, then the event carries `preferredProvider=codex` and the data point carries `provider=claude` and `fallback=true` in addition to the existing `step` and `metering` attributes
 - Given a step whose preferred and actual provider are both `claude`, when the dispatch is counted, then the data point carries `provider=claude` and `fallback=false`
 
 #### Negative Paths
@@ -68,6 +69,7 @@ As an operator, I want `conductor.step.dispatches` to carry `provider` and `fall
 ### Done When
 - [ ] The `MetricsListener` `provider_attempt` handler records a dispatch through the existing dispatch-selection tracker instead of being a no-op
 - [ ] `MetricsRecorder` dispatch recording carries `provider` and, when a preferred provider is known, `fallback`
+- [ ] `provider_attempt` declares optional `preferredProvider`, populated at the attempt emit site, so `fallback` is projected at dispatch time without waiting for `step_completed`
 - [ ] A unit test covers fallback true, fallback false, fallback omitted, lifecycle-row suppression, and single counting across attempt plus completion
 
 ## Story 4: Step spans carry the dispatch dimensions and the fallback reason

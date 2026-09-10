@@ -13,7 +13,8 @@ graph TD
         RES["Step runner<br/>resolves model, effort,<br/>preferred/actual provider"]
         STATE["Conductor state<br/>complexity_tier"]
         EC["step_completed / step_failed<br/>model, preferredProvider, actualProvider (exist)<br/>+ effort, tier (NEW)"]
-        PA["provider_attempt<br/>provider, outcome, model, fallbackReason,<br/>tokenUsage (exist)"]
+        PA["provider_attempt<br/>provider, outcome, model, fallbackReason,<br/>tokenUsage (exist) + preferredProvider (NEW)"]
+        RETRY["step_retry<br/>model, effort, provider, tier (NEW optional fields)"]
     end
 
     subgraph otel["src/conductor/src/engine/otel/"]
@@ -36,6 +37,7 @@ graph TD
     RES --> PA
     EC --> ML
     PA --> ML
+    RETRY --> ML
     ML --> MR
     EC --> SM
     PA --> SM
@@ -48,12 +50,12 @@ graph TD
 
 | Dimension | Source today | Placement | Bounded set | Why |
 |-----------|--------------|-----------|-------------|-----|
-| `model` | `step_completed.model`, `provider_attempt.model` | label on duration, retries, dispatches; span attr | rate-card model set (~10) | the issue's "duration by model" question |
-| `effort` | resolved per invocation in the runner; NEW on `step_completed` | label on duration, retries, dispatches; span attr | 5 values | cost/latency effect of an effort change |
-| `provider` | `step_completed.actualProvider`, `provider_attempt.provider` | label on duration, retries, dispatches; span attr | 2–3 values | Codex vs Claude attribution |
-| `fallback` | `preferredProvider !== actualProvider` | label on dispatches only (`true`/`false`); span attr | 2 values | fallback rate is a counter question |
+| `model` | `step_completed.model`, `provider_attempt.model`, failed-attempt result on `step_retry` | label on duration, retries, dispatches; span attr | rate-card model set (~10) | the issue's "duration by model" question |
+| `effort` | resolved per invocation in the runner; NEW on `step_completed` and `step_retry` | label on duration, retries, dispatches; span attr | 5 values | cost/latency effect of an effort change |
+| `provider` | `step_completed.actualProvider`, `provider_attempt.provider`, failed-attempt actual provider on `step_retry` | label on duration, retries, dispatches; span attr | 2–3 values | Codex vs Claude attribution |
+| `fallback` | `provider_attempt.preferredProvider !== provider_attempt.provider` | label on dispatches only (`true`/`false`); span attr | 2 values | fallback rate is a counter question, computed when the dispatch occurs |
 | `fallback.reason` | `provider_attempt.fallbackReason` | span attribute only | free text | unbounded string — never a label |
-| `tier` | `state.complexity_tier`; NEW on `step_completed` | label on duration, retries, dispatches; span attr | 3 values | tier as a dimension |
+| `tier` | `state.complexity_tier`; NEW on `step_completed` and `step_retry` | label on duration, retries, dispatches; span attr | 3 values | tier as a dimension |
 | `usage.reasoning_output`, `usage.turns`, `usage.duration_ms` | `TokenUsage` | span attributes only | numeric | per-dispatch detail, not a slicing key |
 | `cost.source` | `TokenUsage.costSource` | span attribute only (already a label on `feature.step.cost` as `source`) | 2 values | avoid duplicating the existing cost label |
 

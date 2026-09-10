@@ -13,7 +13,8 @@ Thread reasoning effort and complexity tier onto the step close events, make `pr
 
 - **One dimension shape, both projections.** A `DispatchDimensions` value (`{ model?, effort?, provider?, tier?, fallback? }`) is built once from an event and passed to `MetricsRecorder.onStepClose`, `onRetry`, and `onDispatch`. The recorder merges only defined members into the data-point attributes (the `feature_cost_snapshot` handling of optional `model`/`source` is the local pattern: copy the "only add the key when the value is defined" trait; do not add `unknown` fallbacks). Both the daemon `MetricsListener` and the interactive `OtelVisualizer` build that value the same way, which is what condition C1 demands.
 - **Effort and tier travel on the event.** `ProviderExecutionResult.resolvedEffort` already exists; it is surfaced onto `StepRunResult.effort` at the same spread where `resolvedModel` becomes `model` in `step-runners.ts`, and emitted on `step_completed`/`step_failed` beside `model` in `conductor.ts`. `tier` is read from `state.complexity_tier` at the same emit site. Keys are omitted when undefined.
-- **Provider comes through the existing tracker.** `DispatchMeteringTracker.observe` already selects each invoked dispatch once and drops lifecycle rows; it gains `preferredProvider` and `fallbackReason` on its observation so `fallback` (= preferred known and ≠ actual) and the span's reason derive from one place. The daemon listener gets its own tracker instance per feature so the no-op `provider_attempt` handler can call `recorder.onDispatch` exactly as the interactive switch does.
+- **Provider comes through the existing tracker.** `DispatchMeteringTracker.observe` already selects each invoked dispatch once and drops lifecycle rows; `provider_attempt` gains optional `preferredProvider`, and the observation carries it with `fallbackReason`, so `fallback` (= preferred known and ≠ actual) is computable when the dispatch occurs. The daemon listener gets its own tracker instance per feature so the no-op `provider_attempt` handler can call `recorder.onDispatch` exactly as the interactive switch does.
+- **Retry dimensions travel on the retry event.** `step_retry` gains optional `model`, `effort`, `provider`, and `tier`, populated from the failed attempt's `StepRunResult` and current run state before the next attempt starts. Both metrics consumers project retries directly from that occurrence; they do not cache later close-event data or buffer retry metrics. The existing `escalatedModel` and `escalatedEffort` remain the separate description of the upcoming attempt.
 - **Spans.** `SpanManager` stores the latest `provider_attempt` observation per open step and sets the D10 attributes at close: `conductor.model`, `conductor.effort`, `conductor.provider`, `conductor.provider.preferred`, `conductor.fallback`, `conductor.fallback.reason`, `conductor.complexity_tier`, `conductor.usage.reasoning_output`, `conductor.usage.turns`, `conductor.usage.duration_ms`, `conductor.cost.source`. Numeric members are set only when finite.
 - **Sequencing.** Event fields first (Task 1–2), recorder attribute seam (Task 3), then the three metric behaviors (4–6), spans (7–8), parity (9), and the interactive wiring (10).
 
@@ -51,14 +52,14 @@ Thread reasoning effort and complexity tier onto the step close events, make `pr
 **Type:** happy-path
 
 **Steps:**
-1. Write failing test: drive a step to completion with a stubbed runner returning `effort: 'high'` under a state whose `complexity_tier` is `M` and assert the emitted `step_completed` carries `effort: 'high'` and `tier: 'M'`; drive a failure and assert `step_failed` carries both; drive a completion with no effort and no tier and assert neither key is present (`'effort' in event === false`); replay a legacy `step_completed` line without either key through `EventPersister` and `MetricsListener` and assert no throw
+1. Write failing test: drive a step to completion with a stubbed runner returning `effort: 'high'` under a state whose `complexity_tier` is `M` and assert the emitted `step_completed` carries `effort: 'high'` and `tier: 'M'`; drive a failure and assert `step_failed` carries both; drive a retry and assert `step_retry` carries the currently resolved `model`, `effort`, `provider`, and `tier`; drive events with unresolved dimensions and assert the keys are absent; replay legacy close and retry lines without the new keys through `EventPersister` and `MetricsListener` and assert no throw
 2. Verify test fails (RED)
-3. Implement: add optional `effort?: EffortLevel` and `tier?: ComplexityTier` to the `step_completed` and `step_failed` members of `ConductorEvent`; at both emit sites spread `...(stepResult?.effort ? { effort } : {})` and `...(state.complexity_tier ? { tier } : {})`
+3. Implement: add optional `effort?: EffortLevel` and `tier?: ComplexityTier` to the `step_completed` and `step_failed` members of `ConductorEvent`; add optional `model`, `effort`, `provider`, and `tier` to `step_retry`; populate retry dimensions from the failed `StepRunResult` and current state, keeping the existing `escalatedModel`/`escalatedEffort` fields for the upcoming attempt
 4. Verify test passes (GREEN)
 5. Commit with message: "Emit effort and tier on step close events"
 
 **Done when:**
-- The `step_completed` and `step_failed` union members declare optional `effort` (`EffortLevel`) and `tier` (`ComplexityTier`), and `EVENT_SINKS` needs no new row because no new member exists
+- The `step_completed` and `step_failed` union members declare optional `effort` (`EffortLevel`) and `tier` (`ComplexityTier`); `step_retry` declares optional `model`, `effort`, `provider`, and `tier`; `EVENT_SINKS` needs no new row because no new member exists
 - A conductor test asserts the emitted `step_completed` and `step_failed` payloads carry `effort` and `tier` when the runner result and state supply them, and carry neither key when they do not
 - A replay test feeds a `step_completed` record lacking both keys through `EventPersister` and `MetricsListener.start` and asserts both accept it without throwing
 
@@ -96,14 +97,14 @@ Thread reasoning effort and complexity tier onto the step close events, make `pr
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test: in `dispatch-metering.test.ts`, observe a `provider_attempt` with `fallbackReason: 'codex unavailable'` and assert the observation carries it; observe a `step_completed` with `preferredProvider: 'codex'`, `actualProvider: 'claude'` and assert the observation carries `preferredProvider: 'codex'` and `provider: 'claude'`; observe a lifecycle row (`invoked: false`) and assert `undefined`
+1. Write failing test: in `dispatch-metering.test.ts`, observe a `provider_attempt` with `preferredProvider: 'codex'` and `fallbackReason: 'codex unavailable'` and assert the observation carries both with `provider: 'claude'`; observe a lifecycle row (`invoked: false`) and assert `undefined`
 2. Verify test fails (RED)
-3. Implement: add `preferredProvider?` and `fallbackReason?` to `DispatchMeteringObservation`; populate them in `toObservation` from the record when present as non-empty strings
+3. Implement: add optional `preferredProvider` to the `provider_attempt` event and populate it at its emit site; add `preferredProvider?` and `fallbackReason?` to `DispatchMeteringObservation`; populate them in `toObservation` from the attempt when present as non-empty strings
 4. Verify test passes (GREEN)
 5. Commit with message: "Carry preferred provider and fallback reason on dispatch observations"
 
 **Done when:**
-- `DispatchMeteringObservation` declares optional `preferredProvider` and `fallbackReason`, populated by `DispatchMeteringTracker.observe` from `step_completed.preferredProvider` and `provider_attempt.fallbackReason` when non-empty
+- `provider_attempt` carries optional `preferredProvider`; `DispatchMeteringObservation` declares optional `preferredProvider` and `fallbackReason`, populated by `DispatchMeteringTracker.observe` from that attempt event when non-empty
 - `dispatch-metering.test.ts` asserts both fields on the two event shapes and asserts a lifecycle row (`invoked: false`) still yields `undefined`
 
 **Files likely touched:**
@@ -117,14 +118,14 @@ Thread reasoning effort and complexity tier onto the step close events, make `pr
 **Type:** happy-path
 
 **Steps:**
-1. Write failing test: in the listener-based metrics test (extend `no-daemon-level-metrics-queue-depth-halts-and-gate.acceptance.test.ts` or a new `metrics-listener.test.ts`), emit `step_started`, a `provider_attempt` (`provider: 'claude'`, `model: 'opus'`, `invoked: true`, `outcome: 'success'`), and `step_completed` with `model: 'opus'`, `effort: 'high'`, `tier: 'M'`, `actualProvider: 'claude'`; assert the duration point carries `model=opus, effort=high, provider=claude, tier=M`; emit `step_retry` for that step and assert the retries point carries the same four; emit a `step_completed` with no `model` and no `actualProvider` and assert neither key; emit a `step_retry` before any `step_started` and assert the point carries only `step` and identity with no throw
+1. Write failing test: in the listener-based metrics test (extend `no-daemon-level-metrics-queue-depth-halts-and-gate.acceptance.test.ts` or a new `metrics-listener.test.ts`), emit `step_started`, a `provider_attempt` (`provider: 'claude'`, `model: 'opus'`, `invoked: true`, `outcome: 'success'`), and `step_completed` with `model: 'opus'`, `effort: 'high'`, `tier: 'M'`, `actualProvider: 'claude'`; assert the duration point carries `model=opus, effort=high, provider=claude, tier=M`; emit `step_retry` carrying those four dimensions and assert the retries point carries the same four; emit a `step_completed` and a `step_retry` with no dimensions and assert the corresponding keys are absent
 2. Verify test fails (RED)
-3. Implement: `MetricsListener` keeps a per-feature `DispatchMeteringTracker` and a per-(feature, step) latest `DispatchDimensions` (set from `step_started`→cleared, `provider_attempt` observation, and `step_completed`/`step_failed` fields); `onStepClose` and the `step_retry` handler pass that value to the recorder; the dimension for a retry is the last known for that step or `undefined`
+3. Implement: `MetricsListener` keeps a per-feature `DispatchMeteringTracker`; `onStepClose` builds dimensions from the close event, while the `step_retry` handler builds them directly from the retry event and passes them to the recorder
 4. Verify test passes (GREEN)
 5. Commit with message: "Record dispatch dimensions on step duration and retries"
 
 **Done when:**
-- `MetricsListener` derives a `DispatchDimensions` per (feature, step) from `provider_attempt` observations and `step_completed`/`step_failed` fields and passes it to `onStepClose` and `onRetry`
+- `MetricsListener` derives `DispatchDimensions` from each `step_completed`/`step_failed` or `step_retry` occurrence and passes them to `onStepClose` or `onRetry` without cross-event caching
 - A listener test asserts `model`, `effort`, `provider`, `tier` on the duration point and on a subsequent retries point for the same step, and asserts absence of `model` and `provider` when the events carry neither
 - A listener test asserts a `step_retry` with no prior `step_started` records a retries point with `step` and identity only and does not throw
 
@@ -139,7 +140,7 @@ Thread reasoning effort and complexity tier onto the step close events, make `pr
 **Type:** happy-path
 
 **Steps:**
-1. Write failing test: in the listener test, emit a `provider_attempt` (`provider: 'claude'`, `invoked: true`, `outcome: 'success'`) then `step_completed` (`preferredProvider: 'codex'`, `actualProvider: 'claude'`) and assert exactly one `conductor.step.dispatches` point with `provider=claude`, `fallback=true`, `metering` present; repeat with preferred `claude` and assert `fallback=false`; repeat with no `preferredProvider` and assert `provider` present and no `fallback` key; emit a lifecycle row and assert no dispatch point and no `provider-lifecycle` label value; assert the attempt-plus-completion pair counts once
+1. Write failing test: in the listener test, emit a `provider_attempt` (`preferredProvider: 'codex'`, `provider: 'claude'`, `invoked: true`, `outcome: 'success'`) and assert exactly one `conductor.step.dispatches` point with `provider=claude`, `fallback=true`, `metering` present; repeat with preferred `claude` and assert `fallback=false`; repeat with no `preferredProvider` and assert `provider` present and no `fallback` key; emit a lifecycle row and assert no dispatch point and no `provider-lifecycle` label value; assert a following completion does not double-count
 2. Verify test fails (RED)
 3. Implement: replace the `provider_attempt: () => {}` handler with one that runs the event through the feature's `DispatchMeteringTracker` and, on an observation, calls `recorder.onDispatch(step, tokenUsage, model, dimensions)` where `fallback` is `preferredProvider !== undefined ? preferredProvider !== provider : undefined`; `onStepClose` passes `recordDispatch: false` when the tracker already counted the attempt, else counts the compatibility completion (same rule the interactive path uses)
 4. Verify test passes (GREEN)
