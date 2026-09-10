@@ -1,6 +1,6 @@
 import { execa } from 'execa';
-import { writeFile, readFile, access } from 'node:fs/promises';
-import { join, isAbsolute } from 'node:path';
+import { writeFile, readFile, access, mkdir, rename } from 'node:fs/promises';
+import { join, isAbsolute, relative, resolve, dirname } from 'node:path';
 import type { StepName } from '../types/index.js';
 import { writeVerdict, type GateVerdict } from './gate-verdicts.js';
 import { writeHaltMarker } from './halt-marker.js';
@@ -466,6 +466,105 @@ export async function rebaseStateActive(
     if (await access(abs).then(() => true, () => false)) return true;
   }
   return false;
+}
+
+/** Git's fixed header for a refusal that happens before a rebase starts. */
+const UNTRACKED_OVERWRITE_HEADER =
+  'error: The following untracked working tree files would be overwritten by checkout:';
+const UNTRACKED_OVERWRITE_FOOTER = 'Please move or remove them';
+
+/** A gitignored, worktree-local home for files moved aside before retrying. */
+export const REBASE_UNTRACKED_QUARANTINE_DIR = '.pipeline/rebase-untracked-quarantine';
+
+/**
+ * Parse only Git's structured untracked-overwrite list. Similar failures (such
+ * as a dirty index or a detached HEAD) must never be treated as movable files.
+ */
+export function parseUntrackedOverwriteRefusal(stderr: string): string[] {
+  const lines = stderr.split(/\r?\n/);
+  const header = lines.findIndex((line) => line === UNTRACKED_OVERWRITE_HEADER);
+  if (header === -1) return [];
+
+  const paths: string[] = [];
+  for (const line of lines.slice(header + 1)) {
+    if (line.startsWith(UNTRACKED_OVERWRITE_FOOTER)) return paths;
+    if (!line.startsWith('\t')) return [];
+    const path = line.slice(1);
+    if (!path) return [];
+    paths.push(path);
+  }
+  return [];
+}
+
+function confinedWorktreePath(projectRoot: string, path: string): string | null {
+  if (!path || isAbsolute(path)) return null;
+  const root = resolve(projectRoot);
+  const candidate = resolve(root, path);
+  const fromRoot = relative(root, candidate);
+  if (!fromRoot || fromRoot === '..' || fromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(fromRoot)) {
+    return null;
+  }
+  return candidate;
+}
+
+/** Confirm every parser-produced name is still a confined, untracked worktree path. */
+export async function confirmUntrackedRebasePaths(
+  git: GitRunner,
+  projectRoot: string,
+  paths: string[],
+): Promise<string[]> {
+  for (const path of paths) {
+    const source = confinedWorktreePath(projectRoot, path);
+    if (!source) throw new Error(`refusing to quarantine unsafe rebase path: ${path}`);
+    try {
+      await access(source);
+    } catch {
+      throw new Error(`refusing to quarantine missing rebase path: ${path}`);
+    }
+    const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', path]);
+    if (status.exitCode !== 0 || status.stdout !== `?? ${path}\0`) {
+      throw new Error(`refusing to quarantine path Git does not report untracked: ${path}`);
+    }
+  }
+  return paths;
+}
+
+/**
+ * Move a fully confirmed path set aside without overwriting prior quarantine.
+ * Every source and destination is checked before the first rename.
+ */
+export async function moveRebaseUntrackedPathsToQuarantine(
+  projectRoot: string,
+  paths: string[],
+): Promise<string> {
+  const quarantine = join(projectRoot, REBASE_UNTRACKED_QUARANTINE_DIR);
+  const moves = paths.map((path) => {
+    const source = confinedWorktreePath(projectRoot, path);
+    if (!source) throw new Error(`refusing to quarantine unsafe rebase path: ${path}`);
+    return { path, source, destination: join(quarantine, path) };
+  });
+
+  for (const move of moves) {
+    try {
+      await access(move.source);
+    } catch {
+      throw new Error(`refusing to quarantine missing rebase path: ${move.path}`);
+    }
+    try {
+      await access(move.destination);
+      throw new Error(`refusing to overwrite quarantined rebase path: ${move.path}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+
+  for (const move of moves) {
+    await mkdir(dirname(move.destination), { recursive: true });
+  }
+  for (const move of moves) {
+    await rename(move.source, move.destination);
+  }
+  return quarantine;
 }
 
 // ── HALT (FR-8) ──────────────────────────────────────────────────────────────
