@@ -1,22 +1,23 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-10T01:14:22.401Z
+Status: halted
 Slug: github-issue-text-reaches-an-autonomous-build-with
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-github-issue-text-reaches-an-autonomous-build-with
-Head SHA: 92af14986f2e41f420496b261b96219c98b5212b
-Halted at: 2026-09-10T00:52:17.095Z
+Head SHA: 5b9b42fa22c1428f0260d73bd6bc07cf33ca959e
+Halted at: 2026-09-10T01:52:42.632Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: uncovered build-review coverage failure
-route: halt
+Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-3 (Story 1)
 
+Blocking findings:
+AB-1 (REMEDIABLE; adr-2026-09-06-inbound-intake-trust-boundary decision 3): `buildText` trims title and body before Markdown segmentation, so leading indented or quoted evidence can be reclassified and is not preserved byte-for-byte.
+AB-2 (REMEDIABLE; Task 4): The valid-armor idempotence branch is tested but has no production input or caller capable of reaching it.
+AB-3 (DESIGN; Story 1): The approved high-precision rule floor permits instruction-shaped prose that the sealed outcome requires to be marked.
 ```
