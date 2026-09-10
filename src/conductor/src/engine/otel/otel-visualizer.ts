@@ -475,7 +475,6 @@ export class OtelVisualizer implements VisualizerPlugin {
           this.metricsRecorder?.onDispatch(
             dispatch.step ?? event.step,
             dispatch.tokenUsage,
-            dispatch.model,
             dispatchDimensionsFrom(event, dispatch),
           );
         }
@@ -564,7 +563,6 @@ export class OtelVisualizer implements VisualizerPlugin {
           durationMs,
           0,
           dispatch?.observation?.tokenUsage,
-          dispatch?.observation?.model,
           dispatch?.recordDispatch ?? false,
           dispatch?.dimensions,
         );
