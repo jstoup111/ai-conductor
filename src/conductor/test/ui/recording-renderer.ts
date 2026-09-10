@@ -25,7 +25,7 @@ export class RecordingRenderer implements UIRenderer {
     this.events.push(event);
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopCalled = true;
   }
 

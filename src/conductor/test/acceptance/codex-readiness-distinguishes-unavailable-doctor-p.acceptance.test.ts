@@ -339,7 +339,7 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
       if (!loaded.ok) return;
 
       const registry = new PluginRegistry();
-      registerCliBuiltins(registry, new ConductorEventEmitter(), () => {}, loaded.config);
+      registerCliBuiltins(registry, new ConductorEventEmitter(), loaded.config);
       registry.markInitialized();
       const codex = registry.get<CodexProvider>('llm_provider', 'codex');
       const claude = registry.get<{ invoke(options: InvokeOptions): Promise<unknown> }>('llm_provider', 'claude');

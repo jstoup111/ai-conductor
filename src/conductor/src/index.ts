@@ -1580,7 +1580,7 @@ async function main(): Promise<void> {
 
   persister.stop();
   await stopVisualizers(visualizerList);
-  subscriber.stop();
+  await subscriber.stop();
 }
 
 // Only run the CLI when executed directly (e.g. `node dist/index.js` via

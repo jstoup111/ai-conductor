@@ -6,7 +6,9 @@ import type { ConductorEvent } from '../../src/types/index.js';
 import type { UIRenderer } from '../../src/ui/types.js';
 import { renderedEventTypes } from '../../src/engine/event-sinks.js';
 
-const renderer = (handle = vi.fn(async () => {})): UIRenderer => ({ name: 'test', handle, stop: vi.fn(async () => {}) });
+type RendererMock = UIRenderer & { handle: ReturnType<typeof vi.fn> };
+
+const renderer = (handle = vi.fn(async () => {})): RendererMock => ({ name: 'test', handle, stop: vi.fn(async () => {}) });
 
 describe('TerminalSubscriber', () => {
   const subscribers: TerminalSubscriber[] = [];

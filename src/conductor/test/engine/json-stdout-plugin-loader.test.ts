@@ -39,11 +39,8 @@ describe('json-stdout-subscriber plugin discovery', () => {
         join(tempPluginDir, 'index.js'),
         `
 export class JsonStdoutSubscriber {
-  constructor() { this._started = false; }
-  start() { this._started = true; }
-  stop() { this._started = false; }
-  handle(event) {
-    if (!this._started) return;
+  async stop() {}
+  async handle(event) {
     process.stdout.write(JSON.stringify({ ...event, ts: new Date().toISOString() }) + '\\n');
   }
 }
@@ -57,7 +54,7 @@ export default new JsonStdoutSubscriber();
 
       const plugin = registry.get('ui_renderer', 'json-stdout');
       expect(plugin).toBeDefined();
-      expect(typeof (plugin as { start?: unknown }).start).toBe('function');
+      expect(typeof (plugin as { start?: unknown }).start).toBe('undefined');
       expect(typeof (plugin as { stop?: unknown }).stop).toBe('function');
       expect(typeof (plugin as { handle?: unknown }).handle).toBe('function');
     } finally {
