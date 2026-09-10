@@ -13083,7 +13083,7 @@ export class Conductor {
           // next step, and a step that re-opened an upstream gate (kickback)
           // routes the loop back to plan/stories. Upstream of build → null →
           // the for loop's normal linear i++ (front half untouched).
-          let advance: Awaited<ReturnType<typeof this.advanceTail>>;
+          let advance: number | null | 'halt';
           try {
             advance = await this.advanceTail(
               step,

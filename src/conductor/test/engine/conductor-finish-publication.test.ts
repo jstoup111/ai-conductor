@@ -255,7 +255,7 @@ describe('Conductor FINISH publication routing', () => {
       complexity_tier: 'M', architecture_review: 'skipped',
       manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done',
       validation__prd_audit: 'done',
-    });
+    } as ConductState);
     const advance = vi.fn(async () => ({ kind: 'complete' } as const));
     const conductor = new Conductor({
       stateFilePath: statePath,

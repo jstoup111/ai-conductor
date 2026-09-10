@@ -28,6 +28,7 @@ const PRD_PASS = [
 ].join('\n');
 
 const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
+const MT_FAIL = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n';
 
 async function seedValidators(
   dir: string,
@@ -219,6 +220,29 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
+  it('does not retain manual_test when its successful dispatch writes FAIL rows', async () => {
+    const dir = await mkdtemp(join(process.env.TMPDIR!, 'validation-manual-test-fail-rows-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedValidators(dir, statePath);
+      const conductor = new Conductor({
+        stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
+        verifyArtifacts: true, maxRetries: 1, fromStep: 'manual_test',
+        stepRunner: { run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          if (step === 'prd_audit') throw new Error('sibling crashed');
+          if (step === 'architecture_review_as_built') await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+          return { success: true } as StepRunResult;
+        }) },
+      });
+      await conductor.run();
+      const result = await readState(statePath);
+      if (!result.ok) throw result.error;
+      const state = result.value as Record<string, unknown>;
+      expect([state.manual_test, state.validation__manual_test]).not.toContain('done');
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
   it('does not retain a passing sibling when its verdict-run-identity handshake fails', async () => {
     const dir = await mkdtemp(join(process.env.TMPDIR!, 'validation-handshake-retention-'));
     const statePath = join(dir, 'conduct-state.json');
@@ -258,7 +282,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       });
       const calls: StepName[] = [];
       const events = new ConductorEventEmitter();
-      const completed: StepName[][] = [];
+      const completed: string[][] = [];
       events.on('parallel_completed', event => {
         if (event.type === 'parallel_completed') completed.push(event.branches);
       });
