@@ -93,15 +93,15 @@ describe('daemon and interactive metric wiring parity (Task 9)', () => {
 
       const nextDaemon: string[] = [];
       const nextInteractive: string[] = [];
-      daemonEvents.on('build_progress', () => nextDaemon.push('next'));
-      interactiveEvents.on('build_progress', () => nextInteractive.push('next'));
+      daemonEvents.on('build_progress', () => { nextDaemon.push('next'); });
+      interactiveEvents.on('build_progress', () => { nextInteractive.push('next'); });
       const throwing = vi.spyOn(MetricsRecorder.prototype, 'onStepClose').mockImplementation(() => undefined as never);
       throwing.mockImplementationOnce(() => { throw new Error('expected recorder failure'); });
       await forwarded.events.emit({ type: 'step_completed', step: 'build', status: 'done' });
       throwing.mockImplementationOnce(() => { throw new Error('expected recorder failure'); });
       await interactiveEvents.emit({ type: 'step_completed', step: 'build', status: 'done' });
-      await daemonEvents.emit({ type: 'build_progress', completed: 1, total: 1 });
-      await interactiveEvents.emit({ type: 'build_progress', completed: 1, total: 1 });
+      await daemonEvents.emit({ type: 'build_progress', step: 'build', resolved: 1, total: 1 });
+      await interactiveEvents.emit({ type: 'build_progress', step: 'build', resolved: 1, total: 1 });
       expect(nextDaemon).toEqual(['next']);
       expect(nextInteractive).toEqual(['next']);
       throwing.mockRestore();
