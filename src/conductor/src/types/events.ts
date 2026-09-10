@@ -183,6 +183,8 @@ export interface ProviderAttemptEvent {
   invoked: boolean;
   preferredProvider?: string;
   model?: string;
+  effort?: EffortLevel;
+  tier?: ComplexityTier;
   tokenUsage?: TokenUsage;
   observedIntervals?: readonly ObservedInterval[];
   reason?: string;
