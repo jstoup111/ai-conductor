@@ -4,6 +4,7 @@ import type { HarnessConfig } from '../../types/config.js';
 
 const VALID_EXPORTERS = ['otlp', 'file'] as const;
 const DEFAULT_FILE = 'otel.jsonl';
+const MAX_ATTRIBUTES = 16;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object') return false;
@@ -28,6 +29,48 @@ function unsupportedHeaderTransportError(headers: unknown, transport: string): s
     ? reference.env
     : undefined;
   return `otel header ${renderedHeaderName(header)}${environmentVariable ? ` references environment variable '${environmentVariable}' and` : ''} is unsupported with the ${transport}.`;
+}
+
+function renderedAttributeKey(key: string): string {
+  return key === '' ? "''" : JSON.stringify(key);
+}
+
+function resolveAttributes(attributes: unknown): {
+  attributes: Record<string, string>;
+  warnings: string[];
+} | undefined {
+  if (attributes === undefined) return undefined;
+  if (!isPlainObject(attributes)) {
+    return {
+      attributes: {},
+      warnings: ['otel.attributes must be a mapping from namespaced attribute keys to literal string values.'],
+    };
+  }
+
+  const resolved: Array<[string, string]> = [];
+  const warnings: string[] = [];
+  for (const [rawKey, rawValue] of Object.entries(attributes)) {
+    const key = rawKey.trim();
+    const renderedKey = renderedAttributeKey(key);
+    if (resolved.length + warnings.length >= MAX_ATTRIBUTES) {
+      warnings.push(`otel attribute ${renderedKey} was dropped because at most ${MAX_ATTRIBUTES} attributes may be declared.`);
+    } else if (key === '') {
+      warnings.push(`otel attribute ${renderedKey} was dropped because attribute keys must be non-empty.`);
+    } else if (!key.includes('.')) {
+      warnings.push(`otel attribute ${renderedKey} was dropped because attribute keys must be namespaced with a dot.`);
+    } else if (['service.', 'conductor.', 'host.'].some((prefix) => key.startsWith(prefix))) {
+      const prefix = ['service.', 'conductor.', 'host.'].find((candidate) => key.startsWith(candidate));
+      warnings.push(`otel attribute ${renderedKey} was dropped because the ${prefix} prefix is reserved.`);
+    } else if (typeof rawValue !== 'string') {
+      warnings.push(`otel attribute ${renderedKey} was dropped because attribute values must be literal strings.`);
+    } else if (rawValue.trim() === '') {
+      warnings.push(`otel attribute ${renderedKey} was dropped because attribute values must be non-empty.`);
+    } else {
+      resolved.push([key, rawValue.trim()]);
+    }
+  }
+
+  return { attributes: Object.fromEntries(resolved), warnings };
 }
 
 /**
@@ -81,9 +124,7 @@ export function resolveOtelConfig(
   const { exporter, endpoint, file, protocol, headers, project_name, worker_name, attributes } = otel;
   const projectName = project_name?.trim() || undefined;
   const workerName = worker_name?.trim() || undefined;
-  const resolvedAttributes = attributes === undefined
-    ? undefined
-    : Object.fromEntries(Object.entries(attributes).map(([key, value]) => [key.trim(), value.trim()]));
+  const resolvedAttributes = resolveAttributes(attributes);
 
   // Unknown exporter → disabled + named error listing valid options.
   if (!VALID_EXPORTERS.includes(exporter as (typeof VALID_EXPORTERS)[number])) {
@@ -169,7 +210,7 @@ export function resolveOtelConfig(
       ...(hasHeaderEntries(headers) ? { headers: resolvedHeaders } : {}),
       ...(projectName ? { projectName } : {}),
       ...(workerName ? { workerName } : {}),
-      ...(resolvedAttributes ? { attributes: resolvedAttributes, attributeWarnings: [] } : {}),
+      ...(resolvedAttributes ? { attributes: resolvedAttributes.attributes, attributeWarnings: resolvedAttributes.warnings } : {}),
     };
   }
 
@@ -187,7 +228,7 @@ export function resolveOtelConfig(
     file: resolvedFile,
     ...(projectName ? { projectName } : {}),
     ...(workerName ? { workerName } : {}),
-    ...(resolvedAttributes ? { attributes: resolvedAttributes, attributeWarnings: [] } : {}),
+    ...(resolvedAttributes ? { attributes: resolvedAttributes.attributes, attributeWarnings: resolvedAttributes.warnings } : {}),
   };
 }
 

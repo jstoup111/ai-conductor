@@ -393,5 +393,106 @@ describe('resolveOtelConfig', () => {
         { enabled: true, attributes: {}, attributeWarnings: [] },
       ]);
     });
+
+    it('drops an attribute key without a namespace while retaining valid siblings', () => {
+      const result = resolveOtelConfig(
+        { otel: { exporter: 'file', attributes: { 'team.name': 'platform', team: 'platform' } } },
+        PIPELINE_DIR,
+      );
+
+      expect(result).toMatchObject({
+        enabled: true,
+        attributes: { 'team.name': 'platform' },
+        attributeWarnings: [expect.stringMatching(/team.*namespaced.*dot/i)],
+      });
+    });
+
+    it.each(['service.name', 'conductor.project', 'host.name'])('drops the reserved %s prefix while retaining valid siblings', (key) => {
+      const result = resolveOtelConfig(
+        { otel: { exporter: 'file', attributes: { 'team.name': 'platform', [key]: 'operator-value' } } },
+        PIPELINE_DIR,
+      );
+
+      expect(result).toMatchObject({
+        enabled: true,
+        attributes: { 'team.name': 'platform' },
+        attributeWarnings: [expect.stringMatching(new RegExp(`${key}.*${key.split('.')[0]}\\.`, 'i'))],
+      });
+    });
+
+    it.each([
+      ['a number', 1],
+      ['a boolean', true],
+      ['a list', ['platform']],
+      ['an environment reference', { env: 'OTEL_ATTRIBUTE_VALUE' }],
+    ])('drops %s attribute values while retaining valid siblings', (_caseName, value) => {
+      const result = resolveOtelConfig(
+        { otel: { exporter: 'file', attributes: { 'team.name': 'platform', 'invalid.value': value } } as never },
+        PIPELINE_DIR,
+      );
+
+      expect(result).toMatchObject({
+        enabled: true,
+        attributes: { 'team.name': 'platform' },
+        attributeWarnings: [expect.stringMatching(/invalid\.value.*literal string/i)],
+      });
+    });
+
+    it.each([
+      ['an empty key', '', 'platform', /''/],
+      ['a whitespace-only key', '   ', 'platform', /''/],
+      ['an empty value', 'invalid.value', '', /invalid\.value/],
+      ['a whitespace-only value', 'invalid.value', '   ', /invalid\.value/],
+    ])('drops %s while retaining valid siblings', (_caseName, key, value, warningKey) => {
+      const result = resolveOtelConfig(
+        { otel: { exporter: 'file', attributes: { 'team.name': 'platform', [key]: value } } },
+        PIPELINE_DIR,
+      );
+
+      expect(result).toMatchObject({
+        enabled: true,
+        attributes: { 'team.name': 'platform' },
+        attributeWarnings: [expect.stringMatching(warningKey)],
+      });
+    });
+
+    it('retains the first sixteen declaration-ordered attributes and warns for the seventeenth', () => {
+      const attributes = Object.fromEntries(
+        Array.from({ length: 17 }, (_, index) => [`example.attribute${index + 1}`, `value${index + 1}`]),
+      );
+      const result = resolveOtelConfig({ otel: { exporter: 'file', attributes } }, PIPELINE_DIR);
+
+      expect(result).toMatchObject({
+        enabled: true,
+        attributes: Object.fromEntries(Object.entries(attributes).slice(0, 16)),
+        attributeWarnings: [expect.stringMatching(/example\.attribute17.*16/i)],
+      });
+    });
+
+    it.each(['not-a-mapping', ['not-a-mapping']])('retains an enabled empty map for a non-mapping attributes block', (attributes) => {
+      const result = resolveOtelConfig(
+        { otel: { exporter: 'file', attributes } as never },
+        PIPELINE_DIR,
+      );
+
+      expect(result).toMatchObject({
+        enabled: true,
+        attributes: {},
+        attributeWarnings: [expect.stringMatching(/otel\.attributes.*mapping/i)],
+      });
+    });
+
+    it('keeps the exporter enabled with an empty map when every attribute is invalid', () => {
+      const result = resolveOtelConfig(
+        { otel: { exporter: 'file', attributes: { team: 'platform', 'service.name': 'operator' } } },
+        PIPELINE_DIR,
+      );
+
+      expect(result).toMatchObject({
+        enabled: true,
+        attributes: {},
+        attributeWarnings: [expect.stringMatching(/team/), expect.stringMatching(/service\.name/)],
+      });
+    });
   });
 });
