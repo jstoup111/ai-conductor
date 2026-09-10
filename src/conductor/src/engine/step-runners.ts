@@ -1374,6 +1374,7 @@ export class DefaultStepRunner implements StepRunner {
         ? { observedIntervals: result.observedIntervals }
         : {}),
       ...(result.resolvedModel ? { model: result.resolvedModel } : {}),
+      ...(result.resolvedEffort !== undefined ? { effort: result.resolvedEffort } : {}),
       preferredProvider: result.preferredProvider,
       ...(result.actualProvider
         ? { actualProvider: result.actualProvider }
