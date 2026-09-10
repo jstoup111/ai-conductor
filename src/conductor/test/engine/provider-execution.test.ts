@@ -1,3 +1,6 @@
+/**
+ * Covers: task:14
+ */
 import { describe, expect, it, vi } from 'vitest';
 import type {
   InvokeOptions,
