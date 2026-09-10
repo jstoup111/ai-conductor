@@ -4,17 +4,6 @@ spec_hash: b237ad7211c443897f3812274a87375f77db7fe289d53d7bcab579271c19c923
 pr: https://github.com/jstoup111/ai-conductor/pull/2486
 shipped: 2026-09-10
 engine_version: 20260910T154008Z-613ad9ba89a7
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.1
-    summary: "src/conductor/src/engine/otel/otel-visualizer.ts:309-411 — the compile-time-exhaustive `OtelEventHandlerTable` mapped type and its runtime `[otel] no handler for traced event type` warn-once fallback were deleted and replaced by a bare `switch (event.type)` with no `default` case; a traced event type added later now silently produces no span with neither a type error nor an operator warning"
-    accepted: false
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.2
-    summary: "src/conductor/test/engine/otel/otel-visualizer.test.ts — the file dropped from ~1501 to 103 lines, deleting the SIGINT/SIGTERM flush, idempotent-`stop()`, no-listener-leak, non-blocking-hot-path, and bounded-export-timeout cases while the production code they covered is retained unchanged at src/conductor/src/engine/otel/otel-visualizer.ts:213-243 and :263-289; no replacement coverage exists anywhere under src/conductor/test/ (no otel test file references SIGINT)"
-    accepted: false
 ---
 
 ## Cost
@@ -34,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:finish
+reason: provider-outside-active-union
 
 ## Build Review
 laps_to_pass: 2
