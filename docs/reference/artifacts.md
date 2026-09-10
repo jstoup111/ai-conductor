@@ -41,7 +41,7 @@ Nineteen entries. Alphabetized; the four with no code reference are marked.
 
 | Entry | Naming | Written by | Read by / gate role |
 | --- | --- | --- | --- |
-| `architecture/` | `YYYY-MM-DD-<topic>.md`, plus fixed `system-context.md`, `containers.md`, `components.md`, `erd.md`, and a `sequences/` subdir | `architecture-diagram`, `architecture-review`, `bootstrap` | `architecture_diagram` completion glob; mermaid render check at land; protected-artifact seal |
+| `architecture/` | `YYYY-MM-DD-<topic>.md`, plus fixed `system-context.md`, `containers.md`, `components.md`, `erd.md`, and a `sequences/` subdir | `architecture-diagram`, `architecture-review`, `bootstrap` | `architecture_diagram` completion glob; mermaid render check at land; non-Small artifacts require at least one fenced Mermaid block; protected-artifact seal |
 | `audit/` | free-form | manual | **no code reference** |
 | `audits/` | free-form JSON | a one-off backfill | `shipment-audit.ts` — one hardcoded path, nothing else |
 | `coherence/` | `<plan-stem>.md` | `coherence-check` skill (M and L tiers only) | `coherence_check` completion glob; the land-time coherence validator |
