@@ -796,10 +796,10 @@ describe('executeProviderCandidates', () => {
       ]),
       sessions: new ProviderSessionScope(vi.fn().mockReturnValue('attempt-session')),
       options: { prompt: 'Build.', cwd: '/workspace' },
-      onAttempt: (_step, attempt) => { attempts.push(attempt); },
+      onAttempt: (_step, attempt) => { attempts.push({ ...attempt }); },
     });
 
-    expect(attempts).toMatchObject([
+    expect(attempts as unknown as Record<string, unknown>[]).toMatchObject([
       { provider: 'codex', preferredProvider: 'codex', effort: 'high', tier: 'M' },
     ]);
   });
