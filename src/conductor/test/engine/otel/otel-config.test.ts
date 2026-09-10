@@ -347,4 +347,51 @@ describe('resolveOtelConfig', () => {
       ]);
     });
   });
+
+  describe('attributes', () => {
+    it('carries trimmed attributes on both enabled exporter variants', () => {
+      const attributes = {
+        ' deployment.environment.name ': ' staging ',
+        'team.name': ' platform ',
+      };
+
+      expect([
+        resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', attributes } }, PIPELINE_DIR),
+        resolveOtelConfig({ otel: { exporter: 'file', attributes } }, PIPELINE_DIR),
+      ]).toMatchObject([
+        {
+          enabled: true,
+          attributes: { 'deployment.environment.name': 'staging', 'team.name': 'platform' },
+          attributeWarnings: [],
+        },
+        {
+          enabled: true,
+          attributes: { 'deployment.environment.name': 'staging', 'team.name': 'platform' },
+          attributeWarnings: [],
+        },
+      ]);
+    });
+
+    it('retains sixteen valid attributes in declaration order with no warnings', () => {
+      const attributes = Object.fromEntries(
+        Array.from({ length: 16 }, (_, index) => [`example.attribute${index + 1}`, `value${index + 1}`]),
+      );
+
+      expect(resolveOtelConfig({ otel: { exporter: 'file', attributes } }, PIPELINE_DIR)).toMatchObject({
+        enabled: true,
+        attributes,
+        attributeWarnings: [],
+      });
+    });
+
+    it('keeps both absent and empty attributes configurations enabled', () => {
+      expect([
+        resolveOtelConfig({ otel: { exporter: 'file' } }, PIPELINE_DIR),
+        resolveOtelConfig({ otel: { exporter: 'file', attributes: {} } }, PIPELINE_DIR),
+      ]).toMatchObject([
+        { enabled: true },
+        { enabled: true, attributes: {}, attributeWarnings: [] },
+      ]);
+    });
+  });
 });

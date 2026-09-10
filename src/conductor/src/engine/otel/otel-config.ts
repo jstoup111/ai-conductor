@@ -47,8 +47,18 @@ export type ResolvedOtelConfig =
       headers?: Record<string, string>;
       projectName?: string;
       workerName?: string;
+      attributes?: Record<string, string>;
+      attributeWarnings?: string[];
     }
-  | { enabled: true; exporter: 'file'; file: string; projectName?: string; workerName?: string };
+  | {
+      enabled: true;
+      exporter: 'file';
+      file: string;
+      projectName?: string;
+      workerName?: string;
+      attributes?: Record<string, string>;
+      attributeWarnings?: string[];
+    };
 
 /**
  * Parse and validate the `otel:` block from `config`. Returns a discriminated
@@ -68,9 +78,12 @@ export function resolveOtelConfig(
     return { enabled: false };
   }
 
-  const { exporter, endpoint, file, protocol, headers, project_name, worker_name } = otel;
+  const { exporter, endpoint, file, protocol, headers, project_name, worker_name, attributes } = otel;
   const projectName = project_name?.trim() || undefined;
   const workerName = worker_name?.trim() || undefined;
+  const resolvedAttributes = attributes === undefined
+    ? undefined
+    : Object.fromEntries(Object.entries(attributes).map(([key, value]) => [key.trim(), value.trim()]));
 
   // Unknown exporter → disabled + named error listing valid options.
   if (!VALID_EXPORTERS.includes(exporter as (typeof VALID_EXPORTERS)[number])) {
@@ -156,6 +169,7 @@ export function resolveOtelConfig(
       ...(hasHeaderEntries(headers) ? { headers: resolvedHeaders } : {}),
       ...(projectName ? { projectName } : {}),
       ...(workerName ? { workerName } : {}),
+      ...(resolvedAttributes ? { attributes: resolvedAttributes, attributeWarnings: [] } : {}),
     };
   }
 
@@ -173,6 +187,7 @@ export function resolveOtelConfig(
     file: resolvedFile,
     ...(projectName ? { projectName } : {}),
     ...(workerName ? { workerName } : {}),
+    ...(resolvedAttributes ? { attributes: resolvedAttributes, attributeWarnings: [] } : {}),
   };
 }
 
