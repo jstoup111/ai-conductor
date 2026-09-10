@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-10T14:19:55.577Z
 Slug: export-the-telemetry-dimensions-the-engine-already
 Class: needs-human
 Halting step: unknown
