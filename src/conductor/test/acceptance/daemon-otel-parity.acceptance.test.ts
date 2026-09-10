@@ -17,6 +17,7 @@ import type { ConductorEvent } from '../../src/types/events.js';
 const fixture = vi.hoisted(() => ({
   worktreePath: '',
   events: [] as ConductorEvent[],
+  postMetricEvents: [] as ConductorEvent[],
   filteredType: undefined as ConductorEvent['type'] | undefined,
   metricExportAttempts: 0,
   metricExportCalls: 0,
@@ -53,6 +54,7 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
       });
       if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(60_000);
     }
+    for (const event of fixture.postMetricEvents) await events.emit(event);
     // The periodic exports need fake time, while daemon shutdown awaits the
     // SDK's real completion path. Return to real timers before cleanup.
     if (fixture.metricExportAttempts > 0) vi.useRealTimers();
@@ -74,7 +76,7 @@ import type { OtelVisualizerStartContext } from '../../src/engine/otel/wire.js';
 
 let dirs: string[] = [];
 afterEach(async () => {
-  buildExporters.mockReset(); fixture.events = []; fixture.filteredType = undefined;
+  buildExporters.mockReset(); fixture.events = []; fixture.postMetricEvents = []; fixture.filteredType = undefined;
   fixture.metricExportAttempts = 0; fixture.metricExportCalls = 0; fixture.outcomes = [];
   vi.useRealTimers();
   await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))); dirs = [];
@@ -225,8 +227,8 @@ async function runDaemonExportScenario(metricExporter: PushMetricExporter): Prom
   fixture.worktreePath = join(repo, '.worktrees', 'feature-a');
   fixture.events = [
     { type: 'step_started', step: 'build', index: 0 },
-    { type: 'step_completed', step: 'build', status: 'done' },
   ];
+  fixture.postMetricEvents = [{ type: 'step_completed', step: 'build', status: 'done' }];
   fixture.metricExportAttempts = 3;
   await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true }); await mkdir(join(repo, '.ai-conductor'), { recursive: true });
   await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'otel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n');
