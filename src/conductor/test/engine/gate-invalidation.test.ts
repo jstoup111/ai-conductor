@@ -189,6 +189,15 @@ describe('projectGateSurfaces', () => {
       declaredSurface: ['<all code or test paths>'],
     });
   });
+
+  it('retains the document-prefix declaration when a runtime-only delta resolves no concrete inputs', () => {
+    const projection = projectGateSurfaces(['src/foreign.ts'], ['src/feature.ts'], []);
+
+    expect(projection['feature-runtime-or-prd-inputs']).toEqual({
+      matchedPaths: [],
+      declaredSurface: ['src/feature.ts', '<.docs/stories/|.docs/specs/>'],
+    });
+  });
 });
 
 describe('prd_audit declared document inputs', () => {

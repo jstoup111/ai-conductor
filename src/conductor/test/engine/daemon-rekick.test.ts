@@ -2432,7 +2432,7 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     }))).toEqual([
       {
         gate: 'coverage_binding',
-        surface: ['src/task-1.ts', '<.docs/stories/|.docs/specs/>'],
+        surface: ['src/task-1.ts', '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/>'],
         deltaConsidered: [],
         basis: undefined,
       },
