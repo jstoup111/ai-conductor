@@ -55,7 +55,6 @@ describe('progress event coverage guard', () => {
   });
 
   const lists: Array<{ name: string; file: string }> = [
-    { name: 'ui/subscriber.ts eventTypes', file: join(SRC_ROOT, 'ui', 'subscriber.ts') },
     { name: 'daemon-cli.ts renderer switch', file: join(SRC_ROOT, 'daemon-cli.ts') },
     { name: 'ui/create-renderer.ts TTY renderer switch', file: join(SRC_ROOT, 'ui', 'create-renderer.ts') },
   ];
@@ -73,4 +72,10 @@ describe('progress event coverage guard', () => {
       ).toEqual([]);
     });
   }
+
+  it('derives ui/subscriber.ts registrations from the exhaustive render sink registry', () => {
+    const contents = readFileSync(join(SRC_ROOT, 'ui', 'subscriber.ts'), 'utf-8');
+
+    expect(contents).toContain('renderedEventTypes()');
+  });
 });

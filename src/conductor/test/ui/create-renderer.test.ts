@@ -8,6 +8,17 @@ import { createRenderer } from '../../src/ui/create-renderer.js';
 import { createLiveRegion } from '../../src/ui/live-region.js';
 import type { ConductorEvent, ConductState } from '../../src/types/index.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
+import { renderedEventTypes } from '../../src/engine/event-sinks.js';
+import { FORWARDED_TO_TERMINAL_RENDERER_EVENT_TYPES } from '../../src/ui/subscriber.js';
+
+const DEDICATED_RENDERER_EVENT_TYPES = new Set<ConductorEvent['type']>([
+  'step_started', 'step_completed', 'step_failed', 'step_retry', 'rate_limit', 'session_reset',
+  'credentials_park_progress', 'provider_fallback', 'session_policy', 'when_skip',
+  'parallel_started', 'parallel_completed', 'parallel_failure', 'tier_skip', 'config_skip',
+  'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached',
+  'build_progress', 'unattributed_progress', 'build_no_progress', 'pipeline_closeout',
+  'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'loop_converged',
+]);
 
 class CaptureStream extends Writable {
   chunks: string[] = [];
@@ -135,6 +146,26 @@ describe('createRenderer', () => {
   it('renders an unsatisfied gate with an omitted reason', async () => {
     await renderer({ type: 'gate_verdict', step: 'build_review', satisfied: false });
     expect(stream.output()).toContain('gate build_review: unsatisfied');
+  });
+
+  it('summarizes every renderable event without a dedicated renderer branch', async () => {
+    const fallbackTypes = renderedEventTypes().filter(
+      (type) => !DEDICATED_RENDERER_EVENT_TYPES.has(type)
+        && !FORWARDED_TO_TERMINAL_RENDERER_EVENT_TYPES.includes(type),
+    );
+
+    for (const type of fallbackTypes) {
+      stream.reset();
+      await renderer({ type } as ConductorEvent);
+      expect(stream.output()).toContain(type);
+    }
+  });
+
+  it('does not summarize forwarded or non-renderable branchless events', async () => {
+    await renderer({ type: 'renderer_error', rendererName: 'inline', error: 'render failed' });
+    await renderer({ type: 'coverage_binding_judged' } as ConductorEvent);
+
+    expect(stream.output()).toBe('');
   });
 
   it('writes pipeline closeout details to the live region', async () => {

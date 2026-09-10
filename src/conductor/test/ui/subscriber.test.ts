@@ -89,7 +89,6 @@ describe('TerminalSubscriber', () => {
       'halt_marker_write_failed',
       'renderer_error',
       'pipeline_tail_diagnostic',
-      'gate_verdict',
     ]);
   });
 
@@ -157,7 +156,7 @@ describe('TerminalSubscriber', () => {
     expect(renderCallback).toHaveBeenCalledWith(event);
   });
 
-  it('forwards satisfied gate verdicts from the event bus to the injected terminal renderer once', async () => {
+  it('leaves gate verdicts to the inline dashboard renderer', async () => {
     const stream = new CaptureStream();
     const terminalRenderer = new TerminalRenderer({
       stateFilePath: '/tmp/test-state.json',
@@ -176,9 +175,8 @@ describe('TerminalSubscriber', () => {
 
     expect(renderCallback).toHaveBeenCalledOnce();
     expect(renderCallback).toHaveBeenCalledWith(event);
-    expect(handle).toHaveBeenCalledOnce();
-    expect(handle).toHaveBeenCalledWith(event);
-    expect(stream.output()).toBe('  gate plan: satisfied — covered\n');
+    expect(handle).not.toHaveBeenCalled();
+    expect(stream.output()).toBe('');
   });
 
   it('does not re-render a feature-forwarded gate verdict on the daemon-wide renderer', async () => {

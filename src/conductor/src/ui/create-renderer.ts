@@ -12,6 +12,8 @@ import {
 } from '../engine/artifacts.js';
 import { createLiveRegion, type LiveRegion } from './live-region.js';
 import { formatProgressDelta, displayBuildPosition } from '../engine/format-retry-line.js';
+import { renderedEventTypes } from '../engine/event-sinks.js';
+import { FORWARDED_TO_TERMINAL_RENDERER_EVENT_TYPES } from './subscriber.js';
 
 export interface CreateRendererOptions {
   stateFilePath: string;
@@ -48,6 +50,9 @@ export function createRenderer(
   const region = opts.liveRegion ?? createLiveRegion();
   const viewMode: ViewMode = opts.viewMode ?? 'full';
   const tailLines = opts.tailLines ?? 20;
+  const fallbackEventTypes = new Set(
+    renderedEventTypes().filter((type) => !FORWARDED_TO_TERMINAL_RENDERER_EVENT_TYPES.includes(type)),
+  );
 
   // UI-only overlay state (kept in the renderer, not in engine state).
   let currentStep: DashboardSnapshot['currentStep'];
@@ -328,6 +333,12 @@ export function createRenderer(
         region.log(chalk.green('  ✓ gate loop converged'));
         break;
 
+      default:
+        if (fallbackEventTypes.has(event.type)) {
+          const step = 'step' in event && event.step ? ` — ${event.step}` : '';
+          region.log(chalk.dim(`  · ${event.type}${step}`));
+        }
+        break;
     }
   };
 }

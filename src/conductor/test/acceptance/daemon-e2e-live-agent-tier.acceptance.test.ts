@@ -135,6 +135,11 @@ describe('live-agent daemon E2E tier (#1124)', () => {
     expect(workflow).toMatch(/No live-provider E2E passed\."\s*\n\s*exit\s+1/);
     const providerLeg = workflow.slice(workflow.indexOf('live-daemon-e2e:'), workflow.indexOf('live-provider-gate:'));
     expect(providerLeg).not.toMatch(/exit\s+0/);
+    const credentialCheck = workflow.match(
+      /- name: Check live-provider credentials[\s\S]*?(?=\n      - uses: actions\/checkout)/,
+    )?.[0];
+    expect(credentialCheck).toBeDefined();
+    expect(credentialCheck).not.toMatch(/exit\s+0/);
     expect(workflow).toMatch(/if\s+grep\s+-Rqx\s+success\s+live-provider-results;\s+then[\s\S]*exit\s+0/);
     expect(workflow).toMatch(/live-provider-gate:[\s\S]*COMPLETE_SMOKE_RESULT[\s\S]*grep\s+-Rqx\s+success\s+live-provider-results[\s\S]*exit\s+0[\s\S]*No live-provider E2E passed\.[\s\S]*exit\s+1/);
     expect(workflow).toMatch(/id:\s*provider-smoke\s+continue-on-error:\s*true/);
