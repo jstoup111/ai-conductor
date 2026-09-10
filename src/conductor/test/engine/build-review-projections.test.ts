@@ -97,7 +97,7 @@ function typedScopeWithUnchangedSiblings(siblingCount: number): BuildReviewTestS
     ...Array.from({ length: siblingCount }, (_, index) => `it('unchanged sibling ${index + 1}', () => expect(true).toBe(true));`),
   ].join('\n');
   return analyzeBuildReviewTestScope({
-    base: { source: { fileName: 'test/a.test.ts', bytes: Buffer.from(source(false)) }, storiesText: '', planText: '### Task 10: Scope\n' },
+    base: { source: { fileName: 'test/a.test.ts', bytes: Buffer.from(source(false).replace('// Covers: task:10\n', '')) }, storiesText: '', planText: '### Task 10: Scope\n' },
     head: { source: { fileName: 'test/a.test.ts', bytes: Buffer.from(source(true)) }, storiesText: '', planText: '### Task 10: Scope\n' },
   });
 }

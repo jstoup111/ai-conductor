@@ -2,6 +2,7 @@ import {
   compareCoversMarkerBindings,
   coversResolutionIds,
   resolvesCoversReference,
+  sameCoversMarkerAssociation,
   type BoundCoversMarker,
   type BuildReviewTestBinding,
   type BuildReviewTestBindingsInput,
@@ -103,6 +104,14 @@ function declarationKey(declaration: SupportedTestDeclaration): string {
 
 function markerKey(marker: CoversMarker): string {
   return JSON.stringify(marker.reference);
+}
+
+function isIntroducedAssociation(
+  binding: Exclude<BuildReviewTestBinding, { readonly kind: 'unbound' }>,
+  changes: readonly CoversMarkerAssociationChange[],
+): boolean {
+  return changes.some((change) => change.kind === 'added'
+    && sameCoversMarkerAssociation(change.binding, binding));
 }
 
 function targetBindings(
@@ -277,7 +286,7 @@ export function unavailableBuildReviewTestScope(
   error: unknown,
 ): BuildReviewTestScope {
   const text = sourceText(input.head.source);
-  const markers = resolvableSourceMarkers(input.head);
+  const markers = introducedResolvableSourceMarkers(input.base, input.head);
   const diagnostic = Object.freeze({
     reason: 'syntax-diagnostic' as const,
     span: Object.freeze({ start: 0, end: text.length }),
@@ -316,6 +325,24 @@ function resolvableSourceMarkers(input: BuildReviewTestBindingsInput): readonly 
     }
   }
   return Object.freeze(markers);
+}
+
+function introducedResolvableSourceMarkers(
+  base: BuildReviewTestBindingsInput,
+  head: BuildReviewTestBindingsInput,
+): readonly CoversMarker[] {
+  const remainingBase = new Map<string, number>();
+  for (const marker of resolvableSourceMarkers(base)) {
+    const key = markerKey(marker);
+    remainingBase.set(key, (remainingBase.get(key) ?? 0) + 1);
+  }
+  return Object.freeze(resolvableSourceMarkers(head).filter((marker) => {
+    const key = markerKey(marker);
+    const count = remainingBase.get(key) ?? 0;
+    if (count === 0) return true;
+    remainingBase.set(key, count - 1);
+    return false;
+  }));
 }
 
 const SETUP_HOOKS = new Set(['beforeEach', 'afterEach', 'beforeAll', 'afterAll']);
@@ -551,11 +578,12 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
   const notes: BuildReviewTestScopeNote[] = [];
   const headUncertainMarkers = associations.head.bindings
     .filter((binding): binding is Extract<BuildReviewTestBinding, { kind: 'uncertain-association' }> => binding.kind === 'uncertain-association')
+    .filter((binding) => isIntroducedAssociation(binding, associations.changes))
     .map((binding) => binding.marker);
   const headCandidateMarkers = uniqueMarkers([
     ...headUncertainMarkers,
     ...(headAnalysis.diagnostics.some((diagnostic) => diagnostic.reason === 'unsupported-source-language')
-      ? resolvableSourceMarkers(input.head)
+      ? introducedResolvableSourceMarkers(input.base, input.head)
       : []),
   ]);
   const affectedGroups = derivedAffectedGroups(
@@ -563,15 +591,18 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
     input.head,
     baseAnalysis,
     headAnalysis,
-    associations.head.bindings,
+    associations.head.bindings.filter((binding) => binding.kind === 'bound'
+      && isIntroducedAssociation(binding, associations.changes)),
     changedDeclarations,
   );
 
   for (const declaration of changedDeclarations) {
     const headBindings = targetBindings(associations.head.bindings, declaration);
-    const bound = headBindings.filter((binding): binding is BoundCoversMarker => binding.kind === 'bound');
-    const unresolved = headBindings.filter((binding): binding is UnresolvedCoversMarker => binding.kind === 'unresolved-reference');
     const associationChanges = changedAssociationFor(associations.changes, declaration);
+    const bound = headBindings
+      .filter((binding): binding is BoundCoversMarker => binding.kind === 'bound')
+      .filter((binding) => isIntroducedAssociation(binding, associationChanges));
+    const unresolved = headBindings.filter((binding): binding is UnresolvedCoversMarker => binding.kind === 'unresolved-reference');
     const localUncertainMarkers = potentiallyApplicableUncertainMarkers(
       headCandidateMarkers,
       declaration,
@@ -584,7 +615,7 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
     for (const binding of unresolved) {
       notes.push(Object.freeze({ kind: 'unresolved-reference', declaration, marker: binding.marker }));
     }
-    if (headBindings.length === 0) notes.push(Object.freeze({ kind: 'unbound', declaration }));
+    if (bound.length === 0) notes.push(Object.freeze({ kind: 'unbound', declaration }));
 
     if (declaration.kind === 'group' && bound.length > 0) {
       candidates.push(candidate(candidateSource, declaration, bound.map((binding) => binding.marker), associationChanges, ['declaration-group']));
@@ -636,6 +667,7 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
   );
   const dependencyBindingsByOwner = new Map<string, BoundCoversMarker[]>();
   for (const binding of associations.head.bindings.filter((entry): entry is BoundCoversMarker => entry.kind === 'bound')) {
+    if (!isIntroducedAssociation(binding, associations.changes)) continue;
     const key = JSON.stringify([
       declarationKey(binding.owner.declaration),
       binding.owner.association,
@@ -662,6 +694,7 @@ export function analyzeBuildReviewTestScope(input: BuildReviewTestScopeInput): B
     const unchangedBodyKeys = new Set(group.unchangedDescendantBodies.map(sourceReferenceKey));
     const groupMarkers = associations.head.bindings
       .filter((binding): binding is BoundCoversMarker => binding.kind === 'bound')
+      .filter((binding) => isIntroducedAssociation(binding, associations.changes))
       .filter((binding) => binding.target.bodySpan
         && declarationInsideSuite(binding.target, group.suite)
         && unchangedBodyKeys.has(sourceReferenceKey(sourceReference(input.head.source.fileName, binding.target.bodySpan))))

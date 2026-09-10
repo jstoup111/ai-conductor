@@ -13,7 +13,7 @@ const storiesText = `
 describe('build-review local dependency scope', () => {
   it('keeps a plan-seeded changed helper as a candidate only with the test local Covers binding', async () => {
     const base = new Map([
-      ['test/orders.test.ts', "import { order } from '../src/order-helper';\n// Covers: S3.1\nit('uses order helper', () => { expect(order()).toBe('base'); });\n"],
+      ['test/orders.test.ts', "import { order } from '../src/order-helper';\nit('uses order helper', () => { expect(order()).toBe('base'); });\n"],
       ['src/order-helper.ts', "export const order = () => 'base';\n"],
     ]);
     const head = new Map([
@@ -89,7 +89,7 @@ describe('orders', () => {
 });
 `;
     const result = analyzeBuildReviewTestScope({
-      base: { source: { fileName: 'test/orders.test.ts', bytes: Buffer.from(source) }, storiesText, planText: '### Task 7: dependencies\n' },
+      base: { source: { fileName: 'test/orders.test.ts', bytes: Buffer.from(source.replace('// Covers: S3.1\n', '')) }, storiesText, planText: '### Task 7: dependencies\n' },
       head: { source: { fileName: 'test/orders.test.ts', bytes: Buffer.from(source) }, storiesText, planText: '### Task 7: dependencies\n' },
       dependencyEffects: [{
         seed: { source: { fileName: 'test/orders.test.ts', side: 'head' } },
@@ -111,7 +111,7 @@ describe('orders', () => {
 it('uses both helpers', () => { expect(true).toBe(true); });
 `;
     const result = analyzeBuildReviewTestScope({
-      base: { source: { fileName: 'test/orders.test.ts', bytes: Buffer.from(source) }, storiesText, planText: '### Task 7: dependencies\n' },
+      base: { source: { fileName: 'test/orders.test.ts', bytes: Buffer.from(source.replace('// Covers: S3.1\n', '')) }, storiesText, planText: '### Task 7: dependencies\n' },
       head: { source: { fileName: 'test/orders.test.ts', bytes: Buffer.from(source) }, storiesText, planText: '### Task 7: dependencies\n' },
       dependencyEffects: [
         {

@@ -27,9 +27,9 @@ describe('portable build-review scope regression (#2231)', () => {
       'criterion-bound body': 'target',
       'task-bound body': 'target',
       'criterion-three body': 'target',
-      'unresolved body': 'unresolved-reference',
+      'unresolved body': 'unbound',
       'unbound body': 'unbound',
-      'header-associated body': 'unresolved-reference',
+      'header-associated body': 'unbound',
       'ambiguous body': 'conflicting-associations',
       'removed-binding body': 'binding-removed',
     });
@@ -46,7 +46,7 @@ describe('portable build-review scope regression (#2231)', () => {
     // Whole-file admission read one blob; scoped analysis reads both pinned
     // sides plus the plan and stories through the frozen reader.
     expect(result.counts.sourceReads.scoped).toBeGreaterThan(result.counts.sourceReads.legacy);
-    expect(result.projectionBytes).toEqual({ legacy: 17_295, scoped: 18_183 });
+    expect(result.projectionBytes).toEqual({ legacy: 17_295, scoped: 21_600 });
     expect(result.dispatchCounts).toEqual({ legacy: 1, scoped: 1, realProviders: 0 });
     expect(result.elapsedAnalysisMs.legacy).toBeGreaterThanOrEqual(0);
     expect(result.elapsedAnalysisMs.scoped).toBeGreaterThanOrEqual(0);
@@ -56,7 +56,7 @@ describe('portable build-review scope regression (#2231)', () => {
   it('labels projection bytes as bytes rather than claiming provider-token or end-to-end savings', async () => {
     const result = await compareBuildReviewScope();
 
-    expect(result.projectionBytes).toEqual({ legacy: 17_295, scoped: 18_183 });
+    expect(result.projectionBytes).toEqual({ legacy: 17_295, scoped: 21_600 });
     expect(result).not.toHaveProperty('tokenSavings');
     expect(result).not.toHaveProperty('endToEndLatencySavings');
     expect(JSON.stringify(result)).not.toMatch(/token|end-to-end|latency savings/i);

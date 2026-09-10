@@ -121,11 +121,13 @@ command — inside this session.
   task in the active plan (`Covers: task:<id>`), or — product track — a PRD requirement
   (`Covers: FR-N`). Criterion ids are positional — `S<n>.<m>` names the m-th Given/When/Then bullet
   of Story n, happy-path bullets before negative-path ones; story files carry no literal ids.
-  Markers are resolvable only against the feature's own stories and plan; the
+  Add or update the marker in the current feature diff; an unchanged marker inherited from the
+  review base belongs to its earlier feature and is not current-feature authority, even when its
+  bare ordinal happens to resolve in the active plan. Markers are resolvable only against the feature's own stories and plan; the
   build_review test-quality rubric scopes itself to changed tests with a resolvable `Covers:`
   binding, so a changed test without one is invisible to that review and the rubric passes
-  vacuously. A file-level marker listing every covered id is sufficient; keep it current when the
-  cycle extends an existing test file.
+  vacuously. A file-level marker listing every covered id is sufficient; update it in the same
+  feature when the cycle extends an existing test file so the diff establishes feature ownership.
 
 **If the test passes immediately:** The behavior already exists. Either the test is wrong
 (testing something already implemented) or the criterion is already met. Investigate — don't

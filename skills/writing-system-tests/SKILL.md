@@ -412,6 +412,9 @@ verify outcome). Neither duplicates the other.
   active plan. Criterion ids are positional: `S<n>.<m>` is the m-th Given/When/Then bullet of Story n,
   counting happy-path bullets first and then negative-path bullets — story files never carry literal
   ids. On the product track, also retain `Covers: FR-N[, FR-M]` for PRD coverage reporting.
+  The generated marker must be introduced or updated in the active feature diff. An unchanged bare
+  marker inherited from the review base remains owned by the earlier feature and cannot authorize
+  an active-plan task or criterion merely because its ordinal collides.
   Do not use a test path as a substitute for a Covers marker.
 
 **Helpers:** Create shared request helpers (e.g. response-body parsing and auth-header
