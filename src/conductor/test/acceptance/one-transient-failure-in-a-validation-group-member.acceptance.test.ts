@@ -8,8 +8,8 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { readState, writeState } from '../../src/engine/state.js';
-import { filterRestageChanges } from '../../src/engine/state.js';
-import { applyRebaseVerdicts } from '../../src/engine/rebase.js';
+import { applyRebaseVerdicts, type RebaseOutcome } from '../../src/engine/rebase.js';
+import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -416,27 +416,78 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
         validation__manual_test: 'done', validation__prd_audit: 'done', validation__architecture_review_as_built: 'done',
         rebase: 'done', finish: 'done',
       });
-      // This is the same post-rebase invalidation entry point used by the
-      // engine; an uncomputable surface takes the established fail-closed
-      // invalidation route and writes a rebase-origin gate verdict.
-      await applyRebaseVerdicts(dir, {
-        kind: 'changed', changedCodePaths: ['src/manual-test.ts'], allChangedPaths: ['src/manual-test.ts'],
-      }, true);
+      const outcome: RebaseOutcome = {
+        kind: 'changed',
+        // The rebase delta overlaps the retained PRD-audit member's declared
+        // feature-runtime surface, so this is an ordinary selective
+        // invalidation rather than the uncomputable fail-closed fallback.
+        changedCodePaths: ['src/feature.ts'],
+        allChangedPaths: ['src/feature.ts'],
+        featureSurface: ['src/feature.ts'],
+      };
+      await applyRebaseVerdicts(dir, outcome, true);
       const seeded = await readState(statePath);
       if (!seeded.ok) throw seeded.error;
-      const restaged = filterRestageChanges(seeded.value, { manual_test: 'stale' });
-      await writeState(statePath, { ...seeded.value, ...restaged } as ConductState);
       const calls: StepName[] = [];
-      await new Conductor({
+      const runner: StepRunner = { run: vi.fn(async (step: StepName) => {
+        calls.push(step);
+        if (step === 'coverage_binding') await writeFile(
+          join(dir, '.pipeline/coverage-binding.json'),
+          JSON.stringify({ version: 1, slug: 'one-transient-failure-in-a-validation-group-member', runId: 'test-run', status: 'disabled', entries: [] }),
+        );
+        if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+        if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+        if (step === 'architecture_review_as_built') await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+        return { success: true } as StepRunResult;
+      }) };
+      const conductor = new Conductor({
         stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
         verifyArtifacts: true, fromStep: 'manual_test',
-        stepRunner: { run: vi.fn(async (step: StepName) => {
-          calls.push(step);
-          if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
-          return { success: true } as StepRunResult;
-        }) },
+        stepRunner: runner,
+      });
+      // Exercise the same rebase-tail branch that consumes the invalidation
+      // verdicts and invokes navigateStateBack; do not manufacture a stale
+      // state directly in this test.
+      const rebaseTail = conductor as unknown as {
+        lastRebaseOutcome: RebaseOutcome;
+        advanceTail(
+          step: (typeof ALL_STEPS)[number],
+          state: ConductState,
+          stuckGate: Map<StepName, number>,
+          steps: typeof ALL_STEPS,
+          indexOf: (name: StepName) => number,
+        ): Promise<number | null | 'halt'>;
+      };
+      rebaseTail.lastRebaseOutcome = outcome;
+      const rebase = ALL_STEPS.find((step) => step.name === 'rebase');
+      if (!rebase) throw new Error('rebase step must be registered');
+      await rebaseTail.advanceTail(
+        rebase,
+        seeded.value,
+        new Map(),
+        ALL_STEPS,
+        (name) => ALL_STEPS.findIndex((step) => step.name === name),
+      );
+      const restaged = await readState(statePath);
+      if (!restaged.ok) throw restaged.error;
+      expect(restaged.value.prd_audit).toBe('pending');
+      // A real rebase replays the earlier BUILD gates before this validation
+      // round. Model their already-green replay here, while retaining the
+      // actual post-rebase transition's pending PRD-audit member.
+      await writeState(statePath, {
+        ...restaged.value,
+        acceptance_specs: 'skipped', coverage_binding: 'done', build: 'done', test_suite: 'skipped', build_review: 'skipped', manual_test: 'done',
+      } as ConductState);
+      await Promise.all(['build', 'test_suite', 'build_review', 'manual_test'].map((step) =>
+        writeVerdict(dir, step as StepName, { satisfied: true, checkedAt: Date.now() }),
+      ));
+      // A fresh run reads the state persisted by the real rebase-tail
+      // transition, just as daemon re-dispatch does after that transition.
+      await new Conductor({
+        stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
+        verifyArtifacts: true, fromStep: 'manual_test', stepRunner: runner,
       }).run();
-      expect(calls.filter(step => step === 'manual_test')).toEqual(['manual_test']);
+      expect(calls.filter(step => step === 'prd_audit')).toEqual(['prd_audit']);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
