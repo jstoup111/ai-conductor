@@ -181,6 +181,7 @@ export interface ProviderAttemptEvent {
   outcome: 'success' | 'failure' | 'unavailable';
   /** False when a cached run-wide unavailability avoided process dispatch. */
   invoked: boolean;
+  preferredProvider?: string;
   model?: string;
   tokenUsage?: TokenUsage;
   observedIntervals?: readonly ObservedInterval[];
