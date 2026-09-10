@@ -211,10 +211,11 @@ of an adjudicated case rather than reopening an unbounded route.
 >   existing deferral executor and never a BUILD action.
 > - **D7.2** A `refute` row carries a schema-constrained refutation: the refuted claim, one or more
 >   assertion verdicts each `refuted` or `upheld` with evidence expressed as the existing
->   content-region reference grammar (path, content hash, display, occurrence — never line numbers or
->   commit SHAs), and case `confidence` exactly `high`. At least one assertion is `refuted`. The
->   engine resolves every evidence reference against the current tree; an unresolvable reference
->   rejects the whole judgement fail-closed, and no waiver covers it.
+>   canonical repo-relative path reference plus a whitespace-normalized excerpt (path and excerpt —
+>   never line numbers, hunk offsets, or commit SHAs), and case `confidence` exactly `high`. At least
+>   one assertion is `refuted`. The engine resolves every evidence reference against the current
+>   tree: the path must exist and the normalized excerpt must occur in that file; an unresolvable
+>   reference rejects the whole judgement fail-closed, and no waiver covers it.
 > - **D7.3** The only legal disposition transition is `act` → `refute`, admitted solely when the
 >   bound case is open, BUILD already attempted it, its action effect is `applied`, and it carries no
 >   prior refutation. Any other binding remains `illegal-disposition-transition`. A second `refute`

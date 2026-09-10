@@ -128,7 +128,7 @@ Wire a `build-review` command family before pipeline startup:
 
 > **Amended 2026-09-09 by #2409:** `findings` also renders autonomous case outcomes.
 >
-> - **D4.1** `findings` additionally opens the feature's remediation case store under the same
+> **D4.1** `findings` additionally opens the feature's remediation case store under the same
 >   guarded, version-checked, domain-filtered read discipline as the disposition store and prints
 >   every case: id, disposition, resolution, source ids, effect state, and for a refuted case the
 >   refuted claim, each assertion verdict, and the judge rationale. Autonomous outcomes are labeled
