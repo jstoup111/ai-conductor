@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-10T00:24:05.978Z
 Slug: close-the-unguarded-tmux-fixture-session-that-orph
 Class: plan-gap
 Halting step: prd_audit
