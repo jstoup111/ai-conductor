@@ -1209,6 +1209,9 @@ describe('Task 1: non-Small architecture diagrams at land', () => {
     await expect(
       landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh, renderDeps: renderDeps() }),
     ).rejects.toThrow(architecturePath);
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh, renderDeps: renderDeps() }),
+    ).rejects.toThrow('/architecture-diagram');
   });
 
   it('rejects mid-sentence mermaid fence prose specifically for a missing fenced mermaid diagram', async () => {
