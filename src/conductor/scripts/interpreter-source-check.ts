@@ -122,16 +122,20 @@ function directInterpreterIndex(words: Word[]): number {
   return interpreter.test(words[index]?.text ?? '') ? index : -1;
 }
 
-function heredocsOnLine(line: string, commands: Word[][], lineNumber: number): Heredoc[] {
-  const executable = commands
-    .map((words) => {
-      const index = directInterpreterIndex(words);
-      return index >= 0 ? words[index] : undefined;
-    })
-    .find((word) => word !== undefined);
+function heredocsOnLine(line: string, lineNumber: number): Heredoc[] {
   return [...line.matchAll(/<<(-?)\s*([^\s;|&]+)/g)].map((match) => ({
+    // A physical line can queue redirections for several commands. Resolve
+    // each one against the command text before that redirection, rather than
+    // borrowing the first interpreter found anywhere on the line.
+    // `commandsOnLine` also retains direct calls inside command substitutions.
+    // The final command is the one whose stdin this redirection belongs to.
+    ...(() => {
+      const owner = commandsOnLine(line.slice(0, match.index), lineNumber).at(-1);
+      const executable = owner && directInterpreterIndex(owner);
+      return { interpreter: executable !== undefined && executable >= 0 && /python3?$/.test(owner[executable].text) };
+    })(),
     ...heredocDelimiter(match[2]), stripTabs: match[1] === '-',
-    interpreter: Boolean(executable && /python3?$/.test(executable.text)), line: lineNumber,
+    line: lineNumber,
   }));
 }
 
@@ -181,6 +185,13 @@ export function checkInterpreterSource(sourceName: string, text: string): Interp
           }
           if (continuation < lines.length) {
             if (expanded) findings.push({ sourceName, line: source.line, message: 'shell expansion in interpreter command source' });
+            // Continue at the byte after the closing quote. Advancing the
+            // outer line index alone used to skip a second command (or a
+            // heredoc redirection) on that same physical line.
+            const suffix = lines[continuation].slice(quoteCloseIndex(lines[continuation], source.openQuote) + 1);
+            for (const finding of checkInterpreterSource(sourceName, suffix)) {
+              findings.push({ ...finding, line: finding.line + continuation });
+            }
             index = continuation;
             continue;
           }
@@ -203,7 +214,7 @@ export function checkInterpreterSource(sourceName: string, text: string): Interp
       }
       else if (source.expandable.length > 0) findings.push({ sourceName, line: source.line, message: 'shell expansion in interpreter command source' });
     }
-    pending.push(...heredocsOnLine(lines[index], commands, index + 1));
+    pending.push(...heredocsOnLine(lines[index], index + 1));
   }
   for (const here of pending) {
     if (here.interpreter) findings.push({ sourceName, line: here.line, message: 'unterminated interpreter heredoc' });
