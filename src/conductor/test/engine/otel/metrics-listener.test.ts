@@ -1,4 +1,4 @@
-// Covers: task:5
+// Covers: task:5, task:6
 import { describe, expect, it } from 'vitest';
 import {
   AggregationTemporality,
@@ -28,7 +28,65 @@ function attributesFor(
     ?.attributes;
 }
 
+function attributesForInstrument(
+  exporter: InMemoryMetricExporter,
+  name: string,
+): Record<string, unknown>[] {
+  return exporter.getMetrics()
+    .flatMap((batch) => batch.scopeMetrics)
+    .flatMap((scope) => scope.metrics)
+    .filter((metric) => metric.descriptor.name === name)
+    .flatMap((metric) => metric.dataPoints as unknown as MetricPoint[])
+    .map((point) => point.attributes);
+}
+
 describe('MetricsListener dispatch dimensions', () => {
+  it('counts invoked attempts once with provider and explicit fallback state', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const emitter = new ConductorEventEmitter();
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      undefined,
+      'feature',
+    );
+    listener.start(emitter);
+
+    try {
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+      await emitter.emit({
+        type: 'provider_attempt', step: 'build', provider: 'claude', preferredProvider: 'codex',
+        invoked: true, outcome: 'success',
+      });
+      await emitter.emit({
+        type: 'provider_attempt', step: 'plan', provider: 'claude', preferredProvider: 'claude',
+        invoked: true, outcome: 'success',
+      });
+      await emitter.emit({
+        type: 'provider_attempt', step: 'finish', provider: 'claude', invoked: true, outcome: 'success',
+      });
+      await emitter.emit({
+        type: 'provider_attempt', step: 'build', provider: 'provider-lifecycle', invoked: false,
+        outcome: 'success', lifecycle: { phase: 'settled', attemptId: 'attempt-1', recoveryCount: 0 },
+      });
+      await emitter.emit({
+        type: 'step_completed', step: 'build', status: 'done', actualProvider: 'claude',
+      });
+      await provider.forceFlush();
+
+      expect(attributesForInstrument(exporter, 'conductor.step.dispatches')).toEqual([
+        { step: 'build', metering: 'unmetered', provider: 'claude', fallback: true, project: 'project', worker: 'worker', feature: 'feature' },
+        { step: 'plan', metering: 'unmetered', provider: 'claude', fallback: false, project: 'project', worker: 'worker', feature: 'feature' },
+        { step: 'finish', metering: 'unmetered', provider: 'claude', project: 'project', worker: 'worker', feature: 'feature' },
+      ]);
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
+  });
+
   it('projects close and retry dimensions without retaining them for dimensionless or orphan events', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     const provider = new MeterProvider({

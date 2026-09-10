@@ -58,7 +58,7 @@ export class MetricsListener {
     },
     step_completed: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_completed' }>),
     step_failed: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_failed' }>),
-    provider_attempt: (listener, event) => listener.observeDispatch(event as Extract<OtelEvent, { type: 'provider_attempt' }>),
+    provider_attempt: (listener, event) => listener.onProviderAttempt(event as Extract<OtelEvent, { type: 'provider_attempt' }>),
     feature_usage_total: (listener, event) => listener.feature(event)?.onFeatureUsageTotal(event as Extract<OtelEvent, { type: 'feature_usage_total' }>),
     feature_cost_snapshot: (listener, event) => listener.feature(event)?.onFeatureCostSnapshot(event as Extract<OtelEvent, { type: 'feature_cost_snapshot' }>),
     step_retry: (listener, event) => {
@@ -123,18 +123,31 @@ export class MetricsListener {
     if (!slug || !metric) return;
     const featureStarts = this.starts.get(slug);
     const start = featureStarts?.get(event.step);
-    this.observeDispatch(event);
-    if (start !== undefined) metric.onStepClose(event.step, Math.max(0, this.now() - start), 0, event.type === 'step_completed' ? event.tokenUsage : undefined, event.type === 'step_completed' ? event.model : undefined, true, MetricsListener.dimensionsOf(event));
+    const compatibilityDispatch = this.observeDispatch(event);
+    if (start !== undefined) metric.onStepClose(event.step, Math.max(0, this.now() - start), 0, event.type === 'step_completed' ? event.tokenUsage : undefined, event.type === 'step_completed' ? event.model : undefined, compatibilityDispatch !== undefined, MetricsListener.dimensionsOf(event));
     featureStarts?.delete(event.step);
     if (featureStarts?.size === 0) this.starts.delete(slug);
   }
 
-  private observeDispatch(event: Extract<OtelEvent, { type: 'provider_attempt' | 'step_completed' | 'step_failed' }>): void {
+  private onProviderAttempt(event: Extract<OtelEvent, { type: 'provider_attempt' }>): void {
+    const observation = this.observeDispatch(event);
+    const metric = this.feature(event);
+    if (!observation || !metric) return;
+    metric.onDispatch(event.step, observation.tokenUsage, observation.model, {
+      ...(observation.model !== undefined ? { model: observation.model } : {}),
+      ...(observation.provider !== undefined ? { provider: observation.provider } : {}),
+      ...(observation.preferredProvider !== undefined
+        ? { fallback: observation.preferredProvider !== observation.provider }
+        : {}),
+    });
+  }
+
+  private observeDispatch(event: Extract<OtelEvent, { type: 'provider_attempt' | 'step_completed' | 'step_failed' }>) {
     const slug = this.featureOf(event);
-    if (!slug) return;
+    if (!slug) return undefined;
     const tracker = this.dispatchMetering.get(slug) ?? new DispatchMeteringTracker();
     this.dispatchMetering.set(slug, tracker);
-    tracker.observe(event);
+    return tracker.observe(event);
   }
 
   private static dimensionsOf(event: Extract<OtelEvent, { type: 'step_completed' | 'step_failed' | 'step_retry' }>): DispatchDimensions {
