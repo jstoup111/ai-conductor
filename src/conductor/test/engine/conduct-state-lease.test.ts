@@ -13,6 +13,8 @@ import {
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/state.js';
 
+// Covers: S1.1, task:1
+
 const temporaryDirectories: string[] = [];
 
 async function createStatePath(): Promise<string> {
@@ -162,7 +164,7 @@ describe('conduct-state lease', () => {
     if (recovered.ok) await expect(recovered.handle.release()).resolves.toEqual({ ok: true });
   });
 
-  it('retries a lease its owner released while recovery was probing liveness', async () => {
+  it('retries a lease whose owner released it before recovery reads its metadata', async () => {
     const statePath = '/worktree/vanishing/.pipeline/conduct-state.json';
     const shared = sharedLeaseFilesystem();
     const held = await createConductStateLease(statePath, {
@@ -172,20 +174,31 @@ describe('conduct-state lease', () => {
     }).acquire();
     if (!held.ok) throw new Error(held.message);
 
-    // The owner finishes and removes the lease directory in the window between
-    // the recovering process reading owner.json and writing its recovery claim,
-    // by which time that owner's pid no longer resolves. Two concurrent intake
-    // ledger writers produce exactly this ordering under load.
-    let ownerHasReleased = false;
+    // The contender sees the held directory, then its filesystem seam releases
+    // the first holder before rethrowing EEXIST. Its subsequent owner read must
+    // therefore observe ENOENT and retry normal acquisition.
+    let holderHasReleased = false;
+    let ownerReadError: NodeJS.ErrnoException | undefined;
     const filesystem: ConductStateLeaseFilesystem = {
       ...shared,
-      async readOwner(path): Promise<string> {
-        const owner = await shared.readOwner(path);
-        if (!ownerHasReleased) {
-          ownerHasReleased = true;
-          await held.handle.release();
+      async acquireDirectory(path): Promise<void> {
+        try {
+          await shared.acquireDirectory(path);
+        } catch (error) {
+          if (!holderHasReleased) {
+            holderHasReleased = true;
+            await held.handle.release();
+          }
+          throw error;
         }
-        return owner;
+      },
+      async readOwner(path): Promise<string> {
+        try {
+          return await shared.readOwner(path);
+        } catch (error) {
+          ownerReadError = error as NodeJS.ErrnoException;
+          throw error;
+        }
       },
     };
     const diagnostics: unknown[] = [];
@@ -200,6 +213,7 @@ describe('conduct-state lease', () => {
     }).acquire();
 
     expect(acquired).toMatchObject({ ok: true });
+    expect(ownerReadError).toMatchObject({ code: 'ENOENT' });
     expect(shared.owner).toContain('next-owner');
     expect(diagnostics).toEqual([]);
     if (acquired.ok) await expect(acquired.handle.release()).resolves.toEqual({ ok: true });
