@@ -5022,7 +5022,7 @@ describe('auxiliary provider dispatch tier telemetry', () => {
       config: { llm_provider: ['claude'] },
       providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('claude', invoke)]),
       sessionStore: new ProviderSessionStore(), configuredProviders: ['claude'],
-      providerAttempt: (step, attempt) => attempts.push({ type: 'provider_attempt', step, ...attempt }),
+      providerAttempt: (step, attempt) => { attempts.push({ type: 'provider_attempt', step, ...attempt }); },
     });
 
     try {
@@ -5058,7 +5058,7 @@ describe('auxiliary provider dispatch tier telemetry', () => {
       },
       providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('claude', invoke)]),
       sessionStore: new ProviderSessionStore(), configuredProviders: ['claude'],
-      providerAttempt: (step, attempt) => attempts.push({ type: 'provider_attempt', step, ...attempt }),
+      providerAttempt: (step, attempt) => { attempts.push({ type: 'provider_attempt', step, ...attempt }); },
     });
 
     try {
