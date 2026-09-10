@@ -97,6 +97,8 @@ Tests stay at unit level and inject every boundary. The visualizer test file alr
 
 > **Amended 2026-09-09 by #1490:** The operator declined provider-attempt tracing because halts and retries already provide the needed trace detail. Set `provider_attempt` to `otelTrace: false`, remove it from the traced handler table and trace subscription set, and preserve its existing persistence and optional legacy metrics accounting. The mapped coverage contract follows the remaining registry-derived traced set, including upstream additions such as `memory_setup`; the historical fifteen-type counts below are superseded. Task 4 proves the production `metrics: false` visualizer never subscribes to attempts and emits no attempt span event. This resolves PG-3 without adding telemetry.
 
+> **Amended 2026-09-10 by #1490:** PG-4 confirms `memory_setup`, `feature_usage_total`, and `feature_cost_snapshot` are metrics-only under ADR-014 Decision 7. The operator directed repair of this halt. Task 1 marks these existing OTel events `otelTrace: false`; Task 2 removes their effectless trace-table entries and retains optional direct-caller metrics through the existing metrics-only subscription block. MetricsListener remains their production owner. This supersedes the prior amendment’s inclusion of `memory_setup` in trace coverage. Task 4 extends the production trace-only exclusion proof to all three types and retains existing metric-effect tests; it does not add spans, telemetry, or tracking. Update the affected OTel configuration documentation.
+
 ### Task 2: Route traced events through a compile-checked handler table
 **Story:** Story 1
 **Type:** happy-path

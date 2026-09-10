@@ -41,9 +41,6 @@ const tracedHandlerTable = {
   step_started: () => undefined,
   step_completed: () => undefined,
   step_failed: () => undefined,
-  memory_setup: () => undefined,
-  feature_usage_total: () => undefined,
-  feature_cost_snapshot: () => undefined,
   step_retry: () => undefined,
   gate_verdict: () => undefined,
   kickback: () => undefined,
@@ -102,7 +99,6 @@ const tracedEventSamples: {
     maxAttempts: 3,
     reason: 'transient failure',
   },
-  memory_setup: { type: 'memory_setup', before: 'absent', canonical: true },
   gate_verdict: { type: 'gate_verdict', step: 'build', satisfied: true },
   kickback: { type: 'kickback', from: 'build_review', to: 'build', count: 1 },
   pipeline_closeout: {
@@ -114,22 +110,6 @@ const tracedEventSamples: {
   },
   step_completed: { type: 'step_completed', step: 'build', status: 'done' },
   step_failed: { type: 'step_failed', step: 'build', error: 'boom', retryCount: 0 },
-  feature_cost_snapshot: {
-    type: 'feature_cost_snapshot',
-    costUsd: 0,
-    costComplete: true,
-    byDimension: [],
-    tokensByDimension: [],
-  },
-  feature_usage_total: {
-    type: 'feature_usage_total',
-    dispatches: 1,
-    meteredDispatches: 1,
-    unmeteredDispatches: 0,
-    costUsd: 0,
-    inputTokens: 1,
-    outputTokens: 1,
-  },
   feature_complete: { type: 'feature_complete' },
   loop_halt: { type: 'loop_halt', step: 'build', reason: 'kickback cap' },
 };
@@ -271,7 +251,12 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
     }).toEqual({ subscriptions: expect.not.arrayContaining(['gate_blocked']), spans: [], metrics: [] });
   });
 
-  it('does not subscribe to provider attempts when exporting traces only', async () => {
+  it.each<ConductorEvent>([
+    { type: 'provider_attempt', step: 'build', provider: 'claude', invoked: true, outcome: 'failure' },
+    { type: 'memory_setup', before: 'absent', canonical: true },
+    { type: 'feature_cost_snapshot', costUsd: 0, costComplete: true, byDimension: [], tokensByDimension: [] },
+    { type: 'feature_usage_total', dispatches: 1, meteredDispatches: 1, unmeteredDispatches: 0, costUsd: 0, inputTokens: 1, outputTokens: 1 },
+  ])('does not subscribe to metrics-only $type when exporting traces only', async (event) => {
     const on = vi.spyOn(emitter, 'on');
     const vis = new OtelVisualizer(
       resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, pipelineDir),
@@ -280,15 +265,14 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
     );
     vis.start(emitter);
     await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
-    await emitter.emit({ type: 'provider_attempt', step: 'build', provider: 'claude',
-      invoked: true, outcome: 'failure' });
+    await emitter.emit(event);
     await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
     await vis.stop();
-    expect(on.mock.calls.map(([type]) => type)).not.toContain('provider_attempt');
-    expect(otelTracedEventTypes()).not.toContain('provider_attempt');
+    expect(on.mock.calls.map(([type]) => type)).not.toContain(event.type);
+    expect(otelTracedEventTypes()).not.toContain(event.type);
     const spans = spanExporter.getFinishedSpans();
     expect(spans.map((span) => span.name)).toContain('build');
-    expect(spans.flatMap((span) => span.events).map((event) => event.name)).not.toContain('provider_attempt');
+    expect(spans.flatMap((span) => span.events).map((event) => event.name)).not.toContain(event.type);
   });
 
   it('subscribes to gate_blocked when the mocked sink registry declares it traced', async () => {
