@@ -662,6 +662,34 @@ type RebaseOutcomeKind =
 /** A quarantine applies to every outcome after an untracked-collision heal. */
 export type RebaseOutcome = RebaseOutcomeKind & { quarantine?: RebaseQuarantine };
 
+/**
+ * Select the human recovery note from the classified rebase outcome. A refusal
+ * before git created rebase state must never instruct the operator to continue
+ * a rebase that does not exist.
+ */
+export async function writeRebaseOutcomeHalt(
+  projectRoot: string,
+  outcome: Extract<RebaseOutcome, { kind: 'conflict_halt' }>,
+  events?: ConductorEventEmitter,
+): Promise<HaltMarkerWriteResult> {
+  if (!outcome.startFailure) {
+    return writeHalt(projectRoot, outcome.conflicts, outcome.reason, events, outcome.resumeShape);
+  }
+  const quarantine = outcome.quarantine
+    ? `\nQuarantined files: ${outcome.quarantine.paths.join(', ')}\nQuarantine directory: ${outcome.quarantine.directory}\n`
+    : '';
+  const note =
+    `rebase did not start — parked for human recovery\n` +
+    `${outcome.reason}\n` +
+    quarantine +
+    `\nRecovery procedure:\n` +
+    `  1. Review any quarantined files and restore only the content you still need.\n` +
+    `  2. Clear .pipeline/HALT and .pipeline/HALT.class.\n` +
+    `  3. Re-queue the feature for the daemon.\n\n` +
+    `No git rebase is in progress; do not run git rebase --continue.\n`;
+  return writeHaltMarker(projectRoot, note, 'needs-human', events);
+}
+
 /** A protected-artifact refusal raised before git starts a rebase. */
 export class ProtectedArtifactSealRejection extends Error {
   constructor(reason: string) {

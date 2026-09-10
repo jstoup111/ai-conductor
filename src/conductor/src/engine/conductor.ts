@@ -375,6 +375,7 @@ import {
   emitGateInvalidationEvents,
   recordRebaseStepCompletion,
   writeHalt,
+  writeRebaseOutcomeHalt,
   writeSealHalt,
   ProtectedArtifactSealRejection,
   originDefaultBranch,
@@ -13389,7 +13390,7 @@ export class Conductor {
     }
 
     if (outcome.kind === 'conflict_halt' && !sealRejectionReason) {
-      await writeHalt(this.projectRoot, outcome.conflicts, outcome.reason, this.events, outcome.resumeShape);
+      await writeRebaseOutcomeHalt(this.projectRoot, outcome, this.events);
     }
 
     await recordRebaseStepCompletion(this.stateFilePath, outcome);
