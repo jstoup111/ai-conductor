@@ -247,3 +247,5 @@ the structure that turns an issue into buildable work.
 Unless otherwise noted, the code, skills, templates, and documentation in this repository are
 licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE) for attribution
 information.
+
+Rebases preserve reviews across unrelated document changes; changes to the active feature’s review inputs rerun the affected checks. See the [daemon guide](docs/guides/running-the-daemon.md#protected-artifact-rebaselines).

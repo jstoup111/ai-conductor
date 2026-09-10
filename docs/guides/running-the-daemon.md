@@ -151,6 +151,8 @@ it means the rubric could not run. The `raw:` suffix appears only when a determi
 the effective verdict. The optional excerpt, deterministic reason, and unresolved-marker count are
 included only when the event supplies them.
 
+A rebase that changes the active feature’s stories or PRD reruns its PRD audit and coverage binding. Changes to its plan or coherence carrier rerun coverage binding. Document-only changes leave BUILD and aggregate test proof intact; unrelated features’ documents leave these reviews intact. Rebase events name the input paths responsible for each decision.
+
 ### Protected-artifact rebaselines
 
 The daemon distinguishes a stale pre-rebase seal from a genuine protected-artifact mutation:

@@ -1227,7 +1227,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     ]);
     expect(byGate.coverage_binding.surface).toEqual([
       'src/feature.ts',
-      '<.docs/stories/|.docs/specs/>',
+      '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/>',
     ]);
     // The as-built review remains feature-runtime scoped; its test path is
     // excluded from the declared source surface.

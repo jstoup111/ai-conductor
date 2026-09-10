@@ -1,6 +1,6 @@
 import { execa } from 'execa';
 import { writeFile, readFile, access } from 'node:fs/promises';
-import { join, isAbsolute } from 'node:path';
+import { join, isAbsolute, relative, basename } from 'node:path';
 import type { StepName } from '../types/index.js';
 import { writeVerdict, type GateVerdict } from './gate-verdicts.js';
 import { writeHaltMarker } from './halt-marker.js';
@@ -11,8 +11,11 @@ import { saveStepStatus } from './state.js';
 import {
   classifyGateInvalidation,
   GATE_SURFACE,
+  isReviewDocumentPath,
   projectGateSurfaces,
 } from './gate-invalidation.js';
+import { buildArtifactResolutionContext, resolveFeaturePlanPath, resolveFeaturePrdPaths } from './artifacts.js';
+import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { ALL_STEPS } from './steps.js';
 import type { ProviderAttributionMetadata } from './provider-execution.js';
 import {
@@ -541,6 +544,8 @@ export type RebaseOutcome =
       /** Complete pre-filter rebase delta; absent when the delta is uncomputable. */
       allChangedPaths?: string[];
       featureSurface?: string[];
+      /** Exact active feature review inputs, resolved through existing artifact conventions. */
+      documentInputs?: string[];
     }
   | {
       kind: 'conflict_halt';
@@ -597,9 +602,10 @@ export class ProtectedArtifactSealRejection extends Error {
 export async function classifyMergeableSkip(
   git: GitRunner,
   base: ResolvedBase,
+  projectRoot?: string,
 ): Promise<
   | { skippable: true; baseSha: string | null }
-  | { skippable: false; reason: 'degraded-base' | 'base-moved-in-code' | 'base-delta-uncomputable' }
+  | { skippable: false; reason: 'degraded-base' | 'base-moved-in-code' | 'base-delta-uncomputable' | 'base-moved-in-review-inputs' }
 > {
   if (isDegradedBase(base)) {
     return { skippable: false, reason: 'degraded-base' };
@@ -619,6 +625,10 @@ export async function classifyMergeableSkip(
   }
   if (baseDelta.some(isCodeOrTestPath)) {
     return { skippable: false, reason: 'base-moved-in-code' };
+  }
+
+  if (projectRoot && (await resolveReviewInputs(projectRoot, baseDelta)).some((path) => baseDelta.includes(path))) {
+    return { skippable: false, reason: 'base-moved-in-review-inputs' };
   }
 
   const shaResult = await git(['rev-parse', base.ref]);
@@ -644,6 +654,37 @@ async function resolveFeatureDesc(projectRoot: string): Promise<string | undefin
   } catch {
     return undefined;
   }
+}
+
+/** Resolve only when a document delta exists; no additional persisted state. */
+export async function resolveReviewInputs(projectRoot: string, delta: string[]): Promise<string[]> {
+  if (!delta.some(isReviewDocumentPath)) return [];
+  const featureDesc = await resolveFeatureDesc(projectRoot);
+  const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
+  const context = await buildArtifactResolutionContext(projectRoot, { planPath, featureDesc });
+  if (context.featureIdentities.length === 0) return delta.filter(isReviewDocumentPath);
+  const inputs = await resolveFeaturePrdPaths(projectRoot, context);
+  const repoPath = (path: string) => isAbsolute(path) ? relative(projectRoot, path) : path;
+  const activePlan = context.activePlanPath ?? planPath;
+  if (activePlan) {
+    const plan = repoPath(activePlan);
+    inputs.push(plan, `.docs/coherence/${basename(plan, '.md')}.md`);
+    const body = await readFile(join(projectRoot, plan), 'utf8').catch(() => '');
+    const stories = resolvePlanStoriesPath(plan, body);
+    if (stories) inputs.push(stories);
+  }
+  // Same-stem paths also cover removed documents that no longer appear in a glob.
+  for (const identity of context.featureIdentities) {
+    for (const prefix of ['stories', 'specs', 'plans', 'coherence']) {
+      inputs.push(`.docs/${prefix}/${identity}.md`);
+    }
+  }
+  return [...new Set(inputs.map(repoPath))];
+}
+
+function reviewDelta(outcome: Extract<RebaseOutcome, { kind: 'changed' }>): string[] {
+  return [...new Set([...outcome.changedCodePaths,
+    ...(outcome.allChangedPaths ?? []).filter(isReviewDocumentPath)])];
 }
 
 export interface PerformRebaseOpts {
@@ -715,7 +756,7 @@ export async function performRebase(
     ? await classifyProspectiveMerge(git, base.ref)
     : undefined;
   if (prospectiveMerge === 'clean') {
-    const skip = await classifyMergeableSkip(git, base);
+    const skip = await classifyMergeableSkip(git, base, projectRoot);
     if (skip.skippable) {
       return {
         kind: 'mergeable_skip',
@@ -770,7 +811,7 @@ export async function performRebase(
   // genuine overlap makes the autostash pop conflict, still caught below.)
   const rebase = await git(['rebase', '--autostash', base.ref]);
   if (rebase.exitCode === 0) {
-    const outcome = await classifyClean(git, preTree, mergeBase);
+    const outcome = await classifyClean(git, preTree, mergeBase, projectRoot);
     // Every clean rebase that reaches here rewrites commit shas (the parent
     // changed), regardless of whether classifyClean's code-path heuristic
     // calls it `changed` or `noop` — a docs/config-only rebase still orphans
@@ -805,6 +846,7 @@ async function classifyClean(
   git: GitRunner,
   preTree: string,
   mergeBase?: string,
+  projectRoot?: string,
 ): Promise<RebaseOutcome> {
   // D: the rebase delta (preTree..HEAD). If this diff itself throws (a git
   // process crash, not just a non-zero exit — `changedPathsBetween` already
@@ -824,7 +866,8 @@ async function classifyClean(
     dUncomputable = true;
   }
   const codePaths = filterCodeOrTestPaths(changed);
-  if (!dUncomputable && codePaths.length === 0) {
+  const documentInputs = projectRoot ? await resolveReviewInputs(projectRoot, changed) : [];
+  if (!dUncomputable && codePaths.length === 0 && !changed.some((path) => documentInputs.includes(path))) {
     return { kind: 'noop', allChangedPaths: changed };
   }
   // F: the feature's own claimed surface — files the feature's commits
@@ -850,7 +893,8 @@ async function classifyClean(
     kind: 'changed',
     changedCodePaths: codePaths,
     ...(dUncomputable ? {} : { allChangedPaths: changed }),
-    featureSurface,
+    featureSurface: !dUncomputable && codePaths.length === 0 ? [] : featureSurface,
+    ...(dUncomputable ? {} : { documentInputs }),
   };
 }
 
@@ -1268,8 +1312,10 @@ export async function resolveRebaseConflicts(
         // Complete-delta attribution is optional after resolution succeeds.
       }
     }
-    return changedCodePaths.length > 0
-      ? { kind: 'changed', changedCodePaths, ...(allChangedPaths === undefined ? {} : { allChangedPaths }) }
+    const documentInputs = await resolveReviewInputs(projectRoot, allChangedPaths ?? []);
+    const documentsChanged = allChangedPaths?.some((path) => documentInputs.includes(path)) ?? false;
+    return changedCodePaths.length > 0 || documentsChanged
+      ? { documentInputs, ...(changedCodePaths.length === 0 ? { featureSurface: [] } : {}), kind: 'changed', changedCodePaths, ...(allChangedPaths === undefined ? {} : { allChangedPaths }) }
       : { kind: 'noop', ...(allChangedPaths === undefined ? {} : { allChangedPaths }) };
   }
 
@@ -1388,6 +1434,8 @@ export async function applyRebaseVerdicts(
         : outcome.kind === 'mergeable_skip'
           ? `branch is mergeable with ${outcome.baseRef}@${outcome.baseSha ?? 'unknown'} ` +
             `(${outcome.baseKind}), which has no code/test changes since the merge-base; rebase skipped`
+        : outcome.kind === 'changed' && outcome.changedCodePaths.length === 0 && outcome.documentInputs !== undefined
+          ? 'rebased onto base (review inputs changed — affected reviews re-verify)'
         : outcome.kind === 'changed' && outcome.featureSurface === undefined
           ? 'rebased onto base (code changed — feature surface F uncomputable, fail-closed to legacy invalidate-all)'
           : 'rebased onto base (code changed — downstream re-verify)',
@@ -1400,10 +1448,12 @@ export async function applyRebaseVerdicts(
   }
 
   // FR-5: code/test paths changed → invalidate downstream gates kickback-shaped.
+  const delta = reviewDelta(outcome);
+  const documentOnly = outcome.changedCodePaths.length === 0 && outcome.documentInputs !== undefined;
   const evidence =
-    `rebase changed code/test paths: ${outcome.changedCodePaths.slice(0, 5).join(', ')}` +
-    (outcome.changedCodePaths.length > 5
-      ? ` (+${outcome.changedCodePaths.length - 5} more)`
+    `rebase changed paths: ${delta.slice(0, 5).join(', ')}` +
+    (delta.length > 5
+      ? ` (+${delta.length - 5} more)`
       : '');
   const kickedBack: StepName[] = [];
   const reverified: StepName[] = [];
@@ -1415,7 +1465,7 @@ export async function applyRebaseVerdicts(
   // capability, or thrown check falls through to the normal fail-closed
   // kickback below.
   const reverifiedGates = new Set<StepName>();
-  if (preVerify) {
+  if (preVerify && !documentOnly) {
     for (const gate of ALL_STEPS.filter((step) => step.treeAttestingCompletion)) {
       try {
         const verification = await preVerify(gate.name);
@@ -1457,10 +1507,10 @@ export async function applyRebaseVerdicts(
   // silently left un-re-verified (prd_audit/architecture_review_as_built
   // included).
   const partition = outcome.featureSurface !== undefined
-    ? classifyGateInvalidation(outcome.changedCodePaths, outcome.featureSurface, ranManualTest)
+    ? classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
     : undefined;
   const targets: StepName[] = partition !== undefined
-    ? (['build', ...partition.invalidated] as StepName[])
+    ? ([...(documentOnly ? [] : ['build']), ...partition.invalidated] as StepName[])
     : ([
         'build',
         ...Object.keys(GATE_SURFACE).filter((gate) => ranManualTest || gate !== 'manual_test'),
@@ -1517,8 +1567,9 @@ export async function recordRebaseStepCompletion(
  * For invalidated gates, `matchedPaths` carries only the delta paths that
  * justify invalidating THIS specific gate, per its `GATE_SURFACE` kind:
  *   - 'feature-runtime' (architecture_review_as_built): featureSrc.
- *   - 'feature-runtime-or-prd-inputs' (coverage_binding, prd_audit): feature
- *     runtime paths plus declared stories/PRD document inputs.
+ *   - 'feature-runtime-or-prd-inputs' (prd_audit): feature runtime paths
+ *     plus active stories/PRD inputs. Coverage additionally includes the
+ *     active plan and coherence carrier ('feature-runtime-or-coverage-inputs').
  *   - 'feature-codetest' (build_review): featureSrc ∪ the feature's own test
  *     paths.
  *   - 'all-runtime' (manual_test): featureSrc ∪ foreignSrc.
@@ -1573,11 +1624,12 @@ export async function emitGateInvalidationEvents(
   }
 
   const { invalidated, preserved } = classifyGateInvalidation(
-    outcome.changedCodePaths,
+    reviewDelta(outcome),
     outcome.featureSurface,
     ranManualTest,
+    outcome.documentInputs,
   );
-  const projections = projectGateSurfaces(outcome.changedCodePaths, outcome.featureSurface);
+  const projections = projectGateSurfaces(reviewDelta(outcome), outcome.featureSurface, outcome.documentInputs);
   const preservationBases = new Map(preverifiedPreserved.map(({ gate, basis }) => [gate, basis]));
 
   for (const gate of invalidated) {

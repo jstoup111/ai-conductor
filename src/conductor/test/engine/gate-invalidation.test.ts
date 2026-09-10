@@ -42,7 +42,7 @@ describe('GATE_SURFACE', () => {
   });
 
   it('invalidates coverage_binding for feature runtime or plan inputs', () => {
-    expect(GATE_SURFACE.coverage_binding).toBe('feature-runtime-or-prd-inputs');
+    expect(GATE_SURFACE.coverage_binding).toBe('feature-runtime-or-coverage-inputs');
   });
 });
 

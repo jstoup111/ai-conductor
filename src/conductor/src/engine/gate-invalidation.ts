@@ -46,17 +46,20 @@ export type GateSurfaceKind =
   | 'feature-runtime'
   | 'feature-codetest'
   | 'feature-runtime-or-prd-inputs'
+  | 'feature-runtime-or-coverage-inputs'
   | 'all-runtime'
   | 'any-codetest';
 
 export const PRD_AUDIT_DOCUMENT_INPUT_PREFIXES = ['.docs/stories/', '.docs/specs/'] as const;
 
-function isPrdAuditDocumentInput(path: string): boolean {
-  return PRD_AUDIT_DOCUMENT_INPUT_PREFIXES.some((prefix) => path.startsWith(prefix));
+export const COVERAGE_DOCUMENT_INPUT_PREFIXES = [...PRD_AUDIT_DOCUMENT_INPUT_PREFIXES, '.docs/plans/', '.docs/coherence/'] as const;
+
+export function isReviewDocumentPath(path: string): boolean {
+  return COVERAGE_DOCUMENT_INPUT_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
 export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
-  coverage_binding: 'feature-runtime-or-prd-inputs',
+  coverage_binding: 'feature-runtime-or-coverage-inputs',
   // Grades THE FEATURE'S OWN diff against its plan (plan-vs-diff
   // completeness), so only the feature's own code or tests can change the
   // grade — a foreign main-side delta leaves that diff, and therefore the
@@ -144,13 +147,21 @@ export interface GateSurfaceProjection {
 export function projectGateSurfaces(
   D: string[],
   F: string[],
+  documentInputs?: readonly string[],
 ): Record<GateSurfaceKind, GateSurfaceProjection> {
   const { test, featureSrc, foreignSrc } = partitionDelta(D, F);
   const featureTest = featureTestPaths(D, F);
   const featureRuntimeSurface = F.filter(isRuntimeSourcePath);
   const featureCodeTestSurface = F.filter((path) => isRuntimeSourcePath(path) || isTestPath(path));
-  const prdAuditDocumentInputs = D.filter(isPrdAuditDocumentInput);
-  const documentInputDeclaration = `<${PRD_AUDIT_DOCUMENT_INPUT_PREFIXES.join('|')}>`;
+  const documents = (prefixes: readonly string[]) => {
+    const declared = documentInputs?.filter((path) => prefixes.some((prefix) => path.startsWith(prefix)));
+    return {
+      matchedPaths: D.filter((path) => prefixes.some((prefix) => path.startsWith(prefix)) && (declared === undefined || declared.includes(path))),
+      declaredSurface: declared ?? [`<${prefixes.join('|')}>`],
+    };
+  };
+  const prdInputs = documents(PRD_AUDIT_DOCUMENT_INPUT_PREFIXES);
+  const coverageInputs = documents(COVERAGE_DOCUMENT_INPUT_PREFIXES);
 
   return {
     'feature-runtime': {
@@ -162,8 +173,12 @@ export function projectGateSurfaces(
       declaredSurface: featureCodeTestSurface,
     },
     'feature-runtime-or-prd-inputs': {
-      matchedPaths: [...featureSrc, ...prdAuditDocumentInputs],
-      declaredSurface: [...featureRuntimeSurface, documentInputDeclaration],
+      matchedPaths: [...featureSrc, ...prdInputs.matchedPaths],
+      declaredSurface: [...featureRuntimeSurface, ...prdInputs.declaredSurface],
+    },
+    'feature-runtime-or-coverage-inputs': {
+      matchedPaths: [...featureSrc, ...coverageInputs.matchedPaths],
+      declaredSurface: [...featureRuntimeSurface, ...coverageInputs.declaredSurface],
     },
     'all-runtime': {
       matchedPaths: [...featureSrc, ...foreignSrc],
@@ -204,8 +219,9 @@ export function classifyGateInvalidation(
   D: string[],
   F: string[],
   ranManualTest: boolean,
+  documentInputs?: readonly string[],
 ): { preserved: string[]; invalidated: string[] } {
-  const projections = projectGateSurfaces(D, F);
+  const projections = projectGateSurfaces(D, F, documentInputs);
   const preserved: string[] = [];
   const invalidated: string[] = [];
 

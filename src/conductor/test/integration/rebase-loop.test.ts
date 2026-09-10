@@ -13,6 +13,7 @@ import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import {
   performRebase,
+  resolveRebaseConflicts,
   applyRebaseVerdicts,
   emitGateInvalidationEvents,
   makeGitRunner as makeRebaseGitRunner,
@@ -165,6 +166,52 @@ describe('integration/rebase-loop', () => {
     await git('add', '.');
     await git('commit', '-m', 'feature work');
   }
+
+  it.each([
+    ['.docs/stories/add-foo.md', ['coverage_binding', 'prd_audit']],
+    ['.docs/specs/add-foo.md', ['coverage_binding', 'prd_audit']],
+    ['.docs/plans/add-foo.md', ['coverage_binding']],
+    ['.docs/coherence/add-foo.md', ['coverage_binding']],
+    ['.docs/stories/another-feature.md', []],
+  ])('rebase reviews only the active inputs changed at %s', async (path, expected) => {
+    await initRepoOnFeatureBranch({ path: 'src/foo.ts', content: 'export const foo = 1;\n' });
+    await advanceBaseNonConflicting(path);
+    await writeState(statePath, { ...FRONT_DONE, feature_desc: 'add foo' });
+    const invalidated: string[] = [];
+    events.on('rebase_gate_invalidated', (event) => {
+      if (event.type !== 'rebase_gate_invalidated') return;
+      invalidated.push(event.gate);
+      expect(event.matchedPaths).toEqual([path]);
+    });
+    const outcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE, { finishMergeabilityCheck: true });
+    const preVerify = vi.fn();
+    const result = await applyRebaseVerdicts(dir, outcome, true, preVerify);
+    await emitGateInvalidationEvents(events, outcome, true);
+    expect(result.kickedBack).toEqual(expected);
+    expect(invalidated).toEqual(expected);
+    expect(preVerify).not.toHaveBeenCalled();
+    expect(outcome.kind).toBe(expected.length ? 'changed' : 'mergeable_skip');
+    if (expected.length) expect(await git('merge-base', '--is-ancestor', BASE, 'HEAD')).toBe('');
+  });
+
+  it('keeps document review invalidation after conflict resolution without restarting BUILD', async () => {
+    const path = '.docs/stories/add-foo.md';
+    await initRepoOnFeatureBranch({ path, content: '# feature criteria\n' });
+    await advanceBaseNonConflicting(path);
+    await writeState(statePath, { ...FRONT_DONE, feature_desc: 'add foo' });
+    const runner = makeRebaseGitRunner(dir);
+    const conflict = await performRebase(runner, dir, BASE);
+    expect(conflict.kind).toBe('conflict_halt');
+    const outcome = await resolveRebaseConflicts(runner, dir, conflict, async () => {
+      await writeFile(join(dir, path), '# feature criteria\n# accepted base criteria\n');
+      await git('add', path);
+      await git('-c', 'core.editor=true', 'rebase', '--continue');
+      return { resolved: true };
+    }, 1);
+    expect(outcome.kind).toBe('changed');
+    const result = await applyRebaseVerdicts(dir, outcome, true);
+    expect(result.kickedBack).toEqual(['coverage_binding', 'prd_audit']);
+  });
 
   // Advance BASE with a NON-conflicting commit (a brand-new file). Leaves the
   // checkout back on the feature branch.

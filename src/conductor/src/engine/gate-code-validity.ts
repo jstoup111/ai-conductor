@@ -20,8 +20,8 @@ import {
   PRD_AUDIT_CODE_STAMP,
 } from './artifacts.js';
 import type { GitRunner } from './rebase.js';
-import { originDefaultBranch, changedPathsBetween } from './rebase.js';
-import { featureTestPaths, GATE_SURFACE, partitionDelta } from './gate-invalidation.js';
+import { originDefaultBranch, changedPathsBetween, resolveReviewInputs } from './rebase.js';
+import { featureTestPaths, GATE_SURFACE, partitionDelta, projectGateSurfaces } from './gate-invalidation.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { resolveThroughMap } from './rebase-translate.js';
 
@@ -202,6 +202,7 @@ export async function gateVerdictStillValid(
     surface === 'feature-runtime' ||
     surface === 'feature-codetest' ||
     surface === 'feature-runtime-or-prd-inputs' ||
+    surface === 'feature-runtime-or-coverage-inputs' ||
     surface === 'all-runtime'
       ? await deriveFeatureSurface(ctx)
       : [];
@@ -225,11 +226,8 @@ export async function gateVerdictStillValid(
           : featureSrc.length === 0 && featureTestPaths(delta, F).length === 0;
       break;
     case 'feature-runtime-or-prd-inputs':
-      isSurfaceMiss =
-        featureSrc.length === 0 &&
-        !delta.some(
-          (path) => path.startsWith('.docs/stories/') || path.startsWith('.docs/specs/'),
-        );
+    case 'feature-runtime-or-coverage-inputs':
+      isSurfaceMiss = projectGateSurfaces(delta, F, await resolveReviewInputs(ctx.projectRoot, delta))[surface].matchedPaths.length === 0;
       break;
     case 'all-runtime':
       isSurfaceMiss = featureSrc.length === 0 && foreignSrc.length === 0;
