@@ -62,7 +62,7 @@ export const EVENT_SINKS = {
   step_failed: { render: true, persist: true, audit: false, otel: true },
   step_refused: { render: true, persist: true, audit: true, otel: false },
   step_status_write_refused: { render: true, persist: true, audit: true, otel: false },
-  provider_attempt: { render: true, persist: true, audit: false, otel: true, otelTrace: false },
+  provider_attempt: { render: true, persist: true, audit: false, otel: true },
   // Per-interval progress would flood .daemon/daemon.log; daemon status reads the ledger directly.
   provider_stream_progress: { render: false, persist: true, audit: false, otel: false },
   scratch_cleanup_reclaimed: { render: true, persist: true, audit: false, otel: false },

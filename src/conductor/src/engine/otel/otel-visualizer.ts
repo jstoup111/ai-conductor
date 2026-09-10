@@ -189,6 +189,12 @@ export class OtelVisualizer implements VisualizerPlugin {
     step_failed: (event) => {
       this.spanManager!.onStepFailed(event);
     },
+    provider_attempt: (event) => {
+      const dispatch = this.dispatchMetering.observe(event);
+      if (dispatch) {
+        this.spanManager!.onProviderAttempt(dispatch.step ?? event.step, dispatch);
+      }
+    },
     step_retry: (event) => {
       this.spanManager!.onStepRetry(event);
     },

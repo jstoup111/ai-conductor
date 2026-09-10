@@ -1,5 +1,5 @@
 /**
- * Covers: task:1
+ * Covers: task:1, task:7
  *
  * span-manager.test.ts — unit tests for SpanManager via OtelVisualizer.
  *
@@ -439,6 +439,89 @@ describe('T12: step span negatives — orphan and re-run', () => {
 // ── T13: Step span attributes ─────────────────────────────────────────────────
 
 describe('T13: step span attributes', () => {
+  it('records dispatch dimensions and fallback details on the completed step span', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    const { spanManager } = vis as unknown as {
+      spanManager: {
+        onProviderAttempt(
+          step: string,
+          observation: {
+            provider?: string;
+            preferredProvider?: string;
+            fallbackReason?: string;
+          },
+        ): void;
+      };
+    };
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    spanManager.onProviderAttempt('build', {
+      provider: 'claude',
+      preferredProvider: 'codex',
+      fallbackReason: 'codex unavailable',
+    });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      model: 'sonnet',
+      effort: 'medium',
+      tier: 'S',
+      preferredProvider: 'codex',
+      actualProvider: 'claude',
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'build')!;
+    expect(span.attributes).toMatchObject({
+      'conductor.model': 'sonnet',
+      'conductor.effort': 'medium',
+      'conductor.complexity_tier': 'S',
+      'conductor.provider': 'claude',
+      'conductor.provider.preferred': 'codex',
+      'conductor.fallback': true,
+      'conductor.fallback.reason': 'codex unavailable',
+    });
+  });
+
+  it('omits the fallback reason when the provider attempt did not report one', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    const { spanManager } = vis as unknown as {
+      spanManager: { onProviderAttempt(step: string, observation: { provider?: string }): void };
+    };
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    spanManager.onProviderAttempt('build', { provider: 'claude' });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'build')!;
+    expect(span.attributes).not.toHaveProperty('conductor.fallback.reason');
+  });
+
+  it('warns and does not create a span for an attempt without an open step', async () => {
+    const warnings: string[] = [];
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir, (message) =>
+      warnings.push(message),
+    );
+    vis.start(emitter);
+    const { spanManager } = vis as unknown as {
+      spanManager: { onProviderAttempt(step: string, observation: { provider?: string }): void };
+    };
+
+    expect(() => spanManager.onProviderAttempt('build', { provider: 'claude' })).not.toThrow();
+    await vis.stop();
+
+    expect({ warnings, spans: spanExporter.getFinishedSpans() }).toEqual({
+      warnings: ["provider_attempt for 'build' received but no open span exists — ignoring"],
+      spans: [],
+    });
+  });
+
   it('closed step span carries conductor.step, conductor.step.index, conductor.step.status, conductor.retry.count', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);

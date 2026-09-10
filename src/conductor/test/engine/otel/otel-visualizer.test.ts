@@ -41,6 +41,7 @@ const tracedHandlerTable = {
   step_started: () => undefined,
   step_completed: () => undefined,
   step_failed: () => undefined,
+  provider_attempt: () => undefined,
   step_retry: () => undefined,
   gate_verdict: () => undefined,
   kickback: () => undefined,
@@ -252,7 +253,6 @@ describe('OtelVisualizer — T9: provider/processor setup', () => {
   });
 
   it.each<ConductorEvent>([
-    { type: 'provider_attempt', step: 'build', provider: 'claude', invoked: true, outcome: 'failure' },
     { type: 'memory_setup', before: 'absent', canonical: true },
     { type: 'feature_cost_snapshot', costUsd: 0, costComplete: true, byDimension: [], tokensByDimension: [] },
     { type: 'feature_usage_total', dispatches: 1, meteredDispatches: 1, unmeteredDispatches: 0, costUsd: 0, inputTokens: 1, outputTokens: 1 },
