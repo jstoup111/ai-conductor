@@ -238,6 +238,46 @@ describe('Conductor FINISH publication routing', () => {
     }]);
   });
 
+  it('blocks publication when a retained done prd_audit has an unsatisfied on-disk verdict', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeGreenShipValidatorEvidence(dir);
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
+    );
+    // This is the retained member's on-disk gate evidence. FINISH must
+    // re-evaluate it rather than trusting its `done` status.
+    await writeFile(join(dir, '.pipeline', 'prd-audit.md'), '# PRD Audit\n\nVerdict: BLOCKED\n');
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M', architecture_review: 'skipped',
+      manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done',
+      validation__prd_audit: 'done',
+    });
+    const advance = vi.fn(async () => ({ kind: 'complete' } as const));
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async (step) => {
+        if (step === 'prd_audit') throw ROUTED_SENTINEL;
+        return { success: true };
+      }) },
+      finishPublication: { advance }, events: new ConductorEventEmitter(), projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true,
+      verifyArtifacts: true, git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    });
+    const finishFence = conductor as unknown as {
+      nonGreenFinishValidators(state: ConductState): Promise<Array<{ name: StepName }>>;
+    };
+    const state = await readState(statePath);
+    if (!state.ok) throw new Error('test fixture state must be readable');
+    await expect(finishFence.nonGreenFinishValidators(state.value)).resolves.toEqual([
+      expect.objectContaining({ name: 'prd_audit' }),
+    ]);
+    await conductor.run();
+    expect(advance).not.toHaveBeenCalled();
+  });
+
   it('redirects several non-green validators to the earliest one without demoting a green sibling', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(

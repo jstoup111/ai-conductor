@@ -9374,6 +9374,11 @@ describe('engine/conductor', () => {
 
       expect(kickbacks.length).toBe(0);
       expect(haltCount).toBeGreaterThan(0);
+      const result = await readState(statePath);
+      if (!result.ok) throw result.error;
+      const state = result.value as Record<string, unknown>;
+      // A successful dispatch with FAIL rows is not a satisfied join member.
+      expect([state.manual_test, state.validation__manual_test]).not.toContain('done');
     });
   });
 

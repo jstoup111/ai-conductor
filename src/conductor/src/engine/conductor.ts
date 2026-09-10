@@ -12927,6 +12927,19 @@ export class Conductor {
           // stamped 'done' here. For all other steps, here.
           if (step.name !== 'complexity' && step.name !== 'worktree' && step.name !== 'rebase') {
             await this.saveConductorStepStatus(state, step.name, 'done');
+            // A width-one built-in validation group deliberately follows the
+            // serial dispatch path (and therefore preserves the established
+            // serial event stream), but its durable state must remain
+            // equivalent to the width-2+ join.  Complete the paired synthetic
+            // member key here rather than routing width one through the join.
+            const group = getGroupForStep(step.name);
+            if (group?.name === 'validation') {
+              await this.saveConductorStepStatus(
+                state,
+                `${group.name}__${step.name}` as StepName,
+                'done',
+              );
+            }
           }
           state[step.name] = 'done';
           lastSettledUnit = { kind: 'step', name: step.name };
