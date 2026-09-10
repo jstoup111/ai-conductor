@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-10T22:54:46.938Z
 Slug: render-every-declared-render-event-in-inline-runs
 Class: needs-human
 Halting step: unknown
