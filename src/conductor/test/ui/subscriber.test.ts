@@ -101,6 +101,12 @@ describe('TerminalSubscriber', () => {
     expect(renderCallback).not.toHaveBeenCalled();
   });
 
+  it('exposes an awaitable lifecycle stop', async () => {
+    subscriber.start([]);
+
+    await expect(subscriber.stop()).resolves.toBeUndefined();
+  });
+
   it('triggers dashboard render on step events', async () => {
     subscriber.start();
 

@@ -1,5 +1,5 @@
 import type { ConductorEvent } from '../../src/conductor/src/types/index.js';
-import type { UISubscriber } from '../../src/conductor/src/ui/types.js';
+import type { UIRenderer, UISubscriber } from '../../src/conductor/src/ui/types.js';
 
 /**
  * JsonStdoutSubscriber — Feature 3.2
@@ -15,11 +15,11 @@ import type { UISubscriber } from '../../src/conductor/src/ui/types.js';
 export class JsonStdoutSubscriber implements UISubscriber {
   private started = false;
 
-  start(): void {
+  start(_renderers: UIRenderer[] = []): void {
     this.started = true;
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.started = false;
   }
 

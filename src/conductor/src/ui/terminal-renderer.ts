@@ -294,7 +294,7 @@ export class TerminalRenderer implements UIRenderer {
     }
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopSpinner();
     this.region.clear();
   }

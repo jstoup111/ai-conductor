@@ -16,12 +16,12 @@ import type {
 
 export interface UIRenderer {
   handle(event: ConductorEvent): Promise<void>;
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 export interface UISubscriber {
-  start(): void;
-  stop(): void;
+  start(renderers: UIRenderer[]): void;
+  stop(): Promise<void>;
 }
 
 export type UIEventHandler = (event: ConductorEvent) => void | Promise<void>;

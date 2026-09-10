@@ -41,7 +41,7 @@ export class TerminalSubscriber implements UISubscriber {
     this.onRender = onRender;
   }
 
-  start(): void {
+  start(_renderers: UIRenderer[] = []): void {
     // Dashboard renders are event-driven. No periodic refresh — the sticky
     // live region is updated when conductor state changes. A polling refresh
     // would accumulate stale frames in the scrollback.
@@ -68,7 +68,7 @@ export class TerminalSubscriber implements UISubscriber {
     }
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     for (const { type, handler } of this.handlers) {
       this.eventEmitter.off(type, handler);
     }

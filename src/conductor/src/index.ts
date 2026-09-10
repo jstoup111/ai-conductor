@@ -1431,7 +1431,7 @@ async function main(): Promise<void> {
     config?.ui_renderer ?? 'terminal'
   );
 
-  subscriber.start();
+  subscriber.start([]);
 
   // Wire EventPersister: appends every ConductorEvent as a JSON line to .pipeline/events.jsonl
   const eventsLogPath = join(pipelineDir, 'events.jsonl');
