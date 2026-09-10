@@ -1,4 +1,4 @@
-// Covers: S1.1, S1.2, S1.3, S1.4, S2.1, S2.2, S2.6, S2.8, task:2, task:5
+// Covers: S1.1, S1.2, S1.3, S1.4, S2.1, S2.2, S2.6, S2.8, task:2, task:3, task:5
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -215,6 +215,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const state = result.value as Record<string, unknown>;
       expect(result.ok && result.value.prd_audit).not.toBe('done');
       expect(state.validation__prd_audit).not.toBe('done');
+      expect([state.manual_test, state.validation__manual_test]).not.toContain('done');
       expect([state.architecture_review_as_built, state.validation__architecture_review_as_built])
         .toEqual(['done', 'done']);
     } finally { await rm(dir, { recursive: true, force: true }); }
@@ -240,6 +241,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       if (!result.ok) throw result.error;
       const state = result.value as Record<string, unknown>;
       expect([state.manual_test, state.validation__manual_test]).not.toContain('done');
+      expect([state.prd_audit, state.validation__prd_audit]).not.toContain('done');
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
@@ -268,6 +270,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       if (!result.ok) throw result.error;
       const state = result.value as Record<string, unknown>;
       expect([state.manual_test, state.validation__manual_test]).not.toContain('done');
+      expect([state.prd_audit, state.validation__prd_audit]).not.toContain('done');
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
