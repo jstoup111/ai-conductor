@@ -85,16 +85,43 @@ export class MetricsRecorder {
   }
 
   onStepClose(
-    step: string, durationMs: number, retryCount: number, tokenUsage?: TokenUsage, model?: string, recordDispatch = true,
-    dimensions?: DispatchDimensions,
+    step: string, durationMs: number, retryCount: number, tokenUsage?: TokenUsage,
+    recordDispatch?: boolean, dimensions?: DispatchDimensions,
+  ): void;
+  /** @deprecated Pass `recordDispatch` and `dimensions` without a model argument. */
+  onStepClose(
+    step: string, durationMs: number, retryCount: number, tokenUsage?: TokenUsage,
+    legacyModel?: string, recordDispatch?: boolean, dimensions?: DispatchDimensions,
+  ): void;
+  onStepClose(
+    step: string, durationMs: number, retryCount: number, tokenUsage?: TokenUsage,
+    recordDispatchOrLegacyModel?: boolean | string,
+    dimensionsOrRecordDispatch?: DispatchDimensions | boolean,
+    legacyDimensions?: DispatchDimensions,
   ): void {
+    const legacySignature = typeof dimensionsOrRecordDispatch === 'boolean';
+    const recordDispatch = typeof recordDispatchOrLegacyModel === 'boolean'
+      ? recordDispatchOrLegacyModel
+      : legacySignature ? dimensionsOrRecordDispatch : true;
+    const dimensions = typeof recordDispatchOrLegacyModel === 'boolean'
+      ? dimensionsOrRecordDispatch as DispatchDimensions | undefined
+      : legacySignature ? legacyDimensions : dimensionsOrRecordDispatch as DispatchDimensions | undefined;
     const attrs = this.withDimensions({ step }, dimensions);
     this.instruments.durationHistogram.record(durationMs, this.withIdentity(attrs));
     if (retryCount > 0) this.instruments.retriesCounter.add(retryCount, this.withIdentity(attrs));
-    if (recordDispatch) this.onDispatch(step, tokenUsage, model, dimensions);
+    if (recordDispatch) this.onDispatch(step, tokenUsage, dimensions);
   }
 
-  onDispatch(step: string, tokenUsage?: TokenUsage, _model?: string, dimensions?: DispatchDimensions): void {
+  onDispatch(step: string, tokenUsage?: TokenUsage, dimensions?: DispatchDimensions): void;
+  /** @deprecated Pass `dimensions` without a model argument. */
+  onDispatch(step: string, tokenUsage?: TokenUsage, legacyModel?: string, dimensions?: DispatchDimensions): void;
+  onDispatch(
+    step: string, tokenUsage?: TokenUsage, dimensionsOrLegacyModel?: DispatchDimensions | string,
+    legacyDimensions?: DispatchDimensions,
+  ): void {
+    const dimensions = legacyDimensions ?? (
+      typeof dimensionsOrLegacyModel === 'string' ? undefined : dimensionsOrLegacyModel
+    );
     this.instruments.dispatchesCounter.add(1, this.withIdentity(this.withDimensions({ step, metering: classifyMetering(tokenUsage) }, dimensions)));
   }
   onRetry(step: string, dimensions?: DispatchDimensions): void {

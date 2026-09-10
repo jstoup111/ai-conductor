@@ -1266,6 +1266,78 @@ describe('Task 19: pipeline_closeout export', () => {
   });
 });
 
+// ── Task 10: dispatch dimensions on interactive metrics ────────────────────
+
+describe('Task 10: interactive metric dispatch dimensions', () => {
+  it('exports the successful fallback dispatch dimensions after provider_attempt then step_completed', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'otel-vis-task-10-'));
+    const pipelineDir = join(tempDir, '.pipeline');
+    const spanExporter = new CapturingSpanExporter();
+    const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const emitter = new ConductorEventEmitter();
+    const resolved = resolveOtelConfig(
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      pipelineDir,
+    );
+    const visualizer = new OtelVisualizer(resolved, {
+      runId: 'task-10-run',
+      feature: 'task-10-feature',
+      project: 'task-10-project',
+      spanExporter,
+      metricExporter,
+    });
+
+    try {
+      visualizer.start(emitter);
+      await emitter.emit({ type: 'step_started', step: 'plan', index: 0 });
+      await emitter.emit({
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'claude',
+        preferredProvider: 'codex',
+        model: 'opus',
+        invoked: true,
+        outcome: 'success',
+      });
+      await emitter.emit({
+        type: 'step_completed',
+        step: 'plan',
+        status: 'done',
+        model: 'opus',
+        actualProvider: 'claude',
+      });
+      await emitter.emit({ type: 'feature_complete' });
+      await visualizer.stop();
+
+      const attributesFor = (metricName: string) => metricExporter
+        .getMetrics()
+        .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
+        .find((metric) => metric.descriptor.name === metricName)
+        ?.dataPoints.find((point) => point.attributes['step'] === 'plan')
+        ?.attributes;
+      const expectedDimensions = {
+        step: 'plan',
+        project: 'task-10-project',
+        worker: 'unknown',
+        feature: 'task-10-feature',
+        model: 'opus',
+        provider: 'claude',
+        fallback: true,
+      };
+
+      expect({
+        dispatches: attributesFor('conductor.step.dispatches'),
+        duration: attributesFor('conductor.step.duration'),
+      }).toMatchObject({
+        dispatches: expectedDimensions,
+        duration: expectedDimensions,
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
 // ── T21: flush on exit — SIGINT/SIGTERM handlers ──────────────────────────────
 
 describe('T21: flush on exit — idempotent stop() and signal handlers', () => {
