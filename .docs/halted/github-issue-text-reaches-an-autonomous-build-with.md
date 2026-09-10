@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-10T22:32:52.952Z
 Slug: github-issue-text-reaches-an-autonomous-build-with
 Class: needs-human
 Halting step: unknown
