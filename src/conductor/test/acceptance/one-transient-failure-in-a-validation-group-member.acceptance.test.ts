@@ -378,19 +378,31 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       });
       const seeded = await readState(statePath);
       if (!seeded.ok) throw seeded.error;
-      const restaged = filterRestageChanges(seeded.value, { manual_test: 'stale' });
-      await writeState(statePath, { ...seeded.value, ...restaged } as ConductState);
-      expect(restaged.manual_test).toBe('stale');
       const calls: StepName[] = [];
-      await new Conductor({
-        stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
-        verifyArtifacts: true, fromStep: 'manual_test',
-        stepRunner: { run: vi.fn(async (step: StepName) => {
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
           calls.push(step);
           if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+          if (step === 'architecture_review_as_built') await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
           return { success: true } as StepRunResult;
-        }) },
-      }).run();
+        }),
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
+        verifyArtifacts: true, fromStep: 'manual_test',
+        stepRunner: runner,
+      });
+      // A build kickback takes this exact skip-preserving navigation path.
+      // Calling the owning seam prevents a manual state edit from masking a
+      // regression in markDownstreamStale's retained-member restage.
+      await (conductor as unknown as {
+        navigateStateBack(state: ConductState, target: StepName, steps: typeof ALL_STEPS): Promise<number>;
+      }).navigateStateBack(seeded.value, 'build', ALL_STEPS);
+      const restaged = await readState(statePath);
+      if (!restaged.ok) throw restaged.error;
+      expect(restaged.value.manual_test).toBe('stale');
+      await conductor.run();
       expect(calls.filter(step => step === 'manual_test')).toEqual(['manual_test']);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
