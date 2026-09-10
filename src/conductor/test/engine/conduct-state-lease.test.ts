@@ -13,7 +13,7 @@ import {
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/state.js';
 
-// Covers: S1.1, S1.2, S1.3, S2.1, task:1, task:2, task:3
+// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, task:1, task:2, task:3, task:4
 
 const temporaryDirectories: string[] = [];
 
@@ -34,7 +34,10 @@ function alreadyExists(): NodeJS.ErrnoException {
   return Object.assign(new Error('lease exists'), { code: 'EEXIST' });
 }
 
-function sharedLeaseFilesystem(): ConductStateLeaseFilesystem & { owner: string | undefined } {
+function sharedLeaseFilesystem(): ConductStateLeaseFilesystem & {
+  owner: string | undefined;
+  hasDirectory(path: string): boolean;
+} {
   const directories = new Set<string>();
   const files = new Map<string, string>();
 
@@ -51,6 +54,9 @@ function sharedLeaseFilesystem(): ConductStateLeaseFilesystem & { owner: string 
   return {
     get owner(): string | undefined {
       return [...files.entries()].find(([path]) => path.endsWith('/owner.json'))?.[1];
+    },
+    hasDirectory(path: string): boolean {
+      return directories.has(path);
     },
     async acquireDirectory(path): Promise<void> {
       if (directories.has(path)) throw alreadyExists();
@@ -257,6 +263,7 @@ describe('conduct-state lease', () => {
     let now = 0;
     let acquisitionAttempts = 0;
     const waitDelays: number[] = [];
+    const diagnostics: unknown[] = [];
     const filesystem: ConductStateLeaseFilesystem = {
       ...shared,
       async acquireDirectory(path): Promise<void> {
@@ -274,12 +281,21 @@ describe('conduct-state lease', () => {
       },
       waitTimeoutMs: 5,
       retryDelayMs: 5,
+      onRecoveryDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
     }).acquire();
 
-    expect(result).toMatchObject({ ok: false, kind: 'timeout' });
+    expect(result).toEqual({
+      ok: false,
+      kind: 'timeout',
+      message: 'Unable to acquire conduct-state lease within 5ms',
+    });
     expect(waitDelays).toEqual([5]);
     expect(acquisitionAttempts).toBe(waitDelays.length + 1);
     expect(now).toBe(5);
+    expect(diagnostics).toEqual([]);
+    expect(shared.hasDirectory(`${statePath}.lease`)).toBe(true);
+    expect(shared.owner).toBeUndefined();
+    await expect(shared.readRecoveryClaim(`${statePath}.lease/recovery.json`)).resolves.toBeNull();
   });
 
   it('retries a vanished lease without waiting', async () => {
