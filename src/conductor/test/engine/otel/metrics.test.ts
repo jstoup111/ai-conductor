@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:10, task:11
+// Covers: task:1, task:2, task:3, task:4, task:8, task:10, task:11
 /**
  * Covers: task:1, task:2, task:3, task:4, task:10
  * metrics.test.ts — unit tests for MetricsRecorder via OtelVisualizer.
@@ -122,6 +122,45 @@ describe('Task 3: dispatch dimensions', () => {
     } finally {
       await provider.shutdown();
     }
+  });
+});
+
+describe('Task 8: TokenUsage detail remains span-only', () => {
+  it('does not export usage detail, cost source, or fallback reason on any metric series', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      tokenUsage: {
+        input: 100,
+        output: 50,
+        reasoningOutput: 1200,
+        numTurns: 7,
+        durationMs: 84_000,
+        costSource: 'provider',
+      },
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const forbidden = [
+      'fallback.reason',
+      'usage.reasoning_output',
+      'usage.turns',
+      'usage.duration_ms',
+      'cost.source',
+    ];
+    const metricAttributeKeys = metricExporter.getMetrics().flatMap((resource) => (
+      resource.scopeMetrics.flatMap((scope) => (
+        scope.metrics.flatMap((metric) => metric.dataPoints.flatMap((point) => Object.keys(point.attributes)))
+      ))
+    ));
+
+    expect(metricAttributeKeys.some((key) => forbidden.some((suffix) => key.endsWith(suffix)))).toBe(false);
   });
 });
 
