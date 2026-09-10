@@ -23,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:parallel:prd_audit,step:finish
+reason: open-executions:parallel:prd_audit
 
 ## Build Review
 laps_to_pass: 1
