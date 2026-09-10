@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-10T12:57:27.650Z
 Slug: render-build-review-rubric-events-in-the-daemon-lo
 Class: needs-human
 Halting step: prd_audit
