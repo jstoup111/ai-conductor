@@ -133,6 +133,7 @@ export function wireInteractiveOtelMetrics(
   const projectName = resolved.projectName ?? (context.project ? basename(context.project) : 'unknown');
   const provider = new MeterProvider({
     resource: buildResource({
+      attributes: resolved.attributes,
       pipelineDir: context.pipelineDir,
       project: context.project,
       projectName,
@@ -144,7 +145,11 @@ export function wireInteractiveOtelMetrics(
     })],
   });
   const listener = new MetricsListener(
-    new MetricsRecorder(provider.getMeter('conductor', '1.0.0'), { project: projectName, worker: workerName }),
+    new MetricsRecorder(
+      provider.getMeter('conductor', '1.0.0'),
+      { project: projectName, worker: workerName },
+      resolved.attributes,
+    ),
     () => Date.now(),
     context.feature,
   );

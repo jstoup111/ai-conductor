@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:6
 import { describe, expect, it, vi } from 'vitest';
 import { AggregationTemporality, InMemoryMetricExporter } from '@opentelemetry/sdk-metrics';
 import { CapturingSpanExporter as InMemorySpanExporter } from './fixtures/capturing-span-exporter.js';
@@ -16,6 +16,83 @@ const buildExporters = vi.hoisted(() => vi.fn());
 vi.mock('../src/engine/otel/transport.js', () => ({ buildExporters }));
 
 describe('interactive OTel wiring', () => {
+  it('carries valid configured attributes through both interactive OTel constructors and reports dropped keys once', async () => {
+    const pipelineDir = await mkdtemp(join(process.env.TMPDIR!, 'interactive-otel-'));
+    const emitter = new ConductorEventEmitter();
+    const spanExporter = new InMemorySpanExporter();
+    const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const rendererErrors: Array<{ rendererName: string; error: string }> = [];
+    buildExporters.mockReturnValue({ spanExporter, metricExporter });
+    emitter.on('renderer_error', (event) => {
+      if (event.type === 'renderer_error') {
+        rendererErrors.push({ rendererName: event.rendererName, error: event.error });
+      }
+    });
+    const config = {
+      otel: {
+        exporter: 'otlp',
+        endpoint: 'http://fake-collector:4318',
+        attributes: {
+          'deployment.environment.name': ' staging ',
+          'team.name': ' platform ',
+          invalid: 'dropped',
+        },
+      },
+    } as HarnessConfig;
+    const context: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = {
+      config,
+      pipelineDir,
+      emitter,
+      startContext: {
+        feature: 'interactive-feature',
+        project: '/interactive-project',
+        pipelineDir,
+        branch: undefined,
+        engineVersion: undefined,
+        harnessVersion: undefined,
+      },
+    };
+
+    try {
+      const visualizers = buildInteractiveVisualizers(new PluginRegistry(), config, context);
+      await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+      await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+      await emitter.emit({ type: 'feature_complete', featureDesc: 'interactive-feature' });
+      await Promise.all(visualizers.map((visualizer) => visualizer.stop()));
+
+      const metricPoint = metricExporter.getMetrics()
+        .flatMap((batch) => batch.scopeMetrics)
+        .flatMap((scope) => scope.metrics)
+        .find((metric) => metric.descriptor.name === 'conductor.step.duration')
+        ?.dataPoints[0];
+      const traceResource = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')?.resource.attributes;
+      const metricResource = metricExporter.getMetrics()[0]?.resource.attributes;
+      const metricPointAttributes = metricPoint?.attributes;
+      expect({
+        traceResource,
+        metricResource,
+        metricPoint: metricPointAttributes,
+        invalidKeyPresent: {
+          traceResource: Object.hasOwn(traceResource ?? {}, 'invalid'),
+          metricResource: Object.hasOwn(metricResource ?? {}, 'invalid'),
+          metricPoint: Object.hasOwn(metricPointAttributes ?? {}, 'invalid'),
+        },
+        rendererErrors: { count: rendererErrors.length, events: rendererErrors },
+      }).toMatchObject({
+        traceResource: { 'deployment.environment.name': 'staging', 'team.name': 'platform' },
+        metricResource: { 'deployment.environment.name': 'staging', 'team.name': 'platform' },
+        metricPoint: { 'deployment.environment.name': 'staging', 'team.name': 'platform' },
+        invalidKeyPresent: { traceResource: false, metricResource: false, metricPoint: false },
+        rendererErrors: {
+          count: 1,
+          events: [{ rendererName: 'otel', error: expect.stringContaining('invalid') }],
+        },
+      });
+    } finally {
+      await rm(pipelineDir, { recursive: true, force: true });
+    }
+  });
+
   it('starts one helper-wired visualizer with the run identity context and no run-id override', async () => {
     const pipelineDir = await mkdtemp(join(process.env.TMPDIR!, 'interactive-otel-'));
     const emitter = new ConductorEventEmitter();
