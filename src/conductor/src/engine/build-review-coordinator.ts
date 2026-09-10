@@ -754,7 +754,7 @@ export function classifyBuildReviewRubricBranches(
   );
   if (dispatchableBranches.length === 0) {
     const skippedBranches = branches.filter(
-      (branch): branch is BuildReviewSkip => branch.kind === "skipped",
+      (branch): branch is BuildReviewSkip => "kind" in branch && branch.kind === "skipped",
     );
     return {
       kind: "passed",
