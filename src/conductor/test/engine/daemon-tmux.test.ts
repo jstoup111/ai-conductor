@@ -859,17 +859,21 @@ describe('defaultTmuxRunner: AI_CONDUCTOR_NO_REAL_EXEC kill-switch guards real t
     }
   });
 
-  it('allows an absent-session respawn to return non-zero when the kill-switch is unset', async () => {
+  it.each([
+    ['respawn-pane', '-k', '-t', '=test-wiring-nope:', 'sleep 1'],
+    ['new-session', '-d', '-s', 'test-wiring-guard-unit', 'sleep 1'],
+  ])('passes %s through to the process adapter when the kill-switch is unset', async (...args) => {
     const mod = await load();
     const runner = requireFn(mod, 'defaultTmuxRunner');
     const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     try {
-      const result = runner(['respawn-pane', '-k', '-t', '=test-wiring-nope:', 'sleep 1'], {
+      const result = runner(args, {
         inherit: false,
       });
       expect(result.code).toBe(1);
       expect(spawnSync).toHaveBeenCalledTimes(1);
+      expect(spawnSync).toHaveBeenCalledWith('tmux', args, expect.any(Object));
     } finally {
       if (prevFlag === undefined) {
         delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
