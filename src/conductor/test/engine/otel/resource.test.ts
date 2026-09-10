@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:4, task:11
 /**
  * T7: buildResource(ctx) — OTel Resource builder.
  * FR-6: service.name, conductor.run.id, conductor.feature, conductor.project.
@@ -345,6 +345,72 @@ describe('buildResource', () => {
       expect(() => buildResource(broken, 'metrics')).not.toThrow();
       expect(() => buildResource(broken, 'traces')).not.toThrow();
       expect(buildResource(broken, 'metrics').attributes['service.instance.id']).toBe('project-a/worker-a');
+    });
+
+    it('carries custom attributes on both signals without allowing conductor-key collisions or changing the pre-attributes resources', () => {
+      const custom = {
+        'deployment.environment.name': 'staging',
+        'team.name': 'platform',
+        'service.name': 'operator-service',
+        'conductor.project': 'operator-project',
+      };
+      const withoutAttributes = {
+        pipelineDir,
+        feature: 'feature-a',
+        project: '/workspace/project-a',
+        projectName: 'project-a',
+        workerName: 'worker-a',
+        branch: 'feat/thing',
+        engineVersion: '20260828T000000Z-abc',
+        harnessVersion: '0.105.0',
+        runId: 'run-1',
+      };
+
+      expect({
+        customTrace: buildResource({ ...withoutAttributes, attributes: custom }, 'traces').attributes,
+        customMetric: buildResource({ ...withoutAttributes, attributes: custom }, 'metrics').attributes,
+        traceWithoutAttributes: buildResource(withoutAttributes, 'traces').attributes,
+        metricWithoutAttributes: buildResource(withoutAttributes, 'metrics').attributes,
+      }).toEqual({
+        customTrace: {
+          'deployment.environment.name': 'staging',
+          'team.name': 'platform',
+          'service.name': 'ai-conductor',
+          'service.instance.id': 'project-a/feature-a',
+          'conductor.feature': 'feature-a',
+          'conductor.project': '/workspace/project-a',
+          'conductor.branch': 'feat/thing',
+          'conductor.run.id': 'run-1',
+          'conductor.engine.version': '20260828T000000Z-abc',
+          'service.version': '0.105.0',
+        },
+        customMetric: {
+          'deployment.environment.name': 'staging',
+          'team.name': 'platform',
+          'service.name': 'ai-conductor',
+          'service.instance.id': 'project-a/worker-a',
+          'conductor.project': '/workspace/project-a',
+          'conductor.worker': 'worker-a',
+          'host.name': expect.any(String),
+        },
+        traceWithoutAttributes: {
+          'service.name': 'ai-conductor',
+          'service.instance.id': 'project-a/feature-a',
+          'conductor.feature': 'feature-a',
+          'conductor.project': '/workspace/project-a',
+          'conductor.branch': 'feat/thing',
+          'conductor.run.id': 'run-1',
+          'conductor.engine.version': '20260828T000000Z-abc',
+          'service.version': '0.105.0',
+        },
+        metricWithoutAttributes: {
+          'service.name': 'ai-conductor',
+          'service.instance.id': 'project-a/worker-a',
+          'conductor.project': '/workspace/project-a',
+          'conductor.worker': 'worker-a',
+          'host.name': expect.any(String),
+        },
+      });
     });
   });
 });

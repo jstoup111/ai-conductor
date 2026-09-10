@@ -248,6 +248,8 @@ export interface OtelConfig {
   project_name?: string;
   /** Stable worker identity for daemon-scoped metric Resources. */
   worker_name?: string;
+  /** Static attributes carried on every exported telemetry signal. */
+  attributes?: Record<string, string>;
 }
 
 /**

@@ -1,3 +1,4 @@
+// Covers: task:8
 /**
  * T22: OTel exporter e2e integration tests.
  *
@@ -13,7 +14,7 @@
  * Both fixtures use the exact production-wiring path (no test-only shortcuts).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, readFile } from 'fs/promises';
+import { mkdir, mkdtemp, rm, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -22,6 +23,8 @@ import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
 import { MetricsRecorder } from '../../src/engine/otel/metrics.js';
+import { buildResource } from '../../src/engine/otel/resource.js';
+import { buildExporters } from '../../src/engine/otel/transport.js';
 import { CapturingSpanExporter as InMemorySpanExporter } from '../fixtures/capturing-span-exporter.js';
 import { InMemoryMetricExporter, AggregationTemporality, MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 
@@ -47,6 +50,19 @@ async function runFixture(emitter: ConductorEventEmitter): Promise<void> {
   await emitter.emit({ type: 'feature_complete', featureDesc: 'e2e-test' });
 }
 
+const operatorAttributes = {
+  'deployment.environment.name': 'staging',
+  'team.name': 'platform',
+};
+
+function resourceAttributes(resource: { attributes?: Array<{ key: string; value?: { stringValue?: string } }> }): Record<string, string> {
+  return Object.fromEntries(
+    (resource.attributes ?? []).flatMap(({ key, value }) =>
+      value?.stringValue === undefined ? [] : [[key, value.stringValue]],
+    ),
+  );
+}
+
 // ── File exporter ──────────────────────────────────────────────────────────────
 
 describe('T22-file: file transport writes decodable OTLP-JSON with correct structure', () => {
@@ -64,15 +80,39 @@ describe('T22-file: file transport writes decodable OTLP-JSON with correct struc
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it('writes at least one JSONL line containing resourceSpans with step names', async () => {
-    const resolved = resolveOtelConfig({ otel: { exporter: 'file' } }, pipelineDir);
+  it('writes declared attributes into the OTLP-JSON resource lists for span and metric exports', async () => {
+    const resolved = resolveOtelConfig({ otel: { exporter: 'file', attributes: operatorAttributes } }, pipelineDir);
+    if (!resolved.enabled) throw new Error('file OTel fixture must resolve as enabled');
     const vis = new OtelVisualizer(resolved, {
       runId: 'e2e-file-1',
       feature: 'e2e-test',
       project: 'test-project',
     });
+    const exporters = buildExporters(resolved);
+    const provider = new MeterProvider({
+      resource: buildResource({
+        attributes: resolved.attributes,
+        pipelineDir,
+        project: 'test-project',
+        projectName: 'test-project',
+        workerName: 'test-worker',
+      }, 'metrics'),
+      readers: [new PeriodicExportingMetricReader({ exporter: exporters.metricExporter, exportIntervalMillis: 60_000 })],
+    });
+    const listener = new MetricsListener(
+      new MetricsRecorder(
+        provider.getMeter('file-exporter'),
+        { project: 'test-project', worker: 'test-worker', feature: 'e2e-test' },
+        resolved.attributes,
+      ),
+      undefined,
+      'e2e-test',
+    );
     vis.start(emitter);
+    listener.start(emitter);
     await runFixture(emitter);
+    listener.stop();
+    await provider.shutdown();
     await vis.stop();
 
     const content = await readFile(join(pipelineDir, 'otel.jsonl'), 'utf-8');
@@ -84,60 +124,34 @@ describe('T22-file: file transport writes decodable OTLP-JSON with correct struc
       expect(() => JSON.parse(line)).not.toThrow();
     }
 
-    // The span batch line(s) must contain resourceSpans.
-    const spanLines = lines.filter((l) => {
-      try {
-        const obj = JSON.parse(l);
-        return 'resourceSpans' in obj;
-      } catch {
-        return false;
-      }
+    const payloads = lines.map((line) => JSON.parse(line) as {
+      resourceSpans?: Array<{ resource?: { attributes?: Array<{ key: string; value?: { stringValue?: string } }> } }>;
+      resourceMetrics?: Array<{ resource?: { attributes?: Array<{ key: string; value?: { stringValue?: string } }> } }>;
     });
-    expect(spanLines.length).toBeGreaterThan(0);
+    const spanResource = payloads.flatMap((payload) => payload.resourceSpans ?? []).at(0)?.resource;
+    const metricResource = payloads.flatMap((payload) => payload.resourceMetrics ?? []).at(0)?.resource;
 
-    // At least one scopeSpan must carry step names from our fixture run.
-    const allSpanNames: string[] = [];
-    for (const line of spanLines) {
-      const obj = JSON.parse(line) as {
-        resourceSpans?: Array<{
-          scopeSpans?: Array<{
-            spans?: Array<{ name?: string }>;
-          }>;
-        }>;
-      };
-      for (const rs of obj.resourceSpans ?? []) {
-        for (const ss of rs.scopeSpans ?? []) {
-          for (const sp of ss.spans ?? []) {
-            if (sp.name) allSpanNames.push(sp.name);
-          }
-        }
-      }
-    }
-    expect(allSpanNames).toContain('bootstrap');
-    expect(allSpanNames).toContain('plan');
+    expect({
+      span: resourceAttributes(spanResource ?? {}),
+      metric: resourceAttributes(metricResource ?? {}),
+    }).toMatchObject({ span: operatorAttributes, metric: operatorAttributes });
   });
 
-  it('writes at least one JSONL line for metrics (when metric export produces data)', async () => {
-    const resolved = resolveOtelConfig({ otel: { exporter: 'file' } }, pipelineDir);
+  it('keeps a completed fixture and emits one export-failure warning when the file target is unwritable', async () => {
+    const filePath = join(pipelineDir, 'directory-not-a-file');
+    await mkdir(filePath, { recursive: true });
+    const warnings: string[] = [];
+    const resolved = resolveOtelConfig({ otel: { exporter: 'file', file: filePath, attributes: operatorAttributes } }, pipelineDir);
     const vis = new OtelVisualizer(resolved, {
-      runId: 'e2e-file-2',
-      feature: 'e2e-test',
-      project: 'test-project',
+      runId: 'e2e-file-unwritable', feature: 'e2e-test', project: 'test-project',
+      onWarning: (warning) => warnings.push(warning),
     });
+
     vis.start(emitter);
-    await runFixture(emitter);
+    await expect(runFixture(emitter)).resolves.toBeUndefined();
     await vis.stop();
 
-    const content = await readFile(join(pipelineDir, 'otel.jsonl'), 'utf-8');
-    const lines = content.trim().split('\n').filter(Boolean);
-
-    // All lines parse; some may be metrics (resourceMetrics key).
-    for (const line of lines) {
-      expect(() => JSON.parse(line)).not.toThrow();
-    }
-    // We assert decodability; whether metric lines appear depends on metric flush
-    // producing non-empty batches. The key invariant is no crash + all lines valid.
-    expect(lines.length).toBeGreaterThan(0);
+    expect(warnings).toEqual([expect.stringContaining('[otel] span export failed')]);
   });
 });
 
@@ -164,9 +178,10 @@ describe('T22-otlp: OTLP transport (in-memory exporters) — structure assertion
 
   it('produces one root span + per-step children with correct trace parentage', async () => {
     const resolved = resolveOtelConfig(
-      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', attributes: operatorAttributes } },
       pipelineDir,
     );
+    if (!resolved.enabled) throw new Error('OTLP OTel fixture must resolve as enabled');
     const vis = new OtelVisualizer(resolved, {
       runId: 'e2e-otlp-1',
       feature: 'e2e-test',
@@ -199,9 +214,10 @@ describe('T22-otlp: OTLP transport (in-memory exporters) — structure assertion
 
   it('emits conductor.step.duration and conductor.feature.step.tokens metric descriptors', async () => {
     const resolved = resolveOtelConfig(
-      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } },
+      { otel: { exporter: 'otlp', endpoint: 'http://localhost:4318', attributes: operatorAttributes } },
       pipelineDir,
     );
+    if (!resolved.enabled) throw new Error('OTLP OTel fixture must resolve as enabled');
     const vis = new OtelVisualizer(resolved, {
       runId: 'e2e-otlp-2',
       feature: 'e2e-test',
@@ -210,10 +226,21 @@ describe('T22-otlp: OTLP transport (in-memory exporters) — structure assertion
       metricExporter,
     });
     const provider = new MeterProvider({
+      resource: buildResource({
+        attributes: resolved.attributes,
+        pipelineDir,
+        project: 'test-project',
+        projectName: 'test-project',
+        workerName: 'test-worker',
+      }, 'metrics'),
       readers: [new PeriodicExportingMetricReader({ exporter: metricExporter, exportIntervalMillis: 60_000 })],
     });
     const listener = new MetricsListener(
-      new MetricsRecorder(provider.getMeter('otlp-exporter'), { project: 'test-project', worker: 'test-worker', feature: 'e2e-test' }),
+      new MetricsRecorder(
+        provider.getMeter('otlp-exporter'),
+        { project: 'test-project', worker: 'test-worker', feature: 'e2e-test' },
+        resolved.attributes,
+      ),
       undefined,
       'e2e-test',
     );
@@ -228,9 +255,15 @@ describe('T22-otlp: OTLP transport (in-memory exporters) — structure assertion
       .getMetrics()
       .flatMap((rm) => rm.scopeMetrics.flatMap((sm) => sm.metrics.map((m) => m.descriptor.name)));
 
-    expect(metricNames).toContain('conductor.step.duration');
-    // The ledger-derived snapshot for 'plan' carries the token dimensions.
-    expect(metricNames).toContain('conductor.feature.step.tokens');
+    expect({
+      metricNames,
+      spanResource: spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')?.resource.attributes,
+      metricResource: metricExporter.getMetrics()[0]?.resource.attributes,
+    }).toMatchObject({
+      metricNames: expect.arrayContaining(['conductor.step.duration', 'conductor.feature.step.tokens']),
+      spanResource: operatorAttributes,
+      metricResource: operatorAttributes,
+    });
   });
 
   it('resource attributes are present on every span (non-empty run.id, feature, project)', async () => {

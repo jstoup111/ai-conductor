@@ -114,6 +114,8 @@ export class OtelVisualizer implements VisualizerPlugin {
   private readonly legacyStartContext: VisualizerStartContext;
   /** Configured `otel.project_name` overrides the trace Resource project name. */
   private readonly projectNameOverride?: string;
+  /** Validated operator-supplied attributes carried by this run's Resource. */
+  private readonly attributes: Record<string, string>;
   private tracerProvider: BasicTracerProvider | null = null;
   private spanManager: SpanManager | null = null;
   /** Selects authoritative invoked attempts before they reach open span state. */
@@ -186,7 +188,11 @@ export class OtelVisualizer implements VisualizerPlugin {
       feature: ctx.feature,
       project: ctx.project,
     };
+    this.attributes = config.enabled ? config.attributes ?? {} : {};
     if (config.enabled && config.projectName) this.projectNameOverride = config.projectName;
+    if (config.enabled && config.attributeWarnings?.length) {
+      ctx.onWarning?.(`[otel] ${config.attributeWarnings.join(' ')}`);
+    }
   }
 
   // ── VisualizerPlugin contract ──────────────────────────────────────────────
@@ -359,6 +365,7 @@ export class OtelVisualizer implements VisualizerPlugin {
     if (this.tracerProvider || this.spanManager) return;
 
     const resourceContext = {
+      attributes: this.attributes,
       pipelineDir: context.pipelineDir ?? '',
       runId: context.runId,
       feature: context.feature,

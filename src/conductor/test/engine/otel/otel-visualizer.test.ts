@@ -1,3 +1,4 @@
+// Covers: task:6
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -74,6 +75,41 @@ describe('OtelVisualizer', () => {
 
     expect(spanExporter.getFinishedSpans().map((span) => span.name)).toEqual(['build', 'conductor.run']);
     expect(metricExporter.getMetrics()).toEqual([]);
+  });
+
+  it('reads resolved attributes once for its trace Resource and reports dropped keys through one warning callback', async () => {
+    const onWarning = vi.fn();
+    const visualizer = new OtelVisualizer(
+      resolveOtelConfig({
+        otel: {
+          exporter: 'otlp',
+          endpoint: 'http://localhost:4318',
+          attributes: {
+            'deployment.environment.name': ' staging ',
+            invalid: 'dropped',
+          },
+        },
+      }, pipelineDir),
+      { spanExporter, metricExporter, onWarning },
+    );
+    visualizer.start(emitter, { runId: 'run-1', feature: 'feature', project: 'project' });
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'feature_complete' });
+    await visualizer.stop();
+
+    const traceResource = spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')?.resource.attributes;
+    expect({
+      traceResource,
+      invalidPresent: Object.hasOwn(traceResource ?? {}, 'invalid'),
+      warnings: { count: onWarning.mock.calls.length, message: onWarning.mock.calls[0]?.[0] },
+      metricBatches: metricExporter.getMetrics(),
+    }).toMatchObject({
+      traceResource: { 'deployment.environment.name': 'staging' },
+      invalidPresent: false,
+      warnings: { count: 1, message: expect.stringContaining('invalid') },
+      metricBatches: [],
+    });
   });
 
   it('ignores lifecycle-only provider attempts without overwriting an invoked attempt on the step span', async () => {

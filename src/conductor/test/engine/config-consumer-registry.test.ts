@@ -1,4 +1,4 @@
-// Covers: task:21
+// Covers: task:3, task:21
 import { describe, expect, it } from 'vitest';
 import { CONFIG_CONSUMER_KEY_SETS } from '../../src/engine/config.js';
 import {
@@ -9,6 +9,15 @@ import {
 describe('config consumer registry', () => {
   it('is total over validator-accepted keys', () => {
     expect(() => assertRegistryCovers(CONFIG_CONSUMER_KEY_SETS, configConsumerRegistry)).not.toThrow();
+  });
+
+  it('declares the consumer for OTel attributes admitted by validation', () => {
+    expect(CONFIG_CONSUMER_KEY_SETS.otel).toContain('attributes');
+    expect(configConsumerRegistry).toMatchObject({
+      'otel.attributes': {
+        consumer: 'src/conductor/src/engine/otel/otel-config.ts',
+      },
+    });
   });
 
   it('does not count validation as a key consumer', () => {

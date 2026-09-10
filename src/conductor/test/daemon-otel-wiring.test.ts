@@ -1,4 +1,4 @@
-// Covers: task:3, task:6, task:7, task:8, task:9
+// Covers: task:3, task:6, task:7, task:8, task:9, task:10
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -6,12 +6,17 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
-import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
+import { AggregationTemporality, InMemoryMetricExporter, type PushMetricExporter, type ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import { type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { CapturingSpanExporter as InMemorySpanExporter } from './fixtures/capturing-span-exporter.js';
+import { buildInteractiveVisualizers } from '../src/index.js';
 import { resolveOtelConfig } from '../src/engine/otel/otel-config.js';
 import { createOtelVisualizer } from '../src/engine/otel/create-otel-visualizer.js';
+import { PluginRegistry } from '../src/engine/plugin-registry.js';
+import { ConductorEventEmitter } from '../src/ui/events.js';
 import type { FeatureRunnerDeps, FeatureRunScope } from '../src/engine/daemon-runner.js';
+import type { VisualizerFactoryContext } from '../src/types/plugin.js';
+import type { OtelVisualizerStartContext } from '../src/engine/otel/wire.js';
 
 type WireOtelVisualizer = typeof import('../src/engine/otel/wire.js').wireOtelVisualizer;
 type WireDaemonOtel = typeof import('../src/engine/otel/wire.js').wireDaemonOtel;
@@ -20,6 +25,7 @@ type HarnessConfig = import('../src/types/config.js').HarnessConfig;
 type LoadMergedConfig = typeof import('../src/engine/config.js').loadMergedConfig;
 type ResolveEngineVersion = typeof import('../src/engine/shipped-record.js').resolveEngineVersion;
 type ResolveHarnessVersion = typeof import('../src/engine/version-report.js').resolveHarnessVersion;
+type BuildExporters = typeof import('../src/engine/otel/transport.js').buildExporters;
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -40,8 +46,16 @@ const wireDaemonOtel = vi.hoisted(() => vi.fn<WireDaemonOtel>(() => null));
 const loadMergedConfig = vi.hoisted(() => vi.fn<LoadMergedConfig>());
 const resolveEngineVersion = vi.hoisted(() => vi.fn<ResolveEngineVersion>(() => 'dev'));
 const resolveHarnessVersion = vi.hoisted(() => vi.fn<ResolveHarnessVersion>(async () => '0.0.0'));
+const buildExporters = vi.hoisted(() => vi.fn<BuildExporters>());
 
-vi.mock('../src/engine/otel/wire.js', () => ({ wireOtelVisualizer, wireDaemonOtel }));
+vi.mock('../src/engine/otel/wire.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/engine/otel/wire.js')>();
+  return { ...actual, wireOtelVisualizer, wireDaemonOtel };
+});
+vi.mock('../src/engine/otel/transport.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/engine/otel/transport.js')>();
+  return { ...actual, buildExporters };
+});
 vi.mock('../src/engine/config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/engine/config.js')>();
   return { ...actual, loadMergedConfig };
@@ -162,6 +176,9 @@ beforeEach(() => {
   fixture.runnerSessionIds = [];
   loadMergedConfig.mockClear();
   wireOtelVisualizer.mockClear();
+  wireDaemonOtel.mockReset();
+  wireDaemonOtel.mockReturnValue(null);
+  buildExporters.mockReset();
   resolveEngineVersion.mockReset();
   resolveEngineVersion.mockReturnValue('dev');
   resolveHarnessVersion.mockReset();
@@ -276,6 +293,291 @@ describe('daemon OTel visualizer wiring', () => {
       }),
       fixture.scopes[0]?.events,
     );
+  });
+
+  it('propagates valid OTel attributes to daemon metrics and dispatch traces while warning once for rejected operator metadata', async () => {
+    const attributes = {
+      'deployment.environment': 'test',
+      'team.name': 'platform',
+      'conductor.project': 'invalid',
+    };
+    const daemonMetrics: ResourceMetrics[] = [];
+    const daemonMetricExporter: PushMetricExporter = {
+      export(metrics, resultCallback) {
+        daemonMetrics.push(metrics);
+        resultCallback({ code: ExportResultCode.SUCCESS });
+      },
+      async forceFlush(): Promise<void> {},
+      async shutdown(): Promise<void> {},
+    };
+    const dispatchSpanExporter = new InMemorySpanExporter();
+    const rootEvents = new ConductorEventEmitter();
+    const rootRendererErrors: unknown[] = [];
+    rootEvents.on('renderer_error', (event) => {
+      rootRendererErrors.push(event);
+      throw new Error('root warning handler failed');
+    });
+    buildExporters.mockReturnValue({
+      spanExporter: new InMemorySpanExporter(),
+      metricExporter: daemonMetricExporter,
+    });
+    fixture.emitOtelEvents = true;
+    wireOtelVisualizer.mockImplementation((config, context, events) => {
+      const visualizer = createOtelVisualizer(
+        resolveOtelConfig(config, context.pipelineDir),
+        { spanExporter: dispatchSpanExporter, metricExporter: daemonMetricExporter },
+        events,
+      );
+      visualizer?.start(events, context);
+      return visualizer;
+    });
+    const config = {
+      otel: {
+        exporter: 'otlp',
+        endpoint: 'http://fake-collector.invalid:4318',
+        attributes,
+      },
+    } as unknown as HarnessConfig;
+    const actualWire = await vi.importActual<typeof import('../src/engine/otel/wire.js')>(
+      '../src/engine/otel/wire.js',
+    );
+    const daemonOtel = actualWire.wireDaemonOtel(config, {
+      mainRoot: '/tmp/daemon-otel-root',
+      project: '/tmp/daemon-otel-project',
+      projectName: 'daemon-otel-project',
+      rootEvents,
+    });
+    await rootEvents.emit({
+      type: 'daemon_backlog_snapshot',
+      counts: { pending: 1, active: 0, blocked: 0, complete: 0 },
+      oldestAgeSeconds: {},
+      slots: { busy: 0, free: 1 },
+      inFlight: [],
+      blocked: {},
+      pollDurationMs: 1,
+    } as never);
+    await dispatchWithSessionId(undefined, config);
+    await daemonOtel?.flush();
+    await daemonOtel?.stop();
+
+    const expectedAttributes = {
+      'deployment.environment': 'test',
+      'team.name': 'platform',
+    };
+    const daemonResourceAttributes = daemonMetrics[0]?.resource.attributes;
+    let daemonDatapointAttributes: Record<string, unknown> | undefined;
+    for (const metrics of daemonMetrics) {
+      for (const scope of metrics.scopeMetrics) {
+        for (const metric of scope.metrics) {
+          const datapoint = metric.dataPoints[0];
+          if (datapoint) {
+            daemonDatapointAttributes = datapoint.attributes;
+            break;
+          }
+        }
+        if (daemonDatapointAttributes) break;
+      }
+      if (daemonDatapointAttributes) break;
+    }
+
+    expect(daemonResourceAttributes).toEqual(expect.objectContaining(expectedAttributes));
+    expect(daemonResourceAttributes?.['conductor.project']).not.toBe('invalid');
+    expect(daemonDatapointAttributes).toEqual(expect.objectContaining(expectedAttributes));
+    expect(daemonDatapointAttributes?.['conductor.project']).not.toBe('invalid');
+    const dispatchTraceResourceAttributes = dispatchSpanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === 'conductor.run')?.resource.attributes;
+
+    expect(dispatchTraceResourceAttributes).toEqual(expect.objectContaining(expectedAttributes));
+    expect(dispatchTraceResourceAttributes?.['conductor.project']).not.toBe('invalid');
+    expect(rootRendererErrors).toEqual([
+      expect.objectContaining({
+        type: 'renderer_error',
+        rendererName: 'otel',
+        error: expect.stringContaining('conductor.project'),
+      }),
+    ]);
+    expect(buildExporters).toHaveBeenCalledOnce();
+  });
+
+  it('keeps daemon and interactive declared-attribute sets equal on both Resources and data points', async () => {
+    const attributes = {
+      'deployment.environment': 'test',
+      'team.name': 'platform',
+    };
+    const daemonMetrics: ResourceMetrics[] = [];
+    const daemonMetricExporter: PushMetricExporter = {
+      export(metrics, resultCallback) {
+        daemonMetrics.push(metrics);
+        resultCallback({ code: ExportResultCode.SUCCESS });
+      },
+      async forceFlush(): Promise<void> {},
+      async shutdown(): Promise<void> {},
+    };
+    const dispatchSpanExporter = new InMemorySpanExporter();
+    const interactiveSpanExporter = new InMemorySpanExporter();
+    const interactiveMetricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const rootEvents = new ConductorEventEmitter();
+    const interactivePipelineDir = await mkdtemp(join(tmpdir(), 'interactive-otel-parity-'));
+    dirs.push(interactivePipelineDir);
+    buildExporters.mockReturnValueOnce({
+      spanExporter: new InMemorySpanExporter(),
+      metricExporter: daemonMetricExporter,
+    }).mockReturnValue({ spanExporter: interactiveSpanExporter, metricExporter: interactiveMetricExporter });
+    fixture.emitOtelEvents = true;
+    wireOtelVisualizer.mockImplementation((config, context, events) => {
+      const interactive = context.pipelineDir === interactivePipelineDir;
+      const visualizer = createOtelVisualizer(
+        resolveOtelConfig(config, context.pipelineDir),
+        interactive
+          ? { spanExporter: interactiveSpanExporter, metricExporter: interactiveMetricExporter }
+          : { spanExporter: dispatchSpanExporter, metricExporter: daemonMetricExporter },
+        events,
+      );
+      visualizer?.start(events, context);
+      return visualizer;
+    });
+    const config = {
+      otel: {
+        exporter: 'otlp',
+        endpoint: 'http://fake-collector.invalid:4318',
+        attributes,
+      },
+    } as unknown as HarnessConfig;
+    const actualWire = await vi.importActual<typeof import('../src/engine/otel/wire.js')>(
+      '../src/engine/otel/wire.js',
+    );
+    const daemonOtel = actualWire.wireDaemonOtel(config, {
+      mainRoot: '/tmp/daemon-otel-root',
+      project: '/tmp/daemon-otel-project',
+      projectName: 'daemon-otel-project',
+      rootEvents,
+    });
+    await rootEvents.emit({
+      type: 'daemon_backlog_snapshot',
+      counts: { pending: 1, active: 0, blocked: 0, complete: 0 },
+      oldestAgeSeconds: {},
+      slots: { busy: 0, free: 1 },
+      inFlight: [],
+      blocked: {},
+      pollDurationMs: 1,
+    } as never);
+    await dispatchWithSessionId(undefined, config);
+    await daemonOtel?.flush();
+    await daemonOtel?.stop();
+
+    const interactiveEvents = new ConductorEventEmitter();
+    const interactiveContext: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = {
+      config,
+      pipelineDir: interactivePipelineDir,
+      emitter: interactiveEvents,
+      startContext: {
+        feature: 'interactive-feature',
+        project: '/interactive-project',
+        pipelineDir: interactivePipelineDir,
+        branch: undefined,
+        engineVersion: undefined,
+        harnessVersion: undefined,
+      },
+    };
+    const interactiveVisualizers = buildInteractiveVisualizers(new PluginRegistry(), config, interactiveContext);
+    await interactiveEvents.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await interactiveEvents.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+    await interactiveEvents.emit({ type: 'feature_complete', featureDesc: 'interactive-feature' });
+    await Promise.all(interactiveVisualizers.map((visualizer) => visualizer.stop()));
+
+    const daemonMetricResource = daemonMetrics[0]?.resource.attributes;
+    const daemonMetricPoint = firstMetricPointAttributes(daemonMetrics);
+    const daemonTraceResource = dispatchSpanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === 'conductor.run')?.resource.attributes;
+    const interactiveMetricResource = interactiveMetricExporter.getMetrics()[0]?.resource.attributes;
+    const interactiveMetricPoint = firstMetricPointAttributes(interactiveMetricExporter.getMetrics());
+    const interactiveTraceResource = interactiveSpanExporter
+      .getFinishedSpans()
+      .find((span) => span.name === 'conductor.run')?.resource.attributes;
+
+    expect({
+      daemon: [
+        declaredAttributes(daemonMetricResource, attributes),
+        declaredAttributes(daemonMetricPoint, attributes),
+        declaredAttributes(daemonTraceResource, attributes),
+      ],
+      interactive: [
+        declaredAttributes(interactiveMetricResource, attributes),
+        declaredAttributes(interactiveMetricPoint, attributes),
+        declaredAttributes(interactiveTraceResource, attributes),
+      ],
+    }).toEqual({ daemon: [attributes, attributes, attributes], interactive: [attributes, attributes, attributes] });
+  });
+
+  it('does not read OTEL_RESOURCE_ATTRIBUTES when no daemon attributes are declared', async () => {
+    const daemonMetrics: ResourceMetrics[] = [];
+    const daemonMetricExporter: PushMetricExporter = {
+      export(metrics, resultCallback) {
+        daemonMetrics.push(metrics);
+        resultCallback({ code: ExportResultCode.SUCCESS });
+      },
+      async forceFlush(): Promise<void> {},
+      async shutdown(): Promise<void> {},
+    };
+    const dispatchSpanExporter = new InMemorySpanExporter();
+    const rootEvents = new ConductorEventEmitter();
+    buildExporters.mockReturnValue({
+      spanExporter: new InMemorySpanExporter(),
+      metricExporter: daemonMetricExporter,
+    });
+    fixture.emitOtelEvents = true;
+    wireOtelVisualizer.mockImplementation((config, context, events) => {
+      const visualizer = createOtelVisualizer(
+        resolveOtelConfig(config, context.pipelineDir),
+        { spanExporter: dispatchSpanExporter, metricExporter: daemonMetricExporter },
+        events,
+      );
+      visualizer?.start(events, context);
+      return visualizer;
+    });
+    const config = { otel: { exporter: 'otlp', endpoint: 'http://fake-collector.invalid:4318' } } as HarnessConfig;
+    vi.stubEnv('OTEL_RESOURCE_ATTRIBUTES', 'deployment.environment=from-environment,team.name=from-environment');
+
+    try {
+      const actualWire = await vi.importActual<typeof import('../src/engine/otel/wire.js')>(
+        '../src/engine/otel/wire.js',
+      );
+      const daemonOtel = actualWire.wireDaemonOtel(config, {
+        mainRoot: '/tmp/daemon-otel-root',
+        project: '/tmp/daemon-otel-project',
+        projectName: 'daemon-otel-project',
+        rootEvents,
+      });
+      await rootEvents.emit({
+        type: 'daemon_backlog_snapshot',
+        counts: { pending: 1, active: 0, blocked: 0, complete: 0 },
+        oldestAgeSeconds: {},
+        slots: { busy: 0, free: 1 },
+        inFlight: [],
+        blocked: {},
+        pollDurationMs: 1,
+      } as never);
+      await dispatchWithSessionId(undefined, config);
+      await daemonOtel?.flush();
+      await daemonOtel?.stop();
+
+      const exportedAttributes = [
+        dispatchSpanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')?.resource.attributes,
+        daemonMetrics[0]?.resource.attributes,
+        ...daemonMetrics
+          .flatMap((metrics) => metrics.scopeMetrics)
+          .flatMap((scope) => scope.metrics)
+          .flatMap((metric) => metric.dataPoints.map((point) => point.attributes)),
+      ];
+      expect(exportedAttributes).not.toContainEqual(expect.objectContaining({
+        'deployment.environment': 'from-environment',
+        'team.name': 'from-environment',
+      }));
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('uses the scope session ID without creating conduct-session-id when it is absent', async () => {
@@ -472,3 +774,22 @@ describe('daemon OTel visualizer wiring', () => {
     expect(Date.now() - start).toBeLessThan(1_000);
   });
 });
+
+function declaredAttributes(
+  exported: Record<string, unknown> | undefined,
+  declared: Record<string, string>,
+): Record<string, unknown> {
+  return Object.fromEntries(Object.keys(declared).map((key) => [key, exported?.[key]]));
+}
+
+function firstMetricPointAttributes(metricsList: ResourceMetrics[]): Record<string, unknown> | undefined {
+  for (const metrics of metricsList) {
+    for (const scope of metrics.scopeMetrics) {
+      for (const metric of scope.metrics) {
+        const point = metric.dataPoints[0];
+        if (point) return point.attributes;
+      }
+    }
+  }
+  return undefined;
+}

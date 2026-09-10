@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:8, task:10, task:11
+// Covers: task:1, task:2, task:3, task:4, task:5, task:8, task:10, task:11
 /**
  * Covers: task:1, task:2, task:3, task:4, task:10
  * metrics.test.ts — unit tests for MetricsRecorder through MetricsListener.
@@ -14,7 +14,11 @@ import { tmpdir } from 'os';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { computeCostRollup } from '../../../src/engine/cost-rollup.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
-import { DURATION_BUCKET_BOUNDARIES_MS, MetricsRecorder } from '../../../src/engine/otel/metrics.js';
+import {
+  DURATION_BUCKET_BOUNDARIES_MS,
+  MetricsRecorder,
+  RESERVED_CONDUCTOR_LABEL_KEYS,
+} from '../../../src/engine/otel/metrics.js';
 import { MetricsListener } from '../../../src/engine/otel/metrics-listener.js';
 import type { Meter } from '@opentelemetry/api';
 import {
@@ -67,6 +71,27 @@ function findMetric(exporter: InMemoryMetricExporter, name: string) {
     .getMetrics()
     .flatMap((rm) => rm.scopeMetrics.flatMap((sm) => sm.metrics))
     .find((m) => m.descriptor.name === name);
+}
+
+async function captureFeatureShippedAttributes(
+  meterName: string,
+  customAttrs?: Record<string, string>,
+) {
+  const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  const provider = new MeterProvider({
+    readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+  });
+  try {
+    new MetricsRecorder(
+      provider.getMeter(meterName),
+      { project: 'conductor-project', worker: 'conductor-worker' },
+      customAttrs,
+    ).onFeatureShipped();
+    await provider.forceFlush();
+    return findMetric(exporter, 'conductor.feature.shipped')?.dataPoints[0]?.attributes;
+  } finally {
+    await provider.shutdown();
+  }
 }
 
 async function recordMetricsWithIdentity(identityAttrs: { project: string; worker: string; feature: string }) {
@@ -176,6 +201,67 @@ describe('Task 8: TokenUsage detail remains span-only', () => {
     ));
 
     expect(metricAttributeKeys.some((key) => forbidden.some((suffix) => key.endsWith(suffix)))).toBe(false);
+  });
+});
+
+describe('Task 5: operator attributes at the metrics identity seam', () => {
+  it('exports custom attributes on per-feature and daemon metric points without replacing later labels', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const custom = {
+      environment: 'staging',
+      ...Object.fromEntries(RESERVED_CONDUCTOR_LABEL_KEYS.map((key) => [key, `operator-${key}`])),
+    };
+    const recorder = new MetricsRecorder(
+      provider.getMeter('task-5-custom-attributes'),
+      { project: 'conductor-project', worker: 'conductor-worker' },
+      custom,
+    );
+    const featureRecorder = recorder.forFeature('bound-feature');
+
+    try {
+      featureRecorder.onStepClose('build', 10, 1, undefined, false);
+      featureRecorder.onDispatch('build');
+      featureRecorder.onFeatureUsageTotal({
+        type: 'feature_usage_total', dispatches: 1, meteredDispatches: 1, unmeteredDispatches: 0,
+        costUsd: 1, inputTokens: 1, outputTokens: 1,
+      });
+      featureRecorder.onGateVerdict('build', 'pass');
+      recorder.onDaemonBacklog({
+        type: 'daemon_backlog_snapshot',
+        counts: { eligible: 1, waiting: 0, blocked: 0, gated: 0, parked: 0 },
+        oldestAgeSeconds: {}, slots: { busy: 1, free: 0 }, inFlight: [],
+        blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false }, pollDurationMs: 1,
+      });
+      await provider.forceFlush();
+
+      const point = (name: string) => findMetric(exporter, name)?.dataPoints[0]?.attributes;
+      expect({
+        duration: point('conductor.step.duration'),
+        retries: point('conductor.step.retries'),
+        dispatches: point('conductor.step.dispatches'),
+        featureCost: point('conductor.feature.cost'),
+        gateVerdict: point('conductor.gate.verdicts'),
+        daemonBacklog: point('conductor.daemon.backlog'),
+        sameMapFirst: await captureFeatureShippedAttributes('task-5-same-map-first', custom),
+        sameMapSecond: await captureFeatureShippedAttributes('task-5-same-map-second', custom),
+        noMap: await captureFeatureShippedAttributes('task-5-no-map'),
+      }).toEqual({
+        duration: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', step: 'build' },
+        retries: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', step: 'build' },
+        dispatches: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', step: 'build', metering: 'unmetered' },
+        featureCost: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', cost_complete: true },
+        gateVerdict: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', feature: 'bound-feature', step: 'build', outcome: 'pass' },
+        daemonBacklog: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker', state: 'eligible' },
+        sameMapFirst: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker' },
+        sameMapSecond: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker' },
+        noMap: { project: 'conductor-project', worker: 'conductor-worker' },
+      });
+    } finally {
+      await provider.shutdown();
+    }
   });
 });
 
