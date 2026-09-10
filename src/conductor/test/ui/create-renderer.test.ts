@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:3
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Writable } from 'node:stream';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
