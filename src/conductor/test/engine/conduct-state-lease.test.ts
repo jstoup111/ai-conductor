@@ -13,7 +13,7 @@ import {
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/state.js';
 
-// Covers: S1.1, task:1
+// Covers: S1.1, S1.2, S1.3, task:1, task:2
 
 const temporaryDirectories: string[] = [];
 
@@ -217,6 +217,37 @@ describe('conduct-state lease', () => {
     expect(shared.owner).toContain('next-owner');
     expect(diagnostics).toEqual([]);
     if (acquired.ok) await expect(acquired.handle.release()).resolves.toEqual({ ok: true });
+  });
+
+  it('refuses an unreadable owner without changing its metadata', async () => {
+    const statePath = '/worktree/unreadable/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared,
+      pid: 101,
+      newToken: () => 'existing-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    const ownerBeforeAttempt = shared.owner;
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async readOwner(): Promise<string> {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      },
+    };
+    const diagnostics: unknown[] = [];
+
+    await expect(createConductStateLease(statePath, {
+      filesystem,
+      onRecoveryDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    }).acquire()).resolves.toEqual({
+      ok: false,
+      kind: 'recovery_refused',
+      message: 'Unable to recover conduct-state lease: owner metadata is unavailable (permission denied)',
+    });
+    expect(diagnostics).toEqual([{ kind: 'refused', statePath, reason: 'ownership_changed' }]);
+    expect(shared.owner).toBe(ownerBeforeAttempt);
+    await held.handle.release();
   });
 
   it('waits for a concurrent creator to publish owner metadata before recovering the lease', async () => {
