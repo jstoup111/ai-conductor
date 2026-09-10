@@ -1,20 +1,20 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-10T00:20:38.142Z
+Status: halted
 Slug: github-issue-text-reaches-an-autonomous-build-with
-Class: plan-gap
-Halting step: prd_audit
-Phase: SHIP
+Class: needs-human
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-github-issue-text-reaches-an-autonomous-build-with
-Head SHA: 428987f62a3633aea7a941afb7fa36b835ca7e1a
-Halted at: 2026-09-09T21:46:16.947Z
+Head SHA: 92af14986f2e41f420496b261b96219c98b5212b
+Halted at: 2026-09-10T00:52:17.095Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome
+build_review adjudication halted: uncovered build-review coverage failure
+route: halt
+
 ```
