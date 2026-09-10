@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-10T22:32:52.952Z
+Status: halted
 Slug: github-issue-text-reaches-an-autonomous-build-with
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-github-issue-text-reaches-an-autonomous-build-with
-Head SHA: 4466b0143087d780a3de4209b1d056729f975b87
-Halted at: 2026-09-10T22:27:26.148Z
+Head SHA: afe4b3bb150faddad3ee96f2fc907616cef69661
+Halted at: 2026-09-10T22:33:07.450Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
