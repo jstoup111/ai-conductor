@@ -28,12 +28,16 @@ import {
 } from '@opentelemetry/api';
 import type { ConductorEvent } from '../../types/events.js';
 import type { DispatchMeteringObservation } from '../dispatch-metering.js';
+import { resolveExecutionIdentity, type ExecutionScope } from '../execution-identity.js';
+import type { ObservedInterval } from '../../execution/observed-interval.js';
 
 interface StepState {
   span: Span;
   index: number;
   retryCount: number;
   startTimeMs: number;
+  subjectLabel: string;
+  settlementEndTimeMs?: number;
   dispatch?: DispatchMeteringObservation;
 }
 
@@ -57,6 +61,10 @@ export class SpanManager {
     private readonly tracer: Tracer,
     private readonly onWarning?: (msg: string) => void,
     private readonly callbacks?: SpanManagerCallbacks,
+    private readonly executionScope: ExecutionScope = {
+      featureId: 'unknown-feature',
+      runId: 'unknown-run',
+    },
   ) {}
 
   // ── Run span ───────────────────────────────────────────────────────────────
@@ -85,30 +93,39 @@ export class SpanManager {
 
   onStepStarted(event: Extract<ConductorEvent, { type: 'step_started' }>): void {
     this.ensureRunSpan();
+    const identity = this.resolve(event.step, event.executionContext);
+    if (!identity) return;
 
-    // Re-run: a second step_started for the same step closes the old span first.
-    if (this.openSteps.has(event.step)) {
-      const old = this.openSteps.get(event.step)!;
+    // Context-free legacy re-runs retain their serial close-and-reopen behavior.
+    // Explicit executions are independent even when they share the same member name.
+    if (event.executionContext === undefined && this.openSteps.has(identity.correlationKey)) {
+      const old = this.openSteps.get(identity.correlationKey)!;
       old.span.setStatus({ code: SpanStatusCode.OK });
       old.span.end();
-      this.openSteps.delete(event.step);
+      this.openSteps.delete(identity.correlationKey);
     }
 
-    const span = this.tracer.startSpan(event.step, {}, this.runCtx);
+    const span = this.tracer.startSpan(identity.subjectLabel, {}, this.runCtx);
     // Set index and step name now; status + retryCount set at close.
-    span.setAttribute('conductor.step', event.step);
+    span.setAttribute('conductor.step', identity.subjectLabel);
     span.setAttribute('conductor.step.index', event.index);
+    if (event.executionContext?.subject.kind === 'configured-member') {
+      span.setAttribute('conductor.execution.parent_group', event.executionContext.subject.parentGroup);
+      span.setAttribute('conductor.execution.member', event.executionContext.subject.member);
+    }
 
-    this.openSteps.set(event.step, {
+    this.openSteps.set(identity.correlationKey, {
       span,
       index: event.index,
       retryCount: 0,
       startTimeMs: Date.now(),
+      subjectLabel: identity.subjectLabel,
     });
   }
 
   onStepCompleted(event: Extract<ConductorEvent, { type: 'step_completed' }>): void {
-    const state = this.openSteps.get(event.step);
+    const identity = this.resolve(event.step, event.executionContext);
+    const state = identity ? this.openSteps.get(identity.correlationKey) : undefined;
     if (!state) {
       this.warn(
         `step_completed for '${event.step}' received but no open span exists — ignoring`,
@@ -124,18 +141,20 @@ export class SpanManager {
       provider: event.actualProvider,
       preferredProvider: event.preferredProvider,
     });
+    this.recordSettlement(state, event.observedIntervals);
     this.setTokenUsageAttributes(state.span, event.tokenUsage);
     state.span.setAttribute('conductor.step.status', event.status);
     state.span.setAttribute('conductor.retry.count', state.retryCount);
     state.span.setStatus({ code: SpanStatusCode.OK });
-    state.span.end();
-    this.openSteps.delete(event.step);
+    this.endSpan(state);
+    this.openSteps.delete(identity!.correlationKey);
 
-    this.callbacks?.onStepClose?.(event.step, durationMs, state.retryCount);
+    this.callbacks?.onStepClose?.(state.subjectLabel, durationMs, state.retryCount);
   }
 
   onStepFailed(event: Extract<ConductorEvent, { type: 'step_failed' }>): void {
-    const state = this.openSteps.get(event.step);
+    const identity = this.resolve(event.step, event.executionContext);
+    const state = identity ? this.openSteps.get(identity.correlationKey) : undefined;
     if (!state) {
       this.warn(
         `step_failed for '${event.step}' received but no open span exists — ignoring`,
@@ -148,20 +167,25 @@ export class SpanManager {
       effort: event.effort,
       tier: event.tier,
     });
+    this.recordSettlement(state, event.observedIntervals);
     state.span.setAttribute('conductor.step.status', 'failed');
     // Use event.retryCount for failed steps (authoritative source on failure).
     state.span.setAttribute('conductor.retry.count', event.retryCount);
     state.span.setStatus({ code: SpanStatusCode.ERROR, message: event.error });
-    state.span.end();
-    this.openSteps.delete(event.step);
+    this.endSpan(state);
+    this.openSteps.delete(identity!.correlationKey);
 
-    this.callbacks?.onStepClose?.(event.step, durationMs, event.retryCount);
+    this.callbacks?.onStepClose?.(state.subjectLabel, durationMs, event.retryCount);
   }
 
-  onProviderAttempt(step: string, observation: DispatchMeteringObservation): void {
-    const state = this.openSteps.get(step);
+  onProviderAttempt(
+    event: Extract<ConductorEvent, { type: 'provider_attempt' }>,
+    observation: DispatchMeteringObservation,
+  ): void {
+    const identity = this.resolve(event.step, event.executionContext);
+    const state = identity ? this.openSteps.get(identity.correlationKey) : undefined;
     if (!state) {
-      this.warn(`provider_attempt for '${step}' received but no open span exists — ignoring`);
+      this.warn(`provider_attempt for '${event.step}' received but no open span exists — ignoring`);
       return;
     }
     // Candidate observations can be partial. Keep the latest known value for
@@ -176,6 +200,7 @@ export class SpanManager {
           ? { fallbackReason: state.dispatch.fallbackReason }
           : {}),
     };
+    this.recordSettlement(state, event.observedIntervals);
   }
 
   private setDispatchAttributes(
@@ -227,10 +252,37 @@ export class SpanManager {
     }
   }
 
+  private resolve(step: string, executionContext: unknown) {
+    return resolveExecutionIdentity({
+      scope: this.executionScope,
+      legacyStep: step,
+      executionContext,
+    });
+  }
+
+  private stateFor(step: string, executionContext?: unknown): StepState | undefined {
+    const identity = this.resolve(step, executionContext);
+    return identity ? this.openSteps.get(identity.correlationKey) : undefined;
+  }
+
+  private recordSettlement(state: StepState, intervals: readonly ObservedInterval[] | undefined): void {
+    if (!intervals) return;
+    for (const interval of intervals) {
+      const endedAtMs = interval.startedAtMs + interval.durationMs;
+      if (Number.isFinite(endedAtMs) && endedAtMs >= state.startTimeMs) {
+        state.settlementEndTimeMs = Math.max(state.settlementEndTimeMs ?? endedAtMs, endedAtMs);
+      }
+    }
+  }
+
+  private endSpan(state: StepState): void {
+    state.span.end(state.settlementEndTimeMs);
+  }
+
   // ── Span events ────────────────────────────────────────────────────────────
 
   onStepRetry(event: Extract<ConductorEvent, { type: 'step_retry' }>): void {
-    const state = this.openSteps.get(event.step);
+    const state = this.stateFor(event.step, event.executionContext);
     if (!state) {
       // Out-of-band retry — step isn't tracked. Silently drop (no warn needed).
       return;
@@ -246,7 +298,7 @@ export class SpanManager {
   onGateVerdict(event: Extract<ConductorEvent, { type: 'gate_verdict' }>): void {
     this.ensureRunSpan();
     // Prefer the active step span; fall back to run span if no step is open.
-    const state = this.openSteps.get(event.step);
+    const state = this.stateFor(event.step);
     const targetSpan = state?.span ?? this.runSpan;
     if (!targetSpan) {
       this.warn(`gate_verdict for '${event.step}' received but no span available — dropping`);
@@ -260,7 +312,7 @@ export class SpanManager {
   onKickback(event: Extract<ConductorEvent, { type: 'kickback' }>): void {
     this.ensureRunSpan();
     // Use the 'from' step's span if open; otherwise run span.
-    const fromState = this.openSteps.get(event.from);
+    const fromState = this.stateFor(event.from);
     const targetSpan = fromState?.span ?? this.runSpan;
     if (!targetSpan) {
       this.warn(`kickback from '${event.from}' received but no span available — dropping`);
@@ -277,7 +329,7 @@ export class SpanManager {
 
   onBuildProgress(event: Extract<ConductorEvent, { type: 'build_progress' }>): void {
     this.ensureRunSpan();
-    const state = this.openSteps.get(event.step);
+    const state = this.stateFor(event.step);
     const targetSpan = state?.span ?? this.runSpan;
     if (!targetSpan) {
       this.warn(`build_progress for '${event.step}' received but no span available — dropping`);
@@ -293,7 +345,7 @@ export class SpanManager {
 
   onBuildNoProgress(event: Extract<ConductorEvent, { type: 'build_no_progress' }>): void {
     this.ensureRunSpan();
-    const state = this.openSteps.get(event.step);
+    const state = this.stateFor(event.step);
     const targetSpan = state?.span ?? this.runSpan;
     if (!targetSpan) {
       this.warn(`build_no_progress for '${event.step}' received but no span available — dropping`);
@@ -310,7 +362,7 @@ export class SpanManager {
 
   onBuildStall(event: Extract<ConductorEvent, { type: 'build_stall' }>): void {
     this.ensureRunSpan();
-    const state = this.openSteps.get(event.step);
+    const state = this.stateFor(event.step);
     const targetSpan = state?.span ?? this.runSpan;
     if (!targetSpan) {
       this.warn(`build_stall for '${event.step}' received but no span available — dropping`);
@@ -328,7 +380,7 @@ export class SpanManager {
     this.ensureRunSpan();
     // Closeout belongs to the build lifecycle. It is emitted out-of-band, so
     // prefer an active build step and otherwise preserve it on the run span.
-    const targetSpan = this.openSteps.get('build')?.span ?? this.runSpan;
+    const targetSpan = this.stateFor('build')?.span ?? this.runSpan;
     if (!targetSpan) {
       this.warn('pipeline_closeout received but no span available — dropping');
       return;
@@ -349,7 +401,7 @@ export class SpanManager {
       state.span.setAttribute('conductor.step.status', 'done');
       state.span.setAttribute('conductor.retry.count', state.retryCount);
       state.span.setStatus({ code: SpanStatusCode.OK });
-      state.span.end();
+      this.endSpan(state);
       const durationMs = Date.now() - state.startTimeMs;
       this.callbacks?.onStepClose?.(step, durationMs, state.retryCount);
     }
@@ -394,7 +446,7 @@ export class SpanManager {
       state.span.setAttribute('conductor.step.status', 'incomplete');
       state.span.setAttribute('conductor.retry.count', state.retryCount);
       state.span.setStatus({ code: SpanStatusCode.ERROR, message: 'incomplete: process terminated' });
-      state.span.end();
+      this.endSpan(state);
       const durationMs = Date.now() - state.startTimeMs;
       this.callbacks?.onStepClose?.(step, durationMs, state.retryCount);
     }

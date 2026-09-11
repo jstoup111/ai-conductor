@@ -1,5 +1,6 @@
+// Covers: task:9
 /**
- * Covers: task:1, task:7, task:8
+ * Covers: task:1, task:7, task:8, task:9
  *
  * span-manager.test.ts — unit tests for SpanManager via OtelVisualizer.
  *
@@ -807,6 +808,148 @@ describe('Task 19: pipeline_closeout span event', () => {
       endedAt: 375,
       durationMs: 75,
     });
+  });
+});
+
+describe('Task 9: execution-correlated spans', () => {
+  it('keeps interleaved same-name configured executions as distinct member spans', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    const executionA = {
+      executionId: 'execution-a',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'review' },
+    };
+    const executionB = {
+      executionId: 'execution-b',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'review' },
+    };
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: executionA });
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: executionB });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: executionB });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: executionA });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    expect(spanExporter.getFinishedSpans().filter((span) => span.name === 'configured:validation/review')).toHaveLength(2);
+  });
+
+  it('keeps fallback provider attribution on its owning configured member', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    const alpha = {
+      executionId: 'alpha',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'alpha' },
+    };
+    const beta = {
+      executionId: 'beta',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'beta' },
+    };
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: alpha });
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: beta });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', executionContext: alpha,
+      provider: 'claude', preferredProvider: 'codex', fallbackReason: 'codex unavailable',
+      model: 'sonnet', effort: 'high', tier: 'L', invoked: true, outcome: 'success',
+    });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', executionContext: beta,
+      provider: 'codex', preferredProvider: 'codex', model: 'gpt-5.6', effort: 'medium', tier: 'M',
+      invoked: true, outcome: 'success',
+    });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: beta });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: alpha });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const alphaSpan = spanExporter.getFinishedSpans().find((span) => span.name === 'configured:validation/alpha')!;
+    const betaSpan = spanExporter.getFinishedSpans().find((span) => span.name === 'configured:validation/beta')!;
+    expect({ alpha: alphaSpan.attributes, beta: betaSpan.attributes }).toMatchObject({
+      alpha: {
+        'conductor.execution.parent_group': 'validation',
+        'conductor.execution.member': 'alpha',
+        'conductor.provider': 'claude',
+        'conductor.model': 'sonnet',
+        'conductor.effort': 'high',
+        'conductor.complexity_tier': 'L',
+        'conductor.fallback': true,
+        'conductor.fallback.reason': 'codex unavailable',
+      },
+      beta: {
+        'conductor.execution.parent_group': 'validation',
+        'conductor.execution.member': 'beta',
+        'conductor.provider': 'codex',
+        'conductor.model': 'gpt-5.6',
+        'conductor.effort': 'medium',
+        'conductor.complexity_tier': 'M',
+      },
+    });
+  });
+
+  it('does not let a late completed execution overwrite a newer same-name span', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    const earlier = { executionId: 'earlier', subject: { kind: 'lifecycle-step' as const, step: 'build' as StepName } };
+    const later = { executionId: 'later', subject: { kind: 'lifecycle-step' as const, step: 'build' as StepName } };
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: earlier });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: earlier });
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: later });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', executionContext: earlier,
+      provider: 'claude', invoked: true, outcome: 'success', model: 'sonnet',
+    });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', executionContext: later,
+      provider: 'codex', invoked: true, outcome: 'success', model: 'gpt-5.6',
+    });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: later });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    expect(spanExporter.getFinishedSpans().filter((span) => span.name === 'build' && span.attributes['conductor.provider'] === 'codex')).toHaveLength(1);
+  });
+
+  it('omits execution identifiers and absent provider dimensions from spans', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    const execution = {
+      executionId: 'not-an-attribute',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'no-provider' },
+    };
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: execution });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const attributes = spanExporter.getFinishedSpans().find((span) => span.name === 'configured:validation/no-provider')!.attributes;
+    expect(attributes).not.toMatchObject({
+      'conductor.execution.id': 'not-an-attribute',
+      'conductor.provider': expect.anything(),
+      'conductor.model': expect.anything(),
+      'conductor.effort': expect.anything(),
+      'conductor.complexity_tier': expect.anything(),
+      'conductor.fallback.reason': expect.anything(),
+    });
+  });
+
+  it('closes a configured member at its observed settlement boundary', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    const settledAtMs = Date.now() + 1_000;
+    const execution = {
+      executionId: 'settled-member',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'settled' },
+    };
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
+    await emitter.emit({
+      type: 'step_completed', step: 'build', status: 'done', executionContext: execution,
+      observedIntervals: [{ startedAtMs: settledAtMs - 100, durationMs: 100 }],
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'configured:validation/settled')!;
+    expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(settledAtMs);
   });
 });
 
