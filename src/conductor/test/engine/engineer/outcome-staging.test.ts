@@ -1,3 +1,4 @@
+// Covers: task:1
 // outcome-staging.test.ts — Task 1 (Story 1 happy path): staging the intake's
 // Desired-outcome bullets into the worktree's gitignored .pipeline/ BEFORE any
 // DECIDE artifact is authored.
@@ -59,6 +60,24 @@ describe('stageIntakeOutcomes', () => {
       required: true,
       bullets: ['- [neutralized:agent-directive]'],
       sourceRef: 'owner/repo#42',
+    });
+  });
+
+  it('stages plural Desired outcomes bullets verbatim and reads them as required', async () => {
+    const sourceRef = 'owner/repo#43';
+    const intakeBody = '## Desired outcomes\n\n- Preserve this\n- And this\n';
+
+    const stagedPath = await stageIntakeOutcomes(worktreePath, sourceRef, intakeBody);
+    const contents = await readFile(stagedPath!, 'utf8');
+    const result = await readStagedIntakeOutcomes(worktreePath);
+
+    expect({ contents, result }).toEqual({
+      contents: `Source-Ref: ${sourceRef}\n\n## Desired outcome\n\n- Preserve this\n- And this\n`,
+      result: {
+        required: true,
+        bullets: ['- Preserve this', '- And this'],
+        sourceRef,
+      },
     });
   });
 

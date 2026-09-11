@@ -21,10 +21,10 @@ export const INTAKE_OUTCOMES_RELATIVE_PATH = join('.pipeline', 'intake-outcomes.
  * end of body. Returns null when no such section is present.
  */
 export function extractDesiredOutcomeSection(intakeBody: string): string | null {
-  const headingIdx = intakeBody.search(/^## Desired outcome\s*$/m);
+  const headingIdx = intakeBody.search(/^## Desired outcomes?\s*$/m);
   if (headingIdx === -1) return null;
 
-  const afterHeading = intakeBody.slice(headingIdx).replace(/^## Desired outcome\s*\n?/, '');
+  const afterHeading = intakeBody.slice(headingIdx).replace(/^## Desired outcomes?\s*\n?/, '');
   const nextHeadingMatch = afterHeading.match(/\n## /);
   const sectionBody = nextHeadingMatch
     ? afterHeading.slice(0, nextHeadingMatch.index)
