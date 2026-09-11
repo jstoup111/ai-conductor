@@ -35,6 +35,7 @@ export interface RewindCommandDependencies {
   store?: ConductStateStore<ConductState>;
   preflightDerivedRecords?: (root: string) => Promise<void>;
   clearDerivedRecords?: (root: string, demoted: string[]) => Promise<void>;
+  markerFilesystem?: RewindMarkerFilesystem;
   emit?: (result: RewindStateResult) => Promise<void>;
 }
 
@@ -137,9 +138,71 @@ async function preflightDerivedRecords(root: string): Promise<void> {
   ]);
 }
 
-async function clearDerivedRecords(root: string, demoted: string[]): Promise<void> {
-  await Promise.all(demoted.map((step) => rm(join(root, GATES_DIR, `${step}.json`), { force: true })));
-  await clearHaltAtomically(root);
+async function clearDerivedRecords(
+  root: string,
+  demoted: string[],
+  filesystem: RewindMarkerFilesystem = markerFilesystem,
+): Promise<void> {
+  const staged: Array<{ original: string; staged: string; contents: string }> = [];
+  const [haltContents, haltClassContents] = await Promise.all([
+    readFile(join(root, HALT_MARKER), 'utf-8'),
+    readFile(join(root, HALT_CLASS_MARKER), 'utf-8'),
+  ]);
+  let haltCleared = false;
+  try {
+    for (const step of demoted) {
+      const original = join(root, GATES_DIR, `${step}.json`);
+      const stagedPath = join(root, GATES_DIR, `${step}.rewind-clearing`);
+      try {
+        const contents = await readFile(original, 'utf-8');
+        await filesystem.rename(original, stagedPath);
+        staged.push({ original, staged: stagedPath, contents });
+      } catch (error) {
+        if ((error as { code?: unknown }).code !== 'ENOENT') throw error;
+      }
+    }
+    await clearHaltAtomically(root, filesystem);
+    haltCleared = true;
+    const deletions = await Promise.allSettled(staged.map(({ staged: path }) => filesystem.remove(path)));
+    const deletionFailure = deletions.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (deletionFailure) throw deletionFailure.reason;
+  } catch (error) {
+    const restorationFailures: unknown[] = [];
+    for (const entry of staged.reverse()) {
+      try {
+        await filesystem.rename(entry.staged, entry.original);
+      } catch (restoreError) {
+        if ((restoreError as { code?: unknown }).code !== 'ENOENT') {
+          restorationFailures.push(restoreError);
+          continue;
+        }
+        try {
+          await writeFile(entry.original, entry.contents, 'utf-8');
+        } catch (writeError) {
+          restorationFailures.push(writeError);
+        }
+      }
+    }
+    if (haltCleared) {
+      try {
+        await filesystem.restoreHalt(root, haltContents);
+      } catch (restoreError) {
+        restorationFailures.push(restoreError);
+      }
+      try {
+        await filesystem.writeClass(join(root, HALT_CLASS_MARKER), haltClassContents);
+      } catch (restoreError) {
+        restorationFailures.push(restoreError);
+      }
+    }
+    if (restorationFailures.length > 0) {
+      throw new AggregateError(
+        [error, ...restorationFailures],
+        `Failed to clear derived records and restore staged verdicts: ${restorationFailures.map((failure) => failure instanceof Error ? failure.message : String(failure)).join('; ')}`,
+      );
+    }
+    throw error;
+  }
 }
 
 async function rollbackRewindState(
@@ -212,7 +275,8 @@ export async function dispatchRewindCommand(
   const config = configResult.ok ? configResult.config : {};
   const store = dependencies.store ?? createFilesystemConductStateStore(statePath);
   const preflight = dependencies.preflightDerivedRecords ?? preflightDerivedRecords;
-  const clear = dependencies.clearDerivedRecords ?? clearDerivedRecords;
+  const clear = dependencies.clearDerivedRecords
+    ?? ((root, demoted) => clearDerivedRecords(root, demoted, dependencies.markerFilesystem));
   const originalState = { ...observed.value };
   let result: RewindStateResult | undefined;
   try {

@@ -1,6 +1,6 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -281,6 +281,115 @@ describe('rewindState', () => {
       expect(JSON.parse(await readFile(join(root, '.pipeline/conduct-state.json'), 'utf-8'))).toEqual(original);
     } finally {
       error.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  const rewindDemotedSteps = [
+    'build', 'test_suite', 'build_review', 'manual_test',
+    'prd_audit', 'architecture_review_as_built', 'rebase', 'finish',
+  ];
+
+  async function writeRewindFixture(root: string, absentVerdict?: string): Promise<Map<string, string>> {
+    await mkdir(join(root, '.pipeline/gates'), { recursive: true });
+    await writeFile(join(root, '.pipeline/conduct-state.json'), JSON.stringify(completeState));
+    await writeFile(join(root, '.pipeline/HALT'), 'operator action required\n');
+    await writeFile(join(root, '.pipeline/HALT.class'), 'needs-human\n');
+    const verdicts = new Map<string, string>();
+    for (const step of rewindDemotedSteps) {
+      if (step === absentVerdict) continue;
+      const contents = `{ "step": "${step}" }\n`;
+      verdicts.set(step, contents);
+      await writeFile(join(root, '.pipeline/gates', `${step}.json`), contents);
+    }
+    return verdicts;
+  }
+
+  it('restores every staged verdict with its original bytes when halt clearing fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rewind-verdict-rollback-'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const verdicts = await writeRewindFixture(root, 'test_suite');
+
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, root, {
+        markerFilesystem: {
+          rename,
+          remove: async () => { throw new Error('halt removal failed'); },
+          readFile: (path) => readFile(path, 'utf-8'),
+          restoreHalt: (cwd, body) => writeFile(join(cwd, '.pipeline/HALT'), body, 'utf-8'),
+          writeClass: (path, contents) => writeFile(path, contents, 'utf-8'),
+        },
+      })).resolves.toBe(1);
+
+      await expect(Promise.all([...verdicts].map(async ([step, contents]) =>
+        readFile(join(root, '.pipeline/gates', `${step}.json`), 'utf-8').then((actual) => [actual, contents]),
+      ))).resolves.toEqual([...verdicts].map(([, contents]) => [contents, contents]));
+      expect((await readdir(join(root, '.pipeline/gates'))).some((entry) => entry.includes('.rewind-clearing'))).toBe(false);
+      expect(await readFile(join(root, '.pipeline/HALT'), 'utf-8')).toBe('operator action required\n');
+      expect(await readFile(join(root, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human\n');
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error).toHaveBeenCalledWith('rewind: halt removal failed');
+    } finally {
+      error.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('removes demoted verdicts after a successful rewind without leaving staged entries', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rewind-verdict-success-'));
+    try {
+      await writeRewindFixture(root);
+
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, root)).resolves.toBe(0);
+
+      expect(await readdir(join(root, '.pipeline/gates'))).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('restores verdict bytes when staged verdict deletion partially fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rewind-verdict-delete-rollback-'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const verdicts = await writeRewindFixture(root);
+      let verdictRemovals = 0;
+
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, root, {
+        markerFilesystem: {
+          rename,
+          remove: async (path, options) => {
+            if (path.startsWith(join(root, '.pipeline/gates')) && path.includes('.rewind-clearing')) {
+              verdictRemovals += 1;
+              if (verdictRemovals === 2) throw new Error('staged verdict removal failed');
+            }
+            await rm(path, options);
+          },
+          readFile: (path) => readFile(path, 'utf-8'),
+          restoreHalt: (cwd, body) => writeFile(join(cwd, '.pipeline/HALT'), body, 'utf-8'),
+          writeClass: (path, contents) => writeFile(path, contents, 'utf-8'),
+        },
+      })).resolves.toBe(1);
+
+      await expect(Promise.all([...verdicts].map(async ([step, contents]) =>
+        readFile(join(root, '.pipeline/gates', `${step}.json`), 'utf-8').then((actual) => [actual, contents]),
+      ))).resolves.toEqual([...verdicts].map(([, contents]) => [contents, contents]));
+      expect((await readdir(join(root, '.pipeline/gates'))).some((entry) => entry.includes('.rewind-clearing'))).toBe(false);
+      expect(await readFile(join(root, '.pipeline/HALT'), 'utf-8')).toBe('operator action required\n');
+      expect(await readFile(join(root, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human\n');
+    } finally {
+      error.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('allows a demoted step without a verdict file during a successful rewind', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rewind-missing-verdict-'));
+    try {
+      await writeRewindFixture(root, 'test_suite');
+
+      await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, root)).resolves.toBe(0);
+    } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
