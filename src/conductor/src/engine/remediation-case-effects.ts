@@ -246,7 +246,11 @@ export async function applyBuildReviewDeferralEffect(input: {
         issueUrl = filed.issueUrl;
       }
     } catch (error) {
-      return { value: { ok: false as const, reason: `deferred intake failed: ${error instanceof Error ? error.message : String(error)}` } };
+      const diagnostic = `deferred intake failed: ${error instanceof Error ? error.message : String(error)}`;
+      const next = replaceCases(state, (item) => item.id === deferral.id
+        ? { ...item, effect: { id: deferral.effect.id, kind: 'deferral', status: 'failed', diagnostic } }
+        : item);
+      return { value: { ok: false as const, reason: diagnostic }, nextState: next };
     }
     const next = replaceCases(state, (item) => item.id === deferral.id
       ? { ...item, effect: { id: deferral.effect.id, kind: 'deferral', status: 'applied', issueUrl: issueUrl! } }

@@ -60,6 +60,13 @@ describe('refutation evidence resolver', () => {
     });
   });
 
+  it.each(['   \n\t ', '\n\n'])('rejects an empty normalized excerpt (%j)', async (excerpt) => {
+    await writeFile(join(projectRoot, 'evidence.ts'), 'ordinary evidence contents\n');
+    await expect(resolveRefutationEvidence({ projectRoot, refutation: refutation('evidence.ts', excerpt) })).resolves.toEqual({
+      ok: false, reason: 'unresolvable-refutation-evidence', path: 'evidence.ts', excerpt,
+    });
+  });
+
   it('rejects a directory evidence path', async () => {
     await mkdir(join(projectRoot, 'evidence'));
 

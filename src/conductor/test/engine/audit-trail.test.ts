@@ -191,6 +191,22 @@ describe('engine/audit-trail', () => {
     expect(record.event).toBe('gate_pass');
   });
 
+  it('subscribe() writes an audited remediation refutation occurrence', async () => {
+    const writer = new AuditTrailWriter(dir);
+    const emitter = new ConductorEventEmitter();
+    writer.subscribe(emitter);
+    await emitter.emit({
+      type: 'remediation_case_refuted', domain: 'build_review', lapId: 'lap-7' as never,
+      caseId: 'case-refuted', residualEffectId: 'effect-deferred',
+    });
+    const [line] = (await readFile(join(dir, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf8')).split('\n').filter(Boolean);
+    expect(JSON.parse(line!) as AuditRecord).toMatchObject({
+      origin: 'build', event: 'remediation_case_refuted',
+      reason: 'build_review lap lap-7 refuted case case-refuted', domain: 'build_review', lapId: 'lap-7',
+      caseId: 'case-refuted', residualEffectId: 'effect-deferred',
+    });
+  });
+
   it('subscribe() records a performed operator reseal with its complete sealed-artifact lineage', async () => {
     const writer = new AuditTrailWriter(dir);
     const emitter = new ConductorEventEmitter();

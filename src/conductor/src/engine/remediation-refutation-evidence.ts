@@ -54,7 +54,10 @@ export async function resolveRefutationEvidence({
           excerpt: evidence.excerpt,
         };
       }
-      if (!normalize(contents).includes(normalize(evidence.excerpt))) {
+      const excerpt = normalize(evidence.excerpt);
+      // `''.includes('')` is true, but an empty normalized excerpt is not
+      // evidence. Reject it at the admission boundary before containment.
+      if (!excerpt || !normalize(contents).includes(excerpt)) {
         return {
           ok: false,
           reason: 'unresolvable-refutation-evidence',

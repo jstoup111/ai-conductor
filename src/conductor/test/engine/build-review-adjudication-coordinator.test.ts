@@ -1539,6 +1539,28 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(driftedJudge).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['reserved', { id: 'effect-refuted', kind: 'deferral', status: 'reserved' }],
+    ['failed', { id: 'effect-refuted', kind: 'deferral', status: 'failed', diagnostic: 'tracker unavailable' }],
+  ] as const)('does not re-judge an exact refuted source with a %s residual', async (_status, effect) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-refuted', domain: 'build_review', disposition: 'refute', priority: 'high', confidence: 'high',
+        rationale: 'The exact source has unfinished follow-up.', resolution: 'resolved',
+        sources: [{ sourceId, outcome: 'refuted', recordedAt: '2026-09-11T00:00:00.000Z' }], effect,
+        refutation: { claim: 'The finding is false.', assertions: [{ assertion: 'The behavior exists.', verdict: 'refuted', evidence: [{ path: 'test/example.test.ts', excerpt: 'fixture' }] }] },
+      }],
+    });
+    const judge = vi.fn(async () => actionJudgement());
+    const result = await coordinateBuildReviewAdjudication({ ...input(root, judge) });
+
+    expect(judge).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true, route: 'halt', trace: expect.stringContaining('effect-refuted') });
+  });
+
   it('resolves an attempted open case that the current lap no longer reports', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);

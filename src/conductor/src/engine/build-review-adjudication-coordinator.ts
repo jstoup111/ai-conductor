@@ -444,6 +444,14 @@ export async function coordinateBuildReviewAdjudication(input: {
   let currentSources = sources.filter((source) => !resolved.has(source.findingId));
   const prior = await store.read();
   if (!prior.ok) return fail(`case store ${prior.reason}`);
+  // An exact source bound to a refutation with unfinished durable follow-up
+  // is not new content for the judge. The reducer names that effect and
+  // blocks PASS below.
+  const unfinishedRefutedSourceIds = new Set(prior.state.cases.flatMap((record) =>
+    record.disposition === 'refute' && hasReservedOrFailedRemediationEffect(record)
+      ? record.sources.map((source) => source.sourceId)
+      : [],
+  ));
   // Durable BUILD-attempt evidence, read from the published work order rather
   // than process memory. Without it an attempted case is indistinguishable from
   // an interrupted one, so a repeat could take a second free route and an
@@ -470,8 +478,16 @@ export async function coordinateBuildReviewAdjudication(input: {
   }
   const settledSourceIds = finalizedSourceIds(prior.state.cases);
   currentSources = sources.filter((source) =>
-    !resolved.has(source.findingId) && !input.suppressedFindingIds?.has(source.findingId) && !settledSourceIds.has(buildReviewAdjudicationSourceId(source)),
+    !resolved.has(source.findingId) && !input.suppressedFindingIds?.has(source.findingId) &&
+    !settledSourceIds.has(buildReviewAdjudicationSourceId(source)) &&
+    !unfinishedRefutedSourceIds.has(buildReviewAdjudicationSourceId(source)),
   );
+  liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
+    new Set(sources.filter((source) =>
+      !accepted.has(source.findingId) && !input.suppressedFindingIds?.has(source.findingId) &&
+      !settledSourceIds.has(buildReviewAdjudicationSourceId(source)) &&
+      !unfinishedRefutedSourceIds.has(buildReviewAdjudicationSourceId(source)),
+    ).map(buildReviewAdjudicationSourceId));
   if (currentSources.length === 0) {
     liveSourceIdsFor = () => new Set();
     return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, settleAbsentAttempted: true, dispatchSkipped: true });
