@@ -6,10 +6,11 @@ import {
   makeSkippedOutcome,
   classifyOutcome,
   runWithConcurrency,
-  runGroupBranch,
+  runGroupBranch as runGroupBranchProduction,
   runAuxiliaryGroupBranch,
   runAuxiliaryGroupBranches,
   type BranchOutcome,
+  type BranchExecutorDeps,
   type GroupBranchAdmission,
   type GroupBranchAttempt,
   type GroupBranchLifecycleObserver,
@@ -42,6 +43,30 @@ import type {
   InvokeResult,
   LLMProvider,
 } from "../../src/execution/llm-provider.js";
+
+/** Explicit test-only observer for fixtures unrelated to lifecycle assertions. */
+const TEST_LIFECYCLE_OBSERVER: GroupBranchLifecycleObserver = {
+  onAdmitted: () => undefined,
+  onAttempt: () => undefined,
+  onRetry: () => undefined,
+  onSettled: () => undefined,
+};
+
+type TestBranchExecutorDeps = Omit<BranchExecutorDeps, "lifecycleObserver"> & {
+  lifecycleObserver?: GroupBranchLifecycleObserver;
+};
+
+function runGroupBranch(
+  member: GroupMember,
+  state: ConductState,
+  deps: TestBranchExecutorDeps,
+  maxRetries: number,
+): Promise<BranchOutcome> {
+  return runGroupBranchProduction(member, state, {
+    ...deps,
+    lifecycleObserver: deps.lifecycleObserver ?? TEST_LIFECYCLE_OBSERVER,
+  }, maxRetries);
+}
 
 describe("group-core: BranchOutcome constructors", () => {
   it("makeVerdictOutcome builds a kind:'verdict' outcome carrying pass/fail/blocked", () => {
@@ -1332,6 +1357,18 @@ describe("group-core: complete member lifecycle observations (Task 11)", () => {
   function member(name = "manual_test"): GroupMember {
     return { name, skill: name.replaceAll("_", "-"), outcome: makeSkippedOutcome() };
   }
+
+  it("refuses an omitted lifecycle observer instead of silently running a production branch", async () => {
+    const runner = scriptedRunner([{ success: true }]);
+
+    await expect(runGroupBranchProduction(
+      member(),
+      fakeState,
+      { stepRunner: runner } as unknown as BranchExecutorDeps,
+      1,
+    )).rejects.toThrow("runGroupBranch requires a lifecycleObserver");
+    expect(runner.calls).toEqual([]);
+  });
 
   function lifecycleRecorder() {
     const admissions: GroupBranchAdmission[] = [];

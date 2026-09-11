@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:4, task:5
+// Covers: task:1, task:3, task:4, task:5, task:11
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { execFile as execFileCb } from 'child_process';
@@ -68,7 +68,7 @@ import {
 } from '../../src/engine/conductor.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
-import type { GroupMember } from '../../src/engine/group-core.js';
+import type { GroupBranchLifecycleObserver, GroupMember } from '../../src/engine/group-core.js';
 import { runGroupBranch } from '../../src/engine/group-core.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
@@ -118,6 +118,13 @@ import type {
   InvokeResult,
   LLMProvider,
 } from '../../src/execution/llm-provider.js';
+
+const NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER: GroupBranchLifecycleObserver = {
+  onAdmitted: () => undefined,
+  onAttempt: () => undefined,
+  onRetry: () => undefined,
+  onSettled: () => undefined,
+};
 
 function passingBuildReviewAggregate() {
   const lapId = parseBuildReviewLapId('fixture-lap')!;
@@ -2446,7 +2453,10 @@ describe('engine/conductor', () => {
       outcome: { kind: 'skipped' },
     };
 
-    const outcome = await runGroupBranch(member, {}, { stepRunner }, 1);
+    const outcome = await runGroupBranch(member, {}, {
+      stepRunner,
+      lifecycleObserver: NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER,
+    }, 1);
 
     expect((outcome as { observedIntervals?: readonly unknown[] }).observedIntervals?.[0])
       .toBe(observedIntervals[0]);
@@ -2472,7 +2482,10 @@ describe('engine/conductor', () => {
       outcome: { kind: 'skipped' },
     };
 
-    const outcome = await runGroupBranch(member, {}, { stepRunner: { run } }, 1);
+    const outcome = await runGroupBranch(member, {}, {
+      stepRunner: { run },
+      lifecycleObserver: NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER,
+    }, 1);
 
     expect({
       kind: outcome.kind,
@@ -10668,6 +10681,7 @@ describe('engine/conductor', () => {
         {} as ConductState,
         {
           stepRunner,
+          lifecycleObserver: NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER,
           onMemberEvent: (e) => {
             events.push(e as unknown as (typeof events)[number]);
           },
@@ -18198,7 +18212,10 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
       const grouped = await runGroupBranch(
         { name: 'manual_test', skill: 'manual-test', outcome: { kind: 'skipped' } },
         {} as ConductState,
-        { stepRunner: runner },
+        {
+          stepRunner: runner,
+          lifecycleObserver: NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER,
+        },
         1,
       );
       const auxiliary = await executeOneShot('build_review', { prompt: 'review', cwd: projectRoot });
