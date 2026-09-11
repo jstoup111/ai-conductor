@@ -6039,12 +6039,14 @@ describe('engine/conductor', () => {
       const CEILING = 3;
       let progress = 0;
       let buildCalls = 0;
+      const dispatches: Array<{ model?: string; effort?: string }> = [];
       const retryEvents: Array<Extract<ConductorEvent, { type: 'step_retry' }>> = [];
 
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           if (step === 'build') {
             buildCalls++;
+            dispatches.push({ model: options?.modelOverride, effort: options?.effortOverride });
             // The first retry consumes a normal fixed-budget slot. Each later
             // attempt resolves one task, until the existing ceiling halts it.
             if (buildCalls > 1) {
@@ -6079,6 +6081,10 @@ describe('engine/conductor', () => {
       await conductor.run();
 
       expect(retryEvents).toHaveLength(3);
+      expect(dispatches).toHaveLength(4);
+      expect(retryEvents.map((event) => ({
+        model: event.escalatedModel, effort: event.escalatedEffort,
+      }))).toEqual(dispatches.slice(1));
       expect(retryEvents.every((event) => event.attempt <= event.maxAttempts)).toBe(true);
       expect(retryEvents[0]).toMatchObject({ step: 'build', attempt: 2, maxAttempts: 3 });
       expect(retryEvents[0]).not.toHaveProperty('progressAttempt');

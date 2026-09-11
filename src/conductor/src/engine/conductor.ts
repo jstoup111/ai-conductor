@@ -11243,17 +11243,18 @@ export class Conductor {
               if (progressBypassed || attempt < stepMaxRetries) {
                 // #188: same escalation annotation as the dispatch-failure emit
                 // above — the (model, effort) the upcoming attempt will use.
+                const nextAttempt = progressBypassed ? attempt : attempt + 1;
                 const escNext = escalateAttempt(
                   resolved.model,
                   resolved.effort,
-                  attempt + 1,
+                  nextAttempt,
                   resolved.escalate,
                   stepModelPolicy,
                 );
                 await emitTracked({
                   type: 'step_retry',
                   step: step.name,
-                  attempt: progressBypassed ? attempt : attempt + 1,
+                  attempt: nextAttempt,
                   maxAttempts: stepMaxRetries,
                   reason: completion.reason ?? 'completion check failed',
                   ...(result.model !== undefined && { model: result.model }),
