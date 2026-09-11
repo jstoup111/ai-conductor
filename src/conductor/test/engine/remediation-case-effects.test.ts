@@ -52,16 +52,13 @@ describe('remediation case effects', () => {
     refutation: { claim, assertions: [{ assertion: 'the required behavior exists', verdict: 'refuted', evidence: [{ path: 'src/engine/remediation-case-effects.ts', excerpt: 'isBuildEligibleActionCase' }] }] },
   });
 
-  it('keeps an open unresolved act case with an applied action effect in BUILD', () => {
-    expect(isBuildEligibleActionCase(openAppliedActionRecord())).toBe(true);
-  });
-
   it.each([
-    ['its original claim', 'the finding is wrong'],
-    ['a revised claim', 'the asserted behavior is already present'],
-    ['a narrow claim', 'the finding does not apply to this case'],
-  ] as const)('keeps a refuted case with %s out of BUILD', (_label, claim) => {
-    expect(isBuildEligibleActionCase(refutedRecord(claim))).toBe(false);
+    ['an open unresolved act case with an applied action effect', openAppliedActionRecord, true],
+    ['a refuted case with its original claim', () => refutedRecord('the finding is wrong'), false],
+    ['a refuted case with a revised claim', () => refutedRecord('the asserted behavior is already present'), false],
+    ['a refuted case with a narrow claim', () => refutedRecord('the finding does not apply to this case'), false],
+  ] as const)('BUILD action eligibility: %s', (_label, fixture, expected) => {
+    expect(isBuildEligibleActionCase(fixture())).toBe(expected);
   });
 
   it.each([
