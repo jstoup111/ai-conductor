@@ -1,3 +1,5 @@
+// Covers: task:2, task:3
+
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,6 +14,9 @@ import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '..
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { specHash } from '../../src/engine/shipped-record.js';
+import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import type { BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Story 2 (#204, #205) — the shipped record rides the IMPLEMENTATION branch.
@@ -59,7 +64,8 @@ beforeEach(async () => {
   await git(['config', 'user.email', 'test@example.com']);
   await git(['config', 'user.name', 'Test']);
   await writeFile(join(repo, 'README.md'), 'seed\n');
-  await git(['add', 'README.md']);
+  await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
+  await git(['add', 'README.md', '.gitignore']);
   await git(['commit', '-q', '-m', 'seed']);
   // The implementation branch the finish flow runs on, with the spec committed
   // (worktrees are cut from base with the vetted plan+stories already merged).
@@ -178,6 +184,199 @@ describe('conduct shipped-record — record committed on the implementation bran
 
     expect(await git(['rev-parse', 'HEAD'])).toBe(firstHead);
     expect(await git(['rev-list', '--count', 'HEAD'])).toBe(firstCount);
+  });
+
+  it('commits current rollups after ledger growth, then skips a byte-identical third write', async () => {
+    const pr = 'https://github.com/acme/repo/pull/42';
+    const ledgerPath = join(repo, '.pipeline/events.jsonl');
+    const firstDispatch = {
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      actualProvider: 'codex',
+      activeInterval: { startedAtMs: 0, durationMs: 100 },
+      tokenUsage: { input: 100, output: 20, cacheRead: 10, cacheCreation: 5, costUsd: 0.03 },
+    };
+    const laterDispatch = {
+      ...firstDispatch,
+      activeInterval: { startedAtMs: 100, durationMs: 200 },
+    };
+    await mkdir(join(repo, '.pipeline'), { recursive: true });
+    await writeFile(ledgerPath, [
+      { type: 'step_started', step: 'build' },
+      firstDispatch,
+    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
+
+    expect(await runShippedRecord(SLUG, pr)).toBe(0);
+    const committedRecord = await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8');
+    expect(committedRecord).toContain('dispatches: 1');
+    expect(committedRecord).toContain('active_ms: 100');
+
+    await writeFile(ledgerPath, [
+      { type: 'step_started', step: 'build' },
+      firstDispatch,
+      { type: 'step_started', step: 'build' },
+      laterDispatch,
+    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
+    const outs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((message: unknown) => {
+      outs.push(String(message));
+    });
+
+    expect(await runShippedRecord(SLUG, pr)).toBe(0);
+    expect((await git(['log', '--format=%s'])).split('\n').filter(
+      (subject) => subject === `shipped record: ${SLUG}`,
+    )).toHaveLength(2);
+    expect(outs.filter((line) => line.includes('✓ shipped record committed:'))).toHaveLength(1);
+    const refreshedRecord = await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8');
+    expect(refreshedRecord).toContain('dispatches: 2');
+    expect(refreshedRecord).toContain('active_ms: 300');
+
+    outs.length = 0;
+    expect(await runShippedRecord(SLUG, pr)).toBe(0);
+    expect((await git(['log', '--format=%s'])).split('\n').filter(
+      (subject) => subject === `shipped record: ${SLUG}`,
+    )).toHaveLength(2);
+    expect(outs.filter((line) => line.includes('✓ shipped record already committed:'))).toHaveLength(1);
+    expect(await git(['status', '--porcelain'])).toBe('');
+    const { stdout: committedBytes } = await execFile('git', [
+      'show',
+      `HEAD:.docs/shipped/${SLUG}.md`,
+    ], { cwd: repo });
+    expect(await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8')).toBe(
+      committedBytes,
+    );
+  });
+
+  it('commits once when HEAD has the resolved plan and stories but no shipped-record counterpart', async () => {
+    const errs: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((message: unknown) => {
+      errs.push(String(message));
+    });
+
+    expect(await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42')).toBe(0);
+
+    const recordPath = `.docs/shipped/${SLUG}.md`;
+    const { stdout: committedRecord } = await execFile('git', ['show', `HEAD:${recordPath}`], { cwd: repo });
+    expect((await git(['log', '--format=%s'])).split('\n').filter(
+      (subject) => subject === `shipped record: ${SLUG}`,
+    )).toHaveLength(1);
+    expect(committedRecord).toContain('## Cost');
+    expect(committedRecord).toContain('## Time');
+    expect(errs).toEqual([]);
+    expect(await git(['status', '--porcelain'])).toBe('');
+  });
+
+  it('commits once from an unborn branch when no committed counterpart can be read', async () => {
+    await rm(repo, { recursive: true, force: true });
+    repo = await mkdtemp(join(tmpdir(), 'daemon-ship-unborn-'));
+    await git(['init', '-q', '-b', BRANCH]);
+    await git(['config', 'user.email', 'test@example.com']);
+    await git(['config', 'user.name', 'Test']);
+    await writeSpec(SLUG);
+    // A first commit can include an already-staged spec, just as an ordinary
+    // finish commits only its record atop an implementation's staged work.
+    await git(['add', '.docs']);
+    const errs: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((message: unknown) => {
+      errs.push(String(message));
+    });
+
+    expect(await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42')).toBe(0);
+
+    expect(await git(['rev-list', '--count', 'HEAD'])).toBe('1');
+    expect(await git(['log', '-1', '--format=%s'])).toBe(`shipped record: ${SLUG}`);
+    expect(errs).toEqual([]);
+    expect(await git(['status', '--porcelain'])).toBe('');
+  });
+
+  it('commits a second record when accepted build-review risk evidence changes', async () => {
+    const pr = 'https://github.com/acme/repo/pull/42';
+    expect(await runShippedRecord(SLUG, pr)).toBe(0);
+    const accepted: BuildReviewDispositionRecord = {
+      version: 'v1',
+      feature: { version: 'v1', repository: repo, feature: SLUG },
+      finding: canonicalizeBuildReviewFindingIdentity({
+        rubric: 'testQuality',
+        contractVersion: 'v1',
+        concernKind: 'test-insensitive',
+        anchor: {
+          rubric: 'testQuality',
+          locus: {
+            path: 'test/integration/daemon-ship.integration.test.ts',
+            contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            display: 'accepted risk fixture',
+          },
+        },
+      })!,
+      sourceLapId: parseBuildReviewLapId('lap-1')!,
+      summary: 'accepted risk',
+      rationale: 'fixture proves substantive evidence commits',
+      operator: 'test',
+      acceptedAt: '2026-09-11T12:00:00.000Z',
+    };
+    vi.spyOn(BuildReviewDispositionStore.prototype, 'list').mockResolvedValue({ ok: true, records: [accepted] });
+    const errs: string[] = [];
+    vi.spyOn(console, 'error').mockImplementation((message: unknown) => {
+      errs.push(String(message));
+    });
+
+    expect(await runShippedRecord(SLUG, pr)).toBe(0);
+
+    const { stdout: committedRecord } = await execFile('git', [
+      'show', `HEAD:.docs/shipped/${SLUG}.md`,
+    ], { cwd: repo });
+    expect((await git(['log', '--format=%s'])).split('\n').filter(
+      (subject) => subject === `shipped record: ${SLUG}`,
+    )).toHaveLength(2);
+    expect(committedRecord).toContain('## Accepted build-review risk');
+    expect(committedRecord).toContain(`Finding: \`${accepted.finding.id}\``);
+    expect(errs).toEqual([]);
+    expect(await git(['status', '--porcelain'])).toBe('');
+  });
+
+  it('replaces the committed record when a rerun identifies a different PR', async () => {
+    const firstPr = 'https://github.com/acme/repo/pull/42';
+    const replacementPr = 'https://github.com/acme/repo/pull/43';
+    const ledgerPath = join(repo, '.pipeline/events.jsonl');
+    const firstDispatch = {
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      actualProvider: 'codex',
+      activeInterval: { startedAtMs: 0, durationMs: 100 },
+      tokenUsage: { input: 100, output: 20, cacheRead: 10, cacheCreation: 5, costUsd: 0.03 },
+    };
+    const laterDispatch = {
+      ...firstDispatch,
+      activeInterval: { startedAtMs: 100, durationMs: 200 },
+    };
+    await mkdir(join(repo, '.pipeline'), { recursive: true });
+    await writeFile(ledgerPath, [
+      { type: 'step_started', step: 'build' },
+      firstDispatch,
+    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
+
+    expect(await runShippedRecord(SLUG, firstPr)).toBe(0);
+
+    await writeFile(ledgerPath, [
+      { type: 'step_started', step: 'build' },
+      firstDispatch,
+      { type: 'step_started', step: 'build' },
+      laterDispatch,
+    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
+
+    expect(await runShippedRecord(SLUG, replacementPr)).toBe(0);
+    expect((await git(['log', '--format=%s'])).split('\n').filter(
+      (subject) => subject === `shipped record: ${SLUG}`,
+    )).toHaveLength(2);
+    const { stdout: committedRecord } = await execFile('git', [
+      'show',
+      `HEAD:.docs/shipped/${SLUG}.md`,
+    ], { cwd: repo });
+    expect(committedRecord).toContain(`pr: ${replacementPr}`);
+    expect(committedRecord).toContain('dispatches: 2');
+    expect(committedRecord).toContain('active_ms: 300');
   });
 
   it.each([

@@ -241,6 +241,23 @@ export async function dispatchShippedRecord(
       );
       return 1;
     }
+    // Only a complete byte-identical record is a no-op. Cost and Time are
+    // projections of the feature ledger, including the finish dispatch, so
+    // their current totals must be committed when they change.
+    const committed = await execa('git', ['show', `HEAD:${relPath}`], {
+      cwd,
+      reject: false,
+      stripFinalNewline: false,
+    }).catch(() => undefined);
+    if (
+      committed?.exitCode === 0
+      && committed.stdout === recordBody
+    ) {
+      await writeShippedRecord(join(cwd, relPath), committed.stdout);
+      console.log(`  ✓ shipped record already committed: ${relPath}`);
+      return 0;
+    }
+
     await writeShippedRecord(join(cwd, relPath), recordBody);
 
     await execa('git', ['add', relPath], { cwd });

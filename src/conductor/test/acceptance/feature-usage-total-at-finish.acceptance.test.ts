@@ -357,7 +357,7 @@ describe('acceptance: finish logs the whole-feature usage total', () => {
     expect(res.ok && res.value.finish).toBe('done');
   });
 
-  it('commits a refreshed Cost block after finish token usage is persisted', async () => {
+  it('commits the current Cost block when finish adds usage', async () => {
     await seedCommittedShippedRecord();
     const events = new ConductorEventEmitter();
     await runMeteredFinish(events, meteredShippingRunner(), fakeGit);
@@ -366,7 +366,7 @@ describe('acceptance: finish logs the whole-feature usage total', () => {
     expect(committedRecord).toMatch(/## Cost\ninput: 50\n/);
   });
 
-  it('verifies the implementation head before committing and pushing the optional Cost refresh', async () => {
+  it('verifies the implementation head before committing and pushing the final Cost refresh', async () => {
     await seedCommittedShippedRecord();
     const implementationHead = await seedPushedTrackingBranch();
     const trace: string[] = [];

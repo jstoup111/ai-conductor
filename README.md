@@ -60,6 +60,8 @@ claude                      # then run /bootstrap in the session
 
 For the preferred autonomous path, author a spec, merge its PR, then start the daemon. The daemon
 builds each merged spec in an isolated worktree, retains logs, and opens an implementation PR.
+At finish, its committed shipped record retains the current Cost and Time totals; only a completely
+unchanged record skips a duplicate commit.
 
 Each dispatch sets up shared project memory and reports its placement in the daemon log and, when
 enabled, OpenTelemetry. See [per-dispatch setup](docs/guides/running-the-daemon.md#per-dispatch-hook).
