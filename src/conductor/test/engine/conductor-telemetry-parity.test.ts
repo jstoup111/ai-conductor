@@ -185,6 +185,7 @@ async function runBuiltinGroup(input: {
   asBuiltRemediationEnabled?: boolean;
   durationByMember?: Partial<Record<StepName, number>>;
   shutdownDuringRun?: boolean;
+  authRecovery?: boolean;
 } = {}): Promise<BuiltinFixture> {
   const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-built-in-group-telemetry-'));
   directories.push(projectRoot);
@@ -225,6 +226,12 @@ async function runBuiltinGroup(input: {
 
   const calls: StepName[] = [];
   let boundaryChecks = 0;
+  if (input.authRecovery) {
+    vi.spyOn(
+      Conductor.prototype as unknown as { parkOnAuthFailure: () => Promise<unknown> },
+      'parkOnAuthFailure',
+    ).mockResolvedValue({ disposition: 'recovered' });
+  }
   let conductor: Conductor | undefined;
   conductor = new Conductor({
     projectRoot, stateFilePath, events, fromStep: VALIDATION_GROUP.members[0] as StepName, mode: 'auto', daemon: true,
@@ -644,6 +651,34 @@ describe('serial conductor telemetry parity', () => {
     }
     expect(fixture.spans.filter((span) => span.name === first || span.name === second)
       .every((span) => span.attributes['conductor.step.status'] === 'failed')).toBe(true);
+  });
+
+  it('closes the first auth scope before recovery replaces its member context', async () => {
+    const member = VALIDATION_GROUP.members[0] as StepName;
+    const fixture = await runBuiltinGroup({
+      authRecovery: true,
+      outcomes: {
+        [member]: [
+          {
+            success: false,
+            authFailure: true,
+            authentication: { provider: 'codex', source: 'oauth', state: 'expired' },
+          },
+          { success: true },
+        ],
+      },
+    });
+    const starts = fixture.events.filter((event): event is Extract<ConductorEvent, { type: 'step_started' }> =>
+      event.type === 'step_started' && event.step === member,
+    );
+    const refusal = fixture.ledger.find((event) => event.type === 'step_refused' && event.step === member);
+    const completion = fixture.ledger.find((event) => event.type === 'step_completed' && event.step === member);
+
+    expect(starts).toHaveLength(2);
+    expect(starts[0]?.executionContext).not.toEqual(starts[1]?.executionContext);
+    expect(refusal).toMatchObject({ executionContext: starts[0]?.executionContext, activeInterval: { durationMs: 10 } });
+    expect(completion).toMatchObject({ executionContext: starts[1]?.executionContext, activeInterval: { durationMs: 10 } });
+    expect(fixture.spans.filter((span) => span.name === member)).toHaveLength(2);
   });
 
   it('keeps mixed built-in member lifecycles independent of the group halt', async () => {

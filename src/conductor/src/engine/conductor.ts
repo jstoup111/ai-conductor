@@ -7302,6 +7302,16 @@ export class Conductor {
                   // be fabricated for queued/cancelled work, while branch retries
                   // retain this one context through their whole policy lifetime.
                   if (this.shutdownRequested) return makeSkippedOutcome();
+                  // Auth recovery redispatches only the affected member. Its
+                  // previous branch has already settled a no-verdict result
+                  // (and therefore frozen its member interval), so terminalize
+                  // that scope before replacing the name-keyed context.
+                  if (memberExecutionContexts.has(member.name)) {
+                    await closeMemberRefusal(
+                      member,
+                      `Validation group "${step.name}" auth recovery redispatched "${member.name}".`,
+                    );
+                  }
                   const executionContext: ExecutionContext = {
                     executionId: randomUUID(),
                     subject: { kind: 'lifecycle-step', step: member.name as StepName },
