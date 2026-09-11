@@ -134,6 +134,8 @@ import {
   isProcessed,
   hasWarned,
   markWarned,
+  markRekicked,
+  readRekicked,
   repairProcessed,
   makeFeatureRunnerDeps,
   makeWorkClaimLivenessPredicate,
@@ -1784,10 +1786,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
 
   const processedDir = join(projectRoot, '.daemon/processed');
 
-  // ADR-013 re-kick sweep: per-feature last-rekick SHA (FR-9) persists across the
-  // startup + live sweeps of ONE run. Real fs/git primitives; clearing a marker
-  // is the ONLY side effect — re-dispatch flows through PR #109's un-park path.
-  const lastRekickSha = new Map<string, string>();
+  // ADR-013 re-kick sweep: hydrate the durable per-feature last-rekick SHA
+  // guard before either the startup or live sweep can run. Clearing a marker
+  // is the ONLY dispatch-adjacent side effect — re-dispatch flows through PR
+  // #109's un-park path.
+  const lastRekickSha = await readRekicked(projectRoot);
   // Content-aware dedup (ADR Decision 3): the sweep consults the SHARED
   // ledger-or-shipped-record resolver before re-kicking, so a shipped
   // duplicate stays parked instead of burning an abort/clear/re-park cycle
@@ -1806,6 +1809,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // the canonical clear path; needs-human/unclassified HALTs are retained.
     readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)),
     lastRekickSha,
+    markRekicked: (slug, sha) => markRekicked(projectRoot, slug, sha),
     log,
     hasWarned: (slug) => hasWarned(projectRoot, slug),
     markWarned: (slug) => markWarned(projectRoot, slug),

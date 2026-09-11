@@ -66,6 +66,18 @@ describe('Task 6 — daemon-cli wires the real isOperatorParked dep into the re-
   });
 });
 
+describe('durable re-kick SHA wiring', () => {
+  it('hydrates the guard from the durable store and binds the recorder into rekickDeps', async () => {
+    const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
+
+    expect(source).toMatch(/import\s*\{[^}]*readRekicked[^}]*\}\s*from\s*['"]\.\/engine\/daemon-deps\.js['"]/);
+    expect(source).toMatch(/const lastRekickSha\s*=\s*await readRekicked\(projectRoot\)/);
+    const rekickDepsMatch = source.match(/const rekickDeps:\s*RekickSweepDeps\s*=\s*\{([\s\S]*?)\n\s*\};/);
+    expect(rekickDepsMatch, 'expected a `rekickDeps: RekickSweepDeps = { ... }` block').toBeTruthy();
+    expect(rekickDepsMatch![1]).toMatch(/markRekicked:\s*\(slug, sha\)\s*=>\s*markRekicked\(projectRoot, slug, sha\)/);
+  });
+});
+
 describe('Task 5 — daemon-cli wires the real readHaltClass dep into the re-kick sweep', () => {
   it('imports readHaltClass from halt-marker.ts and wires it into the rekickDeps object', async () => {
     const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
