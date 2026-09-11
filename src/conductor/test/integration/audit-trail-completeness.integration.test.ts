@@ -1,4 +1,4 @@
-// Covers: task:1, task:6
+// Covers: task:1, task:4, task:6
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Every executed step leaves positive evidence —
 // including non-verdict steps" (Story 3,
@@ -737,6 +737,28 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
       records.some((r) => r.origin === flakyStep && r.event === 'gate_pass'),
       'the eventually-successful step must leave positive evidence, not only its retry record',
     ).toBe(true);
+  });
+
+  it('records a rejected remediation category using the rejected field name', async () => {
+    const mod = await loadWriter();
+    const AuditTrailWriter = mod.AuditTrailWriter as new (root: string) => {
+      subscribe(emitter: ConductorEventEmitter): void;
+    };
+    new AuditTrailWriter(dir).subscribe(events);
+
+    await events.emit({
+      type: 'remediation_disposition_rejected',
+      gapId: 'gap-category',
+      disposition: 'unknown-category',
+      accepted: ['build', 'plan'],
+      field: 'category',
+    });
+
+    expect((await readRecords(dir)).at(-1)).toMatchObject({
+      origin: 'build',
+      event: 'remediation_disposition_rejected',
+      reason: 'gap-category: category "unknown-category" not in [build, plan]',
+    });
   });
 
   it('drift guard: every audit-owned event type is classified, and the writer honors that classification', async () => {
