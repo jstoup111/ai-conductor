@@ -171,6 +171,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   rebase_gate_preserved: 'not-audited-by-design',
   rebase_gate_invalidated: 'not-audited-by-design',
   rebase_conflict_halt: 'not-audited-by-design',
+  rebase_untracked_quarantined: 'not-audited-by-design',
   rebase_citation_residue: 'not-audited-by-design',
   rebase_resolution_attempt: 'not-audited-by-design',
   rebase_resolution_succeeded: 'not-audited-by-design',
@@ -571,6 +572,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     matchedPaths: ['src/a.ts'],
   },
   rebase_conflict_halt: { type: 'rebase_conflict_halt', reason: 'conflict', conflicts: ['a.ts'] },
+  rebase_untracked_quarantined: {
+    type: 'rebase_untracked_quarantined',
+    paths: ['generated.txt'],
+    directory: '.pipeline/rebase-untracked-quarantine',
+  },
   rebase_citation_residue: {
     type: 'rebase_citation_residue',
     residue: [{ sha: 'abc123', citingTaskIds: ['1'], reason: 'no patch-id match' }],

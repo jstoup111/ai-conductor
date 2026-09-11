@@ -21,7 +21,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdtemp, rm, writeFile, access, readFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, access, readFile, mkdir, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -86,6 +86,21 @@ async function buildConflictRepo(): Promise<{
   await g(['checkout', '-q', 'feat']);
 
   return { repo, g, gc };
+}
+
+async function buildUntrackedCollisionRepo(): Promise<{ repo: string; g: (args: string[]) => ReturnType<typeof execFile> }> {
+  const repo = await mkdtemp(join(tmpdir(), 'rebase-wiring-collision-'));
+  const g = (args: string[]) => execFile('git', args, { cwd: repo });
+  await initTestRepo(repo);
+  await writeFile(join(repo, 'a.ts'), 'initial\n'); await g(['add', '.']); await g(['commit', '-q', '-m', 'initial']);
+  await g(['checkout', '-q', '-b', 'feat']);
+  await writeFile(join(repo, 'a.ts'), 'feature\n'); await g(['commit', '-q', '-am', 'feature change']);
+  await g(['checkout', '-q', 'main']);
+  await writeFile(join(repo, 'generated.txt'), 'base generated\n'); await g(['add', 'generated.txt']); await g(['commit', '-q', '-m', 'base generated']);
+  await writeFile(join(repo, 'a.ts'), 'base\n'); await g(['commit', '-q', '-am', 'base conflict']);
+  await g(['checkout', '-q', 'feat']);
+  await writeFile(join(repo, 'generated.txt'), 'untracked generated\n');
+  return { repo, g };
 }
 
 // ── Wiring tests ──────────────────────────────────────────────────────────────
@@ -199,6 +214,29 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     // HALT file written (same as pre-resolution behavior)
     const haltExists = await access(join(repo, '.pipeline/HALT')).then(() => true, () => false);
     expect(haltExists).toBe(true);
+  });
+
+  it('finish-time untracked-collision refusal writes the never-started recovery note', async () => {
+    const collision = await buildUntrackedCollisionRepo();
+    const collisionState = join(collision.repo, 'conduct-state.json');
+    await seedPreRebaseState(collisionState);
+    const baselineCommit = (await collision.g(['rev-parse', 'HEAD'])).stdout.toString().trim();
+    await createProtectedArtifactSeal({ projectRoot: collision.repo, baselineCommit });
+    const hook = join(collision.repo, '.git/hooks/pre-rebase');
+    await writeFile(hook, `#!/bin/sh\nprintf '%s\\n' 'error: The following untracked working tree files would be overwritten by checkout:' >&2\nprintf '\\tgenerated.txt\\n' >&2\nprintf '%s\\n' 'Please move or remove them before you switch branches.' >&2\nexit 1\n`);
+    await chmod(hook, 0o755);
+    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true } satisfies StepRunResult) };
+    const conductor = new Conductor({
+      stateFilePath: collisionState, stepRunner: runner, events, projectRoot: collision.repo,
+      daemon: true, mode: 'auto', fromStep: 'rebase', config: { rebase_resolution_attempts: 0 },
+    });
+    try {
+      await conductor.run();
+      const halt = await readFile(join(collision.repo, '.pipeline/HALT'), 'utf8');
+      expect(halt).toContain('rebase did not start — parked for human recovery');
+      expect(halt).toContain('generated.txt');
+      expect(halt).toContain('No git rebase is in progress; do not run git rebase --continue.');
+    } finally { await rm(collision.repo, { recursive: true, force: true }); }
   });
 
   it('finish-time pre-rebase seal refusal bypasses conflict resolution and writes seal recovery', async () => {

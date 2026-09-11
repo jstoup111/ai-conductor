@@ -1,6 +1,6 @@
 import { execa } from 'execa';
-import { writeFile, readFile, access } from 'node:fs/promises';
-import { join, isAbsolute } from 'node:path';
+import { writeFile, readFile, access, mkdir, rename } from 'node:fs/promises';
+import { join, isAbsolute, relative, resolve, dirname } from 'node:path';
 import type { StepName } from '../types/index.js';
 import { writeVerdict, type GateVerdict } from './gate-verdicts.js';
 import { writeHaltMarker } from './halt-marker.js';
@@ -468,6 +468,105 @@ export async function rebaseStateActive(
   return false;
 }
 
+/** Git's fixed header for a refusal that happens before a rebase starts. */
+const UNTRACKED_OVERWRITE_HEADER =
+  'error: The following untracked working tree files would be overwritten by checkout:';
+const UNTRACKED_OVERWRITE_FOOTER = 'Please move or remove them';
+
+/** A gitignored, worktree-local home for files moved aside before retrying. */
+export const REBASE_UNTRACKED_QUARANTINE_DIR = '.pipeline/rebase-untracked-quarantine';
+
+/**
+ * Parse only Git's structured untracked-overwrite list. Similar failures (such
+ * as a dirty index or a detached HEAD) must never be treated as movable files.
+ */
+export function parseUntrackedOverwriteRefusal(stderr: string): string[] {
+  const lines = stderr.split(/\r?\n/);
+  const header = lines.findIndex((line) => line === UNTRACKED_OVERWRITE_HEADER);
+  if (header === -1) return [];
+
+  const paths: string[] = [];
+  for (const line of lines.slice(header + 1)) {
+    if (line.startsWith(UNTRACKED_OVERWRITE_FOOTER)) return paths;
+    if (!line.startsWith('\t')) return [];
+    const path = line.slice(1);
+    if (!path) return [];
+    paths.push(path);
+  }
+  return [];
+}
+
+function confinedWorktreePath(projectRoot: string, path: string): string | null {
+  if (!path || isAbsolute(path)) return null;
+  const root = resolve(projectRoot);
+  const candidate = resolve(root, path);
+  const fromRoot = relative(root, candidate);
+  if (!fromRoot || fromRoot === '..' || fromRoot.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) || isAbsolute(fromRoot)) {
+    return null;
+  }
+  return candidate;
+}
+
+/** Confirm every parser-produced name is still a confined, untracked worktree path. */
+export async function confirmUntrackedRebasePaths(
+  git: GitRunner,
+  projectRoot: string,
+  paths: string[],
+): Promise<string[]> {
+  for (const path of paths) {
+    const source = confinedWorktreePath(projectRoot, path);
+    if (!source) throw new Error(`refusing to quarantine unsafe rebase path: ${path}`);
+    try {
+      await access(source);
+    } catch {
+      throw new Error(`refusing to quarantine missing rebase path: ${path}`);
+    }
+    const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', path]);
+    if (status.exitCode !== 0 || status.stdout !== `?? ${path}\0`) {
+      throw new Error(`refusing to quarantine path Git does not report untracked: ${path}`);
+    }
+  }
+  return paths;
+}
+
+/**
+ * Move a fully confirmed path set aside without overwriting prior quarantine.
+ * Every source and destination is checked before the first rename.
+ */
+export async function moveRebaseUntrackedPathsToQuarantine(
+  projectRoot: string,
+  paths: string[],
+): Promise<string> {
+  const quarantine = join(projectRoot, REBASE_UNTRACKED_QUARANTINE_DIR);
+  const moves = paths.map((path) => {
+    const source = confinedWorktreePath(projectRoot, path);
+    if (!source) throw new Error(`refusing to quarantine unsafe rebase path: ${path}`);
+    return { path, source, destination: join(quarantine, path) };
+  });
+
+  for (const move of moves) {
+    try {
+      await access(move.source);
+    } catch {
+      throw new Error(`refusing to quarantine missing rebase path: ${move.path}`);
+    }
+    try {
+      await access(move.destination);
+      throw new Error(`refusing to overwrite quarantined rebase path: ${move.path}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+
+  for (const move of moves) {
+    await mkdir(dirname(move.destination), { recursive: true });
+  }
+  for (const move of moves) {
+    await rename(move.source, move.destination);
+  }
+  return quarantine;
+}
+
 // ── HALT (FR-8) ──────────────────────────────────────────────────────────────
 
 export type RebaseResumeShape = 'paused-rebase' | 'completed-rebase';
@@ -523,7 +622,12 @@ export async function writeSealHalt(
 
 // ── Outcome model ────────────────────────────────────────────────────────────
 
-export type RebaseOutcome =
+export interface RebaseQuarantine {
+  paths: string[];
+  directory: string;
+}
+
+type RebaseOutcomeKind =
   | {
       kind: 'noop';
       /** Complete rebase delta when the base advanced without touching code/test paths. */
@@ -551,7 +655,40 @@ export type RebaseOutcome =
       reason: string;
       /** A completed rebase failed a post-resolution acceptance guard. */
       resumeShape?: RebaseResumeShape;
+      /** Git refused before creating rebase state; `--continue` is invalid. */
+      startFailure?: boolean;
     };
+
+/** A quarantine applies to every outcome after an untracked-collision heal. */
+export type RebaseOutcome = RebaseOutcomeKind & { quarantine?: RebaseQuarantine };
+
+/**
+ * Select the human recovery note from the classified rebase outcome. A refusal
+ * before git created rebase state must never instruct the operator to continue
+ * a rebase that does not exist.
+ */
+export async function writeRebaseOutcomeHalt(
+  projectRoot: string,
+  outcome: Extract<RebaseOutcome, { kind: 'conflict_halt' }>,
+  events?: ConductorEventEmitter,
+): Promise<HaltMarkerWriteResult> {
+  if (!outcome.startFailure) {
+    return writeHalt(projectRoot, outcome.conflicts, outcome.reason, events, outcome.resumeShape);
+  }
+  const quarantine = outcome.quarantine
+    ? `\nQuarantined files: ${outcome.quarantine.paths.join(', ')}\nQuarantine directory: ${outcome.quarantine.directory}\n`
+    : '';
+  const note =
+    `rebase did not start — parked for human recovery\n` +
+    `${outcome.reason}\n` +
+    quarantine +
+    `\nRecovery procedure:\n` +
+    `  1. Review any quarantined files and restore only the content you still need.\n` +
+    `  2. Clear .pipeline/HALT and .pipeline/HALT.class.\n` +
+    `  3. Re-queue the feature for the daemon.\n\n` +
+    `No git rebase is in progress; do not run git rebase --continue.\n`;
+  return writeHaltMarker(projectRoot, note, 'needs-human', events);
+}
 
 /** A protected-artifact refusal raised before git starts a rebase. */
 export class ProtectedArtifactSealRejection extends Error {
@@ -771,7 +908,8 @@ export async function performRebase(
   // conflict" the operator can't resolve. Autostash stashes those changes, rebases,
   // and reapplies them — so a clean rebase still succeeds with a dirty tree. (A
   // genuine overlap makes the autostash pop conflict, still caught below.)
-  const rebase = await git(['rebase', '--autostash', base.ref]);
+  const rebaseArgs = ['rebase', '--autostash', base.ref];
+  const rebase = await git(rebaseArgs);
   if (rebase.exitCode === 0) {
     const outcome = await classifyClean(git, preTree, mergeBase);
     // Every clean rebase that reaches here rewrites commit shas (the parent
@@ -786,12 +924,57 @@ export async function performRebase(
   // Non-zero → conflicts (or another error). Inspect unmerged paths.
   const conflicts = await conflictedFiles(git);
   if (conflicts.length === 0) {
+    // Git can refuse before it creates rebase state when an untracked file
+    // would be overwritten. Heal only that exact, parser-confirmed refusal;
+    // all other zero-conflict failures remain a never-started human halt.
+    if (!(await rebaseStateActive(git, projectRoot))) {
+      const paths = parseUntrackedOverwriteRefusal(rebase.stderr);
+      if (paths.length > 0) {
+        let quarantine: RebaseQuarantine | undefined;
+        try {
+          const confirmed = await confirmUntrackedRebasePaths(git, projectRoot, paths);
+          const directory = await moveRebaseUntrackedPathsToQuarantine(projectRoot, confirmed);
+          quarantine = { paths: confirmed, directory };
+          const retry = await git(rebaseArgs);
+          if (retry.exitCode === 0) {
+            const outcome = await classifyClean(git, preTree, mergeBase);
+            await translateCompletedRebase();
+            return { ...outcome, quarantine };
+          }
+          const retryConflicts = await conflictedFiles(git);
+          if (retryConflicts.length > 0) {
+            return {
+              kind: 'conflict_halt',
+              conflicts: retryConflicts,
+              reason: 'rebase conflict requires human resolution',
+              quarantine,
+            };
+          }
+          return {
+            kind: 'conflict_halt',
+            conflicts: [],
+            reason: retry.stderr.trim() || 'rebase failed without reported conflicts',
+            startFailure: !(await rebaseStateActive(git, projectRoot)),
+            quarantine,
+          };
+        } catch (error) {
+          return {
+            kind: 'conflict_halt',
+            conflicts: [],
+            reason: `${rebase.stderr.trim() || 'rebase failed without reported conflicts'}\n${(error as Error).message}`,
+            startFailure: true,
+            ...(quarantine === undefined ? {} : { quarantine }),
+          };
+        }
+      }
+    }
     // No unmerged files but rebase failed — treat as a HALT-worthy error,
     // leaving the rebase in whatever state git left it.
     return {
       kind: 'conflict_halt',
       conflicts: [],
       reason: rebase.stderr.trim() || 'rebase failed without reported conflicts',
+      startFailure: !(await rebaseStateActive(git, projectRoot)),
     };
   }
 
@@ -1127,7 +1310,7 @@ export async function featureCommitsPreserved(
  * The helper is PURE and git-injected (no event emission, no writeHalt, no
  * config reads). Callers wire those as needed.
  */
-export async function resolveRebaseConflicts(
+async function resolveRebaseConflictsInner(
   git: GitRunner,
   projectRoot: string,
   conflictOutcome: RebaseOutcome,
@@ -1285,6 +1468,30 @@ export async function resolveRebaseConflicts(
 }
 
 /**
+ * Resolve a paused rebase while retaining any recovery record created before
+ * the conflict. Both the finish-time and autoresolve callers use this export,
+ * so quarantine metadata must survive every rebuilt outcome here.
+ */
+export async function resolveRebaseConflicts(
+  git: GitRunner,
+  projectRoot: string,
+  conflictOutcome: RebaseOutcome,
+  resolver: RebaseResolver,
+  cap: number,
+): Promise<RebaseOutcome> {
+  const resolved = await resolveRebaseConflictsInner(
+    git,
+    projectRoot,
+    conflictOutcome,
+    resolver,
+    cap,
+  );
+  return conflictOutcome.quarantine === undefined
+    ? resolved
+    : { ...resolved, quarantine: conflictOutcome.quarantine };
+}
+
+/**
  * Gated wrapper around {@link resolveRebaseConflicts}. This is the piece of the
  * daemon's rebase mechanism that BOTH `conductor.ts`'s finish-time `runRebaseStep`
  * and `daemon-rekick.ts`'s FR-12 play-forward `resumeRebaseFirst` must share so a
@@ -1343,7 +1550,10 @@ export async function runGatedRebaseResolution(opts: {
       /* best-effort */
     }
   }
-  return resolved;
+  // A pre-start collision may have been healed before this conflict paused the
+  // rebase. Resolution rebuilds its outcome to preserve the existing guards,
+  // so restore that durable recovery record on every resolved outcome kind.
+  return outcome.quarantine === undefined ? resolved : { ...resolved, quarantine: outcome.quarantine };
 }
 
 // ── Verdict + event wiring (consumed by the conductor) ───────────────────────
@@ -1638,6 +1848,13 @@ export async function emitRebaseEvent(
   outcome: RebaseOutcome,
 ): Promise<void> {
   try {
+    if (outcome.quarantine) {
+      await events.emit({
+        type: 'rebase_untracked_quarantined',
+        paths: outcome.quarantine.paths,
+        directory: outcome.quarantine.directory,
+      });
+    }
     switch (outcome.kind) {
       case 'noop':
         await events.emit(

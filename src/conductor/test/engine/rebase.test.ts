@@ -1,4 +1,4 @@
-// Covers: task:1, task:3
+// Covers: task:1, task:3, task:5
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -14,6 +14,7 @@ import {
   isCodeOrTestPath,
   filterCodeOrTestPaths,
   writeHalt,
+  writeRebaseOutcomeHalt,
   writeSealHalt,
   applyRebaseVerdicts,
   recordRebaseStepCompletion,
@@ -283,6 +284,7 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         kind: 'conflict_halt',
         conflicts: [],
         reason: rebaseStderr,
+        startFailure: true,
       });
       expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
     } finally {
@@ -315,6 +317,7 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         kind: 'conflict_halt',
         conflicts: [],
         reason: rebaseStderr,
+        startFailure: true,
       });
       expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
     } finally {
@@ -723,6 +726,36 @@ describe('engine/rebase — HALT (FR-8)', () => {
         `  3. rm .pipeline/HALT\n` +
         `  4. Re-queue the feature for the daemon.\n`,
     );
+  });
+
+  it('writes a never-started recovery note without a rebase-continue instruction', async () => {
+    await writeRebaseOutcomeHalt(dir, {
+      kind: 'conflict_halt',
+      conflicts: [],
+      reason: 'error: The following untracked working tree files would be overwritten by checkout:',
+      startFailure: true,
+      quarantine: { paths: ['generated.txt'], directory: '.pipeline/rebase-untracked-quarantine' },
+    });
+    const note = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+    expect(note).toContain('rebase did not start');
+    expect(note).toContain('generated.txt');
+    expect(note).toContain('Clear .pipeline/HALT and .pipeline/HALT.class');
+    expect(note).toContain('No git rebase is in progress');
+    expect(note).not.toContain('  2. git rebase --continue');
+  });
+
+  it('keeps the existing halt note byte-identical for paused and already-in-progress outcomes', async () => {
+    for (const outcome of [
+      { conflicts: ['src/conflict.ts'], reason: 'rebase conflict requires human resolution' },
+      { conflicts: [], reason: 'a rebase is already in progress; resolve it before starting another' },
+    ]) {
+      await writeHalt(dir, outcome.conflicts, outcome.reason);
+      const expected = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      await rm(join(dir, '.pipeline/HALT'), { force: true });
+      await rm(join(dir, '.pipeline/HALT.class'), { force: true });
+      await writeRebaseOutcomeHalt(dir, { kind: 'conflict_halt', ...outcome });
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(expected);
+    }
   });
 
   it('returns the marker write result for seal HALTs without an emitter', async () => {
@@ -1548,6 +1581,7 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
       'rebase_mergeable_skip',
       'rebase_changed',
       'rebase_conflict_halt',
+      'rebase_untracked_quarantined',
     ] as const) {
       events.on(t, (e) => {
         seen.push(e.type);
@@ -1570,6 +1604,34 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
       'rebase_conflict_halt',
     ]);
     expect(conflictHalt).toMatchObject({ step: 'rebase' });
+  });
+
+  it('reports a quarantine before its healed outcome', async () => {
+    const events = new ConductorEventEmitter();
+    const seen: Array<{ type: string; paths?: string[]; directory?: string }> = [];
+    for (const type of ['rebase_untracked_quarantined', 'rebase_changed', 'rebase_conflict_halt'] as const) {
+      events.on(type, (event) => {
+        seen.push(event.type === 'rebase_untracked_quarantined'
+          ? { type: event.type, paths: event.paths, directory: event.directory }
+          : { type: event.type });
+      });
+    }
+    const quarantine = {
+      paths: ['generated.txt', 'nested/generated.json'],
+      directory: '.pipeline/rebase-untracked-quarantine',
+    };
+
+    await emitRebaseEvent(events, {
+      kind: 'changed', changedCodePaths: ['generated.txt', 'nested/generated.json'], quarantine,
+    });
+    await emitRebaseEvent(events, {
+      kind: 'conflict_halt', conflicts: [], reason: 'still refused', startFailure: true, quarantine,
+    });
+
+    expect(seen).toEqual([
+      { type: 'rebase_untracked_quarantined', ...quarantine }, { type: 'rebase_changed' },
+      { type: 'rebase_untracked_quarantined', ...quarantine }, { type: 'rebase_conflict_halt' },
+    ]);
   });
 
   it('best-effort: emission failure does not throw', async () => {
