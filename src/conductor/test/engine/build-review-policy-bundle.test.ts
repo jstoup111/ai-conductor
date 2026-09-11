@@ -1,4 +1,4 @@
-// Covers: task:7, task:8
+// Covers: task:7, task:8, task:9
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
@@ -286,5 +286,69 @@ describe('engine/build-review-policy-bundle', () => {
       materialParent,
       /64 MiB/,
     );
+  });
+
+  it.each([
+    ['changed definition bytes', async (packageRoot: string) => {
+      await writeFile(join(packageRoot, 'SKILL.md'), '# Changed policy\n', 'utf8');
+    }],
+    ['changed resource bytes', async (packageRoot: string) => {
+      await writeFile(join(packageRoot, 'criteria', 'checks.md'), 'Changed criteria\n', 'utf8');
+    }],
+    ['an added member', async (packageRoot: string) => {
+      await writeFile(join(packageRoot, 'criteria', 'added.md'), 'Added after capture\n', 'utf8');
+    }],
+    ['a removed member', async (packageRoot: string) => {
+      await rm(join(packageRoot, 'criteria', 'unreferenced.bin'));
+    }],
+    ['a changed link target', async (packageRoot: string) => {
+      const linkPath = join(packageRoot, 'criteria', 'linked-checks.md');
+      await rm(linkPath);
+      await symlink('same-checks.md', linkPath);
+    }],
+  ])('rejects %s between source capture and final consistency check', async (_name, changeSource) => {
+    const sourceParent = await temporaryDirectory('build-review-policy-changing-source-');
+    const materialParent = await temporaryDirectory('build-review-policy-changing-material-');
+    const packageRoot = await policyPackage(sourceParent);
+    await writeFile(join(packageRoot, 'criteria', 'same-checks.md'), 'Check every changed boundary.\n', 'utf8');
+    await symlink('checks.md', join(packageRoot, 'criteria', 'linked-checks.md'));
+
+    await expectRejectedWithoutMaterial(
+      captureInstalledReviewPolicyBundle(installedSkill(packageRoot), {
+        materialParent,
+        captureBoundary: async (boundary) => {
+          if (boundary === 'source-captured') await changeSource(packageRoot);
+        },
+      }),
+      materialParent,
+      /changed during capture/,
+    );
+  });
+
+  it('removes only failed candidate material after a write failure and fresh-captures a later attempt', async () => {
+    const sourceParent = await temporaryDirectory('build-review-policy-write-failure-source-');
+    const materialParent = await temporaryDirectory('build-review-policy-write-failure-material-');
+    const packageRoot = await policyPackage(sourceParent);
+    const unrelatedMaterial = join(materialParent, 'unrelated-candidate');
+    await mkdir(unrelatedMaterial);
+    await writeFile(join(unrelatedMaterial, 'keep.txt'), 'preserve', 'utf8');
+
+    await expect(
+      captureInstalledReviewPolicyBundle(installedSkill(packageRoot), {
+        materialParent,
+        materialWriteFile: async (path, bytes) => {
+          if (path.endsWith('criteria/checks.md')) throw new Error('fixture write failure');
+          await writeFile(path, bytes);
+        },
+      }),
+    ).rejects.toThrow(/criteria\/checks\.md/);
+    expect(await readdir(materialParent)).toEqual(['unrelated-candidate']);
+
+    await writeFile(join(packageRoot, 'criteria', 'checks.md'), 'Fresh capture after failure\n', 'utf8');
+    const bundle = await captureInstalledReviewPolicyBundle(installedSkill(packageRoot), { materialParent });
+
+    expect(await readFile(join(bundle.materialPath, 'criteria', 'checks.md'), 'utf8'))
+      .toBe('Fresh capture after failure\n');
+    expect(await readFile(join(unrelatedMaterial, 'keep.txt'), 'utf8')).toBe('preserve');
   });
 });
