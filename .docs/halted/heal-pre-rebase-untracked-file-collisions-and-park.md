@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-11T10:41:31.823Z
 Slug: heal-pre-rebase-untracked-file-collisions-and-park
 Class: plan-gap
 Halting step: prd_audit
