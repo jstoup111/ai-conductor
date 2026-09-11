@@ -1,24 +1,25 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-11T13:37:26.335Z
+Status: halted
 Slug: one-transient-failure-in-a-validation-group-member
 Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-one-transient-failure-in-a-validation-group-member
-Head SHA: d2a089cc36957c986e7c879bba3d9c47ad9c9908
-Halted at: 2026-09-11T12:36:44.832Z
+Head SHA: 13fb5ee4326afddfe0e09d81512673c07caa151b
+Halted at: 2026-09-11T19:15:12.893Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-2 (adr-2026-07-10-validation-group-join decision 1)
+rebase completed — parked for human review
+feature commit(s) lost during resolution: chore: reseal rebased repair evidence boundary (ca509b8be0cf; empty commit diff)
 
-Blocking findings:
-AB-1 (REMEDIABLE; adr-2026-08-12-execution-lifecycle-completeness-for-timing decision 1): The no-verdict group persists `step_failed`; Conductor closes its private parallel key, but EventPersister and the timing rollup leave the persisted parallel execution open.
-AB-2 (DESIGN; adr-2026-07-10-validation-group-join decision 1): The retained-member FINISH recheck changes width-one serial exception semantics without an APPROVED ADR superseding the binding no-semantic-change clause.
+Resume procedure:
+  1. Review the completed rebase and restore any missing feature content.
+  2. Confirm the working tree is clean.
+  3. rm .pipeline/HALT
+  4. Re-queue the feature for the daemon.
 ```
