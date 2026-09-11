@@ -1,5 +1,5 @@
 /**
- * Covers: task:1, task:7, task:8
+ * Covers: task:1, task:4, task:7, task:8
  *
  * span-manager.test.ts — unit tests for SpanManager via OtelVisualizer.
  *
@@ -691,7 +691,36 @@ describe('Task 8: TokenUsage detail on step spans', () => {
 // ── T14: Span events — retries / gate verdicts / kickbacks ───────────────────
 
 describe('T14: span events for retries / gate verdicts / kickbacks', () => {
-  it('step_retry for the active step adds a span event on the open step span', async () => {
+  it('step_retry with a progress allowance adds both allowance fields to the retry event', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({
+      type: 'step_retry',
+      step: 'explore',
+      attempt: 2,
+      maxAttempts: 3,
+      reason: 'flaky',
+      progressAttempt: 1,
+      progressAttemptCeiling: 5,
+    });
+    await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'explore')!;
+    const retryEvent = span.events.find((e) => e.name === 'retry');
+    expect(retryEvent?.attributes).toEqual({
+      attempt: 2,
+      maxAttempts: 3,
+      reason: 'flaky',
+      progressAttempt: 1,
+      progressAttemptCeiling: 5,
+    });
+  });
+
+  it('step_retry without a progress allowance omits both allowance fields from the retry event', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
@@ -703,9 +732,11 @@ describe('T14: span events for retries / gate verdicts / kickbacks', () => {
 
     const span = spanExporter.getFinishedSpans().find((s) => s.name === 'explore')!;
     const retryEvent = span.events.find((e) => e.name === 'retry');
-    expect(retryEvent).toBeDefined();
-    expect(retryEvent!.attributes?.['attempt']).toBe(2);
-    expect(retryEvent!.attributes?.['reason']).toBe('flaky');
+    expect(retryEvent?.attributes).toEqual({
+      attempt: 2,
+      maxAttempts: 3,
+      reason: 'flaky',
+    });
   });
 
   it('gate_verdict for the active step adds a span event on the step span', async () => {

@@ -236,11 +236,16 @@ export class SpanManager {
       return;
     }
     state.retryCount++;
-    state.span.addEvent('retry', {
+    const attributes: Record<string, string | number> = {
       attempt: event.attempt,
       maxAttempts: event.maxAttempts,
       reason: event.reason,
-    });
+    };
+    if (event.progressAttempt !== undefined && event.progressAttemptCeiling !== undefined) {
+      attributes.progressAttempt = event.progressAttempt;
+      attributes.progressAttemptCeiling = event.progressAttemptCeiling;
+    }
+    state.span.addEvent('retry', attributes);
   }
 
   onGateVerdict(event: Extract<ConductorEvent, { type: 'gate_verdict' }>): void {
