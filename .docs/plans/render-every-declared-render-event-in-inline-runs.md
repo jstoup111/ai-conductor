@@ -1,9 +1,22 @@
 # Implementation Plan: Render every declared render event in inline runs
 
+> **Amended 2026-09-10 by operator:** Expand the implementation to restore the
+> approved ADR-003 topology. Rewrite the inline renderer as the terminal
+> `UIRenderer` implementation (`handle` plus lifecycle `stop`), register it as
+> `ui_renderer:terminal`, and make `UISubscriber` internal generic fan-out that
+> subscribes once and dispatches each event to the selected renderer without the
+> callback/class forwarding partition. Production composition in `index.ts`,
+> `cli-builtins.ts`, and `plugin-loader.ts` must select renderer plugins and then
+> construct the subscriber wrapper. Preserve the feature's derived
+> `renderedEventTypes()` subscription, non-renderable dashboard refresh set,
+> satisfied-gate silence, dedicated loop lines, generic fallback, forwarded
+> feature suppression, renderer-error isolation, and exactly-once output.
+> Update the existing renderer/subscriber/plugin tests to prove those boundaries.
+
 **Date:** 2026-09-06
 **Stories:** .docs/stories/render-every-declared-render-event-in-inline-runs.md
 **Track:** technical
-**Complexity:** S
+**Complexity:** M (operator-amended from S for renderer-plugin unification)
 **Conflict check:** Small-tier formal check skipped; the scoped intent consumes the existing event bus and the existing sink registry without adding a union member, a sink declaration, or a second telemetry channel, so it cannot contradict an in-flight declaration change.
 
 ## Summary

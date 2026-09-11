@@ -241,6 +241,10 @@ Passing both `--auto` and `--interactive` prints `Error: --auto and --interactiv
 exclusive` and exits 1. Passing `--auto` alone prints its daemon-directed deprecation notice and
 exits 1.
 
+Inline output includes every event the sink registry declares renderable. Halts, kickbacks,
+unsatisfied gate verdicts, and gate-loop convergence have dedicated lines; other renderable events
+are summarized by type.
+
 ### Auto-resume
 
 When a feature description is given and none of `--resume`, `--fresh`, or `--from` is

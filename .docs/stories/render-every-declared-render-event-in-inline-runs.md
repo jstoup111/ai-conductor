@@ -8,6 +8,12 @@ Tier: S
 
 Approved by the operator on 2026-09-06 (delegated). Scope is the inline terminal subscriber's subscription and forwarding, and the inline dashboard renderer's event coverage. Renderer unification, daemon forwarding, and sink declaration changes remain outside this slice.
 
+> **Amended 2026-09-10 by operator:** Renderer unification is now in scope and
+> must comply with ADR-003. `UIRenderer` is the sole plugin contract;
+> `UISubscriber` is internal lifecycle/fan-out machinery. The production inline
+> path must use one terminal `UIRenderer` for dashboard, dedicated, and fallback
+> event rendering, with no callback/class ownership partition or duplicate line.
+
 ## Story 1: An inline operator sees why the run stopped
 
 As an operator running the pipeline in the foreground, I want halts, kickbacks, unsatisfied gates and convergence to appear in my terminal, so that a run that stops explains itself instead of appearing to hang.

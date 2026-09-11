@@ -18,17 +18,15 @@ describe('JsonStdoutSubscriber', () => {
     stdoutWriteSpy = spyOnStdoutWrite();
   });
 
-  afterEach(() => {
-    subscriber.stop();
+  afterEach(async () => {
+    await subscriber.stop();
     stdoutWriteSpy.mockRestore();
   });
 
-  describe('Task 2 & 3: handle() writes JSON line to stdout', () => {
-    it('writes a newline-delimited JSON line when handle() called after start()', () => {
-      subscriber.start();
-
+  describe('UIRenderer behavior: handle() writes JSON line to stdout', () => {
+    it('writes a newline-delimited JSON line for every handled event', async () => {
       const event: ConductorEvent = { type: 'step_started', step: 'explore', index: 0 };
-      subscriber.handle(event);
+      await subscriber.handle(event);
 
       expect(stdoutWriteSpy).toHaveBeenCalledOnce();
       const written = stdoutWriteSpy.mock.calls[0][0] as string;
@@ -40,12 +38,10 @@ describe('JsonStdoutSubscriber', () => {
       expect(parsed.index).toBe(0);
     });
 
-    it('includes a ts field with ISO timestamp', () => {
-      subscriber.start();
-
+    it('includes a ts field with ISO timestamp', async () => {
       const before = new Date().toISOString();
       const event: ConductorEvent = { type: 'feature_complete' };
-      subscriber.handle(event);
+      await subscriber.handle(event);
       const after = new Date().toISOString();
 
       const written = stdoutWriteSpy.mock.calls[0][0] as string;
@@ -55,16 +51,14 @@ describe('JsonStdoutSubscriber', () => {
       expect(parsed.ts <= after).toBe(true);
     });
 
-    it('preserves all original event fields alongside ts', () => {
-      subscriber.start();
-
+    it('preserves all original event fields alongside ts', async () => {
       const event: ConductorEvent = {
         type: 'step_failed',
         step: 'build',
         error: 'tsc error',
         retryCount: 2,
       };
-      subscriber.handle(event);
+      await subscriber.handle(event);
 
       const written = stdoutWriteSpy.mock.calls[0][0] as string;
       const parsed = JSON.parse(written.trimEnd());
@@ -76,43 +70,39 @@ describe('JsonStdoutSubscriber', () => {
     });
   });
 
-  describe('Task 4: handle() before start() is a no-op', () => {
-    it('does not write to stdout when handle() called before start()', () => {
+  describe('UIRenderer behavior without lifecycle gating', () => {
+    it('writes to stdout without a start lifecycle method', async () => {
       const event: ConductorEvent = { type: 'step_started', step: 'explore', index: 0 };
-      subscriber.handle(event);
+      await subscriber.handle(event);
 
-      expect(stdoutWriteSpy).not.toHaveBeenCalled();
+      expect(stdoutWriteSpy).toHaveBeenCalledOnce();
     });
 
-    it('does not throw when handle() called before start()', () => {
+    it('does not throw when handle() is called directly', async () => {
       const event: ConductorEvent = { type: 'feature_complete' };
-      expect(() => subscriber.handle(event)).not.toThrow();
+      await expect(subscriber.handle(event)).resolves.toBeUndefined();
     });
   });
 
-  describe('Task 4: stop() prevents further output', () => {
-    it('does not write after stop()', () => {
-      subscriber.start();
-      subscriber.stop();
-
+  describe('UIRenderer stop()', () => {
+    it('is awaitable and does not gate later handle calls', async () => {
+      await subscriber.stop();
       const event: ConductorEvent = { type: 'step_started', step: 'explore', index: 0 };
-      subscriber.handle(event);
+      await subscriber.handle(event);
 
-      expect(stdoutWriteSpy).not.toHaveBeenCalled();
+      expect(stdoutWriteSpy).toHaveBeenCalledOnce();
     });
   });
 
   describe('Task 9: renderer_error event is handled without crash', () => {
-    it('writes renderer_error event as JSON line without throwing', () => {
-      subscriber.start();
-
+    it('writes renderer_error event as JSON line without throwing', async () => {
       const event: ConductorEvent = {
         type: 'renderer_error',
         rendererName: 'terminal',
         error: 'render crashed',
       };
 
-      expect(() => subscriber.handle(event)).not.toThrow();
+      await expect(subscriber.handle(event)).resolves.toBeUndefined();
       expect(stdoutWriteSpy).toHaveBeenCalledOnce();
       const written = stdoutWriteSpy.mock.calls[0][0] as string;
       const parsed = JSON.parse(written.trimEnd());
@@ -122,11 +112,9 @@ describe('JsonStdoutSubscriber', () => {
     });
   });
 
-  it('renders stale test-suite verification details without declared environment values', () => {
-    subscriber.start();
-
+  it('renders stale test-suite verification details without declared environment values', async () => {
     const declaredEnvironment = 'API_TOKEN=never-expose-this-value';
-    subscriber.handle({
+    await subscriber.handle({
       type: 'test_suite_verification',
       freshness: { status: 'STALE', reason: 'environment_changed' },
       declaredEnvironment,

@@ -1,5 +1,5 @@
 import type { ConductorEvent } from '../../src/conductor/src/types/index.js';
-import type { UISubscriber } from '../../src/conductor/src/ui/types.js';
+import type { UIRenderer } from '../../src/conductor/src/ui/types.js';
 
 /**
  * JsonStdoutSubscriber — Feature 3.2
@@ -12,19 +12,12 @@ import type { UISubscriber } from '../../src/conductor/src/ui/types.js';
  * Design: handle() is a no-op (silent) before start() and after stop().
  * This matches the TerminalSubscriber contract for safe lifecycle management.
  */
-export class JsonStdoutSubscriber implements UISubscriber {
-  private started = false;
-
-  start(): void {
-    this.started = true;
+export class JsonStdoutSubscriber implements UIRenderer {
+  readonly name = 'json-stdout';
+  async stop(): Promise<void> {
   }
 
-  stop(): void {
-    this.started = false;
-  }
-
-  handle(event: ConductorEvent): void {
-    if (!this.started) return;
+  async handle(event: ConductorEvent): Promise<void> {
     const output =
       event.type === 'test_suite_verification'
         ? {

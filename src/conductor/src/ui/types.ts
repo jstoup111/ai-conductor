@@ -15,13 +15,15 @@ import type {
 } from '../engine/conductor.js';
 
 export interface UIRenderer {
+  /** Stable diagnostic label used when the subscriber reports renderer_error. */
+  name?: string;
   handle(event: ConductorEvent): Promise<void>;
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 export interface UISubscriber {
-  start(): void;
-  stop(): void;
+  start(renderers: UIRenderer[]): void;
+  stop(): Promise<void>;
 }
 
 export type UIEventHandler = (event: ConductorEvent) => void | Promise<void>;

@@ -18,7 +18,7 @@ import { LocalMemoryProvider } from './local-memory-provider.js';
 import { resolveOtelConfig } from './otel/otel-config.js';
 import { createOtelVisualizer } from './otel/create-otel-visualizer.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
-import type { UIEventHandler } from '../ui/subscriber.js';
+import type { UIEventHandler } from '../ui/types.js';
 
 /**
  * Load and instantiate a plugin from its manifest and entrypoint.
@@ -197,19 +197,26 @@ export async function discoverPlugins(
 }
 
 /**
- * Registers built-in plugins (ClaudeProvider, CodexProvider, TerminalSubscriber, TerminalRenderer) into the registry.
+ * Registers built-in plugins (ClaudeProvider, CodexProvider, TerminalRenderer) into the registry.
  * Task 11: ClaudeProvider registers as llm_provider:claude
- * Task 12: TerminalSubscriber registers as ui_renderer:terminal (lifecycle wrapper)
- * Feature 1.2 T11: TerminalRenderer also registers as ui_renderer:terminal_renderer (UIRenderer interface)
+ * TerminalRenderer registers as ui_renderer:terminal; the subscriber is internal lifecycle infrastructure.
  * @returns TerminalSubscriber instance so caller can call start()/stop()
  */
 export function registerBuiltins(
   registry: PluginRegistry,
   events: ConductorEventEmitter,
-  renderEvent: UIEventHandler,
-  rendererOpts?: TerminalRendererOptions,
-  codexDoctorTimeoutSeconds = 10,
+  rendererOptsOrLegacyCallback?: TerminalRendererOptions | UIEventHandler,
+  legacyRendererOptsOrTimeout?: TerminalRendererOptions | number,
+  timeout = 10,
 ): TerminalSubscriber {
+  // Compatibility for callers compiled before ADR-003. The callback is ignored:
+  // subscriber fan-out only receives UIRenderers through start().
+  const rendererOpts = typeof rendererOptsOrLegacyCallback === 'function'
+    ? legacyRendererOptsOrTimeout as TerminalRendererOptions | undefined
+    : rendererOptsOrLegacyCallback;
+  const codexDoctorTimeoutSeconds = typeof legacyRendererOptsOrTimeout === 'number'
+    ? legacyRendererOptsOrTimeout
+    : timeout;
   const codexDoctorTimeoutMs = codexDoctorTimeoutSeconds * 1_000;
   if (!Number.isFinite(codexDoctorTimeoutMs) || codexDoctorTimeoutMs <= 0) {
     throw new Error('codex_doctor_timeout_seconds must be a finite positive number representable in milliseconds');
@@ -223,16 +230,8 @@ export function registerBuiltins(
     new CodexProvider(undefined, undefined, undefined, undefined, codexDoctorTimeoutMs),
   );
 
-  // Feature 1.2 T11: Also register TerminalRenderer (UIRenderer interface) if options provided
-  const terminalRenderer = rendererOpts ? new TerminalRenderer(rendererOpts) : undefined;
-  if (terminalRenderer) {
-    registry.register('ui_renderer', 'terminal_renderer', terminalRenderer);
-  }
-
-  // Task 12: Register TerminalSubscriber (lifecycle wrapper — wires event emitter to render callback).
-  // Halt-marker failures additionally reach the production TerminalRenderer sink.
-  const subscriber = new TerminalSubscriber(events, renderEvent, terminalRenderer);
-  registry.register('ui_renderer', 'terminal', subscriber);
+  if (rendererOpts) registry.register('ui_renderer', 'terminal', new TerminalRenderer(rendererOpts));
+  const subscriber = new TerminalSubscriber(events);
 
   // adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration / Task A3: Register built-in local memory provider (C1 — real provider, not null)
   registry.register('memory_provider', 'local', LocalMemoryProvider);

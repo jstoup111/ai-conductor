@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { Writable } from 'node:stream';
-import { createRenderer } from '../../src/ui/create-renderer.js';
+import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
 import { createLiveRegion } from '../../src/ui/live-region.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductorEvent, ConductState } from '../../src/types/index.js';
@@ -23,13 +23,13 @@ function makeRenderer() {
   const state: ConductState = { complexity_tier: 'L' };
   const readStateMock = vi.fn(async () => ({ ok: true as const, value: state }));
   const stream = new CaptureStream();
-  const renderer = createRenderer({
+  const terminal = new TerminalRenderer({
     stateFilePath: '/tmp/test-state.json',
     steps: ALL_STEPS,
     readStateFn: readStateMock,
     liveRegion: createLiveRegion({ stream, forceTTY: false }),
   });
-  return { renderer, stream };
+  return { renderer: terminal.handle.bind(terminal), stream };
 }
 
 describe('T23 — terminal renderer: when_skip event', () => {

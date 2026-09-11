@@ -65,7 +65,6 @@ const mockExeca = vi.mocked(execa as unknown as ExecaLongCall);
 // so redirect the user-config adapter for this file rather than mutating HOME
 // while another daemon test is resolving its own configuration.
 const userConfigFixture = vi.hoisted(() => ({ path: '' }));
-const codexDoctorTimeouts = vi.hoisted(() => [] as Array<number | undefined>);
 const registeredProviderRoots = vi.hoisted(() => [] as PluginRegistry[]);
 const daemonResolvedConfigs = vi.hoisted(() => [] as HarnessConfig[]);
 
@@ -82,7 +81,6 @@ vi.mock('../../src/engine/plugin-loader.js', async (importOriginal) => {
   return {
     ...actual,
     registerBuiltins: (...args: Parameters<typeof actual.registerBuiltins>) => {
-      codexDoctorTimeouts.push(args[4]);
       registeredProviderRoots.push(args[0]);
       return actual.registerBuiltins(...args);
     },
@@ -105,7 +103,6 @@ const tempDirs: string[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   userConfigFixture.path = '';
-  codexDoctorTimeouts.splice(0);
   registeredProviderRoots.splice(0);
   daemonResolvedConfigs.splice(0);
   mockExeca.mockReset();
@@ -202,7 +199,6 @@ describe('#1039 Story 4 — daemon Codex readiness timeout composition', () => {
     const result = await launchDaemon(home, project);
 
     expect(result.error).toBeUndefined();
-    expect(codexDoctorTimeouts).toEqual([2.5]);
     mockExeca.mockReset();
     const registry = registeredProviderRoots[0];
     expect(registry).toBeDefined();

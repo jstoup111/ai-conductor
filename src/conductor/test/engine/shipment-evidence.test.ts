@@ -517,7 +517,12 @@ describe('evaluateShipmentEvidence', () => {
     await execFile('git', ['add', '.'], { cwd: repoDir });
     await execFile('git', ['commit', '-m', 'test: add shipment plan'], { cwd: repoDir });
 
-    const remote = join(repoDir, 'origin.git');
+    // Keep the bare remote outside the checkout whose state this table asserts
+    // stays unchanged. Git may repack a bare repository after push, which is
+    // unrelated to the evaluator's read-only contract.
+    const remoteDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-origin-'));
+    scratchDirs.push(remoteDir);
+    const remote = join(remoteDir, 'origin.git');
     await execFile('git', ['init', '--bare', '--initial-branch=main', remote], { cwd: repoDir });
     await execFile('git', ['remote', 'add', 'origin', remote], { cwd: repoDir });
     await execFile('git', ['push', '-u', 'origin', 'main'], { cwd: repoDir });

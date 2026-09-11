@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Writable } from 'node:stream';
-import { createRenderer } from '../src/ui/create-renderer.js';
+import { TerminalRenderer } from '../src/ui/terminal-renderer.js';
 import { createLiveRegion } from '../src/ui/live-region.js';
 import type { ConductorEvent, ConductState } from '../src/types/index.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
@@ -15,6 +15,11 @@ class CaptureStream extends Writable {
     return this.chunks.join('');
   }
 }
+
+const createRenderer = (opts: ConstructorParameters<typeof TerminalRenderer>[0]) => {
+  const terminal = new TerminalRenderer(opts);
+  return terminal.handle.bind(terminal);
+};
 
 describe('createRenderer — build progress/no-progress/stall', () => {
   let readStateMock: (path: string) => Promise<{ ok: true; value: ConductState }>;
@@ -34,13 +39,14 @@ describe('createRenderer — build progress/no-progress/stall', () => {
     readStateMock = vi.fn(async () => ({ ok: true as const, value: state }));
     stream = new CaptureStream();
 
-    renderer = createRenderer({
+    const terminal = new TerminalRenderer({
       stateFilePath: '/tmp/test-state.json',
       featureDesc: 'Add login',
       steps: ALL_STEPS,
       readStateFn: readStateMock,
       liveRegion: createLiveRegion({ stream, forceTTY: false }),
     });
+    renderer = terminal.handle.bind(terminal);
   });
 
   it('renders a human-readable line for build_progress with task counts', async () => {

@@ -41,6 +41,7 @@ import { PluginRegistry } from './engine/plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
+import type { UIRenderer } from './ui/types.js';
 import { ALL_STEPS } from './engine/steps.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
@@ -1125,21 +1126,30 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     projectRoot,
   };
   const globalSubscriberLog = createOwnershipAwareDaemonLogger(log);
-  const subscriber = registerBuiltins(registry, events, (event) => {
-    // Events forwarded from a feature-scoped bus (see ForwardingEventEmitter)
-    // are already rendered, tagged, by that feature's own listeners
-    // (beginFeatureRun below) — render them here too and every one of the 19
-    // TerminalSubscriber event types would double-print, once tagged and once
-    // untagged.
-    if (isForwardedFromFeature(event)) return;
-    renderDaemonEvent(event, globalSubscriberLog);
-  }, rendererOpts, config?.codex_doctor_timeout_seconds);
+  const subscriber = registerBuiltins(
+    registry,
+    events,
+    rendererOpts,
+    config?.codex_doctor_timeout_seconds,
+  );
   registry.markInitialized();
   validateRegisteredProviderSelections({
     config: config ?? {},
     registeredProviders: registry.list('llm_provider'),
   });
-  subscriber.start();
+  const daemonLogRenderer: UIRenderer = {
+    name: 'daemon-log',
+    async handle(event) {
+      // Events forwarded from a feature-scoped bus (see ForwardingEventEmitter)
+      // are already rendered, tagged, by that feature's own listeners
+      // (beginFeatureRun below). Rendering them here would double-print them,
+      // once tagged and once untagged.
+      if (isForwardedFromFeature(event)) return;
+      renderDaemonEvent(event, globalSubscriberLog);
+    },
+    async stop() {},
+  };
+  subscriber.start([daemonLogRenderer]);
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
   const createProviderExecution = (
     eventTarget = events,
@@ -2544,7 +2554,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     },
   );
 
-  subscriber.stop();
+  await subscriber.stop();
   await daemonOtel?.stop();
   daemonEventPersistence.stop();
   // A finite daemon invocation (including test/CLI bounded runs) has no

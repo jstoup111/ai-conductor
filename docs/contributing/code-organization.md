@@ -51,7 +51,7 @@ Static-analysis configuration sits at two levels. Anything needing the TypeScrip
 | `engine/` | 238 | The state machine, step catalogue, gate loop, daemon, composer-loop implementation, config resolution, self-host guardrails — essentially all domain logic. |
 | `execution/` | 6 | The third-party process boundary: LLM provider adapters and subprocess/session management. |
 | `types/` | 6 | The shared type surface: `StepName`, `ConductState`, `ConductorEvent`, `HarnessConfig`, plugin kinds. |
-| `ui/` | 11 | Event emitter, subscribers, terminal renderers, dashboard snapshot/text, notifications, prompt host. |
+| `ui/` | 10 | Event emitter, subscriber fan-out, terminal renderer, dashboard snapshot/text, notifications, prompt host. |
 | `tools/` | 3 | Build-time code generators invoked by `bin/` wrappers. Nothing in the runtime imports them. |
 
 ### engine/
@@ -120,7 +120,7 @@ Tests must fake this seam rather than cross it. See [testing](testing.md).
 ### ui/
 
 `events.ts` (`ConductorEventEmitter`), `types.ts` (`UIRenderer`, `UISubscriber`, `StepSnapshot`,
-`DashboardSnapshot`, `ViewMode`, `UIPromptHost`), `create-renderer.ts`, `terminal-renderer.ts`,
+`DashboardSnapshot`, `ViewMode`, `UIPromptHost`), `terminal-renderer.ts`,
 `subscriber.ts`, `dispatch.ts`, `dashboard-snapshot.ts`, `dashboard-text.ts`, `live-region.ts`,
 `notifications.ts`, and `terminal/prompt-host.ts` — the only file under `ui/terminal/`.
 
@@ -181,7 +181,7 @@ Intended layering is `types ← execution ← engine ← ui ← entry points`. M
 > **Known limitation.** `engine/` and `ui/` import each other, so the layering above is not enforceable
 > as a one-way rule. Engine-side value imports: `engine/conductor.ts:61` and `engine/event-persister.ts:4`
 > (`ConductorEventEmitter`), `engine/plugin-loader.ts:8-9` (`TerminalSubscriber`, `TerminalRenderer`).
-> UI-side value imports: `ui/terminal-renderer.ts:8,10` and `ui/create-renderer.ts:8,10`
+> UI-side value imports: `ui/terminal-renderer.ts:8,10`
 > (`getArtifactStatus`, `STEP_ARTIFACT_GLOBS`, `formatProgressDelta`), `ui/terminal/prompt-host.ts:14`
 > (`getRecoveryOptions`). Moving a symbol between the two layers can therefore create a runtime
 > initialization cycle that the type checker will not flag. Tracked in
