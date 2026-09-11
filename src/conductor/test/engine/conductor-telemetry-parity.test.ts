@@ -1,4 +1,4 @@
-// Covers: task:12, task:13, task:14
+// Covers: task:12, task:13, task:14, task:15
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -71,6 +71,7 @@ async function runSerial(input: {
   outcomes: Array<Awaited<ReturnType<StepRunner['run']>>>;
   telemetry?: TelemetryMode;
   widthOneGroup?: boolean;
+  shutdownDuringRun?: boolean;
 }): Promise<SerialFixture> {
   const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-telemetry-parity-'));
   directories.push(projectRoot);
@@ -118,6 +119,7 @@ async function runSerial(input: {
 
   let calls = 0;
   let boundaryChecks = 0;
+  let conductor: Conductor | undefined;
   const run = vi.fn<StepRunner['run']>(async (step, _state, options) => {
     expect(step).toBe(serialStep);
     const outcome = input.outcomes[calls++]!;
@@ -128,9 +130,10 @@ async function runSerial(input: {
       fallbackReason: input.widthOneGroup ? 'only one eligible member remained' : 'controlled fallback',
       invoked: true, outcome: outcome.success ? 'success' : 'failure',
     });
+    if (input.shutdownDuringRun) await conductor!.closeOpenExecutionsForShutdown();
     return outcome;
   });
-  const conductor = new Conductor({
+  conductor = new Conductor({
     projectRoot, stateFilePath, stepRunner: { run }, events, fromStep: serialStep, mode: 'auto', daemon: true, maxRetries: 2,
     verifyArtifacts: false, featureSlug: 'serial-telemetry-parity', operatorParkBoundary: async () => ++boundaryChecks > 1,
     ...(input.widthOneGroup ? {
@@ -444,6 +447,19 @@ describe('serial conductor telemetry parity', () => {
     expect(disabled.spans).toHaveLength(0);
     expect(disabled.metrics.getMetrics()).toHaveLength(0);
     expect(failing.warnings).toHaveLength(1);
+  });
+
+  it('balances a deferred serial shutdown once and suppresses its late success', async () => {
+    const fixture = await runSerial({ outcomes: [{ success: true }], shutdownDuringRun: true });
+    const terminals = fixture.ledger.filter((event) => event.type === 'step_failed' || event.type === 'step_completed');
+
+    expect(fixture.calls).toBe(1);
+    expect(terminals).toEqual([expect.objectContaining({
+      type: 'step_failed', step: 'memory', activeInterval: { startedAtMs: 1_000, durationMs: 10 },
+    })]);
+    expect(serialStepSpan(fixture)).toHaveLength(1);
+    expect(serialStepSpan(fixture)[0]?.attributes['conductor.step.status']).toBe('failed');
+    expect(metricPoints(fixture.metrics, 'conductor.step.duration')).toHaveLength(1);
   });
 
   it('derives every wider built-in member from the registry and gives each an execution scope', async () => {

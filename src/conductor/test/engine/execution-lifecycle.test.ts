@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:15
 import { describe, expect, it } from 'vitest';
 import { ExecutionLifecycle } from '../../src/engine/execution-lifecycle.js';
 import type { ConductorEvent, ExecutionContext } from '../../src/types/events.js';
@@ -146,5 +146,34 @@ describe('engine/execution-lifecycle', () => {
     await lifecycle.emit(advisory);
 
     expect(events.emitted).toEqual([advisory]);
+  });
+
+  it('closes admitted shutdown scopes once without stealing a later redispatch', async () => {
+    const events = new RecordingEvents();
+    let now = 1_000;
+    const lifecycle = new ExecutionLifecycle({ events, clock: { nowMs: () => now } });
+    const oldExecution = configuredContext('shutdown-old');
+    const freshExecution = configuredContext('shutdown-fresh');
+    const queuedExecution = configuredContext('never-admitted');
+
+    await lifecycle.admit({ type: 'step_started', step: 'build', index: 0, executionContext: oldExecution });
+    now = 1_025;
+    const closing = lifecycle.closeOpen();
+    await lifecycle.close({ type: 'step_completed', step: 'build', status: 'done', executionContext: oldExecution });
+    await closing;
+    await lifecycle.admit({ type: 'step_started', step: 'build', index: 0, executionContext: freshExecution });
+    await lifecycle.close({ type: 'step_completed', step: 'build', status: 'done', executionContext: oldExecution });
+    await lifecycle.close({ type: 'step_completed', step: 'build', status: 'done', executionContext: freshExecution });
+    await lifecycle.close({ type: 'step_completed', step: 'build', status: 'done', executionContext: queuedExecution });
+
+    expect(events.emitted.map((event) => `${event.type}:${'executionContext' in event ? event.executionContext?.executionId : undefined}`)).toEqual([
+      'step_started:shutdown-old',
+      'step_failed:shutdown-old',
+      'step_started:shutdown-fresh',
+      'step_completed:shutdown-fresh',
+    ]);
+    expect(lifecycle.boundaryFor(oldExecution)).toEqual({ startedAtMs: 1_000, finishedAtMs: 1_025 });
+    expect(lifecycle.boundaryFor(freshExecution)).toEqual({ startedAtMs: 1_025, finishedAtMs: 1_025 });
+    expect(lifecycle.boundaryFor(queuedExecution)).toBeUndefined();
   });
 });

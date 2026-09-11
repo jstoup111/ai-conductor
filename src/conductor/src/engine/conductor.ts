@@ -12508,6 +12508,11 @@ export class Conductor {
       const prUrl = await this.surfaceRemediationPr(reason);
       await this.emitLoopHalt(reason, prUrl);
     } finally {
+      // Every catchable loop exit (including an unexpected throw or an
+      // unmarked early HALT) drains the same execution owner used by signal
+      // and live-boundary paths. Existing terminals win; only still-open
+      // admitted scopes receive the truthful interruption terminal.
+      await this.closeOpenExecutions();
       this.safetyAttemptCache.clear();
       process.off('SIGINT', sigintHandler);
       process.off('SIGTERM', sigterm);
