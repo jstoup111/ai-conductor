@@ -8576,15 +8576,23 @@ export class Conductor {
         // Mark in_progress before running
         await this.saveConductorStepStatus(state, step.name, 'in_progress');
 
-        const serialExecutionContext: ExecutionContext = {
-          executionId: randomUUID(),
-          subject: { kind: 'lifecycle-step', step: step.name },
-        };
+        // Custom configured steps are intentionally outside the closed
+        // lifecycle-step registry. Keep their established name-based lifecycle
+        // stream instead of attaching an invalid explicit context that the
+        // shared resolver must reject.
+        const serialExecutionContext: ExecutionContext | undefined =
+          ALL_STEPS.some(({ name }) => name === step.name) ||
+          Object.prototype.hasOwnProperty.call(OUT_OF_BAND_STEPS, step.name)
+            ? {
+                executionId: randomUUID(),
+                subject: { kind: 'lifecycle-step', step: step.name },
+              }
+            : undefined;
         await emitTracked({
           type: 'step_started',
           step: step.name,
           index: i,
-          executionContext: serialExecutionContext,
+          ...(serialExecutionContext === undefined ? {} : { executionContext: serialExecutionContext }),
         });
         // Deterministic freshness guard — applied ONLY when re-entering a step
         // that previously FAILED (`failed`) or was REWORKED (kicked back →

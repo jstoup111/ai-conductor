@@ -189,7 +189,7 @@ it('composes one ordered provider context across the interactive run after regis
       modelOverride: 'opts.model',
       effortOverride: 'opts.effort',
       onAttempt:
-        "(step, attempt) =>\n      events.emit({ type: 'provider_attempt', step, ...attempt })",
+        "(step, { executionContext, ...attempt }) =>\n      events.emit({\n        type: 'provider_attempt', step, ...attempt,\n        ...(executionContext ? { executionContext } : {}),\n      })",
       warn: '(_message, transition) => events.emit(transition)',
       withCandidateSafety: 'createCandidateSafetyBoundary()',
     },
