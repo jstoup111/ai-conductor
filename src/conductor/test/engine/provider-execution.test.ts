@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:5
 import { describe, expect, it, vi } from 'vitest';
 import type {
   InvokeOptions,
@@ -15,13 +15,16 @@ import {
   ProviderRuntimeSet,
   type ProviderRuntime,
 } from '../../src/engine/provider-runtime.js';
-import { ProviderSessionScope } from '../../src/engine/provider-session.js';
+import { ProviderSessionScope, ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { createProviderLifecycleSupervisor } from '../../src/engine/provider-lifecycle.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import type { ConductState } from '../../src/types/index.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import {
   createCandidateSafetyBoundary,
   executeAuxiliaryProviderCandidates,
+  executeProviderCandidates,
   formatProviderCapabilityGapMessages,
 } from '../../src/engine/provider-execution.js';
 
@@ -121,6 +124,200 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('keeps interleaved execution context on unavailable, fallback, and successful candidates', async () => {
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+    let releaseFirst!: () => void;
+    const firstRelease = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const observed: Array<{
+      executionContext?: unknown;
+      provider: string;
+      outcome: string;
+      invoked: boolean;
+      fallbackReason?: string;
+      model?: string;
+      effort?: string;
+      tier?: string;
+    }> = [];
+    const codex = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+      if (options.prompt === 'first') {
+        markFirstStarted();
+        await firstRelease;
+        return {
+          success: false,
+          output: 'codex unavailable',
+          exitCode: 127,
+          providerUnavailable: true,
+          providerUnavailableScope: 'run',
+          providerUnavailableReason: 'codex unavailable',
+          providerInvocationSkipped: true,
+        };
+      }
+      return { success: true, output: 'codex settled', exitCode: 0 };
+    });
+    const claude = vi.fn(async (): Promise<InvokeResult> => (
+      { success: true, output: 'claude fallback settled', exitCode: 0 }
+    ));
+    const firstContext = {
+      executionId: 'execution-first',
+      subject: { kind: 'configured-member' as const, parentGroup: 'quality', member: 'audit' },
+    };
+    const secondContext = {
+      executionId: 'execution-second',
+      subject: { kind: 'configured-member' as const, parentGroup: 'security', member: 'audit' },
+    };
+    const runtimes = new ProviderRuntimeSet([
+      runtime('codex', { invoke: codex }),
+      runtime('claude', { invoke: claude }),
+    ]);
+    const invoke = (prompt: string, executionContext?: typeof firstContext) =>
+      executeProviderCandidates({
+        step: 'build',
+        configuredProviders: ['codex', 'claude'],
+        preferredProvider: 'codex',
+        runtimes,
+        sessions: new ProviderSessionScope(vi.fn().mockReturnValue(`session-${prompt}`)),
+        tier: 'M',
+        effortOverride: 'high',
+        executionContext,
+        options: { prompt, cwd: '/workspace' },
+        onAttempt: (_step, metadata) => { observed.push(metadata); },
+      });
+
+    const first = invoke('first', firstContext);
+    await firstStarted;
+    const second = await invoke('second', secondContext);
+    releaseFirst();
+    const firstResult = await first;
+    const legacy = await invoke('legacy');
+
+    expect({
+      results: [firstResult.actualProvider, second.actualProvider, legacy.actualProvider],
+      attempts: observed.map(({ executionContext, provider, outcome, invoked, fallbackReason, model, effort, tier }) => ({
+        executionContext, provider, outcome, invoked, fallbackReason, model, effort, tier,
+      })),
+    }).toEqual({
+      results: ['claude', 'codex', 'claude'],
+      attempts: [
+        {
+          executionContext: secondContext,
+          provider: 'codex', outcome: 'success', invoked: true,
+          fallbackReason: undefined, model: CODEX_MODEL_POLICY.stepModels.build, effort: 'high', tier: 'M',
+        },
+        {
+          executionContext: firstContext,
+          provider: 'codex', outcome: 'unavailable', invoked: false,
+          fallbackReason: 'codex unavailable', model: undefined, effort: undefined, tier: undefined,
+        },
+        {
+          executionContext: firstContext,
+          provider: 'claude', outcome: 'success', invoked: true,
+          fallbackReason: undefined, model: CLAUDE_MODEL_POLICY.stepModels.build, effort: 'medium', tier: 'M',
+        },
+        {
+          executionContext: undefined,
+          provider: 'codex', outcome: 'unavailable', invoked: false,
+          fallbackReason: 'codex unavailable', model: undefined, effort: undefined, tier: undefined,
+        },
+        {
+          executionContext: undefined,
+          provider: 'claude', outcome: 'success', invoked: true,
+          fallbackReason: undefined, model: CLAUDE_MODEL_POLICY.stepModels.build, effort: 'medium', tier: 'M',
+        },
+      ],
+    });
+  });
+
+  it('keeps each runner invocation context beside its verdict run and lifecycle attempt IDs', async () => {
+    const events: Array<{
+      provider: string;
+      executionContext?: unknown;
+      lifecycle?: { attemptId: string };
+    }> = [];
+    const firstContext = {
+      executionId: 'execution-first',
+      subject: { kind: 'configured-member' as const, parentGroup: 'quality', member: 'audit' },
+    };
+    const retryContext = {
+      executionId: 'execution-retry',
+      subject: { kind: 'configured-member' as const, parentGroup: 'quality', member: 'audit' },
+    };
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn(async (): Promise<InvokeResult> => (
+        { success: true, output: 'settled', exitCode: 0 }
+      )),
+    };
+    const runner = new DefaultStepRunner(provider, 'runner-session', '/workspace', {
+      providerExecution: {
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', provider)]),
+        sessions: new ProviderSessionStore(),
+        onAttempt: (_step, attempt) => { events.push(attempt); },
+      },
+    });
+    const state: ConductState = { complexity_tier: 'M' };
+
+    await runner.run('build', state, {
+      attempt: 1,
+      runId: 'verdict-run-1',
+      executionContext: firstContext,
+    });
+    await runner.run('build', state, {
+      attempt: 2,
+      runId: 'verdict-run-2',
+      executionContext: retryContext,
+    });
+
+    expect({
+      candidateContexts: events
+        .filter(({ provider }) => provider === 'codex')
+        .map(({ executionContext }) => executionContext),
+      lifecycle: events
+        .filter(({ provider }) => provider === 'provider-lifecycle')
+        .map(({ executionContext, lifecycle }) => ({ executionContext, attemptId: lifecycle?.attemptId })),
+    }).toEqual({
+      candidateContexts: [firstContext, retryContext],
+      lifecycle: [
+        { executionContext: firstContext, attemptId: 'verdict-run-1' },
+        { executionContext: firstContext, attemptId: 'verdict-run-1' },
+        { executionContext: retryContext, attemptId: 'verdict-run-2' },
+        { executionContext: retryContext, attemptId: 'verdict-run-2' },
+      ],
+    });
+  });
+
+  it('emits scalar invocation metadata with its caller-owned execution context', async () => {
+    const attempts: Array<Record<string, unknown>> = [];
+    const context = {
+      executionId: 'scalar-execution',
+      subject: { kind: 'configured-member' as const, parentGroup: 'quality', member: 'audit' },
+    };
+    const provider: LLMProvider = {
+      invoke: vi.fn(async (): Promise<InvokeResult> => (
+        { success: true, output: 'scalar settled', exitCode: 0 }
+      )),
+    };
+    const runner = new DefaultStepRunner(provider, 'scalar-session', '/workspace', {
+      modelPolicy: CODEX_MODEL_POLICY,
+      providerKey: 'codex',
+      providerAttempt: (_step, attempt) => { attempts.push(attempt); },
+    });
+
+    await runner.run('build', { complexity_tier: 'M' }, { executionContext: context });
+
+    expect(attempts).toEqual([{
+      executionContext: context,
+      provider: 'codex',
+      preferredProvider: 'codex',
+      model: CODEX_MODEL_POLICY.stepModels.build,
+      effort: CODEX_MODEL_POLICY.stepEfforts.build,
+      tier: 'M',
+      outcome: 'success',
+      invoked: true,
+    }]);
+  });
+
   it('executes an auxiliary rubric through its own provider, fallback ladder, retries, and attribution label', async () => {
     const codexInvoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> =>
       options.model === 'gpt-5.6-sol'

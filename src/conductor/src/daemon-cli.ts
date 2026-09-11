@@ -1152,8 +1152,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // The per-feature Conductor composes self-host authority around this
     // resolved-candidate boundary; keep it present for every daemon context.
     withCandidateSafety: createCandidateSafetyBoundary(),
-    onAttempt: (step, attempt) =>
-      eventTarget.emit({ type: 'provider_attempt', step, ...attempt }),
+    onAttempt: (step, { executionContext, ...attempt }) =>
+      eventTarget.emit({
+        type: 'provider_attempt', step, ...attempt,
+        ...(executionContext ? { executionContext } : {}),
+      }),
     warn: (_message, transition) => eventTarget.emit(transition),
     ...(runtimeLog ? { diagnosticLog: runtimeLog } : {}),
   });
