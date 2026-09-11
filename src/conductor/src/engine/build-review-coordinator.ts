@@ -717,7 +717,13 @@ export async function coordinateBuildReviewRubrics(
       await emitScopeSummary(input.emit, input);
       await emitScopeIncomplete(input.emit, outcome.branch.result, input.lapId);
     } else if (outcome.branch.kind === "infrastructure-failure") {
-      await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: outcome.rubric, lapId: input.lapId, reason: outcome.branch.reason });
+      await input.emit?.({
+        type: "build_review_rubric_infrastructure_failure",
+        rubric: outcome.rubric,
+        lapId: input.lapId,
+        reason: outcome.branch.reason,
+        ...(outcome.branch.detail !== undefined ? { excerpt: outcome.branch.detail } : {}),
+      });
     }
   }
 

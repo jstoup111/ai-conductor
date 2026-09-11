@@ -812,7 +812,7 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
       modelFallbackLadder: input.policy.model_fallback_ladder,
       auxiliaryMember: input.memberId,
     });
-    if (result.success) return result;
+    if (result.success || result.commandUnresolved) return result;
     last = result;
   }
   return last ?? {

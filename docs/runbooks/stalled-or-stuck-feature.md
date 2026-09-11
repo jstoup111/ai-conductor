@@ -211,6 +211,24 @@ the next dispatch.
 **Verification:** after the next dispatch, the daemon log shows the step's command resolving
 and the run advancing past it; it must not return to the same `commandUnresolved` HALT.
 
+#### Unresolved build-review rubric skill
+
+**Symptom:** the event log contains `build_review_rubric_infrastructure_failure` with reason
+`invalid-provider-result`. Its `excerpt` says that a build-review rubric skill could not be
+dispatched and names the unresolved command when the provider supplied it.
+
+**Diagnosis:** the rubric produced no judgement. The provider reported that its dispatched skill
+command is unavailable, so the conductor stops that auxiliary member immediately instead of
+retrying it, requesting a judged-result repair, or trying another configured provider.
+
+**Recovery:** relink or re-provision the provider skill catalog. If the feature branch predates
+the rubric skill, rebase it onto a base that contains the skill. Then use [the resume
+procedure](#clear-a-halt-and-let-the-feature-resume) when the feature has a HALT; otherwise rerun
+the blocked build-review gate.
+
+**Verification:** the next build-review event is a rubric result or another actionable
+infrastructure failure, not the same unresolved-command excerpt.
+
 #### Provider preparation exhausted
 
 **Symptom:** `.pipeline/HALT` begins `Provider preparation exhausted.` and its class is

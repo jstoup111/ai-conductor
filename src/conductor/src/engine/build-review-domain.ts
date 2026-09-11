@@ -396,5 +396,11 @@ export function describeBuildReviewJudgedResultRejection(value: unknown, rubric:
   return shown.join('; ') + (problems.length > shown.length ? `; and ${problems.length - shown.length} more problem(s)` : '');
 }
 export interface BuildReviewDispatchFailure { readonly kind: 'dispatch-failure'; readonly detail: string; }
+export function renderBuildReviewUnresolvedSkillRemedy(rubricSkillName: string, unresolvedCommandName: string): string {
+  const commandDetail = unresolvedCommandName.trim()
+    ? ` The unresolved command was "${unresolvedCommandName}".`
+    : ' The provider did not report the unresolved command name.';
+  return `Build-review rubric skill "${rubricSkillName}" could not be dispatched.${commandDetail} No judgement was produced, and retrying cannot make the command resolvable. Relink the provider skill catalog; if this feature's base predates the skill, rebase the feature.`;
+}
 export function makeBuildReviewDispatchFailure(detail: string): BuildReviewDispatchFailure { return { kind: 'dispatch-failure', detail }; }
 export function parseBuildReviewDispatchFailure(value: unknown): BuildReviewDispatchFailure | undefined { const source = object(value); return source?.kind === 'dispatch-failure' && text(source.detail) ? { kind: 'dispatch-failure', detail: source.detail } : undefined; }
