@@ -1,23 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-11T10:46:41.635Z
+Status: halted
 Slug: make-the-shipped-record-idempotence-guard-ignore-s
 Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Halting step: build_review
+Phase: BUILD
 Branch: feat/daemon-make-the-shipped-record-idempotence-guard-ignore-s
-Head SHA: b7fb528f255054985e3ed5ef1439181a016ac12e
-Halted at: 2026-09-11T07:03:01.720Z
+Head SHA: 9cf37cdbeb4c86d4e489756e9cbaf55c8a58aaa9
+Halted at: 2026-09-11T12:09:20.310Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-1 (adr-2026-07-22-per-feature-cost-rollup-in-shipped-record 2026-08-30 amendment)
-
-Blocking findings:
-AB-1 (DESIGN; adr-2026-07-22-per-feature-cost-rollup-in-shipped-record 2026-08-30 amendment): The new telemetry-only guard preserves a pre-finish Cost block after the finish ledger total grows, violating the approved requirement that the finish total and committed Cost block cannot disagree.
+Operator credentials expired and refresh timed out after 60 minutes.
+Credentials file: /home/james-stoup/.claude/.credentials.json
+Expires at: 1789125083987
+Please refresh your OAuth token and re-queue this feature.
 ```
