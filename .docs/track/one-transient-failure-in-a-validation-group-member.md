@@ -15,3 +15,5 @@ adr-2026-07-10-validation-group-join.md).
 Internal engine retry/state semantics restoring an already-approved ADR contract
 (adr-2026-07-10-concurrent-group-core.md D5); no user-facing product capability, so
 acceptance criteria live directly in stories.
+
+> **Amended 2026-09-11 by operator approval for #1425:** NC.3 is accepted with a required regression test: in auto mode, a single validator rechecked by the FINISH fence may retry thrown dispatch failures within its existing resolved budget when its siblings are already done. Publication remains blocked until valid passing evidence exists; exhaustion halts. Story 4 and Task 9 own this bounded extension. No unrelated serial step gains retries.

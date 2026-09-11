@@ -4,7 +4,7 @@
 
 Source-Ref: jstoup111/ai-conductor#1425
 
-Scope boundary (from the track marker, as amended after conflict-check): retain completed sibling verdicts across a no-verdict validation-group halt. The per-branch retry budget (the member's resolved `max_retries` instead of the literal `1`) is delivered by #2190 (`.docs/stories/a-halted-feature-only-re-runs-when-a-human-clears-.md` Story 1, PR #2206); #1425 is blocked by #2190 and these stories assume that budget is in place. The join policy is unchanged (a no-verdict branch still halts the group) and no new observability surface is added.
+Scope boundary (from the track marker, as amended after conflict-check): retain completed sibling verdicts across a no-verdict validation-group halt. The per-branch retry budget (the member's resolved `max_retries` instead of the literal `1`) is delivered by #2190 (`.docs/stories/a-halted-feature-only-re-runs-when-a-human-clears-.md` Story 1, PR #2206); #1425 is blocked by #2190 and these stories assume that budget is in place. The join policy is unchanged (a no-verdict branch still halts the group) and no new observability surface is added. Operator approval on 2026-09-11 also includes the bounded FINISH-fence recheck behavior specified in Story 4, with mandatory regression proof before shipping.
 
 ## Story 1: A genuine failure still halts the group loudly
 
@@ -69,3 +69,21 @@ As a daemon operator, I want the re-dispatch after I clear a validation-group ha
 - [ ] A test seeds state with two `done` members and one pending member, runs the group round, and observes exactly one dispatch (the pending member) followed by an all-green join.
 - [ ] A test observes that a kickback restage flips a retained member to `stale` and that the next round dispatches it.
 - [ ] A test observes that the finish fence reports a retained member non-green when its gate verdict is unsatisfied.
+
+## Story 4: Retry transient FINISH-fence crashes without bypassing validation
+
+As a daemon operator, I want a transient final validation crash to use its existing retry allowance while publication still waits for valid passing evidence.
+
+### Acceptance Criteria
+
+#### Happy Path
+- Given the FINISH fence rechecks one validator while its siblings remain done, when that validator throws once and then supplies valid passing evidence within its existing retry budget, then only that validator is retried and publication is reached only after its evidence passes.
+
+#### Negative Paths
+- Given the FINISH fence rechecks one validator that throws on every attempt, when its existing retry budget is exhausted, then the run halts and publication is never invoked.
+- Given a FINISH-fence recheck returns success without valid passing evidence, when publication is considered, then publication remains blocked.
+
+### Done When
+- [ ] A FINISH-fence regression test proves a single crashing recheck retries within its configured budget, retains completed siblings, and reaches publication only after valid passing evidence.
+- [ ] An always-throwing recheck exhausts its configured budget, halts, and never invokes publication.
+- [ ] A successful runner result without valid passing evidence never authorizes publication.

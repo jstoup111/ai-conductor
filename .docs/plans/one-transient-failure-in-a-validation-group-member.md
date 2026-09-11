@@ -9,6 +9,8 @@
 
 ## Summary
 
+> **Amended 2026-09-11 by operator approval for #1425:** NC.3 is accepted with a required regression test: in auto mode, a single validator rechecked by the FINISH fence may retry thrown dispatch failures within its existing resolved budget when its siblings are already done. Publication remains blocked until valid passing evidence exists; exhaustion halts. Story 4 and Task 9 own this bounded extension. No unrelated serial step gains retries.
+
 Make the auto-mode SHIP validation-group join persist the siblings that already passed when one member halts the group with `no-verdict`, so the operator's re-dispatch re-runs only the failed member. Eight tasks: one refactor, three retention tasks, one verification task, three re-dispatch tasks.
 
 ## Technical Approach
@@ -197,7 +199,36 @@ Make the auto-mode SHIP validation-group join persist the siblings that already 
 
 **Dependencies:** 2
 
+### Task 9: Prove bounded FINISH-fence retries preserve the publication gate
+**Story:** 4
+**Type:** happy-path
+**Files:** src/conductor/src/engine/conductor.ts, src/conductor/test/engine/conductor-finish-publication.test.ts, README.md, docs/guides/running-the-daemon.md
+**Dependencies:** 6, 8
+
+**Steps:**
+1. Extend the existing finish-publication fixture through the real FINISH fence and serial retry path. Seed satisfied sibling evidence and done bare/synthetic keys, make one validator's evidence non-green, and start at FINISH so the fence itself restages that validator. Inject the runner and publication adapter; no real provider or GitHub call is permitted.
+2. For the transient case, make that validator throw once and then write valid passing evidence. Assert dispatches stay within its resolved retry budget, satisfied siblings are not repeated, and publication is never invoked before the valid evidence passes.
+3. Add the always-throwing case: assert the exact configured attempt bound, a halt, and zero publication calls. Add or reuse sufficient proof that a success result without valid evidence cannot authorize publication. Bound fixture execution at its publication observation or terminal halt and await cleanup; never use a timeout as the termination mechanism.
+4. Correct the retry guard's comment that currently excludes FINISH-fence rechecks. If the new regression exposes a defect, repair only this authorized single-member validation path, preserving retry budgets, other serial exception routing, and objective publication gates. Do not describe source-inferred behavior as tested until these cases run; existing behavior may already satisfy the tests.
+5. Update README and the existing daemon guide to describe bounded final-validation crash retries and continued publication gating. Run affected tests through `ai-conductor scoped-run` and the configured typecheck covering tests; commit the bounded repair and its proof.
+
+**Done when:**
+1. A FINISH-fence regression test proves a single crashing recheck retries within its configured budget, retains completed siblings, and reaches publication only after valid passing evidence.
+2. An always-throwing recheck exhausts its configured budget, halts, and never invokes publication.
+3. A successful runner result without valid passing evidence never authorizes publication.
+
+**Files likely touched:**
+- src/conductor/src/engine/conductor.ts — align retry comment and, only if regression proof requires it, repair the authorized single-member validation path
+- src/conductor/test/engine/conductor-finish-publication.test.ts — real fence/retry/publication boundary with injected external adapters
+- README.md — operator-visible retry behavior
+- docs/guides/running-the-daemon.md — final validation retry behavior and publication requirement
+
 ## Task Dependency Graph
+
+> **Amended 2026-09-11 by operator approval for #1425:** NC.3 is accepted with a required regression test: in auto mode, a single validator rechecked by the FINISH fence may retry thrown dispatch failures within its existing resolved budget when its siblings are already done. Publication remains blocked until valid passing evidence exists; exhaustion halts. Story 4 and Task 9 own this bounded extension. No unrelated serial step gains retries.
+
+Task 6 -> Task 9
+Task 8 -> Task 9
 
 ```
 1 ─▶ 2 ─┬─▶ 3
@@ -246,9 +277,20 @@ Make the auto-mode SHIP validation-group join persist the siblings that already 
 | Story 3 negative: Given a retained `done` member whose on-disk verdict no longer satisfies its gate at FINISH, when the finish publication fence runs, then that member is reported non-green and publication does not proceed. | 8 | "a test in src/conductor/test/engine/conductor-finish-publication.test.ts seeds a member `done` with an on-disk gate verdict that is unsatisfied at FINISH and asserts `nonGreenFinishValidators` reports that member and publication does not proceed" | diff-local |
 | Story 3 negative: Given the re-dispatched member fails again after its full budget, when the join halts, then the previously retained members stay `done` and the halt names only the member that failed. | 7 | "a test where the re-dispatched member throws on every attempt asserts the previously retained members remain `done` after the second halt and the HALT body names only the failed member" | diff-local |
 
+| Story 4 happy: Given the FINISH fence rechecks one validator while its siblings remain done, when that validator throws once and then supplies valid passing evidence within its existing retry budget, then only that validator is retried and publication is reached only after its evidence passes. | 9 | "A FINISH-fence regression test proves a single crashing recheck retries within its configured budget, retains completed siblings, and reaches publication only after valid passing evidence." | diff-local |
+| Story 4 negative: Given the FINISH fence rechecks one validator that throws on every attempt, when its existing retry budget is exhausted, then the run halts and publication is never invoked. | 9 | "An always-throwing recheck exhausts its configured budget, halts, and never invokes publication." | diff-local |
+| Story 4 negative: Given a FINISH-fence recheck returns success without valid passing evidence, when publication is considered, then publication remains blocked. | 9 | "A successful runner result without valid passing evidence never authorizes publication." | diff-local |
+
 ## Verification
 - [ ] All happy path criteria covered by at least one task
 - [ ] All negative path criteria covered by at least one task
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
+
+## Verify-Claims Ledger — operator amendment — 2026-09-11
+
+- [verified] The FINISH fence marks a non-green validator stale and returns to its dispatch; the serial exception guard checks for done sibling synthetic keys (`conductor.ts`, current source).
+- [verified] The guard comment excludes FINISH-fence rechecks, contradicting the approved extension.
+- [inferred, 80%] That source path retries thrown rechecks; the audit did not execute this case. Task 9 must establish the actual behavior and repair it if needed.
+- Confirmed input: operator approved bounded retries with regression proof that publication stays blocked until validation passes. No pending load-bearing assumption: passing this proof is required, not presumed.
