@@ -4,6 +4,12 @@ spec_hash: 86c8a205354ae1b4a29abd16db95391548ad368eedf5feeb3c514d88674472e1
 pr: https://github.com/jstoup111/ai-conductor/pull/2448
 shipped: 2026-09-11
 engine_version: 20260910T220211Z-39b4ec92e0a6
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/acceptance/daemon-e2e-live-agent-tier.acceptance.test.ts:138-142 — five added assertions pinning a `Check live-provider credentials` step in the CI workflow YAML, unrelated to render events and named by no plan task"
+    accepted: false
 ---
 
 ## Cost
