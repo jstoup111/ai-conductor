@@ -36,6 +36,10 @@ adr-2026-07-23-commit-movement-liveness-floor D3). Retiring it needs a new autho
 
 ## Decision
 
+### D1 — Preserve the review ownership map and its admitted repair boundaries
+
+> **Amended 2026-09-11 by #1986:** The existing decision below is assigned the citable identifier D1 to satisfy the land gate for changed approved ADRs. The ownership map, later amendments, and implementation-authority limits are unchanged.
+
 The ownership map is:
 
 | Question | Owner |
