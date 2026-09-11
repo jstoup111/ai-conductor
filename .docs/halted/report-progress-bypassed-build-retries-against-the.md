@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-11T12:45:37.996Z
 Slug: report-progress-bypassed-build-retries-against-the
 Class: needs-human
 Halting step: coverage_binding
