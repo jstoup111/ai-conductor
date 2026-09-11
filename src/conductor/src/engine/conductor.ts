@@ -5916,9 +5916,11 @@ export class Conductor {
     state: ConductState,
     retryHint: string | undefined,
     verdictRunId?: string,
+    /** The serial lifecycle scope that owns this provider invocation. */
+    executionContext?: ExecutionContext,
   ): Promise<StepRunResult> {
     if (!this.liveBoundaryCoordinator) {
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId);
+      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, undefined, executionContext);
     }
     await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'queued' });
     return this.liveBoundaryCoordinator.runDispatch(async (openWindow) => {
@@ -5928,7 +5930,7 @@ export class Conductor {
         return { success: false, operatorParkedBeforeDispatch: true };
       }
       await this.events.emit({ type: 'self_host_dispatch_admission', step: name, state: 'admitted' });
-      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow);
+      return this.runAdmittedSelfBuildDispatch(name, state, retryHint, verdictRunId, openWindow, executionContext);
     });
   }
 
@@ -5943,8 +5945,11 @@ export class Conductor {
      */
     verdictRunId?: string,
     openWindow?: OpenAdmittedWindow,
+    /** The serial lifecycle scope that owns this provider invocation. */
+    executionContext?: ExecutionContext,
   ): Promise<StepRunResult> {
     const identityOption = verdictRunId ? { runId: verdictRunId } : {};
+    const executionContextOption = executionContext ? { executionContext } : {};
     const selfHostConfig = resolveSelfHostConfig(this.config);
     const stepSelection =
       this.config.steps?.[name]?.llm_provider ?? this.config.llm_provider;
@@ -6025,7 +6030,11 @@ export class Conductor {
     // test/extension surface.
     if (!this.providerExecution) {
       if (preferredBuildProvider === 'codex') {
-        return this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });
+        return this.stepRunner.run(name, state, {
+          retryReason: retryHint,
+          ...identityOption,
+          ...executionContextOption,
+        });
       }
       const installed = await this.guardrails.resolveInstalledHarnessRoot();
       const harnessRoot = installed.status === 'ok' ? installed.root : this.projectRoot;
@@ -6049,7 +6058,11 @@ export class Conductor {
       process.env.CLAUDE_CONFIG_DIR = sandbox.configDir;
       if (daemonToken) process.env.CLAUDE_CODE_OAUTH_TOKEN = daemonToken;
       try {
-        return await this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });
+        return await this.stepRunner.run(name, state, {
+          retryReason: retryHint,
+          ...identityOption,
+          ...executionContextOption,
+        });
       } finally {
         if (hadConfig) process.env.CLAUDE_CONFIG_DIR = priorConfig;
         else delete process.env.CLAUDE_CONFIG_DIR;
@@ -6212,7 +6225,11 @@ export class Conductor {
       };
     }
     try {
-      return await this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });
+      return await this.stepRunner.run(name, state, {
+        retryReason: retryHint,
+        ...identityOption,
+        ...executionContextOption,
+      });
     } finally {
       if (this.providerExecution) {
         this.providerExecution.prepareCandidateSelfHost = priorPreparation;
@@ -9747,6 +9764,7 @@ export class Conductor {
                               escalate: resolved.escalate,
                               modelOverride: esc.model,
                               effortOverride: esc.effort,
+                              executionContext: serialExecutionContext,
                             })
                         : usesSelfBuildDispatch
                           ? await this.runSelfBuildDispatch(
@@ -9761,6 +9779,7 @@ export class Conductor {
                               isVerdictRunIdentityStep(step.name)
                                 ? this.currentRunId
                                 : undefined,
+                              serialExecutionContext,
                             )
                           : await (async (): Promise<StepRunResult> => {
                             // PRD widening preparation stays outside the
