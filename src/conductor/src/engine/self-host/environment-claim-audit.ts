@@ -202,6 +202,7 @@ export function auditEnvironmentBlockerClaims(
   // Unknown provider, or one that really is sandboxed: the engine has no proof,
   // so it does not get a verdict.
   if (PROVIDER_OS_SANDBOX[facts.provider] !== false) return none;
+  if (hasUnboundedCommandDenialClaim(output)) return none;
 
   const deniable = facts.writeFenceInstalled
     ? writeFenceDeniableOperations()
