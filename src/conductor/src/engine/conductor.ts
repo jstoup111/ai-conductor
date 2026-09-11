@@ -2213,7 +2213,14 @@ export class Conductor {
         // parallel execution has closed. It must reach the event spine, but
         // must not close an unrelated parallel execution (the ordinary
         // untracked-terminal behavior remains suppression).
-        if (getGroupForStep(event.step)?.name === 'validation') {
+        if (
+          (event.type === 'step_completed'
+            || event.type === 'step_failed'
+            || event.type === 'step_refused'
+            || event.type === 'parallel_completed'
+            || event.type === 'parallel_failure')
+          && getGroupForStep(event.step)?.name === 'validation'
+        ) {
           terminalKey = undefined;
         } else {
           return Promise.resolve();
