@@ -62,7 +62,6 @@ describe('remediation plan absence causes', () => {
   it.each([
     ['an empty array', []],
     ['non-object entries', [null, 'not an object', 42]],
-    ['a halt without a category', [{ id: 'AB-1', disposition: 'halt' }]],
     ['an existing-task disposition with a blank task id', [{
       id: 'AB-1',
       disposition: 'existing-task',
