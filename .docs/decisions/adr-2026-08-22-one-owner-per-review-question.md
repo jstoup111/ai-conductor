@@ -36,6 +36,10 @@ adr-2026-07-23-commit-movement-liveness-floor D3). Retiring it needs a new autho
 
 ## Decision
 
+### D1 — Preserve the review ownership map and its admitted repair boundaries
+
+> **Amended 2026-09-11 by #1986:** The existing decision below is assigned the citable identifier D1 to satisfy the land gate for changed approved ADRs. The ownership map, later amendments, and implementation-authority limits are unchanged.
+
 The ownership map is:
 
 | Question | Owner |
@@ -46,6 +50,8 @@ The ownership map is:
 | Does it actually work? | `manual_test` (unchanged) |
 | Is the mechanism right? | DECIDE `/architecture-review`; post-code residue → as-built `PLAN_GAP` (adr-2026-08-22-as-built-review-runs-always-with-plan-gap) |
 | Does the code respect ADRs and is it reachable? | as-built review (unchanged) |
+
+> **Amended 2026-09-10 by #1986:** installed custom review policies contribute declared review questions and content findings to the existing shared build-review adjudicator. That adjudicator considers overlap, contradictions, and whether repair is admitted by approved scope; it does not assume product-completion, architecture-choice, or plan-growth authority. Findings requiring those decisions stop at the owning boundary before implementation, under adr-2026-09-10-portable-build-review-policy D8/D9. The ownership map and admitted remediation-append sources remain unchanged.
 
 > **Amended 2026-08-31 by #2088:** the map gains one question — *Does the cited plan task's `Done when` assert the story criterion it is claimed to cover?* — owned by the `coverage_binding` step (default off; `adr-2026-08-31-coverage-binding-judge-step` D4–D7), judged before BUILD from the criterion text and the `Done when` block alone. It may halt `needs-human`; it never appends a task and never routes to `plan`, so the appender clause and `prd_audit`'s completion authority are untouched.
 

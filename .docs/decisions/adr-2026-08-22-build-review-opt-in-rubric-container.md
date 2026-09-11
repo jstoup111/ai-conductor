@@ -28,6 +28,9 @@ fails ~often on refactors and relocations because its revert-preflight classific
    `test-quality`, **enabled: false by default**. The engine dispatches only enabled members; an
    enabled gate with zero enabled members yields a PASS verdict with a `build_review_no_rubrics`
    reason on the spine and no grader dispatch. This replaces adr-2026-08-13's configuration-error rule.
+
+> **Amended 2026-09-10 by #1986:** membership also admits explicitly enabled project-declared custom rubrics through the effective catalog, under adr-2026-09-10-portable-build-review-policy D1/D7. The built-in member remains default-off; empty-container PASS, retired-key handling, and the prohibition on rubric-driven plan growth remain unchanged.
+
 2. **Retired rubric keys** (`scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`,
    `wiring`) stay on the accepted-key list and are ignored with a one-time `config_deprecated_key`
    warning naming the key and this ADR — the adr-2026-08-14 wiring precedent, extended. They are
@@ -50,6 +53,9 @@ fails ~often on refactors and relocations because its revert-preflight classific
    resolving `skills/build-review-test-quality/SKILL.md`), and the `beyond` record kind — retained
    as data for #1810, never produced by this rubric. Vocabularies are now per-registered-rubric;
    the four-rubric enumerations in the amended ADRs are narrowed to the registry, not re-cut by hand.
+
+> **Amended 2026-09-10 by #1986:** the built-in contract remains specialized. Custom members use a separate versioned finding contract and self-describing policy identity through all evidence, cache, disposition, and recovery consumers (adr-2026-09-10-portable-build-review-policy D6/D7); they do not broaden the test-quality vocabulary.
+
 5. S-tier: build_review runs for S exactly as for L (adr-2026-07-21 D4 holds); with the container
    empty it is a no-dispatch PASS at every tier.
 

@@ -199,6 +199,8 @@ supplied. Nothing free-text enters it, satisfying `adr-2026-08-16` D1's rule tha
 input is a closed vocabulary member or an engine-verified reference. `detail`, excerpts and timestamps
 are report-only, exactly as `summary` and `evidenceLocations` are for findings.
 
+> **Amended 2026-09-10 by #1986:** approved adr-2026-09-10-separate-custom-review-coverage-identity D2/D3 extends this rule for project-declared custom rubrics: the subject is the validated declaration and closed failure reason within the feature. No effective content digest is required for missing coverage, and package changes alone do not expire that decision. Different declarations or reasons do not match. The built-in identity, explicit operator checks, exhaustion prerequisite, distinction from finding acceptance, and no-judgments prohibition remain unchanged.
+
 **Why not narrower.** Including the preflight sub-reason, the lap, or the snapshot digest would make
 the decision evaporate as the fault's incidental particulars shift between laps — which is precisely
 the failure `adr-2026-08-16` was written to fix for findings ("an operator-accepted finding stops

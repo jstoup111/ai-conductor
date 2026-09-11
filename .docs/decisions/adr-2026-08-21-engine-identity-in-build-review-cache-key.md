@@ -90,6 +90,8 @@ write, per the fail-closed rule of adr-2026-08-13 §7.
 
 > **Amended 2026-08-21 by #1759 (conflict-check):** the failure reuses the existing closed reason `cache-read-failed` with a detail naming the SKILL.md path instead of adding `skill-digest-unavailable`; PR #1734 (adr-2026-08-18) makes the infrastructure-reason→fault-class mapping a total record, and the clean-rubric spec's shipped rule keeps that vocabulary closed. Behavior (no hit, no write) is unchanged.
 
+> **Amended 2026-09-10 by #1986:** D3's harness-root single-file approximation is replaced by the complete effective policy bundle resolved inside the actual prepared provider candidate, for built-in and custom rubrics. The captured bytes are also delivered to that candidate. Missing or incomplete policy still permits neither lookup nor write (adr-2026-09-10-portable-build-review-policy D2/D3/D6).
+
 **D4. Legacy entries are parsed in a staged form.** `parseBuildReviewCacheEntryCandidate` accepts
 `engineIdentity` as optional; an absent field classifies as `engine-version-mismatch` so the first
 post-ship lap is observable per rubric rather than disappearing into `invalid-entry`. Newly written
@@ -106,9 +108,15 @@ event; ordinary projection/policy misses stay silent as today.
 coordinator** (`coordinateBuildReviewRubrics` input), not read from `process.env` or `import.meta`
 inside the cache module, keeping `build-review-cache.ts` pure and unit-testable with fakes.
 
+> **Amended 2026-09-10 by #1986:** only the engine content stamp remains once-per-run. Effective policy identity, cache lookup, and eligible write belong inside the actual candidate's preparation lifecycle, including fallback, with typed inputs keeping the cache pure (adr-2026-09-10-portable-build-review-policy D6).
+
 **D7. Out of scope (operator-confirmed boundary):** an operator cache-clear command, bulk clearing on
 daemon engine rollover, KPI/dashboard surfacing. `engineIdentity` never enters the disposition
 store or reduced-coverage keys (adr-2026-08-18 D7).
+
+> **Amended 2026-09-10 by #1986:** existing built-in operator-disposition bindings remain unchanged. New custom evidence and dispositions bind to their own versioned declaration and effective-policy identity so changed same-named policy cannot borrow prior authorization; engine timing or publication identity does not grant or erase operator authority (adr-2026-09-10-portable-build-review-policy D6/D7).
+
+> **Amended 2026-09-10 by #1986:** the preceding amendment's common custom-disposition binding is narrowed by approved adr-2026-09-10-separate-custom-review-coverage-identity. Custom finding acceptance remains content-bound; custom reduced coverage instead binds to the feature, validated declaration, and closed failure reason, because a loading failure may have no effective content identity. The latter accepts missing coverage only, survives package changes with the same declaration/reason, and cannot suppress a finding or make an unjudged lap pass. Built-in binding and judged-result cache identity are unchanged.
 
 ## Consequences
 
