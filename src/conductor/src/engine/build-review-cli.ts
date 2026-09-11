@@ -7,6 +7,7 @@ import { BuildReviewDispositionStore, type BuildReviewDispositionAppendResult, t
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId, type BuildReviewInfrastructureFailureReason } from './build-review-domain.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
+import { RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { resolveCliFeatureWorktree } from './cli-operator-authority.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
@@ -27,6 +28,7 @@ export interface BuildReviewFindingsDeps {
   readonly realpath?: (path: string) => Promise<string>;
   readonly readFile?: (path: string) => Promise<string>;
   readonly createStore?: (worktree: string) => DispositionStore;
+  readonly createCaseStore?: (worktree: string, feature: BuildReviewFeatureIdentity) => RemediationCaseStoreReader;
   readonly readKickbackGateEntry?: (worktree: string) => Promise<Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'> | undefined>;
   readonly readMechanicalFaults?: (worktree: string) => Promise<number | undefined>;
   readonly loadConfig?: (worktree: string) => Promise<ConfigResult>;
@@ -54,6 +56,10 @@ type DispositionStore = {
   listReducedCoverage?(feature: unknown): Promise<BuildReviewReducedCoverageListResult>;
   append(input: Parameters<BuildReviewDispositionStore['append']>[0]): Promise<BuildReviewDispositionAppendResult>;
   appendIfCurrent?: BuildReviewDispositionStore['appendIfCurrent'];
+};
+
+type RemediationCaseStoreReader = {
+  read(): Promise<RemediationCaseStoreReadResult>;
 };
 
 type ReducedCoverageDispositionStore = {
@@ -141,14 +147,26 @@ function acceptedDispositions(
   });
 }
 
-function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>, accepted: readonly AcceptedDisposition[], faults: readonly ExhaustedMechanicalFault[], lastMechanicalFault: KickbackGateEntry['lastMechanicalFault']): string {
+function renderCase(caseRecord: RemediationCaseRecord): string {
+  const effect = caseRecord.effect.kind === 'none'
+    ? 'none'
+    : `${caseRecord.effect.kind}/${caseRecord.effect.status}`;
+  const assertions = caseRecord.refutation?.assertions
+    .map((assertion) => `${assertion.assertion} (${assertion.verdict})`).join('; ') ?? 'none';
+  return `Autonomous case outcome: ${caseRecord.id}; disposition: ${caseRecord.disposition}; resolution: ${caseRecord.resolution}; source ids: ${caseRecord.sources.map((source) => source.sourceId).join(', ') || 'none'}; effect: ${effect}; claim: ${caseRecord.refutation?.claim ?? 'none'}; assertions: ${assertions}; rationale: ${caseRecord.rationale}`;
+}
+
+function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>, accepted: readonly AcceptedDisposition[], cases: readonly RemediationCaseRecord[], faults: readonly ExhaustedMechanicalFault[], lastMechanicalFault: KickbackGateEntry['lastMechanicalFault']): string {
   return [
     `Build review findings: ${feature}`,
     `Lap: ${aggregate.lapId}`,
     `Raw verdict: ${effective.rawVerdict}`,
     `Effective verdict: ${effective.verdict}`,
     `Accepted findings: ${effective.acceptedFindingIds.join(', ') || 'none'}`,
+    `Operator dispositions: ${accepted.length === 0 ? 'none' : ''}`,
     ...accepted.map(({ findingId, disposition }) => `Accepted disposition: ${findingId} (lap ${disposition.sourceLapId}; operator ${disposition.operator}; rationale: ${disposition.rationale})`),
+    `Autonomous case outcomes: ${cases.length === 0 ? 'none' : ''}`,
+    ...cases.map(renderCase),
     `Unresolved findings: ${effective.unresolvedFindingIds.join(', ') || 'none'}`,
     `Skipped rubrics: ${effective.skippedRubrics.join(', ') || 'none'}`,
     `Infrastructure failures: ${effective.infrastructureFailureRubrics.join(', ') || 'none'}`,
@@ -217,6 +235,10 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     const listed = await store.list(feature);
     if (!listed.ok) throw new Error(listed.message);
     const records = listed.records;
+    const caseStore = (deps.createCaseStore ?? ((projectRoot: string, caseFeature: BuildReviewFeatureIdentity) => new RemediationCaseStore(projectRoot, caseFeature)))(worktree, feature);
+    const caseRead = await caseStore.read();
+    if (!caseRead.ok) throw new Error(`remediation case store is ${caseRead.reason}`);
+    const cases = caseRead.state.cases;
     const reducedCoverage = store.listReducedCoverage
       ? await store.listReducedCoverage(feature)
       : { ok: true as const, records: [] as BuildReviewReducedCoverageDispositionRecord[] };
@@ -247,12 +269,17 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     } = effective;
     const output = {
       feature: command.feature, lapId: aggregate.lapId, snapshotDigest: aggregate.snapshotDigest, ...reported, acceptedDispositions: accepted,
+      cases,
       ...(gateEntry?.lastMechanicalFault === undefined ? {} : { lastMechanicalFault: gateEntry.lastMechanicalFault }),
       ...(faults.length > 0 ? { exhaustedMechanicalFaults: faults } : {}),
     };
-    print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted, faults, gateEntry?.lastMechanicalFault));
+    print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted, cases, faults, gateEntry?.lastMechanicalFault));
     return 0;
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('remediation case store is ')) {
+      print(`build-review findings: ${error.message} for '${command.feature}'.`);
+      return 1;
+    }
     print(`build-review findings: current feature state is invalid or unavailable for '${command.feature}'.`);
     return 1;
   }
