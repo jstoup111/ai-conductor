@@ -274,6 +274,19 @@ describe('sealed-artifact remediation routing', () => {
       expect(redirects).toEqual([]);
   });
 
+  it('keeps a newline-separated rationale citation on its authored build route', async () => {
+    const { outcome, redirects } = await remediate([{
+      id: 'newline-citation',
+      disposition: 'build',
+      category: null,
+      rationale: 'Update the parser to reject null\nEvidence: .docs/stories/another-feature.md:12',
+      tasks: [{ id: 'parser-repair', title: 'Repair parser behavior' }],
+    }]);
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(redirects).toEqual([]);
+  });
+
   it('emits the directing task-title clause and source when redirecting a sealed target', async () => {
     const { outcome, redirects } = await remediate([{
       id: 'title-event-gap',

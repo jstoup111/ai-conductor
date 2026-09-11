@@ -13937,6 +13937,7 @@ export function directedProtectedTarget(
     const clauseStart = Math.max(
       beforePath.lastIndexOf('.'),
       beforePath.lastIndexOf(';'),
+      beforePath.lastIndexOf('\n'),
     );
     const clause = prose.slice(clauseStart + 1).trim();
     return action.test(beforePath.slice(clauseStart + 1)) ? [{ path, clause }] : [];

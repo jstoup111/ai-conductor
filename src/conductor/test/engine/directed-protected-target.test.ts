@@ -56,7 +56,7 @@ describe('directedProtectedTarget', () => {
   });
 
   it('collapses whitespace without ellipsizing a directing clause within the quote budget', () => {
-    const clause = 'Amend\n  .docs/stories/another-feature.md\twith the correction.';
+    const clause = 'Amend .docs/stories/another-feature.md\n  with\tthe correction.';
 
     expect(directedProtectedTarget(clause, 'feature')).toEqual({
       path: '.docs/stories/another-feature.md',
@@ -68,5 +68,11 @@ describe('directedProtectedTarget', () => {
     const title = 'See .docs/stories/another-feature.md for the external correction.';
 
     expect(directedProtectedTarget(title, 'feature')).toBeUndefined();
+  });
+
+  it('returns undefined when a directing verb precedes a newline-separated citation', () => {
+    const rationale = 'Update the parser to reject null\nEvidence: .docs/stories/another-feature.md:12';
+
+    expect(directedProtectedTarget(rationale, 'feature')).toBeUndefined();
   });
 });
