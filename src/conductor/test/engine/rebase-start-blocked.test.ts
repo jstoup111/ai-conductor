@@ -12,7 +12,7 @@ import {
   REBASE_UNTRACKED_QUARANTINE_DIR,
   makeGitRunner,
   performRebase,
-  runGatedRebaseResolution,
+  resolveRebaseConflicts,
   type GitRunner,
 } from '../../src/engine/rebase.js';
 
@@ -172,10 +172,13 @@ describe('engine/rebase — refusal before rebase starts', () => {
       expect(outcome).toMatchObject({ kind: 'conflict_halt', conflicts: ['conflict.txt'], quarantine: {
         paths: ['generated.txt'], directory: join(root, REBASE_UNTRACKED_QUARANTINE_DIR),
       } });
-      const resolved = await runGatedRebaseResolution({
-        git: makeGitRunner(root), projectRoot: root, outcome, cap: 1,
-        resolve: async () => ({ resolved: false, reason: 'leave for human' }),
-      });
+      const resolved = await resolveRebaseConflicts(
+        makeGitRunner(root),
+        root,
+        outcome,
+        async () => ({ resolved: false, reason: 'leave for human' }),
+        1,
+      );
       expect(resolved).toMatchObject({ kind: 'conflict_halt', reason: 'leave for human', quarantine: outcome.quarantine });
     } finally {
       await rm(root, { recursive: true, force: true });

@@ -1351,7 +1351,7 @@ export async function featureCommitsPreserved(
  * The helper is PURE and git-injected (no event emission, no writeHalt, no
  * config reads). Callers wire those as needed.
  */
-export async function resolveRebaseConflicts(
+async function resolveRebaseConflictsInner(
   git: GitRunner,
   projectRoot: string,
   conflictOutcome: RebaseOutcome,
@@ -1511,6 +1511,30 @@ export async function resolveRebaseConflicts(
 }
 
 /**
+ * Resolve a paused rebase while retaining any recovery record created before
+ * the conflict. Both the finish-time and autoresolve callers use this export,
+ * so quarantine metadata must survive every rebuilt outcome here.
+ */
+export async function resolveRebaseConflicts(
+  git: GitRunner,
+  projectRoot: string,
+  conflictOutcome: RebaseOutcome,
+  resolver: RebaseResolver,
+  cap: number,
+): Promise<RebaseOutcome> {
+  const resolved = await resolveRebaseConflictsInner(
+    git,
+    projectRoot,
+    conflictOutcome,
+    resolver,
+    cap,
+  );
+  return conflictOutcome.quarantine === undefined
+    ? resolved
+    : { ...resolved, quarantine: conflictOutcome.quarantine };
+}
+
+/**
  * Gated wrapper around {@link resolveRebaseConflicts}. This is the piece of the
  * daemon's rebase mechanism that BOTH `conductor.ts`'s finish-time `runRebaseStep`
  * and `daemon-rekick.ts`'s FR-12 play-forward `resumeRebaseFirst` must share so a
@@ -1569,10 +1593,7 @@ export async function runGatedRebaseResolution(opts: {
       /* best-effort */
     }
   }
-  // A pre-start collision may have been healed before this conflict paused the
-  // rebase. Resolution rebuilds its outcome to preserve the existing guards,
-  // so restore that durable recovery record on every resolved outcome kind.
-  return outcome.quarantine === undefined ? resolved : { ...resolved, quarantine: outcome.quarantine };
+  return resolved;
 }
 
 // ── Verdict + event wiring (consumed by the conductor) ───────────────────────
