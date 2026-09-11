@@ -5,13 +5,14 @@
 //   brainStart(deps)  → Promise<number>   creates/reuses the `cc-brain-*` tmux
 //                        session running `ai-conductor intake-loop --continuous`
 //   brainStop(deps)   → Promise<number>   kills the brain session
-//   brainStatus(deps) → Promise<number>   reports liveness + queued-work count
+//   brainStatus(deps) → Promise<number>   reports liveness + durable queue depth
 //
 // No real tmux is spawned — a fake TmuxRunner records argv and returns
 // deterministic results. No real filesystem I/O — a fake readStatus is
 // injected for the intake-status.json read.
 
 import { describe, it, expect } from 'vitest';
+import { CorruptLedgerError } from '../../src/engine/engineer/intake/ledger.js';
 
 const MOD = '../../src/engine/brain-supervisor-cli.js';
 
@@ -117,7 +118,12 @@ describe('brainStop', () => {
 });
 
 describe('brainStatus', () => {
-  it('reports running + queued count from the status surface when the session is up', async () => {
+  const now = Date.UTC(2026, 8, 11, 12, 0, 0);
+  const entry = (overrides: Record<string, unknown> = {}) => ({
+    source: 'github-issues', sourceRef: 'owner/repo#1', status: 'pending', attempts: 0, ...overrides,
+  });
+
+  it('reports durable pending, claimed, and stranded counts after liveness', async () => {
     const mod = await load();
     const brainStart = requireFn(mod, 'brainStart');
     const brainStatus = requireFn(mod, 'brainStatus');
@@ -128,28 +134,136 @@ describe('brainStatus', () => {
     const code = await brainStatus({
       run,
       out: (l: string) => out.push(l),
-      readStatus: async () => JSON.stringify({ count: 3, sourceRefs: ['a', 'b', 'c'] }),
+      readLedgerEntries: async () => [
+        entry(), entry({ sourceRef: 'owner/repo#2', status: 'claimed', lastSeenAt: new Date(now - 2_000).toISOString() }),
+        entry({ sourceRef: 'owner/repo#3', status: 'claimed', lastSeenAt: new Date(now - 500).toISOString() }),
+        entry({ sourceRef: 'owner/repo#4', status: 'done' }),
+      ],
+      now: () => now,
+      staleClaimWindowMs: 1_000,
     });
 
     expect(code).toBe(0);
-    expect(out.join('\n')).toMatch(/running/i);
-    expect(out.join('\n')).toMatch(/3/);
+    expect(out).toEqual(['brain loop: running', 'pending: 1', 'claimed: 2', 'stranded: 1']);
   });
 
-  it('reports stopped + zero queued when no session and no status surface', async () => {
+  it('reads the ledger again on every invocation', async () => {
+    const mod = await load();
+    const brainStatus = requireFn(mod, 'brainStatus');
+    const { run } = makeFakeTmuxRunner();
+    const out: string[] = [];
+    let entries = [entry()];
+    const deps = {
+      run, out: (l: string) => out.push(l), readLedgerEntries: async () => entries,
+      now: () => now, staleClaimWindowMs: 1_000,
+    };
+
+    expect(await brainStatus(deps)).toBe(0);
+    entries = [entry({ status: 'claimed', lastSeenAt: new Date(now - 2_000).toISOString() })];
+    expect(await brainStatus(deps)).toBe(0);
+
+    expect(out).toEqual([
+      'brain loop: stopped', 'pending: 1', 'claimed: 0', 'stranded: 0',
+      'brain loop: stopped', 'pending: 0', 'claimed: 1', 'stranded: 1',
+    ]);
+  });
+
+  it('reports corrupt-ledger quarantine location and no counts', async () => {
+    const mod = await load();
+    const brainStatus = requireFn(mod, 'brainStatus');
+    const { run } = makeFakeTmuxRunner();
+    const error = new CorruptLedgerError(
+      '/engineer/ledger.json',
+      'invalid JSON',
+      '/engineer/ledger.json.corrupt-20260911',
+    );
+    const out: string[] = [];
+
+    const code = await brainStatus({
+      run, out: (l: string) => out.push(l), readLedgerEntries: async () => { throw error; },
+    });
+
+    expect(code).toBe(1);
+    expect(out).toEqual([
+      'brain loop: stopped',
+      'intake queue: unavailable — intake ledger is corrupt at /engineer/ledger.json; quarantine path: /engineer/ledger.json.corrupt-20260911',
+    ]);
+    expect(out.join('\n')).not.toMatch(/^(pending|claimed|stranded):/m);
+  });
+
+  it('reports a corrupt-ledger quarantine diagnostic and no counts when no path is available', async () => {
+    const mod = await load();
+    const brainStatus = requireFn(mod, 'brainStatus');
+    const { run } = makeFakeTmuxRunner();
+    const error = new CorruptLedgerError(
+      '/engineer/ledger.json',
+      'invalid JSON',
+      undefined,
+      'copy failed: permission denied',
+    );
+    const out: string[] = [];
+
+    const code = await brainStatus({
+      run, out: (l: string) => out.push(l), readLedgerEntries: async () => { throw error; },
+    });
+
+    expect(code).toBe(1);
+    expect(out).toEqual([
+      'brain loop: stopped',
+      'intake queue: unavailable — intake ledger is corrupt at /engineer/ledger.json; quarantine path: copy failed: permission denied',
+    ]);
+    expect(out.join('\n')).not.toMatch(/^(pending|claimed|stranded):/m);
+  });
+
+  it('reports lease unavailability and no counts', async () => {
+    const mod = await load();
+    const brainStatus = requireFn(mod, 'brainStatus');
+    const { run } = makeFakeTmuxRunner();
+    const error = new Error('Unable to acquire intake ledger lease: busy');
+    const out: string[] = [];
+
+    const code = await brainStatus({
+      run, out: (l: string) => out.push(l), readLedgerEntries: async () => { throw error; },
+    });
+
+    expect(code).toBe(1);
+    expect(out).toEqual(['brain loop: stopped', `intake queue: unavailable — ${error.message}`]);
+    expect(out.join('\n')).not.toMatch(/^(pending|claimed|stranded):/m);
+  });
+
+  it('labels a recorded notifier batch as the last notification', async () => {
     const mod = await load();
     const brainStatus = requireFn(mod, 'brainStatus');
     const { run } = makeFakeTmuxRunner();
     const out: string[] = [];
 
     const code = await brainStatus({
-      run,
-      out: (l: string) => out.push(l),
-      readStatus: async () => null,
+      run, out: (l: string) => out.push(l), readLedgerEntries: async () => [], staleClaimWindowMs: 1_000,
+      readStatus: async () => JSON.stringify({ count: 3, timestamp: '2026-09-11T12:00:00.000Z' }),
     });
 
     expect(code).toBe(0);
-    expect(out.join('\n')).toMatch(/stopped/i);
-    expect(out.join('\n')).toMatch(/0/);
+    expect(out).toEqual([
+      'brain loop: stopped', 'pending: 0', 'claimed: 0', 'stranded: 0',
+      'last notification: 3 at 2026-09-11T12:00:00.000Z',
+    ]);
   });
+
+  it.each([null, '', '{ bad json', JSON.stringify({ timestamp: '2026-09-11T12:00:00.000Z' })])(
+    'does not fabricate a notification batch from an absent or invalid status surface',
+    async (surface) => {
+      const mod = await load();
+      const brainStatus = requireFn(mod, 'brainStatus');
+      const { run } = makeFakeTmuxRunner();
+      const out: string[] = [];
+
+      const code = await brainStatus({
+        run, out: (l: string) => out.push(l), readLedgerEntries: async () => [],
+        staleClaimWindowMs: 1_000, readStatus: async () => surface,
+      });
+
+      expect(code).toBe(0);
+      expect(out).toEqual(['brain loop: stopped', 'pending: 0', 'claimed: 0', 'stranded: 0']);
+    },
+  );
 });
