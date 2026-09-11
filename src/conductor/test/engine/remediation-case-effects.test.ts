@@ -201,7 +201,7 @@ describe('remediation case effects', () => {
       refutation: { claim: 'The finding is false.', assertions: [{ assertion: 'The behavior exists.', verdict: 'refuted', evidence: [{ path: 'test/evidence.ts', excerpt: 'evidence' }] }] },
     }] });
     const createIssue = vi.fn().mockResolvedValue('https://github.test/acme/repo/issues/43');
-    const intakeTracker = { createIssue } as TrackerClient;
+    const intakeTracker = { createIssue } as unknown as TrackerClient;
     const effect = {
       kind: 'deferral' as const,
       title: 'Deferred refutation',

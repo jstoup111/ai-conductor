@@ -1575,9 +1575,11 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(lapBJudge).not.toHaveBeenCalled();
     expect(events.map((event) => event.type)).not.toContain('remediation_semantic_repeat_halt');
 
+    const judgedResult = aggregate.results.testQuality;
+    if (judgedResult.kind !== 'judged') throw new Error('fixture must provide a judged test-quality result');
     const driftedAggregate = joinBuildReviewRubricOutcomes({
       ...aggregate, lapId: 'lap-drifted' as never,
-      results: { testQuality: { ...aggregate.results.testQuality, lapId: 'lap-drifted' as never, findings: [{
+      results: { testQuality: { ...judgedResult, lapId: 'lap-drifted' as never, findings: [{
         ...rawSource, anchor: { ...rawSource.anchor, locus: { ...rawSource.anchor.locus, contentHash: 'sha256:drifted' } },
       }] } },
     });
@@ -1595,9 +1597,9 @@ describe('coordinateBuildReviewAdjudication', () => {
   });
 
   it.each([
-    ['applied', { findIssueByEffectMarker: vi.fn().mockResolvedValue(null) } as EffectMarkerTrackerClient, vi.fn().mockResolvedValue({ issueUrl: 'https://github.test/acme/repo/issues/44' }), 'pass'],
+    ['applied', { findIssueByEffectMarker: vi.fn().mockResolvedValue(null) } as unknown as EffectMarkerTrackerClient, vi.fn().mockResolvedValue({ issueUrl: 'https://github.test/acme/repo/issues/44' }), 'pass'],
     ['reserved', undefined, undefined, 'halt'],
-    ['failed', { findIssueByEffectMarker: vi.fn().mockResolvedValue(null) } as EffectMarkerTrackerClient, vi.fn().mockRejectedValue(new Error('tracker unavailable')), 'halt'],
+    ['failed', { findIssueByEffectMarker: vi.fn().mockResolvedValue(null) } as unknown as EffectMarkerTrackerClient, vi.fn().mockRejectedValue(new Error('tracker unavailable')), 'halt'],
   ] as const)('keeps a refuted %s residual from regressing on lap B', async (_status, tracker, fileIssue, expectedRoute) => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);
@@ -1632,7 +1634,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     }));
     const events: RemediationCaseLifecycleEvent[] = [];
     await coordinateBuildReviewAdjudication({
-      ...input(root, lapAJudge), ...(tracker && fileIssue ? { tracker, repo: 'acme/repo', fileIssue } : {}),
+      ...input(root, lapAJudge), ...(tracker ? { tracker, repo: 'acme/repo', fileIssue } : {}),
       generateId: sequentialIds('residual'), emit: async (event) => { events.push(event); },
     });
 
@@ -1696,9 +1698,11 @@ describe('coordinateBuildReviewAdjudication', () => {
     expect(exact).toMatchObject({ ok: true, route: 'pass', dispatchSkipped: true });
     expect(exactJudge).not.toHaveBeenCalled();
 
+    const judgedResult = aggregate.results.testQuality;
+    if (judgedResult.kind !== 'judged') throw new Error('fixture must provide a judged test-quality result');
     const driftedAggregate = joinBuildReviewRubricOutcomes({
       ...aggregate, lapId: 'lap-drifted' as never,
-      results: { testQuality: { ...aggregate.results.testQuality, lapId: 'lap-drifted' as never, findings: [{
+      results: { testQuality: { ...judgedResult, lapId: 'lap-drifted' as never, findings: [{
         ...rawSource, anchor: { ...rawSource.anchor, locus: { ...rawSource.anchor.locus, contentHash: 'sha256:drifted' } },
       }] } },
     });

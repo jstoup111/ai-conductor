@@ -132,7 +132,9 @@ describe('build-review findings CLI', () => {
       cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
       readFile: async () => JSON.stringify(aggregate),
       createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
-      createCaseStore: () => ({ read: async () => ({ ok: false as const, reason }) }), print,
+      createCaseStore: (_worktree, _feature) => ({
+        read: async () => ({ ok: false as const, reason: reason as 'malformed-state' | 'unknown-version' }),
+      }), print,
     })).resolves.toBe(1);
     expect(print).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`remediation case store.*${reason}`, 'i')));
   });

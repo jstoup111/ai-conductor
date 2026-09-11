@@ -60,6 +60,14 @@ const VALID_JUDGEMENT = {
   ],
 } as const satisfies RemediationCaseJudgement;
 
+const VALID_REFUTATION = {
+  claim: 'The earlier action did not cover this finding.',
+  assertions: [{
+    assertion: 'The repaired branch is still absent.', verdict: 'refuted',
+    evidence: [{ path: 'test/widget.test.ts', excerpt: 'covers the changed branch' }],
+  }],
+} as const;
+
 const VALID_REFUTE_JUDGEMENT = {
   ...VALID_JUDGEMENT,
   sourceOutcomes: [
@@ -71,13 +79,7 @@ const VALID_REFUTE_JUDGEMENT = {
     {
       caseRef: 'case-refuted', existingCaseId: 'existing-case-1', disposition: 'refute', priority: 'medium',
       rationale: 'The earlier action did not address the asserted defect.', confidence: 'high', effect: { kind: 'none' },
-      refutation: {
-        claim: 'The earlier action did not cover this finding.',
-        assertions: [{
-          assertion: 'The repaired branch is still absent.', verdict: 'refuted',
-          evidence: [{ path: 'test/widget.test.ts', excerpt: 'covers the changed branch' }],
-        }],
-      },
+      refutation: VALID_REFUTATION,
     },
   ],
 } as const satisfies RemediationCaseJudgement;
@@ -204,7 +206,7 @@ describe('remediation case graph validator', () => {
       ...VALID_REFUTE_JUDGEMENT,
       cases: [...VALID_REFUTE_JUDGEMENT.cases.slice(0, 2), {
         ...VALID_REFUTE_JUDGEMENT.cases[2],
-        refutation: { ...VALID_REFUTE_JUDGEMENT.cases[2].refutation, assertions: [{ ...VALID_REFUTE_JUDGEMENT.cases[2].refutation.assertions[0], verdict: 'upheld' }] },
+        refutation: { ...VALID_REFUTATION, assertions: [{ ...VALID_REFUTATION.assertions[0], verdict: 'upheld' }] },
       }],
     }, 'refutation-without-refuted-assertion'],
     ['a refutation below high confidence', {
