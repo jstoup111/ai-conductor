@@ -272,6 +272,7 @@ function fakeDeps(opts: {
   isProcessed?: (slug: string) => Promise<boolean>;
   warned?: Set<string>;
   isOperatorParked?: (slug: string) => Promise<boolean>;
+  markRekicked?: (slug: string, sha: string) => Promise<void>;
   readHaltClass?: (
     slug: string,
   ) => Promise<HaltDisposition>;
@@ -305,6 +306,7 @@ function fakeDeps(opts: {
         }
       : {}),
     ...(opts.isOperatorParked ? { isOperatorParked: opts.isOperatorParked } : {}),
+    ...(opts.markRekicked ? { markRekicked: opts.markRekicked } : {}),
     ...(opts.readHaltClass
       ? {
           readHaltClass: async (slug: string) => {
@@ -330,6 +332,52 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     expect([...trace.cleared].sort()).toEqual(['a', 'b', 'c']);
     expect(last.get('a')).toBe(SHA_B);
     expect(last.get('c')).toBe(SHA_B);
+  });
+
+  it('persists a cleared slug only after its marker clear resolves', async () => {
+    const trace: string[] = [];
+    const { deps } = fakeDeps({
+      halted: ['clear-me'],
+      markRekicked: async (slug, sha) => { trace.push(`record:${slug}:${sha}`); },
+    });
+    const originalClear = deps.clearMarker;
+    deps.clearMarker = async (slug) => {
+      await originalClear(slug);
+      trace.push(`clear:${slug}`);
+    };
+
+    await expect(rekickSweep(deps, SHA_B)).resolves.toEqual({ cleared: ['clear-me'], skipped: [] });
+    expect(trace).toEqual(['clear:clear-me', `record:clear-me:${SHA_B}`]);
+  });
+
+  it.each(['abort', 'clear'] as const)('does not persist a slug whose %s path fails', async (failure) => {
+    const recorded: string[] = [];
+    const { deps } = fakeDeps({
+      halted: ['broken'],
+      rebasing: failure === 'abort' ? new Set(['broken']) : undefined,
+      abortFails: failure === 'abort' ? new Set(['broken']) : undefined,
+      clearFails: failure === 'clear' ? new Set(['broken']) : undefined,
+      markRekicked: async (slug) => { recorded.push(slug); },
+    });
+
+    await expect(rekickSweep(deps, SHA_B)).resolves.toEqual({ cleared: [], skipped: ['broken'] });
+    expect(recorded).toEqual([]);
+  });
+
+  it('logs a failed durable write and continues sweeping siblings', async () => {
+    const { deps, trace } = fakeDeps({
+      halted: ['bad-record', 'good-record'],
+      markRekicked: async (slug) => {
+        if (slug === 'bad-record') throw new Error('disk full');
+      },
+    });
+
+    await expect(rekickSweep(deps, SHA_B)).resolves.toEqual({
+      cleared: ['bad-record', 'good-record'], skipped: [],
+    });
+    expect(deps.lastRekickSha.get('bad-record')).toBe(SHA_B);
+    expect(deps.lastRekickSha.get('good-record')).toBe(SHA_B);
+    expect(trace.events.some((event) => event.includes('bad-record') && event.includes('durable record anomaly'))).toBe(true);
   });
 
   it('aborts an in-progress rebase BEFORE clearing the marker', async () => {
