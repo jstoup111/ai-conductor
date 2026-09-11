@@ -1,4 +1,4 @@
-// Covers: task:12
+// Covers: task:12, task:13
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,7 +7,7 @@ import { AggregationTemporality, InMemoryMetricExporter, MeterProvider, Periodic
 import type { SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { Conductor } from '../test-conductor.js';
 import { writeState } from '../../src/engine/state.js';
-import { ALL_STEPS } from '../../src/engine/steps.js';
+import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
 import { MetricsRecorder } from '../../src/engine/otel/metrics.js';
@@ -31,6 +31,10 @@ interface SerialFixture {
   state: ConductState;
   warnings: string[];
   step: StepName;
+}
+
+interface BuiltinFixture extends Omit<SerialFixture, 'calls' | 'step'> {
+  calls: StepName[];
 }
 
 const directories: string[] = [];
@@ -70,12 +74,10 @@ async function runSerial(input: {
     ...Object.fromEntries(ALL_STEPS.map(({ name }) => [name, 'done'])),
     memory: 'pending', explore: 'pending', complexity_tier: 'M', track: 'technical', feature_desc: 'serial-telemetry-parity',
   };
-  const serialStep: StepName = input.widthOneGroup ? 'manual_test' : 'memory';
+  const serialStep: StepName = input.widthOneGroup ? VALIDATION_GROUP.members[0] as StepName : 'memory';
   if (input.widthOneGroup) {
     state.memory = 'done';
-    state.manual_test = 'pending';
-    state.prd_audit = 'pending';
-    state.architecture_review_as_built = 'pending';
+    for (const member of VALIDATION_GROUP.members) state[member as StepName] = 'pending';
     state.finish = 'pending';
   }
   await writeState(stateFilePath, state);
@@ -126,7 +128,11 @@ async function runSerial(input: {
   const conductor = new Conductor({
     projectRoot, stateFilePath, stepRunner: { run }, events, fromStep: serialStep, mode: 'auto', daemon: true, maxRetries: 2,
     verifyArtifacts: false, featureSlug: 'serial-telemetry-parity', operatorParkBoundary: async () => ++boundaryChecks > 1,
-    ...(input.widthOneGroup ? { config: { steps: { prd_audit: { disable: true }, architecture_review_as_built: { disable: true } } } } : {}),
+    ...(input.widthOneGroup ? {
+      config: {
+        steps: Object.fromEntries(VALIDATION_GROUP.members.slice(1).map((member) => [member, { disable: true }])),
+      },
+    } : {}),
     gh: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })), git: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })), runGh: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
   });
 
@@ -148,6 +154,81 @@ function serialStepSpan(fixture: SerialFixture) {
   return fixture.spans.filter((span) => span.name === fixture.step);
 }
 
+async function runBuiltinGroup(input: {
+  outcomes?: Partial<Record<StepName, Array<Awaited<ReturnType<StepRunner['run']>>>>>;
+  validationConcurrency?: number;
+} = {}): Promise<BuiltinFixture> {
+  const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-built-in-group-telemetry-'));
+  directories.push(projectRoot);
+  const stateFilePath = join(projectRoot, 'conduct-state.json');
+  const state: ConductState = {
+    ...Object.fromEntries(ALL_STEPS.map(({ name }) => [name, 'done'])),
+    ...Object.fromEntries(VALIDATION_GROUP.members.map((member) => [member, 'pending'])),
+    finish: 'pending', complexity_tier: 'M', track: 'technical', feature_desc: 'built-in-group-telemetry-parity',
+  };
+  await writeState(stateFilePath, state);
+  let now = 1_000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const events = new ConductorEventEmitter();
+  const observed: ConductorEvent[] = [];
+  for (const type of ['step_started', 'step_completed', 'step_failed', 'step_retry', 'provider_attempt', 'group_member_step'] as const) {
+    events.on(type, (event) => { observed.push(event); });
+  }
+  const ledgerPath = join(projectRoot, '.pipeline', 'events.jsonl');
+  const persister = new EventPersister(ledgerPath, events, { nowMs: () => now });
+  persister.start();
+  const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  const meterProvider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter: metricExporter, exportIntervalMillis: 60_000 })] });
+  const metrics = new MetricsListener(new MetricsRecorder(meterProvider.getMeter('built-in-group-telemetry'), { project: 'project', worker: 'worker' }), () => now, 'built-in-group-telemetry');
+  const spanExporter = new CapturingSpanExporter();
+  const visualizer = new OtelVisualizer(
+    resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, join(projectRoot, '.pipeline')),
+    { spanExporter, exportTimeoutMillis: 50 },
+  );
+  visualizer.start(events, { runId: 'built-in-group-run', feature: 'built-in-group-telemetry', project: projectRoot });
+  metrics.start(events);
+
+  const calls: StepName[] = [];
+  let boundaryChecks = 0;
+  const conductor = new Conductor({
+    projectRoot, stateFilePath, events, fromStep: VALIDATION_GROUP.members[0] as StepName, mode: 'auto', daemon: true,
+    maxRetries: 2, verifyArtifacts: false, featureSlug: 'built-in-group-telemetry',
+    config: { validation_concurrency: input.validationConcurrency },
+    operatorParkBoundary: async () => ++boundaryChecks > 1,
+    stepRunner: {
+      run: async (step, _state, options) => {
+        calls.push(step);
+        const outcomes = input.outcomes?.[step];
+        const outcome = outcomes?.shift() ?? { success: true };
+        // Each local fake completes on its own event-loop turn. This retains
+        // concurrent admission while making the injected clock observe the
+        // member's own finish before a sibling can advance it.
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        now += 10;
+        await events.emit({
+          type: 'provider_attempt', step, executionContext: options?.executionContext,
+          provider: 'claude', preferredProvider: 'codex', model: 'gpt-5.6-luna', effort: 'high', tier: 'M',
+          fallbackReason: 'controlled built-in fallback', invoked: true, outcome: outcome.success ? 'success' : 'failure',
+        });
+        return outcome;
+      },
+    },
+    gh: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })), git: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })), runGh: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
+  });
+  try {
+    const result = await conductor.run();
+    await meterProvider.forceFlush();
+    await visualizer.stop();
+    const ledger = (await readFile(ledgerPath, 'utf8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    return { result, calls, events: observed, ledger, spans: spanExporter.getFinishedSpans(), metrics: metricExporter, state: JSON.parse(await readFile(stateFilePath, 'utf8')) as ConductState, warnings: [] };
+  } finally {
+    persister.stop();
+    metrics.stop();
+    await meterProvider.shutdown();
+    await visualizer.stop();
+  }
+}
+
 describe('serial conductor telemetry parity', () => {
   it('persists and projects one width-one fallback serial execution with bounded attribution', async () => {
     const fixture = await runSerial({
@@ -160,6 +241,11 @@ describe('serial conductor telemetry parity', () => {
     expect(fixture.result).toEqual({ kind: 'operator-parked', boundary: { kind: 'step', name: 'manual_test' } });
     expect(fixture.calls).toBe(1);
     expect(fixture.events.filter((event) => event.type === 'parallel_started')).toHaveLength(0);
+    expect(fixture.events.filter((event) => event.type === 'step_started' && VALIDATION_GROUP.members.slice(1).includes(event.step))).toHaveLength(0);
+    for (const skippedMember of VALIDATION_GROUP.members.slice(1)) {
+      expect(fixture.spans.filter((span) => span.name === skippedMember)).toHaveLength(0);
+      expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === skippedMember)).toHaveLength(0);
+    }
     expect(started?.executionContext).toEqual(expect.objectContaining({ executionId: expect.any(String), subject: { kind: 'lifecycle-step', step: 'manual_test' } }));
     expect(lifecycle.map((event) => ('executionContext' in event ? event.executionContext?.executionId : undefined)))
       .toEqual([started?.executionContext?.executionId, started?.executionContext?.executionId, started?.executionContext?.executionId]);
@@ -264,5 +350,99 @@ describe('serial conductor telemetry parity', () => {
     expect(disabled.spans).toHaveLength(0);
     expect(disabled.metrics.getMetrics()).toHaveLength(0);
     expect(failing.warnings).toHaveLength(1);
+  });
+
+  it('derives every wider built-in member from the registry and gives each an execution scope', async () => {
+    const fixture = await runBuiltinGroup();
+    const started = fixture.events.filter((event) => event.type === 'step_started');
+    const completed = fixture.events.filter((event) => event.type === 'step_completed');
+
+    expect(fixture.calls).toEqual(VALIDATION_GROUP.members);
+    expect(started.map((event) => event.step)).toEqual(VALIDATION_GROUP.members);
+    expect(completed.map((event) => event.step)).toEqual(VALIDATION_GROUP.members);
+    const groupDuration = (fixture.ledger.find((event) => event.type === 'parallel_completed')?.activeInterval as { durationMs?: number } | undefined)?.durationMs;
+    const memberDurations: number[] = [];
+    for (const member of VALIDATION_GROUP.members) {
+      const start = started.find((event) => event.step === member);
+      const terminal = completed.find((event) => event.step === member);
+      expect(start?.executionContext).toEqual(expect.objectContaining({
+        executionId: expect.any(String), subject: { kind: 'lifecycle-step', step: member },
+      }));
+      expect(terminal?.executionContext).toEqual(start?.executionContext);
+      const persisted = fixture.ledger.find((event) => event.type === 'step_completed' && event.step === member);
+      expect(persisted).toMatchObject({
+        executionContext: start?.executionContext,
+        activeInterval: { durationMs: expect.any(Number) },
+      });
+      memberDurations.push((persisted?.activeInterval as { durationMs: number }).durationMs);
+      expect(fixture.spans.filter((span) => span.name === member)).toHaveLength(1);
+      expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === member)).toHaveLength(1);
+    }
+    expect(groupDuration).toBeDefined();
+    expect(memberDurations.every((duration) => duration <= groupDuration!)).toBe(true);
+    expect(memberDurations.some((duration) => duration < groupDuration!)).toBe(true);
+  });
+
+  it('admits cap-one built-in members one at a time without queue-duration telemetry', async () => {
+    const fixture = await runBuiltinGroup({ validationConcurrency: 1 });
+    const terminals = fixture.ledger.filter((event) => event.type === 'step_completed');
+
+    expect(fixture.calls).toEqual(VALIDATION_GROUP.members);
+    expect(terminals.map((event) => event.step)).toEqual(VALIDATION_GROUP.members);
+    expect(terminals.map((event) => event.activeInterval)).toEqual(
+      VALIDATION_GROUP.members.map((_member, index) => ({ startedAtMs: 1_000 + index * 10, durationMs: 10 })),
+    );
+    for (const member of VALIDATION_GROUP.members) {
+      expect(fixture.events.filter((event) => event.type === 'step_started' && event.step === member)).toHaveLength(1);
+      expect(fixture.spans.filter((span) => span.name === member)).toHaveLength(1);
+      expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === member)).toHaveLength(1);
+    }
+  });
+
+  it('retains each member scope across retries and closes an exhausted member as failed', async () => {
+    const retryMember = VALIDATION_GROUP.members[0] as StepName;
+    const retried = await runBuiltinGroup({
+      outcomes: {
+        [retryMember]: [{ success: false, output: 'controlled retry' }, { success: true }],
+      },
+    });
+    const exhausted = await runBuiltinGroup({
+      outcomes: {
+        [retryMember]: [{ success: false, output: 'controlled exhaustion' }, { success: false, output: 'controlled exhaustion' }],
+      },
+    });
+    const retriedStart = retried.events.find((event): event is Extract<ConductorEvent, { type: 'step_started' }> => event.type === 'step_started' && event.step === retryMember);
+    const retry = retried.events.find((event): event is Extract<ConductorEvent, { type: 'step_retry' }> => event.type === 'step_retry' && event.step === retryMember);
+    const retriedTerminal = retried.events.find((event): event is Extract<ConductorEvent, { type: 'step_completed' }> => event.type === 'step_completed' && event.step === retryMember);
+
+    expect(retry).toMatchObject({ attempt: 2, maxAttempts: 2, executionContext: retriedStart?.executionContext });
+    expect(retriedTerminal?.executionContext).toEqual(retriedStart?.executionContext);
+    expect(metricPoints(retried.metrics, 'conductor.step.retries').filter((point) => point.attributes.step === retryMember)).toHaveLength(1);
+    expect(exhausted.events.filter((event) => event.type === 'step_failed' && event.step === retryMember)).toHaveLength(1);
+    expect(exhausted.events.filter((event) => event.type === 'step_completed' && event.step === retryMember)).toHaveLength(0);
+    expect(exhausted.spans.filter((span) => span.name === retryMember)).toHaveLength(1);
+    expect(metricPoints(exhausted.metrics, 'conductor.step.outcomes').find((point) => point.attributes.step === retryMember)?.attributes.outcome).toBe('failure');
+    for (const member of VALIDATION_GROUP.members) {
+      expect(exhausted.events.filter((event) => (event.type === 'step_completed' || event.type === 'step_failed') && event.step === member)).toHaveLength(1);
+      expect(metricPoints(exhausted.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === member)).toHaveLength(1);
+    }
+  });
+
+  it('keeps mixed built-in member lifecycles independent of the group halt', async () => {
+    const failedMember = VALIDATION_GROUP.members[1] as StepName;
+    const fixture = await runBuiltinGroup({
+      outcomes: {
+        [failedMember]: [{ success: false, output: 'controlled mixed failure' }, { success: false, output: 'controlled mixed failure' }],
+      },
+    });
+
+    expect(fixture.state[VALIDATION_GROUP.members[0] as StepName]).toBe('failed');
+    for (const member of VALIDATION_GROUP.members) {
+      expect(fixture.events.filter((event) => event.type === 'step_started' && event.step === member)).toHaveLength(1);
+      expect(fixture.events.filter((event) => (event.type === 'step_completed' || event.type === 'step_failed') && event.step === member)).toHaveLength(1);
+      expect(fixture.spans.filter((span) => span.name === member)).toHaveLength(1);
+      expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === member)).toHaveLength(1);
+    }
+    expect(metricPoints(fixture.metrics, 'conductor.step.outcomes').find((point) => point.attributes.step === failedMember)?.attributes.outcome).toBe('failure');
   });
 });
