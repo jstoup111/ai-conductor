@@ -4014,16 +4014,20 @@ export class Conductor {
       : isAbsolute(activePlanPath)
         ? activePlanPath
         : join(this.projectRoot, activePlanPath);
-    const sealedArtifactsByGapId = new Map<string, string>();
+    const sealedArtifactsByGapId = new Map<string, {
+      artifact: string;
+      directingClause: string;
+      directingSource: 'task title' | 'rationale';
+    }>();
     if (planPath) {
       for (const gap of plan.gaps) {
-        const artifact = remediationGapTargetsAnotherFeatureSealedArtifact(gap, planStem(planPath));
-        if (artifact) sealedArtifactsByGapId.set(gap.id, artifact);
+        const target = remediationGapTargetsAnotherFeatureSealedArtifact(gap, planStem(planPath));
+        if (target) sealedArtifactsByGapId.set(gap.id, target);
       }
     }
     const sealedArtifactGapIds = new Set(sealedArtifactsByGapId.keys());
-    for (const [gapId, artifact] of sealedArtifactsByGapId) {
-      await this.events.emit({ type: 'remediation_sealed_artifact_redirect', gapId, artifact });
+    for (const [gapId, target] of sealedArtifactsByGapId) {
+      await this.events.emit({ type: 'remediation_sealed_artifact_redirect', gapId, ...target });
     }
     const gaps = plan.gaps.map((gap) =>
       sealedArtifactGapIds.has(gap.id) &&
@@ -13856,7 +13860,11 @@ export function resolveExistingTaskBindingsForAdmission(
 function remediationGapTargetsAnotherFeatureSealedArtifact(
   gap: RemediationGap,
   activePlanStem: string,
-): string | undefined {
+): {
+  artifact: string;
+  directingClause: string;
+  directingSource: 'task title' | 'rationale';
+} | undefined {
   // Task titles are prose, not plan Files declarations — remediation tasks
   // routinely cite .docs artifacts as evidence ("the sequence contract at
   // .docs/architecture/sequences/<slug>.md:87 requires ..."), and treating the
@@ -13866,13 +13874,26 @@ function remediationGapTargetsAnotherFeatureSealedArtifact(
   // protected path with an edit verb in its own preceding clause is a target.
   const taskTarget = gap.tasks
     .map((task) => directedProtectedTarget(task.title, activePlanStem))
-    .find((path) => path !== undefined);
-  if (taskTarget) return taskTarget.path;
+    .find((target) => target !== undefined);
+  if (taskTarget) {
+    return {
+      artifact: taskTarget.path,
+      directingClause: taskTarget.clause,
+      directingSource: 'task title',
+    };
+  }
 
   // Rationale is prose rather than a plan Files declaration. Treat it as a
   // target only when it both names a resolvable protected artifact and directs
   // an edit; a context-only citation must not re-route source work.
-  return directedProtectedTarget(gap.rationale, activePlanStem)?.path;
+  const rationaleTarget = directedProtectedTarget(gap.rationale, activePlanStem);
+  return rationaleTarget === undefined
+    ? undefined
+    : {
+      artifact: rationaleTarget.path,
+      directingClause: rationaleTarget.clause,
+      directingSource: 'rationale',
+    };
 }
 
 /**

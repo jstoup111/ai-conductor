@@ -3040,9 +3040,14 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     }
     case 'remediation_sealed_artifact_redirect': {
+      const directingEvidence = event.directingClause === undefined
+        ? ''
+        : event.directingSource === undefined
+          ? ` — "${event.directingClause}"`
+          : ` — ${event.directingSource}: "${event.directingClause}"`;
       log(
         `${dot} ${chalk.yellow(
-          `↩ remediation gap ${event.gapId} → plan — sealed artifact ${event.artifact}`,
+          `↩ remediation gap ${event.gapId} → plan — sealed artifact ${event.artifact}${directingEvidence}`,
         )}`,
       );
       break;

@@ -1,3 +1,4 @@
+// Covers: task:2
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
@@ -273,7 +274,29 @@ describe('sealed-artifact remediation routing', () => {
       expect(redirects).toEqual([]);
   });
 
-  it('emits the foreign artifact and gap id when redirecting a sealed rationale target', async () => {
+  it('emits the directing task-title clause and source when redirecting a sealed target', async () => {
+    const { outcome, redirects } = await remediate([{
+      id: 'title-event-gap',
+      disposition: 'build',
+      category: null,
+      rationale: 'The accepted assertion is incorrect.',
+      tasks: [{
+        id: 'foreign-title',
+        title: 'Amend .docs/specs/another-feature.md with the corrected assertion.',
+      }],
+    }]);
+
+    expect(outcome).toMatchObject({ kind: 'halt' });
+    expect(redirects).toEqual([{
+      type: 'remediation_sealed_artifact_redirect',
+      gapId: 'title-event-gap',
+      artifact: '.docs/specs/another-feature.md',
+      directingClause: 'Amend .docs/specs/another-feature.md with the corrected assertion.',
+      directingSource: 'task title',
+    }]);
+  });
+
+  it('emits the foreign artifact, rationale clause, and source when redirecting a sealed rationale target', async () => {
     const seen: unknown[] = [];
     const dispositions = [{
       id: 'event-gap', disposition: 'build', category: null,
@@ -296,7 +319,13 @@ describe('sealed-artifact remediation routing', () => {
       ) => Promise<unknown>;
     }).planRemediation(
       { session_started_at: Date.now() - 1000, feature_desc: 'feature' }, ALL_STEPS, 'blocked', { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' });
-    expect(seen).toEqual([{ type: 'remediation_sealed_artifact_redirect', gapId: 'event-gap', artifact: '.docs/specs/another-feature.md' }]);
+    expect(seen).toEqual([{
+      type: 'remediation_sealed_artifact_redirect',
+      gapId: 'event-gap',
+      artifact: '.docs/specs/another-feature.md',
+      directingClause: 'Amend .docs/specs/another-feature.md.',
+      directingSource: 'rationale',
+    }]);
     expect(await readFile(join(projectRoot, '.pipeline/events.jsonl'), 'utf8')).toContain(
       '"type":"remediation_sealed_artifact_redirect","gapId":"event-gap","artifact":".docs/specs/another-feature.md"',
     );
