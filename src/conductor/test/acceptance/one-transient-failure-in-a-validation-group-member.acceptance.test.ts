@@ -357,7 +357,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
         stateFilePath: statePath, events, projectRoot: dir, mode: 'auto', daemon: true,
         verifyArtifacts: true, maxRetries: 2, fromStep: 'manual_test',
         stepRunner: { run: vi.fn(async (step: StepName) => {
-          if (step === 'manual_test' && ++attempts === 1) return { success: false, output: 'transient runner failure' };
+          if (step === 'manual_test' && ++attempts === 1) throw new Error('transient runner failure');
           if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           return { success: true } as StepRunResult;
         }) },
@@ -506,7 +506,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
         stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
         verifyArtifacts: true, maxRetries: 2, fromStep: 'manual_test',
         stepRunner: { run: vi.fn(async (step: StepName) => {
-          if (step === 'manual_test') return { success: false, output: 'second-round crash' };
+          if (step === 'manual_test') throw new Error('second-round crash');
           return { success: true } as StepRunResult;
         }) },
       }).run();

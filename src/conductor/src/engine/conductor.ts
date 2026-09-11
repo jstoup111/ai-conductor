@@ -9671,43 +9671,49 @@ export class Conductor {
                                 ? this.currentRunId
                                 : undefined,
                             )
-                          : step.name === 'prd_audit'
-                            ? await (async () => {
-                                const recovery = await this.preparePrdWideningBeforeAudit();
-                                if (recovery) return { success: false, output: recovery };
-                                return this.stepRunner.run(step.name, state, {
-                                  ...(this.prdWideningReviewContext
-                                    ? { prdWideningReviewContext: this.prdWideningReviewContext }
-                                    : {}),
-                                  retryReason: retryHint,
-                                  attempt,
-                                  escalate: resolved.escalate,
-                                  modelOverride: esc.model,
-                                  effortOverride: esc.effort,
-                                  ...(dispatchIdentityArmed &&
-                                  this.currentRunId &&
-                                  isVerdictRunIdentityStep(step.name)
-                                    ? { runId: this.currentRunId }
-                                    : {}),
-                                });
-                              })()
-                          : await this.stepRunner.run(step.name, state, {
-                            retryReason: retryHint,
-                            attempt,
-                            escalate: resolved.escalate,
-                            modelOverride: esc.model,
-                            effortOverride: esc.effort,
-                            // D1 scope: only a SHIP-tail verdict gate hands its
-                            // identity to the lifecycle, so that gate's
-                            // `attempt.id` and its sidecar stamp are one value.
-                            // Other steps stamp no identity and keep the
-                            // runner's run-scoped attempt-id format.
-                            ...(dispatchIdentityArmed &&
-                            this.currentRunId &&
-                            isVerdictRunIdentityStep(step.name)
-                              ? { runId: this.currentRunId }
-                              : {}),
-                          }));
+                          : await (async (): Promise<StepRunResult> => {
+                            // PRD widening preparation stays outside the
+                            // runner-throw contract, matching the group
+                            // branch, which prepares before its fan-out.
+                            if (step.name === 'prd_audit') {
+                              const recovery = await this.preparePrdWideningBeforeAudit();
+                              if (recovery) return { success: false, output: recovery };
+                            }
+                            try {
+                              return await this.stepRunner.run(step.name, state, {
+                                ...(step.name === 'prd_audit' && this.prdWideningReviewContext
+                                  ? { prdWideningReviewContext: this.prdWideningReviewContext }
+                                  : {}),
+                                retryReason: retryHint,
+                                attempt,
+                                escalate: resolved.escalate,
+                                modelOverride: esc.model,
+                                effortOverride: esc.effort,
+                                // D1 scope: only a SHIP-tail verdict gate hands its
+                                // identity to the lifecycle, so that gate's
+                                // `attempt.id` and its sidecar stamp are one value.
+                                // Other steps stamp no identity and keep the
+                                // runner's run-scoped attempt-id format.
+                                ...(dispatchIdentityArmed &&
+                                this.currentRunId &&
+                                isVerdictRunIdentityStep(step.name)
+                                  ? { runId: this.currentRunId }
+                                  : {}),
+                              });
+                            } catch (error) {
+                              // Width-one validation groups keep their serial event
+                              // stream, but must retain the group branch's retry
+                              // contract: a runner throw is a retryable no-verdict
+                              // attempt, not a conductor-level exception.
+                              if (getGroupForStep(step.name)?.name === 'validation') {
+                                return {
+                                  success: false,
+                                  output: error instanceof Error ? error.message : String(error),
+                                };
+                              }
+                              throw error;
+                            }
+                          })());
             if (result.operatorParkedBeforeDispatch) {
               const queuedPark = await stopAtOperatorParkBoundary(true);
               if (queuedPark) return queuedPark;
