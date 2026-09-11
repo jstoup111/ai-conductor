@@ -98,6 +98,7 @@ import {
   makeBuildReviewDispatchFailure,
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
+  renderBuildReviewUnresolvedSkillRemedy,
   renderBuildReviewProviderPayloadShape,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
@@ -2267,7 +2268,25 @@ export class DefaultStepRunner implements StepRunner {
       lapId: projection.lapId,
       promptBytes: Buffer.byteLength(rubricPrompt, 'utf8'),
     });
-    const invokeOnce = async (prompt: string): Promise<{ success: boolean; output?: string }> => {
+    const invokeOnce = async (prompt: string): Promise<{
+      success: boolean;
+      output?: string;
+      commandUnresolved?: boolean;
+      commandUnresolvedName?: string;
+    }> => {
+      const preserveInvocationFailure = (result: {
+        success: boolean;
+        output?: string;
+        commandUnresolved?: boolean;
+        commandUnresolvedName?: string;
+      }) => ({
+        success: result.success,
+        ...(typeof result.output === 'string' ? { output: result.output } : {}),
+        ...(result.commandUnresolved ? {
+          commandUnresolved: true,
+          ...(result.commandUnresolvedName ? { commandUnresolvedName: result.commandUnresolvedName } : {}),
+        } : {}),
+      });
       if (this.providerRuntimes && this.sessionStore) {
         const safety = this.candidateSafetyFor('build_review');
         const result = await this.dispatchProviderWithLifecycleSupervision(
@@ -2301,9 +2320,7 @@ export class DefaultStepRunner implements StepRunner {
         );
         const verified = safety?.verify(result) ?? result;
         this.callCount++;
-        return typeof verified.output === 'string'
-          ? { success: verified.success, output: verified.output }
-          : { success: verified.success };
+        return preserveInvocationFailure(verified);
       }
       const result = await this.provider.invoke({
         prompt: `${renderAuxiliarySkillInvocation(branch.skillName, this.providerKey)}\n\n${prompt}`,
@@ -2315,9 +2332,7 @@ export class DefaultStepRunner implements StepRunner {
         effort: branch.policy.effort,
       });
       this.callCount++;
-      return typeof result.output === 'string'
-        ? { success: result.success, output: result.output }
-        : { success: result.success };
+      return preserveInvocationFailure(result);
     };
 
     // Validate-and-repair loop (deterministic shape enforcement): a session
@@ -2328,6 +2343,12 @@ export class DefaultStepRunner implements StepRunner {
     // infrastructure failure. Provider-agnostic by construction: both the
     // runtime-candidates path and the legacy provider path share invokeOnce.
     const initial = await invokeOnce(rubricPrompt);
+    if (initial.commandUnresolved) {
+      return makeBuildReviewDispatchFailure(renderBuildReviewUnresolvedSkillRemedy(
+        branch.skillName,
+        initial.commandUnresolvedName ?? '',
+      ));
+    }
     if (!initial.success || initial.output === undefined) return undefined;
     const validated = this.validateRubricOutput(initial.output, branch.rubric, projection);
     if (validated.result) return validated.result;

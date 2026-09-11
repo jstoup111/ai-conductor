@@ -38,6 +38,7 @@ import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js
 import { projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { scopedRunFailure } from '../../src/engine/build-review-test-quality-preflight.js';
 import type { BuildReviewScopedLauncher } from '../../src/engine/build-review-scoped-run.js';
+import { renderBuildReviewUnresolvedSkillRemedy } from '../../src/engine/build-review-domain.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -5153,6 +5154,45 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(repairPrompt).toContain(
       'Your previous response (bounded excerpt):\nI read the referenced diff and measured each changed test.',
     );
+  });
+
+  it('records an unresolved rubric skill command as a named dispatch failure without a repair turn', async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      success: false,
+      output: 'unknown skill command',
+      exitCode: 1,
+      commandUnresolved: true,
+      commandUnresolvedName: '$build-review-test-quality',
+    });
+    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      kind: 'dispatch-failure',
+      detail: renderBuildReviewUnresolvedSkillRemedy(
+        'build-review-test-quality',
+        '$build-review-test-quality',
+      ),
+    });
+  });
+
+  it('preserves contract-violation repair behavior without adding an unresolved-command remedy', async () => {
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
+      .mockResolvedValueOnce({ success: true, output: 'still invalid after repair', exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project');
+
+    const result = await dispatch(runner);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({
+      kind: 'dispatch-failure',
+      detail: expect.stringContaining('judged-result contract not satisfied after one repair turn'),
+    });
+    expect((result as { detail: string }).detail).not.toContain('could not be dispatched');
+    expect((result as { detail: string }).detail).not.toContain('retrying cannot make the command resolvable');
   });
 
   it('diagnoses findings-only output through the same v3-stamped candidate it validates', async () => {
