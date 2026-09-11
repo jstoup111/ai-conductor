@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-11T12:35:26.642Z
 Slug: heal-pre-rebase-untracked-file-collisions-and-park
 Class: needs-human
 Halting step: build_review
