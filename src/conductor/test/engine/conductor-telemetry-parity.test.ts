@@ -555,7 +555,10 @@ describe('serial conductor telemetry parity', () => {
       expect(persisted?.activeInterval).toEqual({ startedAtMs: 1_000, durationMs: ownDuration });
       memberDurations.push((persisted?.activeInterval as { durationMs: number }).durationMs);
       expect(fixture.spans.filter((span) => span.name === member)).toHaveLength(1);
-      expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === member)).toHaveLength(1);
+      const durationPoints = metricPoints(fixture.metrics, 'conductor.step.duration')
+        .filter((point) => point.attributes.step === member);
+      expect(durationPoints).toHaveLength(1);
+      expect(durationPoints[0]?.value).toMatchObject({ count: 1, sum: ownDuration });
     }
     expect(groupDuration).toBeDefined();
     expect(memberDurations.every((duration) => duration <= groupDuration!)).toBe(true);
@@ -574,7 +577,10 @@ describe('serial conductor telemetry parity', () => {
     for (const member of VALIDATION_GROUP.members) {
       expect(fixture.events.filter((event) => event.type === 'step_started' && event.step === member)).toHaveLength(1);
       expect(fixture.spans.filter((span) => span.name === member)).toHaveLength(1);
-      expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === member)).toHaveLength(1);
+      const durationPoints = metricPoints(fixture.metrics, 'conductor.step.duration')
+        .filter((point) => point.attributes.step === member);
+      expect(durationPoints).toHaveLength(1);
+      expect(durationPoints[0]?.value).toMatchObject({ count: 1, sum: 10 });
     }
   });
 
