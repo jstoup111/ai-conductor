@@ -132,6 +132,30 @@ export interface ProviderCandidate {
   effort: EffortLevel;
 }
 
+/**
+ * The only extension point that runs after a real provider candidate has
+ * prepared. It intentionally exposes the existing invocation callback rather
+ * than a provider adapter, so policy work cannot bypass fresh sessions,
+ * lifecycle permits, model fallback, or attempt metering.
+ */
+export interface PreparedCandidateOperationContext {
+  readonly candidate: ProviderCandidate;
+  readonly prepared: SelfHostInvocation | undefined;
+  readonly abortSignal?: AbortSignal;
+  readonly deadlineAt?: number;
+  invoke(): Promise<InvokeResult>;
+}
+
+/** A candidate operation either reuses evidence, judges through `invoke`, or returns a classified failure. */
+export type PreparedCandidateOperationResult =
+  | { readonly kind: 'hit'; readonly result: InvokeResult }
+  | { readonly kind: 'judged'; readonly result: InvokeResult }
+  | { readonly kind: 'failure'; readonly result: InvokeResult };
+
+export type PreparedCandidateOperation = (
+  context: PreparedCandidateOperationContext,
+) => Promise<PreparedCandidateOperationResult>;
+
 /** Render safe provider capability-gap notices without affecting execution. */
 export function formatProviderCapabilityGapMessages(
   provider: string,
@@ -232,6 +256,12 @@ export interface ExecuteProviderCandidatesInput {
   effortOverride?: EffortLevel;
   /** A caller-owned native model ladder, used by isolated auxiliary branches. */
   modelFallbackLadder?: readonly string[];
+  /** Candidate-bound work may refuse judgment once this signal is aborted. */
+  abortSignal?: AbortSignal;
+  /** Candidate-bound work may refuse judgment after this absolute deadline. */
+  deadlineAt?: number;
+  /** Optional policy/cache operation that runs only after candidate preparation. */
+  preparedCandidateOperation?: PreparedCandidateOperation;
   /** Attribution label for an auxiliary branch; does not manufacture a StepName. */
   auxiliaryMember?: string;
   /** Task-local telemetry to validate before any candidate/session invocation. */
@@ -324,6 +354,28 @@ function unsupportedNativeSchemaProviderResult(providerKey: string): InvokeResul
     nativeSchemaUnsupported: true,
     providerInvocationSkipped: true,
   };
+}
+
+function cancelledPreparedCandidateResult(): InvokeResult {
+  return {
+    success: false,
+    output: 'Prepared candidate operation cancelled before judgment.',
+    exitCode: 1,
+    providerInvocationSkipped: true,
+  };
+}
+
+function timedOutPreparedCandidateResult(): InvokeResult {
+  return {
+    success: false,
+    output: 'Prepared candidate operation timed out before judgment.',
+    exitCode: 1,
+    providerInvocationSkipped: true,
+  };
+}
+
+function preparedCandidateDeadlineExpired(deadlineAt: number | undefined): boolean {
+  return deadlineAt !== undefined && Date.now() >= deadlineAt;
 }
 
 export function classifyProviderAttempt(
@@ -640,6 +692,9 @@ export async function executeProviderCandidates({
   modelOverride,
   effortOverride,
   modelFallbackLadder,
+  abortSignal,
+  deadlineAt,
+  preparedCandidateOperation,
   auxiliaryMember,
   taskAttribution: attributionInput,
   onAttempt,
@@ -706,68 +761,42 @@ export async function executeProviderCandidates({
             : {}),
         }
       : options;
+    const candidate: ProviderCandidate = {
+      step,
+      providerKey,
+      model: resolved.model,
+      effort: resolved.effort,
+    };
     let candidateObserver: ReturnType<NonNullable<typeof candidateOptions.providerStreamObserverForCandidate>> | undefined;
     let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
+    let selfHost: SelfHostInvocation | undefined;
     let setupUnavailable: ProviderSetupUnavailable | undefined;
     const cachedUnavailable = runtime.runWideUnavailable !== undefined;
-    const invoke = async (): Promise<InvokeResult> => {
-      // The REPL path supplies no stream consumer
-      // (adr-2026-08-24-one-dispatch-member-on-the-provider-contract, and the
-      // machine-envelope ADR repeats it). An interactive dispatch renders to
-      // the operator's own terminal; an observer there watches a stream that
-      // structurally cannot carry machine envelopes, so it is not merely
-      // inert — it must never be created or attached.
-      candidateObserver = candidateOptions.interactive
-        ? undefined
-        : candidateOptions.providerStreamObserverForCandidate?.(providerKey);
-      const candidateInvocationOptions = candidateObserver
-        ? {
-            ...candidateOptions,
-            streamConsumer: candidateObserver,
-            onProviderStream: candidateObserver.onProviderStream,
-          }
-        : candidateOptions;
-      const candidate = {
-        step,
-        providerKey,
-        model: resolved.model,
-        effort: resolved.effort,
-      };
-      let selfHost: SelfHostInvocation | undefined;
-      let schemaScratchHome: string | undefined;
-      let schemaScratchRunId: string | undefined;
-      try {
-        try {
-          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, {
-            runId,
-            attempt: index,
-          });
-        } catch (error) {
-          setupUnavailable = normalizeProviderSetupUnavailable(error, providerKey);
-          if (setupUnavailable) {
-            return {
-              success: false,
-              output: setupUnavailable.reason,
-              exitCode: 1,
-              providerInvocationSkipped: true,
-            };
-          }
-          throw error;
-        }
+    let schemaScratchHome: string | undefined;
+    let schemaScratchRunId: string | undefined;
+    let invocationResult: Promise<InvokeResult> | undefined;
+    const invokeProvider = (): Promise<InvokeResult> => {
+      invocationResult ??= (async () => {
+        const candidateInvocationOptions = candidateObserver
+          ? {
+              ...candidateOptions,
+              streamConsumer: candidateObserver,
+              onProviderStream: candidateObserver.onProviderStream,
+              ...(selfHost ? { selfHost } : {}),
+            }
+          : selfHost
+            ? { ...candidateOptions, selfHost }
+            : candidateOptions;
         if (
-          selfHost === undefined &&
-          providerKey === 'codex' &&
-          candidateInvocationOptions.nativeSchema !== undefined &&
-          nativeSchemaScratch !== undefined
+          selfHost === undefined && providerKey === 'codex' &&
+          candidateInvocationOptions.nativeSchema !== undefined && nativeSchemaScratch !== undefined
         ) {
           schemaScratchRunId = runId ?? randomUUID();
           schemaScratchHome = await acquireScratchHome({
             worktreeRoot: nativeSchemaScratch.worktreeRoot,
             repository: nativeSchemaScratch.repository,
             featureSlug: nativeSchemaScratch.featureSlug || basename(nativeSchemaScratch.worktreeRoot),
-            runId: schemaScratchRunId,
-            attempt,
-            provider: 'codex',
+            runId: schemaScratchRunId, attempt, provider: 'codex',
           });
         }
         invocation = await invokeProviderCandidate({
@@ -777,12 +806,57 @@ export async function executeProviderCandidates({
           resolved,
           options: {
             ...candidateInvocationOptions,
-            ...(selfHost ? { selfHost } : {}),
             ...(schemaScratchHome ? { nativeSchemaScratchHome: schemaScratchHome } : {}),
           },
           modelFallbackLadder,
         });
         return invocation.result;
+      })();
+      return invocationResult;
+    };
+    const invoke = async (): Promise<InvokeResult> => {
+      try {
+        // The REPL path supplies no stream consumer
+        // (adr-2026-08-24-one-dispatch-member-on-the-provider-contract, and the
+        // machine-envelope ADR repeats it). An interactive dispatch renders to
+        // the operator's own terminal; an observer there watches a stream that
+        // structurally cannot carry machine envelopes, so it is not merely
+        // inert — it must never be created or attached. Create it before
+        // preparation so its close boundary survives preparation failures.
+        candidateObserver = candidateOptions.interactive
+          ? undefined
+          : candidateOptions.providerStreamObserverForCandidate?.(providerKey);
+        try {
+          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, { runId, attempt: index });
+        } catch (error) {
+          setupUnavailable = normalizeProviderSetupUnavailable(error, providerKey);
+          if (!setupUnavailable) throw error;
+          return { success: false, output: setupUnavailable.reason, exitCode: 1, providerInvocationSkipped: true };
+        }
+        if (abortSignal?.aborted) return cancelledPreparedCandidateResult();
+        if (preparedCandidateDeadlineExpired(deadlineAt)) {
+          return timedOutPreparedCandidateResult();
+        }
+        if (preparedCandidateOperation) {
+          const operation = await preparedCandidateOperation({
+            candidate,
+            prepared: selfHost,
+            abortSignal,
+            deadlineAt,
+            invoke: invokeProvider,
+          });
+          // An operation may observe cancellation while resolving a policy or
+          // checking a cache. It cannot publish that stale work as a judgment
+          // or cache hit after the candidate's authority has ended.
+          if (abortSignal?.aborted) return cancelledPreparedCandidateResult();
+          if (preparedCandidateDeadlineExpired(deadlineAt)) {
+            return timedOutPreparedCandidateResult();
+          }
+          return operation.kind === 'hit'
+            ? { ...operation.result, providerInvocationSkipped: true }
+            : operation.result;
+        }
+        return await invokeProvider();
       } finally {
         try {
           await selfHost?.teardown();
@@ -791,18 +865,12 @@ export async function executeProviderCandidates({
             if (schemaScratchHome !== undefined) {
               const released = await releaseScratchHome({
                 worktreeRoot: nativeSchemaScratch!.worktreeRoot,
-                runId: schemaScratchRunId!,
-                attempt,
-                provider: 'codex',
+                runId: schemaScratchRunId!, attempt, provider: 'codex',
               });
-              if (released.kind === 'failed') {
-                throw new Error(`native schema scratch teardown failed: ${released.error}`);
-              }
+              if (released.kind === 'failed') throw new Error(`native schema scratch teardown failed: ${released.error}`);
             }
           } finally {
-            try {
-              candidateObserver?.close();
-            } catch {
+            try { candidateObserver?.close(); } catch {
               // Observation close/flush is best effort and cannot affect fallback.
             }
           }
@@ -820,17 +888,12 @@ export async function executeProviderCandidates({
       : requiresNativeSchemaCapability && !supportsNativeSchemaCapability
         ? unsupportedNativeSchemaProviderResult(providerKey)
         : withCandidateSafety
-          ? await withCandidateSafety(
-              {
-                step,
-                providerKey,
-                model: resolved.model,
-                effort: resolved.effort,
-              },
-              invoke,
-            )
+          ? await withCandidateSafety(candidate, invoke)
           : await invoke();
-    setupUnavailable ??= skippedCandidateSetupUnavailable(providerKey, result, cachedUnavailable);
+    // A prepared cache hit or cancellation did not consult provider availability.
+    if (invocation || result.providerUnavailable === true) {
+      setupUnavailable ??= skippedCandidateSetupUnavailable(providerKey, result, cachedUnavailable);
+    }
     const invokedModel = invocation?.invokedModel;
     const suppression = invocation?.sessionPolicySuppression;
     const emittedProviders = sessionPolicyDiagnostics.get(sessions) ?? new Set<string>();
@@ -1011,7 +1074,8 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
     // A setup-only exhaustion is terminal for this logical dispatch: retrying
     // repeats the same verified capability checks without ever invoking a
     // provider.
-    if (result.success || result.commandUnresolved || result.providerSetupExhaustion) return result;
+    if (result.success || result.commandUnresolved || result.providerSetupExhaustion ||
+      input.abortSignal?.aborted || preparedCandidateDeadlineExpired(input.deadlineAt)) return result;
     last = result;
   }
   return last ?? {
