@@ -39,7 +39,23 @@ describe('engine/execution-identity', () => {
       },
     ] satisfies ConductorEvent[];
 
-    expect(events).toHaveLength(7);
+    const expectedIdentity = resolveExecutionIdentity({
+      scope: featureOneRunOne,
+      legacyStep: 'build',
+      executionContext: context,
+    });
+
+    for (const event of events) {
+      const identity = resolveExecutionIdentity({
+        scope: featureOneRunOne,
+        // A configured member is not itself a lifecycle step, but its
+        // telemetry is correlated to the lifecycle step that dispatched it.
+        legacyStep: event.type === 'group_member_step' ? 'build' : event.step,
+        executionContext: event.executionContext,
+      });
+
+      expect(identity).toEqual(expectedIdentity);
+    }
   });
 
   it('correlates configured members by execution and feature/run scope', () => {
