@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -64,6 +64,32 @@ describe('rejected remediation dispositions', () => {
     const plan = (await readRemediationPlanResult(projectRoot, Date.now() - 60_000, 'prd-audit')).plan;
     expect(plan?.gaps.map((gap) => gap.category)).toEqual([
       'architectural-clarity', 'product-scope', 'unanswerable',
+    ]);
+  });
+
+  it('rejects halt gaps with invalid category values by category', async () => {
+    await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
+      dispositions: [
+        { id: 'AB-1', disposition: 'halt', category: 'unknown-category' },
+        { id: 'AB-2', disposition: 'halt' },
+        { id: 'AB-3', disposition: 'halt', category: 7 },
+      ],
+    }));
+
+    const plan = (await readRemediationPlanResult(projectRoot, Date.now() - 60_000, 'prd-audit')).plan;
+    expect(plan?.rejected).toEqual([
+      {
+        gapId: 'AB-1', disposition: 'unknown-category',
+        accepted: ['architectural-clarity', 'product-scope', 'unanswerable'], field: 'category',
+      },
+      {
+        gapId: 'AB-2', disposition: '<missing>',
+        accepted: ['architectural-clarity', 'product-scope', 'unanswerable'], field: 'category',
+      },
+      {
+        gapId: 'AB-3', disposition: '7',
+        accepted: ['architectural-clarity', 'product-scope', 'unanswerable'], field: 'category',
+      },
     ]);
   });
 
