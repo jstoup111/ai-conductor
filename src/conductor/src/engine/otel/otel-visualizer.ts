@@ -322,6 +322,12 @@ export class OtelVisualizer implements VisualizerPlugin {
       case 'step_failed':
         this.spanManager.onStepFailed(event);
         break;
+      case 'step_refused':
+        this.spanManager.onStepRefused(event);
+        break;
+      case 'group_member_step':
+        this.spanManager.onGroupMemberStep(event);
+        break;
       case 'provider_attempt':
         {
           const observation = this.dispatchMetering.observe(event);

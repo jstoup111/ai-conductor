@@ -1,4 +1,4 @@
-// Covers: task:9
+// Covers: task:9, task:10
 /**
  * Covers: task:1, task:7, task:8, task:9
  *
@@ -12,7 +12,7 @@
  *   T13: Step span attributes (with safe tier omission)
  *   T14: Span events for retries / gate verdicts / kickbacks
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -950,6 +950,78 @@ describe('Task 9: execution-correlated spans', () => {
 
     const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'configured:validation/settled')!;
     expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(settledAtMs);
+  });
+});
+
+describe('Task 10: truthful refusal span closure', () => {
+  it('closes a refused execution once with an UNSET status rather than success or error', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    const execution = {
+      executionId: 'refused-member',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'review' },
+    };
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
+    await emitter.emit({
+      type: 'step_refused',
+      step: 'build',
+      kind: 'validation-verdict',
+      reason: 'operator judgement required',
+      executionContext: execution,
+    });
+    await emitter.emit({
+      type: 'step_refused',
+      step: 'build',
+      kind: 'validation-verdict',
+      reason: 'duplicate terminal',
+      executionContext: execution,
+    });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: execution });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const spans = spanExporter.getFinishedSpans()
+      .filter((span) => span.name === 'configured:validation/review');
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).toBe(0 /* UNSET: refused, not success or error */);
+    expect(spans[0].attributes).toMatchObject({
+      'conductor.step.status': 'refused',
+      'conductor.execution.parent_group': 'validation',
+      'conductor.execution.member': 'review',
+    });
+  });
+
+  it('freezes a configured member at its group result before delayed refusal', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const base = Date.now();
+    let now = base;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const execution = {
+      executionId: 'settled-before-refusal',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'review' },
+    };
+    try {
+      vis.start(emitter);
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
+      now = base + 100;
+      await emitter.emit({
+        type: 'group_member_step', member: 'review', skill: 'build', phase: 'result',
+        outcome: 'refused', executionContext: execution,
+      });
+      now = base + 10_000;
+      await emitter.emit({
+        type: 'step_refused', step: 'build', kind: 'validation-verdict',
+        reason: 'authoritative delayed refusal', executionContext: execution,
+      });
+      await emitter.emit({ type: 'feature_complete' });
+      await vis.stop();
+
+      const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'configured:validation/review')!;
+      expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(base + 100);
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 });
 

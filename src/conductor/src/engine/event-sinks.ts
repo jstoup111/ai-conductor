@@ -60,7 +60,7 @@ export const EVENT_SINKS = {
   containment_check_unresolved: { render: false, persist: true, audit: false, otel: false },
   step_completed: { render: true, persist: true, audit: true, otel: true },
   step_failed: { render: true, persist: true, audit: false, otel: true },
-  step_refused: { render: true, persist: true, audit: true, otel: true, otelTrace: false },
+  step_refused: { render: true, persist: true, audit: true, otel: true },
   step_status_write_refused: { render: true, persist: true, audit: true, otel: false },
   provider_attempt: { render: true, persist: true, audit: false, otel: true },
   // Per-interval progress would flood .daemon/daemon.log; daemon status reads the ledger directly.
@@ -112,7 +112,7 @@ export const EVENT_SINKS = {
   parallel_started: { render: true, persist: true, audit: false, otel: false },
   parallel_completed: { render: true, persist: true, audit: false, otel: false },
   parallel_failure: { render: false, persist: true, audit: false, otel: false },
-  group_member_step: { render: false, persist: false, audit: false, otel: true, otelTrace: false },
+  group_member_step: { render: false, persist: false, audit: false, otel: true },
   // A gate's verdict must outlive the run so recovery can reconstruct it from the ledger.
   gate_verdict: { render: true, persist: true, audit: true, otel: true },
   test_suite_verification: { render: false, persist: true, audit: false, otel: false },

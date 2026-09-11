@@ -178,6 +178,41 @@ export class SpanManager {
     this.callbacks?.onStepClose?.(state.subjectLabel, durationMs, event.retryCount);
   }
 
+  onStepRefused(event: Extract<ConductorEvent, { type: 'step_refused' }>): void {
+    const identity = this.resolve(event.step, event.executionContext);
+    const state = identity ? this.openSteps.get(identity.correlationKey) : undefined;
+    if (!state) {
+      this.warn(
+        `step_refused for '${event.step}' received but no open span exists — ignoring`,
+      );
+      return;
+    }
+    const durationMs = Date.now() - state.startTimeMs;
+
+    // Refusal is an authoritative terminal outcome, not successful work and
+    // not a provider/runtime failure. Keep the OTel status UNSET while making
+    // the outcome queryable through the bounded step-status attribute.
+    state.span.setAttribute('conductor.step.status', 'refused');
+    state.span.setAttribute('conductor.retry.count', state.retryCount);
+    state.span.setStatus({ code: SpanStatusCode.UNSET });
+    this.endSpan(state);
+    this.openSteps.delete(identity!.correlationKey);
+
+    this.callbacks?.onStepClose?.(state.subjectLabel, durationMs, state.retryCount);
+  }
+
+  onGroupMemberStep(event: Extract<ConductorEvent, { type: 'group_member_step' }>): void {
+    if (event.phase !== 'result') return;
+    const identity = this.resolve(event.skill, event.executionContext);
+    const state = identity ? this.openSteps.get(identity.correlationKey) : undefined;
+    if (!state) return;
+
+    // A group result is observed at the member's own settlement boundary. A
+    // later refusal or group join closes this same span at the frozen instant,
+    // excluding sibling and join delay from member work time.
+    state.settlementEndTimeMs = Date.now();
+  }
+
   onProviderAttempt(
     event: Extract<ConductorEvent, { type: 'provider_attempt' }>,
     observation: DispatchMeteringObservation,
