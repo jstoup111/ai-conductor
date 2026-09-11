@@ -2189,17 +2189,8 @@ export class Conductor {
       : event.type === 'parallel_started'
         ? { key: `parallel:${event.step}`, execution: { kind: 'parallel' as const, step: event.step } }
         : undefined;
-    // A refusal normally closes its own step execution. Validation-group
-    // members run inside their entry's parallel execution instead, so their
-    // refusal is deliverable (but non-terminal) while that enclosing window
-    // remains open.
-    const terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
-      ? this.openExecutions.has(`step:${event.step}`)
-        ? `step:${event.step}`
-        : getGroupForStep(event.step)?.name === 'validation'
-          && this.openExecutions.has(`parallel:${event.step}`)
-          ? `parallel:${event.step}`
-          : `step:${event.step}`
+    let terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
+      ? `step:${event.step}`
       : event.type === 'step_refused'
         ? (this.openExecutions.has(`step:${event.step}`) ? `step:${event.step}` : undefined)
       : event.type === 'parallel_completed'
