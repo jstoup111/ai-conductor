@@ -579,7 +579,9 @@ export async function runGroupBranch(
       ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
       outcome,
       attempts: lifecycleAttempts,
-      ...(outcome.observedIntervals === undefined ? {} : { observedIntervals: outcome.observedIntervals }),
+      ...(!('observedIntervals' in outcome) || outcome.observedIntervals === undefined
+        ? {}
+        : { observedIntervals: outcome.observedIntervals }),
     });
   }
   // Task 25: emit the member-attributed result event AFTER the outcome is
