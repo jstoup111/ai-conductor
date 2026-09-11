@@ -26,6 +26,7 @@ import {
   executeAuxiliaryProviderCandidates,
   executeProviderCandidates,
   formatProviderCapabilityGapMessages,
+  type ProviderAttemptMetadata,
 } from '../../src/engine/provider-execution.js';
 
 const UUID_RE =
@@ -288,7 +289,7 @@ describe('executeProviderCandidates', () => {
   });
 
   it('emits scalar invocation metadata with its caller-owned execution context', async () => {
-    const attempts: Array<Record<string, unknown>> = [];
+    const attempts: ProviderAttemptMetadata[] = [];
     const context = {
       executionId: 'scalar-execution',
       subject: { kind: 'configured-member' as const, parentGroup: 'quality', member: 'audit' },
