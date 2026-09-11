@@ -8,9 +8,15 @@
 
 ## Summary
 
+> **Amended 2026-09-11 by operator approval for #1648:** Preserve the APPROVED cost-rollup ADR and use the correct final total, not the legacy snapshot. Task 4 supersedes the executed tasks' telemetry-insensitive skip rule: changed Cost or Time must commit, and only byte-identical rendered records may skip. Historical tasks stay for attribution; current acceptance is the corrected story.
+
 Three bounded tasks deliver #1648. A pure projection strips the two self-updating rollup blocks from a rendered record body; the shipped-record subcommand compares that projection against the record committed at HEAD and, when only the rollups moved, restores the committed bytes and commits nothing. The rollup computation, the KPI reader, the post-finish refresh caller, and the sibling existence-check defect in the finish publication adapter are outside this slice.
 
 ## Technical Approach
+
+> **Amended 2026-09-11 by operator approval for #1648:** Preserve the APPROVED cost-rollup ADR and use the correct final total, not the legacy snapshot. Task 4 supersedes the executed tasks' telemetry-insensitive skip rule: changed Cost or Time must commit, and only byte-identical rendered records may skip. Historical tasks stay for attribution; current acceptance is the corrected story.
+
+The corrective approach compares the complete assembled record with the committed bytes. Preserve the existing read-failure fallback, exact-byte restoration for a true no-op, staged check, and write/stage/commit behavior. The existing engine-owned post-finish refresh already calls this writer after finish usage is recorded; restore that path's current-total behavior without introducing another provider dispatch, event channel, or telemetry baseline. No new ADR replaces or weakens the existing equality contract.
 
 Add one exported pure function beside the existing record renderers in `src/conductor/src/engine/shipped-record.ts`. It takes a rendered record body and returns the same body with the `## Cost` and `## Time` sections removed — each section spanning its column-zero heading line through the byte before the next column-zero `## ` heading, or through the end of the body when none follows. Nothing else is touched: the frontmatter fence, the `## Build Review` block, the accepted build-review risk section and its comment markers, and the reduced build-review coverage section all survive the projection byte for byte. Those two sections are exactly the values that a write of the record changes, because both are aggregated from the feature worktree's own event ledger and both grow with the dispatch that is doing the writing; the build-review metrics and the evidence sections are not, so they stay inside the comparison.
 
@@ -37,6 +43,8 @@ Tests follow the repository's test-design rules. The projection is a pure export
 - Verify-claims verdict: CLEAR. Every path, symbol, and behavior above was read in the worktree. No approved decision record is amended: the per-feature cost rollup decision fixes the block's contents and its home, not the commit decision.
 
 ## Tasks
+
+> **Amended 2026-09-11 by operator approval for #1648:** Preserve the APPROVED cost-rollup ADR and use the correct final total, not the legacy snapshot. Task 4 supersedes the executed tasks' telemetry-insensitive skip rule: changed Cost or Time must commit, and only byte-identical rendered records may skip. Historical tasks stay for attribution; current acceptance is the corrected story.
 
 ### Task 1: Project a rendered record onto its non-telemetry substance
 **Story:** Story 1
@@ -98,11 +106,34 @@ Tests follow the repository's test-design rules. The projection is a pure export
 2. The unborn-branch fixture produces exactly one shipped-record commit and the command returns zero with no failure line on stderr.
 3. The injected accepted-risk fixture produces a second shipped-record commit whose committed body contains the accepted build-review risk section.
 
+### Task 4: Commit current totals and restore final-cost agreement
+**Story:** Story 1
+**Story:** Story 2
+**Type:** happy-path
+**Files:** src/conductor/src/engine/shipped-record-cli.ts, src/conductor/test/integration/daemon-ship.integration.test.ts, src/conductor/test/acceptance/feature-usage-total-at-finish.acceptance.test.ts, README.md, docs/reference/cli.md
+**Dependencies:** 2, 3
+
+**Steps:**
+1. Correct the existing real-git integration expectations: ledger growth between writes must yield a second commit carrying the current Cost and Time; a third write with unchanged inputs must preserve HEAD and leave both index and working tree clean. Preserve absent/unreadable counterpart and substantive evidence-change coverage.
+2. Establish scoped RED for the current-cost mismatch, then change the early guard in `shipped-record-cli.ts` to compare the complete assembled body with the exact committed bytes. A Cost/Time-only difference must take the existing write/stage/commit path. Remove only the now-unused import of the projection in this caller; the previously delivered helper and its tests need not be deleted in this repair.
+3. Correct the existing finish acceptance tests that currently preserve input 10 despite finish input 40. Through the real internal finish path, prove the committed Cost equals the emitted `feature_usage_total` from the same ledger including finish usage. Update the related assertions to exercise the existing bounded refresh, verified commit, and push-failure recovery behavior rather than expecting the refresh never to happen. This task owns the final-cost boundary integration proof.
+4. Keep all third-party boundaries fake and all Git repositories fixture-owned. Do not launch a provider or contact GitHub. Preserve the existing refresh transaction and recovery behavior; no additional finish dispatch is permitted just to write the record.
+5. Update README and the shipped-record CLI reference to state that changed totals commit and unchanged complete records do not; remove the reader-facing promise to ignore Cost/Time differences. Run the affected integration and acceptance selectors through `ai-conductor scoped-run` and commit the repair.
+
+**Done when:**
+1. A grown ledger produces a committed record with current Cost and Time, while an unchanged third write adds no commit and leaves the fixture clean.
+2. The successful finish fixture commits the same total emitted from the ledger, including finish usage; it cannot retain the pre-finish snapshot.
+3. The existing refresh remains bounded and its push-failure recovery is exercised with fake external boundaries, without a second finish dispatch.
+4. Absent/unreadable counterpart, PR/spec-hash, accepted-risk, and stream-discipline behavior remains covered; README and CLI documentation match the corrected commit rule.
+
 ## Coverage Check
+
+> **Amended 2026-09-11 by operator approval for #1648:** Preserve the APPROVED cost-rollup ADR and use the correct final total, not the legacy snapshot. Task 4 supersedes the executed tasks' telemetry-insensitive skip rule: changed Cost or Time must commit, and only byte-identical rendered records may skip. Historical tasks stay for attribution; current acceptance is the corrected story.
 
 | Criterion | Task id(s) | Done when quote | Disposition |
 | --- | --- | --- | --- |
-| Story 1 happy: Given a shipped record is already committed and the freshly rendered body differs only inside its Cost and Time blocks, when the shipped-record write runs, then it creates no new commit and reports the record as already committed. | 1, 2 | "The integration fixture with a growing event ledger produces exactly one shipped-record commit across two writes and prints the already-committed line on stdout on the second write." | diff-local |
+| Story 1 happy: Given an identical complete rendered record, writing it again creates no commit; after a ledger change, current totals are committed and an unchanged third write adds no commit. | 4 | "A grown ledger produces a committed record with current Cost and Time, while an unchanged third write adds no commit and leaves the fixture clean." | diff-local |
+| Story 1 happy: After finish adds usage, the successful refresh commits the same total emitted from the ledger, including finish usage. | 4 | "The successful finish fixture commits the same total emitted from the ledger, including finish usage; it cannot retain the pre-finish snapshot." | diff-local |
 | Story 1 happy: Given that skip occurs, when the write returns, then the record file and the git index byte-match the committed record so no tracked or staged change is left behind. | 2 | "Status output for the fixture worktree is empty after the skipped write, and the record file byte-matches the committed record." | diff-local |
 | Story 1 negative: Given the commit at HEAD carries no record at the resolved record path, when the shipped-record write runs, then it commits the record exactly once rather than treating the absent record as a match. | 3 | "The absent-counterpart fixture produces exactly one shipped-record commit whose body contains a cost block and a time block." | diff-local |
 | Story 1 negative: Given the branch has no commit at all so the committed record cannot be read, when the shipped-record write runs, then it commits the record exactly once and still exits zero. | 3 | "The unborn-branch fixture produces exactly one shipped-record commit and the command returns zero with no failure line on stderr." | diff-local |
@@ -110,6 +141,10 @@ Tests follow the repository's test-design rules. The projection is a pure export
 | Story 2 negative: Given a shipped record is already committed and the freshly rendered body differs only in its accepted build-review risk evidence, when the shipped-record write runs, then it commits rather than discarding that evidence as telemetry. | 1, 3 | "The injected accepted-risk fixture produces a second shipped-record commit whose committed body contains the accepted build-review risk section." | diff-local |
 
 ## Test dispositions and integration ownership
+
+> **Amended 2026-09-11 by operator approval for #1648:** Preserve the APPROVED cost-rollup ADR and use the correct final total, not the legacy snapshot. Task 4 supersedes the executed tasks' telemetry-insensitive skip rule: changed Cost or Time must commit, and only byte-identical rendered records may skip. Historical tasks stay for attribution; current acceptance is the corrected story.
+
+Task 4 owns the corrective integration and finish acceptance proof. Existing unit projection tests remain historical helper coverage, not authority for the command's skip decision.
 
 All six criteria are diff-local against controlled fixtures. Task 1 owns the pure projection unit cases, which pin which blocks are ignored and which are compared. Task 2 owns the real-git integration for the skip decision, the clean-tree consequence, and the substantive-change path, and it carries the reference-documentation update in the same diff. Task 3 owns the three negative counterpart cases in the same real-git file. The existing shipped-record integration coverage supplies the unchanged stream discipline, degraded-rollup, guide, and write-failure permutations and is not duplicated. No smoke test, no provider call, no network call, and no full conductor run is added, and no terminal validation task is required.
 
@@ -119,3 +154,16 @@ Task 1 -> Task 2
 Task 2 -> Task 3
 
 Small tier: architecture and coherence artifacts are skipped. No new decision record and no amendment is required, because the approved per-feature cost-rollup decision fixes the block's contents and its home rather than the commit decision, and the shipment contract for identity, hashing, and evidence is unchanged.
+
+> **Amended 2026-09-11 by operator approval for #1648:** Preserve the APPROVED cost-rollup ADR and use the correct final total, not the legacy snapshot. Task 4 supersedes the executed tasks' telemetry-insensitive skip rule: changed Cost or Time must commit, and only byte-identical rendered records may skip. Historical tasks stay for attribution; current acceptance is the corrected story.
+
+Task 2 -> Task 4
+Task 3 -> Task 4
+
+## Verify-Claims Ledger — operator amendment — 2026-09-11
+
+- [verified] The approved cost-rollup ADR's 2026-08-30 amendment requires the finish line and committed Cost to agree.
+- [verified] `conductor.ts` emits finish completion before computing `feature_usage_total`, and its terminal refresh invokes `dispatchShippedRecord` directly.
+- [verified] The current writer compares projections excluding Cost/Time and restores the older committed bytes; the current finish acceptance test explicitly retains input 10 after finish usage.
+- [verified] The existing refresh checks clean state, verifies its new commit, and handles push failure without dispatching another provider.
+- Confirmed input: operator approved preserving the correct final total on 2026-09-11. No pending assumptions. Verify-claims verdict: CLEAR.
