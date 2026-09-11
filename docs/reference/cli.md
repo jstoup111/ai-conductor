@@ -1004,6 +1004,11 @@ then clears both `.pipeline/HALT` and `.pipeline/HALT.class` atomically. It emit
 event and prints `Rewound to <step>.` The next daemon dispatch begins at the rewound step. Do not edit
 `conduct-state.json`, gate files, or halt markers by hand; use this command instead.
 
+If clearing the derived records fails, `rewind` exits non-zero and restores the recorded step state,
+halt markers, and any gate verdicts it staged for removal, so the feature remains retryable. It reports
+the failure that stopped the rewind first; a subsequent `rewind: rollback failed:` message means that
+the corrective restoration also failed and needs operator attention.
+
 ## `ai-conductor reseal`
 
 ```bash

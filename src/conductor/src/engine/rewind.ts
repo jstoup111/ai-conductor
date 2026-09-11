@@ -1,5 +1,5 @@
 import type { ConductState, HarnessConfig } from '../types/index.js';
-import type { ConductStateStore, StateMutation } from './conduct-state-store.js';
+import type { ConductStateStore, StateFieldDeletion, StateMutation } from './conduct-state-store.js';
 import { buildStepRegistry } from './steps.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import { readState } from './state.js';
@@ -35,6 +35,7 @@ export interface RewindCommandDependencies {
   store?: ConductStateStore<ConductState>;
   preflightDerivedRecords?: (root: string) => Promise<void>;
   clearDerivedRecords?: (root: string, demoted: string[]) => Promise<void>;
+  markerFilesystem?: RewindMarkerFilesystem;
   emit?: (result: RewindStateResult) => Promise<void>;
 }
 
@@ -137,9 +138,71 @@ async function preflightDerivedRecords(root: string): Promise<void> {
   ]);
 }
 
-async function clearDerivedRecords(root: string, demoted: string[]): Promise<void> {
-  await Promise.all(demoted.map((step) => rm(join(root, GATES_DIR, `${step}.json`), { force: true })));
-  await clearHaltAtomically(root);
+async function clearDerivedRecords(
+  root: string,
+  demoted: string[],
+  filesystem: RewindMarkerFilesystem = markerFilesystem,
+): Promise<void> {
+  const staged: Array<{ original: string; staged: string; contents: string }> = [];
+  const [haltContents, haltClassContents] = await Promise.all([
+    readFile(join(root, HALT_MARKER), 'utf-8'),
+    readFile(join(root, HALT_CLASS_MARKER), 'utf-8'),
+  ]);
+  let haltCleared = false;
+  try {
+    for (const step of demoted) {
+      const original = join(root, GATES_DIR, `${step}.json`);
+      const stagedPath = join(root, GATES_DIR, `${step}.rewind-clearing`);
+      try {
+        const contents = await readFile(original, 'utf-8');
+        await filesystem.rename(original, stagedPath);
+        staged.push({ original, staged: stagedPath, contents });
+      } catch (error) {
+        if ((error as { code?: unknown }).code !== 'ENOENT') throw error;
+      }
+    }
+    await clearHaltAtomically(root, filesystem);
+    haltCleared = true;
+    const deletions = await Promise.allSettled(staged.map(({ staged: path }) => filesystem.remove(path)));
+    const deletionFailure = deletions.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (deletionFailure) throw deletionFailure.reason;
+  } catch (error) {
+    const restorationFailures: unknown[] = [];
+    for (const entry of staged.reverse()) {
+      try {
+        await filesystem.rename(entry.staged, entry.original);
+      } catch (restoreError) {
+        if ((restoreError as { code?: unknown }).code !== 'ENOENT') {
+          restorationFailures.push(restoreError);
+          continue;
+        }
+        try {
+          await writeFile(entry.original, entry.contents, 'utf-8');
+        } catch (writeError) {
+          restorationFailures.push(writeError);
+        }
+      }
+    }
+    if (haltCleared) {
+      try {
+        await filesystem.restoreHalt(root, haltContents);
+      } catch (restoreError) {
+        restorationFailures.push(restoreError);
+      }
+      try {
+        await filesystem.writeClass(join(root, HALT_CLASS_MARKER), haltClassContents);
+      } catch (restoreError) {
+        restorationFailures.push(restoreError);
+      }
+    }
+    if (restorationFailures.length > 0) {
+      throw new AggregateError(
+        [error, ...restorationFailures],
+        `Failed to clear derived records and restore staged verdicts: ${restorationFailures.map((failure) => failure instanceof Error ? failure.message : String(failure)).join('; ')}`,
+      );
+    }
+    throw error;
+  }
 }
 
 async function rollbackRewindState(
@@ -154,29 +217,38 @@ async function rollbackRewindState(
   const predecessor = steps[targetIndex - 1]!.name as NonNullable<ConductState['last_step']>;
   const previousLastStep = state.last_step;
   if (!previousLastStep) throw new Error('Cannot restore rewind state without a prior last step');
-  const demotionRollback: StateMutation<ConductState>[] = result.demoted.map((step) => {
+  const definedRollback: StateMutation<ConductState>[] = [];
+  const absentRollback: StateFieldDeletion<ConductState>[] = [];
+  for (const step of result.demoted) {
     const original = state[step as keyof ConductState];
-    if (original === undefined) throw new Error(`Cannot restore absent rewind field ${step}`);
-    return {
-      field: step,
-      expected: 'stale',
-      intent: `rollback failed operator rewind to ${result.target}`,
-      next: original,
-    } as StateMutation<ConductState>;
-  });
-
-  const rollback = await store.applyBatch({
-    name: 'rollback failed operator rewind state',
-    mutations: [
-      ...demotionRollback,
-      {
-        field: 'last_step',
-        expected: predecessor,
-        intent: `rollback failed operator rewind to ${result.target}`,
-        next: previousLastStep,
-      } as StateMutation<ConductState>,
-    ],
-  });
+    if (original === undefined) {
+      absentRollback.push({ field: step, expected: 'stale', intent: `rollback failed operator rewind to ${result.target}` } as StateFieldDeletion<ConductState>);
+    } else {
+      definedRollback.push({ field: step, expected: 'stale', intent: `rollback failed operator rewind to ${result.target}`, next: original } as StateMutation<ConductState>);
+    }
+  }
+  const lastStepRollback = {
+    field: 'last_step',
+    expected: predecessor,
+    intent: `rollback failed operator rewind to ${result.target}`,
+    next: previousLastStep,
+  } as StateMutation<ConductState>;
+  const rollback = absentRollback.length === 0
+    ? await store.applyBatch({
+      name: 'rollback failed operator rewind state',
+      mutations: [
+        ...definedRollback,
+        lastStepRollback,
+      ],
+    })
+    : store.applyCorrection
+      ? await store.applyCorrection({
+        name: 'rollback failed operator rewind state',
+        deletions: absentRollback,
+        mutations: [...definedRollback, lastStepRollback],
+        privileged: true,
+      })
+      : { kind: 'persistence' as const, message: `State store does not support corrective mutations for absent rewind fields: ${absentRollback.map(({ field }) => field).join(', ')}` };
   if ('message' in rollback) {
     throw new Error(`Operator rewind rollback failed (${rollback.kind}): ${rollback.message}`);
   }
@@ -203,7 +275,8 @@ export async function dispatchRewindCommand(
   const config = configResult.ok ? configResult.config : {};
   const store = dependencies.store ?? createFilesystemConductStateStore(statePath);
   const preflight = dependencies.preflightDerivedRecords ?? preflightDerivedRecords;
-  const clear = dependencies.clearDerivedRecords ?? clearDerivedRecords;
+  const clear = dependencies.clearDerivedRecords
+    ?? ((root, demoted) => clearDerivedRecords(root, demoted, dependencies.markerFilesystem));
   const originalState = { ...observed.value };
   let result: RewindStateResult | undefined;
   try {
@@ -214,14 +287,14 @@ export async function dispatchRewindCommand(
     } });
     await clear(cwd, result.demoted);
   } catch (error) {
+    console.error(`rewind: ${error instanceof Error ? error.message : String(error)}`);
     if (result) {
       try {
         await rollbackRewindState(originalState, config, result, store);
       } catch (rollbackError) {
-        console.error(`rewind: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+        console.error(`rewind: rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
       }
     }
-    console.error(`rewind: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
   if (!result) return 1;
