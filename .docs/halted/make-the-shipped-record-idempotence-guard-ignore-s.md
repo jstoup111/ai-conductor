@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-11T12:43:00.099Z
 Slug: make-the-shipped-record-idempotence-guard-ignore-s
 Class: needs-human
 Halting step: build_review
