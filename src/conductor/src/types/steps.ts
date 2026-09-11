@@ -25,7 +25,7 @@ export type StepName =
   // Conditional SHIP sub-routine — dispatched by the conductor when a blocking
   // prd_audit / as-built review needs gap remediation. NOT part of the
   // sequential ALL_STEPS; it routes each gap to the right step or HALTs
-  // (architectural-clarity / product-scope only).
+  // (architectural-clarity / product-scope / unanswerable only).
   | 'remediate'
   // Semantic attribution verification step — out-of-band verification gate
   // (like remediate) that validates task attribution metadata in commits.

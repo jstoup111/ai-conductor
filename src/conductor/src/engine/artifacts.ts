@@ -5214,7 +5214,7 @@ export function remediationDispositionAppendsToPlan(
     (REMEDIATION_TARGET_STEPS as readonly string[]).includes(disposition)
   );
 }
-export type RemediationHaltCategory = 'architectural-clarity' | 'product-scope';
+export type RemediationHaltCategory = 'architectural-clarity' | 'product-scope' | 'unanswerable';
 
 export interface RemediationGap {
   id: string;
@@ -5324,8 +5324,11 @@ export async function readRemediationPlanResult(
       continue;
     }
     const disposition = dispositionValue as RemediationDisposition;
+    // Accepted halt categories: architectural-clarity, product-scope, unanswerable.
     const category =
-      o.category === 'architectural-clarity' || o.category === 'product-scope'
+      o.category === 'architectural-clarity' ||
+      o.category === 'product-scope' ||
+      o.category === 'unanswerable'
         ? (o.category as RemediationHaltCategory)
         : null;
     // A 'halt' must name a category; an autonomous disposition must not be halt.

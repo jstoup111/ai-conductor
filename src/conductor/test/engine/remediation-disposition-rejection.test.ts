@@ -1,3 +1,4 @@
+// Covers: task:1
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -49,6 +50,21 @@ describe('rejected remediation dispositions', () => {
       { gapId: '#4', disposition: '{"a":1}' },
     ]);
     expect(plan?.rejected.every((rejection) => rejection.accepted.includes('build'))).toBe(true);
+  });
+
+  it('retains documented halt categories', async () => {
+    await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
+      dispositions: [
+        { id: 'AB-1', disposition: 'halt', category: 'architectural-clarity' },
+        { id: 'AB-2', disposition: 'halt', category: 'product-scope' },
+        { id: 'AB-3', disposition: 'halt', category: 'unanswerable' },
+      ],
+    }));
+
+    const plan = (await readRemediationPlanResult(projectRoot, Date.now() - 60_000, 'prd-audit')).plan;
+    expect(plan?.gaps.map((gap) => gap.category)).toEqual([
+      'architectural-clarity', 'product-scope', 'unanswerable',
+    ]);
   });
 
   it('emits every rejection and halts with the rejected vocabulary when no gap survives', async () => {
