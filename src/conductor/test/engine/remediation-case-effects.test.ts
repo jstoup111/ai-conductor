@@ -39,25 +39,40 @@ describe('remediation case effects', () => {
     expect(hasReservedOrFailedRemediationEffect(record(effect as RemediationCaseRecord['effect']))).toBe(expected);
   });
 
-  const refutedRecord = (effect: RemediationCaseRecord['effect']) => record(effect, {
-    disposition: 'refute', resolution: 'resolved',
-    sources: [{ sourceId: 'testQuality:finding-1', outcome: 'refuted', recordedAt: '2026-09-11T00:00:00.000Z' }],
-    refutation: { claim: 'the finding is wrong', assertions: [{ assertion: 'the required behavior exists', verdict: 'refuted', evidence: [{ path: 'src/engine/remediation-case-effects.ts', excerpt: 'isBuildEligibleActionCase' }] }] },
+  const openAppliedActionRecord = (): RemediationCaseRecord => record({
+    id: 'effect-action', kind: 'action', status: 'applied', workOrderId: 'order-1',
+  }, {
+    disposition: 'act', resolution: 'open',
+    sources: [{ sourceId: 'testQuality:finding-1', outcome: 'acted', recordedAt: '2026-09-11T00:00:00.000Z' }],
+  });
+
+  const refutedRecord = (claim: string): RemediationCaseRecord => ({
+    ...openAppliedActionRecord(),
+    disposition: 'refute',
+    refutation: { claim, assertions: [{ assertion: 'the required behavior exists', verdict: 'refuted', evidence: [{ path: 'src/engine/remediation-case-effects.ts', excerpt: 'isBuildEligibleActionCase' }] }] },
+  });
+
+  it('keeps an open unresolved act case with an applied action effect in BUILD', () => {
+    expect(isBuildEligibleActionCase(openAppliedActionRecord())).toBe(true);
   });
 
   it.each([
-    ['no effect', { kind: 'none' }],
-    ['reserved deferral', { id: 'effect-refute', kind: 'deferral', status: 'reserved' }],
-    ['failed deferral', { id: 'effect-refute', kind: 'deferral', status: 'failed', diagnostic: 'intake failed' }],
-  ] as const)('keeps a refuted case with %s out of BUILD', (_label, effect) => {
-    expect(isBuildEligibleActionCase(refutedRecord(effect))).toBe(false);
+    ['its original claim', 'the finding is wrong'],
+    ['a revised claim', 'the asserted behavior is already present'],
+    ['a narrow claim', 'the finding does not apply to this case'],
+  ] as const)('keeps a refuted case with %s out of BUILD', (_label, claim) => {
+    expect(isBuildEligibleActionCase(refutedRecord(claim))).toBe(false);
   });
 
   it.each([
     ['reserved', { id: 'effect-refute', kind: 'deferral', status: 'reserved' }],
     ['failed', { id: 'effect-refute', kind: 'deferral', status: 'failed', diagnostic: 'intake failed' }],
   ] as const)('treats a refutation with a %s deferral as unfinished', (_label, effect) => {
-    expect(hasReservedOrFailedRemediationEffect(refutedRecord(effect))).toBe(true);
+    expect(hasReservedOrFailedRemediationEffect(record(effect, {
+      disposition: 'refute', resolution: 'resolved',
+      sources: [{ sourceId: 'testQuality:finding-1', outcome: 'refuted', recordedAt: '2026-09-11T00:00:00.000Z' }],
+      refutation: { claim: 'the finding is wrong', assertions: [{ assertion: 'the required behavior exists', verdict: 'refuted', evidence: [{ path: 'src/engine/remediation-case-effects.ts', excerpt: 'isBuildEligibleActionCase' }] }] },
+    }))).toBe(true);
   });
 
   it.each([

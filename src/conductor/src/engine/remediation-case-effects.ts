@@ -48,7 +48,10 @@ export function isOpenRemediationCase(record: RemediationCaseRecord): boolean {
 }
 
 function isActionCase(record: RemediationCaseRecord): record is ActionCase {
-  return isOpenRemediationCase(record) && record.effect.kind === 'action';
+  return isOpenRemediationCase(record)
+    && record.disposition === 'act'
+    && record.refutation === undefined
+    && record.effect.kind === 'action';
 }
 
 /** The one durable vocabulary for action cases that may enter a BUILD retry. */
