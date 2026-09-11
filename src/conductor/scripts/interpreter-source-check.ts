@@ -22,7 +22,7 @@ const findingsIn = (value: string): string[] => [...value.matchAll(expansion)]
  * The inner text of every outermost command substitution the word spans is
  * captured verbatim so the caller can tokenize it as its own command context.
  */
-function wordAt(text: string, start: number, line: number, lineAt = () => line): [Word, number] {
+function wordAt(text: string, start: number, line: number, lineAt: (offset: number) => number = () => line): [Word, number] {
   let index = start;
   let quote: "'" | '"' | undefined;
   let substitutionDepth = 0;
@@ -45,7 +45,7 @@ function wordAt(text: string, start: number, line: number, lineAt = () => line):
       const end = close < 0 ? text.length : close + 2;
       const arithmetic = text.slice(index, end);
       value += arithmetic;
-      if (quote !== "'") expandable += arithmetic;
+      expandable += arithmetic;
       index = end;
       continue;
     } else if (quote !== "'" && char === '$' && text[index + 1] === '(') {
@@ -73,7 +73,7 @@ function wordAt(text: string, start: number, line: number, lineAt = () => line):
 
 type CommandScan = { commands: Word[][]; heredocs: Heredoc[] };
 
-function commandsOnLine(line: string, lineNumber: number, includeNested = true, lineAt = () => lineNumber): CommandScan {
+function commandsOnLine(line: string, lineNumber: number, includeNested = true, lineAt: (offset: number) => number = () => lineNumber): CommandScan {
   const commands: Word[][] = [[]];
   const nested: Word[][] = [];
   const heredocs: Heredoc[] = [];
