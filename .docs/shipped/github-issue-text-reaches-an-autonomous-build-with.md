@@ -4,25 +4,6 @@ spec_hash: 185a3fa6efc98b6b25c268b689eaa850a36b926f5f7de30708cc0addceafc78b
 pr: https://github.com/jstoup111/ai-conductor/pull/2372
 shipped: 2026-09-11
 engine_version: 20260910T220211Z-39b4ec92e0a6
-findings:
-  - gate: architecture_review_as_built
-    finding: AB-1
-    class: REMEDIABLE
-    governing_clause: "adr-2026-09-06-inbound-intake-trust-boundary decision 4"
-    outcome: remediated
-    summary: "Staged and committed intake outcomes discard the ADR-required armor and digest."
-  - gate: architecture_review_as_built
-    finding: AB-2
-    class: REMEDIABLE
-    governing_clause: "adr-2026-09-06-inbound-intake-trust-boundary decision 2"
-    outcome: remediated
-    summary: "The diagram still promises neutralization for an example outside the approved closed shape, after two consecutive reviews."
-  - gate: architecture_review_as_built
-    finding: AB-3
-    class: REMEDIABLE
-    governing_clause: "adr-2026-09-06-inbound-intake-trust-boundary decision 10"
-    outcome: remediated
-    summary: "The architecture diagrams still omit the staged-bullet/quote equality gate after two consecutive reviews."
 ---
 
 ## Cost
@@ -42,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:parallel:prd_audit,step:build_review,step:finish
+reason: open-executions:parallel:prd_audit,step:build_review
 
 ## Build Review
 laps_to_pass: 1
