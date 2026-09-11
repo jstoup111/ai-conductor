@@ -732,6 +732,12 @@ export async function coordinateBuildReviewAdjudication(input: {
           !liveSourceIdsAfterDeferralFailure.has(source.sourceId),
         );
         if (retiredByAcceptance) {
+          // The executor already durably recorded the tracker failure. An
+          // acceptance changes the route, not whether this occurrence happened.
+          await input.emit?.({
+            type: 'remediation_effect_failed', domain: 'build_review', lapId: input.aggregate.lapId,
+            caseId, effectId: record.effect.id, effectKind: 'deferral', reason: deferred.reason,
+          });
           deferredFailureRetiredByAcceptance = true;
           continue;
         }

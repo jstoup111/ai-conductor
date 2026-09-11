@@ -935,14 +935,14 @@ describe('coordinateBuildReviewAdjudication', () => {
     if (!settled.ok) throw new Error(`unexpected case-store failure: ${settled.reason}`);
     const accepted = settled.state.cases.find((record) => record.id === 'deferral-window-1');
     const live = settled.state.cases.find((record) => record.id === 'deferral-window-3');
-    expect(accepted).toMatchObject({ resolution: 'resolved', effect: { status: 'failed', diagnostic: 'retired by operator acceptance' } });
-    expect(live).toMatchObject({ resolution: 'open', effect: { status: 'reserved' } });
-    // Finalize flipped the accepted case's reserved deferral to durable
-    // failed; that reserved->failed transition emits exactly once.
+    expect(accepted).toMatchObject({ resolution: 'resolved', effect: { status: 'failed', diagnostic: 'deferred intake failed: tracker unavailable' } });
+    expect(live).toMatchObject({ resolution: 'open', effect: { status: 'failed', diagnostic: 'deferred intake failed: tracker unavailable' } });
+    // The tracker failure is already durable when acceptance lands; retirement
+    // resolves the case without overwriting its real failure diagnostic.
     expect(events.filter((event) => event.type === 'remediation_effect_failed' && event.caseId === accepted?.id)).toEqual([
       expect.objectContaining({
         type: 'remediation_effect_failed', caseId: accepted?.id, effectKind: 'deferral',
-        reason: 'retired by operator acceptance',
+        reason: 'deferred intake failed: tracker unavailable',
       }),
     ]);
     expect(events).toContainEqual(expect.objectContaining({ type: 'remediation_effect_failed', caseId: live?.id, effectKind: 'deferral' }));
