@@ -463,8 +463,8 @@ Agent-authored, engine-validated. Alphabetized.
 | `protected-artifact-seal.json` | See above | `protected-artifact-seal.ts` |
 | `rebase-residue.json` | `[{ sha, citingTaskIds[], reason }]` — citations a rebase could not translate | `rebase-translate.ts` |
 | `rebase-rewrites.json` | Pre-to-post rebase sha map, merged transitively; atomic temp plus rename | `rebase-translate.ts` |
-| `remediation.json` | Legacy remediation output is per-gap dispositions and tasks. Post-join `build_review` adjudication writes the additive strict `{ mode: 'case-v1', domain: 'build_review', sourceOutcomes, cases }` form; the engine validates it before any case or effect state changes. | `remediate` skill |
-| `remediation-cases.json` | `{ version: 'v1', feature, cases[] }`. Feature-local post-join adjudication state: engine-stamped case identities, append-only source links, open/resolved status, and `none`, reserved, applied, or failed action/deferral effects. Reads and writes validate the feature identity and replace atomically under the conductor lease. | build-review adjudication coordinator |
+| `remediation.json` | Legacy remediation output is per-gap dispositions and tasks. Post-join `build_review` adjudication writes the additive strict `{ mode: 'case-v1', domain: 'build_review', sourceOutcomes, cases }` form; the engine validates it before any case or effect state changes. Its source outcomes include `refuted`; a `refute` case binds an existing attempted action case, has high confidence, and carries a claim plus assertion verdicts with path/excerpt evidence. | `remediate` skill |
+| `remediation-cases.json` | `{ version: 'v1', feature, cases[] }`. Feature-local post-join adjudication state: engine-stamped case identities, append-only source links, open/resolved status, and `none`, reserved, applied, or failed action/deferral effects. A resolved `refute` case persists its refutation record (claim; `refuted`/`upheld` assertions; path/excerpt evidence) and may retain a residual deferral effect. Reads and writes validate the feature identity and replace atomically under the conductor lease. | build-review adjudication coordinator |
 | `summary.json` | At least `{ tasks_completed: number }`; read tolerantly — missing or corrupt reads as 0 | `pipeline` skill |
 | `test-failures.md` | Failure detail consumed by the remediation flow | remediate flow |
 | `test-suite-environment.key` | Environment fingerprint for suite evidence | `full-suite-fingerprint.ts` |
@@ -704,7 +704,7 @@ those:
 `build_review_stale_aggregate`,
 `build_review_disposition_version_invalidated`, `build_review_mechanical_allowance_exhausted`,
 `remediation_adjudication_started`, `remediation_adjudication_completed`, `remediation_adjudication_failed`,
-`remediation_case_reconciled`, `remediation_effect_reserved`, `remediation_effect_applied`,
+`remediation_case_reconciled`, `remediation_case_refuted`, `remediation_effect_reserved`, `remediation_effect_applied`,
 `remediation_effect_failed`, `remediation_semantic_repeat_halt`,
 `step_started`, `deprecated_step`, `step_completed`, `step_failed`, `step_refused`, `provider_attempt`,
 `provider_stream_progress`,

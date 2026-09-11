@@ -155,8 +155,12 @@ ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --r
 ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale <text>
 ```
 
-`findings` is read-only and renders the current feature's raw and effective build-review findings;
-`--json` selects machine-readable output. `accept` changes state only from an interactive terminal with
+`findings` is read-only and renders the current feature's raw and effective build-review findings plus
+autonomous remediation-case outcomes; `--json` includes those cases under `cases`. Human output keeps
+autonomous outcomes separate from operator dispositions and includes each case's disposition, resolution,
+source ids, effect state, rationale, and, for a refutation, its claim and assertion verdicts. A missing
+case store is a successful listing with no autonomous cases. An unreadable or unsupported case store makes
+`findings` name the store and exit 1 rather than silently omitting its cases. `accept` changes state only from an interactive terminal with
 a resolved local operator identity. It requires the exact current lap identity, canonical finding ID,
 and a non-empty rationale. Acceptance works on every registered rubric — currently only `testQuality` —
 because the identity the engine prints is the identity the disposition store accepts back. Stale, unknown, unauthorized, or non-interactive requests are refused without changing
