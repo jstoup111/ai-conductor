@@ -7,9 +7,10 @@ import { resolveExecutionIdentity, type ResolvedExecutionIdentity } from '../exe
 import { dispatchDimensionsFrom, stepDimensionsFrom, type DispatchDimensions, MetricsRecorder } from './metrics.js';
 
 type OtelEvent = Extract<ConductorEvent, { type: OtelEventType }>;
-type MetricsEventType = OtelEventType | 'group_member_step';
-type MetricsEvent = Extract<ConductorEvent, { type: MetricsEventType }>;
+type MetricsEventType = OtelEventType;
+type MetricsEvent = OtelEvent;
 type MetricsHandler = (listener: MetricsListener, event: MetricsEvent) => void;
+type StepTerminalEvent = Extract<ConductorEvent, { type: 'step_completed' | 'step_failed' | 'step_refused' }>;
 
 interface StartedExecution {
   identity: ResolvedExecutionIdentity;
@@ -71,13 +72,15 @@ export class MetricsListener {
     },
     step_completed: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_completed' }>),
     step_failed: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_failed' }>),
-    group_member_step: (listener, event) => listener.onMemberSettlement(event as Extract<MetricsEvent, { type: 'group_member_step' }>),
+    step_refused: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_refused' }>),
+    group_member_step: (listener, event) => listener.onMemberSettlement(event as Extract<OtelEvent, { type: 'group_member_step' }>),
     provider_attempt: (listener, event) => listener.onProviderAttempt(event as Extract<OtelEvent, { type: 'provider_attempt' }>),
     feature_usage_total: (listener, event) => listener.feature(event)?.onFeatureUsageTotal(event as Extract<OtelEvent, { type: 'feature_usage_total' }>),
     feature_cost_snapshot: (listener, event) => listener.feature(event)?.onFeatureCostSnapshot(event as Extract<OtelEvent, { type: 'feature_cost_snapshot' }>),
     step_retry: (listener, event) => {
       const retry = event as Extract<OtelEvent, { type: 'step_retry' }>;
-      listener.feature(retry)?.onRetry(retry.step, dispatchDimensionsFrom(retry));
+      const identity = listener.identityFor(retry, retry.step);
+      if (identity) listener.feature(retry)?.onRetry(identity.metricLabel, stepDimensionsFrom(retry));
     },
     feature_complete: (listener, event) => listener.closeFeature(event as OtelEvent, 'complete'),
     build_stall: (listener, event) => listener.recorder.onStall((event as Extract<OtelEvent, { type: 'build_stall' }>).reason),
@@ -99,11 +102,7 @@ export class MetricsListener {
     this.emitter = emitter;
     const missing = missingMetricsHandlerTypes();
     if (missing.length > 0) throw new Error(`MetricsListener lacks handlers for OTel event type(s): ${missing.join(', ')}`);
-    // Settlement is a metrics-only lifecycle boundary until Task 8 promotes
-    // its sink declaration. Keeping it in this same handler table avoids a
-    // second projection path and automatically deduplicates that later sink
-    // change.
-    for (const type of new Set<MetricsEventType>([...otelEventTypes(), 'group_member_step'])) {
+    for (const type of otelEventTypes()) {
       const projection = MetricsListener.METRICS_HANDLERS[type];
       const handler: EventHandler = (event) => { try { projection(this, event as MetricsEvent); } catch { /* metrics are best effort */ } };
       this.handlers.push([type, handler]);
@@ -134,7 +133,7 @@ export class MetricsListener {
       if (slug) this.terminal.add(slug);
     }
   }
-  private onStepClose(event: Extract<OtelEvent, { type: 'step_completed' | 'step_failed' }>): void {
+  private onStepClose(event: StepTerminalEvent): void {
     const slug = this.featureOf(event);
     const metric = this.feature(event);
     if (!slug || !metric) return;
@@ -142,18 +141,19 @@ export class MetricsListener {
     if (!identity) return;
     const featureStarts = this.starts.get(slug);
     const start = featureStarts?.get(identity.correlationKey);
-    const compatibilityDispatch = this.observeDispatch(event);
+    const compatibilityDispatch = event.type === 'step_refused' ? undefined : this.observeDispatch(event);
     const dimensions = this.dispatchDimensionsForClose(slug, identity.correlationKey, event, compatibilityDispatch);
     if (start !== undefined) {
       const endedAt = start.settledAt ?? this.now();
-      metric.onStepClose(identity.metricLabel, Math.max(0, endedAt - start.startedAt), 0, event.type === 'step_completed' ? event.tokenUsage : undefined, event.type === 'step_completed' ? event.model : undefined, compatibilityDispatch !== undefined, dimensions);
+      metric.onStepClose(identity.metricLabel, Math.max(0, endedAt - start.startedAt), 0, event.type === 'step_completed' ? event.tokenUsage : undefined, compatibilityDispatch !== undefined, dimensions);
+      metric.onStepTerminal(identity.metricLabel, terminalOutcome(event), dimensions);
     }
     this.latestDispatchDimensions.get(slug)?.delete(identity.correlationKey);
     featureStarts?.delete(identity.correlationKey);
     if (featureStarts?.size === 0) this.starts.delete(slug);
   }
 
-  private onMemberSettlement(event: Extract<MetricsEvent, { type: 'group_member_step' }>): void {
+  private onMemberSettlement(event: Extract<OtelEvent, { type: 'group_member_step' }>): void {
     if (event.phase !== 'result') return;
     const slug = this.featureOf(event);
     const identity = this.identityFor(event, event.member);
@@ -194,10 +194,13 @@ export class MetricsListener {
   private dispatchDimensionsForClose(
     slug: string,
     key: string,
-    event: Extract<OtelEvent, { type: 'step_completed' | 'step_failed' }>,
+    event: StepTerminalEvent,
     observation: ReturnType<DispatchMeteringTracker['observe']>,
   ): DispatchDimensions {
-    return { ...this.latestDispatchDimensions.get(slug)?.get(key), ...stepDimensionsFrom(event, observation) };
+    return {
+      ...this.latestDispatchDimensions.get(slug)?.get(key),
+      ...(event.type === 'step_refused' ? {} : stepDimensionsFrom(event, observation)),
+    };
   }
 
   private identityFor(event: ConductorEvent, legacyStep: string): ResolvedExecutionIdentity | undefined {
@@ -210,6 +213,10 @@ export class MetricsListener {
     });
   }
 
+}
+
+function terminalOutcome(event: StepTerminalEvent): 'success' | 'failure' | 'refusal' {
+  return event.type === 'step_completed' ? 'success' : event.type === 'step_failed' ? 'failure' : 'refusal';
 }
 
 /** Lists OTel sink rows that lack a real listener projection. */

@@ -1,4 +1,4 @@
-// Covers: task:5, task:6, task:7
+// Covers: task:5, task:6, task:7, task:8
 import { describe, expect, it } from 'vitest';
 import {
   AggregationTemporality,
@@ -398,6 +398,172 @@ describe('MetricsListener correlated member duration projection (Task 7)', () =>
       await expect(emitter.emit({ type: 'group_member_step', member: 'audit', skill: 'audit', phase: 'result', outcome: 'verdict:pass', executionContext: context })).resolves.toBeUndefined();
       await expect(emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: context })).resolves.toBeUndefined();
       expect(delivered).toEqual(['audit']);
+    } finally {
+      listener.stop();
+    }
+  });
+});
+
+describe('MetricsListener retry and refusal projection (Task 8)', () => {
+  function configuredContext(executionId: string, parentGroup: string, member = 'audit') {
+    return {
+      executionId,
+      subject: { kind: 'configured-member' as const, parentGroup, member },
+    };
+  }
+
+  function outcomePoint(exporter: InMemoryMetricExporter, step: string, outcome: string): MetricPoint | undefined {
+    return pointsForInstrument(exporter, 'conductor.step.outcomes')
+      .find((point) => point.attributes.step === step && point.attributes.outcome === outcome);
+  }
+
+  it('correlates serial and member policy retries without zero-filled retries or duplicate terminal outcomes', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const emitter = new ConductorEventEmitter();
+    let now = 10;
+    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), () => now, 'feature');
+    const member = configuredContext('execution-exhausted', 'review');
+    listener.start(emitter);
+
+    try {
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+      await emitter.emit({ type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'failed attempt', model: 'opus', effort: 'high', provider: 'claude', tier: 'M' });
+      now = 20;
+      await emitter.emit({ type: 'step_completed', step: 'build', status: 'done' });
+
+      now = 30;
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: member });
+      await emitter.emit({
+        type: 'provider_attempt', step: 'build', executionContext: member, provider: 'codex',
+        model: 'gpt-5.6', effort: 'medium', tier: 'L', invoked: true, outcome: 'failure',
+        tokenUsage: { input: 10, output: 5, costUsd: 0.01 },
+      });
+      await emitter.emit({ type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'failed attempt', model: 'gpt-5.6', effort: 'medium', provider: 'codex', tier: 'L', executionContext: member });
+      await emitter.emit({ type: 'step_retry', step: 'build', attempt: 2, maxAttempts: 3, reason: 'failed attempt', model: 'gpt-5.6', effort: 'medium', provider: 'codex', tier: 'L', executionContext: member });
+      now = 50;
+      await emitter.emit({ type: 'group_member_step', member: 'audit', skill: 'audit', phase: 'result', outcome: 'failed', executionContext: member });
+      now = 60;
+      await emitter.emit({ type: 'step_failed', step: 'build', error: 'exhausted', retryCount: 2, executionContext: member });
+      await emitter.emit({ type: 'step_failed', step: 'build', error: 'late duplicate', retryCount: 2, executionContext: member });
+      await provider.forceFlush();
+
+      expect(pointsForInstrument(exporter, 'conductor.step.retries')).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          value: 1,
+          attributes: { step: 'build', model: 'opus', effort: 'high', provider: 'claude', tier: 'M', project: 'project', worker: 'worker', feature: 'feature' },
+        }),
+        expect.objectContaining({
+          value: 2,
+          attributes: { step: 'configured:review/audit', model: 'gpt-5.6', effort: 'medium', provider: 'codex', tier: 'L', project: 'project', worker: 'worker', feature: 'feature' },
+        }),
+      ]));
+      expect(outcomePoint(exporter, 'build', 'success')?.value).toBe(1);
+      expect(outcomePoint(exporter, 'configured:review/audit', 'failure')?.value).toBe(1);
+      expect(pointsForInstrument(exporter, 'conductor.step.dispatches')).toEqual([
+        expect.objectContaining({
+          value: 1,
+          attributes: {
+            step: 'configured:review/audit', metering: 'fully-metered', model: 'gpt-5.6', effort: 'medium', provider: 'codex', tier: 'L',
+            project: 'project', worker: 'worker', feature: 'feature',
+          },
+        }),
+      ]);
+      expect(pointsForInstrument(exporter, 'conductor.step.retries').some((point) => point.attributes.step === 'plan')).toBe(false);
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
+  });
+
+  it('closes started refusals once at their own boundary without fabricating pre-start or late terminals', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const emitter = new ConductorEventEmitter();
+    let now = 10;
+    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), () => now, 'feature');
+    const first = configuredContext('execution-first', 'review');
+    const second = configuredContext('execution-second', 'review');
+    const neverStarted = configuredContext('execution-never-started', 'review');
+    listener.start(emitter);
+
+    try {
+      await emitter.emit({ type: 'step_started', step: 'plan', index: 0 });
+      now = 20;
+      await emitter.emit({ type: 'step_refused', step: 'plan', kind: 'needs-human', reason: 'operator required' });
+      await emitter.emit({ type: 'step_refused', step: 'plan', kind: 'needs-human', reason: 'duplicate' });
+
+      now = 30;
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: first });
+      now = 40;
+      await emitter.emit({ type: 'group_member_step', member: 'audit', skill: 'audit', phase: 'result', outcome: 'verdict:pass', executionContext: first });
+      now = 50;
+      await emitter.emit({ type: 'step_refused', step: 'build', kind: 'validation-verdict', reason: 'authoritative refusal', executionContext: first });
+      now = 60;
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: second });
+      now = 70;
+      await emitter.emit({ type: 'step_refused', step: 'build', kind: 'validation-verdict', reason: 'late first refusal', executionContext: first });
+      await emitter.emit({ type: 'step_refused', step: 'build', kind: 'validation-verdict', reason: 'not admitted', executionContext: neverStarted });
+      now = 90;
+      await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: second });
+      await provider.forceFlush();
+
+      expect(outcomePoint(exporter, 'plan', 'refusal')?.value).toBe(1);
+      expect(outcomePoint(exporter, 'configured:review/audit', 'refusal')?.value).toBe(1);
+      expect(outcomePoint(exporter, 'configured:review/audit', 'success')?.value).toBe(1);
+      expect(pointsForInstrument(exporter, 'conductor.step.duration')).toEqual(expect.arrayContaining([
+        expect.objectContaining({ attributes: expect.objectContaining({ step: 'plan' }), value: expect.objectContaining({ count: 1, sum: 10 }) }),
+        expect.objectContaining({ attributes: expect.objectContaining({ step: 'configured:review/audit' }), value: expect.objectContaining({ count: 2, sum: 40 }) }),
+      ]));
+      expect(pointsForInstrument(exporter, 'conductor.step.duration').some((point) => point.attributes.executionId === 'execution-never-started')).toBe(false);
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
+  });
+
+  it('does not turn rate limits or non-invoked candidates into retries or dispatches', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const emitter = new ConductorEventEmitter();
+    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), undefined, 'feature');
+    listener.start(emitter);
+
+    try {
+      await emitter.emit({ type: 'step_started', step: 'test_suite', index: 0 });
+      await emitter.emit({ type: 'rate_limit', waitSeconds: 3, reason: 'usage-exhausted' });
+      await emitter.emit({ type: 'provider_attempt', step: 'test_suite', provider: 'codex', invoked: false, outcome: 'unavailable' });
+      await emitter.emit({ type: 'step_completed', step: 'test_suite', status: 'done' });
+      await provider.forceFlush();
+
+      expect(pointsForInstrument(exporter, 'conductor.step.retries')).toEqual([]);
+      expect(pointsForInstrument(exporter, 'conductor.step.dispatches')).toEqual([]);
+      expect(outcomePoint(exporter, 'test_suite', 'success')?.value).toBe(1);
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
+  });
+
+  it('keeps retry and refusal event delivery intact when the metrics recorder throws', async () => {
+    const emitter = new ConductorEventEmitter();
+    const delivered: string[] = [];
+    const throwingRecorder = {
+      forFeature: () => throwingRecorder,
+      onRetry: () => { throw new Error('retry export failed'); },
+      onStepClose: () => { throw new Error('refusal export failed'); },
+      onStepTerminal: () => { throw new Error('outcome export failed'); },
+    } as unknown as MetricsRecorder;
+    const listener = new MetricsListener(throwingRecorder, () => 10, 'feature');
+    listener.start(emitter);
+    emitter.on('step_retry', () => { delivered.push('retry'); });
+    emitter.on('step_refused', () => { delivered.push('refusal'); });
+
+    try {
+      await expect(emitter.emit({ type: 'step_started', step: 'build', index: 0 })).resolves.toBeUndefined();
+      await expect(emitter.emit({ type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 2, reason: 'failed attempt' })).resolves.toBeUndefined();
+      await expect(emitter.emit({ type: 'step_refused', step: 'build', kind: 'needs-human', reason: 'operator required' })).resolves.toBeUndefined();
+      expect(delivered).toEqual(['retry', 'refusal']);
     } finally {
       listener.stop();
     }
