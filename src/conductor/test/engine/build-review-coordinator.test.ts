@@ -652,16 +652,22 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
 
     expect(testQualityBranch(result)).toEqual({ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result", detail });
     expect(input.writeArtifact).not.toHaveBeenCalled();
-    // The event-spine occurrence stays a short reason; the detail travels on the branch only.
     expect(emit).toHaveBeenCalledWith({
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "invalid-provider-result",
+      excerpt: detail,
     });
   });
 
   it("settles an undefined dispatch result as invalid-provider-result with no detail", async () => {
-    const result = await coordinateBuildReviewRubrics(coordinationInput(true));
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, { emit }));
 
     expect(testQualityBranch(result)).toEqual({ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result" });
+    expect(emit.mock.calls.map(([event]) => event)).toEqual([{
+      type: "build_review_rubric_started", rubric: "testQuality", lapId: "lap-current",
+    }, {
+      type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "invalid-provider-result",
+    }]);
   });
 
   it.each([
