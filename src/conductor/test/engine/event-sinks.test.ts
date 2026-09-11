@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:6, task:8, task:15, task:17
+// Covers: task:1, task:3, task:6, task:8, task:10, task:15, task:17
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -370,6 +370,7 @@ describe('event sink subscriptions', () => {
       'step_started',
       'step_completed',
       'step_failed',
+      'step_refused',
       'provider_attempt',
       'step_retry',
       'feature_complete',
@@ -377,6 +378,7 @@ describe('event sink subscriptions', () => {
       'build_progress',
       'build_no_progress',
       'pipeline_closeout',
+      'group_member_step',
       'gate_verdict',
       'kickback',
       'loop_halt',
@@ -390,6 +392,7 @@ describe('event sink subscriptions', () => {
       'step_started',
       'step_completed',
       'step_failed',
+      'step_refused',
       'provider_attempt',
       'feature_usage_total',
       'feature_cost_snapshot',
@@ -399,6 +402,7 @@ describe('event sink subscriptions', () => {
       'build_progress',
       'build_no_progress',
       'pipeline_closeout',
+      'group_member_step',
       'gate_verdict',
       'kickback',
       'loop_halt',
