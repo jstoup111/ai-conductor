@@ -1,6 +1,6 @@
 **Status:** Accepted
 
-# Stories: Complete assigned-issue capture for background intake (#1133)
+# Stories: Bounded assigned-issue capture for background intake (#1133)
 
 Track: technical
 
@@ -10,15 +10,15 @@ Approved by the operator on 2026-09-06 (delegated). Scope is the assigned-issue 
 
 ## Story 1: Capture assigned issues beyond the CLI's default result window
 
-**Requirement:** Every eligible assigned issue in a registered repository is discoverable regardless of its age or position in the result set.
+**Requirement:** A poll requests up to 1,000 open assigned issues per registered repository, captures every eligible issue returned within that window, and reports possible incompleteness when the returned count reaches 1,000. Issues outside that window are not guaranteed to be discovered.
 
-As an operator running background intake, I want a poll to see every open issue assigned to me in a registered repository so that older assigned work is routed instead of silently disappearing behind the GitHub CLI's default result window.
+As an operator running background intake, I want a poll to inspect up to 1,000 open issues assigned to me per registered repository so that work beyond the default 30-result window is captured and a saturated listing is visible.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- Given a registered repository whose issue listing would return only its first 30 results without an explicit maximum, when background intake polls it, then the poll requests an explicit maximum larger than 30 and captures every open assigned issue the repository holds.
+- Given a registered repository whose issue listing would return only its first 30 results without an explicit maximum, when background intake polls it, then the poll requests an explicit maximum of 1,000 and captures every eligible issue returned within that limit.
 - Given a registered repository holding 45 open assigned issues, when background intake polls it, then it produces 45 pending envelopes, one per issue, each carrying that issue's source reference.
 
 #### Negative Paths
@@ -28,13 +28,13 @@ As an operator running background intake, I want a poll to see every open issue 
 
 ### Done When
 
-- [ ] The assigned-issue listing argv carries an explicit maximum whose value exceeds the GitHub CLI's documented 30-result default.
+- [ ] The assigned-issue listing argv carries an explicit maximum whose value is 1,000, exceeding the GitHub CLI's documented 30-result default.
 - [ ] An intake poll over a repository of 45 open assigned issues returns 45 pending envelopes with 45 distinct source references.
 - [ ] An immediately repeated poll over that same repository returns zero envelopes.
 
 ## Story 2: Report a result set whose completeness cannot be proven
 
-**Requirement:** Intake reports an explicit failure or incompleteness signal if the complete eligible set cannot be read.
+**Requirement:** Intake reports a repository failure or an explicit possible-incompleteness signal when its bounded listing reaches the requested maximum.
 
 As an operator running background intake, I want a loud signal whenever a poll's issue listing came back at exactly the maximum it asked for so that a truncated read is visible instead of being mistaken for a complete one.
 

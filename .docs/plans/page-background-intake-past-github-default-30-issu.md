@@ -12,6 +12,8 @@
 
 Three bounded tasks deliver #1133: the canonical tracker seam requests an explicit assigned-issue maximum instead of inheriting the GitHub CLI's 30-result default, an acceptance poll proves capture and re-poll idempotency across a result set larger than that default, and the intake adapter reports one explicit incompleteness warning when a listing comes back at exactly the maximum it asked for. Cursor paging, a configurable limit key, per-repository tuning, and any queue or ledger schema change are outside this slice.
 
+> **Amended 2026-09-11 by James Stoup (#1133):** The operator accepts a 1,000-issue result window per repository with a saturation warning and no guarantee of discovery beyond that window. Story 1 now states that bounded outcome; cursor paging remains excluded. This resolves as-built AB-2 without adding implementation work.
+
 ## Technical Approach
 
 The seam owns the maximum. `createGithubTrackerClient`'s `listAssignedIssues` gains an exported module constant for the default maximum and an optional trailing `limit` parameter defaulting to it, and appends `--limit <value>` to the existing argv it already builds. The constant is 1000 — far above the 48 assigned issues the filing repository holds today and above the 30 the CLI applies when the flag is absent — because the GitHub CLI already pages internally up to `--limit`; hand-rolling a cursor pager would fork the seam's single-call contract and every fake that implements it. The parameter is optional and trailing, so the existing `TrackerClient` implementations in the test suite that declare `listAssignedIssues` with fewer parameters keep compiling.
