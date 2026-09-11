@@ -78,17 +78,17 @@ Overwrite `.pipeline/remediation.json` with one JSON object using exactly these 
 `"build_review"`; do not add legacy `dispositions` or any other keys.
 
 `sourceOutcomes` contains one exact row with `sourceId`, `outcome`, `caseRef` for every and only the
-supplied `currentFindings` identifier. `outcome` is closed: `acted` | `deferred` | `rejected` | `merged`.
+supplied `currentFindings` identifier. `outcome` is closed: `acted` | `deferred` | `rejected` | `merged` | `refuted`.
 Each `caseRef` is a provider-local reference to one canonical row in `cases`; it is not a durable id.
 Several source rows may reference one canonical case only when the judgement is that they are the same
 repair case.
 
 Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`, `priority`,
-`rationale`, `confidence`, `effect`:
+`rationale`, `confidence`, `effect`; a `refute` row additionally carries `refutation`:
 
 - `caseRef` is the provider-local reference used by source rows. `existingCaseId`, when supplied by
   the engine in `priorCases`, may bind that existing case only.
-- `disposition` is closed: `act` | `defer` | `reject`.
+- `disposition` is closed: `act` | `defer` | `reject` | `refute`.
 - `priority` is closed: `critical` | `high` | `medium` | `low`.
 - `rationale` is bounded, evidence-grounded prose explaining the judgement, and `confidence` is
   closed: `high` | `medium` | `low`.
@@ -99,6 +99,12 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
   the work.
 - A `reject` effect is exactly `{ "kind": "none" }` and its rationale explains why the raw finding
   is non-actionable under the supplied rubric and plan contract.
+- A `refute` row MUST bind an `existingCaseId` for an already attempted `act` case, use confidence
+  `high`, and use either `{ "kind": "none" }` or a complete deferral effect. Its `refutation` is
+  exactly `{ "claim": "...", "assertions": [...] }`; every assertion has `assertion`, a `refuted` or
+  `upheld` verdict, and evidence entries containing only `path` and `excerpt`. Evidence proves current
+  tree content: use no line numbers, hunks, commits, or SHAs. A case may be refuted once only; a later
+  attempt to refute the same case is rejected for human review.
 
 ### Authority boundaries
 
