@@ -8,6 +8,8 @@
 
 ## Summary
 
+> **Amended 2026-09-11 by operator approval for #1628:** Target-disappearance errors are explicitly outside both the stable-identifier requirement and the recording contract. Preserve their existing rejection, retained-worktree, and no-write behavior. The operator approved this story exception rather than adding an identifier for a scenario outside the intended operating scope. All other target-resolved rejections retain the existing gate-identification and event requirements.
+
 Four bounded tasks deliver #1628 after the target repository has been resolved. Task 1 gives every rejection in the landing primitive a stable gate identifier. Task 2 adds the persisted rejection event and the pure classifier that turns a thrown error into it. Task 3 emits the event from the landing command's `landSpec` failure path onto the target repository's persisted event ledger while bypassing persistence if the canonical target disappears. Task 4 proves the recording path cannot degrade the operator-facing rejection, and updates the event-catalogue documentation. Pre-target command failures, target-disappearance telemetry, historical backfill, precision reporting, rejection recording for other commands, and any change to gate strictness are outside this slice.
 
 ## Technical Approach
@@ -37,6 +39,8 @@ Testing follows the repository test rules. The classifier and the gate identifie
 ## Tasks
 
 ### Task 1: Give every landing rejection a stable gate identifier
+
+> **Amended 2026-09-11 by operator approval for #1628:** Target-disappearance errors are explicitly outside both the stable-identifier requirement and the recording contract. Preserve their existing rejection, retained-worktree, and no-write behavior. The operator approved this story exception rather than adding an identifier for a scenario outside the intended operating scope. All other target-resolved rejections retain the existing gate-identification and event requirements.
 **Story:** Story 1
 **Type:** happy-path
 **Files:** src/conductor/src/engine/engineer/land-spec.ts, src/conductor/test/engine/engineer/land-gate-rejection.test.ts (new)
@@ -114,6 +118,8 @@ Testing follows the repository test rules. The classifier and the gate identifie
 
 ## Coverage Check
 
+> **Amended 2026-09-11 by operator approval for #1628:** Target-disappearance errors are explicitly outside both the stable-identifier requirement and the recording contract. Preserve their existing rejection, retained-worktree, and no-write behavior. The operator approved this story exception rather than adding an identifier for a scenario outside the intended operating scope. All other target-resolved rejections retain the existing gate-identification and event requirements.
+
 | Criterion | Task id(s) | Done when quote | Disposition |
 | --- | --- | --- | --- |
 | Story 1 happy: Given a land invocation is rejected because its stories artifact is not approved, when the command reports the failure, then the target repository's persisted event ledger gains one land-gate-rejection event whose gate identifier names the stories-approval gate and whose reason carries the rejection message. | 1, 3 | "A rejected landing appends exactly one rejection event to the target repository's persisted event ledger, carrying the gate identifier, the reason, the project name, and the worktree path." | diff-local |
@@ -121,7 +127,7 @@ Testing follows the repository test rules. The classifier and the gate identifie
 | Story 1 happy: Given several land invocations against one repository are rejected by different gates, when the persisted ledger is replayed, then each rejection appears as its own event and the per-gate counts and reasons are derivable from those events alone. | 3 | "Two rejections tripping different gates produce two ledger records whose gate identifiers differ, so per-gate counts and reasons are derivable from the ledger alone." | diff-local |
 | Story 1 negative: Given a land invocation that passes every gate and commits, when the command returns success, then no land-gate-rejection event is recorded. | 3 | "A successful landing appends no rejection event to that ledger." | diff-local |
 | Story 2 happy: Given a rejection message longer than the recorded-reason cap, when the event is built, then the recorded reason is truncated to the cap and marked as truncated, while the message printed to the operator remains complete. | 2 | "A reason longer than the cap is returned truncated to the cap with an explicit truncation marker, and the classifier never mutates the error it was given." | diff-local |
-| Story 2 negative: Given a land failure that no gate identifier classifies, when the event is built, then it is recorded under the unclassified gate identifier rather than dropped. | 2, 4 | "The classifier returns the error's own gate identifier for a gate error, `target-path-missing` for target disappearance inside `landSpec`, and `unclassified` for any other error from the target-resolved landing boundary." | diff-local |
+| Story 2 negative: Given a recordable land failure other than target disappearance that no gate identifier classifies, when the event is built, then it is recorded under the unclassified gate identifier rather than dropped. | 2, 4 | "The classifier returns the error's own gate identifier for a gate error and `unclassified` for any other recordable error from the target-resolved landing boundary; target disappearance never reaches the persister." | diff-local |
 | Story 2 negative: Given the persisted event ledger cannot be written, when a land invocation is rejected, then the command still prints the original rejection message and the retained worktree path and still exits nonzero. | 4 | "An unwritable ledger leaves the rejection message, the retained-worktree line, and the nonzero exit code byte-identical to a run with a writable ledger." | diff-local |
 
 ## Test dispositions and integration ownership
@@ -131,3 +137,10 @@ All criteria are diff-local against controlled fixtures. Task 1 and Task 2 own u
 ## Task Dependency Graph
 
 Task 1 -> Task 2 -> Task 3 -> Task 4
+
+## Verify-Claims Ledger — operator scope correction — 2026-09-11
+
+- [verified] The existing `dispatchEngineer` catch returns after reporting `TargetPathMissingError`, before classification and persister construction.
+- Confirmed input: operator approved exempting target disappearance from identification while preserving the no-write behavior. This is a scope exception, not a claim that filesystem disappearance is mechanically impossible.
+- No new implementation task is required: the approved plan already directs this bypass. The corrected story and Task 1 clarification resolve PG-1; the coverage row now quotes Task 2's actual completion criterion.
+- No pending assumptions. Verify-claims verdict: CLEAR.
