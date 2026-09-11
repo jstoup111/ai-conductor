@@ -171,10 +171,26 @@ export interface ProviderLifecycleEventMetadata {
   outcome?: 'completed' | 'failed';
 }
 
+/**
+ * Stable identity for one logical execution. It is intentionally separate
+ * from provider-attempt IDs and from the lifecycle registry's policy step.
+ */
+export interface ExecutionContext {
+  executionId: string;
+  subject: ExecutionSubject;
+}
+
+/** A telemetry subject is either a registered lifecycle step or a configured branch. */
+export type ExecutionSubject =
+  | { kind: 'lifecycle-step'; step: StepName }
+  | { kind: 'configured-member'; parentGroup: string; member: string };
+
 /** One provider candidate result or lifecycle transition within a step attempt. */
 export interface ProviderAttemptEvent {
   type: 'provider_attempt';
   step: StepName;
+  /** Optional so historical event records retain their legacy interpretation. */
+  executionContext?: ExecutionContext;
   provider: string;
   /** Sanitized Codex authentication source; omitted for other providers. */
   authenticationSource?: 'api-key' | 'cached-login';
@@ -427,7 +443,12 @@ export type ConductorEvent =
       reason: 'already-attempted' | 'regressed';
     }
   | { type: 'build_review_stale_aggregate'; storedLapId: string; currentLapId: string }
-  | { type: 'step_started'; step: StepName; index: number }
+  | {
+      type: 'step_started';
+      step: StepName;
+      index: number;
+      executionContext?: ExecutionContext;
+    }
   | {
       /** A hook-owned containment check could not reach a verdict. */
       type: 'containment_check_unresolved';
@@ -462,6 +483,7 @@ export type ConductorEvent =
       /** Build-only tree witnesses; absent on legacy and non-build events. */
       treeBefore?: string | null;
       treeAfter?: string | null;
+      executionContext?: ExecutionContext;
     }
   | {
       type: 'step_failed';
@@ -471,6 +493,7 @@ export type ConductorEvent =
       effort?: EffortLevel;
       tier?: ComplexityTier;
       observedIntervals?: readonly ObservedInterval[];
+      executionContext?: ExecutionContext;
     }
   | {
       /** The step was stopped before its own work could be judged a failure. */
@@ -478,6 +501,7 @@ export type ConductorEvent =
       step: StepName;
       kind: 'seal' | 'needs-human' | 'validation-verdict';
       reason: string;
+      executionContext?: ExecutionContext;
     }
   | {
       /** A domain rule refused a conductor-owned step status write. */
@@ -608,6 +632,7 @@ export type ConductorEvent =
        */
       escalatedModel?: string;
       escalatedEffort?: string;
+      executionContext?: ExecutionContext;
     }
   | {
       // #646: rerun-vs-route classification, emitted on every classifier-
@@ -896,6 +921,8 @@ export type ConductorEvent =
       phase: 'dispatch' | 'result';
       /** Present when phase === 'result': the classified outcome (see classifyOutcome in group-core.ts). */
       outcome?: string;
+      /** Correlates an admitted configured member without registering it as a StepName. */
+      executionContext?: ExecutionContext;
     }
   // ── Gate-driven loop (Phase 5 observability) ──
   | {
