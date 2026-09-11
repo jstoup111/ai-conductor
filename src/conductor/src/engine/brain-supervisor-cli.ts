@@ -28,7 +28,7 @@ import {
 } from './daemon-tmux.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveCanonicalLauncher, shellQuote } from './canonical-launcher.js';
-import { createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
+import { CorruptLedgerError, createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
 import { summarizeQueueDepth } from './engineer/intake/queue-depth.js';
 import { loadConfig } from './config.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
@@ -144,8 +144,16 @@ export async function brainStatus(deps: BrainCliDeps = {}): Promise<number> {
     try {
       entries = await readLedgerEntries();
     } catch (err) {
-      const reason = err instanceof Error ? err.message : String(err);
-      out(`intake queue: unavailable — ${reason}`);
+      if (err instanceof CorruptLedgerError) {
+        const quarantineLocation = err.quarantinePath ?? err.quarantineDiagnostic ?? 'unavailable';
+        out(
+          `intake queue: unavailable — intake ledger is corrupt at ${err.ledgerPath}; ` +
+            `quarantine path: ${quarantineLocation}`,
+        );
+      } else {
+        const reason = err instanceof Error ? err.message : String(err);
+        out(`intake queue: unavailable — ${reason}`);
+      }
       return 1;
     }
 

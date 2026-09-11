@@ -12,6 +12,7 @@
 // injected for the intake-status.json read.
 
 import { describe, it, expect } from 'vitest';
+import { CorruptLedgerError } from '../../src/engine/engineer/intake/ledger.js';
 
 const MOD = '../../src/engine/brain-supervisor-cli.js';
 
@@ -167,20 +168,67 @@ describe('brainStatus', () => {
     ]);
   });
 
-  it('reports queue unavailability and no counts when the ledger is corrupt or leased', async () => {
+  it('reports corrupt-ledger quarantine location and no counts', async () => {
     const mod = await load();
     const brainStatus = requireFn(mod, 'brainStatus');
     const { run } = makeFakeTmuxRunner();
+    const error = new CorruptLedgerError(
+      '/engineer/ledger.json',
+      'invalid JSON',
+      '/engineer/ledger.json.corrupt-20260911',
+    );
+    const out: string[] = [];
 
-    for (const error of [new Error('Intake ledger at /ledger.json is corrupt: invalid JSON'), new Error('Unable to acquire intake ledger lease: busy')]) {
-      const out: string[] = [];
-      const code = await brainStatus({
-        run, out: (l: string) => out.push(l), readLedgerEntries: async () => { throw error; },
-      });
+    const code = await brainStatus({
+      run, out: (l: string) => out.push(l), readLedgerEntries: async () => { throw error; },
+    });
 
-      expect(code).toBe(1);
-      expect(out).toEqual(['brain loop: stopped', `intake queue: unavailable — ${error.message}`]);
-    }
+    expect(code).toBe(1);
+    expect(out).toEqual([
+      'brain loop: stopped',
+      'intake queue: unavailable — intake ledger is corrupt at /engineer/ledger.json; quarantine path: /engineer/ledger.json.corrupt-20260911',
+    ]);
+    expect(out.join('\n')).not.toMatch(/^(pending|claimed|stranded):/m);
+  });
+
+  it('reports a corrupt-ledger quarantine diagnostic and no counts when no path is available', async () => {
+    const mod = await load();
+    const brainStatus = requireFn(mod, 'brainStatus');
+    const { run } = makeFakeTmuxRunner();
+    const error = new CorruptLedgerError(
+      '/engineer/ledger.json',
+      'invalid JSON',
+      undefined,
+      'copy failed: permission denied',
+    );
+    const out: string[] = [];
+
+    const code = await brainStatus({
+      run, out: (l: string) => out.push(l), readLedgerEntries: async () => { throw error; },
+    });
+
+    expect(code).toBe(1);
+    expect(out).toEqual([
+      'brain loop: stopped',
+      'intake queue: unavailable — intake ledger is corrupt at /engineer/ledger.json; quarantine path: copy failed: permission denied',
+    ]);
+    expect(out.join('\n')).not.toMatch(/^(pending|claimed|stranded):/m);
+  });
+
+  it('reports lease unavailability and no counts', async () => {
+    const mod = await load();
+    const brainStatus = requireFn(mod, 'brainStatus');
+    const { run } = makeFakeTmuxRunner();
+    const error = new Error('Unable to acquire intake ledger lease: busy');
+    const out: string[] = [];
+
+    const code = await brainStatus({
+      run, out: (l: string) => out.push(l), readLedgerEntries: async () => { throw error; },
+    });
+
+    expect(code).toBe(1);
+    expect(out).toEqual(['brain loop: stopped', `intake queue: unavailable — ${error.message}`]);
+    expect(out.join('\n')).not.toMatch(/^(pending|claimed|stranded):/m);
   });
 
   it('labels a recorded notifier batch as the last notification', async () => {
