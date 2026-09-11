@@ -220,6 +220,8 @@ export function auditEnvironmentBlockerClaims(
     `${ENVIRONMENT_CLAIM_REFUTED}: this step blamed the environment for blocking ` +
       `${operations}, and the engine disproved it from the dispatch it actually performed.`,
     ...quoted,
+    'Disproved proposition: a write-fence rule denies the refuted operations.',
+    'Evidence: a generated fence-script scan found no matching rule, and the provider has no OS sandbox.',
     'Engine facts for THIS dispatch:',
     ...renderFacts(facts),
     `Therefore ${operations} is NOT blocked by this environment. Run the operation for real and ` +

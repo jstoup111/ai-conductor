@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 /**
  * Unit specs for the claimed-environmental-blocker audit (#1106).
  *
@@ -88,6 +88,16 @@ describe('environment claim audit', () => {
     expect(audit.message).toContain("The environment's write-fence sandbox blocks");
     expect(audit.message).toContain('no OS sandbox');
     expect(audit.message).toContain('outside this build worktree');
+  });
+
+  it('states the disproved fence proposition and dispatch evidence with the engine facts', () => {
+    const audit = auditEnvironmentBlockerClaims(INCIDENT_OUTPUT, CLAUDE_DISPATCH);
+
+    expect([
+      audit.message?.includes('a write-fence rule denies the refuted operations'),
+      audit.message?.includes('generated fence-script scan'),
+      audit.message?.includes('no OS sandbox'),
+    ]).toEqual([true, true, true]);
   });
 
   it('derives what the fence can deny from the fence generator, not from belief', () => {
