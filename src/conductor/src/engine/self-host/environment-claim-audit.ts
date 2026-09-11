@@ -74,6 +74,14 @@ const BLOCKING_ASSERTIONS: readonly RegExp[] = [
   /\brefus(e|es|ed|ing)\b/i,
 ];
 
+/** Assertions that the environment denies an unbounded command surface. */
+const UNBOUNDED_COMMAND_DENIAL_ASSERTIONS: readonly RegExp[] = [
+  /\b(?:block(?:s|ed|ing)?|deny|denies|denied|reject(?:s|ed|ing)?|refus(?:e|es|ed|ing))\s+(?:all|every|any)\s+(?:bash|shell|tool|terminal)\s+(?:commands?|calls?|invocations?)\b/i,
+  /\b(?:unable\s+to|cannot|can't|can not)\s+(?:run|execute|use)\s+(?:all|every|any)\s+(?:bash|shell|tool|terminal)\s+(?:commands?|calls?|invocations?)\b/i,
+  /\b(?:block(?:s|ed|ing)?|deny|denies|denied|reject(?:s|ed|ing)?|refus(?:e|es|ed|ing))\s+everything\b/i,
+  /\bunconditional(?:ly)?\s+(?:block|denial|deny|denies|denied|rejection|reject|rejects|rejected|refusal|refuse|refuses|refused)\b/i,
+];
+
 /** Providers whose dispatch runs under an OS sandbox that CAN restrict network. */
 const PROVIDER_OS_SANDBOX: Readonly<Record<string, boolean>> = {
   // claude-provider.ts passes `--dangerously-skip-permissions` with no sandbox
@@ -128,6 +136,11 @@ export function writeFenceDeniableOperations(): ReadonlySet<AuditedOperation> {
 
 function matchesAny(patterns: readonly RegExp[], line: string): boolean {
   return patterns.some((pattern) => pattern.test(line));
+}
+
+/** Whether output asserts that the environment denies an unbounded command surface. */
+export function hasUnboundedCommandDenialClaim(output: string): boolean {
+  return matchesAny(UNBOUNDED_COMMAND_DENIAL_ASSERTIONS, output);
 }
 
 /**
@@ -189,6 +202,7 @@ export function auditEnvironmentBlockerClaims(
   // Unknown provider, or one that really is sandboxed: the engine has no proof,
   // so it does not get a verdict.
   if (PROVIDER_OS_SANDBOX[facts.provider] !== false) return none;
+  if (hasUnboundedCommandDenialClaim(output)) return none;
 
   const deniable = facts.writeFenceInstalled
     ? writeFenceDeniableOperations()
@@ -206,6 +220,8 @@ export function auditEnvironmentBlockerClaims(
     `${ENVIRONMENT_CLAIM_REFUTED}: this step blamed the environment for blocking ` +
       `${operations}, and the engine disproved it from the dispatch it actually performed.`,
     ...quoted,
+    'Disproved proposition: a write-fence rule denies the refuted operations.',
+    'Evidence: a generated fence-script scan found no matching rule, and the provider has no OS sandbox.',
     'Engine facts for THIS dispatch:',
     ...renderFacts(facts),
     `Therefore ${operations} is NOT blocked by this environment. Run the operation for real and ` +

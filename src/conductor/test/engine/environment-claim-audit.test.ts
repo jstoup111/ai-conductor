@@ -1,3 +1,4 @@
+// Covers: task:1, task:2, task:3
 /**
  * Unit specs for the claimed-environmental-blocker audit (#1106).
  *
@@ -11,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ENVIRONMENT_CLAIM_REFUTED,
   auditEnvironmentBlockerClaims,
+  hasUnboundedCommandDenialClaim,
   writeFenceDeniableOperations,
 } from '../../src/engine/self-host/environment-claim-audit.js';
 
@@ -33,6 +35,49 @@ const INCIDENT_OUTPUT = [
 const CLAUDE_DISPATCH = { provider: 'claude', writeFenceInstalled: true } as const;
 
 describe('environment claim audit', () => {
+  it('recognizes only assertions of unbounded command denial across the full output', () => {
+    const cases = [
+      ['blocks all Bash commands', true],
+      ['rejects every Bash call', true],
+      ['unable to run any shell commands', true],
+      ['cannot run any shell commands', true],
+      ["can't execute every Bash command", true],
+      ['can not use all terminal invocations', true],
+      ['The sandbox imposes an unconditional denial.', true],
+      ['The write fence blocks everything.', true],
+      [INCIDENT_OUTPUT, false],
+      ['All tests pass and every task is committed.', false],
+      ['Every verification gate passed.', false],
+      ['The write fence blocks all\nBash commands.', true],
+    ] as const;
+
+    expect(cases.map(([output, expected]) => hasUnboundedCommandDenialClaim(output) === expected)).toEqual(
+      cases.map(() => true),
+    );
+  });
+
+  it('leaves blanket command-denial claims alone without suppressing an ordinary operation claim', () => {
+    const blanketDenial = 'The write-fence blocks all Bash commands, including `gh pr list`.';
+    const ordinaryClaim = [
+      'Cannot proceed: the sandbox blocks `gh pr create`.',
+      'All tests pass and every task is committed.',
+    ].join('\n');
+    const cases = [
+      [blanketDenial, CLAUDE_DISPATCH, [], true],
+      [blanketDenial, { provider: 'claude', writeFenceInstalled: false }, [], true],
+      [ordinaryClaim, CLAUDE_DISPATCH, ['gh'], false],
+    ] as const;
+
+    expect(cases.map(([output, facts, operations, empty]) => {
+      const audit = auditEnvironmentBlockerClaims(output, facts);
+      const actualOperations = audit.refuted.map((claim) => claim.operation);
+      const hasExpectedOperations = actualOperations.length === operations.length && actualOperations.every(
+        (operation, index) => operation === operations[index],
+      );
+      return hasExpectedOperations && (audit.message === null) === empty;
+    })).toEqual(cases.map(() => true));
+  });
+
   it('refutes the incident blocker on an unsandboxed, write-fenced claude dispatch', () => {
     const audit = auditEnvironmentBlockerClaims(INCIDENT_OUTPUT, CLAUDE_DISPATCH);
 
@@ -43,6 +88,16 @@ describe('environment claim audit', () => {
     expect(audit.message).toContain("The environment's write-fence sandbox blocks");
     expect(audit.message).toContain('no OS sandbox');
     expect(audit.message).toContain('outside this build worktree');
+  });
+
+  it('states the disproved fence proposition and dispatch evidence with the engine facts', () => {
+    const audit = auditEnvironmentBlockerClaims(INCIDENT_OUTPUT, CLAUDE_DISPATCH);
+
+    expect([
+      audit.message?.includes('a write-fence rule denies the refuted operations'),
+      audit.message?.includes('generated fence-script scan'),
+      audit.message?.includes('no OS sandbox'),
+    ]).toEqual([true, true, true]);
   });
 
   it('derives what the fence can deny from the fence generator, not from belief', () => {
