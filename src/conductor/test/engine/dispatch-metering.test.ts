@@ -1,8 +1,62 @@
-// Covers: task:1
+// Covers: task:1, task:6
 import { describe, expect, it } from 'vitest';
 import { DispatchMeteringTracker } from '../../src/engine/dispatch-metering.js';
 
 describe('engine/dispatch-metering', () => {
+  it('correlates interleaved configured executions without suppressing another member completion', () => {
+    const tracker = new DispatchMeteringTracker();
+    const qualityAudit = {
+      executionId: 'quality-audit-1',
+      subject: { kind: 'configured-member' as const, parentGroup: 'quality', member: 'audit' },
+    };
+    const securityAudit = {
+      executionId: 'security-audit-1',
+      subject: { kind: 'configured-member' as const, parentGroup: 'security', member: 'audit' },
+    };
+
+    expect([
+      tracker.observe({
+        type: 'provider_attempt', step: 'build', provider: 'codex', invoked: true, outcome: 'success',
+        tokenUsage: { input: 10, output: 2 }, executionContext: qualityAudit,
+      }),
+      tracker.observe({
+        type: 'step_completed', step: 'build', actualProvider: 'codex', unmetered: true,
+        executionContext: securityAudit,
+      }),
+      tracker.observe({
+        type: 'group_member_step', member: 'audit', skill: 'build', phase: 'result', outcome: 'completed',
+        executionContext: securityAudit,
+      }),
+      tracker.observe({
+        type: 'provider_attempt', step: 'build', provider: 'provider-lifecycle', invoked: false, outcome: 'success',
+        executionContext: securityAudit,
+      }),
+      tracker.observe({
+        type: 'provider_attempt', step: 'build', provider: 'claude', invoked: false, outcome: 'success',
+        executionContext: securityAudit,
+      }),
+      tracker.observe({
+        type: 'step_completed', step: 'build', actualProvider: 'codex', unmetered: true,
+        executionContext: qualityAudit,
+      }),
+      tracker.observe({
+        type: 'step_completed', step: 'build', actualProvider: 'codex', unmetered: true,
+      }),
+      tracker.observe({ type: 'step_completed', step: 'build', unmetered: true }),
+    ]).toEqual([
+      {
+        step: 'configured:quality/audit', provider: 'codex', tokenUsage: { input: 10, output: 2 },
+      },
+      { step: 'configured:security/audit', provider: 'codex', unmetered: true },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { step: 'build', provider: 'codex', unmetered: true },
+      undefined,
+    ]);
+  });
+
   it.each([
     ['provider-free unmetered completion', { unmetered: true }, undefined],
     ['provider-free completion', {}, undefined],
