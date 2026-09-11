@@ -189,7 +189,7 @@ export class AuditTrailWriter {
         return {
           origin: 'build',
           event: event.type,
-          reason: `${event.gapId}: disposition "${event.disposition}" not in [${event.accepted.join(', ')}]`,
+          reason: `${event.gapId}: ${event.field ?? 'disposition'} "${event.disposition}" not in [${event.accepted.join(', ')}]`,
         };
       case 'build_review_disposition_version_invalidated':
         return {

@@ -1,3 +1,4 @@
+// Covers: task:1, task:2, task:3
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -51,6 +52,47 @@ describe('rejected remediation dispositions', () => {
     expect(plan?.rejected.every((rejection) => rejection.accepted.includes('build'))).toBe(true);
   });
 
+  it('retains documented halt categories', async () => {
+    await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
+      dispositions: [
+        { id: 'AB-1', disposition: 'halt', category: 'architectural-clarity' },
+        { id: 'AB-2', disposition: 'halt', category: 'product-scope' },
+        { id: 'AB-3', disposition: 'halt', category: 'unanswerable' },
+      ],
+    }));
+
+    const plan = (await readRemediationPlanResult(projectRoot, Date.now() - 60_000, 'prd-audit')).plan;
+    expect(plan?.gaps.map((gap) => gap.category)).toEqual([
+      'architectural-clarity', 'product-scope', 'unanswerable',
+    ]);
+  });
+
+  it('rejects halt gaps with invalid category values by category', async () => {
+    await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({
+      dispositions: [
+        { id: 'AB-1', disposition: 'halt', category: 'unknown-category' },
+        { id: 'AB-2', disposition: 'halt' },
+        { id: 'AB-3', disposition: 'halt', category: 7 },
+      ],
+    }));
+
+    const plan = (await readRemediationPlanResult(projectRoot, Date.now() - 60_000, 'prd-audit')).plan;
+    expect(plan?.rejected).toEqual([
+      {
+        gapId: 'AB-1', disposition: 'unknown-category',
+        accepted: ['architectural-clarity', 'product-scope', 'unanswerable'], field: 'category',
+      },
+      {
+        gapId: 'AB-2', disposition: '<missing>',
+        accepted: ['architectural-clarity', 'product-scope', 'unanswerable'], field: 'category',
+      },
+      {
+        gapId: 'AB-3', disposition: '7',
+        accepted: ['architectural-clarity', 'product-scope', 'unanswerable'], field: 'category',
+      },
+    ]);
+  });
+
   it('emits every rejection and halts with the rejected vocabulary when no gap survives', async () => {
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
@@ -71,6 +113,27 @@ describe('rejected remediation dispositions', () => {
       { type: 'remediation_disposition_rejected', gapId: 'AB-2', disposition: 'unknown-disposition' },
       { type: 'gate_blocked', step: 'remediate', reason: expect.stringContaining('AB-1') },
     ]);
+  });
+
+  it('names a rejected halt category in the operator halt and event spine', async () => {
+    const events: ConductorEvent[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('remediation_disposition_rejected', (event) => { events.push(event); });
+
+    const outcome = await remediate(emitter, [
+      { id: 'AB-1', disposition: 'halt', category: 'unknown-category' },
+    ]);
+
+    expect(outcome.kind).toBe('halt');
+    expect(outcome.detail).toContain('AB-1 category → "unknown-category"');
+    expect(outcome.detail).toContain('accepted categories are architectural-clarity | product-scope | unanswerable');
+    expect(events).toMatchObject([{
+      type: 'remediation_disposition_rejected',
+      gapId: 'AB-1',
+      disposition: 'unknown-category',
+      accepted: ['architectural-clarity', 'product-scope', 'unanswerable'],
+      field: 'category',
+    }]);
   });
 
   it('reports a taskless build refusal through the same gate-blocked event', async () => {
@@ -132,6 +195,18 @@ describe('rejected remediation dispositions', () => {
     expect(taskless.detail).toContain('AB-2 → "unknown-disposition"');
     expect(category.detail).toContain('product-scope: operator decision needed');
     expect(category.detail).toContain('AB-2 → "unknown-disposition"');
+  });
+
+  it('keeps an accepted halt blocking while naming a rejected category', async () => {
+    const outcome = await remediate(new ConductorEventEmitter(), [
+      { id: 'AB-1', disposition: 'halt', category: 'product-scope', rationale: 'operator decision needed' },
+      { id: 'AB-2', disposition: 'halt', category: 'unknown-category' },
+    ]);
+
+    expect(outcome.kind).toBe('halt');
+    expect(outcome.detail).toContain('product-scope: operator decision needed');
+    expect(outcome.detail).toContain('AB-2 category → "unknown-category"');
+    expect(outcome.detail).toContain('accepted categories are architectural-clarity | product-scope | unanswerable');
   });
 
   it('declares the rejection event on every required sink', () => {

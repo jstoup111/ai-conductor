@@ -335,6 +335,15 @@ describe('renderDaemonEvent', () => {
     })).toEqual([
       '· ✗ remediation gap gap-1 dropped — disposition "unknown-disposition" not in [build, plan]',
     ]);
+    expect(lines({
+      type: 'remediation_disposition_rejected',
+      gapId: 'gap-2',
+      disposition: 'unknown-category',
+      accepted: ['build', 'plan'],
+      field: 'category',
+    })).toEqual([
+      '· ✗ remediation gap gap-2 dropped — category "unknown-category" not in [build, plan]',
+    ]);
   });
 
   it('renders each protected-artifact reseal event as one human-readable line', () => {

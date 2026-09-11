@@ -5214,7 +5214,13 @@ export function remediationDispositionAppendsToPlan(
     (REMEDIATION_TARGET_STEPS as readonly string[]).includes(disposition)
   );
 }
-export type RemediationHaltCategory = 'architectural-clarity' | 'product-scope';
+export type RemediationHaltCategory = 'architectural-clarity' | 'product-scope' | 'unanswerable';
+
+const REMEDIATION_HALT_CATEGORIES: readonly RemediationHaltCategory[] = [
+  'architectural-clarity',
+  'product-scope',
+  'unanswerable',
+];
 
 export interface RemediationGap {
   id: string;
@@ -5238,6 +5244,7 @@ export interface RemediationDispositionRejection {
   gapId: string;
   disposition: string;
   accepted: readonly string[];
+  field: 'disposition' | 'category';
 }
 
 /** Why the remediation planner did not produce a readable plan. */
@@ -5320,16 +5327,30 @@ export async function readRemediationPlanResult(
         ? dispositionValue
         : JSON.stringify(dispositionValue);
     if (typeof dispositionValue !== 'string' || !valid.includes(dispositionValue as RemediationDisposition)) {
-      rejected.push({ gapId, disposition: renderedDisposition, accepted: valid });
+      rejected.push({ gapId, disposition: renderedDisposition, accepted: valid, field: 'disposition' });
       continue;
     }
     const disposition = dispositionValue as RemediationDisposition;
-    const category =
-      o.category === 'architectural-clarity' || o.category === 'product-scope'
-        ? (o.category as RemediationHaltCategory)
-        : null;
+    // Accepted halt categories: architectural-clarity, product-scope, unanswerable.
+    const category = REMEDIATION_HALT_CATEGORIES.includes(o.category as RemediationHaltCategory)
+      ? (o.category as RemediationHaltCategory)
+      : null;
     // A 'halt' must name a category; an autonomous disposition must not be halt.
-    if (disposition === 'halt' && category === null) continue;
+    if (disposition === 'halt' && category === null) {
+      const categoryValue = o.category;
+      const renderedCategory = categoryValue === undefined
+        ? '<missing>'
+        : typeof categoryValue === 'string'
+          ? categoryValue
+          : JSON.stringify(categoryValue);
+      rejected.push({
+        gapId,
+        disposition: renderedCategory,
+        accepted: REMEDIATION_HALT_CATEGORIES,
+        field: 'category',
+      });
+      continue;
+    }
     const tasks = Array.isArray(o.tasks)
       ? o.tasks
           .filter(

@@ -3051,9 +3051,10 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     }
     case 'remediation_disposition_rejected': {
+      const field = event.field ?? 'disposition';
       log(
         `${dot} ${chalk.yellow(
-          `✗ remediation gap ${event.gapId} dropped — disposition "${event.disposition}" not in [${event.accepted.join(', ')}]`,
+          `✗ remediation gap ${event.gapId} dropped — ${field} "${event.disposition}" not in [${event.accepted.join(', ')}]`,
         )}`,
       );
       break;
