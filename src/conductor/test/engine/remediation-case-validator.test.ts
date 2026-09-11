@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:2
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -56,6 +56,28 @@ const VALID_JUDGEMENT = {
       rationale: 'The finding does not violate the governing rubric.',
       confidence: 'low',
       effect: { kind: 'none' },
+    },
+  ],
+} as const satisfies RemediationCaseJudgement;
+
+const VALID_REFUTE_JUDGEMENT = {
+  ...VALID_JUDGEMENT,
+  sourceOutcomes: [
+    ...VALID_JUDGEMENT.sourceOutcomes.slice(0, 3),
+    { ...VALID_JUDGEMENT.sourceOutcomes[3], outcome: 'refuted', caseRef: 'case-refuted' },
+  ],
+  cases: [
+    ...VALID_JUDGEMENT.cases.slice(0, 2),
+    {
+      caseRef: 'case-refuted', existingCaseId: 'existing-case-1', disposition: 'refute', priority: 'medium',
+      rationale: 'The earlier action did not address the asserted defect.', confidence: 'high', effect: { kind: 'none' },
+      refutation: {
+        claim: 'The earlier action did not cover this finding.',
+        assertions: [{
+          assertion: 'The repaired branch is still absent.', verdict: 'refuted',
+          evidence: [{ path: 'test/widget.test.ts', excerpt: 'covers the changed branch' }],
+        }],
+      },
     },
   ],
 } as const satisfies RemediationCaseJudgement;
@@ -171,5 +193,71 @@ describe('remediation case graph validator', () => {
     const result = validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement as RemediationCaseJudgement);
 
     expect(result).toEqual({ ok: false, reason });
+  });
+
+  it.each([
+    ['a refute row without an existing case binding', {
+      ...VALID_REFUTE_JUDGEMENT,
+      cases: [...VALID_REFUTE_JUDGEMENT.cases.slice(0, 2), { ...VALID_REFUTE_JUDGEMENT.cases[2], existingCaseId: undefined }],
+    }, 'refute-without-binding'],
+    ['a refutation with no refuted assertion', {
+      ...VALID_REFUTE_JUDGEMENT,
+      cases: [...VALID_REFUTE_JUDGEMENT.cases.slice(0, 2), {
+        ...VALID_REFUTE_JUDGEMENT.cases[2],
+        refutation: { ...VALID_REFUTE_JUDGEMENT.cases[2].refutation, assertions: [{ ...VALID_REFUTE_JUDGEMENT.cases[2].refutation.assertions[0], verdict: 'upheld' }] },
+      }],
+    }, 'refutation-without-refuted-assertion'],
+    ['a refutation below high confidence', {
+      ...VALID_REFUTE_JUDGEMENT,
+      cases: [...VALID_REFUTE_JUDGEMENT.cases.slice(0, 2), { ...VALID_REFUTE_JUDGEMENT.cases[2], confidence: 'medium' }],
+    }, 'refutation-confidence-not-high'],
+    ['an action effect on a refute row', {
+      ...VALID_REFUTE_JUDGEMENT,
+      cases: [...VALID_REFUTE_JUDGEMENT.cases.slice(0, 2), { ...VALID_REFUTE_JUDGEMENT.cases[2], effect: VALID_JUDGEMENT.cases[0].effect }],
+    }, 'invalid-refute-effect'],
+    ['a refute deferral without an exclusion rationale', {
+      ...VALID_REFUTE_JUDGEMENT,
+      cases: [...VALID_REFUTE_JUDGEMENT.cases.slice(0, 2), {
+        ...VALID_REFUTE_JUDGEMENT.cases[2],
+        effect: { kind: 'deferral', title: 'Follow up', body: 'The plan excludes this work.', exclusionRationale: '' },
+      }],
+    }, 'invalid-deferral-effect'],
+    ['a refuted source outcome on a reject row', {
+      ...VALID_JUDGEMENT,
+      sourceOutcomes: [...VALID_JUDGEMENT.sourceOutcomes.slice(0, 3), { ...VALID_JUDGEMENT.sourceOutcomes[3], outcome: 'refuted' }],
+    }, 'contradictory-source-outcome'],
+  ] as const)('rejects %s', (_name, judgement, reason) => {
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement as RemediationCaseJudgement)).toEqual({ ok: false, reason });
+  });
+
+  it('accepts a valid refute graph', () => {
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, VALID_REFUTE_JUDGEMENT)).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ['refuted', 'refute', true],
+    ['refuted', 'reject', false],
+    ['merged', 'act', true],
+    ['merged', 'defer', true],
+    ['merged', 'reject', true],
+    ['merged', 'refute', true],
+  ] as const)('accepts %s only for an allowed %s disposition', (outcome, disposition, expected) => {
+    const caseRow = disposition === 'refute'
+      ? VALID_REFUTE_JUDGEMENT.cases[2]
+      : {
+        caseRef: 'case-target', disposition, priority: 'medium', rationale: 'A test case.', confidence: 'high',
+        effect: disposition === 'act'
+          ? VALID_JUDGEMENT.cases[0].effect
+          : disposition === 'defer'
+            ? VALID_JUDGEMENT.cases[1].effect
+            : { kind: 'none' },
+      };
+    const judgement = {
+      ...VALID_REFUTE_JUDGEMENT,
+      sourceOutcomes: [...VALID_REFUTE_JUDGEMENT.sourceOutcomes.slice(0, 3), { ...VALID_REFUTE_JUDGEMENT.sourceOutcomes[3], outcome, caseRef: 'case-target' }],
+      cases: [...VALID_REFUTE_JUDGEMENT.cases.slice(0, 2), { ...caseRow, caseRef: 'case-target' }],
+    } as RemediationCaseJudgement;
+
+    expect(validateRemediationCaseGraph(CURRENT_SOURCE_IDS, judgement).ok).toBe(expected);
   });
 });

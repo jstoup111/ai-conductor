@@ -19,6 +19,10 @@ export type RemediationCaseGraphRejection =
   | 'invalid-action-effect'
   | 'invalid-deferral-effect'
   | 'invalid-reject-effect'
+  | 'refute-without-binding'
+  | 'refutation-without-refuted-assertion'
+  | 'refutation-confidence-not-high'
+  | 'invalid-refute-effect'
   | 'provider-durable-id';
 
 export interface ProposedRemediationCase {
@@ -70,6 +74,17 @@ function validateEffect(caseRow: RemediationCaseRow): RemediationCaseGraphReject
       ? undefined
       : 'invalid-deferral-effect';
   }
+  if (caseRow.disposition === 'refute') {
+    if (!caseRow.existingCaseId) return 'refute-without-binding';
+    if (caseRow.confidence !== 'high') return 'refutation-confidence-not-high';
+    if (!caseRow.refutation?.assertions.some((assertion) => assertion.verdict === 'refuted')) {
+      return 'refutation-without-refuted-assertion';
+    }
+    if (effect.kind === 'none') return undefined;
+    return effect.kind === 'deferral' && nonEmptyString(effect.exclusionRationale)
+      ? undefined
+      : effect.kind === 'deferral' ? 'invalid-deferral-effect' : 'invalid-refute-effect';
+  }
   return effect.kind === 'none' ? undefined : 'invalid-reject-effect';
 }
 
@@ -80,7 +95,8 @@ function outcomeMatchesDisposition(
   return outcome === 'merged'
     || (outcome === 'acted' && disposition === 'act')
     || (outcome === 'deferred' && disposition === 'defer')
-    || (outcome === 'rejected' && disposition === 'reject');
+    || (outcome === 'rejected' && disposition === 'reject')
+    || (outcome === 'refuted' && disposition === 'refute');
 }
 
 /**
