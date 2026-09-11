@@ -2287,6 +2287,12 @@ export class Conductor {
     judgingStep: StepName;
     /** Members whose attempt this halt ended; defaults to the judging step. */
     refusedSteps?: readonly StepName[];
+    /**
+     * Admitted member scopes are keyed by member name.  A group decision is
+     * deliberately later than member settlement, so terminal events must
+     * retain this identity rather than falling back to the logical step.
+     */
+    executionContexts?: ReadonlyMap<string, ExecutionContext>;
     reason: string;
   }): Promise<void> {
     const refused = new Set<StepName>(input.refusedSteps ?? []);
@@ -2298,12 +2304,21 @@ export class Conductor {
       `record refused ${input.judgingStep} step`,
       changes,
     );
-    await this.emitExecutionEvent({
-      type: 'step_refused',
-      step: input.judgingStep,
-      kind: 'validation-verdict',
-      reason: input.reason,
-    });
+    // A join can reject several admitted members.  Close every owned scope
+    // exactly once; the lifecycle resolver suppresses stale/duplicate
+    // terminals. Preserve the legacy single judging-step event when this
+    // caller has no execution-aware member context.
+    const contextSteps = [...refused].filter((step) => input.executionContexts?.has(step));
+    for (const refusedStep of contextSteps.length > 0 ? contextSteps : [input.judgingStep]) {
+      const executionContext = input.executionContexts?.get(refusedStep);
+      await this.emitExecutionEvent({
+        type: 'step_refused',
+        step: refusedStep,
+        kind: 'validation-verdict',
+        reason: input.reason,
+        ...(executionContext === undefined ? {} : { executionContext }),
+      });
+    }
     await this.emitExecutionEvent({
       type: 'parallel_failure',
       step: input.groupStep,
@@ -8113,6 +8128,22 @@ export class Conductor {
               ? await readManualTestFailRows(this.projectRoot)
               : [];
 
+            // The runner's `success` merely settles a member; it is not its
+            // terminal classification.  A member may be closed successfully
+            // only after this join has accepted its own objective evidence.
+            // This intentionally emits no state change: the join remains the
+            // sole writer of state and gate artifacts.
+            const closeClassifiedPassingMembers = async () => {
+              for (let index = 0; index < membership.dispatchable.length; index += 1) {
+                const member = membership.dispatchable[index]!;
+                const outcome = outcomes[index];
+                if (outcome?.kind !== 'verdict' || outcome.verdict !== 'pass') continue;
+                if (this.verifyArtifacts && !gateVerdicts.get(member.name)?.satisfied) continue;
+                if (member.name === 'manual_test' && manualTestFailRows.length > 0) continue;
+                await closeSuccessfulMember(member);
+              }
+            };
+
             // Tasks 24/25: the serial SHIP tail treats recorded negative-path
             // PLAN_GAP and harmless/within-intent OVER_SCOPE findings as an
             // explicit pass, and routes their halt variants directly. Apply
@@ -8239,12 +8270,7 @@ export class Conductor {
               // complete its own execution even though the group cannot join
               // green. Close that scope without mutating the group's state or
               // granting a gate verdict; only the single-writer join owns that.
-              for (let index = 0; index < membership.dispatchable.length; index += 1) {
-                const outcome = outcomes[index];
-                if (index !== noVerdictIdx && outcome?.kind === 'verdict' && outcome.verdict === 'pass') {
-                  await closeSuccessfulMember(membership.dispatchable[index]!);
-                }
-              }
+              await closeClassifiedPassingMembers();
               await this.emitLoopHalt(haltReason);
               await emitTracked({
                 type: 'parallel_failure',
@@ -8439,11 +8465,13 @@ export class Conductor {
                     renderAsBuiltBlockedFindingDetail(asBuiltReport);
                   await this.writeHaltMarker(reason + '\n', KICKBACK_CAP_HALT_CLASS);
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  await closeClassifiedPassingMembers();
                   await this.recordGroupRefusal({
                     state,
                     groupStep: step.name,
                     judgingStep: 'architecture_review_as_built',
                     refusedSteps: asBuiltGroupRefusedSteps(),
+                    executionContexts: memberExecutionContexts,
                     reason,
                   });
                   const prUrl = await this.surfaceRemediationPr(reason);
@@ -8520,11 +8548,13 @@ export class Conductor {
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
                   await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
+                  await closeClassifiedPassingMembers();
                   await this.recordGroupRefusal({
                     state,
                     groupStep: step.name,
                     judgingStep: 'architecture_review_as_built',
                     refusedSteps: asBuiltGroupRefusedSteps(),
+                    executionContexts: memberExecutionContexts,
                     reason,
                   });
                   const prUrl = await this.surfaceRemediationPr(reason);
@@ -8606,6 +8636,7 @@ export class Conductor {
                   reason + '\n',
                   asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
                 );
+                await closeClassifiedPassingMembers();
                 await this.recordGroupRefusal({
                   state,
                   groupStep: step.name,
@@ -8618,6 +8649,7 @@ export class Conductor {
                       outcomes[idx]?.verdict !== 'pass' ||
                       (this.verifyArtifacts && gateVerdicts.get(member.name)?.satisfied !== true))
                     .map((member) => member.name as StepName),
+                  executionContexts: memberExecutionContexts,
                   reason,
                 });
                 await this.emitLoopHalt(reason);
@@ -8988,6 +9020,7 @@ export class Conductor {
             if (!existingGroupHalt || existingGroupHalt.trim().length === 0) {
               await this.writeHaltMarker(groupHaltReason + '\n', 'needs-human');
             }
+            await closeClassifiedPassingMembers();
             // Attribute the refusal to the first member that actually failed
             // its own gate; with none identified the group entry is the only
             // honest subject left.
@@ -8996,6 +9029,7 @@ export class Conductor {
               groupStep: step.name,
               judgingStep: (failedMembers[0]?.name as StepName | undefined) ?? step.name,
               refusedSteps: failedMembers.map((member) => member.name as StepName),
+              executionContexts: memberExecutionContexts,
               reason: groupHaltReason,
             });
             await this.emitLoopHalt(groupHaltReason);
