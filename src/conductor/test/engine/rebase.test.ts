@@ -1610,7 +1610,9 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
     const events = new ConductorEventEmitter();
     const seen: string[] = [];
     for (const type of ['rebase_untracked_quarantined', 'rebase_changed', 'rebase_conflict_halt'] as const) {
-      events.on(type, (event) => seen.push(event.type));
+      events.on(type, (event) => {
+        seen.push(event.type);
+      });
     }
     const quarantine = { paths: ['generated.txt'], directory: '.pipeline/rebase-untracked-quarantine' };
 
