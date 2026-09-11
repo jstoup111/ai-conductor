@@ -551,12 +551,18 @@ export async function runGroupBranch(
   const observer = deps.lifecycleObserver;
   const lifecycleAttempts: GroupBranchAttempt[] = [];
   let admitted = false;
+  // Admission registers the execution scope synchronously, but its event
+  // subscribers (persistence/export) must not serialize sibling dispatch.
+  // Await the delivery at settlement so the lifecycle stream remains ordered
+  // before this branch can report its result.
+  let admissionDelivery: Promise<void> = Promise.resolve();
   const lifecycleDeps: BranchExecutorDeps = {
     ...deps,
     lifecycleObserver: {
-      onAdmitted: async (observation) => {
+      onAdmitted: (observation) => {
         admitted = true;
-        await observer.onAdmitted(observation);
+        admissionDelivery = Promise.resolve(observer.onAdmitted(observation));
+        return Promise.resolve();
       },
       onAttempt: async (observation) => {
         lifecycleAttempts.push(observation);
@@ -569,6 +575,7 @@ export async function runGroupBranch(
   };
   const outcome = await runGroupBranchInner(member, state, lifecycleDeps, maxRetries);
   if (admitted) {
+    await admissionDelivery;
     await observer.onSettled({
       member: member.name,
       skill: member.skill,
