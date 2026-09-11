@@ -2189,17 +2189,8 @@ export class Conductor {
       : event.type === 'parallel_started'
         ? { key: `parallel:${event.step}`, execution: { kind: 'parallel' as const, step: event.step } }
         : undefined;
-    // A refusal normally closes its own step execution. Validation-group
-    // members run inside their entry's parallel execution instead, so their
-    // refusal is deliverable (but non-terminal) while that enclosing window
-    // remains open.
-    const terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
-      ? this.openExecutions.has(`step:${event.step}`)
-        ? `step:${event.step}`
-        : getGroupForStep(event.step)?.name === 'validation'
-          && this.openExecutions.has(`parallel:${event.step}`)
-          ? `parallel:${event.step}`
-          : `step:${event.step}`
+    let terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
+      ? `step:${event.step}`
       : event.type === 'step_refused'
         ? (this.openExecutions.has(`step:${event.step}`) ? `step:${event.step}` : undefined)
       : event.type === 'parallel_completed'
@@ -2217,7 +2208,17 @@ export class Conductor {
       // Daemon SIGTERM closes the lifecycle before draining a runner that may
       // still resolve. Its ordinary terminal is then an orphan: the ledger
       // listener cannot recover an interval after the shutdown terminal consumed it.
-      if (!this.openExecutions.has(terminalKey)) return Promise.resolve();
+      if (!this.openExecutions.has(terminalKey)) {
+        // A validation-group terminal is still observable after its enclosing
+        // parallel execution has closed. It must reach the event spine, but
+        // must not close an unrelated parallel execution (the ordinary
+        // untracked-terminal behavior remains suppression).
+        if (getGroupForStep(event.step)?.name === 'validation') {
+          terminalKey = undefined;
+        } else {
+          return Promise.resolve();
+        }
+      }
     }
     if (event.type === 'step_refused' && !terminalKey) {
       const group = getGroupForStep(event.step);
@@ -2257,6 +2258,16 @@ export class Conductor {
     });
     this.closingExecutions.set(terminalKey, terminalDelivery);
     return terminalDelivery;
+  }
+
+  /** A width-one validation recheck is group-derived only in auto mode with a retained sibling. */
+  private hasRetainedValidationSibling(step: StepName, state: ConductState): boolean {
+    const group = getGroupForStep(step);
+    return this.mode === 'auto' &&
+      group?.name === 'validation' &&
+      group.members.some((member) =>
+        member !== step && (state as Record<string, unknown>)[`${group.name}__${member}`] === 'done',
+      );
   }
 
   /**
@@ -8222,6 +8233,12 @@ export class Conductor {
               }
               await this.emitLoopHalt(haltReason);
               await emitTracked({
+                type: 'parallel_failure',
+                step: step.name,
+                branch: noVerdictMember.name,
+                error: haltReason,
+              });
+              await emitTracked({
                 type: 'step_failed',
                 step: step.name,
                 error: haltReason,
@@ -9707,14 +9724,7 @@ export class Conductor {
                               // retry contract. Ordinary serial validation
                               // dispatches keep their existing exception
                               // routing.
-                              const stateFields = state as Record<string, unknown>;
-                              const retainedSiblingExists =
-                                builtinGroup?.name === 'validation' &&
-                                builtinGroup.members.some((member) =>
-                                  member !== step.name &&
-                                  stateFields[`${builtinGroup.name}__${member}`] === 'done',
-                                );
-                              if (this.mode === 'auto' && retainedSiblingExists) {
+                              if (this.hasRetainedValidationSibling(step.name, state)) {
                                 return {
                                   success: false,
                                   output: error instanceof Error ? error.message : String(error),
@@ -12948,7 +12958,7 @@ export class Conductor {
             // equivalent to the width-2+ join.  Complete the paired synthetic
             // member key here rather than routing width one through the join.
             const group = getGroupForStep(step.name);
-            if (group?.name === 'validation') {
+            if (group?.name === 'validation' && this.hasRetainedValidationSibling(step.name, state)) {
               // Synthetic group-member keys are not StepName values.  Commit
               // the paired status through the mutation port without using the
               // step-status helper, which would incorrectly advance last_step

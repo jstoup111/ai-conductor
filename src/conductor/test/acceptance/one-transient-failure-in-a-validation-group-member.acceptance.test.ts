@@ -1,4 +1,4 @@
-// Covers: S1.1, S1.2, S1.3, S1.4, S2.1, S2.2, S2.6, S2.8, task:2, task:3, task:5
+// Covers: S1.1, S1.2, S1.3, S1.4, S2.1, S2.2, S2.6, S2.8, task:2, task:3, task:4, task:5
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -11,6 +11,8 @@ import { readState, writeState } from '../../src/engine/state.js';
 import { applyRebaseVerdicts, type RebaseOutcome } from '../../src/engine/rebase.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
+import { startFeatureEventPersistence } from '../../src/engine/event-persister.js';
+import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -51,6 +53,53 @@ async function seedValidators(
 }
 
 describe('validation-group no-verdict sibling retention (#1425)', () => {
+  it('closes the persisted validation-group execution when a member produces no verdict', async () => {
+    const dir = await mkdtemp(join(process.env.TMPDIR!, 'validation-no-verdict-timing-'));
+    const statePath = join(dir, 'conduct-state.json');
+    const globalEvents = new ConductorEventEmitter();
+    const persistence = startFeatureEventPersistence(dir, globalEvents);
+    try {
+      await seedValidators(dir, statePath);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        events: persistence.events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'manual_test',
+        stepRunner: { run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') throw new Error('validator process exited without a verdict');
+          if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+          if (step === 'architecture_review_as_built') {
+            await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+          }
+          return { success: true } as StepRunResult;
+        }) },
+      });
+
+      await conductor.run();
+
+      const ledger = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf8'))
+        .split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+      const parallelFailures = ledger.filter((event) => event.type === 'parallel_failure');
+      expect(parallelFailures).toEqual([expect.objectContaining({
+        step: 'manual_test',
+        branch: 'manual_test',
+        activeInterval: expect.any(Object),
+      })]);
+      expect(ledger.filter((event) => event.type === 'step_failed')).toHaveLength(1);
+      await expect(computeTimingRollup(dir)).resolves.not.toMatchObject({
+        state: 'partial',
+        reason: expect.stringMatching(/^open-executions:/),
+      });
+    } finally {
+      persistence.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('halts for the failed member while retaining both siblings that passed the joined gate checks', async () => {
     const dir = await mkdtemp(join(process.env.TMPDIR!, 'validation-retain-siblings-'));
     const statePath = join(dir, 'conduct-state.json');

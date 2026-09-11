@@ -79,6 +79,7 @@ async function writeGreenShipValidatorEvidence(dir: string): Promise<void> {
   await utimes(join(dir, '.pipeline', 'architecture-review-as-built.md'), fresh, fresh);
 }
 
+// Covers: task:6, task:9
 describe('Conductor FINISH publication routing', () => {
   let dir: string;
   let statePath: string;
@@ -105,6 +106,54 @@ describe('Conductor FINISH publication routing', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it.each([
+    { name: 'interactive', mode: 'interactive' as const, daemon: false },
+    { name: 'default foreground', mode: 'default' as const, daemon: false },
+  ])('does not write a synthetic validation key for a successful serial member in %s mode', async ({ mode, daemon }) => {
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw persisted.error;
+    await writeState(statePath, { ...persisted.value, prd_audit: 'pending' });
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'prd_audit',
+      mode,
+      daemon,
+      verifyArtifacts: false,
+    }).run();
+
+    const after = await readState(statePath);
+    if (!after.ok) throw after.error;
+    expect(after.value.prd_audit).toBe('done');
+    expect(Object.keys(after.value).filter((key) => key.startsWith('validation__'))).toEqual([]);
+  });
+
+  it('does not write a synthetic validation key for an auto serial member without a retained sibling', async () => {
+    await writeGreenShipValidatorEvidence(dir);
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw persisted.error;
+    await writeState(statePath, { ...persisted.value, prd_audit: 'pending' });
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'prd_audit',
+      mode: 'auto',
+      daemon: false,
+      verifyArtifacts: false,
+    }).run();
+
+    const after = await readState(statePath);
+    if (!after.ok) throw after.error;
+    expect(after.value.prd_audit).toBe('done');
+    expect(Object.keys(after.value).filter((key) => key.startsWith('validation__'))).toEqual([]);
   });
 
   it.each([
