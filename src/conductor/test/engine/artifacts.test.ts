@@ -5687,6 +5687,7 @@ Task 1 → Task 2
 
   describe('checkStepCompletion: prd_audit / architecture_review_as_built / manual_test code-validity on re-dispatch (Task 6, #817)', () => {
     const OLD_MTIME = new Date(2000, 0, 1);
+    const bareDirs: string[] = [];
 
     async function makeGitDir(): Promise<string> {
       const d = await mkdtemp(join(tmpdir(), 'artifacts-gate-validity-6-'));
@@ -5715,6 +5716,7 @@ Task 1 → Task 2
      * feature surface `F` in-fixture instead of failing open to `[]`. */
     async function wireOrigin(d: string): Promise<void> {
       const bare = await mkdtemp(join(tmpdir(), 'artifacts-gate-validity-6-origin-'));
+      bareDirs.push(bare);
       await execa('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: bare });
       await execa('git', ['remote', 'add', 'origin', bare], { cwd: d });
       await execa('git', ['push', '-q', 'origin', 'main'], { cwd: d });
@@ -5735,6 +5737,7 @@ Task 1 → Task 2
     let gdir: string;
     afterEach(async () => {
       if (gdir) await rm(gdir, { recursive: true, force: true });
+      await Promise.all(bareDirs.splice(0).map((bare) => rm(bare, { recursive: true, force: true })));
     });
 
     describe('prd_audit', () => {
@@ -6388,6 +6391,7 @@ Task 1 → Task 2
 
   describe('sweepStaleReviewArtifacts: code-validity preserve before delete (Task 7, #817)', () => {
     const OLD_MTIME = new Date(2000, 0, 1);
+    const bareDirs: string[] = [];
 
     async function makeGitDir(): Promise<string> {
       const d = await mkdtemp(join(tmpdir(), 'artifacts-gate-validity-7-'));
@@ -6416,6 +6420,7 @@ Task 1 → Task 2
      * feature surface `F` in-fixture instead of failing open to `[]`. */
     async function wireOrigin(d: string): Promise<void> {
       const bare = await mkdtemp(join(tmpdir(), 'artifacts-gate-validity-7-origin-'));
+      bareDirs.push(bare);
       await execa('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: bare });
       await execa('git', ['remote', 'add', 'origin', bare], { cwd: d });
       await execa('git', ['push', '-q', 'origin', 'main'], { cwd: d });
@@ -6425,6 +6430,7 @@ Task 1 → Task 2
     let gdir: string;
     afterEach(async () => {
       if (gdir) await rm(gdir, { recursive: true, force: true });
+      await Promise.all(bareDirs.splice(0).map((bare) => rm(bare, { recursive: true, force: true })));
     });
 
     describe('prd_audit', () => {

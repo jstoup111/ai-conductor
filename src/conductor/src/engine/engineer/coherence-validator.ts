@@ -203,6 +203,12 @@ export interface OutcomeGapFinding {
   gapId: string;
   /** The verbatim staged outcome bullet with no affirmative coverage. */
   bullet: string;
+  /**
+   * Set when the row exists and is otherwise well-formed, but its quote is not
+   * the sanitized staged bullet. Names the problem so the gap is not read as a
+   * missing row (adr-2026-09-06-inbound-intake-trust-boundary D8).
+   */
+  quoteMismatch?: true;
 }
 
 export type OutcomeCoverageResult =
@@ -213,6 +219,21 @@ export type OutcomeCoverageResult =
       /** Every uncovered outcome bullet, not just the first — FR-9. */
       gaps: OutcomeGapFinding[];
     };
+
+/**
+ * Reduce an outcome bullet and an authored `Quote` cell to one comparable form.
+ * Authors write the bullet's text without its list marker and inside double
+ * quotes, so those are presentation, not content; whitespace runs collapse
+ * because a table cell cannot carry a line break. Nothing else is stripped —
+ * neutralization markers and wording differences must still register.
+ */
+function normalizeOutcomeQuote(text: string): string {
+  return text
+    .replace(/^\s*[-*+]\s+/, '')
+    .replace(/^["'`\u201c\u201d]+|["'`\u201c\u201d]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 /**
  * Set-difference check: every staged intake outcome bullet must have a
@@ -245,8 +266,18 @@ export function checkOutcomeCoverage(
     const gapId = `outcome-${n}`;
     const row = outcomeRowsById.get(gapId);
     const citesStory = !!row && row.citedIds.some((id) => storyIds.has(id));
+    const bullet = outcomeBullets[n - 1];
     if (!row || NEGATIVE_VERDICTS.has(row.verdict.trim().toLowerCase()) || !citesStory) {
-      gaps.push({ gapId, bullet: outcomeBullets[n - 1] });
+      gaps.push({ gapId, bullet });
+      continue;
+    }
+    // The staged bullet is the sanitized projection and the only intake
+    // authority (adr-2026-09-06-inbound-intake-trust-boundary D8). A row whose
+    // quote is not that text — raw tracker prose above all — covers nothing,
+    // so the row's own presence must not launder unsanitized content into the
+    // committed coherence artifact.
+    if (normalizeOutcomeQuote(row.quote) !== normalizeOutcomeQuote(bullet)) {
+      gaps.push({ gapId, bullet, quoteMismatch: true });
     }
   }
 
@@ -1155,7 +1186,15 @@ export function validateCoherence(inputs: ValidateCoherenceInputs): ValidateCohe
         layer: 'outcome',
         gapId: gap.gapId,
         artifact: 'intake outcomes',
-        item: gap.bullet,
+        // A row that exists and cites a real story but quotes something other
+        // than the staged (sanitized) bullet is a different defect from a row
+        // that is missing outright, and the operator has to fix it differently.
+        // Carrying `quoteMismatch` into the rendered item keeps the two
+        // distinguishable in the production report, not only in the layer
+        // result (Task 11; as-built AB-3).
+        item: gap.quoteMismatch
+          ? `${gap.bullet} — the outcome-coverage row's quote does not match this staged bullet`
+          : gap.bullet,
       });
     }
   }

@@ -227,6 +227,7 @@ export type ConductorEvent =
       runStartedAt?: number;
       active: { state: 'exact' | 'partial' | 'unavailable'; activeMs?: number };
     }
+  | { type: 'intake_inbound_sanitized'; sourceRef: string; neutralizations: import('../engine/engineer/intake/sanitize-inbound.js').InboundNeutralization[]; digest: string }
   | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
   | {
       type: 'setup_repair';

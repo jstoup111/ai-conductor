@@ -94,6 +94,10 @@ Constraints found by the sweep that the design must honor:
    as `## Desired outcome`, bullets, numbering — is preserved so `outcome-staging.ts` and the
    coherence extractor keep parsing.
 
+> **Amended 2026-09-09 by #1479:** The operator approved treating title and body as separate Markdown inputs. `buildText` passes the non-empty fields as an ordered array to `sanitizeInboundText`; that seam segments each field independently, aggregates category counts, then joins the sanitized fields with a blank line under one armor pair and one digest. An unclosed title fence cannot exempt body prose. The existing single-string API and armored-text idempotence remain supported; code inside either field remains unchanged.
+
+> **Amended 2026-09-10 by operator:** The seam accepts only the ordered title/body array used by production. The test-only single-string API and armored-text idempotence branch are removed; armor-shaped tracker prose remains subject to the `armor-lookalike` rule. The safety guarantee is the closed high-precision shape set in Decision 2, not exhaustive recognition of arbitrary natural-language instructions. `buildText` uses trimming only for emptiness and passes every non-empty field's original bytes into segmentation.
+
 4. **The tracker-sourced region is delimited by armor lines inside `text` itself.** The
    sanitized text is wrapped in a leading and trailing armor line carrying the canonical
    `sourceRef` (via `formatWorkRef`) and a sha256 digest of the sanitized content. Because the
@@ -136,11 +140,63 @@ Constraints found by the sweep that the design must honor:
    The engine never retains raw tracker text; the tracker itself remains the raw record.
    Criterion rows and coverage quotes are authored from stories and plan tasks
    (adr-2026-08-23-coverage-claims-grounded-by-verbatim-quote), never copied from
-   `Envelope.text`, so the verbatim-quote chain is unaffected.
+   `Envelope.text`, so the verbatim-quote chain is unaffected. `outcome-N` rows are the
+   exception this decision must close: they quote the intake bullet itself, so authorship
+   alone is not a boundary and decision 10 enforces it mechanically.
 
 9. **Build privilege is out of scope.** `--dangerously-skip-permissions` and the
    non-autonomy invariant (adr-005) are unchanged by this decision; consequence narrowing is
    a separate intake.
+
+10. **An `outcome-N` coherence row's quote must be the sanitized staged bullet.** The land
+    gate compares each `outcome-N` row's `Quote` cell against `outcomeBullets[n-1]` — the
+    sanitized projection decision 8 stages — and treats a mismatch as an uncovered outcome
+    naming the quote as the problem. Presentation is not content: a leading list marker,
+    surrounding quotation marks, and collapsed whitespace are normalized away, and nothing
+    else is. Without this, a row carrying valid ids and an affirmative verdict admits raw
+    tracker text into the committed coherence artifact, which is precisely the laundering
+    decision 8 exists to prevent.
+
+> **Amended 2026-09-07 by #1479 (as-built review finding AB-1, operator decision).** Decision 7
+> placed the occurrence in a bespoke worktree-local sidecar and deferred any live emitter. That
+> shipped `render: true` / `persist: true` consumers no production code could ever feed, which the
+> as-built reachability check blocked. The occurrence now rides the live spine. This amendment
+> supersedes decision 7's sibling-ledger destination, the Negative consequence "a ledger-appended
+> event never reaches a live emitter", and the deferred follow-up that would have tailed the
+> sidecar. Decision 7's event shape, sink declaration, best-effort posture, and chat-origin
+> exclusion are unchanged.
+>
+> **D11. `engineer worktree --source-ref` emits `intake_inbound_sanitized` on a real
+> `ConductorEventEmitter`.** The CLI process owns no long-lived bus, so it constructs the spine for
+> the duration of the emit — an emitter with an `EventPersister` attached to the canonical
+> `<worktree>/.pipeline/events.jsonl` — and stops the persister in a `finally`. This is the
+> construction `engine/rewind.ts` already uses to put `operator_rewind` (also `render: true`,
+> also produced by a short-lived CLI) on the spine, so no new mechanism is introduced. The emit is
+> best-effort: a persistence failure prints on stderr and never fails worktree creation. The
+> emit is **persist-only**: the CLI process owns no long-lived bus and no renderer is attached to
+> the emitter it builds, so there is no live terminal or daemon-log line at the moment of emit.
+> Consumers see the occurrence wherever the persisted spine is read — OTel exporters, dashboards,
+> and the daemon's own tailers of `<worktree>/.pipeline/events.jsonl`. See D13 for the sink row.
+>
+> **D13. The `EVENT_SINKS` row for `intake_inbound_sanitized` is `render: false, persist: true`.**
+> A `render: true` declaration asserts that a production path carries the occurrence to a live
+> renderer. For this event none does, and building one — a subscriber bridge, an IPC hop, or a
+> ledger replay from the short-lived CLI into the interactive or daemon emitter — is a structural
+> change this feature deliberately does not make. Declaring `render: false` keeps the sink registry
+> a truthful description of production (adr-2026-07-26-event-sink-registry-exhaustiveness) instead
+> of an aspiration, and supersedes D11's earlier "the `EVENT_SINKS` row is unchanged" clause. The
+> render branches that existed only to satisfy that stale declaration — the
+> `terminal-renderer.ts` case, its `TerminalSubscriber` forwarding entry, and the
+> `renderDaemonEventUnsafe` case — are removed with it, so no render branch survives without a
+> producer. Adding a live render path later requires its own ADR.
+>
+> **D12. The sidecar `<worktree>/.pipeline/intake-events.jsonl` is removed, not kept as a derived
+> view.** A repo-wide search found no reader, no tailer, and nothing deriving from it, so it was a
+> write-only second format — a parallel channel by the schema-and-reader-path test. Event-spine
+> exceptions A and B no longer apply: the writer is not an emitter-less process (it can build the
+> emitter, as D11 does), and single-writer atomicity is satisfied by the per-worktree
+> `events.jsonl` the persister already owns. One union, one reader path, one file.
+
 
 ## Consequences
 
@@ -156,12 +212,19 @@ Constraints found by the sweep that the design must honor:
 - The rule set will miss novel directive phrasing; this is a floor, not a proof. The
   `[neutralized:*]` markers make misses and false positives auditable, which is the mitigation.
 - `Envelope.text` is no longer the literal `title+body` (adr-011 decision 2 amended in place).
-- A ledger-appended event never reaches a live emitter, so it is invisible to OTel
-  (adr-014) and to `ui_renderer` plugins until a reader tails the sibling ledger — the same
-  accepted cost as the two precedent sibling ledgers.
+- ~~A ledger-appended event never reaches a live emitter, so it is invisible to OTel
+  (adr-014) and to `ui_renderer` plugins until a reader tails the sibling ledger.~~ Superseded by
+  the 2026-09-07 amendment (D11): the event is emitted on the live spine and persisted to the
+  canonical `<worktree>/.pipeline/events.jsonl`. It remains outside OTel because its sink row
+  declares `otel: false`, which is a sink policy, not a missing emitter.
+- The occurrence has no live render at emit time (D13). An operator watching a terminal or
+  `daemon.log` while `engineer worktree --source-ref` runs sees nothing; the record is found by
+  reading the persisted spine. This is the accepted cost of not building a bridge from a
+  short-lived CLI process into a long-lived renderer bus.
 - Issue bodies in `.docs/intake/<plan-stem>.md` now carry armor lines and may carry markers.
 
 ### Follow-up Actions
 - [ ] File the privilege-narrowing intake (Option C) as a separate issue referencing #1479.
-- [ ] Tail `.pipeline/intake-events.jsonl` onto the live bus when a reader for the sibling
-      ledgers is consolidated (not required by this feature).
+- [x] ~~Tail `.pipeline/intake-events.jsonl` onto the live bus when a reader for the sibling
+      ledgers is consolidated.~~ Withdrawn by the 2026-09-07 amendment (D12): there is no sidecar
+      to tail — the event is emitted on the live spine at the point of occurrence.

@@ -40,6 +40,28 @@ describe('stageIntakeOutcomes', () => {
     expect(contents).toContain('## Desired outcome\n\n- Bullet one\n- Bullet two');
   });
 
+  it('keeps an inbound envelope\'s verbatim armor lines around neutralized outcomes', async () => {
+    const opening = '<<< INBOUND sourceRef=owner/repo#42 digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >>>';
+    const closing = '<<< END INBOUND >>>';
+    const intakeBody = [
+      opening,
+      '## Desired outcome',
+      '',
+      '- [neutralized:agent-directive]',
+      closing,
+    ].join('\n');
+
+    const stagedPath = await stageIntakeOutcomes(worktreePath, 'owner/repo#42', intakeBody);
+    const contents = await readFile(stagedPath!, 'utf8');
+    expect(contents).toContain(`${opening}\n## Desired outcome\n\n- [neutralized:agent-directive]\n${closing}`);
+
+    await expect(readStagedIntakeOutcomes(worktreePath)).resolves.toEqual({
+      required: true,
+      bullets: ['- [neutralized:agent-directive]'],
+      sourceRef: 'owner/repo#42',
+    });
+  });
+
   it('no-ops (no file, no throw) when there is no sourceRef and no intakeBody (chat/CLI origin)', async () => {
     await expect(stageIntakeOutcomes(worktreePath, undefined, undefined)).resolves.toBeNull();
     await expect(stageIntakeOutcomes(worktreePath, null, null)).resolves.toBeNull();

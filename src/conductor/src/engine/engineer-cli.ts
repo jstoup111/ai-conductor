@@ -24,6 +24,8 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRegistryReader } from './registry.js';
+import { ConductorEventEmitter } from '../ui/events.js';
+import { EventPersister } from './event-persister.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveTargetRepo } from './engineer/target.js';
 import { landSpec } from './engineer/land-spec.js';
@@ -392,12 +394,13 @@ async function persistClaimRecord(
   engDir: string,
   sourceRef: string | null | undefined,
   body: string | null | undefined,
+  inbound?: Envelope['inbound'],
 ): Promise<void> {
   if (!sourceRef) return;
   try {
     const dir = join(engDir, 'claims');
     await mkdir(dir, { recursive: true });
-    await writeFile(claimRecordPath(engDir, sourceRef), JSON.stringify({ sourceRef, body: body ?? null }), 'utf8');
+    await writeFile(claimRecordPath(engDir, sourceRef), JSON.stringify({ sourceRef, body: body ?? null, inbound }), 'utf8');
   } catch {
     // Best-effort — degrade to no staging at worktree time (matches the chat-origin
     // negative path in worktree-authoring.ts).
@@ -412,12 +415,16 @@ async function persistClaimRecord(
 async function loadClaimRecord(
   engDir: string,
   sourceRef: string,
-): Promise<{ sourceRef: string; body: string | null } | null> {
+): Promise<{ sourceRef: string; body: string | null; inbound?: Envelope['inbound'] } | null> {
   try {
     const raw = await readFile(claimRecordPath(engDir, sourceRef), 'utf8');
-    const parsed = JSON.parse(raw) as { sourceRef?: string; body?: string | null };
+    const parsed = JSON.parse(raw) as { sourceRef?: string; body?: string | null; inbound?: Envelope['inbound'] };
     if (typeof parsed.sourceRef !== 'string') return null;
-    return { sourceRef: parsed.sourceRef, body: typeof parsed.body === 'string' ? parsed.body : null };
+    return {
+      sourceRef: parsed.sourceRef,
+      body: typeof parsed.body === 'string' ? parsed.body : null,
+      inbound: parsed.inbound,
+    };
   } catch {
     return null;
   }
@@ -924,10 +931,12 @@ export async function dispatchEngineer(
       // explicit --body always wins. A missing/unreadable record degrades to no
       // staging (matches worktree-authoring.ts's chat-origin negative path) — never throws.
       let resolvedBody = body;
-      if (sourceRef && resolvedBody == null) {
+      let inbound: Envelope['inbound'];
+      if (sourceRef) {
         const engDir = engineerDir ?? resolveEngineerDir({});
         const record = await loadClaimRecord(engDir, sourceRef);
-        resolvedBody = record?.body ?? undefined;
+        if (resolvedBody == null) resolvedBody = record?.body ?? undefined;
+        inbound = record?.inbound;
       }
 
       try {
@@ -935,6 +944,33 @@ export async function dispatchEngineer(
           sourceRef,
           body: resolvedBody,
         });
+        // The occurrence rides the one telemetry spine. This CLI process owns no
+        // long-lived bus, so it builds the spine for the duration of the emit —
+        // a ConductorEventEmitter with EventPersister attached to the canonical
+        // `<worktree>/.pipeline/events.jsonl` — exactly as the `operator_rewind`
+        // emit in `engine/rewind.ts` does. No sibling ledger and no bespoke
+        // format: one union, one reader path. Best-effort — a persistence failure
+        // reports on stderr and never fails worktree creation.
+        if (sourceRef && inbound) {
+          const events = new ConductorEventEmitter();
+          const persister = new EventPersister(
+            join(wt.worktreePath, '.pipeline', 'events.jsonl'),
+            events,
+          );
+          try {
+            persister.start();
+            await events.emitOrThrow({
+              type: 'intake_inbound_sanitized',
+              sourceRef,
+              neutralizations: inbound.neutralizations,
+              digest: inbound.digest,
+            });
+          } catch (err) {
+            printErr(`engineer worktree: could not record inbound intake event: ${err instanceof Error ? err.message : String(err)}`);
+          } finally {
+            persister.stop();
+          }
+        }
         print(JSON.stringify({ kind: 'worktree', ...wt }));
         return 0;
       } catch (err: unknown) {
@@ -1276,7 +1312,7 @@ export async function dispatchEngineer(
       }
       // FR-13: persist a claim record so `engineer worktree --source-ref` can later
       // resolve the Desired-outcome body without the skill ever passing --body itself.
-      await persistClaimRecord(engDir, envelope.sourceRef, envelope.text);
+      await persistClaimRecord(engDir, envelope.sourceRef, envelope.text, envelope.inbound);
       print(
         JSON.stringify({
           kind: 'claim',
@@ -1284,6 +1320,7 @@ export async function dispatchEngineer(
           body: envelope.text,
           source: envelope.source,
           sourceRef: envelope.sourceRef,
+          inbound: envelope.inbound,
         }),
       );
       return 0;

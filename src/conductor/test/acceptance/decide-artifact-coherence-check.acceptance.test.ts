@@ -164,8 +164,8 @@ const COHERENCE = [
   '',
   '| class   | id        | maps-to  | verdict | evidence                     |',
   '|---------|-----------|----------|---------|-------------------------------|',
-  '| outcome | outcome-1 | story-1  | covered | "outcome 1 maps to story 1"  |',
-  '| outcome | outcome-2 | story-1  | covered | "outcome 2 maps to story 1"  |',
+  '| outcome | outcome-1 | story-1  | covered | "The duplicate-spec class dies at land." |',
+  '| outcome | outcome-2 | story-1  | covered | "An unmapped outcome blocks the spec." |',
   '| fr      | FR-1      | story-1  | covered | "FR-1 maps to story 1"       |',
   '| fr      | FR-2      | story-2  | covered | "FR-2 maps to story 2"       |',
   '| story   | story-1   | task-1   | covered | "story 1 maps to task 1"     |',
@@ -392,7 +392,7 @@ describe('Story 2 / FR-1 — mapping artifact authored + cross-checked at land',
 describe('Story 3 / FR-2 — outcome coverage (outcome-<n>)', () => {
   it('negative: an outcome bullet with no mapping row is refused with an outcome gap id', async () => {
     // Drop the row covering the second outcome bullet.
-    const gapped = COHERENCE.replace('| outcome | outcome-2 | story-1  | covered | "outcome 2 maps to story 1"  |\n', '');
+    const gapped = COHERENCE.replace('| outcome | outcome-2 | story-1  | covered | "An unmapped outcome blocks the spec." |\n', '');
     const wt = await seedWorktree('coherence demo', { coherence: gapped });
     await expect(
       landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),
@@ -402,8 +402,8 @@ describe('Story 3 / FR-2 — outcome coverage (outcome-<n>)', () => {
   it('negative: an outcome row with an affirmative verdict but a blank Cited-Ids cell is refused with an outcome gap id', async () => {
     // outcome-2's row keeps its "covered" verdict but cites zero stories.
     const blankCited = COHERENCE.replace(
-      '| outcome | outcome-2 | story-1  | covered | "outcome 2 maps to story 1"  |\n',
-      '| outcome | outcome-2 |          | covered | "outcome 2 maps to story 1"  |\n',
+      '| outcome | outcome-2 | story-1  | covered | "An unmapped outcome blocks the spec." |\n',
+      '| outcome | outcome-2 |          | covered | "An unmapped outcome blocks the spec." |\n',
     );
     const wt = await seedWorktree('coherence demo', { coherence: blankCited });
     await expect(
@@ -445,7 +445,7 @@ describe('Story 3 / FR-2 — outcome coverage (outcome-<n>)', () => {
 
     // Drop the row covering the second outcome bullet — an unmapped outcome.
     const gapped = COHERENCE.replace(
-      '| outcome | outcome-2 | story-1  | covered | "outcome 2 maps to story 1"  |\n',
+      '| outcome | outcome-2 | story-1  | covered | "An unmapped outcome blocks the spec." |\n',
       '',
     );
     await w('coherence/coherence-demo.md', gapped);
@@ -670,7 +670,7 @@ describe('Story 8 / FR-7 — duplicate intake claim (duplicate:<ref>)', () => {
 // ── Story 9 (FR-8): waivers name gaps, are fresh, never cover silently ─────────
 describe('Story 9 / FR-8 — coherence waiver', () => {
   // Introduce a real gap (unmapped outcome-2) that the waiver must name.
-  const gappedCoherence = COHERENCE.replace('| outcome | outcome-2 | story-1  | covered | "outcome 2 maps to story 1"  |\n', '');
+  const gappedCoherence = COHERENCE.replace('| outcome | outcome-2 | story-1  | covered | "An unmapped outcome blocks the spec." |\n', '');
 
   it('happy: a fresh-in-diff waiver naming the gap with a non-empty rationale lets the land proceed', async () => {
     const waiver = 'Waives: outcome-2\n\nRationale: outcome-2 is a deferred follow-up, tracked in #540.\n';
@@ -720,7 +720,7 @@ describe('Story 10 / FR-9 — precise, aggregated gap reporting', () => {
     // outcome-2 unmapped + Story 2 uncovered (Task 2 removed) + phantom coverage claim.
     const plan = PLAN.replace(/### Task 2:[\s\S]*?\n\n/, '').replace('| 2 | 2 |', '| 2 | T9 |');
     const coherence = COHERENCE
-      .replace('| outcome | outcome-2 | story-1  | covered | "outcome 2 maps to story 1"  |\n', '')
+      .replace('| outcome | outcome-2 | story-1  | covered | "An unmapped outcome blocks the spec." |\n', '')
       .replace('| task    | task-2    | story-2  | covered | "task 2 maps to story 2"     |\n', '')
       .replace('| story   | story-2   | task-2   | covered | "story 2 maps to task 2"     |\n', '| story   | story-2   |          | covered | "story 2 not yet covered"    |\n');
     const wt = await seedWorktree('coherence demo', { plan, coherence });
@@ -758,7 +758,7 @@ describe('Story 11 / FR-10 — technical-track behavior', () => {
     const coherence = COHERENCE
       .replace('| fr      | FR-1      | story-1  | covered | "FR-1 maps to story 1"       |\n', '')
       .replace('| fr      | FR-2      | story-2  | covered | "FR-2 maps to story 2"       |\n', '')
-      .replace('| outcome | outcome-2 | story-1  | covered | "outcome 2 maps to story 1"  |\n', '');
+      .replace('| outcome | outcome-2 | story-1  | covered | "An unmapped outcome blocks the spec." |\n', '');
     const wt = await seedWorktree('coherence demo', { prd: null, track: 'technical', stories, coherence });
     await expect(
       landSpec(target(), 'coherence demo', wt, SOURCE_REF, landOpts()),

@@ -10,6 +10,7 @@
 
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { INBOUND_ARMOR_LINE } from './intake/sanitize-inbound.js';
 
 /** Relative path (from the worktree root) of the staged outcomes file. */
 export const INTAKE_OUTCOMES_RELATIVE_PATH = join('.pipeline', 'intake-outcomes.md');
@@ -19,7 +20,7 @@ export const INTAKE_OUTCOMES_RELATIVE_PATH = join('.pipeline', 'intake-outcomes.
  * bullets that follow it, up to (but not including) the next `## ` heading or
  * end of body. Returns null when no such section is present.
  */
-function extractDesiredOutcomeSection(intakeBody: string): string | null {
+export function extractDesiredOutcomeSection(intakeBody: string): string | null {
   const headingIdx = intakeBody.search(/^## Desired outcome\s*$/m);
   if (headingIdx === -1) return null;
 
@@ -59,9 +60,28 @@ export async function stageIntakeOutcomes(
   const pipelineDir = join(worktreePath, '.pipeline');
   const stagedPath = join(pipelineDir, 'intake-outcomes.md');
 
-  const outcomeSection = extractDesiredOutcomeSection(body) ?? '## Desired outcome\n';
+  const extractedOutcomes = extractDesiredOutcomeSection(body);
+  const bodyLines = body.split('\n');
+  const openingArmorIndex = bodyLines.findIndex(
+    (line) => line.startsWith('<<< INBOUND sourceRef=') && INBOUND_ARMOR_LINE.test(line),
+  );
+  const closingArmorIndex = bodyLines.findIndex(
+    (line, index) => index > openingArmorIndex && INBOUND_ARMOR_LINE.test(line),
+  );
+  const armorLines = openingArmorIndex !== -1 && closingArmorIndex !== -1
+    ? { opening: bodyLines[openingArmorIndex], closing: bodyLines[closingArmorIndex] }
+    : null;
+  // Tracker-sourced text is armor-delimited. Without an outcomes section it
+  // must not manufacture a staging artifact; explicit CLI bodies retain the
+  // established empty-section behavior for backwards compatibility.
+  if (extractedOutcomes === null && armorLines !== null) {
+    return null;
+  }
+  const outcomeSection = extractedOutcomes ?? '## Desired outcome\n';
 
-  const contents = `Source-Ref: ${ref}\n\n${outcomeSection}\n`;
+  const contents = armorLines === null
+    ? `Source-Ref: ${ref}\n\n${outcomeSection}\n`
+    : `Source-Ref: ${ref}\n\n${armorLines.opening}\n${outcomeSection}\n${armorLines.closing}\n`;
 
   await mkdir(pipelineDir, { recursive: true });
   await writeFile(stagedPath, contents, 'utf8');

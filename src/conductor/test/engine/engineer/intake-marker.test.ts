@@ -169,6 +169,37 @@ describe('writeIntakeMarker', () => {
     expect(body).toContain('- Given Z, the system does W.');
   });
 
+  it('keeps both inbound armor lines on first write and owner re-write', async () => {
+    const opening = '<<< INBOUND sourceRef=acme/app#7 digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >>>';
+    const closing = '<<< END INBOUND >>>';
+    const stagedOutcomes = [
+      'Source-Ref: acme/app#7',
+      '',
+      opening,
+      '## Desired outcome',
+      '',
+      '- [neutralized:agent-directive]',
+      closing,
+      '',
+    ].join('\n');
+
+    await writeIntakeMarker(repoPath, 'armored-slug', 'acme/app#7', null, undefined, stagedOutcomes);
+    const markerPath = join(repoPath, '.docs', 'intake', 'armored-slug.md');
+    expect(await readFile(markerPath, 'utf8')).toContain(`${opening}\n## Desired outcome\n\n- [neutralized:agent-directive]\n${closing}`);
+
+    await writeIntakeMarker(repoPath, 'armored-slug', undefined, 'alice');
+    const rewritten = await readFile(markerPath, 'utf8');
+    expect(rewritten).toContain('Owner: alice');
+    expect(rewritten).toContain(`${opening}\n## Desired outcome\n\n- [neutralized:agent-directive]\n${closing}`);
+
+    const { readCommittedIntakeOutcomes } = await import('../../../src/engine/engineer/outcome-staging.js');
+    await expect(readCommittedIntakeOutcomes(repoPath, 'armored-slug')).resolves.toEqual({
+      required: true,
+      bullets: ['- [neutralized:agent-directive]'],
+      sourceRef: 'acme/app#7',
+    });
+  });
+
   it('plan-stem filename is unchanged when staged outcomes content is provided', async () => {
     const stagedOutcomes = ['Source-Ref: acme/app#7', '', '## Desired outcome', '', '- A bullet.', ''].join('\n');
     const marker = await writeIntakeMarker(repoPath, 'the-plan-stem', 'acme/app#7', null, undefined, stagedOutcomes);
