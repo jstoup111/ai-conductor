@@ -27,7 +27,7 @@ import { createRegistryReader } from './registry.js';
 import { ConductorEventEmitter } from '../ui/events.js';
 import { EventPersister } from './event-persister.js';
 import { resolveEngineerDir } from './engineer-store.js';
-import { resolveTargetRepo } from './engineer/target.js';
+import { resolveTargetRepo, TargetPathMissingError } from './engineer/target.js';
 import { classifyLandGateRejection, landSpec } from './engineer/land-spec.js';
 import { loadConfig } from './config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
@@ -1035,6 +1035,9 @@ export async function dispatchEngineer(
         // report WHERE it is so retention is actionable, not silent clutter.
         printErr(`engineer land: ${msg}`);
         printErr(`engineer land: worktree kept for inspection at "${worktree}".`);
+        if (err instanceof TargetPathMissingError) {
+          return 1;
+        }
         try {
           const rejection = classifyLandGateRejection(err);
           const events = new ConductorEventEmitter();

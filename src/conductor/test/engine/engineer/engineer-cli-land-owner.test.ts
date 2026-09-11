@@ -7,7 +7,7 @@
 // tests exercise dispatchEngineer end-to-end (registry → resolveTargetRepo →
 // loadConfig → landSpec) with an injected gh (no network) and assert the marker.
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,6 +19,8 @@ import {
 } from '../../../src/engine/engineer-cli.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
+import { TargetPathMissingError } from '../../../src/engine/engineer/target.js';
+import * as landSpecModule from '../../../src/engine/engineer/land-spec.js';
 
 const execFile = promisify(execFileCb);
 
@@ -367,6 +369,29 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     await expect(readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8'))
       .rejects.toMatchObject({ code: 'ENOENT' });
     await rm(fakeHome, { recursive: true, force: true });
+  });
+
+  it('does not recreate a target that disappears during landSpec to record telemetry', async () => {
+    const worktree = await seedWorktree();
+    const fakeHome = await makeUserHome('spec_owner: bob\n');
+    const { err, opts } = captureOpts({ gh: async () => ({ stdout: 'unused\n' }) });
+    const landSpec = vi.spyOn(landSpecModule, 'landSpec')
+      .mockRejectedValue(new TargetPathMissingError(repoPath));
+
+    try {
+      const code = await withHome(fakeHome, () => dispatchEngineer(
+        { kind: 'land', project: 'alpha', idea: 'dep bump', worktree },
+        opts,
+      ));
+
+      expect(code).toBe(1);
+      expect(err).toHaveLength(2);
+      await expect(readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8'))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      landSpec.mockRestore();
+      await rm(fakeHome, { recursive: true, force: true });
+    }
   });
 
   it('keeps the reported rejection and exit code when its event ledger cannot be written', async () => {
