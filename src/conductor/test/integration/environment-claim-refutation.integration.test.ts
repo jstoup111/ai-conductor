@@ -10,6 +10,8 @@
  * than the fabricated blocker parking finished work.
  *
  * The provider boundary is a scripted fake: no CLI, no network.
+ *
+ * Covers: task:4
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -43,6 +45,16 @@ const HONEST_FINISH: InvokeResult = {
   success: true,
   exitCode: 0,
   output: 'Pushed the branch and recorded the finish choice via finish-record.',
+};
+
+const BLANKET_BASH_DENIAL: InvokeResult = {
+  success: true,
+  exitCode: 0,
+  output: [
+    '**HALT — write-fence sandbox prevents finish completion.**',
+    '',
+    'The write fence blocks all Bash commands, including `gh pr list`.',
+  ].join('\n'),
 };
 
 type SafetyWrapper = (
@@ -107,6 +119,18 @@ describe('self-host dispatch refuses a disprovable environmental blocker (#1106)
     const result = await dispatchThroughSafety(selfBuildConductor(projectRoot), 'claude', HONEST_FINISH);
 
     expect(result).toEqual(HONEST_FINISH);
+  });
+
+  it('passes a blanket Bash-denial claude dispatch through untouched', async () => {
+    const result = await dispatchThroughSafety(
+      selfBuildConductor(projectRoot),
+      'claude',
+      BLANKET_BASH_DENIAL,
+    );
+
+    expect(result.success).toBe(BLANKET_BASH_DENIAL.success);
+    expect(result.exitCode).toBe(BLANKET_BASH_DENIAL.exitCode);
+    expect(result.output).toBe(BLANKET_BASH_DENIAL.output);
   });
 
   it('does not second-guess the sandboxed codex provider', async () => {
