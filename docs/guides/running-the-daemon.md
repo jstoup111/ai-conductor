@@ -191,13 +191,16 @@ protected artifact reseal refused [<path>] — <condition>
 A related but distinct line covers remediation, not the seal itself:
 
 ```text
-↩ remediation gap <gapId> → plan — sealed artifact <artifact>
+↩ remediation gap <gapId> → plan — sealed artifact <artifact> — <task title|rationale>: "<directing clause>"
 ```
 
 This fires when a remediation gap's target — its task scope or, absent a `**Files:**` declaration, a
 directed reference in its rationale prose — names another feature's sealed DECIDE artifact. The gap is
 redirected to the owning DECIDE step instead of routing to `build`; see
-[gates](../explanation/gates.md#kickback-and-remediation-routing).
+[gates](../explanation/gates.md#kickback-and-remediation-routing). When available, the suffix names
+whether the directing text came from the task title or rationale and quotes the clause the engine
+read. The quote is whitespace-normalized and capped at 160 characters so the daemon event ledger
+remains line-oriented. Older redirect events without this evidence retain the shorter line.
 
 ### Provider attribution and result summaries
 
