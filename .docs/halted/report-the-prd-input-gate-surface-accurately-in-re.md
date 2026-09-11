@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-11T00:25:38.267Z
+Status: halted
 Slug: report-the-prd-input-gate-surface-accurately-in-re
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-report-the-prd-input-gate-surface-accurately-in-re
-Head SHA: b684d8704865d14e29baa5e0fe77f2a0426ff27c
-Halted at: 2026-09-10T23:49:00.113Z
+Head SHA: 493e32370d2cfcd20dd79ce1beffb0cab2112ffb
+Halted at: 2026-09-11T02:16:46.163Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
@@ -19,6 +17,6 @@ Push status: this record may be ahead of the remote; push is not guaranteed.
 Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-1 (adr-2026-07-30-finish-only-mergeability-gate decision 5)
 
 Blocking findings:
-AB-1 (DESIGN; adr-2026-07-30-finish-only-mergeability-gate decision 5): A clean prospective merge with an active review-input change now performs a real rebase, contradicting the approved normal-finish predicate.
-AB-2 (REMEDIABLE; Task 4): The new coverage-input resume-validity branch has no production caller and is exercised only by a direct helper test.
+AB-1 (DESIGN; adr-2026-07-30-finish-only-mergeability-gate decision 5): The feature rewrites an APPROVED decision in place instead of preserving it and landing a human-approved superseding ADR.
+AB-2 (REMEDIABLE; Task 4): The coverage-binding resume-validity branch remains test-only and unreachable from production despite Task 4 requiring its removal.
 ```
