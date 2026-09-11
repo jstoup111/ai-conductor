@@ -13109,6 +13109,9 @@ export class Conductor {
       skill: branch.skill ?? '',
       outcome: { kind: 'no-verdict', reason: 'not-run' },
     }));
+    const memberExecutionContexts = new Map<string, ExecutionContext>();
+    const memberAttemptResults = new Map<string, StepRunResult>();
+    const memberAttemptBudgets = new Map<string, number>();
 
     const outcomes: BranchOutcome[] = await runWithConcurrency(
       members.map((member) => async () => {
@@ -13124,7 +13127,50 @@ export class Conductor {
           this.config,
           { tier: state.complexity_tier },
         );
-        return runGroupBranch(member, state, { stepRunner: this.stepRunner }, resolved.max_retries);
+        memberAttemptBudgets.set(member.name, resolved.max_retries);
+        // The concurrency runner invokes this thunk only after admission. The
+        // configured subject stays outside the closed StepName registry while
+        // the parent group supplies the registered policy/phase identity.
+        const executionContext: ExecutionContext = {
+          executionId: randomUUID(),
+          subject: { kind: 'configured-member', parentGroup: groupName, member: member.name },
+        };
+        memberExecutionContexts.set(member.name, executionContext);
+        return runGroupBranch(member, state, {
+          stepRunner: this.stepRunner,
+          executionContext,
+          lifecycleObserver: {
+            onAdmitted: async (observation) => {
+              await this.emitExecutionEvent({
+                type: 'step_started',
+                step: groupName,
+                index: Math.max(0, ALL_STEPS.findIndex(({ name }) => name === groupName)),
+                executionContext,
+              });
+            },
+            onAttempt: async (observation) => {
+              if (observation.result !== undefined) {
+                memberAttemptResults.set(observation.member, observation.result);
+              }
+            },
+            onRetry: async (observation) => {
+              await this.emitExecutionEvent({
+                type: 'step_retry',
+                step: groupName,
+                attempt: observation.attempt,
+                maxAttempts: memberAttemptBudgets.get(observation.member) ?? observation.attempt,
+                reason: 'configured group member retry',
+                executionContext,
+              });
+            },
+            // The common group-core result event freezes this member's timing
+            // before the join below classifies the group policy outcome.
+            onSettled: async () => undefined,
+          },
+          onMemberEvent: async (event) => {
+            if (event.phase === 'result') await this.emitExecutionEvent(event);
+          },
+        }, resolved.max_retries);
       }),
       Math.max(1, Math.min(this.validationConcurrency, branches.length)),
     );
@@ -13163,6 +13209,43 @@ export class Conductor {
 
     changes[groupName] = groupFailed ? 'failed' : 'done';
     await this.commitStateChanges(state, `join ${groupName} parallel group`, changes);
+
+    // Group policy owns its synthetic keys and parent outcome, while every
+    // admitted member closes its own lifecycle at the boundary frozen by its
+    // group-core result event. A configured name is carried only in context.
+    for (let i = 0; i < branches.length; i += 1) {
+      const branch = branches[i]!;
+      const outcome = outcomes[i];
+      const executionContext = memberExecutionContexts.get(branch.name);
+      if (executionContext === undefined || outcome === undefined) continue;
+      const result = memberAttemptResults.get(branch.name);
+      if (outcome.kind === 'verdict' && outcome.verdict === 'pass') {
+        await this.emitExecutionEvent({
+          type: 'step_completed',
+          step: groupName,
+          status: 'done',
+          ...(result?.model !== undefined ? { model: result.model } : {}),
+          ...(result?.effort !== undefined ? { effort: result.effort } : {}),
+          ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+          ...(result?.preferredProvider !== undefined ? { preferredProvider: result.preferredProvider } : {}),
+          ...(result?.actualProvider !== undefined ? { actualProvider: result.actualProvider } : {}),
+          ...(result?.tokenUsage !== undefined ? { tokenUsage: result.tokenUsage } : {}),
+          ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
+          executionContext,
+        });
+        continue;
+      }
+      await this.emitExecutionEvent({
+        type: 'step_failed',
+        step: groupName,
+        error: outcome.kind === 'no-verdict' ? outcome.reason : 'configured group member failed',
+        retryCount: memberAttemptBudgets.get(branch.name) ?? 0,
+        ...(result?.effort !== undefined ? { effort: result.effort } : {}),
+        ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+        ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
+        executionContext,
+      });
+    }
 
     if (!groupFailed) {
       await this.emitExecutionEvent({

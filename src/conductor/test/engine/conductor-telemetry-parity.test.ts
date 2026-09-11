@@ -1,4 +1,4 @@
-// Covers: task:12, task:13
+// Covers: task:12, task:13, task:14
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -16,7 +16,7 @@ import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { CapturingSpanExporter } from '../fixtures/capturing-span-exporter.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
-import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
+import type { ConductState, ConductorEvent, ExecutionContext, StepName } from '../../src/types/index.js';
 
 interface MetricPoint { attributes: Record<string, unknown>; value: unknown; }
 type TelemetryMode = 'enabled' | 'disabled' | 'failing-exporter';
@@ -35,6 +35,11 @@ interface SerialFixture {
 
 interface BuiltinFixture extends Omit<SerialFixture, 'calls' | 'step'> {
   calls: StepName[];
+}
+
+interface ConfiguredFixture extends Omit<SerialFixture, 'calls' | 'step'> {
+  calls: string[];
+  runnerContexts: ExecutionContext[];
 }
 
 const directories: string[] = [];
@@ -227,6 +232,95 @@ async function runBuiltinGroup(input: {
     await meterProvider.shutdown();
     await visualizer.stop();
   }
+}
+
+async function runConfiguredGroup(input: {
+  branches?: Array<{ name: string; advisory?: boolean }>;
+  outcomes?: Record<string, Array<Awaited<ReturnType<StepRunner['run']>>>>;
+  validationConcurrency?: number;
+  skip?: boolean;
+  twoGroups?: boolean;
+} = {}): Promise<ConfiguredFixture> {
+  const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-configured-group-telemetry-'));
+  directories.push(projectRoot);
+  const stateFilePath = join(projectRoot, 'conduct-state.json');
+  const parentGroups: StepName[] = input.twoGroups ? ['memory', 'explore'] : ['explore'];
+  const state: ConductState = {
+    ...Object.fromEntries(ALL_STEPS.filter(({ name }) => !parentGroups.includes(name)).map(({ name }) => [name, 'done'])),
+  } as ConductState;
+  await writeState(stateFilePath, state);
+  let now = 1_000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
+  const events = new ConductorEventEmitter();
+  const observed: ConductorEvent[] = [];
+  for (const type of ['step_started', 'step_completed', 'step_failed', 'step_retry', 'provider_attempt', 'group_member_step', 'parallel_failure', 'parallel_completed'] as const) {
+    events.on(type, (event) => { observed.push(event); });
+  }
+  const ledgerPath = join(projectRoot, '.pipeline', 'events.jsonl');
+  const persister = new EventPersister(ledgerPath, events, { nowMs: () => now });
+  persister.start();
+  const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+  const meterProvider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter: metricExporter, exportIntervalMillis: 60_000 })] });
+  const metrics = new MetricsListener(new MetricsRecorder(meterProvider.getMeter('configured-group-telemetry'), { project: 'project', worker: 'worker' }), () => now, 'configured-group-telemetry');
+  const spanExporter = new CapturingSpanExporter();
+  const visualizer = new OtelVisualizer(
+    resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, join(projectRoot, '.pipeline')),
+    { spanExporter, exportTimeoutMillis: 50 },
+  );
+  visualizer.start(events, { runId: 'configured-group-run', feature: 'configured-group-telemetry', project: projectRoot });
+  metrics.start(events);
+
+  const branches = input.branches ?? [
+    { name: 'frontend-review' },
+    { name: 'backend-review' },
+  ];
+  const calls: string[] = [];
+  const runnerContexts: ExecutionContext[] = [];
+  const conductor = new Conductor({
+    projectRoot, stateFilePath, events, mode: 'auto',
+    maxRetries: 1, verifyArtifacts: false,
+    config: {
+      validation_concurrency: input.validationConcurrency,
+      steps: Object.fromEntries(parentGroups.map((parentGroup) => [parentGroup, {
+          max_retries: 1,
+          ...(input.skip ? { when: 'tier == L' } : {}),
+          parallel: branches.map((branch) => ({ ...branch, skill: `skills/${branch.name}/SKILL.md` })),
+        }])),
+    },
+    stepRunner: {
+      run: async (step, _state, options) => {
+        calls.push(step);
+        if (options?.executionContext !== undefined) runnerContexts.push(options.executionContext);
+        const outcomes = input.outcomes?.[step];
+        const outcome = outcomes?.shift() ?? { success: true };
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        now += 10;
+        await events.emit({
+          type: 'provider_attempt', step, executionContext: options?.executionContext,
+          provider: 'claude', preferredProvider: 'codex', model: 'gpt-5.6-luna', effort: 'high',
+          fallbackReason: 'controlled configured fallback', invoked: true, outcome: outcome.success ? 'success' : 'failure',
+        });
+        return outcome;
+      },
+    },
+    gh: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })), git: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })), runGh: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
+  });
+  try {
+    const result = await conductor.run();
+    await meterProvider.forceFlush();
+    await visualizer.stop();
+    const ledger = (await readFile(ledgerPath, 'utf8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    return { result, calls, runnerContexts, events: observed, ledger, spans: spanExporter.getFinishedSpans(), metrics: metricExporter, state: JSON.parse(await readFile(stateFilePath, 'utf8')) as ConductState, warnings: [] };
+  } finally {
+    persister.stop();
+    metrics.stop();
+    await meterProvider.shutdown();
+    await visualizer.stop();
+  }
+}
+
+function configuredLabel(parentGroup: string, member: string): string {
+  return `configured:${encodeURIComponent(parentGroup)}/${encodeURIComponent(member)}`;
 }
 
 describe('serial conductor telemetry parity', () => {
@@ -444,5 +538,89 @@ describe('serial conductor telemetry parity', () => {
       expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === member)).toHaveLength(1);
     }
     expect(metricPoints(fixture.metrics, 'conductor.step.outcomes').find((point) => point.attributes.step === failedMember)?.attributes.outcome).toBe('failure');
+  });
+
+  it('opens one stable configured-member lifecycle under its registered parent group', async () => {
+    const fixture = await runConfiguredGroup();
+
+    expect(fixture.calls).toEqual(['frontend-review', 'backend-review']);
+    for (const member of fixture.calls) {
+      const label = configuredLabel('explore', member);
+      const started = fixture.events.find((event): event is Extract<ConductorEvent, { type: 'step_started' }> => event.type === 'step_started' && event.executionContext?.subject.kind === 'configured-member' && event.executionContext.subject.member === member);
+      const completed = fixture.events.find((event): event is Extract<ConductorEvent, { type: 'step_completed' }> => event.type === 'step_completed' && event.executionContext?.subject.kind === 'configured-member' && event.executionContext.subject.member === member);
+      expect(started?.executionContext).toEqual(expect.objectContaining({
+        executionId: expect.any(String), subject: { kind: 'configured-member', parentGroup: 'explore', member },
+      }));
+      expect(completed?.executionContext).toEqual(started?.executionContext);
+      expect(fixture.runnerContexts).toContainEqual(started?.executionContext);
+      expect(fixture.events.filter((event) => event.type === 'step_started' && event.executionContext?.subject.kind === 'configured-member' && event.executionContext.subject.member === member)).toHaveLength(1);
+      const spans = fixture.spans.filter((span) => span.name === label);
+      expect(spans).toHaveLength(1);
+      expect(spans[0]?.attributes).toMatchObject({
+        'conductor.execution.parent_group': 'explore', 'conductor.execution.member': member,
+        'conductor.provider': 'claude', 'conductor.provider.preferred': 'codex', 'conductor.fallback': true,
+      });
+      expect(spans[0]?.attributes).not.toHaveProperty('conductor.usage.reasoning_output');
+      expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === label)).toHaveLength(1);
+    }
+    expect(metricPoints(fixture.metrics, 'conductor.feature.step.tokens')).toHaveLength(0);
+    for (const point of [...metricPoints(fixture.metrics, 'conductor.step.duration'), ...metricPoints(fixture.metrics, 'conductor.step.dispatches')]) {
+      expect(point.attributes).not.toHaveProperty('executionId');
+      expect(point.attributes).not.toHaveProperty('fallbackReason');
+    }
+  });
+
+  it('keeps cap-one configured member durations at their own admitted boundaries', async () => {
+    const fixture = await runConfiguredGroup({ validationConcurrency: 1 });
+    const terminals = fixture.ledger.filter((event) => event.type === 'step_completed' && event.executionContext !== undefined);
+
+    expect(terminals.map((event) => event.activeInterval)).toEqual([
+      { startedAtMs: 1_000, durationMs: 10 },
+      { startedAtMs: 1_010, durationMs: 10 },
+    ]);
+  });
+
+  it('keeps same-name configured members in distinct parent-group scopes', async () => {
+    const fixture = await runConfiguredGroup({ twoGroups: true, branches: [{ name: 'shared-review' }] });
+    const contexts = fixture.events
+      .filter((event): event is Extract<ConductorEvent, { type: 'step_started' }> => event.type === 'step_started' && event.executionContext?.subject.kind === 'configured-member')
+      .map((event) => event.executionContext!);
+
+    expect(fixture.calls).toEqual(['shared-review', 'shared-review']);
+    expect(contexts.map((context) => context.subject)).toEqual([
+      { kind: 'configured-member', parentGroup: 'memory', member: 'shared-review' },
+      { kind: 'configured-member', parentGroup: 'explore', member: 'shared-review' },
+    ]);
+    expect(new Set(contexts.map((context) => context.executionId)).size).toBe(2);
+    for (const parentGroup of ['memory', 'explore']) {
+      const label = configuredLabel(parentGroup, 'shared-review');
+      expect(fixture.spans.filter((span) => span.name === label)).toHaveLength(1);
+      expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === label)).toHaveLength(1);
+    }
+  });
+
+  it('closes an advisory configured failure without changing the parent group policy', async () => {
+    const fixture = await runConfiguredGroup({
+      branches: [{ name: 'advisory-review', advisory: true }, { name: 'required-review' }],
+      outcomes: { 'advisory-review': [{ success: false, output: 'controlled advisory failure' }] },
+    });
+    const label = configuredLabel('explore', 'advisory-review');
+
+    expect(fixture.state.explore).toBe('done');
+    expect((fixture.state as Record<string, unknown>)['explore__advisory-review']).toBe('failed');
+    expect(fixture.events.find((event) => event.type === 'parallel_failure')).toMatchObject({ branch: 'advisory-review', terminal: false });
+    expect(fixture.events.filter((event) => event.type === 'step_failed' && event.executionContext?.subject.kind === 'configured-member' && event.executionContext.subject.member === 'advisory-review')).toHaveLength(1);
+    expect(fixture.spans.filter((span) => span.name === label)).toHaveLength(1);
+    expect(metricPoints(fixture.metrics, 'conductor.step.outcomes').find((point) => point.attributes.step === label)?.attributes.outcome).toBe('failure');
+  });
+
+  it('emits no configured lifecycle for a pre-admission skipped group', async () => {
+    const fixture = await runConfiguredGroup({ skip: true });
+
+    expect(fixture.calls).toEqual([]);
+    expect(fixture.events.filter((event) => event.type === 'step_started' || event.type === 'group_member_step')).toHaveLength(0);
+    expect(fixture.spans.filter((span) => span.name.startsWith('configured:'))).toHaveLength(0);
+    expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => String(point.attributes.step).startsWith('configured:'))).toHaveLength(0);
+    expect((fixture.state as Record<string, unknown>)['explore__frontend-review']).toBe('skipped');
   });
 });
