@@ -1,6 +1,6 @@
-# James Stoup Agents — Custom Development Harness
+# ai-conductor — Custom Development Harness
 
-A personal suite of skills and agent personas for AI-assisted software development.
+A development harness with skills and agent personas for AI-assisted software development.
 Originally built on Claude Code; the shared repository contract applies to every supported host.
 
 ## Behavioral Rules
@@ -47,12 +47,6 @@ report, or coordinate something — a watcher, a poller, a sidecar file, an ad-h
 timestamp stamped into an artifact — the active host agent MUST read and follow
 [`.agents/skills/event-spine/SKILL.md`](.agents/skills/event-spine/SKILL.md), which carries the
 decision procedure, the schema-not-file test, and the only three exceptions.
-
-**Third-party calls are smoke-only in tests.** Unit tests inject mocked adapters. Acceptance,
-integration, and end-to-end tests run the real internal flow with faithful fakes at every
-third-party boundary. Only explicitly named, opt-in smoke tests may call real LLMs or other
-external services; the default test suite and CI exclude them. `HARNESS.md` defines the full
-test-isolation policy.
 
 ## Daemon Operations Safety (Operator / Agent)
 
@@ -135,12 +129,7 @@ Per this repo's own Design Principle, the durable fix for each of these is machi
 a merge→shipped-record reconciler, live-checkout change attribution) — these prose rules are
 the interim guard until that machinery exists.
 
-## Harness Architecture
-
-- **Skills** (`skills/`) — Each has a `SKILL.md` with YAML frontmatter. One skill, one responsibility.
-- **Agents** (`agents/`) — Prompt templates defining *who* does the work.
-- **Tech-Context** (`tech-context/`) — Stack-specific knowledge loaded by bootstrap.
-- **Templates** (`templates/`) — Project scaffolding including `CLAUDE.md.template`.
+## Repository Authoring
 
 ### Scope Decisions
 
@@ -195,8 +184,15 @@ parent directory it is restoring into — so this rule is the interim guard, not
 
 ## Validation Rules (This Repo)
 
-**Every change to this harness repo MUST be validated.** Run the full validation suite
-and fix any failures before declaring the work complete.
+Follow the test-execution ownership in `HARNESS.md`. During managed runs, `test_suite`
+owns aggregate tests and the self-host release gate owns `test/test_harness_integrity.sh`.
+Other steps consume their evidence; editing a file or completing a step does not trigger
+another suite run. Run only targeted checks needed for changed behavior or a concrete defect.
+Missing or failed aggregate evidence returns to its owning gate.
+
+For an operator-requested hotfix outside the lifecycle, run `test/test_harness_integrity.sh`
+once on the completed change, plus checks appropriate to changed executable behavior.
+Prose-only edits need no new behavioral tests. Check affected links and instruction consistency.
 
 ### Test Authoring Rules
 
@@ -219,39 +215,8 @@ command, including discovery and teardown. Never rely on session names, the ambi
 Use a mocked adapter until private-socket isolation is available. This is repository-local
 test-authoring policy; consumer projects do not inherit this repository's fixture machinery.
 
-### Validation Suite
-
-Run `test/test_harness_integrity.sh`. The checks below are the ones you break most often; the script
-actually runs 21 numbered and 3 unnumbered checks, several of which carry lettered
-sub-checks (1b, 5a-5c, 9a-9c). The canonical enumeration — every check, what makes it
-fail, and how to fix it — is [`docs/contributing/validation.md`](docs/contributing/validation.md).
-
-1. **Bash syntax** — All scripts in `bin/`, `hooks/claude/`, and `test/` pass `bash -n`.
-1b. **ShellCheck** — The same scripts pass `shellcheck --severity=error` via
-   `test/lint_shell.sh`. Catches shell bugs that parse cleanly but misbehave at runtime.
-2. **SKILL.md frontmatter** — Every `skills/*/SKILL.md` has YAML frontmatter with required
-   fields: `name`, `description`, `enforcement`, `phase`.
-3. **Agent references** — Every `agents/*.md` referenced in skills, HARNESS.md, or ARCHITECTURE.md exists on disk.
-4. **Cross-skill references** — Every `/skill-name` reference in SKILL.md files points to an
-   existing `skills/` directory.
-5. **ARCHITECTURE.md model table** — Every skill directory has an entry in the model selection table.
-5a. **Table content drift** — The generated ARCHITECTURE.md model-selection-table section matches
-    the output of `bin/generate-model-table` (source: `model-table-metadata.ts` +
-    `resolved-config.ts`); regenerate and commit if it drifts.
-5b. **SKILL.md pin agreement** — Every skill marked opus-tier in the model table pins
-    `model: opus` in its SKILL.md frontmatter, and vice versa.
-6. **Template references** — Every `templates/*.template` referenced in skills exists on disk.
-7. **Section numbering** — No duplicate section numbers within a SKILL.md file.
-
-### When to Validate
-
-- After editing any SKILL.md, agent, HARNESS.md, or bin/ script
-- The active host agent MUST run validation automatically — do not ask, do not skip
-
-### Failure Handling
-
-If validation fails, fix the issue before declaring the work complete. If a check is failing
-due to a legitimate structural change (e.g., renaming a skill), fix all references.
+The integrity check catalog and troubleshooting belong in
+[validation reference](docs/contributing/validation.md).
 
 ## Worktree Policy
 
@@ -313,32 +278,4 @@ for the full mechanism.
    waiver when the edit changes actual CLI/hook/schema *behavior* — that
    always needs a real migration block.
 
-3. **The bot-owned release PR is maintained on every merge to main, and publication
-   is gated on its provenance.** `.github/workflows/release-pr.yml` collects complete,
-   eligible merged-PR metadata since the latest tag and upserts one `automation/release-pr`
-   PR carrying the rendered `CHANGELOG.md`/`VERSION` candidate and an exhaustive audit.
-   `.github/workflows/release.yml` publishes only when the commit on `main` is that exact
-   PR's merge, with matching audit evidence bound to its head — it ignores ordinary pushes
-   to `main`. There is no manual release script and no feature-branch VERSION edit:
-   the release PR's renderer computes the next `VERSION` by aggregating the highest
-   `Release-Semver` declared across its candidates.
-
-4. **Semver rules** (declared per-PR via `Release-Semver`, aggregated by the release PR):
-   - **MAJOR** — breaking change to skill contracts, `bin/conduct` CLI, or
-     `settings.json` schema.
-   - **MINOR** — new skill, new hook, new gate, additive HARNESS.md rule.
-   - **PATCH** — bug fix, wording, non-behavioral cleanup.
-
-5. **Integrity checks apply to release artifacts too.**
-   `test/test_harness_integrity.sh` validates: `VERSION` is valid semver,
-   `CHANGELOG.md` has a `## [Unreleased]` section, and every `vX.Y.Z` tag has
-   a matching `## [X.Y.Z]` section in `CHANGELOG.md`.
-
-## HARNESS.md Flow
-
-HARNESS.md is the single source of truth for behavioral rules consumed by projects using this harness.
-
-- Execution rules (communication protocol, model selection obligations, conventions) go in HARNESS.md
-- Architecture, generated model-policy tables, and operator reference material go in ARCHITECTURE.md; it is not a mandatory session-start read
-- This shared instruction file describes the harness repo itself; HARNESS.md describes rules for projects
-- `hooks/claude/session-start-context.sh` detects when a consumer CLAUDE.md is missing the HARNESS.md reference and prints the required block; consumers must add it manually (not auto-applied)
+Release automation and semver reference: [Repository Release Mechanics](ARCHITECTURE.md#repository-release-mechanics).

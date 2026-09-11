@@ -300,3 +300,34 @@ One daemon per repo, enforced by the pidfile lock at `.daemon/daemon.pid` (stale
 locks self-reclaim) underneath the tmux session. The daemon runs **serially** (one feature at a
 time), so `connect` always shows exactly the feature currently building. A host reboot drops
 tmux sessions; the next `daemon start` (or composer nudge) respawns.
+
+## Repository Layout
+
+- **Skills** (`skills/`) — Each has a `SKILL.md` with YAML frontmatter. One skill, one responsibility.
+- **Agents** (`agents/`) — Prompt templates defining *who* does the work.
+- **Tech-Context** (`tech-context/`) — Stack-specific knowledge loaded by bootstrap.
+- **Templates** (`templates/`) — Project scaffolding including `CLAUDE.md.template`.
+
+
+## Repository Release Mechanics
+
+1. **The bot-owned release PR is maintained on every merge to main, and publication
+   is gated on its provenance.** `.github/workflows/release-pr.yml` collects complete,
+   eligible merged-PR metadata since the latest tag and upserts one `automation/release-pr`
+   PR carrying the rendered `CHANGELOG.md`/`VERSION` candidate and an exhaustive audit.
+   `.github/workflows/release.yml` publishes only when the commit on `main` is that exact
+   PR's merge, with matching audit evidence bound to its head — it ignores ordinary pushes
+   to `main`. There is no manual release script and no feature-branch VERSION edit:
+   the release PR's renderer computes the next `VERSION` by aggregating the highest
+   `Release-Semver` declared across its candidates.
+
+2. **Semver rules** (declared per-PR via `Release-Semver`, aggregated by the release PR):
+   - **MAJOR** — breaking change to skill contracts, `bin/conduct` CLI, or
+     `settings.json` schema.
+   - **MINOR** — new skill, new hook, new gate, additive HARNESS.md rule.
+   - **PATCH** — bug fix, wording, non-behavioral cleanup.
+
+3. **Integrity checks apply to release artifacts too.**
+   `test/test_harness_integrity.sh` validates: `VERSION` is valid semver,
+   `CHANGELOG.md` has a `## [Unreleased]` section, and every `vX.Y.Z` tag has
+   a matching `## [X.Y.Z]` section in `CHANGELOG.md`.
