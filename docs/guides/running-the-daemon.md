@@ -872,11 +872,12 @@ the rebase — `git merge-tree` proves only that the two trees do not collide, n
 branch's gates were graded against the base that will actually be merged into. A clean result is
 skippable only when both of these also hold:
 
-- **The base has not moved in code.** No code or test path differs between the branch's merge-base
-  and the base ref. If the base gained code after `build_review` graded the diff, `test_suite`
-  proved a tree, or `manual_test` exercised behavior, those verdicts predate it — the engine rebases
-  and lets the existing delta-aware invalidation decide what to re-verify. A docs-only advance
-  changes nothing and still skips.
+- **The base has not moved in code or this feature's active review inputs.** No code or test path,
+  active story, PRD, plan, or coherence carrier differs between the branch's merge-base and the base
+  ref. If the base gained code after `build_review` graded the diff, `test_suite` proved a tree, or
+  `manual_test` exercised behavior, those verdicts predate it. A changed active review input can
+  also change the PRD-audit or coverage-binding result. In either case the engine rebases and lets
+  delta-aware invalidation decide what to re-verify. Unrelated documentation still permits a skip.
 - **The base is not a degraded fallback.** When an `origin` remote exists but its default-branch
   discovery or `git fetch` failed, the engine compares against the LOCAL base branch, which in a
   daemon worktree can be arbitrarily far behind origin — a "clean" verdict against it means nothing,
@@ -973,18 +974,20 @@ once; a lock loser never runs it and never touches worktrees.
 Honouring the `REKICK` sentinel always rebases the feature onto the advanced base before any gate
 resumes, even when it is cleanly mergeable. This play-forward path is intentionally different from
 normal finish: the pending gate must observe the advanced base in its worktree.
-When that rebase changes code or test paths, the downstream judged gates — `test_suite`,
-`build_review`, and (when they ran) `manual_test`, `prd_audit`,
-`architecture_review_as_built` — are candidates for re-opening, because their verdicts graded the
-pre-rebase diff. Which ones actually re-open depends on the delta: each judged gate declares the
-surface its verdict depends on, and only a delta that lands inside that surface invalidates it.
+When that rebase changes code, test paths, or an active review input, the downstream judged gates —
+`test_suite`, `build_review`, and (when they ran) `manual_test`, `prd_audit`,
+`coverage_binding`, `architecture_review_as_built` — are candidates for re-opening. Which ones
+actually re-open depends on the delta: each judged gate declares the surface its verdict depends on,
+and only a delta that lands inside that surface invalidates it.
 
 | Gate | Depends on | Re-opened when the rebase delta touches |
 | --- | --- | --- |
 | `test_suite` | the whole tree | any code or test path, anywhere |
 | `manual_test` | all runtime source | any runtime source path, feature-owned or not |
 | `build_review` | the feature's own code and tests | the feature's own source **or** its own test files |
-| `prd_audit`, `architecture_review_as_built` | the feature's own runtime source | the feature's own source |
+| `prd_audit` | the feature's own runtime source, active stories, and PRD | the feature's own source, active story, or active PRD |
+| `coverage_binding` | the feature's own runtime source, active stories, PRD, plan, and coherence carrier | the feature's own source or one of those active review inputs |
+| `architecture_review_as_built` | the feature's own runtime source | the feature's own source |
 
 `build_review` grades the feature's own code and tests — currently only the opt-in `testQuality`
 rubric's judgement of whether a changed test is insensitive to the behavior it claims to cover — so a
