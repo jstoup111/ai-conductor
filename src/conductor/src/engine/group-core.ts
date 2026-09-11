@@ -397,13 +397,8 @@ export interface BranchExecutorDeps {
   stepRunner: BranchStepRunner;
   /** Engine-rendered PRD widening history for the prd_audit member only. */
   prdWideningReviewContext?: StepRunOptions['prdWideningReviewContext'];
-  /**
-   * The shared member-lifecycle observer. It is optional only while the two
-   * existing production group entry points are migrated in Tasks 13 and 14;
-   * when supplied, every admitted branch receives the complete contract below.
-   * Auxiliary branches deliberately remain outside this lifecycle contract.
-   */
-  lifecycleObserver?: GroupBranchLifecycleObserver;
+  /** Every production branch reports its admitted lifecycle through this observer. */
+  lifecycleObserver: GroupBranchLifecycleObserver;
   /** Test seam: override session-id minting instead of importing uuid. */
   mintSessionId?: () => string;
   /**
@@ -547,6 +542,9 @@ export async function runGroupBranch(
   deps: BranchExecutorDeps,
   maxRetries: number,
 ): Promise<BranchOutcome> {
+  if (deps.lifecycleObserver === undefined) {
+    throw new Error("runGroupBranch requires a lifecycleObserver");
+  }
   // `runWithConcurrency` calls this only after semaphore admission. If an
   // abort won the race before that call, there was no work admission and no
   // lifecycle start, settlement, or duration to report.
@@ -555,26 +553,24 @@ export async function runGroupBranch(
   const observer = deps.lifecycleObserver;
   const lifecycleAttempts: GroupBranchAttempt[] = [];
   let admitted = false;
-  const lifecycleDeps: BranchExecutorDeps = observer === undefined
-    ? deps
-    : {
-        ...deps,
-        lifecycleObserver: {
-          onAdmitted: async (observation) => {
-            admitted = true;
-            await observer.onAdmitted(observation);
-          },
-          onAttempt: async (observation) => {
-            lifecycleAttempts.push(observation);
-            await observer.onAttempt(observation);
-          },
-          onRetry: (observation) => observer.onRetry(observation),
-          // The outer exit point below is the sole settlement owner.
-          onSettled: () => undefined,
-        },
-      };
+  const lifecycleDeps: BranchExecutorDeps = {
+    ...deps,
+    lifecycleObserver: {
+      onAdmitted: async (observation) => {
+        admitted = true;
+        await observer.onAdmitted(observation);
+      },
+      onAttempt: async (observation) => {
+        lifecycleAttempts.push(observation);
+        await observer.onAttempt(observation);
+      },
+      onRetry: (observation) => observer.onRetry(observation),
+      // The outer exit point below is the sole settlement owner.
+      onSettled: () => undefined,
+    },
+  };
   const outcome = await runGroupBranchInner(member, state, lifecycleDeps, maxRetries);
-  if (admitted && observer !== undefined) {
+  if (admitted) {
     await observer.onSettled({
       member: member.name,
       skill: member.skill,
@@ -645,7 +641,7 @@ async function runGroupBranchInner(
   // logical execution so queue/pre-admission cancellation never manufactures
   // a lifecycle start or duration.
   if (deps.signal?.aborted) return makeNoVerdictOutcome("aborted");
-  await deps.lifecycleObserver?.onAdmitted({
+  await deps.lifecycleObserver.onAdmitted({
     member: member.name,
     skill: member.skill,
     ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
@@ -701,7 +697,7 @@ async function runGroupBranchInner(
       // branches (acceptance flow B: a crashing validator must not stop
       // its siblings from dispatching).
       lastOutput = err instanceof Error ? err.message : String(err);
-      await deps.lifecycleObserver?.onAttempt({
+      await deps.lifecycleObserver.onAttempt({
         member: member.name,
         skill: member.skill,
         ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
@@ -709,7 +705,7 @@ async function runGroupBranchInner(
         error: lastOutput,
       });
       if (attempt < maxRetries) {
-        await deps.lifecycleObserver?.onRetry({
+        await deps.lifecycleObserver.onRetry({
           member: member.name,
           skill: member.skill,
           ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
@@ -718,7 +714,7 @@ async function runGroupBranchInner(
       }
       continue;
     }
-    await deps.lifecycleObserver?.onAttempt({
+    await deps.lifecycleObserver.onAttempt({
       member: member.name,
       skill: member.skill,
       ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
@@ -814,7 +810,7 @@ async function runGroupBranchInner(
     // rate-limit episode and session recovery both continue above with the
     // same attempt number, so neither becomes a policy-retry observation.
     if (attempt < maxRetries) {
-      await deps.lifecycleObserver?.onRetry({
+      await deps.lifecycleObserver.onRetry({
         member: member.name,
         skill: member.skill,
         ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
