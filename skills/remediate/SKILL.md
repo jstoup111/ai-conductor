@@ -23,12 +23,14 @@ for a human rather than to guess a route.
 
 The daemon should be autonomous. So the default is to **remediate**: translate each gap into
 concrete, file-scoped work and route it back to the right SDLC step. A **HALT** is reserved for the
-two cases a machine genuinely cannot close:
+three cases a machine genuinely cannot close:
 
 1. **architectural-clarity** — an architectural gap that needs a human *decision* (ambiguous trade-off,
    missing ADR, conflicting constraints), not just a code change.
 2. **product-scope** — functionality the **initial design never accounted for** (a real product gap),
    which needs a human DECIDE amendment.
+3. **unanswerable** — a stall-question that cannot be answered from committed artifacts alone and
+   needs more evidence.
 
 If a gap can be turned into concrete work, it is **not** a HALT. This skill plans only — it assigns
 dispositions and writes tasks. It does **not** edit code, write tests, or amend the PRD; the step it
@@ -192,7 +194,7 @@ Judgment rules:
   The audit origin or finding id alone does not determine the route: an as-built architecture-review
   finding whose approved architecture remains applicable and authoritative routes to `build` when
   it is conforming implementation/test/documentation drift.
-- **HALT is the exception, not the default.** Only the two human categories above HALT. "I'm not sure
+- **HALT is the exception, not the default.** Only the three categories above HALT. "I'm not sure
   how to fix it" is not a HALT category — if the gap is an impl bug you can describe as a task, it is
   `build`.
 - A gap that is an `impl-gap` in the audit is almost always `build` (or `acceptance_specs` when the
