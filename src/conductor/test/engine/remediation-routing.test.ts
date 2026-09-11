@@ -1,4 +1,4 @@
-// Covers: task:2, task:3
+// Covers: task:2, task:3, task:4
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
@@ -330,6 +330,70 @@ describe('sealed-artifact remediation routing', () => {
       '"type":"remediation_sealed_artifact_redirect","gapId":"event-gap","artifact":".docs/specs/another-feature.md"',
     );
     persister.stop();
+  });
+
+  it('persists one parseable redirect record and carries an oversized normalized clause to halt evidence', async () => {
+    const title = [
+      'Amend .docs/specs/another-feature.md with a correction that contains deliberately extensive supporting context',
+      'across several lines so the diagnostic quote must be collapsed into one bounded operator-facing line before it',
+      'is carried to event persistence or halt evidence.',
+    ].join('\n  ');
+    const normalized = title.replace(/\s+/g, ' ').trim();
+    const directingClause = `${normalized.slice(0, 159)}…`;
+    const dispositions = [{
+      id: 'oversized-event-gap', disposition: 'build', category: null,
+      rationale: 'The accepted assertion is incorrect.',
+      tasks: [{ id: 'oversized-foreign-title', title }],
+    }];
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline/events.jsonl'), events);
+    persister.start();
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
+      projectRoot,
+      stepRunner: {
+        run: async () => {
+          await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({ dispositions }));
+          return { success: true };
+        },
+      },
+      events,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+    });
+
+    try {
+      const outcome = await (conductor as unknown as {
+        planRemediation: (
+          state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string,
+          hintSource: { source: string; evidenceFile: string },
+        ) => Promise<{ kind: string; detail?: string }>;
+      }).planRemediation(
+        { session_started_at: Date.now() - 1_000, feature_desc: 'feature' },
+        ALL_STEPS,
+        'blocked',
+        { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
+      );
+
+      const lines = (await readFile(join(projectRoot, '.pipeline/events.jsonl'), 'utf8'))
+        .split('\n')
+        .filter(Boolean);
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0])).toMatchObject({
+        type: 'remediation_sealed_artifact_redirect',
+        gapId: 'oversized-event-gap',
+        artifact: '.docs/specs/another-feature.md',
+        directingClause,
+        directingSource: 'task title',
+      });
+      expect(directingClause).toHaveLength(160);
+      expect(outcome).toMatchObject({ kind: 'halt' });
+      expect(outcome.detail).toContain(`"${directingClause}"`);
+    } finally {
+      persister.stop();
+    }
   });
 
   it('names the redirected gap’s directing text in DECIDE halt evidence while ordinary gaps stay bare', async () => {

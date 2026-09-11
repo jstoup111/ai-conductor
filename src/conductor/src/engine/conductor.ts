@@ -13937,7 +13937,6 @@ export function directedProtectedTarget(
     const clauseStart = Math.max(
       beforePath.lastIndexOf('.'),
       beforePath.lastIndexOf(';'),
-      beforePath.lastIndexOf('\n'),
     );
     const clause = prose.slice(clauseStart + 1).trim();
     return action.test(beforePath.slice(clauseStart + 1)) ? [{ path, clause }] : [];
@@ -13950,7 +13949,12 @@ export function directedProtectedTarget(
     : directedPaths.find(({ path }) => path.replace(/^\.\//, '') === target.replace(/^\.\//, ''))?.clause;
   return targetClause === undefined || target === undefined
     ? undefined
-    : { path: target, clause: targetClause };
+    : { path: target, clause: normalizeDirectingClause(targetClause) };
+}
+
+function normalizeDirectingClause(clause: string): string {
+  const normalized = clause.replace(/\s+/g, ' ').trim();
+  return normalized.length <= 160 ? normalized : `${normalized.slice(0, 159)}…`;
 }
 
 /**
