@@ -901,7 +901,8 @@ When a feature halts, the daemon leaves `.pipeline/HALT` in its worktree and sto
 On a genuine advance of the base branch SHA, the re-kick sweep runs over every halted worktree and,
 per feature:
 
-1. Skips it entirely if it is operator-parked, already shipped, or already re-kicked at this SHA.
+1. Skips it entirely if it is operator-parked, already shipped, or already re-kicked at this SHA;
+   the last condition reads the durable per-slug record in the main checkout's `.daemon/rekicked/` state directory.
 2. Skips it, on every sweep regardless of SHA, if `.pipeline/HALT.class` reads `needs-human` or
    `unclassified` — only `mechanical` and `legacy` are ordinarily retryable. See the
    classification table in
@@ -909,11 +910,14 @@ per feature:
 3. Aborts a paused rebase if one is mid-flight — a failed abort leaves the HALT marker intact rather
    than half-clearing it.
 4. Renames `.pipeline/HALT` to `.pipeline/HALT.cleared`, preserving the reason.
-5. Drops a `.pipeline/REKICK` sentinel and records the triggering SHA.
+5. Drops a `.pipeline/REKICK` sentinel and records the triggering SHA in that durable per-slug record.
 
 The sweep never dispatches directly; the cleared feature is re-dispatched on the next poll. That is
 why a git error left in a feature's worktree gets retried without backoff, and why parking is the
 only reliable way to make a feature stay stopped.
+
+Restarting the daemon no longer grants a fresh re-kick at an unchanged base SHA; clearing the halt
+or unparking the feature remains the sanctioned operator lever.
 
 ### Budget-cap halts need an authorization
 

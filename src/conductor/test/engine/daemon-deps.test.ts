@@ -42,7 +42,9 @@ import { execa } from 'execa';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import {
   isProcessed,
+  markRekicked,
   readWorktreeOutcome,
+  readRekicked,
   makeWorkClaimLivenessPredicate,
   makeWorktreeRemovalPredicate,
   makeFeatureRunnerDeps,
@@ -97,6 +99,43 @@ describe('engine/daemon-deps', () => {
           '[daemon] worktree removal refused active-feature — reason: active work claim',
         ],
       });
+    });
+  });
+
+  describe('durable last-rekick markers', () => {
+    it('records a slug SHA and reads it back', async () => {
+      await markRekicked(dir, 'feature-a', 'a1b2c3');
+
+      await expect(readRekicked(dir)).resolves.toEqual(new Map([['feature-a', 'a1b2c3']]));
+    });
+
+    it('returns an empty map when the marker store does not exist', async () => {
+      await expect(readRekicked(dir)).resolves.toEqual(new Map());
+    });
+
+    it('omits empty and malformed marker bodies while preserving a well-formed sibling', async () => {
+      const markerDir = join(dir, '.daemon', 'rekicked');
+      await mkdir(markerDir, { recursive: true });
+      await writeFile(join(markerDir, 'valid'), '  deadBEEF  \n');
+      await writeFile(join(markerDir, 'empty'), ' \n');
+      await writeFile(join(markerDir, 'malformed'), 'not-a-sha\n');
+
+      await expect(readRekicked(dir)).resolves.toEqual(new Map([['valid', 'deadBEEF']]));
+    });
+
+    it('omits an unreadable marker entry while preserving a well-formed sibling', async () => {
+      const markerDir = join(dir, '.daemon', 'rekicked');
+      await mkdir(join(markerDir, 'unreadable'), { recursive: true });
+      await writeFile(join(markerDir, 'valid'), 'a1b2c3\n');
+
+      await expect(readRekicked(dir)).resolves.toEqual(new Map([['valid', 'a1b2c3']]));
+    });
+
+    it('overwrites a slug marker with its later SHA', async () => {
+      await markRekicked(dir, 'feature-a', 'a1b2c3');
+      await markRekicked(dir, 'feature-a', 'd4e5f6');
+
+      await expect(readRekicked(dir)).resolves.toEqual(new Map([['feature-a', 'd4e5f6']]));
     });
   });
 

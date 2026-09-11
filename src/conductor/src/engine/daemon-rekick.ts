@@ -330,6 +330,12 @@ export interface RekickSweepDeps {
    * re-kicked at SHA `X` is not re-kicked again at `X`.
    */
   lastRekickSha: Map<string, string>;
+  /**
+   * Persist a successful re-kick's triggering SHA. Absent → behavior is
+   * unchanged (backward-compatible); a write failure is logged and does not
+   * stop the rest of the sweep.
+   */
+  markRekicked?: (slug: string, sha: string) => Promise<void>;
   log?: (msg: string) => void;
   /**
    * True when a slug's spec/implementation has already shipped (content-aware
@@ -515,6 +521,13 @@ export async function rekickSweep(
     }
 
     deps.lastRekickSha.set(slug, sha);
+    if (deps.markRekicked) {
+      try {
+        await deps.markRekicked(slug, sha);
+      } catch (err) {
+        log(`re-kick ${slug}: durable record anomaly — FAILED (${errMsg(err)})`);
+      }
+    }
     cleared.push(slug);
   }
 

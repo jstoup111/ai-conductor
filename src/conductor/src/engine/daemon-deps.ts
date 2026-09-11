@@ -1,5 +1,5 @@
 import { execa } from 'execa';
-import { mkdir, writeFile, readFile, access, stat } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, readdir, access, stat } from 'node:fs/promises';
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
@@ -125,6 +125,7 @@ export interface DaemonFeatureRunnerDeps extends FeatureRunnerDeps {
 
 const PROCESSED_SUBDIR = '.daemon/processed';
 const WARNED_SUBDIR = '.daemon/warned';
+const REKICKED_SUBDIR = '.daemon/rekicked';
 
 /** Concrete (git/fs) implementation of the feature-runner primitives. */
 export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerDeps {
@@ -361,6 +362,35 @@ export async function markWarned(projectRoot: string, slug: string): Promise<voi
   const warnedDir = join(projectRoot, WARNED_SUBDIR);
   await mkdir(warnedDir, { recursive: true });
   await writeFile(join(warnedDir, slug), 'warned\n', 'utf-8');
+}
+
+/** Record the base SHA that last re-kicked this slug. */
+export async function markRekicked(projectRoot: string, slug: string, sha: string): Promise<void> {
+  const rekickedDir = join(projectRoot, REKICKED_SUBDIR);
+  await mkdir(rekickedDir, { recursive: true });
+  await writeFile(join(rekickedDir, slug), `${sha.trim()}\n`, 'utf-8');
+}
+
+/** Read valid durable last-rekick SHA markers, tolerating missing or damaged state. */
+export async function readRekicked(projectRoot: string): Promise<Map<string, string>> {
+  const rekickedDir = join(projectRoot, REKICKED_SUBDIR);
+  let slugs: string[];
+  try {
+    slugs = await readdir(rekickedDir);
+  } catch {
+    return new Map();
+  }
+
+  const markers = new Map<string, string>();
+  await Promise.all(slugs.map(async (slug) => {
+    try {
+      const sha = (await readFile(join(rekickedDir, slug), 'utf-8')).trim();
+      if (/^[0-9a-f]+$/i.test(sha)) markers.set(slug, sha);
+    } catch {
+      // A damaged marker remains eligible for a future re-kick.
+    }
+  }));
+  return markers;
 }
 
 /**
