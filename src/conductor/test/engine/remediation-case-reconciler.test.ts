@@ -166,6 +166,44 @@ describe('remediation case reconciler', () => {
     }] } });
   });
 
+  it('rewrites an attempted action source in place when its exact id is refuted', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [durableAction()] } }));
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph(REFUTE_CASE, [{ sourceId: 'testQuality:finding-1', outcome: 'refuted', caseRef: 'refute-case-1' }]),
+      recordedAt: '2026-08-30T13:00:00.000Z', generateId: () => 'must-not-be-used', attemptedCaseIds: ['case-1'],
+    });
+    const reparsed = await store.read();
+
+    expect(result).toMatchObject({ ok: true, state: { cases: [{
+      id: 'case-1', disposition: 'refute', resolution: 'resolved',
+      sources: [{ sourceId: 'testQuality:finding-1', outcome: 'refuted', recordedAt: '2026-08-30T13:00:00.000Z' }],
+    }] } });
+    expect(reparsed.ok && reparsed.state.cases[0]?.sources).toEqual([
+      { sourceId: 'testQuality:finding-1', outcome: 'refuted', recordedAt: '2026-08-30T13:00:00.000Z' },
+    ]);
+  });
+
+  it('rejects a non-refutation exact-id outcome mismatch without changing durable state', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [durableAction()] } }));
+    const before = await readFile(remediationCaseStorePath(projectRoot), 'utf8');
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'same-action', existingCaseId: 'case-1' }, [
+        { sourceId: 'testQuality:finding-1', outcome: 'refuted', caseRef: 'same-action' },
+      ]),
+      recordedAt: '2026-08-30T13:00:00.000Z', generateId: () => 'must-not-be-used',
+    });
+
+    expect([result, await readFile(remediationCaseStorePath(projectRoot), 'utf8')]).toEqual([
+      { ok: false, reason: 'illegal-source-link' }, before,
+    ]);
+  });
+
   it('reserves a supplied refutation deferral effect under a new engine-owned identity', async () => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);

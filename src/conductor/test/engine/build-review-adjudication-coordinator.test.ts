@@ -1475,6 +1475,59 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
   });
 
+  it('settles an attempted re-raised action with its exact historical source id', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-durable', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The test needs a focused assertion.', resolution: 'open',
+        sources: [{ sourceId, outcome: 'acted', recordedAt: '2026-08-30T18:00:00.000Z' }],
+        effect: { id: 'effect-durable', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+      }],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-durable',
+      cases: [{ caseId: 'case-durable', priority: 'high', tasks: [{ title: 'Add the missing assertion' }] }],
+    });
+    await markBuildReviewWorkOrderAttempted(root, feature);
+    await mkdir(join(root, 'test'), { recursive: true });
+    await writeFile(join(root, 'test', 'refutation-evidence.test.ts'), 'covers the repaired branch\n');
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+    const judgement: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'refuted', caseRef: 'case-refuted' }],
+      cases: [{
+        caseRef: 'case-refuted', existingCaseId: 'case-durable', disposition: 'refute', priority: 'high', confidence: 'high',
+        rationale: 'The claimed gap is covered by the repaired branch.', effect: { kind: 'none' },
+        refutation: { claim: 'The repair did not cover the asserted branch.', assertions: [{
+          assertion: 'The repaired branch remains absent.', verdict: 'refuted',
+          evidence: [{ path: 'test/refutation-evidence.test.ts', excerpt: 'covers the repaired branch' }],
+        }] },
+      }],
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => judgement), chargeEffect: charge, emit: async (event) => { events.push(event); },
+    });
+    const settled = await store.read();
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(charge).not.toHaveBeenCalled();
+    expect(settled).toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
+      id: 'case-durable', disposition: 'refute', resolution: 'resolved', effect: { kind: 'none' },
+      sources: [expect.objectContaining({ sourceId, outcome: 'refuted' })],
+    })] } });
+    if (settled.ok) expect(settled.state.cases[0]?.sources).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'remediation_case_refuted')).toEqual([
+      expect.objectContaining({ caseId: 'case-durable' }),
+    ]);
+    expect(events.map((event) => event.type)).not.toContain('remediation_effect_reserved');
+    expect(events.map((event) => event.type)).not.toContain('remediation_adjudication_failed');
+  });
+
   it('admits an open action refutation, settles its exact source on lap B, and re-dispatches drifted content', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);

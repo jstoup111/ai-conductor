@@ -196,10 +196,20 @@ function reconcileState(
     claimed.add(existingCaseId);
     caseIdsByRef.set(caseRow.caseRef, existingCaseId);
 
-    const appendedSources = [...existing.sources];
+    let appendedSources = [...existing.sources];
     for (const source of sources) {
       const historical = existing.sources.find((link) => link.sourceId === source.sourceId);
       if (historical) {
+        // An applied action may be conclusively refuted on a later attempted
+        // lap. Preserve the source identity while changing its durable
+        // outcome; adding a second link would violate the store's unique
+        // source-id invariant.
+        if (admitsRefutation && historical.outcome === 'acted' && source.outcome === 'refuted') {
+          appendedSources = appendedSources.map((link) => link.sourceId === source.sourceId
+            ? { ...link, outcome: 'refuted', recordedAt: input.recordedAt }
+            : link);
+          continue;
+        }
         if (historical.outcome !== source.outcome) return { ok: false, reason: 'illegal-source-link' };
         continue;
       }
