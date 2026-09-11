@@ -274,7 +274,7 @@ describe('BUILD post-task tail telemetry acceptance', () => {
       await tail.poll();
     } finally {
       tail.stop();
-      terminal.stop();
+      await terminal.stop();
       persister.stop();
       metrics.stop();
       await provider.shutdown();

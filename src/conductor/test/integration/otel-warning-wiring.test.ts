@@ -152,8 +152,8 @@ describe('FR-8: onWarning wired at production construction site (createOtelVisua
         expect(renderedWarningLines).toHaveLength(1);
         expect(renderedWarningLines[0]).toContain(error);
       } finally {
-        terminalSubscriber.stop();
-        terminalRenderer.stop();
+        await terminalSubscriber.stop();
+        await terminalRenderer.stop();
       }
     },
     15_000,

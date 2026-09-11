@@ -17,8 +17,8 @@ describe('TerminalSubscriber event forwarding', () => {
     subscriber.start([{ name: 'capture', handle: async (event) => { renderCallback(event); }, stop: async () => {} } as UIRenderer]);
   });
 
-  afterEach(() => {
-    subscriber.stop();
+  afterEach(async () => {
+    await subscriber.stop();
     vi.useRealTimers();
   });
 

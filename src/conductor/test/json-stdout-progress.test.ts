@@ -42,7 +42,7 @@ describe('TerminalSubscriber subscription list', () => {
     expect(onRender).toHaveBeenNthCalledWith(2, noProgress);
     expect(onRender).toHaveBeenNthCalledWith(3, stall);
 
-    subscriber.stop();
+    await subscriber.stop();
   });
 });
 

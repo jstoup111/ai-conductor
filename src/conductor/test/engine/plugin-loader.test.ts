@@ -552,7 +552,7 @@ describe('registerBuiltins — terminal halt-marker sink', () => {
       path: '/tmp/.pipeline/HALT',
       reason: 'permission denied',
     });
-    subscriber.stop();
+    await subscriber.stop();
 
     expect(stream.output()).toContain('halt marker write failed: /tmp/.pipeline/HALT — permission denied');
   });
