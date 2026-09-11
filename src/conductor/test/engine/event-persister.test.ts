@@ -1,3 +1,4 @@
+// Covers: task:3
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readFile, chmod } from 'fs/promises';
 import { join } from 'path';
@@ -10,7 +11,7 @@ import {
 } from '../../src/engine/event-persister.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import type { ConductorEvent, ProviderAttemptEvent } from '../../src/types/index.js';
+import type { ConductorEvent, ExecutionContext, ProviderAttemptEvent } from '../../src/types/index.js';
 
 describe('EventPersister', () => {
   let tempDir: string;
@@ -23,6 +24,11 @@ describe('EventPersister', () => {
       if (value === undefined) throw new Error('scripted clock exhausted');
       return value;
     },
+  });
+
+  const configuredMember = (executionId: string, member = 'reviewer'): ExecutionContext => ({
+    executionId,
+    subject: { kind: 'configured-member', parentGroup: 'validation', member },
   });
 
   beforeEach(async () => {
@@ -441,6 +447,103 @@ describe('EventPersister', () => {
 
     const persisted = await readFile(eventsPath, 'utf-8');
     expect(persisted).not.toContain(rawFragment);
+  });
+
+  it('persists correlated members at their settlement boundary while group envelopes stay independent', async () => {
+    const first = configuredMember('execution-1');
+    const second = configuredMember('execution-2');
+    const persister = new EventPersister(
+      eventsPath,
+      emitter,
+      scriptedClock(100, 110, 120, 130, 140, 170),
+    );
+    persister.start();
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: first });
+    await emitter.emit({
+      type: 'parallel_started', step: 'manual_test', branches: ['reviewer', 'writer'],
+    });
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: second });
+    await emitter.emit({
+      type: 'group_member_step', member: 'reviewer', skill: 'review', phase: 'result', outcome: 'completed', executionContext: second,
+    });
+    await emitter.emit({
+      type: 'group_member_step', member: 'reviewer', skill: 'review', phase: 'result', outcome: 'completed', executionContext: first,
+    });
+    await emitter.emit({
+      type: 'parallel_completed', step: 'manual_test', branches: ['reviewer', 'writer'],
+    });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: first });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: second });
+    persister.stop();
+
+    const records = (await readFile(eventsPath, 'utf-8')).trim().split('\n').map((line) => JSON.parse(line));
+    expect(records.filter((record) => record.type === 'group_member_step').map((record) => record.executionContext.executionId))
+      .toEqual(['execution-2', 'execution-1']);
+    expect(records.filter((record) => record.type === 'parallel_completed').map((record) => record.activeInterval))
+      .toEqual([{ startedAtMs: 110, durationMs: 60 }]);
+    expect(records.filter((record) => record.type === 'step_completed').map((record) => record.activeInterval))
+      .toEqual([
+        { startedAtMs: 100, durationMs: 40 },
+        { startedAtMs: 120, durationMs: 10 },
+      ]);
+  });
+
+  it('keeps interleaved correlated executions isolated when a terminal is duplicated', async () => {
+    const first = configuredMember('execution-1');
+    const second = configuredMember('execution-2');
+    const persister = new EventPersister(eventsPath, emitter, scriptedClock(100, 120, 140, 160));
+    persister.start();
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: first });
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: second });
+    const firstTerminal = { type: 'step_completed', step: 'build', status: 'done', executionContext: first } satisfies ConductorEvent;
+    await emitter.emit(firstTerminal);
+    await emitter.emit(firstTerminal);
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: second });
+    persister.stop();
+
+    const terminals = (await readFile(eventsPath, 'utf-8')).trim().split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.type === 'step_completed');
+    expect(terminals.map((record) => record.activeInterval)).toEqual([
+      { startedAtMs: 100, durationMs: 40 },
+      undefined,
+      { startedAtMs: 120, durationMs: 40 },
+    ]);
+  });
+
+  it('preserves legacy pairing but never fabricates an interval for malformed or orphan correlated evidence', async () => {
+    const valid = configuredMember('execution-1');
+    const malformedContext = {
+      executionId: '',
+      subject: { kind: 'configured-member', parentGroup: 'validation', member: 'reviewer' },
+    };
+    const persister = new EventPersister(eventsPath, emitter, scriptedClock(100, 125));
+    persister.start();
+
+    await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+    await emitter.emit({
+      type: 'step_started', step: 'build', index: 0, executionContext: malformedContext,
+    } as unknown as ConductorEvent);
+    await emitter.emit({
+      type: 'group_member_step', member: 'reviewer', skill: 'review', phase: 'result', executionContext: valid,
+    });
+    await emitter.emit({
+      type: 'step_completed', step: 'build', status: 'done', executionContext: malformedContext,
+    } as unknown as ConductorEvent);
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: valid });
+    persister.stop();
+
+    const terminals = (await readFile(eventsPath, 'utf-8')).trim().split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.type === 'step_completed');
+    expect(terminals.map((record) => record.activeInterval)).toEqual([
+      { startedAtMs: 100, durationMs: 25 },
+      undefined,
+      undefined,
+    ]);
   });
 
   // ─── Task 4: missing tokenUsage does not crash ──────────────────────────────
