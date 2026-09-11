@@ -15,7 +15,7 @@ import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { CapturingSpanExporter } from '../fixtures/capturing-span-exporter.js';
-import type { StepRunner } from '../../src/engine/conductor.js';
+import type { FinishPublicationCoordinator, StepRunner } from '../../src/engine/conductor.js';
 import type { ConductState, ConductorEvent, ExecutionContext, StepName } from '../../src/types/index.js';
 
 interface MetricPoint { attributes: Record<string, unknown>; value: unknown; }
@@ -72,15 +72,22 @@ async function runSerial(input: {
   telemetry?: TelemetryMode;
   widthOneGroup?: boolean;
   shutdownDuringRun?: boolean;
+  step?: StepName;
+  finishPublication?: boolean;
+  daemon?: boolean;
 }): Promise<SerialFixture> {
   const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-telemetry-parity-'));
   directories.push(projectRoot);
   const stateFilePath = join(projectRoot, 'conduct-state.json');
   const state: ConductState = {
     ...Object.fromEntries(ALL_STEPS.map(({ name }) => [name, 'done'])),
-    memory: 'pending', explore: 'pending', complexity_tier: 'M', track: 'technical', feature_desc: 'serial-telemetry-parity',
+    memory: input.step === undefined ? 'pending' : 'done', explore: input.step === undefined ? 'pending' : 'done', complexity_tier: 'M', track: 'technical', feature_desc: 'serial-telemetry-parity',
   };
-  const serialStep: StepName = input.widthOneGroup ? VALIDATION_GROUP.members[0] as StepName : 'memory';
+  const serialStep: StepName = input.step ?? (input.widthOneGroup ? VALIDATION_GROUP.members[0] as StepName : 'memory');
+  state[serialStep] = 'pending';
+  // FINISH selection treats an absent status as its eligible entry state;
+  // this matches the real coordinator fixtures without advancing any tail.
+  if (serialStep === 'finish') delete state.finish;
   if (input.widthOneGroup) {
     state.memory = 'done';
     for (const member of VALIDATION_GROUP.members) state[member as StepName] = 'pending';
@@ -134,12 +141,20 @@ async function runSerial(input: {
     return outcome;
   });
   conductor = new Conductor({
-    projectRoot, stateFilePath, stepRunner: { run }, events, fromStep: serialStep, mode: 'auto', daemon: true, maxRetries: 2,
+    projectRoot, stateFilePath, stepRunner: { run }, events, fromStep: serialStep, mode: 'auto', daemon: input.daemon ?? true, maxRetries: 2,
     verifyArtifacts: false, featureSlug: 'serial-telemetry-parity', operatorParkBoundary: async () => ++boundaryChecks > 1,
     ...(input.widthOneGroup ? {
       config: {
         steps: Object.fromEntries(VALIDATION_GROUP.members.slice(1).map((member) => [member, { disable: true }])),
       },
+    } : {}),
+    ...(input.finishPublication ? {
+      finishPublication: {
+        advance: async ({ dispatchJudgment }) => {
+          await dispatchJudgment({} as never);
+          return { kind: 'complete' } as never;
+        },
+      } satisfies FinishPublicationCoordinator,
     } : {}),
     gh: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })), git: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })), runGh: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
   });
@@ -462,6 +477,25 @@ describe('serial conductor telemetry parity', () => {
     expect(disabled.spans).toHaveLength(0);
     expect(disabled.metrics.getMetrics()).toHaveLength(0);
     expect(failing.warnings).toHaveLength(1);
+  });
+
+  it('keeps the serial lifecycle context through a finish-publication provider judgment', async () => {
+    const fixture = await runSerial({
+      step: 'finish',
+      finishPublication: true,
+      daemon: false,
+      outcomes: [{ success: true }],
+    });
+    const started = fixture.events.find((event) => event.type === 'step_started' && event.step === 'finish');
+    const attempt = fixture.events.find((event) => event.type === 'provider_attempt' && event.step === 'finish');
+
+    expect(fixture.calls).toBe(1);
+    expect(attempt).toMatchObject({ executionContext: started && 'executionContext' in started ? started.executionContext : undefined });
+    expect(serialStepSpan(fixture)).toHaveLength(1);
+    expect(serialStepSpan(fixture)[0]?.attributes).toMatchObject({
+      'conductor.provider': 'claude',
+      'conductor.provider.preferred': 'codex',
+    });
   });
 
   it('balances a deferred serial shutdown once and suppresses its late success', async () => {
