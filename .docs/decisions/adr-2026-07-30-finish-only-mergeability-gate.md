@@ -1,7 +1,8 @@
 # ADR: Limit mergeability-first skipping to normal finish
 
 **Date:** 2026-07-30
-**Status:** APPROVED
+**Status:** SUPERSEDED
+**Superseded by:** `adr-2026-09-11-finish-mergeability-respects-active-review-inputs` (operator-approved 2026-09-11, #2211)
 **Deciders:** James Stoup (operator), engineer session
 **Supersedes:** `adr-2026-07-30-mergeability-first-integration-gate`
 **Amends:** `adr-2026-07-26-rebase-tail-current-branch-before-publication`
