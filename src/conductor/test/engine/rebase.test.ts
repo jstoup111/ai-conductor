@@ -744,6 +744,20 @@ describe('engine/rebase — HALT (FR-8)', () => {
     expect(note).not.toContain('  2. git rebase --continue');
   });
 
+  it('keeps the existing halt note byte-identical for paused and already-in-progress outcomes', async () => {
+    for (const outcome of [
+      { conflicts: ['src/conflict.ts'], reason: 'rebase conflict requires human resolution' },
+      { conflicts: [], reason: 'a rebase is already in progress; resolve it before starting another' },
+    ]) {
+      await writeHalt(dir, outcome.conflicts, outcome.reason);
+      const expected = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      await rm(join(dir, '.pipeline/HALT'), { force: true });
+      await rm(join(dir, '.pipeline/HALT.class'), { force: true });
+      await writeRebaseOutcomeHalt(dir, { kind: 'conflict_halt', ...outcome });
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(expected);
+    }
+  });
+
   it('returns the marker write result for seal HALTs without an emitter', async () => {
     expect(await writeSealHalt(dir, 'protected artifact changed')).toEqual({ status: 'written' });
   });
