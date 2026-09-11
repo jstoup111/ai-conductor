@@ -210,11 +210,27 @@ class ForwardingEventEmitter extends ConductorEventEmitter {
 
   override async emit(event: ConductorEvent): Promise<void> {
     await super.emit(event);
-    const forwarded: ConductorEvent = { ...event };
+    // Forward an independent event envelope.  In particular, a configured
+    // member's nested subject is execution identity, not listener-local
+    // decoration: the daemon-wide metrics projection must receive it intact.
+    const forwarded = cloneForwardedEvent(event);
     forwardedFromFeature.add(forwarded);
     if (this.slug) forwardedFeature.set(forwarded, this.slug);
     await this.globalEvents.emit(forwarded);
   }
+}
+
+function cloneForwardedEvent(event: ConductorEvent): ConductorEvent {
+  if (!('executionContext' in event) || event.executionContext === undefined) {
+    return { ...event };
+  }
+  return {
+    ...event,
+    executionContext: {
+      ...event.executionContext,
+      subject: { ...event.executionContext.subject },
+    },
+  };
 }
 
 export async function withFeatureEventPersistence<T>(input: {

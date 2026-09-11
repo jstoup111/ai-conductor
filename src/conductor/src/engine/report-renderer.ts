@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { TokenUsage } from '../execution/llm-provider.js';
 import { EFFORT_ORDER, MODEL_TIER_ORDER } from './escalation.js';
+import { resolveExecutionIdentity } from './execution-identity.js';
 
 /**
  * Thrown when events.jsonl cannot be found or read.
@@ -27,6 +28,23 @@ export interface ParsedEvent {
   attempt?: number;
   tokenUsage?: TokenUsage;
   [key: string]: unknown;
+}
+
+interface RenderedEventIdentity {
+  correlationKey: string;
+  subjectLabel: string;
+}
+
+/** Resolve display/correlation identity with a stable report-local scope. */
+function renderedEventIdentity(event: ParsedEvent): RenderedEventIdentity | undefined {
+  if (typeof event.step !== 'string') return undefined;
+  const featureId = typeof event.featureSlug === 'string' ? event.featureSlug : 'report';
+  const runId = typeof event.sessionId === 'string' ? event.sessionId : 'events-jsonl';
+  return resolveExecutionIdentity({
+    scope: { featureId, runId },
+    legacyStep: event.step,
+    executionContext: event.executionContext,
+  });
 }
 
 /**
@@ -376,26 +394,27 @@ interface DurationRow {
 }
 
 function renderDurations(events: ParsedEvent[]): string {
-  // Collect start timestamps by step
-  const startTimes = new Map<string, number>();
+  // Collect start timestamps by execution correlation key.
+  const startTimes = new Map<string, { label: string; at: number }>();
   const completeTimes = new Map<string, number>();
 
   for (const evt of events) {
-    if (!evt.step) continue;
+    const identity = renderedEventIdentity(evt);
+    if (!identity) continue;
     if (evt.type === 'step_started') {
-      startTimes.set(evt.step, new Date(evt.ts).getTime());
+      startTimes.set(identity.correlationKey, { label: identity.subjectLabel, at: new Date(evt.ts).getTime() });
     } else if (evt.type === 'step_completed') {
-      completeTimes.set(evt.step, new Date(evt.ts).getTime());
+      completeTimes.set(identity.correlationKey, new Date(evt.ts).getTime());
     }
   }
 
   // Build rows for all started steps
   const rows: DurationRow[] = [];
-  for (const [step, startMs] of startTimes.entries()) {
-    const endMs = completeTimes.get(step);
+  for (const [key, start] of startTimes.entries()) {
+    const endMs = completeTimes.get(key);
     rows.push({
-      step,
-      durationMs: endMs !== undefined ? endMs - startMs : null,
+      step: start.label,
+      durationMs: endMs !== undefined ? endMs - start.at : null,
     });
   }
 
@@ -428,30 +447,34 @@ interface RetryRow {
 }
 
 function renderRetries(events: ParsedEvent[]): string {
-  // Collect retry counts and reasons per step
+  // Collect retry counts and reasons per execution correlation key.
   const retryCounts = new Map<string, number>();
   const retryReasons = new Map<string, Map<string, number>>();
   const failedSteps = new Set<string>();
   const refusedSteps = new Set<string>();
   const completedSteps = new Set<string>();
+  const labels = new Map<string, string>();
 
   for (const evt of events) {
-    if (!evt.step) continue;
+    const identity = renderedEventIdentity(evt);
+    if (!identity) continue;
+    const key = identity.correlationKey;
+    labels.set(key, identity.subjectLabel);
     if (evt.type === 'step_retry') {
-      retryCounts.set(evt.step, (retryCounts.get(evt.step) ?? 0) + 1);
+      retryCounts.set(key, (retryCounts.get(key) ?? 0) + 1);
       const reason = evt.reason ?? 'unknown';
-      let reasons = retryReasons.get(evt.step);
+      let reasons = retryReasons.get(key);
       if (!reasons) {
         reasons = new Map();
-        retryReasons.set(evt.step, reasons);
+        retryReasons.set(key, reasons);
       }
       reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
     } else if (evt.type === 'step_failed') {
-      failedSteps.add(evt.step);
+      failedSteps.add(key);
     } else if (evt.type === 'step_refused') {
-      refusedSteps.add(evt.step);
+      refusedSteps.add(key);
     } else if (evt.type === 'step_completed') {
-      completedSteps.add(evt.step);
+      completedSteps.add(key);
     }
   }
 
@@ -461,7 +484,7 @@ function renderRetries(events: ParsedEvent[]): string {
   // refusals commonly carry zero retries. Seeding rows from retry counts alone
   // dropped them from the report entirely, so a refused step read as absent.
   const refusedWithoutRetries = [...refusedSteps].filter(
-    (step) => !retryCounts.has(step) && !completedSteps.has(step),
+    (key) => !retryCounts.has(key) && !completedSteps.has(key),
   );
   if (retryCounts.size === 0 && refusedWithoutRetries.length === 0) {
     lines.push('No retries recorded');
@@ -473,8 +496,8 @@ function renderRetries(events: ParsedEvent[]): string {
 
   // Sort by count descending
   const rows: RetryRow[] = [];
-  for (const [step, count] of retryCounts.entries()) {
-    const reasons = retryReasons.get(step) ?? new Map();
+  for (const [key, count] of retryCounts.entries()) {
+    const reasons = retryReasons.get(key) ?? new Map();
     let topReason = '';
     let topCount = 0;
     for (const [r, c] of reasons.entries()) {
@@ -483,17 +506,17 @@ function renderRetries(events: ParsedEvent[]): string {
         topReason = r;
       }
     }
-    const failed = failedSteps.has(step) && !completedSteps.has(step);
+    const failed = failedSteps.has(key) && !completedSteps.has(key);
     rows.push({
-      step,
+      step: labels.get(key) ?? 'unknown',
       count,
       topReason,
       failed,
-      refused: refusedSteps.has(step) && !completedSteps.has(step),
+      refused: refusedSteps.has(key) && !completedSteps.has(key),
     });
   }
-  for (const step of refusedWithoutRetries) {
-    rows.push({ step, count: 0, topReason: '', failed: false, refused: true });
+  for (const key of refusedWithoutRetries) {
+    rows.push({ step: labels.get(key) ?? 'unknown', count: 0, topReason: '', failed: false, refused: true });
   }
   rows.sort((a, b) => b.count - a.count);
 
@@ -521,10 +544,11 @@ function renderTokenSpend(events: ParsedEvent[]): string {
   const rows: TokenRow[] = [];
 
   for (const evt of events) {
-    if (evt.type === 'step_completed' && evt.step && evt.tokenUsage) {
+    const identity = renderedEventIdentity(evt);
+    if (evt.type === 'step_completed' && identity && evt.tokenUsage) {
       const usage = evt.tokenUsage;
       rows.push({
-        step: evt.step,
+        step: identity.subjectLabel,
         preferredProvider:
           typeof evt.preferredProvider === 'string'
             ? evt.preferredProvider
