@@ -101,6 +101,7 @@ import {
 } from './provider-model-policy.js';
 import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
+import { ExecutionLifecycle, type OpenExecution } from './execution-lifecycle.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
 import { CloseoutEventTail } from './closeout-tail.js';
 import {
@@ -1990,14 +1991,14 @@ export class Conductor {
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
-  /** Starts observed by this conductor that have not yet emitted a terminal event. */
-  private openExecutions = new Map<string, { kind: 'step' | 'parallel'; step: StepName }>();
-  /** Terminals being emitted; remain open until their event has been delivered. */
-  private closingExecutions = new Map<string, Promise<void>>();
-  /** Serializes lifecycle delivery so an interrupt terminal cannot precede its start. */
-  private executionEventTail: Promise<void> = Promise.resolve();
-  /** A lifecycle listener may synchronously request shutdown while its start is delivered. */
-  private activeExecutionEventDeliveries = 0;
+  private readonly executionLifecycle: ExecutionLifecycle;
+  /** Compatibility seam for existing conductor tests; lifecycle state remains engine-owned. */
+  private get openExecutions(): Map<string, OpenExecution> {
+    return this.executionLifecycle.openExecutions;
+  }
+  private set openExecutions(executions: Map<string, OpenExecution>) {
+    this.executionLifecycle.replaceOpenExecutions(executions);
+  }
   /** Route every conductor-owned marker failure through the existing event spine. */
   private async writeHaltMarker(
     body: string,
@@ -2014,76 +2015,9 @@ export class Conductor {
     );
   }
 
-  /** Emit through the existing spine while retaining the conductor's open execution state. */
+  /** Delegate conductor lifecycle delivery to the shared engine owner. */
   private emitExecutionEvent(event: ConductorEvent): Promise<void> {
-    const start = event.type === 'step_started'
-      ? { key: `step:${event.step}`, execution: { kind: 'step' as const, step: event.step } }
-      : event.type === 'parallel_started'
-        ? { key: `parallel:${event.step}`, execution: { kind: 'parallel' as const, step: event.step } }
-        : undefined;
-    // A refusal normally closes its own step execution. Validation-group
-    // members run inside their entry's parallel execution instead, so their
-    // refusal is deliverable (but non-terminal) while that enclosing window
-    // remains open.
-    const terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
-      ? `step:${event.step}`
-      : event.type === 'step_refused'
-        ? (this.openExecutions.has(`step:${event.step}`) ? `step:${event.step}` : undefined)
-      : event.type === 'parallel_completed'
-        || (event.type === 'parallel_failure' && event.terminal !== false)
-        ? `parallel:${event.step}`
-        : undefined;
-
-    // Register a start before listeners can observe it. A terminal remains
-    // open until its event returns, while `closingExecutions` lets a signal
-    // listener join its in-flight delivery instead of emitting a duplicate.
-    if (start) this.openExecutions.set(start.key, start.execution);
-    if (terminalKey) {
-      const inFlight = this.closingExecutions.get(terminalKey);
-      if (inFlight) return inFlight;
-      // Daemon SIGTERM closes the lifecycle before draining a runner that may
-      // still resolve. Its ordinary terminal is then an orphan: the ledger
-      // listener cannot recover an interval after the shutdown terminal consumed it.
-      if (!this.openExecutions.has(terminalKey)) return Promise.resolve();
-    }
-    if (event.type === 'step_refused' && !terminalKey) {
-      const group = getGroupForStep(event.step);
-      const hasOpenGroupExecution = group?.members.some((member) =>
-        this.openExecutions.has(`parallel:${member}`),
-      ) ?? false;
-      // A missing step key is valid only for a currently-running group member.
-      // Otherwise this is the same late orphan that SIGTERM must suppress.
-      if (!hasOpenGroupExecution) return Promise.resolve();
-    }
-    const deliver = async () => {
-      this.activeExecutionEventDeliveries += 1;
-      try {
-        await this.events.emit(event);
-      } finally {
-        this.activeExecutionEventDeliveries -= 1;
-      }
-    };
-    // A listener can synchronously request shutdown from a start event. Its
-    // terminal is safe to deliver now (the start is already being delivered),
-    // and queuing it behind that listener would make the listener await itself.
-    const delivery = terminalKey && this.activeExecutionEventDeliveries > 0
-      ? deliver()
-      : this.executionEventTail.then(deliver);
-    // A failed event must reach its caller, but must not poison later terminal
-    // delivery (which is the only chance a signal has to close another key).
-    this.executionEventTail = delivery.catch(() => {});
-    if (!terminalKey) return delivery;
-
-    const terminalDelivery = delivery.then(async () => {
-      this.openExecutions.delete(terminalKey);
-      if (event.type === 'step_completed' || event.type === 'step_failed') {
-        await this.emitFeatureCostSnapshot();
-      }
-    }).finally(() => {
-      this.closingExecutions.delete(terminalKey);
-    });
-    this.closingExecutions.set(terminalKey, terminalDelivery);
-    return terminalDelivery;
+    return this.executionLifecycle.emit(event);
   }
 
   /**
@@ -2102,28 +2036,7 @@ export class Conductor {
 
   /** Close every execution this conductor observed, without exposing step selection to callers. */
   private async closeOpenExecutions(): Promise<void> {
-    for (const [key, execution] of this.openExecutions) {
-      const terminalDelivery = this.closingExecutions.get(key);
-      if (terminalDelivery) {
-        await terminalDelivery;
-        continue;
-      }
-      if (execution.kind === 'step') {
-        await this.emitExecutionEvent({
-          type: 'step_failed',
-          step: execution.step,
-          error: 'execution interrupted before a terminal event was emitted',
-          retryCount: 0,
-        });
-      } else {
-        await this.emitExecutionEvent({
-          type: 'parallel_failure',
-          step: execution.step,
-          branch: 'conductor',
-          error: 'execution interrupted before a terminal event was emitted',
-        });
-      }
-    }
+    await this.executionLifecycle.closeOpen();
   }
 
   /**
@@ -3240,6 +3153,14 @@ export class Conductor {
     );
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
+    this.executionLifecycle = new ExecutionLifecycle({
+      events: this.events,
+      onTerminal: async ({ event }) => {
+        if (event.type === 'step_completed' || event.type === 'step_failed') {
+          await this.emitFeatureCostSnapshot();
+        }
+      },
+    });
     this.featureSlug = opts.featureSlug;
     this.operatorParkBoundary = opts.operatorParkBoundary;
     this.resume = opts.resume ?? false;
