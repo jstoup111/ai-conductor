@@ -8,6 +8,8 @@
 
 ## Summary
 
+> **Amended 2026-09-11 by operator approval for #2211:** The operator reaffirmed the already-approved active-review-input invalidation policy. `adr-2026-09-11-finish-mergeability-respects-active-review-inputs` now supersedes the earlier finish-only decision through the proper lifecycle; its original text is restored and its status is superseded. Task 5 closes the remaining AB-2 removal already required by Task 4. No new coverage tree-attestation mechanism is authorized.
+
 Four bounded tasks deliver #2211 by making one shared per-kind projection the source of both the preserve/invalidate decision and the payload that explains it, then reporting the corrected surface and delta from the rebase gate events. Gate decisions, event field names, the event union, and the delta the engine feeds the classifier are unchanged.
 
 > **Amended 2026-09-10 by #2211:** The operator approved completing document-driven invalidation, with minimal machinery and no reruns for unrelated features. Tasks 1–2 now give `coverage_binding` its stories/PRD/plan/coherence surface and reuse the complete rebase delta already computed by the engine. Resolve the active feature’s document inputs with existing artifact/plan-reference helpers, scope document matches to those inputs, and use the same projection for verdicts and events. A relevant document-only rebase invalidates only affected reviews, not BUILD or the full suite. Normal finish must not skip a base advance containing a relevant input change; unrelated documentation remains a no-op. Task 4 owns a real local-Git proof for relevant and unrelated document changes, plus coverage for the conflict-resolution return path and removal of the unreachable `coverage_binding` resume-validity branch. Coverage binding remains non-tree-attesting; adding a durable resume-validity stamp requires a separate ADR and feature. The README/daemon-guide explanation covers only post-rebase invalidation. The original reporting-only statements and unchanged-decision expectations below are superseded only for these approved input changes. No new watcher, ledger, event type, retry policy, or background work is introduced.
@@ -107,6 +109,22 @@ Test design follows the repository's test-authoring rules: the projection and th
 2. No production or test-only branch claims tree-attested `coverage_binding` resume validity.
 3. The drift-budget preserved event still carries its basis while ordinary delta-based preservation carries none, and the uncomputable-feature-surface path still emits only the pre-verified preservation with its uncomputable declaration.
 
+### Task 5: Remove the unreachable coverage resume-validity branch
+**Story:** Story 2
+**Type:** negative-path
+**Files:** src/conductor/src/engine/gate-code-validity.ts, src/conductor/test/engine/gate-code-validity.test.ts
+**Dependencies:** 4
+
+**Steps:**
+1. Confirm the AB-2 finding against the current caller set: `coverage_binding` has no production caller of `gateVerdictStillValid` and its completion path does not supply a tree-attestation anchor. Follow the code-removal skill for this bounded code-path removal.
+2. Remove the coverage-specific `feature-runtime-or-coverage-inputs` resume-validity branch and the direct-helper-only test that presents it as supported. Retain the production PRD-audit validity path and real post-rebase coverage invalidation; do not add a production caller or a durable anchor.
+3. Verify affected gate-validity behavior through `ai-conductor scoped-run` and the configured typecheck covering tests. Cite the existing real rebase coverage for document-driven invalidation rather than replacing it with direct helper proof.
+4. Commit the bounded removal. Do not remove a production directory or unrelated code.
+
+**Done when:**
+1. No coverage-specific branch or direct-helper-only test claims tree-attested `coverage_binding` resume validity.
+2. Production PRD-audit validity and post-rebase coverage invalidation retain their established behavior, with affected checks passing.
+
 ## Coverage Check
 
 | Criterion | Task id(s) | Done when quote | Disposition |
@@ -131,3 +149,7 @@ Task 2 -> Task 3
 Task 2 -> Task 4
 
 Small tier: architecture, conflict-check, and coherence artifacts are skipped. No new architecture decision record or amendment is required: the governing decision already declares this gate's stories and PRD inputs and already requires each gate to emit its decision with the justifying delta, which is precisely what this change makes true.
+
+> **Amended 2026-09-11 by operator approval for #2211:** The operator reaffirmed the already-approved active-review-input invalidation policy. `adr-2026-09-11-finish-mergeability-respects-active-review-inputs` now supersedes the earlier finish-only decision through the proper lifecycle; its original text is restored and its status is superseded. Task 5 closes the remaining AB-2 removal already required by Task 4. No new coverage tree-attestation mechanism is authorized.
+
+Task 4 -> Task 5
