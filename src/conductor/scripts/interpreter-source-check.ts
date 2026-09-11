@@ -4,8 +4,9 @@ export interface InterpreterSourceFinding {
   message: string;
 }
 
-type Word = { text: string; raw: string; line: number; expandable: string[]; closed: boolean; openQuote?: "'" | '"'; regions: string[]; openRegions: string[] };
-type Heredoc = { delimiter: string; expanding: boolean; stripTabs: boolean; interpreter: boolean; line: number };
+type Region = { text: string; start: number };
+type Word = { text: string; raw: string; line: number; expandable: string[]; closed: boolean; openQuote?: "'" | '"'; regions: Region[]; openRegions: Region[] };
+type Heredoc = { delimiter: string; expanding: boolean; stripTabs: boolean; interpreter: boolean; line: number; owner: Word[] };
 const expansion = /(?:\$\{|\$\(|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9]|\$[@*#?$!\-$]|`)/g;
 const interpreter = /^(?:\/[^\s/]+)*\/(?:python3?|node)$|^(?:python3?|node)$/;
 /** A dollar is escaped only after an odd-length run of backslashes. */
@@ -28,8 +29,8 @@ function wordAt(text: string, start: number, line: number, lineAt: (offset: numb
   let substitutionDepth = 0;
   let value = '';
   let expandable = '';
-  const regions: string[] = [];
-  const openRegions: string[] = [];
+  const regions: Region[] = [];
+  const openRegions: Region[] = [];
   const enclosing: ("'" | '"' | undefined)[] = [];
   let regionStart = -1;
   while (index < text.length) {
@@ -57,14 +58,14 @@ function wordAt(text: string, start: number, line: number, lineAt: (offset: numb
     } else if (!quote && char === ')' && substitutionDepth > 0) {
       substitutionDepth -= 1;
       quote = enclosing.pop();
-      if (substitutionDepth === 0 && regionStart >= 0) { regions.push(text.slice(regionStart, index)); regionStart = -1; }
+      if (substitutionDepth === 0 && regionStart >= 0) { regions.push({ text: text.slice(regionStart, index), start: regionStart }); regionStart = -1; }
     }
     value += char;
     if (quote !== "'") expandable += char;
     index += 1;
   }
   if (regionStart >= 0) {
-    const openRegion = text.slice(regionStart);
+    const openRegion = { text: text.slice(regionStart), start: regionStart };
     regions.push(openRegion);
     openRegions.push(openRegion);
   }
@@ -98,7 +99,7 @@ function commandsOnLine(line: string, lineNumber: number, includeNested = true, 
       const executable = directInterpreterIndex(owner);
       heredocs.push({
         ...heredocDelimiter(delimiter.raw), stripTabs,
-        interpreter: executable >= 0 && /python3?$/.test(owner[executable].text), line: lineAt(cursor),
+        interpreter: false, line: lineAt(cursor), owner,
       });
       cursor = next;
       continue;
@@ -115,12 +116,16 @@ function commandsOnLine(line: string, lineNumber: number, includeNested = true, 
     commands.at(-1)?.push(word);
     if (includeNested) {
       for (const region of word.regions) {
-        const scan = commandsOnLine(region, lineNumber, true, lineAt);
+        const scan = commandsOnLine(region.text, lineNumber, true, (offset) => lineAt(region.start + offset));
         nested.push(...scan.commands);
         heredocs.push(...scan.heredocs);
       }
     }
     cursor = next;
+  }
+  for (const heredoc of heredocs) {
+    const executable = directInterpreterIndex(heredoc.owner);
+    heredoc.interpreter = executable >= 0 && /python3?$/.test(heredoc.owner[executable].text);
   }
   return { commands: [...commands, ...nested].filter((words) => words.length > 0), heredocs };
 }

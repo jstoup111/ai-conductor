@@ -144,6 +144,20 @@ describe('checkInterpreterSource', () => {
     expect(checkInterpreterSource('nested-safe.sh', "x=$(node -e 'console.log(process.argv[1])' -- \"$VALUE\")\ny=$(python3 - \"$VALUE\" <<'PY'\nprint('$')\nPY\n)")).toEqual([]);
   });
 
+  it('keeps the physical line for an interpreter nested after an escaped continuation', () => {
+    expect(checkInterpreterSource('nested-continuation.sh', 'result=$(true; \\\nnode -e "console.log($VALUE)")')).toEqual([
+      expect.objectContaining({ sourceName: 'nested-continuation.sh', line: 2, message: 'shell expansion in interpreter command source' }),
+    ]);
+    expect(checkInterpreterSource('nested-continuation-safe.sh', 'result=$(true; \\\nnode -e "console.log(process.argv[1])")')).toEqual([]);
+  });
+
+  it('associates heredocs that precede their interpreter command word', () => {
+    expect(checkInterpreterSource('prefix-heredoc.sh', '<<PY python3\nprint($VALUE)\nPY')).toEqual([
+      expect.objectContaining({ sourceName: 'prefix-heredoc.sh', line: 2, message: 'shell expansion in interpreter heredoc source' }),
+    ]);
+    expect(checkInterpreterSource('prefix-heredoc-safe.sh', "<<'PY' python3\nprint($VALUE)\nPY")).toEqual([]);
+  });
+
   it('terminates after case-pattern separators at end of line', () => {
     expect(checkInterpreterSource('case.sh', 'case "$name" in\n  conduct-ts)\n    true\n    ;;\nesac')).toEqual([]);
   });
