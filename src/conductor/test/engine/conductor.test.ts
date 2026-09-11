@@ -1534,6 +1534,8 @@ describe('engine/conductor', () => {
         attempt: 1,
         reason: expect.stringContaining('infrastructure'),
       })]);
+      expect(retryEvents[0]).not.toHaveProperty('progressAttempt');
+      expect(retryEvents[0]).not.toHaveProperty('progressAttemptCeiling');
       expect((await readKickbackLedger(dir)).gates.test_suite).toEqual(expect.objectContaining({
         count: 1,
         cumulative: 1,
@@ -6029,6 +6031,68 @@ describe('engine/conductor', () => {
 
       const evidence = await createTaskEvidence(dir);
       expect(evidence.lastResolvedCount).toBe(CEILING);
+    });
+
+    it('reports refunded build retries against their reused fixed slot and progress allowance', async () => {
+      await seedToBuild();
+      const TOTAL = 4;
+      const CEILING = 3;
+      let progress = 0;
+      let buildCalls = 0;
+      const retryEvents: Array<Extract<ConductorEvent, { type: 'step_retry' }>> = [];
+
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            buildCalls++;
+            // The first retry consumes a normal fixed-budget slot. Each later
+            // attempt resolves one task, until the existing ceiling halts it.
+            if (buildCalls > 1) {
+              progress++;
+              await writePlanAndStatus(progress, TOTAL);
+            } else {
+              await writePlanAndStatus(0, TOTAL);
+            }
+          }
+          return { success: true };
+        }),
+      };
+      events.on('step_retry', (event) => {
+        if (event.type === 'step_retry') retryEvents.push(event);
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 3,
+        fromStep: 'build',
+        config: {
+          build_progress_halt: { enabled: true, attempt_ceiling: CEILING, dispatch_ceiling: 20 },
+        } as HarnessConfig,
+      });
+
+      await conductor.run();
+
+      expect(retryEvents).toHaveLength(3);
+      expect(retryEvents.every((event) => event.attempt <= event.maxAttempts)).toBe(true);
+      expect(retryEvents[0]).toMatchObject({ step: 'build', attempt: 2, maxAttempts: 3 });
+      expect(retryEvents[0]).not.toHaveProperty('progressAttempt');
+      expect(retryEvents[0]).not.toHaveProperty('progressAttemptCeiling');
+      expect(retryEvents.slice(1)).toEqual([
+        expect.objectContaining({
+          step: 'build', attempt: 2, maxAttempts: 3,
+          progressAttempt: 1, progressAttemptCeiling: CEILING,
+        }),
+        expect.objectContaining({
+          step: 'build', attempt: 2, maxAttempts: 3,
+          progressAttempt: 2, progressAttemptCeiling: CEILING,
+        }),
+      ]);
     });
   });
 

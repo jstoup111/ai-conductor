@@ -10745,6 +10745,7 @@ export class Conductor {
               // the retry decision below to re-dispatch without consuming
               // the fixed `stepMaxRetries` budget.
               let progressBypassed = false;
+              let progressAttemptCeiling: number | undefined;
               if (step.name === 'build') {
                 const headShaAfterBuild = await currentCommitSha(this.projectRoot);
                 const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
@@ -10819,6 +10820,7 @@ export class Conductor {
                     if (progressAttempts + 1 < bpCeiling) {
                       progressAttempts++;
                       progressBypassed = true;
+                      progressAttemptCeiling = bpCeiling;
                     } else {
                       // T5: absolute attempt-ceiling backstop. This attempt is
                       // still making real forward progress (T4's bypass
@@ -11251,7 +11253,7 @@ export class Conductor {
                 await emitTracked({
                   type: 'step_retry',
                   step: step.name,
-                  attempt: attempt + 1,
+                  attempt: progressBypassed ? attempt : attempt + 1,
                   maxAttempts: stepMaxRetries,
                   reason: completion.reason ?? 'completion check failed',
                   ...(result.model !== undefined && { model: result.model }),
@@ -11260,6 +11262,10 @@ export class Conductor {
                   ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
                   resolvedBefore: retryResolvedBefore,
                   resolvedAfter: retryResolvedAfter,
+                  ...(progressBypassed && progressAttemptCeiling !== undefined && {
+                    progressAttempt: progressAttempts,
+                    progressAttemptCeiling,
+                  }),
                   ...(resolved.escalate && {
                     escalatedModel: escNext.model,
                     escalatedEffort: escNext.effort,
