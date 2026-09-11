@@ -305,7 +305,19 @@ async function seedWorktree(idea: string, overrides: SeedOverrides = {}): Promis
 }
 
 function landOpts() {
-  return { ownerConfig: {}, gh: resolvingGh };
+  // The architecture fixture carries a Mermaid fence to satisfy the land-time
+  // presence gate. Keep this coherence fixture at its intended land boundary:
+  // renderer behavior has its own tests, and the real mmdc process can launch
+  // Chromium once for every coherence case.
+  return {
+    ownerConfig: {},
+    gh: resolvingGh,
+    renderDeps: {
+      hasTool: async () => true,
+      writeTemp: async () => '/tmp/coherence-architecture.mmd',
+      runMmdc: async () => ({ ok: true }),
+    },
+  };
 }
 
 beforeEach(async () => {
