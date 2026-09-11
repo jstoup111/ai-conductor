@@ -9707,11 +9707,12 @@ export class Conductor {
                               // serial validation dispatches — including a
                               // FINISH-fence recheck — must preserve their
                               // existing exception routing.
+                              const stateFields = state as Record<string, unknown>;
                               const retainedSiblingExists =
                                 builtinGroup?.name === 'validation' &&
                                 builtinGroup.members.some((member) =>
                                   member !== step.name &&
-                                  state[`${builtinGroup.name}__${member}`] === 'done',
+                                  stateFields[`${builtinGroup.name}__${member}`] === 'done',
                                 );
                               if (this.mode === 'auto' && retainedSiblingExists) {
                                 return {
