@@ -1339,10 +1339,10 @@ describe("group-core: complete member lifecycle observations (Task 11)", () => {
     const retries: GroupBranchRetry[] = [];
     const settlements: GroupBranchSettlement[] = [];
     const lifecycleObserver: GroupBranchLifecycleObserver = {
-      onAdmitted: (observation) => admissions.push(observation),
-      onAttempt: (observation) => attempts.push(observation),
-      onRetry: (observation) => retries.push(observation),
-      onSettled: (observation) => settlements.push(observation),
+      onAdmitted: (observation) => { admissions.push(observation); },
+      onAttempt: (observation) => { attempts.push(observation); },
+      onRetry: (observation) => { retries.push(observation); },
+      onSettled: (observation) => { settlements.push(observation); },
     };
     return {
       admissions,
