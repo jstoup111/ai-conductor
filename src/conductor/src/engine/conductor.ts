@@ -13867,12 +13867,12 @@ function remediationGapTargetsAnotherFeatureSealedArtifact(
   const taskTarget = gap.tasks
     .map((task) => directedProtectedTarget(task.title, activePlanStem))
     .find((path) => path !== undefined);
-  if (taskTarget) return taskTarget;
+  if (taskTarget) return taskTarget.path;
 
   // Rationale is prose rather than a plan Files declaration. Treat it as a
   // target only when it both names a resolvable protected artifact and directs
   // an edit; a context-only citation must not re-route source work.
-  return directedProtectedTarget(gap.rationale, activePlanStem);
+  return directedProtectedTarget(gap.rationale, activePlanStem)?.path;
 }
 
 /**
@@ -13880,10 +13880,10 @@ function remediationGapTargetsAnotherFeatureSealedArtifact(
  * verb appears in the same clause before it; a context-only citation never
  * re-routes source work.
  */
-function directedProtectedTarget(
+export function directedProtectedTarget(
   prose: string,
   activePlanStem: string,
-): string | undefined {
+): { path: string; clause: string } | undefined {
   const prosePaths = Array.from(
     prose.matchAll(
       /(?:^|[\s`])((?:\.\/)?\.docs\/(?:architecture|decisions|plans|stories|specs)\/[A-Za-z0-9._-]+\.md)\b/g,
@@ -13902,11 +13902,18 @@ function directedProtectedTarget(
       beforePath.lastIndexOf(';'),
       beforePath.lastIndexOf('\n'),
     );
-    return action.test(beforePath.slice(clauseStart + 1)) ? [path] : [];
+    const clause = prose.slice(clauseStart + 1).trim();
+    return action.test(beforePath.slice(clauseStart + 1)) ? [{ path, clause }] : [];
   });
   if (directedPaths.length === 0) return undefined;
-  const directedScope = `### Task directed: remediation\n\n**Files:** ${directedPaths.join(', ')}`;
-  return scanPlanProtectedTargets(directedScope, activePlanStem)[0]?.path;
+  const directedScope = `### Task directed: remediation\n\n**Files:** ${directedPaths.map(({ path }) => path).join(', ')}`;
+  const target = scanPlanProtectedTargets(directedScope, activePlanStem)[0]?.path;
+  const targetClause = target === undefined
+    ? undefined
+    : directedPaths.find(({ path }) => path.replace(/^\.\//, '') === target.replace(/^\.\//, ''))?.clause;
+  return targetClause === undefined || target === undefined
+    ? undefined
+    : { path: target, clause: targetClause };
 }
 
 /**
