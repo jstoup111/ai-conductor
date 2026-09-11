@@ -445,9 +445,10 @@ also blocks the build gate directly.
 #### `ENVIRONMENT_CLAIM_REFUTED`
 
 A step failed with a reason beginning `ENVIRONMENT_CLAIM_REFUTED`. That is not an environment
-problem: the dispatch blamed the environment for blocking `git push` or `gh`, and the engine
-disproved it from the dispatch it actually performed (unsandboxed `claude`, and a write fence whose
-generated script carries no such rule). The failure message quotes the claim and states the facts.
+problem: the dispatch made an operation-specific claim that the environment blocked `git push` or
+`gh`, and the engine disproved it from the dispatch it actually performed (unsandboxed `claude`, and
+a write fence whose generated script carries no such rule). The failure message quotes the claim and
+states the facts.
 
 Nothing needs fixing in the sandbox — do **not** go looking for one. The attempt is retried with the
 disproof as its retry hint so the step performs the operation for real. If the same refutation
@@ -457,6 +458,10 @@ its `shipped-record`, see [shipped-record reconciliation](shipped-record-reconci
 
 Claims from `codex` are never refuted — its unattended runs really are sandboxed
 (`sandbox_mode="workspace-write"`), so a blocked operation there may be genuine.
+
+A claim that the environment blocks all, every, or any Bash, shell, tool, or terminal command (or
+blocks everything) also does not produce this marker. The audit passes that broader claim through
+unchanged rather than selectively refuting a named operation in the same output.
 
 #### Build-progress ceilings
 

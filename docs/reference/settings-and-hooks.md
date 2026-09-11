@@ -272,13 +272,15 @@ dispatched with `--dangerously-skip-permissions`, no OS sandbox, and full enviro
 (`codex` is the sandboxed provider: unattended runs pass `sandbox_mode="workspace-write"`.)
 
 Because a claude self-build dispatch therefore cannot be fenced away from pushing or from `gh`, the
-engine refutes any dispatch output that says otherwise. `environment-claim-audit.ts` runs inside the
-self-host candidate-safety wrapper: when a line carries an environmental cause, a blocking assertion,
-**and** a named remote operation the generated fence provably cannot deny, the attempt is failed and
-the disproof becomes its retry reason, prefixed `ENVIRONMENT_CLAIM_REFUTED`. The deniable-operation
-set is derived from `generateFenceScript` itself, so teaching the fence a real `git push` rule
-retires the refutation automatically. Claims on a sandboxed or unrecognized provider are never
-refuted — the audit only rejects what the engine can positively disprove. See
+engine refutes an operation-specific dispatch claim that says otherwise. `environment-claim-audit.ts`
+runs inside the self-host candidate-safety wrapper: when a line carries an environmental cause, a
+blocking assertion, **and** a named remote operation the generated fence provably cannot deny, the
+attempt is failed and the disproof becomes its retry reason, prefixed `ENVIRONMENT_CLAIM_REFUTED`.
+The deniable-operation set is derived from `generateFenceScript` itself, so teaching the fence a real
+`git push` rule retires the refutation automatically. Output that instead claims the environment
+blocks all, every, or any Bash, shell, tool, or terminal command (or blocks everything) passes through
+unchanged; that broader claim is not selectively refuted. Claims on a sandboxed or unrecognized
+provider are never refuted — the audit only rejects what the engine can positively disprove. See
 [stalled or stuck feature](../runbooks/stalled-or-stuck-feature.md) for triage.
 
 ## Malformed settings.json
