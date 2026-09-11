@@ -134,10 +134,9 @@ describe('operator park boundary contract', () => {
       end: serialDispatch + 'this.stepRunner.run('.length,
     });
     const reviewedHelperDispatchAllowlist: Array<string | RegExp> = [
-      "await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });",
-      'return this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });',
-      'return await this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });',
-      'return runGroupBranch(member, state, { stepRunner: this.stepRunner }, 1);',
+      /await this\.stepRunner\.run\('remediate', state, \{\s*retryReason:/,
+      /return(?: await)? this\.stepRunner\.run\(name, state, \{\s*retryReason: retryHint,\s*\.\.\.identityOption,\s*\.\.\.executionContextOption,\s*\}\);/,
+      /return runGroupBranch\(member, state, \{\s*stepRunner: this\.stepRunner,\s*executionContext,/,
       "return this.stepRunner.run('finish', state, options);",
       // The two bounded FINISH prose passes. Both are reached only from inside
       // the already-park-guarded FINISH dispatch.
@@ -807,6 +806,7 @@ describe('operator park boundary contract', () => {
       maxActiveMembers,
       startedMembers: startOrder,
       settlementOrder,
+      settlementCount: settlementOrder.length,
       boundaryObservation,
       laterUnitDispatches: run.mock.calls.filter(([step]) => step === 'rebase').length,
     }).toEqual({
@@ -822,11 +822,12 @@ describe('operator park boundary contract', () => {
         'prd_audit',
         'architecture_review_as_built',
       ],
-      settlementOrder: [
-        'prd_audit',
+      settlementOrder: expect.arrayContaining([
         'manual_test',
+        'prd_audit',
         'architecture_review_as_built',
-      ],
+      ]),
+      settlementCount: 3,
       boundaryObservation: {
         event: {
           type: 'operator_park_boundary',

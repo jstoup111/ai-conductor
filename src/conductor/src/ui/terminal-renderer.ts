@@ -13,6 +13,7 @@ import {
 import { createLiveRegion, type LiveRegion } from './live-region.js';
 import { formatProgressDelta } from '../engine/format-retry-line.js';
 import { formatFeatureUsageTotal } from '../execution/provider-diagnostics.js';
+import { resolveExecutionIdentity } from '../engine/execution-identity.js';
 
 export interface TerminalRendererOptions {
   stateFilePath: string;
@@ -106,6 +107,17 @@ export class TerminalRenderer implements UIRenderer {
     this.region.update(lines);
   }
 
+  private renderedExecutionSubject(event: ConductorEvent, legacyStep: string): string {
+    return resolveExecutionIdentity({
+      scope: {
+        featureId: this.featureDesc ?? this.stateFilePath,
+        runId: 'terminal-renderer',
+      },
+      legacyStep,
+      executionContext: 'executionContext' in event ? event.executionContext : undefined,
+    })?.subjectLabel ?? legacyStep;
+  }
+
   async handle(event: ConductorEvent): Promise<void> {
     // Any event other than rate_limit itself means we're unblocked — stop
     // the countdown spinner if one is running.
@@ -116,12 +128,14 @@ export class TerminalRenderer implements UIRenderer {
     switch (event.type) {
       case 'step_started': {
         const def = this.steps.find((s) => s.name === event.step);
+        const subject = this.renderedExecutionSubject(event, event.step);
+        const label = subject === event.step ? def?.label ?? event.step : subject;
         this.currentStep = {
           name: event.step,
-          label: def?.label ?? event.step,
+          label,
           startedAtMs: Date.now(),
         };
-        this.region.log(`  ${chalk.cyan('▶')} ${def?.label ?? event.step} ${chalk.dim('— running...')}`);
+        this.region.log(`  ${chalk.cyan('▶')} ${label} ${chalk.dim('— running...')}`);
         this.region.suspend();
         break;
       }
@@ -141,7 +155,7 @@ export class TerminalRenderer implements UIRenderer {
         this.region.resume();
         this.region.log('');
         this.region.log(chalk.bold.red('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
-        this.region.log(chalk.bold.red(`  ✗ STEP FAILED: ${event.step}`));
+        this.region.log(chalk.bold.red(`  ✗ STEP FAILED: ${this.renderedExecutionSubject(event, event.step)}`));
         this.region.log(chalk.bold.red('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
         if (event.error) {
           this.region.log(chalk.red('  Error output:'));
@@ -152,11 +166,21 @@ export class TerminalRenderer implements UIRenderer {
         this.notify('Conductor', `Step failed: ${event.step}`);
         break;
 
+      case 'step_refused':
+        this.region.resume();
+        this.region.log('');
+        this.region.log(chalk.bold.yellow('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+        this.region.log(chalk.bold.yellow(`  ✋ STEP REFUSED: ${this.renderedExecutionSubject(event, event.step)}`));
+        this.region.log(chalk.bold.yellow('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+        this.region.log(chalk.yellow(`  ${event.kind}: ${event.reason}`));
+        this.region.log('');
+        break;
+
       case 'step_retry': {
         const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
         this.region.log(
           chalk.yellow(
-            `  ↻ ${event.step} — retry ${event.attempt}/${event.maxAttempts}: ${event.reason}${delta ? ' ' + delta : ''}`,
+            `  ↻ ${this.renderedExecutionSubject(event, event.step)} — retry ${event.attempt}/${event.maxAttempts}: ${event.reason}${delta ? ' ' + delta : ''}`,
           ),
         );
         break;

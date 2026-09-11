@@ -20,7 +20,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { StepName, ConductState } from "../types/index.js";
 import type { StepRunResult, StepRunOptions } from "./conductor.js";
 import { sweepStaleReviewArtifacts } from "./artifacts.js";
-import type { ConductorEvent } from "../types/events.js";
+import type { ConductorEvent, ExecutionContext } from "../types/events.js";
 import type { HarnessConfig } from "../types/config.js";
 import type { ProviderSessionScope } from "./provider-session.js";
 import type { AuthenticationReadiness } from "../execution/llm-provider.js";
@@ -346,8 +346,57 @@ export interface BranchRateLimitEpisode {
   clear(signal?: AbortSignal): Promise<void>;
 }
 
+/** Common attribution retained on every observation for one admitted branch. */
+export interface GroupBranchLifecycleBase {
+  member: string;
+  skill: string;
+  executionContext?: ExecutionContext;
+}
+
+/** One logical branch has passed the group semaphore and may now perform work. */
+export interface GroupBranchAdmission extends GroupBranchLifecycleBase {}
+
+/** One actual `StepRunner.run` invocation and its complete returned facts. */
+export interface GroupBranchAttempt extends GroupBranchLifecycleBase {
+  /** The branch policy attempt number supplied to this invocation. */
+  attempt: number;
+  /** Present when the runner returned normally; preserves provider/usage facts verbatim. */
+  result?: StepRunResult;
+  /** Present when the runner threw before producing a typed result. */
+  error?: string;
+}
+
+/** A normal retry advances the branch's finite policy attempt budget. */
+export interface GroupBranchRetry extends GroupBranchLifecycleBase {
+  /** The policy attempt about to run, after a prior retryable failure. */
+  attempt: number;
+}
+
+/** One admitted branch has returned its final outcome, before caller join work. */
+export interface GroupBranchSettlement extends GroupBranchLifecycleBase {
+  outcome: BranchOutcome;
+  /** Every actual runner invocation, including rate-limit and fallback facts. */
+  attempts: readonly GroupBranchAttempt[];
+  /** Retained independently so a consumer need not reinterpret the branch outcome. */
+  observedIntervals?: readonly ObservedInterval[];
+}
+
+/**
+ * Shared lifecycle observer for group branches. Group core only reports these
+ * facts; the caller-owned lifecycle scope remains responsible for event
+ * delivery, timing, and terminal classification.
+ */
+export interface GroupBranchLifecycleObserver {
+  onAdmitted(observation: GroupBranchAdmission): void | Promise<void>;
+  onAttempt(observation: GroupBranchAttempt): void | Promise<void>;
+  onRetry(observation: GroupBranchRetry): void | Promise<void>;
+  onSettled(observation: GroupBranchSettlement): void | Promise<void>;
+}
+
 export interface BranchExecutorDeps {
   stepRunner: BranchStepRunner;
+  /** Every production branch reports its admitted lifecycle through this observer. */
+  lifecycleObserver: GroupBranchLifecycleObserver;
   /** Test seam: override session-id minting instead of importing uuid. */
   mintSessionId?: () => string;
   /**
@@ -404,6 +453,11 @@ export interface BranchExecutorDeps {
    * existing callers that don't pass it see no behavior change.
    */
   onMemberEvent?: (event: GroupMemberStepEvent) => void | Promise<void>;
+  /**
+   * Caller-owned execution identity. It is per invocation (never mutable
+   * runner state), survives retries, and is forwarded to every runner attempt.
+   */
+  executionContext?: ExecutionContext;
   /**
    * adr-2026-08-25-engine-stamped-ship-tail-verdict-run-identity D1: this
    * branch dispatch's engine-owned run identity, threaded verbatim into
@@ -486,7 +540,53 @@ export async function runGroupBranch(
   deps: BranchExecutorDeps,
   maxRetries: number,
 ): Promise<BranchOutcome> {
-  const outcome = await runGroupBranchInner(member, state, deps, maxRetries);
+  if (deps.lifecycleObserver === undefined) {
+    throw new Error("runGroupBranch requires a lifecycleObserver");
+  }
+  // `runWithConcurrency` calls this only after semaphore admission. If an
+  // abort won the race before that call, there was no work admission and no
+  // lifecycle start, settlement, or duration to report.
+  if (deps.signal?.aborted) return makeNoVerdictOutcome("aborted");
+
+  const observer = deps.lifecycleObserver;
+  const lifecycleAttempts: GroupBranchAttempt[] = [];
+  let admitted = false;
+  // Admission registers the execution scope synchronously, but its event
+  // subscribers (persistence/export) must not serialize sibling dispatch.
+  // Await the delivery at settlement so the lifecycle stream remains ordered
+  // before this branch can report its result.
+  let admissionDelivery: Promise<void> = Promise.resolve();
+  const lifecycleDeps: BranchExecutorDeps = {
+    ...deps,
+    lifecycleObserver: {
+      onAdmitted: (observation) => {
+        admitted = true;
+        admissionDelivery = Promise.resolve(observer.onAdmitted(observation));
+        return Promise.resolve();
+      },
+      onAttempt: async (observation) => {
+        lifecycleAttempts.push(observation);
+        await observer.onAttempt(observation);
+      },
+      onRetry: (observation) => observer.onRetry(observation),
+      // The outer exit point below is the sole settlement owner.
+      onSettled: () => undefined,
+    },
+  };
+  const outcome = await runGroupBranchInner(member, state, lifecycleDeps, maxRetries);
+  if (admitted) {
+    await admissionDelivery;
+    await observer.onSettled({
+      member: member.name,
+      skill: member.skill,
+      ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
+      outcome,
+      attempts: lifecycleAttempts,
+      ...(!('observedIntervals' in outcome) || outcome.observedIntervals === undefined
+        ? {}
+        : { observedIntervals: outcome.observedIntervals }),
+    });
+  }
   // Task 25: emit the member-attributed result event AFTER the outcome is
   // known, regardless of which of the inner function's several return
   // points produced it — a single exit point for event emission so every
@@ -498,6 +598,7 @@ export async function runGroupBranch(
     skill: member.skill,
     phase: "result",
     outcome: classifyOutcome(outcome),
+    ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
   });
   return outcome;
 }
@@ -540,6 +641,16 @@ async function runGroupBranchInner(
   const observedIntervals: ObservedInterval[] = [];
   const accumulatedObservedIntervals = () =>
     observedIntervals.length > 0 ? observedIntervals : undefined;
+
+  // Pre-dispatch setup above can yield. Abort once more before admitting the
+  // logical execution so queue/pre-admission cancellation never manufactures
+  // a lifecycle start or duration.
+  if (deps.signal?.aborted) return makeNoVerdictOutcome("aborted");
+  await deps.lifecycleObserver.onAdmitted({
+    member: member.name,
+    skill: member.skill,
+    ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
+  });
   for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
     // Task 8: check before every dispatch — an abort observed while queued
     // behind the semaphore, or between retries, must stop the branch from
@@ -557,6 +668,7 @@ async function runGroupBranchInner(
       member: member.name,
       skill: member.skill,
       phase: "dispatch",
+      ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
     });
     let result: StepRunResult;
     try {
@@ -564,13 +676,14 @@ async function runGroupBranchInner(
         memberStep,
         state,
         providerSessions
-          ? { providerSessions, attempt, escalate, runId: deps.runId }
+          ? { providerSessions, attempt, escalate, runId: deps.runId, executionContext: deps.executionContext }
           : {
               sessionId: mintSessionId(),
               resume: false,
               attempt,
               escalate,
               runId: deps.runId,
+              executionContext: deps.executionContext,
             },
       );
     } catch (err) {
@@ -581,8 +694,30 @@ async function runGroupBranchInner(
       // branches (acceptance flow B: a crashing validator must not stop
       // its siblings from dispatching).
       lastOutput = err instanceof Error ? err.message : String(err);
+      await deps.lifecycleObserver.onAttempt({
+        member: member.name,
+        skill: member.skill,
+        ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
+        attempt,
+        error: lastOutput,
+      });
+      if (attempt < maxRetries) {
+        await deps.lifecycleObserver.onRetry({
+          member: member.name,
+          skill: member.skill,
+          ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
+          attempt: attempt + 1,
+        });
+      }
       continue;
     }
+    await deps.lifecycleObserver.onAttempt({
+      member: member.name,
+      skill: member.skill,
+      ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
+      attempt,
+      result,
+    });
     if (result.observedIntervals) {
       observedIntervals.push(...result.observedIntervals);
     }
@@ -668,6 +803,17 @@ async function runGroupBranchInner(
     }
 
     lastOutput = result.output ?? lastOutput;
+    // Only the ordinary failure path advances the finite policy budget. A
+    // rate-limit episode and session recovery both continue above with the
+    // same attempt number, so neither becomes a policy-retry observation.
+    if (attempt < maxRetries) {
+      await deps.lifecycleObserver.onRetry({
+        member: member.name,
+        skill: member.skill,
+        ...(deps.executionContext === undefined ? {} : { executionContext: deps.executionContext }),
+        attempt: attempt + 1,
+      });
+    }
   }
 
   return makeNoVerdictOutcome(

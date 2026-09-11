@@ -56,7 +56,7 @@ import type {
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
-import type { ConductState, ConductorEvent, FinishPublicationEvent } from '../types/index.js';
+import type { ConductState, ConductorEvent, ExecutionContext, FinishPublicationEvent } from '../types/index.js';
 import type {
   StepName,
   StepStatus,
@@ -101,6 +101,7 @@ import {
 } from './provider-model-policy.js';
 import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
+import { ExecutionLifecycle, type OpenExecution } from './execution-lifecycle.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
 import { CloseoutEventTail } from './closeout-tail.js';
 import {
@@ -1353,6 +1354,8 @@ export interface StepRunOptions {
    * own run-scoped attempt-id format.
    */
   runId?: string;
+  /** Existing-spine correlation for this one invocation; never runner-global state. */
+  executionContext?: ExecutionContext;
   /**
    * Retry hint injected into the system prompt when the conductor re-invokes
    * this step after a completion-gate miss. Example: "previous attempt did not
@@ -1990,14 +1993,14 @@ export class Conductor {
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
-  /** Starts observed by this conductor that have not yet emitted a terminal event. */
-  private openExecutions = new Map<string, { kind: 'step' | 'parallel'; step: StepName }>();
-  /** Terminals being emitted; remain open until their event has been delivered. */
-  private closingExecutions = new Map<string, Promise<void>>();
-  /** Serializes lifecycle delivery so an interrupt terminal cannot precede its start. */
-  private executionEventTail: Promise<void> = Promise.resolve();
-  /** A lifecycle listener may synchronously request shutdown while its start is delivered. */
-  private activeExecutionEventDeliveries = 0;
+  private readonly executionLifecycle: ExecutionLifecycle;
+  /** Compatibility seam for existing conductor tests; lifecycle state remains engine-owned. */
+  private get openExecutions(): Map<string, OpenExecution> {
+    return this.executionLifecycle.openExecutions;
+  }
+  private set openExecutions(executions: Map<string, OpenExecution>) {
+    this.executionLifecycle.replaceOpenExecutions(executions);
+  }
   /** Route every conductor-owned marker failure through the existing event spine. */
   private async writeHaltMarker(
     body: string,
@@ -2014,76 +2017,9 @@ export class Conductor {
     );
   }
 
-  /** Emit through the existing spine while retaining the conductor's open execution state. */
+  /** Delegate conductor lifecycle delivery to the shared engine owner. */
   private emitExecutionEvent(event: ConductorEvent): Promise<void> {
-    const start = event.type === 'step_started'
-      ? { key: `step:${event.step}`, execution: { kind: 'step' as const, step: event.step } }
-      : event.type === 'parallel_started'
-        ? { key: `parallel:${event.step}`, execution: { kind: 'parallel' as const, step: event.step } }
-        : undefined;
-    // A refusal normally closes its own step execution. Validation-group
-    // members run inside their entry's parallel execution instead, so their
-    // refusal is deliverable (but non-terminal) while that enclosing window
-    // remains open.
-    const terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
-      ? `step:${event.step}`
-      : event.type === 'step_refused'
-        ? (this.openExecutions.has(`step:${event.step}`) ? `step:${event.step}` : undefined)
-      : event.type === 'parallel_completed'
-        || (event.type === 'parallel_failure' && event.terminal !== false)
-        ? `parallel:${event.step}`
-        : undefined;
-
-    // Register a start before listeners can observe it. A terminal remains
-    // open until its event returns, while `closingExecutions` lets a signal
-    // listener join its in-flight delivery instead of emitting a duplicate.
-    if (start) this.openExecutions.set(start.key, start.execution);
-    if (terminalKey) {
-      const inFlight = this.closingExecutions.get(terminalKey);
-      if (inFlight) return inFlight;
-      // Daemon SIGTERM closes the lifecycle before draining a runner that may
-      // still resolve. Its ordinary terminal is then an orphan: the ledger
-      // listener cannot recover an interval after the shutdown terminal consumed it.
-      if (!this.openExecutions.has(terminalKey)) return Promise.resolve();
-    }
-    if (event.type === 'step_refused' && !terminalKey) {
-      const group = getGroupForStep(event.step);
-      const hasOpenGroupExecution = group?.members.some((member) =>
-        this.openExecutions.has(`parallel:${member}`),
-      ) ?? false;
-      // A missing step key is valid only for a currently-running group member.
-      // Otherwise this is the same late orphan that SIGTERM must suppress.
-      if (!hasOpenGroupExecution) return Promise.resolve();
-    }
-    const deliver = async () => {
-      this.activeExecutionEventDeliveries += 1;
-      try {
-        await this.events.emit(event);
-      } finally {
-        this.activeExecutionEventDeliveries -= 1;
-      }
-    };
-    // A listener can synchronously request shutdown from a start event. Its
-    // terminal is safe to deliver now (the start is already being delivered),
-    // and queuing it behind that listener would make the listener await itself.
-    const delivery = terminalKey && this.activeExecutionEventDeliveries > 0
-      ? deliver()
-      : this.executionEventTail.then(deliver);
-    // A failed event must reach its caller, but must not poison later terminal
-    // delivery (which is the only chance a signal has to close another key).
-    this.executionEventTail = delivery.catch(() => {});
-    if (!terminalKey) return delivery;
-
-    const terminalDelivery = delivery.then(async () => {
-      this.openExecutions.delete(terminalKey);
-      if (event.type === 'step_completed' || event.type === 'step_failed') {
-        await this.emitFeatureCostSnapshot();
-      }
-    }).finally(() => {
-      this.closingExecutions.delete(terminalKey);
-    });
-    this.closingExecutions.set(terminalKey, terminalDelivery);
-    return terminalDelivery;
+    return this.executionLifecycle.emit(event);
   }
 
   /**
@@ -2102,28 +2038,7 @@ export class Conductor {
 
   /** Close every execution this conductor observed, without exposing step selection to callers. */
   private async closeOpenExecutions(): Promise<void> {
-    for (const [key, execution] of this.openExecutions) {
-      const terminalDelivery = this.closingExecutions.get(key);
-      if (terminalDelivery) {
-        await terminalDelivery;
-        continue;
-      }
-      if (execution.kind === 'step') {
-        await this.emitExecutionEvent({
-          type: 'step_failed',
-          step: execution.step,
-          error: 'execution interrupted before a terminal event was emitted',
-          retryCount: 0,
-        });
-      } else {
-        await this.emitExecutionEvent({
-          type: 'parallel_failure',
-          step: execution.step,
-          branch: 'conductor',
-          error: 'execution interrupted before a terminal event was emitted',
-        });
-      }
-    }
+    await this.executionLifecycle.closeOpen();
   }
 
   /**
@@ -2131,6 +2046,7 @@ export class Conductor {
    * coordinator invokes this rather than relying on a per-conductor listener.
    */
   async closeOpenExecutionsForShutdown(): Promise<void> {
+    this.shutdownRequested = true;
     await this.closeOpenExecutions();
   }
 
@@ -2164,12 +2080,19 @@ export class Conductor {
     step: StepName,
     kind: 'seal' | 'needs-human' | 'validation-verdict',
     reason: string,
+    executionContext?: ExecutionContext,
   ): Promise<void> {
     await this.commitStateChanges(state, `record refused ${step} step`, {
       [step]: 'refused',
       last_step: step,
     });
-    await this.emitExecutionEvent({ type: 'step_refused', step, kind, reason });
+    await this.emitExecutionEvent({
+      type: 'step_refused',
+      step,
+      kind,
+      reason,
+      ...(executionContext === undefined ? {} : { executionContext }),
+    });
   }
 
   /**
@@ -2186,6 +2109,12 @@ export class Conductor {
     judgingStep: StepName;
     /** Members whose attempt this halt ended; defaults to the judging step. */
     refusedSteps?: readonly StepName[];
+    /**
+     * Admitted member scopes are keyed by member name.  A group decision is
+     * deliberately later than member settlement, so terminal events must
+     * retain this identity rather than falling back to the logical step.
+     */
+    executionContexts?: ReadonlyMap<string, ExecutionContext>;
     reason: string;
   }): Promise<void> {
     const refused = new Set<StepName>(input.refusedSteps ?? []);
@@ -2197,12 +2126,21 @@ export class Conductor {
       `record refused ${input.judgingStep} step`,
       changes,
     );
-    await this.emitExecutionEvent({
-      type: 'step_refused',
-      step: input.judgingStep,
-      kind: 'validation-verdict',
-      reason: input.reason,
-    });
+    // A join can reject several admitted members.  Close every owned scope
+    // exactly once; the lifecycle resolver suppresses stale/duplicate
+    // terminals. Preserve the legacy single judging-step event when this
+    // caller has no execution-aware member context.
+    const contextSteps = [...refused].filter((step) => input.executionContexts?.has(step));
+    for (const refusedStep of contextSteps.length > 0 ? contextSteps : [input.judgingStep]) {
+      const executionContext = input.executionContexts?.get(refusedStep);
+      await this.emitExecutionEvent({
+        type: 'step_refused',
+        step: refusedStep,
+        kind: 'validation-verdict',
+        reason: input.reason,
+        ...(executionContext === undefined ? {} : { executionContext }),
+      });
+    }
     await this.emitExecutionEvent({
       type: 'parallel_failure',
       step: input.groupStep,
@@ -2291,6 +2229,8 @@ export class Conductor {
    * next dispatch onward.
    */
   private pendingLiveBoundaryHalt?: string;
+  /** Public shutdown closes admitted scopes and forbids later queue admission. */
+  private shutdownRequested = false;
   /** Guards the one-time skill relink so it runs before the first build only. */
   /** Breadcrumb of the last step index reached in the main loop, for terminal-verdict diagnostics. */
   private _breadcrumb: { lastAdvancedStep?: string; exitIndex?: number; lastEventType?: string } = {};
@@ -3240,6 +3180,14 @@ export class Conductor {
     );
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
+    this.executionLifecycle = new ExecutionLifecycle({
+      events: this.events,
+      onTerminal: async ({ event }) => {
+        if (event.type === 'step_completed' || event.type === 'step_failed') {
+          await this.emitFeatureCostSnapshot();
+        }
+      },
+    });
     this.featureSlug = opts.featureSlug;
     this.operatorParkBoundary = opts.operatorParkBoundary;
     this.resume = opts.resume ?? false;
@@ -5424,8 +5372,11 @@ export class Conductor {
      * stamp carry one value on the self-host path too (D1).
      */
     verdictRunId?: string,
+    /** The serial lifecycle scope that owns this provider invocation. */
+    executionContext?: ExecutionContext,
   ): Promise<StepRunResult> {
     const identityOption = verdictRunId ? { runId: verdictRunId } : {};
+    const executionContextOption = executionContext ? { executionContext } : {};
     const selfHostConfig = resolveSelfHostConfig(this.config);
     const stepSelection =
       this.config.steps?.[name]?.llm_provider ?? this.config.llm_provider;
@@ -5506,7 +5457,11 @@ export class Conductor {
     // test/extension surface.
     if (!this.providerExecution) {
       if (preferredBuildProvider === 'codex') {
-        return this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });
+        return this.stepRunner.run(name, state, {
+          retryReason: retryHint,
+          ...identityOption,
+          ...executionContextOption,
+        });
       }
       const installed = await this.guardrails.resolveInstalledHarnessRoot();
       const harnessRoot = installed.status === 'ok' ? installed.root : this.projectRoot;
@@ -5530,7 +5485,11 @@ export class Conductor {
       process.env.CLAUDE_CONFIG_DIR = sandbox.configDir;
       if (daemonToken) process.env.CLAUDE_CODE_OAUTH_TOKEN = daemonToken;
       try {
-        return await this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });
+        return await this.stepRunner.run(name, state, {
+          retryReason: retryHint,
+          ...identityOption,
+          ...executionContextOption,
+        });
       } finally {
         if (hadConfig) process.env.CLAUDE_CONFIG_DIR = priorConfig;
         else delete process.env.CLAUDE_CONFIG_DIR;
@@ -5666,7 +5625,11 @@ export class Conductor {
       };
     }
     try {
-      return await this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });
+      return await this.stepRunner.run(name, state, {
+        retryReason: retryHint,
+        ...identityOption,
+        ...executionContextOption,
+      });
     } finally {
       if (this.providerExecution) {
         this.providerExecution.prepareCandidateSelfHost = priorPreparation;
@@ -6110,6 +6073,7 @@ export class Conductor {
   }
 
   async run(): Promise<OperatorParkedTermination | undefined> {
+    this.shutdownRequested = false;
     // #788 regression guard: the phase-active marker creates `.pipeline/`
     // via `mkdirSync` as a side effect ahead of any real init (worktree-
     // prepare provisioning session-hooks/, task-status.json, etc). Recorded
@@ -7238,6 +7202,82 @@ export class Conductor {
             );
             const branchDispatchStartedAt = new Map<string, number>();
             const branchHandshakeFailures = new Map<string, CompletionResult>();
+            const memberExecutionContexts = new Map<string, ExecutionContext>();
+            const memberAttemptResults = new Map<string, StepRunResult>();
+            const closeSuccessfulMember = async (member: typeof membership.dispatchable[number]) => {
+              const executionContext = memberExecutionContexts.get(member.name);
+              if (executionContext === undefined) return;
+              const result = memberAttemptResults.get(member.name);
+              await emitTracked({
+                type: 'step_completed',
+                step: member.name as StepName,
+                status: 'done',
+                ...(result?.model !== undefined ? { model: result.model } : {}),
+                ...(result?.effort !== undefined ? { effort: result.effort } : {}),
+                ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+                ...(result?.preferredProvider !== undefined ? { preferredProvider: result.preferredProvider } : {}),
+                ...(result?.actualProvider !== undefined ? { actualProvider: result.actualProvider } : {}),
+                ...(result?.tokenUsage !== undefined ? { tokenUsage: result.tokenUsage } : {}),
+                ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
+                executionContext,
+              });
+            };
+            const closeMemberFailure = async (
+              member: typeof membership.dispatchable[number],
+              error: string,
+            ) => {
+              const executionContext = memberExecutionContexts.get(member.name);
+              if (executionContext === undefined) return;
+              const result = memberAttemptResults.get(member.name);
+              await emitTracked({
+                type: 'step_failed',
+                step: member.name as StepName,
+                error,
+                retryCount: memberAttemptBudgets.get(member.name) ?? 0,
+                ...(result?.effort !== undefined ? { effort: result.effort } : {}),
+                ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+                ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
+                executionContext,
+              });
+            };
+            const closeMemberRefusal = async (
+              member: typeof membership.dispatchable[number],
+              reason: string,
+            ) => {
+              const executionContext = memberExecutionContexts.get(member.name);
+              if (executionContext === undefined) return;
+              await emitTracked({
+                type: 'step_refused',
+                step: member.name as StepName,
+                kind: 'validation-verdict',
+                reason,
+                executionContext,
+              });
+            };
+            // The group decision may return before the ordinary join has a
+            // chance to classify every member.  Settle each admitted scope
+            // from its own branch outcome so run-finally never invents a
+            // generic interruption terminal for a known result.
+            const closeSettledMembers = async (
+              settled: readonly BranchOutcome[],
+              refusalReason?: string,
+            ) => {
+              for (let index = 0; index < settled.length; index += 1) {
+                const outcome = settled[index];
+                const member = membership.dispatchable[index];
+                if (outcome === undefined || member === undefined) continue;
+                if (outcome.kind === 'verdict' && outcome.verdict === 'pass') {
+                  await closeSuccessfulMember(member);
+                } else if (refusalReason !== undefined) {
+                  await closeMemberRefusal(member, refusalReason);
+                } else if (outcome.kind === 'no-verdict') {
+                  await closeMemberFailure(
+                    member,
+                    `Validation group "${step.name}" branch "${member.name}" produced no-verdict: ${outcome.reason}.`,
+                  );
+                }
+              }
+            };
             const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
               // D1: one identity per branch dispatch, minted here and passed
               // into the branch below so the provider-lifecycle `attempt.id`
@@ -7256,11 +7296,59 @@ export class Conductor {
                 roundChanges,
               );
               return runWithConcurrency(
-                members.map((member) => () => runGroupBranch(
-                    member,
-                    state,
-                    {
+                members.map((member) => async () => {
+                  // This thunk is launched only after runWithConcurrency admits
+                  // a member under the group cap. A fresh scope therefore cannot
+                  // be fabricated for queued/cancelled work, while branch retries
+                  // retain this one context through their whole policy lifetime.
+                  if (this.shutdownRequested) return makeSkippedOutcome();
+                  // Auth recovery redispatches only the affected member. Its
+                  // previous branch has already settled a no-verdict result
+                  // (and therefore frozen its member interval), so terminalize
+                  // that scope before replacing the name-keyed context.
+                  if (memberExecutionContexts.has(member.name)) {
+                    await closeMemberRefusal(
+                      member,
+                      `Validation group "${step.name}" auth recovery redispatched "${member.name}".`,
+                    );
+                  }
+                  const executionContext: ExecutionContext = {
+                    executionId: randomUUID(),
+                    subject: { kind: 'lifecycle-step', step: member.name as StepName },
+                  };
+                  memberExecutionContexts.set(member.name, executionContext);
+                  return runGroupBranch(member, state, {
                       stepRunner: this.stepRunner,
+                      executionContext,
+                      lifecycleObserver: {
+                        onAdmitted: async (observation) => {
+                          await emitTracked({
+                            type: 'step_started',
+                            step: observation.member as StepName,
+                            index: indexOf(observation.member as StepName),
+                            executionContext,
+                          });
+                        },
+                        onAttempt: async (observation) => {
+                          if (observation.result !== undefined) {
+                            memberAttemptResults.set(observation.member, observation.result);
+                          }
+                        },
+                        onRetry: async (observation) => {
+                          await emitTracked({
+                            type: 'step_retry',
+                            step: observation.member as StepName,
+                            attempt: observation.attempt,
+                            maxAttempts: memberAttemptBudgets.get(observation.member) ?? observation.attempt,
+                            reason: `group member ${observation.member} retry`,
+                            executionContext,
+                          });
+                        },
+                        // The group-core result callback below retains the
+                        // pre-existing handshake ordering and emits the shared
+                        // settlement event before the join can classify it.
+                        onSettled: async () => undefined,
+                      },
                       ...(isVerdictRunIdentityStep(member.name as StepName)
                         ? { runId: branchRunIds.get(member.name) }
                         : {}),
@@ -7287,6 +7375,7 @@ export class Conductor {
                           branchDispatchStartedAt.set(event.member, Date.now());
                         }
                         if (event.phase === 'result') {
+                          await emitTracked(event);
                           // This settles before runGroupBranch returns to the join.
                           await this.stampVerdictRunIdentity(
                             event.member as StepName,
@@ -7306,9 +7395,8 @@ export class Conductor {
                           inFlightGroupCompletions![syntheticKey] = 'done';
                         }
                       },
-                    },
-                    memberAttemptBudgets.get(member.name)!,
-                  )),
+                    }, memberAttemptBudgets.get(member.name)!);
+                }),
                 cap,
               );
             };
@@ -7321,7 +7409,7 @@ export class Conductor {
             // Round settled (whatever the outcome) — the pending side-channel
             // must never leak into the halt/allGreen/kickback paths below.
             inFlightGroupCompletions = undefined;
-            if (signalExitRequested) return;
+            if (signalExitRequested || this.shutdownRequested) return;
 
             // Task 4 (build-auth-token-check-and-classify, FR-4): an
             // `authFailure` no-verdict is NOT the ordinary "exhausted its
@@ -7371,6 +7459,7 @@ export class Conductor {
                   : undefined,
               );
               if (park.disposition === 'halt') {
+                await closeSettledMembers(outcomes, park.haltReason);
                 await this.writeHaltMarker(park.haltReason + '\n', 'needs-human');
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(park.haltReason);
@@ -7399,7 +7488,11 @@ export class Conductor {
               inFlightGroupCompletions = {};
               const retryOutcomes = await dispatchGroupRound(retryMembers);
               inFlightGroupCompletions = undefined;
-              if (signalExitRequested) return;
+              if (signalExitRequested || this.shutdownRequested) return;
+
+              for (const [index, outcome] of retryOutcomes.entries()) {
+                outcomes[retryIdxs[index]!] = outcome;
+              }
 
               if (park.disposition === 'trial-required') {
                 const failedTrial = retryOutcomes[0];
@@ -7413,6 +7506,7 @@ export class Conductor {
                     `Codex cached-login recovery trial for grouped member "${failedMember.name}" ` +
                     `failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(park.probeFailure)}).\n` +
                     'Refresh the Codex login, then re-queue this feature.';
+                  await closeSettledMembers(outcomes, haltReason);
                   await this.writeHaltMarker(haltReason + '\n', 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(haltReason);
@@ -7421,9 +7515,6 @@ export class Conductor {
                   if (!this.daemon) process.off('SIGTERM', sigterm);
                   return;
                 }
-              }
-              for (const [index, outcome] of retryOutcomes.entries()) {
-                outcomes[retryIdxs[index]!] = outcome;
               }
             }
 
@@ -7444,6 +7535,7 @@ export class Conductor {
                 '.\n' +
                 'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
                 `\nProvider detail: ${outcome.reason}`;
+              await closeSettledMembers(outcomes, haltReason);
               await this.writeHaltMarker(haltReason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(haltReason);
@@ -7496,6 +7588,22 @@ export class Conductor {
             const manualTestFailRows = hasManualTest
               ? await readManualTestFailRows(this.projectRoot)
               : [];
+
+            // The runner's `success` merely settles a member; it is not its
+            // terminal classification.  A member may be closed successfully
+            // only after this join has accepted its own objective evidence.
+            // This intentionally emits no state change: the join remains the
+            // sole writer of state and gate artifacts.
+            const closeClassifiedPassingMembers = async () => {
+              for (let index = 0; index < membership.dispatchable.length; index += 1) {
+                const member = membership.dispatchable[index]!;
+                const outcome = outcomes[index];
+                if (outcome?.kind !== 'verdict' || outcome.verdict !== 'pass') continue;
+                if (this.verifyArtifacts && !gateVerdicts.get(member.name)?.satisfied) continue;
+                if (member.name === 'manual_test' && manualTestFailRows.length > 0) continue;
+                await closeSuccessfulMember(member);
+              }
+            };
 
             // Tasks 24/25: the serial SHIP tail treats recorded negative-path
             // PLAN_GAP and harmless/within-intent OVER_SCOPE findings as an
@@ -7575,6 +7683,7 @@ export class Conductor {
               const haltReason =
                 `Validation group "${step.name}" halted: branch "${noVerdictMember.name}" produced ` +
                 `no-verdict after ${attemptsSpent} attempts (${noVerdictOutcome.reason}).`;
+              await closeSettledMembers(outcomes);
               await this.writeHaltMarker(haltReason + '\n', 'needs-human');
               // Story 3, negative path: a no-verdict outcome is the validator's
               // own runner dying (thrown branch, terminal error, or exhausted
@@ -7585,6 +7694,25 @@ export class Conductor {
                 [step.name]: 'failed',
                 last_step: step.name,
               });
+              const executionContext = memberExecutionContexts.get(noVerdictMember.name);
+              if (executionContext !== undefined) {
+                const result = memberAttemptResults.get(noVerdictMember.name);
+                await emitTracked({
+                  type: 'step_failed',
+                  step: noVerdictMember.name as StepName,
+                  error: haltReason,
+                  retryCount: attemptsSpent,
+                  ...(result?.effort !== undefined ? { effort: result.effort } : {}),
+                  ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+                  ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
+                  executionContext,
+                });
+              }
+              // A sibling that already returned a passing branch result did
+              // complete its own execution even though the group cannot join
+              // green. Close that scope without mutating the group's state or
+              // granting a gate verdict; only the single-writer join owns that.
+              await closeClassifiedPassingMembers();
               await this.emitLoopHalt(haltReason);
               await emitTracked({
                 type: 'step_failed',
@@ -7669,6 +7797,11 @@ export class Conductor {
                 `join ${builtinGroup.name} verification group`,
                 joinChanges,
               );
+              // The group join owns state/gate authority, but each admitted
+              // member owns its lifecycle terminal. Its settlement boundary
+              // was emitted by group-core before the join's evidence work, so
+              // delayed sibling/join work cannot extend its duration.
+              for (const member of membership.dispatchable) await closeSuccessfulMember(member);
               await emitTracked({
                 type: 'parallel_completed',
                 step: step.name,
@@ -7775,11 +7908,13 @@ export class Conductor {
                     renderAsBuiltBlockedFindingDetail(asBuiltReport);
                   await this.writeHaltMarker(reason + '\n', KICKBACK_CAP_HALT_CLASS);
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  await closeClassifiedPassingMembers();
                   await this.recordGroupRefusal({
                     state,
                     groupStep: step.name,
                     judgingStep: 'architecture_review_as_built',
                     refusedSteps: asBuiltGroupRefusedSteps(),
+                    executionContexts: memberExecutionContexts,
                     reason,
                   });
                   const prUrl = await this.surfaceRemediationPr(reason);
@@ -7856,11 +7991,13 @@ export class Conductor {
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
                   await this.writeHaltMarker(reason + '\n', remediationOutcome.haltClass ?? 'needs-human');
+                  await closeClassifiedPassingMembers();
                   await this.recordGroupRefusal({
                     state,
                     groupStep: step.name,
                     judgingStep: 'architecture_review_as_built',
                     refusedSteps: asBuiltGroupRefusedSteps(),
+                    executionContexts: memberExecutionContexts,
                     reason,
                   });
                   const prUrl = await this.surfaceRemediationPr(reason);
@@ -7942,6 +8079,7 @@ export class Conductor {
                   reason + '\n',
                   asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
                 );
+                await closeClassifiedPassingMembers();
                 await this.recordGroupRefusal({
                   state,
                   groupStep: step.name,
@@ -7954,6 +8092,7 @@ export class Conductor {
                       outcomes[idx]?.verdict !== 'pass' ||
                       (this.verifyArtifacts && gateVerdicts.get(member.name)?.satisfied !== true))
                     .map((member) => member.name as StepName),
+                  executionContexts: memberExecutionContexts,
                   reason,
                 });
                 await this.emitLoopHalt(reason);
@@ -8324,6 +8463,7 @@ export class Conductor {
             if (!existingGroupHalt || existingGroupHalt.trim().length === 0) {
               await this.writeHaltMarker(groupHaltReason + '\n', 'needs-human');
             }
+            await closeClassifiedPassingMembers();
             // Attribute the refusal to the first member that actually failed
             // its own gate; with none identified the group entry is the only
             // honest subject left.
@@ -8332,6 +8472,7 @@ export class Conductor {
               groupStep: step.name,
               judgingStep: (failedMembers[0]?.name as StepName | undefined) ?? step.name,
               refusedSteps: failedMembers.map((member) => member.name as StepName),
+              executionContexts: memberExecutionContexts,
               reason: groupHaltReason,
             });
             await this.emitLoopHalt(groupHaltReason);
@@ -8435,7 +8576,24 @@ export class Conductor {
         // Mark in_progress before running
         await this.saveConductorStepStatus(state, step.name, 'in_progress');
 
-        await emitTracked({ type: 'step_started', step: step.name, index: i });
+        // Custom configured steps are intentionally outside the closed
+        // lifecycle-step registry. Keep their established name-based lifecycle
+        // stream instead of attaching an invalid explicit context that the
+        // shared resolver must reject.
+        const serialExecutionContext: ExecutionContext | undefined =
+          ALL_STEPS.some(({ name }) => name === step.name) ||
+          Object.prototype.hasOwnProperty.call(OUT_OF_BAND_STEPS, step.name)
+            ? {
+                executionId: randomUUID(),
+                subject: { kind: 'lifecycle-step', step: step.name },
+              }
+            : undefined;
+        await emitTracked({
+          type: 'step_started',
+          step: step.name,
+          index: i,
+          ...(serialExecutionContext === undefined ? {} : { executionContext: serialExecutionContext }),
+        });
         // Deterministic freshness guard — applied ONLY when re-entering a step
         // that previously FAILED (`failed`) or was REWORKED (kicked back →
         // `stale`), never on a clean first run. Such a step ran before, so a
@@ -9019,6 +9177,7 @@ export class Conductor {
                               escalate: resolved.escalate,
                               modelOverride: esc.model,
                               effortOverride: esc.effort,
+                              executionContext: serialExecutionContext,
                             })
                         : this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))))
                           ? await this.runSelfBuildDispatch(
@@ -9033,6 +9192,7 @@ export class Conductor {
                               isVerdictRunIdentityStep(step.name)
                                 ? this.currentRunId
                                 : undefined,
+                              serialExecutionContext,
                             )
                           : await this.stepRunner.run(step.name, state, {
                             retryReason: retryHint,
@@ -9040,6 +9200,7 @@ export class Conductor {
                             escalate: resolved.escalate,
                             modelOverride: esc.model,
                             effortOverride: esc.effort,
+                            executionContext: serialExecutionContext,
                             // D1 scope: only a SHIP-tail verdict gate hands its
                             // identity to the lifecycle, so that gate's
                             // `attempt.id` and its sidecar stamp are one value.
@@ -9400,12 +9561,13 @@ export class Conductor {
               }
 
               if (attempt < stepMaxRetries) {
-                await emitTracked({
-                  type: 'step_retry',
+              await emitTracked({
+                type: 'step_retry',
                   step: 'finish',
                   attempt: attempt + 1,
                   maxAttempts: stepMaxRetries,
                   reason: lastError,
+                  executionContext: serialExecutionContext,
                 });
                 continue;
               }
@@ -9632,6 +9794,7 @@ export class Conductor {
                   reason:
                     `test_suite infrastructure failure (${fullSuiteFailure.reason}): ` +
                     fullSuiteFailure.message,
+                  executionContext: serialExecutionContext,
                 });
                 // Infrastructure retries are bounded in their own durable
                 // allowance and must not consume the generic step budget.
@@ -9738,7 +9901,13 @@ export class Conductor {
                 haltBeforeAttempt,
               );
               if (stepWrittenHalt) {
-                await this.recordStepRefusal(state, step.name, 'needs-human', stepWrittenHalt);
+                await this.recordStepRefusal(
+                  state,
+                  step.name,
+                  'needs-human',
+                  stepWrittenHalt,
+                  serialExecutionContext,
+                );
                 await this.emitLoopHalt(stepWrittenHalt);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
@@ -9787,8 +9956,8 @@ export class Conductor {
                 resolved.escalate,
                 stepModelPolicy,
               );
-              await emitTracked({
-                type: 'step_retry',
+                await emitTracked({
+                  type: 'step_retry',
                 step: step.name,
                 attempt: attempt + 1,
                 maxAttempts: stepMaxRetries,
@@ -9802,6 +9971,7 @@ export class Conductor {
                   escalatedModel: escNext.model,
                   escalatedEffort: escNext.effort,
                 }),
+                executionContext: serialExecutionContext,
               });
               // #814: back off before re-dispatching a grader whose dispatch
               // failed, so a transient spawn/startup failure has time to clear
@@ -10586,7 +10756,13 @@ export class Conductor {
                   haltBeforeAttempt,
                 );
                 if (stepWrittenHalt) {
-                  await this.recordStepRefusal(state, step.name, 'needs-human', stepWrittenHalt);
+                  await this.recordStepRefusal(
+                    state,
+                    step.name,
+                    'needs-human',
+                    stepWrittenHalt,
+                    serialExecutionContext,
+                  );
                   await this.emitLoopHalt(stepWrittenHalt);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
@@ -10620,6 +10796,7 @@ export class Conductor {
                     escalatedModel: escNext.model,
                     escalatedEffort: escNext.effort,
                   }),
+                  executionContext: serialExecutionContext,
                 });
                 // T4: this attempt made forward progress and is under the
                 // progress-attempt ceiling — undo the `attempt++` at the top
@@ -10746,7 +10923,13 @@ export class Conductor {
               reason + '\n',
               kind === 'seal' ? PROTECTED_ARTIFACT_HALT_CLASS : 'needs-human',
             );
-            await this.recordStepRefusal(state, step.name, kind, reason);
+            await this.recordStepRefusal(
+              state,
+              step.name,
+              kind,
+              reason,
+              serialExecutionContext,
+            );
             await this.emitLoopHalt(reason);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
@@ -10798,6 +10981,7 @@ export class Conductor {
             ...(failedStepResult?.observedIntervals
               ? { observedIntervals: failedStepResult.observedIntervals }
               : {}),
+            executionContext: serialExecutionContext,
           });
 
           // Auto mode is unattended — NEVER prompt or open a REPL. An advisory
@@ -12297,6 +12481,7 @@ export class Conductor {
             ...(stepResult?.observedIntervals
               ? { observedIntervals: stepResult.observedIntervals }
               : {}),
+            executionContext: serialExecutionContext,
           });
 
           // Store PR URL from finish step output. Prefer state-file write
@@ -12458,6 +12643,11 @@ export class Conductor {
       const prUrl = await this.surfaceRemediationPr(reason);
       await this.emitLoopHalt(reason, prUrl);
     } finally {
+      // Every catchable loop exit (including an unexpected throw or an
+      // unmarked early HALT) drains the same execution owner used by signal
+      // and live-boundary paths. Existing terminals win; only still-open
+      // admitted scopes receive the truthful interruption terminal.
+      await this.closeOpenExecutions();
       this.safetyAttemptCache.clear();
       process.off('SIGINT', sigintHandler);
       process.off('SIGTERM', sigterm);
@@ -13059,6 +13249,9 @@ export class Conductor {
       skill: branch.skill ?? '',
       outcome: { kind: 'no-verdict', reason: 'not-run' },
     }));
+    const memberExecutionContexts = new Map<string, ExecutionContext>();
+    const memberAttemptResults = new Map<string, StepRunResult>();
+    const memberAttemptBudgets = new Map<string, number>();
 
     const outcomes: BranchOutcome[] = await runWithConcurrency(
       members.map((member) => async () => {
@@ -13074,7 +13267,50 @@ export class Conductor {
           this.config,
           { tier: state.complexity_tier },
         );
-        return runGroupBranch(member, state, { stepRunner: this.stepRunner }, resolved.max_retries);
+        memberAttemptBudgets.set(member.name, resolved.max_retries);
+        // The concurrency runner invokes this thunk only after admission. The
+        // configured subject stays outside the closed StepName registry while
+        // the parent group supplies the registered policy/phase identity.
+        const executionContext: ExecutionContext = {
+          executionId: randomUUID(),
+          subject: { kind: 'configured-member', parentGroup: groupName, member: member.name },
+        };
+        memberExecutionContexts.set(member.name, executionContext);
+        return runGroupBranch(member, state, {
+          stepRunner: this.stepRunner,
+          executionContext,
+          lifecycleObserver: {
+            onAdmitted: async (observation) => {
+              await this.emitExecutionEvent({
+                type: 'step_started',
+                step: groupName,
+                index: Math.max(0, ALL_STEPS.findIndex(({ name }) => name === groupName)),
+                executionContext,
+              });
+            },
+            onAttempt: async (observation) => {
+              if (observation.result !== undefined) {
+                memberAttemptResults.set(observation.member, observation.result);
+              }
+            },
+            onRetry: async (observation) => {
+              await this.emitExecutionEvent({
+                type: 'step_retry',
+                step: groupName,
+                attempt: observation.attempt,
+                maxAttempts: memberAttemptBudgets.get(observation.member) ?? observation.attempt,
+                reason: 'configured group member retry',
+                executionContext,
+              });
+            },
+            // The common group-core result event freezes this member's timing
+            // before the join below classifies the group policy outcome.
+            onSettled: async () => undefined,
+          },
+          onMemberEvent: async (event) => {
+            if (event.phase === 'result') await this.emitExecutionEvent(event);
+          },
+        }, resolved.max_retries);
       }),
       Math.max(1, Math.min(this.validationConcurrency, branches.length)),
     );
@@ -13113,6 +13349,43 @@ export class Conductor {
 
     changes[groupName] = groupFailed ? 'failed' : 'done';
     await this.commitStateChanges(state, `join ${groupName} parallel group`, changes);
+
+    // Group policy owns its synthetic keys and parent outcome, while every
+    // admitted member closes its own lifecycle at the boundary frozen by its
+    // group-core result event. A configured name is carried only in context.
+    for (let i = 0; i < branches.length; i += 1) {
+      const branch = branches[i]!;
+      const outcome = outcomes[i];
+      const executionContext = memberExecutionContexts.get(branch.name);
+      if (executionContext === undefined || outcome === undefined) continue;
+      const result = memberAttemptResults.get(branch.name);
+      if (outcome.kind === 'verdict' && outcome.verdict === 'pass') {
+        await this.emitExecutionEvent({
+          type: 'step_completed',
+          step: groupName,
+          status: 'done',
+          ...(result?.model !== undefined ? { model: result.model } : {}),
+          ...(result?.effort !== undefined ? { effort: result.effort } : {}),
+          ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+          ...(result?.preferredProvider !== undefined ? { preferredProvider: result.preferredProvider } : {}),
+          ...(result?.actualProvider !== undefined ? { actualProvider: result.actualProvider } : {}),
+          ...(result?.tokenUsage !== undefined ? { tokenUsage: result.tokenUsage } : {}),
+          ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
+          executionContext,
+        });
+        continue;
+      }
+      await this.emitExecutionEvent({
+        type: 'step_failed',
+        step: groupName,
+        error: outcome.kind === 'no-verdict' ? outcome.reason : 'configured group member failed',
+        retryCount: memberAttemptBudgets.get(branch.name) ?? 0,
+        ...(result?.effort !== undefined ? { effort: result.effort } : {}),
+        ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+        ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
+        executionContext,
+      });
+    }
 
     if (!groupFailed) {
       await this.emitExecutionEvent({

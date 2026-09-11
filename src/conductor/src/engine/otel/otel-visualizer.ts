@@ -322,10 +322,16 @@ export class OtelVisualizer implements VisualizerPlugin {
       case 'step_failed':
         this.spanManager.onStepFailed(event);
         break;
+      case 'step_refused':
+        this.spanManager.onStepRefused(event);
+        break;
+      case 'group_member_step':
+        this.spanManager.onGroupMemberStep(event);
+        break;
       case 'provider_attempt':
         {
           const observation = this.dispatchMetering.observe(event);
-          if (observation !== undefined) this.spanManager.onProviderAttempt(event.step, observation);
+          if (observation !== undefined) this.spanManager.onProviderAttempt(event, observation);
         }
         break;
       case 'step_retry':
@@ -385,6 +391,14 @@ export class OtelVisualizer implements VisualizerPlugin {
       spanProcessors: [new BatchSpanProcessor(this.spanExporter, { exportTimeoutMillis: this.exportTimeoutMillis })],
     });
     const tracer = this.tracerProvider.getTracer('conductor', '1.0.0');
-    this.spanManager = new SpanManager(tracer, this.onWarning);
+    this.spanManager = new SpanManager(
+      tracer,
+      this.onWarning,
+      undefined,
+      {
+        featureId: context.feature ?? 'unknown-feature',
+        runId: context.runId ?? 'unknown-run',
+      },
+    );
   }
 }

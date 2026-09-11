@@ -6,6 +6,7 @@ import {
 } from '../execution/observed-interval.js';
 import type { ConductorEvent } from '../types/index.js';
 import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
+import { resolveExecutionIdentity, type ExecutionScope } from './execution-identity.js';
 import { persistedEventTypes } from './event-sinks.js';
 
 /**
@@ -36,7 +37,9 @@ export class EventPersister {
   private readonly handler: EventHandler;
   private readonly clock: IntervalClock;
   private readonly openSteps = new Map<string, number>();
+  private readonly settledSteps = new Map<string, number>();
   private readonly openGroups = new Map<string, number>();
+  private readonly executionScope: ExecutionScope;
   private dirEnsured = false;
 
   constructor(
@@ -47,6 +50,7 @@ export class EventPersister {
     this.filePath = filePath;
     this.emitter = emitter;
     this.clock = clock;
+    this.executionScope = { featureId: filePath, runId: 'event-persister' };
 
     this.handler = (event: ConductorEvent): void => {
       this.persist(event);
@@ -57,7 +61,7 @@ export class EventPersister {
    * Subscribe to all ConductorEvent types.
    */
   start(): void {
-    for (const type of persistedEventTypes()) {
+    for (const type of ledgerEventTypes()) {
       this.emitter.on(type, this.handler);
     }
   }
@@ -66,7 +70,7 @@ export class EventPersister {
    * Unsubscribe from all ConductorEvent types.
    */
   stop(): void {
-    for (const type of persistedEventTypes()) {
+    for (const type of ledgerEventTypes()) {
       this.emitter.off(type, this.handler);
     }
   }
@@ -80,6 +84,7 @@ export class EventPersister {
       const step = 'step' in event && typeof event.step === 'string'
         ? event.step
         : undefined;
+      const executionContext = 'executionContext' in event ? event.executionContext : undefined;
       // A refusal ends a serial step's attempt, so it closes that step's
       // interval exactly as a completion or failure does (adr-2026-08-12 D1:
       // every started execution closes on the ledger). A validation-group
@@ -95,22 +100,31 @@ export class EventPersister {
         event.type === 'parallel_completed'
         || (event.type === 'parallel_failure' && event.terminal !== false)
       );
+      const intervalKey = step === undefined
+        ? undefined
+        : this.intervalKey(step, executionContext);
       const openIntervals = closesGroup ? this.openGroups : this.openSteps;
-      const startedAtMs = step !== undefined && (closesStep || closesGroup)
-        ? openIntervals.get(step)
+      const startedAtMs = intervalKey !== undefined && (closesStep || closesGroup)
+        ? openIntervals.get(intervalKey)
         : undefined;
+      const finishedAtMs = startedAtMs === undefined
+        ? undefined
+        : closesStep ? this.settledSteps.get(intervalKey!) ?? this.clock.nowMs() : this.clock.nowMs();
       const activeInterval = closesStep
         || closesGroup
-        ? startedAtMs === undefined ? undefined : {
+        ? startedAtMs === undefined || finishedAtMs === undefined ? undefined : {
             startedAtMs,
-            durationMs: Math.max(0, this.clock.nowMs() - startedAtMs),
+            durationMs: Math.max(0, finishedAtMs - startedAtMs),
           }
         : undefined;
       const lifecycleEvent = event.type === 'provider_attempt' ? event : undefined;
       const lifecycle = lifecycleEvent?.lifecycle;
-      const lifecycleKey = lifecycle === undefined
+      const lifecycleIdentity = lifecycleEvent === undefined
         ? undefined
-        : `provider-lifecycle:${lifecycleEvent!.step}:${lifecycle.attemptId}`;
+        : this.intervalKey(lifecycleEvent.step, lifecycleEvent.executionContext);
+      const lifecycleKey = lifecycle === undefined || lifecycleIdentity === undefined
+        ? undefined
+        : `provider-lifecycle:${lifecycleIdentity}:${lifecycle.attemptId}`;
       const lifecycleNow = lifecycle === undefined ? undefined : this.clock.nowMs();
       const lifecycleStartedAt = lifecycleKey === undefined
         ? undefined
@@ -130,12 +144,18 @@ export class EventPersister {
         ts: new Date().toISOString(),
       });
       appendFileSync(this.filePath, record + '\n', 'utf-8');
-      if (event.type === 'step_started') {
-        this.openSteps.set(event.step, this.clock.nowMs());
-      } else if (event.type === 'parallel_started') {
-        this.openGroups.set(event.step, this.clock.nowMs());
-      } else if (startedAtMs !== undefined && step !== undefined) {
-        openIntervals.delete(step);
+      if (event.type === 'step_started' && intervalKey !== undefined) {
+        this.openSteps.set(intervalKey, this.clock.nowMs());
+      } else if (event.type === 'parallel_started' && intervalKey !== undefined) {
+        this.openGroups.set(intervalKey, this.clock.nowMs());
+      } else if (event.type === 'group_member_step' && event.phase === 'result') {
+        const settlementKey = this.intervalKey(event.member, event.executionContext);
+        if (settlementKey !== undefined && this.openSteps.has(settlementKey)) {
+          this.settledSteps.set(settlementKey, this.clock.nowMs());
+        }
+      } else if (startedAtMs !== undefined && intervalKey !== undefined) {
+        openIntervals.delete(intervalKey);
+        if (closesStep) this.settledSteps.delete(intervalKey);
       }
       if (lifecycleKey !== undefined && lifecycleNow !== undefined) {
         if (lifecycle?.phase === 'settled' || lifecycle?.phase === 'exhausted') {
@@ -148,6 +168,19 @@ export class EventPersister {
       throw new EventPersistError(this.filePath, err);
     }
   }
+
+  private intervalKey(legacyStep: string, executionContext: unknown): string | undefined {
+    return resolveExecutionIdentity({
+      scope: this.executionScope,
+      legacyStep,
+      executionContext,
+    })?.correlationKey;
+  }
+}
+
+/** Member settlement is persisted so its clock boundary reaches the terminal record. */
+function ledgerEventTypes(): ConductorEvent['type'][] {
+  return [...new Set<ConductorEvent['type']>([...persistedEventTypes(), 'group_member_step'])];
 }
 
 /**
@@ -177,11 +210,27 @@ class ForwardingEventEmitter extends ConductorEventEmitter {
 
   override async emit(event: ConductorEvent): Promise<void> {
     await super.emit(event);
-    const forwarded: ConductorEvent = { ...event };
+    // Forward an independent event envelope.  In particular, a configured
+    // member's nested subject is execution identity, not listener-local
+    // decoration: the daemon-wide metrics projection must receive it intact.
+    const forwarded = cloneForwardedEvent(event);
     forwardedFromFeature.add(forwarded);
     if (this.slug) forwardedFeature.set(forwarded, this.slug);
     await this.globalEvents.emit(forwarded);
   }
+}
+
+function cloneForwardedEvent(event: ConductorEvent): ConductorEvent {
+  if (!('executionContext' in event) || event.executionContext === undefined) {
+    return { ...event };
+  }
+  return {
+    ...event,
+    executionContext: {
+      ...event.executionContext,
+      subject: { ...event.executionContext.subject },
+    },
+  };
 }
 
 export async function withFeatureEventPersistence<T>(input: {

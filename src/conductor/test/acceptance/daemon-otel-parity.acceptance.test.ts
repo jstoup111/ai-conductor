@@ -100,6 +100,8 @@ const eventSequences: Partial<Record<ConductorEvent['type'], ConductorEvent[]>> 
   step_started: [{ type: 'step_started', step: 'build', index: 0 }],
   step_completed: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_completed', step: 'build', status: 'done' }],
   step_failed: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 }],
+  step_refused: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_refused', step: 'build', kind: 'needs-human', reason: 'operator required' }],
+  group_member_step: [{ type: 'group_member_step', member: 'build', skill: 'build', phase: 'result', outcome: 'completed' }],
   provider_attempt: [{ type: 'provider_attempt', step: 'build', provider: 'claude', outcome: 'success', invoked: true, tokenUsage: { input: 10, output: 2, costUsd: 0.25 } }],
   feature_usage_total: [{ type: 'feature_usage_total', dispatches: 1, meteredDispatches: 1, unmeteredDispatches: 0, costUnmeteredDispatches: 0, costUsd: 0.25, inputTokens: 10, outputTokens: 2 }],
   feature_cost_snapshot: [{ type: 'feature_cost_snapshot', costUsd: 0.25, costComplete: true, byDimension: [{ step: 'build', model: 'test-model', source: 'provider', costUsd: 0.25 }], tokensByDimension: [{ step: 'build', model: 'test-model', tokens: { input: 10, output: 2 } }] }],

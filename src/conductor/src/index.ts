@@ -1417,8 +1417,11 @@ async function main(): Promise<void> {
     // BUILD/SHIP StepRunner paths retain this resolved-candidate boundary.
     // Conductor composes self-host authority around it when applicable.
     withCandidateSafety: createCandidateSafetyBoundary(),
-    onAttempt: (step, attempt) =>
-      events.emit({ type: 'provider_attempt', step, ...attempt }),
+    onAttempt: (step, { executionContext, ...attempt }) =>
+      events.emit({
+        type: 'provider_attempt', step, ...attempt,
+        ...(executionContext ? { executionContext } : {}),
+      }),
     warn: (_message, transition) => events.emit(transition),
   };
   const compatibilityRuntime = providerExecution.runtimes.get(

@@ -4,6 +4,7 @@
  * Instruments (FR-5):
  *  - conductor.step.duration  — Histogram (ms, per step)
  *  - conductor.step.retries   — Counter (per step, only when retryCount > 0)
+ *  - conductor.step.outcomes  — Counter (per terminal step outcome)
  *  - conductor.step.dispatches — Counter (per authoritative dispatch)
  *  - conductor.feature.cost   — Gauge (authoritative cumulative feature total)
  *  - conductor.feature.step.cost — Gauge (cumulative feature cost per dimension)
@@ -38,6 +39,8 @@ export interface DispatchDimensions {
   fallback?: boolean;
 }
 
+export type StepTerminalOutcome = 'success' | 'failure' | 'refusal';
+
 const STEP_DIMENSION_KEYS = ['model', 'effort', 'provider', 'tier'] as const;
 const DISPATCH_DIMENSION_KEYS = [...STEP_DIMENSION_KEYS, 'fallback'] as const;
 type DimensionKeys = readonly (keyof DispatchDimensions)[];
@@ -70,6 +73,19 @@ export function dispatchDimensionsFrom(
       ? { fallback: preferredProvider !== provider }
       : {}),
   };
+}
+
+/**
+ * Duration and retry points retain the existing bounded step dimensions but
+ * deliberately exclude dispatch-only fallback state. Free-text fallback
+ * reasons are never accepted by this projection.
+ */
+export function stepDimensionsFrom(
+  event: DispatchDimensionEvent,
+  observation?: DispatchMeteringObservation,
+): DispatchDimensions {
+  const { fallback: _fallback, ...dimensions } = dispatchDimensionsFrom(event, observation);
+  return dimensions;
 }
 
 export class MetricsRecorder {
@@ -141,6 +157,11 @@ export class MetricsRecorder {
   onRetry(step: string, dimensions?: DispatchDimensions): void {
     this.instruments.retriesCounter.add(1, this.withIdentity(this.withDimensions(
       { step }, dimensions, STEP_DIMENSION_KEYS,
+    )));
+  }
+  onStepTerminal(step: string, outcome: StepTerminalOutcome, dimensions?: DispatchDimensions): void {
+    this.instruments.stepOutcomesCounter.add(1, this.withIdentity(this.withDimensions(
+      { step, outcome }, dimensions, STEP_DIMENSION_KEYS,
     )));
   }
 
@@ -229,7 +250,7 @@ const BLOCK_REASONS = ['paused', 'build_auth_missing', 'gh_version', 'episode_ac
 
 interface MetricInstruments {
   memorySetupCounter: Counter;
-  durationHistogram: Histogram; retriesCounter: Counter; dispatchesCounter: Counter;
+  durationHistogram: Histogram; retriesCounter: Counter; stepOutcomesCounter: Counter; dispatchesCounter: Counter;
   featureCostGauge: Gauge; featureStepCostGauge: Gauge; featureStepTokensGauge: Gauge;
   closeoutDurationHistogram: Histogram; runOutcomesCounter: Counter;
   daemonBacklogGauge: Gauge; daemonOldestAgeGauge: Gauge; daemonSlotsGauge: Gauge; daemonInflightGauge: Gauge;
@@ -246,6 +267,7 @@ function createInstruments(meter: Meter): MetricInstruments {
     memorySetupCounter: counter('conductor.memory.setup', 'Memory setup observations by prior state and canonical placement'),
     durationHistogram: histogram('conductor.step.duration', 'Duration of conductor steps in milliseconds; quantiles saturate above 8 h (largest finite bucket boundary)'),
     retriesCounter: counter('conductor.step.retries', 'Number of retries per conductor step'),
+    stepOutcomesCounter: counter('conductor.step.outcomes', 'Number of conductor step terminal outcomes'),
     dispatchesCounter: counter('conductor.step.dispatches', 'Number of conductor step dispatches classified by metering status'),
     featureCostGauge: gauge('conductor.feature.cost', 'Authoritative shipped-record cost for a conductor feature', 'usd'),
     featureStepCostGauge: gauge('conductor.feature.step.cost', 'Authoritative cumulative feature cost by dimension', 'usd'),

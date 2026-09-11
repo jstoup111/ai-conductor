@@ -108,7 +108,7 @@ function finishingRunner(
   emitProviderAttempt: (event: Extract<ConductorEvent, { type: 'provider_attempt' }>) => Promise<void>,
 ): StepRunner {
   return {
-    run: vi.fn(async (step: StepName) => {
+    run: vi.fn(async (step: StepName, _state, runOptions) => {
       if (step === 'finish') {
         await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
         const current = await readState(statePath);
@@ -126,6 +126,9 @@ function finishingRunner(
           invoked: true,
           model: 'm2',
           tokenUsage: options.usage,
+          ...(runOptions?.executionContext === undefined
+            ? {}
+            : { executionContext: runOptions.executionContext }),
         });
       }
       return {
