@@ -4,7 +4,7 @@ export interface InterpreterSourceFinding {
   message: string;
 }
 
-type Word = { text: string; line: number; expandable: string[]; closed: boolean; openQuote?: "'" | '"'; regions: string[]; openRegions: string[] };
+type Word = { text: string; raw: string; line: number; expandable: string[]; closed: boolean; openQuote?: "'" | '"'; regions: string[]; openRegions: string[] };
 type Heredoc = { delimiter: string; expanding: boolean; stripTabs: boolean; interpreter: boolean; line: number };
 const expansion = /(?:\$\{|\$\(|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9]|\$[@*#?$!\-$]|`)/g;
 const interpreter = /^(?:\/[^\s/]+)*\/(?:python3?|node)$|^(?:python3?|node)$/;
@@ -22,7 +22,7 @@ const findingsIn = (value: string): string[] => [...value.matchAll(expansion)]
  * The inner text of every outermost command substitution the word spans is
  * captured verbatim so the caller can tokenize it as its own command context.
  */
-function wordAt(text: string, start: number, line: number): [Word, number] {
+function wordAt(text: string, start: number, line: number, lineAt = () => line): [Word, number] {
   let index = start;
   let quote: "'" | '"' | undefined;
   let substitutionDepth = 0;
@@ -38,7 +38,17 @@ function wordAt(text: string, start: number, line: number): [Word, number] {
     if (!quote && (char === "'" || char === '"')) { quote = char; index += 1; continue; }
     if (quote && char === quote) { quote = undefined; index += 1; continue; }
     if (char === '\\' && index + 1 < text.length) { value += text[index + 1]; index += 2; continue; }
-    if (quote !== "'" && char === '$' && text[index + 1] === '(') {
+    if (quote !== "'" && text.startsWith('$((', index)) {
+      // Arithmetic expansion contains operators such as `<<`, but it is one
+      // shell word rather than a nested command context or a redirection.
+      const close = text.indexOf('))', index + 3);
+      const end = close < 0 ? text.length : close + 2;
+      const arithmetic = text.slice(index, end);
+      value += arithmetic;
+      if (quote !== "'") expandable += arithmetic;
+      index = end;
+      continue;
+    } else if (quote !== "'" && char === '$' && text[index + 1] === '(') {
       // Quoting restarts inside a substitution, so stack the enclosing quote.
       enclosing.push(quote);
       quote = undefined;
@@ -58,12 +68,15 @@ function wordAt(text: string, start: number, line: number): [Word, number] {
     regions.push(openRegion);
     openRegions.push(openRegion);
   }
-  return [{ text: value, line, expandable: findingsIn(expandable), closed: !quote, openQuote: quote, regions, openRegions }, index];
+  return [{ text: value, raw: text.slice(start, index), line: lineAt(start), expandable: findingsIn(expandable), closed: !quote, openQuote: quote, regions, openRegions }, index];
 }
 
-function commandsOnLine(line: string, lineNumber: number, includeNested = true): Word[][] {
+type CommandScan = { commands: Word[][]; heredocs: Heredoc[] };
+
+function commandsOnLine(line: string, lineNumber: number, includeNested = true, lineAt = () => lineNumber): CommandScan {
   const commands: Word[][] = [[]];
   const nested: Word[][] = [];
+  const heredocs: Heredoc[] = [];
   let cursor = 0;
   while (cursor < line.length) {
     while (/\s/.test(line[cursor] ?? '')) cursor += 1;
@@ -73,26 +86,43 @@ function commandsOnLine(line: string, lineNumber: number, includeNested = true):
       commands.push([]);
       continue;
     }
-    if (line.startsWith('<<', cursor) || '<>'.includes(line[cursor])) { cursor += 1; continue; }
-    const [word, next] = wordAt(line, cursor, lineNumber);
+    if (line.startsWith('<<<', cursor)) { cursor += 3; continue; }
+    if (line.startsWith('<<', cursor)) {
+      cursor += 2;
+      const stripTabs = line[cursor] === '-';
+      if (stripTabs) cursor += 1;
+      while (/\s/.test(line[cursor] ?? '')) cursor += 1;
+      const [delimiter, next] = wordAt(line, cursor, lineNumber, lineAt);
+      if (next === cursor) continue;
+      const owner = commands.at(-1) ?? [];
+      const executable = directInterpreterIndex(owner);
+      heredocs.push({
+        ...heredocDelimiter(delimiter.raw), stripTabs,
+        interpreter: executable >= 0 && /python3?$/.test(owner[executable].text), line: lineAt(cursor),
+      });
+      cursor = next;
+      continue;
+    }
+    // Arithmetic commands are syntax, not nested shell command contexts.
+    if (line.startsWith('((', cursor)) {
+      const close = line.indexOf('))', cursor + 2);
+      cursor = close < 0 ? line.length : close + 2;
+      continue;
+    }
+    if ('<>'.includes(line[cursor])) { cursor += 1; continue; }
+    const [word, next] = wordAt(line, cursor, lineNumber, lineAt);
     if (next === cursor) { cursor += 1; continue; }
     commands.at(-1)?.push(word);
-    if (includeNested) nested.push(...word.regions.flatMap((region) => commandsOnLine(region, lineNumber)));
+    if (includeNested) {
+      for (const region of word.regions) {
+        const scan = commandsOnLine(region, lineNumber, true, lineAt);
+        nested.push(...scan.commands);
+        heredocs.push(...scan.heredocs);
+      }
+    }
     cursor = next;
   }
-  return [...commands, ...nested].filter((words) => words.length > 0);
-}
-
-/**
- * A here-doc belongs to the command in its lexical shell context. Completed
- * substitutions before `<<` are commands of a child context, not the owner;
- * an unterminated substitution does contain the redirection, so descend only
- * through that open region.
- */
-function heredocOwner(prefix: string, lineNumber: number): Word[] | undefined {
-  const owner = commandsOnLine(prefix, lineNumber, false).at(-1);
-  const openRegion = owner?.flatMap((word) => word.openRegions).at(-1);
-  return openRegion ? heredocOwner(openRegion, lineNumber) ?? owner : owner;
+  return { commands: [...commands, ...nested].filter((words) => words.length > 0), heredocs };
 }
 
 /**
@@ -139,23 +169,6 @@ function directInterpreterIndex(words: Word[]): number {
   return interpreter.test(words[index]?.text ?? '') ? index : -1;
 }
 
-function heredocsOnLine(line: string, lineNumber: number): Heredoc[] {
-  return [...line.matchAll(/<<(-?)\s*([^\s;|&]+)/g)].map((match) => ({
-    // A physical line can queue redirections for several commands. Resolve
-    // each one against the command text before that redirection, rather than
-    // borrowing the first interpreter found anywhere on the line.
-    // Completed command substitutions do not own an outer redirection. Only
-    // descend when the redirection appears in an as-yet-open substitution.
-    ...(() => {
-      const owner = heredocOwner(line.slice(0, match.index), lineNumber);
-      const executable = owner && directInterpreterIndex(owner);
-      return { interpreter: executable !== undefined && executable >= 0 && /python3?$/.test(owner[executable].text) };
-    })(),
-    ...heredocDelimiter(match[2]), stripTabs: match[1] === '-',
-    line: lineNumber,
-  }));
-}
-
 function quoteCloseIndex(line: string, quote: "'" | '"'): number {
   for (let index = 0; index < line.length; index += 1) {
     if (line[index] === '\\') { index += 1; continue; }
@@ -164,11 +177,42 @@ function quoteCloseIndex(line: string, quote: "'" | '"'): number {
   return -1;
 }
 
+/** True for an odd terminal backslash run outside single quotes. */
+function continuesShellLine(line: string): boolean {
+  let quote: "'" | '"' | undefined;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (!quote && (char === "'" || char === '"')) { quote = char; continue; }
+    if (quote && char === quote) { quote = undefined; continue; }
+    if (char === '\\') {
+      if (index === line.length - 1) return quote !== "'";
+      index += 1;
+    }
+  }
+  return false;
+}
+
+function joinedContinuation(lines: string[], start: number): { text: string; consumed: number; lineAt: (offset: number) => number } {
+  let text = lines[start];
+  const starts = [0];
+  let consumed = 1;
+  while (start + consumed < lines.length && continuesShellLine(lines[start + consumed - 1])) {
+    text = text.slice(0, -1);
+    starts.push(text.length);
+    text += lines[start + consumed];
+    consumed += 1;
+  }
+  return {
+    text, consumed,
+    lineAt: (offset) => start + starts.filter((position) => position <= offset).length,
+  };
+}
+
 /** A bounded lexical checker. Candidate shell/interpreter text is never run. */
-export function checkInterpreterSource(sourceName: string, text: string): InterpreterSourceFinding[] {
+export function checkInterpreterSource(sourceName: string, text: string, inheritedPending?: Heredoc[], finalize = true): InterpreterSourceFinding[] {
   const findings: InterpreterSourceFinding[] = [];
   const lines = text.split(/\r?\n/);
-  const pending: Heredoc[] = [];
+  const pending = inheritedPending ?? [];
   for (let index = 0; index < lines.length; index += 1) {
     if (pending.length > 0) {
       const here = pending[0];
@@ -177,8 +221,9 @@ export function checkInterpreterSource(sourceName: string, text: string): Interp
       if (here.interpreter && here.expanding && findingsIn(lines[index]).length > 0) findings.push({ sourceName, line: index + 1, message: 'shell expansion in interpreter heredoc source' });
       continue;
     }
-    const commands = commandsOnLine(lines[index], index + 1);
-    for (const words of commands) {
+    const joined = joinedContinuation(lines, index);
+    const scan = commandsOnLine(joined.text, index + 1, true, joined.lineAt);
+    for (const words of scan.commands) {
       const executable = directInterpreterIndex(words);
       if (executable < 0) continue;
       const command = words[executable].text;
@@ -206,7 +251,10 @@ export function checkInterpreterSource(sourceName: string, text: string): Interp
             // outer line index alone used to skip a second command (or a
             // heredoc redirection) on that same physical line.
             const suffix = lines[continuation].slice(quoteCloseIndex(lines[continuation], source.openQuote) + 1);
-            for (const finding of checkInterpreterSource(sourceName, suffix)) {
+            // The suffix shares the outer heredoc queue. A redirection after
+            // the closing quote owns following physical lines, not an
+            // artificial end-of-suffix EOF.
+            for (const finding of checkInterpreterSource(sourceName, suffix, pending, false)) {
               findings.push({ ...finding, line: finding.line + continuation });
             }
             index = continuation;
@@ -231,10 +279,13 @@ export function checkInterpreterSource(sourceName: string, text: string): Interp
       }
       else if (source.expandable.length > 0) findings.push({ sourceName, line: source.line, message: 'shell expansion in interpreter command source' });
     }
-    pending.push(...heredocsOnLine(lines[index], index + 1));
+    pending.push(...scan.heredocs);
+    index += joined.consumed - 1;
   }
-  for (const here of pending) {
-    if (here.interpreter) findings.push({ sourceName, line: here.line, message: 'unterminated interpreter heredoc' });
+  if (finalize) {
+    for (const here of pending) {
+      if (here.interpreter) findings.push({ sourceName, line: here.line, message: 'unterminated interpreter heredoc' });
+    }
   }
   return findings;
 }

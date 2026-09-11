@@ -34,6 +34,24 @@ describe('checkInterpreterSource', () => {
     ]);
   });
 
+  it.each([
+    ['continued unquoted source', 'node -e console.log\\\n($VALUE)', 1],
+    ['source after a continued option', 'node -e \\\n"console.log($VALUE)"', 2],
+    ['interpreter before a continued option', 'python3 \\\n-c "print($VALUE)"', 2],
+  ])('rejects shell expansion in a %s', (_name, text, line) => {
+    expect(checkInterpreterSource('continued-unsafe.sh', text)).toEqual([
+      expect.objectContaining({ sourceName: 'continued-unsafe.sh', line, message: 'shell expansion in interpreter command source' }),
+    ]);
+  });
+
+  it.each([
+    'node -e console.log\\\n(process.argv[1])',
+    'node -e \\\n"console.log(process.argv[1])"',
+    'python3 \\\n-c "print(process.argv[1])"',
+  ])('accepts static source in an escaped-newline command: %s', (text) => {
+    expect(checkInterpreterSource('continued-safe.sh', text)).toEqual([]);
+  });
+
   it('accepts a multiline single-quoted interpreter source', () => {
     expect(checkInterpreterSource('multiline.sh', "node -e '\nconsole.log(process.argv[1])\n' -- \"$VALUE\"")).toEqual([]);
   });
@@ -137,6 +155,12 @@ describe('checkInterpreterSource', () => {
     expect(checkInterpreterSource('multiline-suffix-safe.sh', 'node -e "\nconsole.log(process.argv[1])\n"; python3 -c "print(process.argv[1])"')).toEqual([]);
   });
 
+  it('retains heredocs discovered in the suffix of a closed multiline source word', () => {
+    expect(checkInterpreterSource('multiline-suffix-heredoc.sh', 'node -e "\nconsole.log(process.argv[1])\n"; python3 <<PY\nprint($VALUE)\nPY')).toEqual([
+      expect.objectContaining({ line: 4, message: 'shell expansion in interpreter heredoc source' }),
+    ]);
+  });
+
   it('associates queued heredocs with their own command', () => {
     expect(checkInterpreterSource('mixed-heredocs.sh', "python3 <<'PY'; cat <<EOF\nprint('$')\nPY\n$VALUE\nEOF")).toEqual([]);
     expect(checkInterpreterSource('mixed-heredocs-unsafe.sh', 'python3 <<PY; cat <<\'EOF\'\nprint($VALUE)\nPY\n$LITERAL\nEOF')).toEqual([
@@ -149,5 +173,29 @@ describe('checkInterpreterSource', () => {
       expect.objectContaining({ line: 2, message: 'shell expansion in interpreter heredoc source' }),
     ]);
     expect(checkInterpreterSource('outer-cat.sh', 'cat "$(python3 -c \'print(1)\')" <<EOF\n$VALUE\nEOF')).toEqual([]);
+  });
+
+  it.each([
+    '# <<EOF',
+    'echo "<<EOF"',
+    "echo '<<EOF'",
+    'echo <<<"literal"',
+    'echo $((1<<2))',
+    '((1<<2))',
+  ])('does not let non-redirection %s hide a later unsafe interpreter command', (prefix) => {
+    expect(checkInterpreterSource('false-heredoc-unsafe.sh', `${prefix}\nnode -e "console.log($VALUE)"`)).toEqual([
+      expect.objectContaining({ sourceName: 'false-heredoc-unsafe.sh', line: 2, message: 'shell expansion in interpreter command source' }),
+    ]);
+  });
+
+  it.each([
+    '# <<EOF',
+    'echo "<<EOF"',
+    "echo '<<EOF'",
+    'echo <<<"literal"',
+    'echo $((1<<2))',
+    '((1<<2))',
+  ])('accepts static source after non-redirection %s', (prefix) => {
+    expect(checkInterpreterSource('false-heredoc-safe.sh', `${prefix}\nnode -e "console.log(process.argv[1])"`)).toEqual([]);
   });
 });
