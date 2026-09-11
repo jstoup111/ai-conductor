@@ -12,7 +12,7 @@ import type {
 import { ModelAvailability } from './model-availability.js';
 import { redactSafetyText } from './safety-diagnostics.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
-import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
+import type { StepName, ConductState, ComplexityTier, ExecutionContext, RunMode } from '../types/index.js';
 import type { HarnessConfig, EffortLevel, BuildReviewRubricId } from '../types/config.js';
 import { prdAuditScopeProjection } from './conductor.js';
 import type {
@@ -119,6 +119,7 @@ import type {
   ProviderSessionStore,
 } from './provider-session.js';
 import {
+  buildProviderAttemptMetadata,
   executeProviderCandidates,
   executeAuxiliaryProviderCandidates,
   type ExecuteProviderCandidatesInput,
@@ -928,7 +929,16 @@ export class DefaultStepRunner implements StepRunner {
           false,
         );
       }
-      return this.runAutonomous(step, prompt, resume, systemPrompt, resolved, branchSessionId);
+      return this.runAutonomous(
+        step,
+        prompt,
+        resume,
+        systemPrompt,
+        resolved,
+        branchSessionId,
+        state.complexity_tier,
+        opts?.executionContext,
+      );
     }
 
     // Open a REPL when the step is designed for user conversation AND we're
@@ -975,7 +985,7 @@ export class DefaultStepRunner implements StepRunner {
       : this.createProviderStreamConsumer(step, this.providerKey);
 
     try {
-      await this.provider.invoke({
+      const result = await this.provider.invoke({
         prompt,
         sessionId: branchSessionId ?? this.sessionId,
         resume,
@@ -993,6 +1003,14 @@ export class DefaultStepRunner implements StepRunner {
         effort: resolved.effort,
         ...(streamConsumer ? { streamConsumer } : {}),
       });
+      await this.emitScalarProviderAttempt(
+        step,
+        result,
+        effectiveModel,
+        resolved.effort,
+        state.complexity_tier,
+        opts?.executionContext,
+      );
       this.callCount++;
 
       if (branchSessionId === undefined) {
@@ -1066,6 +1084,7 @@ export class DefaultStepRunner implements StepRunner {
               repository: this.projectDir,
               featureSlug: this.featureDesc || basename(this.projectDir),
             },
+            executionContext: opts?.executionContext,
             escalate: opts?.escalate ?? true,
             modelOverride: opts?.modelOverride ?? this.modelOverride,
             effortOverride: opts?.effortOverride ?? this.effortOverride,
@@ -1092,6 +1111,7 @@ export class DefaultStepRunner implements StepRunner {
               : {}),
           }),
         opts?.runId,
+        opts?.executionContext,
       );
       const verifiedResult = safety?.verify(result) ?? result;
       this.callCount++;
@@ -1163,6 +1183,7 @@ export class DefaultStepRunner implements StepRunner {
             repository: this.projectDir,
             featureSlug: this.featureDesc || basename(this.projectDir),
           },
+          executionContext: request.dispatch?.executionContext,
           escalate: request.dispatch?.escalate ?? true,
           modelOverride: request.dispatch?.modelOverride ?? this.modelOverride,
           effortOverride: request.dispatch?.effortOverride ?? this.effortOverride,
@@ -1185,6 +1206,7 @@ export class DefaultStepRunner implements StepRunner {
             : {}),
         }),
       request.dispatch?.runId,
+      request.dispatch?.executionContext,
     );
     return safety?.verify(result) ?? result;
   }
@@ -1201,6 +1223,7 @@ export class DefaultStepRunner implements StepRunner {
       options: ExecuteProviderCandidatesInput['options'],
     ) => Promise<ProviderExecutionResult>,
     dispatchRunId?: string,
+    executionContext?: ExecutionContext,
   ): Promise<ProviderExecutionResult> {
     const pulse = createHeartbeatPulse(this.projectDir, step);
     const providerStreamIntervalMs = resolveProviderStreamMinIntervalMs(this.config);
@@ -1229,7 +1252,10 @@ export class DefaultStepRunner implements StepRunner {
       preparationTimeoutMinutes: resolveProviderPreparationTimeoutMinutes(this.config),
       timer: this.providerLifecycleTimer,
       onLifecycleEvent: (event) => {
-        void this.providerAttempt?.(event.step, event);
+        void this.providerAttempt?.(
+          event.step,
+          executionContext ? { ...event, executionContext } : event,
+        );
       },
       recovery: {
         projectRoot: this.projectDir,
@@ -1424,6 +1450,8 @@ export class DefaultStepRunner implements StepRunner {
     systemPrompt: string,
     resolved: ResolvedStepConfig,
     branchSessionId?: string,
+    tier?: ComplexityTier,
+    executionContext?: ExecutionContext,
   ): Promise<StepRunResult> {
     // Resolve to a live model up front (skipping any already known-dead
     // model in this process) so a single ladder-covered invocation doesn't
@@ -1459,6 +1487,14 @@ export class DefaultStepRunner implements StepRunner {
       const { v4: uuidv4 } = await import('uuid');
       return { sessionId: uuidv4(), resume: false };
     });
+    await this.emitScalarProviderAttempt(
+      step,
+      result,
+      attemptedModels.at(-1) || effectiveModel,
+      resolved.effort,
+      tier,
+      executionContext,
+    );
     this.callCount++;
     const observedIntervals = result.observedIntervals
       ? { observedIntervals: result.observedIntervals }
@@ -1581,6 +1617,33 @@ export class DefaultStepRunner implements StepRunner {
         : {}),
       ...observedIntervals,
     };
+  }
+
+  /** Emits scalar-provider telemetry without retaining invocation state on the runner. */
+  private async emitScalarProviderAttempt(
+    step: StepName,
+    result: InvokeResult,
+    model: string,
+    effort: EffortLevel,
+    tier: ComplexityTier | undefined,
+    executionContext: ExecutionContext | undefined,
+  ): Promise<void> {
+    try {
+      await this.providerAttempt?.(
+        step,
+        buildProviderAttemptMetadata({
+          providerKey: this.providerKey,
+          executionContext,
+          result,
+          preferredProvider: this.providerKey,
+          resolvedModel: model,
+          resolvedEffort: effort,
+          tier,
+        }),
+      );
+    } catch {
+      // Attempt metadata is observational and must not alter scalar dispatch.
+    }
   }
 
   async resetSession(step?: StepName, providerKey = this.providerKey): Promise<void> {

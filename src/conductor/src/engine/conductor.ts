@@ -70,7 +70,7 @@ import type {
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
-import type { ConductState, ConductorEvent, FinishPublicationEvent } from '../types/index.js';
+import type { ConductState, ConductorEvent, ExecutionContext, FinishPublicationEvent } from '../types/index.js';
 import type {
   StepName,
   StepStatus,
@@ -1517,6 +1517,8 @@ export interface StepRunOptions {
    * own run-scoped attempt-id format.
    */
   runId?: string;
+  /** Existing-spine correlation for this one invocation; never runner-global state. */
+  executionContext?: ExecutionContext;
   /**
    * Retry hint injected into the system prompt when the conductor re-invokes
    * this step after a completion-gate miss. Example: "previous attempt did not
