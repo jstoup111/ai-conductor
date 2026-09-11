@@ -543,6 +543,7 @@ describe('registerBuiltins — terminal halt-marker sink', () => {
       readStateFn: async () => ({ ok: true, value: {} }),
       liveRegion: createLiveRegion({ stream, forceTTY: false }),
     });
+    registry.markInitialized();
     const renderer = registry.get<{ handle: (event: unknown) => Promise<void>; stop: () => Promise<void> }>('ui_renderer', 'terminal');
     subscriber.start([renderer as never]);
 

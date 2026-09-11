@@ -56,7 +56,7 @@ describe('progress event coverage guard', () => {
 
   const lists: Array<{ name: string; file: string }> = [
     { name: 'daemon-cli.ts renderer switch', file: join(SRC_ROOT, 'daemon-cli.ts') },
-    { name: 'ui/create-renderer.ts TTY renderer switch', file: join(SRC_ROOT, 'ui', 'create-renderer.ts') },
+    { name: 'ui/terminal-renderer.ts TTY renderer switch', file: join(SRC_ROOT, 'ui', 'terminal-renderer.ts') },
   ];
 
   for (const { name, file } of lists) {
