@@ -29,7 +29,6 @@ import {
   appendBuildReviewReducedCoverageEvidence,
   appendBuildReviewMetrics,
   parseStoriesReference,
-  projectShippedRecordSubstance,
   specHash,
   renderShippedRecord,
   renderShippedRecordWithCost,
@@ -242,9 +241,9 @@ export async function dispatchShippedRecord(
       );
       return 1;
     }
-    // Cost and Time are self-updating telemetry: the dispatch that writes this
-    // record also grows their ledger. When every other byte matches HEAD,
-    // retain the committed record verbatim so the worktree remains clean.
+    // Only a complete byte-identical record is a no-op. Cost and Time are
+    // projections of the feature ledger, including the finish dispatch, so
+    // their current totals must be committed when they change.
     const committed = await execa('git', ['show', `HEAD:${relPath}`], {
       cwd,
       reject: false,
@@ -252,7 +251,7 @@ export async function dispatchShippedRecord(
     }).catch(() => undefined);
     if (
       committed?.exitCode === 0
-      && projectShippedRecordSubstance(committed.stdout) === projectShippedRecordSubstance(recordBody)
+      && committed.stdout === recordBody
     ) {
       await writeShippedRecord(join(cwd, relPath), committed.stdout);
       console.log(`  ✓ shipped record already committed: ${relPath}`);

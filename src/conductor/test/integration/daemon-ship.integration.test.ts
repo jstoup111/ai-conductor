@@ -186,7 +186,7 @@ describe('conduct shipped-record — record committed on the implementation bran
     expect(await git(['rev-list', '--count', 'HEAD'])).toBe(firstCount);
   });
 
-  it('idempotent re-run: ignores ledger growth after its committed record is authoritative', async () => {
+  it('commits current rollups after ledger growth, then skips a byte-identical third write', async () => {
     const pr = 'https://github.com/acme/repo/pull/42';
     const ledgerPath = join(repo, '.pipeline/events.jsonl');
     const firstDispatch = {
@@ -226,7 +226,17 @@ describe('conduct shipped-record — record committed on the implementation bran
     expect(await runShippedRecord(SLUG, pr)).toBe(0);
     expect((await git(['log', '--format=%s'])).split('\n').filter(
       (subject) => subject === `shipped record: ${SLUG}`,
-    )).toHaveLength(1);
+    )).toHaveLength(2);
+    expect(outs.filter((line) => line.includes('✓ shipped record committed:'))).toHaveLength(1);
+    const refreshedRecord = await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8');
+    expect(refreshedRecord).toContain('dispatches: 2');
+    expect(refreshedRecord).toContain('active_ms: 300');
+
+    outs.length = 0;
+    expect(await runShippedRecord(SLUG, pr)).toBe(0);
+    expect((await git(['log', '--format=%s'])).split('\n').filter(
+      (subject) => subject === `shipped record: ${SLUG}`,
+    )).toHaveLength(2);
     expect(outs.filter((line) => line.includes('✓ shipped record already committed:'))).toHaveLength(1);
     expect(await git(['status', '--porcelain'])).toBe('');
     const { stdout: committedBytes } = await execFile('git', [

@@ -760,10 +760,10 @@ fact that the spec shipped and the daemon stops re-dispatching it. Never run it 
 | `--pr <url\|local>` | string | yes | The PR URL, or the literal `local` for a merge-local finish. |
 
 It resolves the plan identity, hashes `.docs/plans/<slug>.md` and its stories file — the plan's
-`**Stories:**` reference first, then `.docs/stories/<slug>.md` — renders the record with a cost block
-when one can be computed, then compares its substantive content to the committed record, ignoring the
-generated `## Cost` and `## Time` blocks. Equal substance produces no duplicate commit; otherwise it
-`git add`s the file and commits it as `shipped record: <slug>` when the staged content changed.
+`**Stories:**` reference first, then `.docs/stories/<slug>.md` — and renders the record with a cost block
+when one can be computed. Only a byte-identical complete record produces no duplicate commit; changed
+`## Cost` or `## Time` totals are committed with the current record. Otherwise it `git add`s the file and
+commits it as `shipped record: <slug>` when the staged content changed.
 
 It also appends a `## Time` block computed independently from `.pipeline/events.jsonl`, reporting
 `state: measured|partial|unavailable` with `active_ms`, `provider_active_ms`, and
