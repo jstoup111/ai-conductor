@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-11T10:46:41.635Z
 Slug: make-the-shipped-record-idempotence-guard-ignore-s
 Class: needs-human
 Halting step: prd_audit
