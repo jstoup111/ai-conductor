@@ -9365,6 +9365,9 @@ describe('engine/conductor', () => {
         events,
         fromStep: 'manual_test',
         mode: 'auto',
+        // The FAIL-row retention predicate is artifact-aware. Keep this
+        // no-verdict fixture on that production path rather than bypassing it.
+        verifyArtifacts: true,
       });
 
       await conductor.run();

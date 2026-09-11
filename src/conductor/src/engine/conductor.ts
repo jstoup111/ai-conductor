@@ -12934,10 +12934,14 @@ export class Conductor {
             // member key here rather than routing width one through the join.
             const group = getGroupForStep(step.name);
             if (group?.name === 'validation') {
-              await this.saveConductorStepStatus(
+              // Synthetic group-member keys are not StepName values.  Commit
+              // the paired status through the mutation port without using the
+              // step-status helper, which would incorrectly advance last_step
+              // to the synthetic key.
+              await this.commitStateChanges(
                 state,
-                `${group.name}__${step.name}` as StepName,
-                'done',
+                `complete ${group.name} ${step.name} synthetic member state`,
+                { [`${group.name}__${step.name}`]: 'done' },
               );
             }
           }
