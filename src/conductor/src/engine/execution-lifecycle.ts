@@ -5,7 +5,13 @@ import {
 import type { ConductorEvent, ExecutionContext } from '../types/events.js';
 import type { StepName } from '../types/steps.js';
 import { ConductorEventEmitter } from '../ui/events.js';
+import { resolveExecutionIdentity, type ExecutionScope } from './execution-identity.js';
 import { getGroupForStep } from './steps.js';
+
+const executionLifecycleScope: ExecutionScope = {
+  featureId: 'execution-lifecycle',
+  runId: 'in-memory',
+};
 
 type LifecycleStartEvent = Extract<ConductorEvent, { type: 'step_started' | 'parallel_started' }>;
 type LifecycleRetryEvent = Extract<ConductorEvent, { type: 'step_retry' }>;
@@ -87,7 +93,7 @@ export class ExecutionLifecycle {
   /** A retry remains an observation inside its already-admitted execution. */
   retry(event: LifecycleRetryEvent): Promise<void> {
     if (event.executionContext !== undefined) {
-      const key = contextualKey(event.executionContext);
+      const key = contextualKey(event.executionContext, event.step);
       if (key === undefined || !this.openExecutions.has(key)) return Promise.resolve();
     }
     return this.deliver(event);
@@ -201,7 +207,7 @@ function startKey(event: LifecycleStartEvent): string | undefined {
   if (event.type === 'parallel_started') return `parallel:${event.step}`;
   return event.executionContext === undefined
     ? `step:${event.step}`
-    : contextualKey(event.executionContext);
+    : contextualKey(event.executionContext, event.step);
 }
 
 function terminalKey(
@@ -209,18 +215,28 @@ function terminalKey(
   openExecutions: ReadonlyMap<string, OpenExecution>,
 ): string | undefined {
   if (event.type === 'step_completed' || event.type === 'step_failed') {
-    return event.executionContext === undefined ? `step:${event.step}` : contextualKey(event.executionContext);
+    return event.executionContext === undefined ? `step:${event.step}` : contextualKey(event.executionContext, event.step);
   }
   if (event.type === 'step_refused') {
     return event.executionContext === undefined
       ? openExecutions.has(`step:${event.step}`) ? `step:${event.step}` : undefined
-      : contextualKey(event.executionContext);
+      : contextualKey(event.executionContext, event.step);
   }
   if (event.type === 'parallel_completed' || event.terminal !== false) return `parallel:${event.step}`;
   return undefined;
 }
 
-function contextualKey(context: ExecutionContext): string | undefined {
+function contextualKey(context: ExecutionContext, legacyStep?: string): string | undefined {
+  if (
+    legacyStep !== undefined
+    && resolveExecutionIdentity({
+      scope: executionLifecycleScope,
+      legacyStep,
+      executionContext: context,
+    }) === undefined
+  ) {
+    return undefined;
+  }
   if (typeof context.executionId !== 'string' || context.executionId.length === 0) return undefined;
   const { subject } = context;
   if (subject.kind === 'lifecycle-step' && typeof subject.step === 'string' && subject.step.length > 0) {
