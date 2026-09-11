@@ -43,6 +43,25 @@ const ACTION_CASE = {
   effect: { kind: 'action', route: 'build', tasks: [{ title: 'Cover the changed behavior' }] },
 } as const;
 
+const REFUTATION = {
+  claim: 'The alleged coverage gap is already covered by the focused regression test.',
+  assertions: [{
+    assertion: 'The focused regression test exercises the changed production path.',
+    verdict: 'refuted' as const,
+    evidence: [{ path: 'test/regression.test.ts', excerpt: 'exercises the changed production path' }],
+  }],
+} as const;
+
+const REFUTE_CASE = {
+  caseRef: 'refute-case-1', existingCaseId: 'case-1', disposition: 'refute', priority: 'high',
+  rationale: 'The original finding is contradicted by the focused regression test.', confidence: 'high',
+  effect: { kind: 'none' }, refutation: REFUTATION,
+} as const;
+
+function refuteGraph(caseRow: RemediationCaseGraph['cases'][number]['case'] = REFUTE_CASE): RemediationCaseGraph {
+  return graph(caseRow, [{ sourceId: 'testQuality:finding-2', outcome: 'refuted', caseRef: caseRow.caseRef }]);
+}
+
 function durableAction(overrides: Partial<RemediationCaseRecord> = {}): RemediationCaseRecord {
   return {
     id: 'case-1', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'Fix it.', confidence: 'high', resolution: 'open',
@@ -65,6 +84,7 @@ describe('remediation case reconciler', () => {
     ['attempted action halts regardless of changed-tree facts outside the durable identity', durableAction(), new Set(['case-1']), 'halt-repeat'],
     ['resolved action regression halts before a second route', durableAction({ resolution: 'resolved' }), new Set<string>(), 'halt-regression'],
     ['deferred and rejected bindings reuse without another action route', { ...durableAction(), disposition: 'defer', effect: { id: 'effect-1', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/1' } }, new Set(['case-1']), 'reuse'],
+    ['refuted bindings reuse without another action route', durableAction({ disposition: 'refute', resolution: 'resolved', sources: [{ sourceId: 'testQuality:finding-1', outcome: 'refuted', recordedAt: RECORDED_AT }], effect: { kind: 'none' }, refutation: REFUTATION }), new Set(['case-1']), 'reuse'],
   ] as const)('%s', (_label, record, attempted, expected) => {
     expect(classifyRemediationCaseReuse(record, attempted)).toBe(expected);
   });
@@ -123,6 +143,106 @@ describe('remediation case reconciler', () => {
         }],
       },
     });
+  });
+
+  it('admits one attempted applied action case as a resolved refutation', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [durableAction()] } }));
+
+    const result = await reconcileRemediationCases(store, {
+      graph: refuteGraph(),
+      recordedAt: '2026-08-30T13:00:00.000Z',
+      generateId: () => 'must-not-be-used',
+      attemptedCaseIds: ['case-1'],
+    });
+
+    expect(result).toMatchObject({ ok: true, state: { cases: [{
+      id: 'case-1', disposition: 'refute', resolution: 'resolved', effect: { kind: 'none' }, refutation: REFUTATION,
+      sources: [
+        { sourceId: 'testQuality:finding-1', outcome: 'acted', recordedAt: RECORDED_AT },
+        { sourceId: 'testQuality:finding-2', outcome: 'refuted', recordedAt: '2026-08-30T13:00:00.000Z' },
+      ],
+    }] } });
+  });
+
+  it('rewrites an attempted action source in place when its exact id is refuted', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [durableAction()] } }));
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph(REFUTE_CASE, [{ sourceId: 'testQuality:finding-1', outcome: 'refuted', caseRef: 'refute-case-1' }]),
+      recordedAt: '2026-08-30T13:00:00.000Z', generateId: () => 'must-not-be-used', attemptedCaseIds: ['case-1'],
+    });
+    const reparsed = await store.read();
+
+    expect(result).toMatchObject({ ok: true, state: { cases: [{
+      id: 'case-1', disposition: 'refute', resolution: 'resolved',
+      sources: [{ sourceId: 'testQuality:finding-1', outcome: 'refuted', recordedAt: '2026-08-30T13:00:00.000Z' }],
+    }] } });
+    expect(reparsed.ok && reparsed.state.cases[0]?.sources).toEqual([
+      { sourceId: 'testQuality:finding-1', outcome: 'refuted', recordedAt: '2026-08-30T13:00:00.000Z' },
+    ]);
+  });
+
+  it('rejects a non-refutation exact-id outcome mismatch without changing durable state', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [durableAction()] } }));
+    const before = await readFile(remediationCaseStorePath(projectRoot), 'utf8');
+
+    const result = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'same-action', existingCaseId: 'case-1' }, [
+        { sourceId: 'testQuality:finding-1', outcome: 'refuted', caseRef: 'same-action' },
+      ]),
+      recordedAt: '2026-08-30T13:00:00.000Z', generateId: () => 'must-not-be-used',
+    });
+
+    expect([result, await readFile(remediationCaseStorePath(projectRoot), 'utf8')]).toEqual([
+      { ok: false, reason: 'illegal-source-link' }, before,
+    ]);
+  });
+
+  it('reserves a supplied refutation deferral effect under a new engine-owned identity', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [durableAction()] } }));
+
+    const result = await reconcileRemediationCases(store, {
+      graph: refuteGraph({ ...REFUTE_CASE, effect: {
+        kind: 'deferral', title: 'Follow up elsewhere', body: 'Track the narrowly excluded concern.', exclusionRationale: 'Out of scope for this repair.',
+      } }),
+      recordedAt: '2026-08-30T13:00:00.000Z', generateId: generatedIds('effect-refute'), attemptedCaseIds: ['case-1'],
+    });
+
+    expect(result).toMatchObject({ ok: true, state: { cases: [{
+      id: 'case-1', disposition: 'refute', resolution: 'resolved',
+      effect: { id: 'effect-refute', kind: 'deferral', status: 'reserved' }, refutation: REFUTATION,
+    }] } });
+  });
+
+  it.each([
+    ['an unattempted action case', durableAction(), [], 'illegal-disposition-transition'],
+    ['a reserved action effect', durableAction({ effect: { id: 'effect-1', kind: 'action', status: 'reserved' } }), ['case-1'], 'illegal-disposition-transition'],
+    ['a failed action effect', durableAction({ effect: { id: 'effect-1', kind: 'action', status: 'failed', diagnostic: 'work order failed' } }), ['case-1'], 'illegal-disposition-transition'],
+    ['a deferred case', durableAction({ disposition: 'defer', sources: [{ sourceId: 'testQuality:finding-1', outcome: 'deferred', recordedAt: RECORDED_AT }], effect: { id: 'effect-1', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/1' } }), [], 'illegal-disposition-transition'],
+    ['a rejected case', durableAction({ disposition: 'reject', sources: [{ sourceId: 'testQuality:finding-1', outcome: 'rejected', recordedAt: RECORDED_AT }], effect: { kind: 'none' } }), [], 'illegal-disposition-transition'],
+    ['an already refuted case', durableAction({ disposition: 'refute', resolution: 'resolved', sources: [{ sourceId: 'testQuality:finding-1', outcome: 'refuted', recordedAt: RECORDED_AT }], effect: { kind: 'none' }, refutation: REFUTATION }), [], 'refutation-repeat'],
+  ] as const)('rejects a refutation bound to %s without changing durable state', async (_description, record, attemptedCaseIds, reason) => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    await store.mutate(async (state) => ({ value: null, nextState: { ...state, cases: [record] } }));
+    const before = await readFile(remediationCaseStorePath(projectRoot), 'utf8');
+
+    const result = await reconcileRemediationCases(store, {
+      graph: refuteGraph(), recordedAt: '2026-08-30T13:00:00.000Z',
+      generateId: () => 'must-not-be-used', attemptedCaseIds,
+    });
+
+    expect([result, await readFile(remediationCaseStorePath(projectRoot), 'utf8')]).toEqual([
+      { ok: false, reason }, before,
+    ]);
   });
 
   it('resolves an absent open action case only after recorded BUILD attempt evidence', async () => {

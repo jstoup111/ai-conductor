@@ -7,6 +7,7 @@ import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-agg
 import { parseBuildReviewLapId, type BuildReviewRubricResult } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
+import { RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
 
 vi.mock('../../src/engine/config.js', async (importOriginal) => ({
@@ -44,6 +45,27 @@ const scopeIncompleteAggregate = joinBuildReviewRubricOutcomes({
   },
 });
 
+const refutedCaseStore: RemediationCaseStoreState = {
+  version: 'v1',
+  feature: { version: 'v1', repository: '/main', feature: 'review-rubrics' },
+  cases: [{
+    id: 'case-refuted', domain: 'build_review', disposition: 'refute', priority: 'high',
+    rationale: 'The cited assertion is contradicted by the current test.', confidence: 'high', resolution: 'resolved',
+    sources: [{ sourceId: 'testQuality:sha256:refuted', outcome: 'refuted', recordedAt: '2026-09-11T12:00:00.000Z' }],
+    effect: { kind: 'none' },
+    refutation: {
+      claim: 'The changed test does not observe the behavior.',
+      assertions: [{
+        assertion: 'The test omits the observable assertion.', verdict: 'refuted',
+        evidence: [{ path: 'test/a.test.ts', excerpt: 'expect(result).toBe(true)' }],
+      }, {
+        assertion: 'The assertion is reachable.', verdict: 'upheld',
+        evidence: [{ path: 'src/a.ts', excerpt: 'return result;' }],
+      }],
+    },
+  }],
+};
+
 function aggregateWithTestQuality(result: BuildReviewRubricResult) {
   return joinBuildReviewRubricOutcomes({
     lapId, snapshotDigest: 'sha256:snapshot', results: { ...infrastructureAggregate.results, testQuality: result },
@@ -51,6 +73,84 @@ function aggregateWithTestQuality(result: BuildReviewRubricResult) {
 }
 
 describe('build-review findings CLI', () => {
+  let caseRead: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    caseRead = vi.spyOn(RemediationCaseStore.prototype, 'read').mockResolvedValue({
+      ok: true, state: { ...refutedCaseStore, cases: [] },
+    });
+  });
+
+  afterEach(() => {
+    caseRead.mockRestore();
+  });
+
+  // Covers: task:12
+  it('renders refuted autonomous cases separately from operator dispositions in human and JSON output', async () => {
+    const identity = canonicalizeBuildReviewFindingIdentity({ ...finding, rubric: 'testQuality', contractVersion: 'v3' })!;
+    const dispositionStore = {
+      list: async () => ({ ok: true as const, records: [{
+        version: 'v1' as const, feature: { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' },
+        finding: identity, sourceLapId: lapId, summary: 'accepted', rationale: 'operator risk', operator: 'operator', acceptedAt: '2026-09-11T12:00:00.000Z',
+      }] }), append: vi.fn(),
+    };
+    const caseStore = { read: async () => ({ ok: true as const, state: refutedCaseStore }) };
+    const deps = {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(aggregate), createStore: () => dispositionStore,
+      createCaseStore: () => caseStore, readMechanicalFaults: async () => 0,
+    };
+    const human = vi.fn();
+    const json = vi.fn();
+
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, { ...deps, print: human })).resolves.toBe(0);
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, { ...deps, print: json })).resolves.toBe(0);
+
+    expect(human).toHaveBeenCalledWith(expect.stringMatching(
+      /Operator dispositions:[\s\S]*operator risk[\s\S]*Autonomous case outcomes:[\s\S]*case-refuted[\s\S]*disposition: refute[\s\S]*resolution: resolved[\s\S]*testQuality:sha256:refuted[\s\S]*effect: none[\s\S]*The changed test does not observe the behavior\.[\s\S]*The test omits the observable assertion\. \(refuted\)[\s\S]*The assertion is reachable\. \(upheld\)[\s\S]*The cited assertion is contradicted by the current test\./,
+    ));
+    expect(JSON.parse(json.mock.calls[0]![0])).toMatchObject({
+      cases: [{
+        id: 'case-refuted', disposition: 'refute', resolution: 'resolved',
+        sources: [{ sourceId: 'testQuality:sha256:refuted' }], effect: { kind: 'none' },
+        refutation: { claim: 'The changed test does not observe the behavior.', assertions: [
+          { assertion: 'The test omits the observable assertion.', verdict: 'refuted' },
+          { assertion: 'The assertion is reachable.', verdict: 'upheld' },
+        ] }, rationale: 'The cited assertion is contradicted by the current test.',
+      }],
+      acceptedDispositions: [expect.objectContaining({ disposition: expect.objectContaining({ rationale: 'operator risk' }) })],
+    });
+  });
+
+  // Covers: task:12
+  it.each([
+    ['malformed-state', 'malformed-state'],
+    ['unknown-version', 'unknown-version'],
+  ])('refuses a %s remediation case store instead of omitting autonomous cases', async (_name, reason) => {
+    const print = vi.fn();
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(aggregate),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      createCaseStore: (_worktree, _feature) => ({
+        read: async () => ({ ok: false as const, reason: reason as 'malformed-state' | 'unknown-version' }),
+      }), print,
+    })).resolves.toBe(1);
+    expect(print).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`remediation case store.*${reason}`, 'i')));
+  });
+
+  // Covers: task:12
+  it('reports no autonomous cases when the remediation case store is absent', async () => {
+    const print = vi.fn();
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'human' }, {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(aggregate),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [] } }) }), print,
+    })).resolves.toBe(0);
+    expect(print).toHaveBeenCalledWith(expect.stringContaining('Autonomous case outcomes: none'));
+  });
+
   it('records reduced coverage for an interactive resolved local operator using the engine-derived cause', async () => {
     const appendReducedCoverageIfCurrent = vi.fn(async (input, validate) => {
       expect(await validate([])).toBe(true);
@@ -371,7 +471,7 @@ describe('build-review findings CLI', () => {
     const machineOutput = JSON.parse(machine.mock.calls[0]![0]);
     expect(machineOutput.lastMechanicalFault).toEqual(fault);
     expect(Object.keys(machineOutput).sort()).toEqual([
-      'acceptedDispositions', 'acceptedFindingIds', 'feature', 'infrastructureFailureRubrics', 'lapId', 'lastMechanicalFault',
+      'acceptedDispositions', 'acceptedFindingIds', 'cases', 'feature', 'infrastructureFailureRubrics', 'lapId', 'lastMechanicalFault',
       'rawVerdict', 'skippedRubrics', 'snapshotDigest', 'suppressedFindingIds', 'unresolvedFindingIds', 'verdict',
     ]);
     expect(human).toHaveBeenCalledWith(expect.stringContaining(
@@ -425,11 +525,12 @@ describe('build-review findings CLI', () => {
     expect(machine).toHaveBeenCalledWith(JSON.stringify({
       feature: 'review-rubrics', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', rawVerdict: 'PASS', verdict: 'PASS',
       acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], acceptedDispositions: [],
+      cases: [],
     }));
     expect(JSON.parse(machine.mock.calls[0]![0])).not.toHaveProperty('lastMechanicalFault');
     expect(human).toHaveBeenCalledWith([
       'Build review findings: review-rubrics', 'Lap: lap-current', 'Raw verdict: PASS', 'Effective verdict: PASS',
-      'Accepted findings: none', 'Unresolved findings: none', 'Skipped rubrics: none', 'Infrastructure failures: none',
+      'Accepted findings: none', 'Operator dispositions: none', 'Autonomous case outcomes: none', 'Unresolved findings: none', 'Skipped rubrics: none', 'Infrastructure failures: none',
     ].join('\n'));
   });
 
@@ -568,7 +669,8 @@ describe('build-review accept', () => {
     const config = vi.fn(async () => ({ ok: true as const, config: { build_review: { rubrics: { testQuality: { min_confidence: 70 } } } }, warnings: [] }));
     const shared = {
       cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
-      readFile: async () => JSON.stringify(lowConfidenceAggregate), createStore: () => store, loadConfig: config, print,
+      readFile: async () => JSON.stringify(lowConfidenceAggregate), createStore: () => store,
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [] } }) }), loadConfig: config, print,
     };
 
     await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, shared)).resolves.toBe(0);
@@ -603,6 +705,7 @@ describe('build-review accept', () => {
       resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
       readFile: async () => JSON.stringify(testQualityAggregate),
       createStore: () => new BuildReviewDispositionStore(root),
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [] } }) }),
       appendEvent: vi.fn(),
       ...overrides,
     };

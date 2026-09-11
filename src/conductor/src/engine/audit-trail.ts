@@ -41,6 +41,11 @@ export type AuditRecord = {
   attempt?: number;
   artifact?: string;
   outcome?: VerdictFreshnessOutcome;
+  /** Present for build-review remediation occurrences. */
+  domain?: string;
+  lapId?: string;
+  caseId?: string;
+  residualEffectId?: string;
   at: number;
   /**
    * #647 D3: for `event: 'kickback'` records, distinguishes a kickback that
@@ -169,6 +174,16 @@ export class AuditTrailWriter {
           event: 'retry',
           reason: event.reason || 'step retry',
           attempt: event.attempt,
+        };
+      case 'remediation_case_refuted':
+        return {
+          origin: 'build',
+          event: event.type,
+          reason: `${event.domain} lap ${event.lapId} refuted case ${event.caseId}`,
+          domain: event.domain,
+          lapId: event.lapId,
+          caseId: event.caseId,
+          ...(event.residualEffectId ? { residualEffectId: event.residualEffectId } : {}),
         };
       case 'remediation_disposition_rejected':
         return {

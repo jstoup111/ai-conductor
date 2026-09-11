@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:6, task:15, task:17
+// Covers: task:1, task:3, task:6, task:8, task:15, task:17
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -117,6 +117,7 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'build_review_disposition_version_invalidated',
   'build_review_outer_verdict',
   'remediation_adjudication_completed',
+  'remediation_case_refuted',
   'build_review_stale_aggregate',
   'loop_halt',
   'halt_marker_write_failed',
@@ -157,6 +158,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'self_host_containment_verdict',
   'over_scope_decision',
   ...REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES,
+  'remediation_case_refuted',
   'build_review_scope_summary',
   'build_review_scope_incomplete',
 ] satisfies Array<ConductorEvent['type']>;
@@ -198,6 +200,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'build_review_rubric_infrastructure_failure',
   'build_review_outer_verdict',
   'remediation_adjudication_completed',
+  'remediation_case_refuted',
   'operator_rewind',
   'setup_repair',
   'project_setup',
@@ -514,6 +517,15 @@ describe('event sink subscriptions', () => {
         ? { ...expected, render: true }
         : expected]),
     ));
+  });
+
+  it('renders, persists, and audits a refuted remediation case without exporting it to OpenTelemetry', () => {
+    expect(EVENT_SINKS.remediation_case_refuted).toEqual({
+      render: true,
+      persist: true,
+      audit: true,
+      otel: false,
+    });
   });
 
   it('persists loop_halt events through the emitter into the pipeline ledger', async () => {
@@ -869,6 +881,7 @@ describe('event sink subscriptions', () => {
       'shipment_evidence_refused',
       'build_review_disposition_version_invalidated',
       'build_review_cache_discarded',
+      'remediation_case_refuted',
       ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
       ...RESEAL_EVENT_TYPES,
     ]));

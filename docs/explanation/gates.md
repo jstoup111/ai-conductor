@@ -604,9 +604,15 @@ dispositions. `build_review.adjudication.enabled: false` retains the legacy raw-
 The engine validates the judgement as a complete source-to-case mapping, assigns durable case and
 effect identities, and records the feature-local state before applying an effect. An action publishes
 a durable BUILD work order and returns to `build`; a justified deferral files or reuses its marked
-intake issue; a rejection has no external effect. In a mixed lap, an action route takes precedence
-while an uncovered infrastructure failure remains blocking after the BUILD attempt. Invalid,
-incomplete, stale, repeated, or unfinished case state halts rather than silently routing or passing.
+intake issue; a rejection has no external effect. A `refute` row can instead settle an already attempted
+action case once: it must bind that case, carry high-confidence path/excerpt evidence and at least one
+refuted assertion, and changes the case to a resolved refutation without charging another BUILD route.
+It emits `remediation_case_refuted`. A refutation may retain only a complete deferral for a narrow
+remainder; the refuted source settles only after that residual is applied, while a reserved or failed
+residual remains blocking. A second refutation of the same case halts `needs-human`. In a mixed lap,
+an action route takes precedence while an uncovered infrastructure failure remains blocking after the
+BUILD attempt. Invalid, incomplete, stale, repeated, or unfinished case state halts rather than silently
+routing or passing.
 
 The case store and work order survive a daemon restart. BUILD stamps the work order before it starts,
 so an already attempted case cannot receive another free route; a later clean review settles cases

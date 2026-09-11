@@ -1,6 +1,7 @@
 import type { BuildReviewAggregate, BuildReviewRawSourceProjection } from './build-review-aggregate.js';
 import { projectBuildReviewAggregateSources } from './build-review-aggregate.js';
 import type { RemediationCaseEffect, RemediationCaseRecord, RemediationCaseSourceLink, RemediationCaseSuppressionEntry } from './remediation-case-store.js';
+import type { RemediationCaseRefutation } from './remediation-case-artifact.js';
 
 export const BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS = Object.freeze({
   maxCurrentSources: 512,
@@ -25,6 +26,7 @@ export interface BuildReviewAdjudicationPriorCase {
   readonly resolution: RemediationCaseRecord['resolution'];
   readonly sources: readonly RemediationCaseSourceLink[];
   readonly effect: RemediationCaseEffect;
+  readonly refutation?: RemediationCaseRefutation;
 }
 
 /** The active approved-plan contract that decides whether work is admitted. */
@@ -93,7 +95,7 @@ export type AssembleBuildReviewAdjudicationContextResult =
   | { readonly ok: false; readonly stop: BuildReviewAdjudicationContextStop };
 
 const LIMITS = BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS;
-const OUTCOMES = new Set(['acted', 'deferred', 'rejected', 'merged']);
+const OUTCOMES = new Set(['acted', 'deferred', 'rejected', 'refuted', 'merged']);
 
 function bytes(value: string): number {
   return Buffer.byteLength(value, 'utf8');
@@ -139,7 +141,7 @@ function validateCurrent(source: BuildReviewRawSourceProjection): BuildReviewAdj
 
 function validateEffect(caseRecord: RemediationCaseRecord): BuildReviewAdjudicationContextStop | undefined {
   const effect = caseRecord.effect;
-  if (caseRecord.disposition === 'reject') {
+  if (caseRecord.disposition === 'reject' || caseRecord.disposition === 'refute' && effect.kind === 'none') {
     return effect.kind === 'none' ? undefined : { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'effect' };
   }
   const expectedKind = caseRecord.disposition === 'act' ? 'action' : 'deferral';
@@ -163,7 +165,7 @@ function validatePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudi
     const stop = boundedString(value, limit, 'prior-case', field, caseRecord.id);
     if (stop) return stop;
   }
-  if (caseRecord.domain !== 'build_review' || !['act', 'defer', 'reject'].includes(caseRecord.disposition) ||
+  if (caseRecord.domain !== 'build_review' || !['act', 'defer', 'reject', 'refute'].includes(caseRecord.disposition) ||
     !['critical', 'high', 'medium', 'low'].includes(caseRecord.priority) ||
     !['high', 'medium', 'low'].includes(caseRecord.confidence) || !['open', 'resolved'].includes(caseRecord.resolution)) {
     return { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'case' };
@@ -181,6 +183,17 @@ function validatePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudi
     sourceIds.add(source.sourceId);
   }
   return validateEffect(caseRecord);
+}
+
+function freezeRefutation(refutation: RemediationCaseRefutation): RemediationCaseRefutation {
+  return Object.freeze({
+    claim: refutation.claim,
+    assertions: Object.freeze(refutation.assertions.map((assertion) => Object.freeze({
+      assertion: assertion.assertion,
+      verdict: assertion.verdict,
+      evidence: Object.freeze(assertion.evidence.map((evidence) => Object.freeze({ ...evidence }))),
+    }))),
+  });
 }
 
 /** One compact durable pointer per prior case; no prose, no tree re-audit. */
@@ -207,6 +220,7 @@ function freezePriorCase(caseRecord: RemediationCaseRecord): BuildReviewAdjudica
     resolution: caseRecord.resolution,
     sources: Object.freeze(sources),
     effect: Object.freeze({ ...caseRecord.effect }) as RemediationCaseEffect,
+    ...(caseRecord.disposition === 'refute' ? { refutation: freezeRefutation(caseRecord.refutation!) } : {}),
   });
 }
 

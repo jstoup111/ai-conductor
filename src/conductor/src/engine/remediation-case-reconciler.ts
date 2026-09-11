@@ -29,6 +29,7 @@ export type RemediationCaseReconciliationRejection =
   | 'foreign-case-binding'
   | 'duplicate-case-binding'
   | 'illegal-disposition-transition'
+  | 'refutation-repeat'
   | 'illegal-source-link'
   | 'id-generation-failed'
   | 'id-collision';
@@ -183,21 +184,52 @@ function reconcileState(
     if (!existing) return { ok: false, reason: 'unknown-case-binding' };
     if (existing.domain !== 'build_review') return { ok: false, reason: 'foreign-case-binding' };
     if (referencedExisting.has(existingCaseId)) return { ok: false, reason: 'duplicate-case-binding' };
-    if (existing.disposition !== caseRow.disposition) return { ok: false, reason: 'illegal-disposition-transition' };
+    const admitsRefutation = caseRow.disposition === 'refute'
+      && existing.disposition === 'act'
+      && existing.resolution === 'open'
+      && attemptedIds.has(existing.id)
+      && existing.effect.kind === 'action'
+      && existing.effect.status === 'applied';
+    if (caseRow.disposition === 'refute' && existing.refutation) return { ok: false, reason: 'refutation-repeat' };
+    if (existing.disposition !== caseRow.disposition && !admitsRefutation) return { ok: false, reason: 'illegal-disposition-transition' };
     referencedExisting.add(existingCaseId);
     claimed.add(existingCaseId);
     caseIdsByRef.set(caseRow.caseRef, existingCaseId);
 
-    const appendedSources = [...existing.sources];
+    let appendedSources = [...existing.sources];
     for (const source of sources) {
       const historical = existing.sources.find((link) => link.sourceId === source.sourceId);
       if (historical) {
+        // An applied action may be conclusively refuted on a later attempted
+        // lap. Preserve the source identity while changing its durable
+        // outcome; adding a second link would violate the store's unique
+        // source-id invariant.
+        if (admitsRefutation && historical.outcome === 'acted' && source.outcome === 'refuted') {
+          appendedSources = appendedSources.map((link) => link.sourceId === source.sourceId
+            ? { ...link, outcome: 'refuted', recordedAt: input.recordedAt }
+            : link);
+          continue;
+        }
         if (historical.outcome !== source.outcome) return { ok: false, reason: 'illegal-source-link' };
         continue;
       }
       appendedSources.push({ sourceId: source.sourceId, outcome: source.outcome, recordedAt: input.recordedAt });
     }
-    if (appendedSources.length !== existing.sources.length) {
+    if (admitsRefutation) {
+      const effectId = caseRow.effect.kind === 'deferral' ? takeId(input.generateId, usedIds) : undefined;
+      if (effectId === 'id-generation-failed' || effectId === 'id-collision') return { ok: false, reason: effectId };
+      replacements.set(existingCaseId, {
+        ...existing,
+        disposition: 'refute',
+        priority: caseRow.priority,
+        rationale: caseRow.rationale,
+        confidence: caseRow.confidence,
+        resolution: 'resolved',
+        sources: appendedSources,
+        effect: caseRow.effect.kind === 'none' ? { kind: 'none' } : { id: effectId!, kind: 'deferral', status: 'reserved' },
+        refutation: caseRow.refutation!,
+      });
+    } else if (appendedSources.length !== existing.sources.length) {
       replacements.set(existingCaseId, { ...existing, sources: appendedSources });
     }
   }

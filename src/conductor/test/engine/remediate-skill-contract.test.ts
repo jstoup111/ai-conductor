@@ -47,14 +47,21 @@ describe('remediate build_review case-mode contract', () => {
 
     expect(caseMode).toMatch(/exactly these top-level keys.*`mode`, `domain`, `sourceOutcomes`, `cases`/is);
     expect(caseMode).toMatch(/`sourceId`, `outcome`, `caseRef`/);
-    expect(caseMode).toMatch(/`acted` \| `deferred` \| `rejected` \| `merged`/);
+    expect(caseMode).toMatch(/`acted` \| `deferred` \| `rejected` \| `merged` \| `refuted`/);
     expect(caseMode).toMatch(/`caseRef`, optional `existingCaseId`,[\s\S]*?`disposition`, `priority`,[\s\S]*?`rationale`, `confidence`, `effect`/);
-    expect(caseMode).toMatch(/`act` \| `defer` \| `reject`/);
+    expect(caseMode).toMatch(/`act` \| `defer` \| `reject` \| `refute`/);
     expect(caseMode).toMatch(/`critical` \| `high` \| `medium` \| `low`/);
     expect(caseMode).toMatch(/`high` \| `medium` \| `low`/);
     expect(caseMode).toMatch(/"kind": "action", "route": "build", "tasks": \[\{ "title"/);
     expect(caseMode).toMatch(/"kind": "deferral"[\s\S]*?"title"[\s\S]*?"body"[\s\S]*?"exclusionRationale"/);
     expect(caseMode).toMatch(/"kind": "none"/);
+    expect(caseMode).toMatch(/`refutation`.*"claim".*"assertions"/s);
+    expect(caseMode).toMatch(/MUST bind an `existingCaseId`/);
+    expect(caseMode).toMatch(/confidence\s+`high`/);
+    expect(caseMode).toMatch(/`refuted` or\s+`upheld`/);
+    expect(caseMode).toMatch(/`path` and `excerpt`/);
+    expect(caseMode).toMatch(/no line numbers/i);
+    expect(caseMode).toMatch(/refuted once only/i);
   });
 
   it('makes the judge source-complete and keeps identity, effects, and operator authority engine-owned', async () => {

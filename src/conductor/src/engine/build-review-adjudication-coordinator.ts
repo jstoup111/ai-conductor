@@ -13,9 +13,10 @@ import { planContractPointers, readActivePlanPath } from './remediation-context-
 import { orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, isBuildEligibleActionCase } from './remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import { classifyRemediationCaseReuse, reconcileRemediationCases } from './remediation-case-reconciler.js';
+import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds } from './build-review-work-order.js';
 import { RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseSuppressionEntry } from './remediation-case-store.js';
 import { validateRemediationCaseGraph } from './remediation-case-validator.js';
@@ -28,7 +29,7 @@ import type { ConductorEvent } from '../types/events.js';
 type RemediationCaseLifecycleEvent = Extract<ConductorEvent, {
   type: 'remediation_adjudication_started' | 'remediation_adjudication_completed' | 'remediation_adjudication_failed'
     | 'remediation_case_reconciled' | 'remediation_effect_reserved' | 'remediation_effect_applied'
-    | 'remediation_effect_failed' | 'remediation_semantic_repeat_halt';
+    | 'remediation_effect_failed' | 'remediation_semantic_repeat_halt' | 'remediation_case_refuted';
 }>;
 
 type OperatorRetirementTransition = {
@@ -152,7 +153,9 @@ export async function coordinateBuildReviewAdjudication(input: {
    */
   const finalizedSourceIds = (cases: readonly RemediationCaseRecord[]): ReadonlySet<string> =>
     new Set(cases.flatMap((record) =>
-      record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
+      record.disposition === 'refute' && (record.effect.kind === 'none' || record.effect.status === 'applied')
+        ? record.sources.map((source) => source.sourceId)
+        : record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
         ? record.sources.map((source) => source.sourceId)
         : record.resolution === 'resolved' && record.effect.kind !== 'none' && record.effect.status === 'applied'
           ? record.sources.filter((source) => source.outcome === 'merged').map((source) => source.sourceId)
@@ -441,6 +444,14 @@ export async function coordinateBuildReviewAdjudication(input: {
   let currentSources = sources.filter((source) => !resolved.has(source.findingId));
   const prior = await store.read();
   if (!prior.ok) return fail(`case store ${prior.reason}`);
+  // An exact source bound to a refutation with unfinished durable follow-up
+  // is not new content for the judge. The reducer names that effect and
+  // blocks PASS below.
+  const unfinishedRefutedSourceIds = new Set(prior.state.cases.flatMap((record) =>
+    record.disposition === 'refute' && hasReservedOrFailedRemediationEffect(record)
+      ? record.sources.map((source) => source.sourceId)
+      : [],
+  ));
   // Durable BUILD-attempt evidence, read from the published work order rather
   // than process memory. Without it an attempted case is indistinguishable from
   // an interrupted one, so a repeat could take a second free route and an
@@ -467,8 +478,16 @@ export async function coordinateBuildReviewAdjudication(input: {
   }
   const settledSourceIds = finalizedSourceIds(prior.state.cases);
   currentSources = sources.filter((source) =>
-    !resolved.has(source.findingId) && !input.suppressedFindingIds?.has(source.findingId) && !settledSourceIds.has(buildReviewAdjudicationSourceId(source)),
+    !resolved.has(source.findingId) && !input.suppressedFindingIds?.has(source.findingId) &&
+    !settledSourceIds.has(buildReviewAdjudicationSourceId(source)) &&
+    !unfinishedRefutedSourceIds.has(buildReviewAdjudicationSourceId(source)),
   );
+  liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
+    new Set(sources.filter((source) =>
+      !accepted.has(source.findingId) && !input.suppressedFindingIds?.has(source.findingId) &&
+      !settledSourceIds.has(buildReviewAdjudicationSourceId(source)) &&
+      !unfinishedRefutedSourceIds.has(buildReviewAdjudicationSourceId(source)),
+    ).map(buildReviewAdjudicationSourceId));
   if (currentSources.length === 0) {
     liveSourceIdsFor = () => new Set();
     return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, settleAbsentAttempted: true, dispatchSkipped: true });
@@ -500,6 +519,11 @@ export async function coordinateBuildReviewAdjudication(input: {
   // is what made any pre-existing acceptance un-adjudicable.
   const graph = validateRemediationCaseGraph(dispatchSourceIds, judgement);
   if (!graph.ok) return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, { settleAbsentAttempted: true });
+  for (const proposed of graph.graph.cases) {
+    if (proposed.case.disposition !== 'refute') continue;
+    const evidence = await resolveRefutationEvidence({ projectRoot: input.projectRoot, refutation: proposed.case.refutation! });
+    if (!evidence.ok) return failUnlessAccepted(evidence.reason, { settleAbsentAttempted: true });
+  }
   const liveSourceIds = liveSourceIdsFor(resolved);
   const admitted = graph.graph.cases.filter((proposed) =>
     proposed.sources.some((source) => liveSourceIds.has(source.sourceId)),
@@ -518,6 +542,10 @@ export async function coordinateBuildReviewAdjudication(input: {
     // A store fault stays fail-closed; a rejected graph is content-specific
     // and, like every failure above, may be obsolete under a late acceptance.
     if (reconciled.reason === 'store-failure') return fail(`case store ${reconciled.storeReason}`);
+    if (reconciled.reason === 'refutation-repeat') {
+      const repeatedCaseId = admitted.find((proposed) => proposed.case.disposition === 'refute')?.case.existingCaseId;
+      return failUnlessAccepted(`refutation repeat ${repeatedCaseId ?? 'unknown'}`, { settleAbsentAttempted: false });
+    }
     return failUnlessAccepted(`case reconciliation ${reconciled.reason}`, { settleAbsentAttempted: true });
   }
 
@@ -549,6 +577,16 @@ export async function coordinateBuildReviewAdjudication(input: {
         caseId, effectId: record.effect.id, effectKind: record.effect.kind,
       });
     }
+  }
+  for (const proposed of admitted) {
+    if (proposed.case.disposition !== 'refute') continue;
+    const caseId = caseIdsByRef.get(proposed.case.caseRef);
+    const record = caseId ? reconciledCasesById.get(caseId) : undefined;
+    if (!caseId || !record) return fail('refuted case identity was not reconciled');
+    await input.emit?.({
+      type: 'remediation_case_refuted', domain: 'build_review', lapId: input.aggregate.lapId,
+      caseId, ...(record.effect.kind === 'none' ? {} : { residualEffectId: record.effect.id }),
+    });
   }
 
   // Reconciliation awaited durable work, so its earlier authority snapshot
@@ -666,7 +704,10 @@ export async function coordinateBuildReviewAdjudication(input: {
   if (input.tracker && input.repo && input.fileIssue) {
     let deferredFailureRetiredByAcceptance = false;
     for (const proposed of admitted) {
-      if (proposed.case.disposition !== 'defer' || proposed.case.effect.kind !== 'deferral') continue;
+      if (
+        (proposed.case.disposition !== 'defer' && proposed.case.disposition !== 'refute') ||
+        proposed.case.effect.kind !== 'deferral'
+      ) continue;
       // Deferral reservation files a real tracker issue, and every iteration
       // awaits that external work — so operator authority is re-read before
       // EACH reservation, never from a pre-loop snapshot: an acceptance
@@ -691,6 +732,12 @@ export async function coordinateBuildReviewAdjudication(input: {
           !liveSourceIdsAfterDeferralFailure.has(source.sourceId),
         );
         if (retiredByAcceptance) {
+          // The executor already durably recorded the tracker failure. An
+          // acceptance changes the route, not whether this occurrence happened.
+          await input.emit?.({
+            type: 'remediation_effect_failed', domain: 'build_review', lapId: input.aggregate.lapId,
+            caseId, effectId: record.effect.id, effectKind: 'deferral', reason: deferred.reason,
+          });
           deferredFailureRetiredByAcceptance = true;
           continue;
         }

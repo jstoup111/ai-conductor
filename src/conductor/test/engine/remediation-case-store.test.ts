@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:4
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,6 +36,28 @@ const CASE_STATE: RemediationCaseStoreState = {
     },
   }],
   suppressions: [],
+};
+
+const REFUTATION = {
+  claim: 'The alleged missing coverage is present in the focused regression test.',
+  assertions: [{
+    assertion: 'The regression test exercises the changed production path.',
+    verdict: 'refuted' as const,
+    evidence: [{ path: 'test/regression.test.ts', excerpt: 'exercises the changed production path' }],
+  }],
+};
+
+const REFUTED_CASE_STATE: RemediationCaseStoreState = {
+  ...CASE_STATE,
+  cases: [{
+    ...CASE_STATE.cases[0],
+    disposition: 'refute',
+    rationale: 'The asserted gap is contradicted by the existing regression test.',
+    resolution: 'resolved',
+    sources: [{ ...CASE_STATE.cases[0].sources[0], outcome: 'refuted' }],
+    effect: { kind: 'none' },
+    refutation: REFUTATION,
+  }],
 };
 
 const temporaryDirectories: string[] = [];
@@ -76,6 +98,24 @@ describe('remediation case store', () => {
     });
   });
 
+  it.each([
+    ['a no-effect refutation', REFUTED_CASE_STATE],
+    ['a refutation with a durable deferral', {
+      ...REFUTED_CASE_STATE,
+      cases: [{
+        ...REFUTED_CASE_STATE.cases[0],
+        effect: { id: 'effect-refuted', kind: 'deferral', status: 'applied', issueUrl: 'https://example.test/issues/1' },
+      }],
+    }],
+  ] as const)('round-trips %s with its refutation intact', async (_description, state) => {
+    const projectRoot = await createProjectRoot();
+    const writer = new RemediationCaseStore(projectRoot, FEATURE);
+
+    await expect(writer.mutate(async () => ({ value: 'seeded' as const, nextState: state })))
+      .resolves.toEqual({ ok: true, value: 'seeded' });
+    await expect(new RemediationCaseStore(projectRoot, FEATURE).read()).resolves.toEqual({ ok: true, state });
+  });
+
   it('preserves one suppression per finding and accepts v1 state with no suppression list', async () => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);
@@ -113,6 +153,14 @@ describe('remediation case store', () => {
         disposition: 'defer',
         effect: { id: 'effect-1', kind: 'deferral', status: 'failed' },
       }],
+    }, 'malformed-state'],
+    ['a refute record without its refutation', {
+      ...REFUTED_CASE_STATE,
+      cases: [{ ...REFUTED_CASE_STATE.cases[0], refutation: undefined }],
+    }, 'malformed-state'],
+    ['a non-refute record carrying a refutation', {
+      ...CASE_STATE,
+      cases: [{ ...CASE_STATE.cases[0], refutation: REFUTATION }],
     }, 'malformed-state'],
     ['a duplicate case id', {
       ...CASE_STATE,

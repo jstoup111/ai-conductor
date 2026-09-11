@@ -53,6 +53,31 @@ const CASE_V1 = {
   ],
 } as const;
 
+const REFUTE_CASE = {
+  caseRef: 'case-refuted',
+  existingCaseId: 'remcase-existing-refuted',
+  disposition: 'refute',
+  priority: 'high',
+  rationale: 'The finding is contradicted by the existing coverage.',
+  confidence: 'high',
+  effect: { kind: 'none' },
+  refutation: {
+    claim: 'The changed branch has no behavioral coverage.',
+    assertions: [{
+      assertion: 'The existing test invokes the changed branch.',
+      verdict: 'refuted',
+      evidence: [{ path: 'src/widget.test.ts', excerpt: 'it covers the changed branch' }],
+    }],
+  },
+} as const;
+
+const REFUTE_CASE_V1 = {
+  mode: 'case-v1',
+  domain: 'build_review',
+  sourceOutcomes: [{ sourceId: 'testQuality:finding-refuted', outcome: 'refuted', caseRef: 'case-refuted' }],
+  cases: [REFUTE_CASE],
+} as const;
+
 describe('remediation case artifact', () => {
   let projectRoot: string;
 
@@ -74,6 +99,121 @@ describe('remediation case artifact', () => {
     const result = await read(CASE_V1);
 
     expect(result).toEqual({ ok: true, judgement: CASE_V1 });
+  });
+
+  it('parses a refute row and its typed refutation record', async () => {
+    const result = await read(REFUTE_CASE_V1);
+
+    expect(result).toEqual({ ok: true, judgement: REFUTE_CASE_V1 });
+  });
+
+  it('parses a refute row with a deferral effect', async () => {
+    const judgement = {
+      ...REFUTE_CASE_V1,
+      cases: [{ ...REFUTE_CASE, effect: CASE_V1.cases[1].effect }],
+    };
+    const result = await read(judgement);
+
+    expect(result).toEqual({ ok: true, judgement });
+  });
+
+  it.each(['line', 'lineNumber', 'hunk', 'sha', 'commit'])(
+    'rejects refutation evidence carrying %s',
+    async (forbiddenKey) => {
+      const result = await read({
+        ...REFUTE_CASE_V1,
+        cases: [{
+          ...REFUTE_CASE,
+          refutation: {
+            ...REFUTE_CASE.refutation,
+            assertions: [{
+              ...REFUTE_CASE.refutation.assertions[0],
+              evidence: [{ ...REFUTE_CASE.refutation.assertions[0].evidence[0], [forbiddenKey]: 1 }],
+            }],
+          },
+        }],
+      });
+
+      expect(result).toEqual({ ok: false, reason: 'malformed-refutation-evidence' });
+    },
+  );
+
+  it.each([
+    ['missing refutation', (({ refutation: _refutation, ...value }) => value)(REFUTE_CASE)],
+    ['zero assertions', { ...REFUTE_CASE, refutation: { ...REFUTE_CASE.refutation, assertions: [] } }],
+    ['unknown refutation key', { ...REFUTE_CASE, refutation: { ...REFUTE_CASE.refutation, unknown: true } }],
+    ['missing assertion key', {
+      ...REFUTE_CASE,
+      refutation: { ...REFUTE_CASE.refutation, assertions: [(({
+        verdict: _verdict,
+        ...assertion
+      }) => assertion)(REFUTE_CASE.refutation.assertions[0])] },
+    }],
+    ['unknown assertion key', {
+      ...REFUTE_CASE,
+      refutation: { ...REFUTE_CASE.refutation, assertions: [{ ...REFUTE_CASE.refutation.assertions[0], unknown: true }] },
+    }],
+    ['unknown assertion verdict', {
+      ...REFUTE_CASE,
+      refutation: { ...REFUTE_CASE.refutation, assertions: [{ ...REFUTE_CASE.refutation.assertions[0], verdict: 'uncertain' }] },
+    }],
+    ['too many assertions', {
+      ...REFUTE_CASE,
+      refutation: { ...REFUTE_CASE.refutation, assertions: Array.from({ length: 17 }, () => REFUTE_CASE.refutation.assertions[0]) },
+    }],
+  ])('rejects a refute row with %s', async (_name, caseRow) => {
+    const result = await read({ ...REFUTE_CASE_V1, cases: [caseRow] });
+
+    expect(result).toEqual({ ok: false, reason: 'invalid-refutation' });
+  });
+
+  it('rejects a refute row with malformed evidence keys', async () => {
+    const evidence = (({ excerpt: _excerpt, ...entry }) => entry)(REFUTE_CASE.refutation.assertions[0].evidence[0]);
+    const result = await read({
+      ...REFUTE_CASE_V1,
+      cases: [{
+        ...REFUTE_CASE,
+        refutation: {
+          ...REFUTE_CASE.refutation,
+          assertions: [{ ...REFUTE_CASE.refutation.assertions[0], evidence: Array.isArray(evidence) ? evidence : [evidence] }],
+        },
+      }],
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'malformed-refutation-evidence' });
+  });
+
+  it('rejects a refute row with too many evidence entries', async () => {
+    const result = await read({
+      ...REFUTE_CASE_V1,
+      cases: [{
+        ...REFUTE_CASE,
+        refutation: {
+          ...REFUTE_CASE.refutation,
+          assertions: [{
+            ...REFUTE_CASE.refutation.assertions[0],
+            evidence: Array.from({ length: 9 }, () => REFUTE_CASE.refutation.assertions[0].evidence[0]),
+          }],
+        },
+      }],
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'invalid-refutation' });
+  });
+
+  it('rejects a refute row with zero evidence entries', async () => {
+    const result = await read({
+      ...REFUTE_CASE_V1,
+      cases: [{
+        ...REFUTE_CASE,
+        refutation: {
+          ...REFUTE_CASE.refutation,
+          assertions: [{ ...REFUTE_CASE.refutation.assertions[0], evidence: [] }],
+        },
+      }],
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'invalid-refutation' });
   });
 
   it.each([
@@ -110,6 +250,18 @@ describe('remediation case artifact', () => {
       ...CASE_V1,
       cases: [{ ...CASE_V1.cases[1], effect: { ...CASE_V1.cases[1].effect, exclusionRationale: '' } }],
     }, 'invalid-deferral-effect'],
+    ['refute deferral without an exclusion rationale key', {
+      ...REFUTE_CASE_V1,
+      cases: [{ ...REFUTE_CASE, effect: { kind: 'deferral', title: 'Deferred follow-up', body: 'Track this later.' } }],
+    }, 'invalid-deferral-effect'],
+    ['refute deferral with an empty exclusion rationale', {
+      ...REFUTE_CASE_V1,
+      cases: [{ ...REFUTE_CASE, effect: { kind: 'deferral', title: 'Deferred follow-up', body: 'Track this later.', exclusionRationale: '' } }],
+    }, 'invalid-deferral-effect'],
+    ['refute action effect', {
+      ...REFUTE_CASE_V1,
+      cases: [{ ...REFUTE_CASE, effect: { kind: 'action', route: 'build', tasks: [{ title: 'Not a refute residual.' }] } }],
+    }, 'invalid-refute-effect'],
   ])('rejects %s without exposing partial rows', async (_name, value, reason) => {
     const result = await read(value);
 
