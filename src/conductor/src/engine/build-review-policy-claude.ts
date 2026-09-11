@@ -4,6 +4,10 @@ import { load as loadYaml } from 'js-yaml';
 import { execa } from 'execa';
 
 import type { InstalledReviewSkill } from './build-review-policy.js';
+import {
+  ReviewPolicyCatalogError,
+  type ReviewPolicyCatalogFailureCode,
+} from './build-review-policy-resolver.js';
 
 /** The prepared candidate context in which Claude discovery is allowed to run. */
 export interface ClaudeReviewPolicyCandidate {
@@ -11,15 +15,22 @@ export interface ClaudeReviewPolicyCandidate {
   readonly env: NodeJS.ProcessEnv;
   readonly projectSkillRoots: readonly string[];
   readonly userSkillRoots: readonly string[];
+  /** The owning candidate cancels the metadata child process. */
+  readonly signal?: AbortSignal;
 }
 
 export interface ClaudeMetadataCommandOptions {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
+  readonly signal?: AbortSignal;
 }
 
 export interface ClaudeMetadataCommandResult {
   readonly stdout: string;
+  /** A transport may report a complete list independently from its exit code. */
+  readonly complete?: boolean;
+  readonly errors?: readonly unknown[];
+  readonly exitCode?: number;
 }
 
 /** Injectable boundary for Claude's read-only plugin inventory command. */
@@ -42,19 +53,50 @@ export interface DiscoverClaudeReviewPoliciesOptions {
   readonly filesystem?: ClaudeReviewPolicyFilesystem;
 }
 
-export class ClaudeReviewPolicyCatalogError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ClaudeReviewPolicyCatalogError';
+export class ClaudeReviewPolicyCatalogError extends ReviewPolicyCatalogError {
+  constructor(message: string, code: ReviewPolicyCatalogFailureCode = 'malformed') {
+    super('claude', code, message);
   }
 }
 
-const realFilesystem: ClaudeReviewPolicyFilesystem = { readdir, readFile, realpath };
+const realFilesystem: ClaudeReviewPolicyFilesystem = {
+  readdir,
+  readFile: (path) => readFile(path, 'utf8'),
+  realpath,
+};
 
 const realCommand: ClaudeMetadataCommand = async (command, args, options) => {
-  const result = await execa(command, args, { cwd: options.cwd, env: options.env });
+  const result = await execa(command, args, {
+    cwd: options.cwd,
+    env: options.env,
+    ...(options.signal === undefined ? {} : { cancelSignal: options.signal }),
+  });
   return { stdout: result.stdout };
 };
+
+function abortIfNeeded(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new ClaudeReviewPolicyCatalogError(
+    'Claude policy catalog discovery was cancelled',
+    'cancelled',
+  );
+}
+
+function asCatalogError(error: unknown, signal: AbortSignal | undefined): ClaudeReviewPolicyCatalogError {
+  if (error instanceof ClaudeReviewPolicyCatalogError) return error;
+  if (error instanceof ReviewPolicyCatalogError) {
+    return new ClaudeReviewPolicyCatalogError(error.message, error.code);
+  }
+  if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
+    return new ClaudeReviewPolicyCatalogError('Claude policy catalog discovery was cancelled', 'cancelled');
+  }
+  if (error instanceof Error && /timeout/i.test(error.name)) {
+    return new ClaudeReviewPolicyCatalogError('Claude policy catalog discovery timed out', 'timeout');
+  }
+  if (typeof error === 'object' && error !== null && typeof (error as { exitCode?: unknown }).exitCode === 'number') {
+    return new ClaudeReviewPolicyCatalogError(`Claude plugin inventory command failed: ${String(error)}`, 'error');
+  }
+  return new ClaudeReviewPolicyCatalogError(`Unable to load Claude policy catalog: ${String(error)}`, 'unreadable');
+}
 
 interface ClaudePluginInventoryEntry {
   readonly id: string;
@@ -88,7 +130,7 @@ async function optionalDirectoryEntries(
     return await filesystem.readdir(path);
   } catch (error) {
     if (isMissing(error)) return [];
-    throw new ClaudeReviewPolicyCatalogError(`Unable to read Claude skill root ${path}: ${String(error)}`);
+    throw new ClaudeReviewPolicyCatalogError(`Unable to read Claude skill root ${path}: ${String(error)}`, 'unreadable');
   }
 }
 
@@ -150,7 +192,7 @@ async function installedSkillAtDirectory(
     skillText = await filesystem.readFile(skillPath);
   } catch (error) {
     if (isMissing(error)) return undefined;
-    throw new ClaudeReviewPolicyCatalogError(`Unable to read Claude skill ${skillPath}: ${String(error)}`);
+    throw new ClaudeReviewPolicyCatalogError(`Unable to read Claude skill ${skillPath}: ${String(error)}`, 'unreadable');
   }
 
   const canonicalSkillDirectory = await filesystem.realpath(skillDirectory);
@@ -175,8 +217,17 @@ function parsePluginInventory(stdout: string): readonly ClaudePluginInventoryEnt
   } catch (error) {
     throw new ClaudeReviewPolicyCatalogError(`Invalid Claude plugin inventory JSON: ${String(error)}`);
   }
-  const entries = Array.isArray(value) ? value : object(value)?.plugins;
-  if (!Array.isArray(entries)) throw new ClaudeReviewPolicyCatalogError('Unsupported Claude plugin inventory envelope');
+  const envelope = Array.isArray(value) ? undefined : object(value);
+  if (envelope?.complete === false) throw new ClaudeReviewPolicyCatalogError('Claude plugin inventory was partial', 'partial');
+  if (envelope?.errors !== undefined) {
+    if (!Array.isArray(envelope.errors)) throw new ClaudeReviewPolicyCatalogError('Malformed Claude plugin inventory errors', 'malformed');
+    if (envelope.errors.length > 0) throw new ClaudeReviewPolicyCatalogError('Claude plugin inventory reported catalog errors', 'error');
+  }
+  if (envelope?.version !== undefined && envelope.version !== 1) {
+    throw new ClaudeReviewPolicyCatalogError(`Unsupported Claude plugin inventory version ${String(envelope.version)}`, 'unsupported');
+  }
+  const entries = Array.isArray(value) ? value : envelope?.plugins;
+  if (!Array.isArray(entries)) throw new ClaudeReviewPolicyCatalogError('Unsupported Claude plugin inventory envelope', 'unsupported');
 
   return entries.map((entry, index) => {
     const item = object(entry);
@@ -224,41 +275,61 @@ function pluginSkillDirectories(manifestText: string, manifestPath: string): rea
 export async function discoverClaudeReviewPolicies(
   options: DiscoverClaudeReviewPoliciesOptions,
 ): Promise<readonly InstalledReviewSkill[]> {
-  const filesystem = options.filesystem ?? realFilesystem;
-  const command = options.command ?? realCommand;
   const { candidate } = options;
-  const pluginInventory = parsePluginInventory((await command('claude', ['plugin', 'list', '--json'], {
-    cwd: candidate.cwd,
-    env: candidate.env,
-  })).stdout);
-
-  const standalone = await Promise.all([
-    ...candidate.projectSkillRoots.map((root) => installedSkillsInDirectory(filesystem, root, 'project')),
-    ...candidate.userSkillRoots.map((root) => installedSkillsInDirectory(filesystem, root, 'global')),
-  ]);
-  const policies = standalone.flat();
-
-  for (const plugin of pluginInventory) {
-    // An inventory item without an installed root is merely a marketplace
-    // listing. It has no local material the review boundary may read.
-    if (!plugin.enabled || !plugin.installPath) continue;
-    const packageRoot = await filesystem.realpath(plugin.installPath);
-    const manifestPath = join(plugin.installPath, '.claude-plugin', 'plugin.json');
-    let manifestText: string;
-    try {
-      manifestText = await filesystem.readFile(manifestPath);
-    } catch (error) {
-      throw new ClaudeReviewPolicyCatalogError(`Unable to read Claude plugin manifest ${manifestPath}: ${String(error)}`);
+  try {
+    abortIfNeeded(candidate.signal);
+    const filesystem = options.filesystem ?? realFilesystem;
+    const command = options.command ?? realCommand;
+    const commandResult = await command('claude', ['plugin', 'list', '--json'], {
+      cwd: candidate.cwd,
+      env: candidate.env,
+      ...(candidate.signal === undefined ? {} : { signal: candidate.signal }),
+    });
+    abortIfNeeded(candidate.signal);
+    if (commandResult.complete === false) throw new ClaudeReviewPolicyCatalogError('Claude plugin inventory was partial', 'partial');
+    if (commandResult.errors !== undefined && !Array.isArray(commandResult.errors)) {
+      throw new ClaudeReviewPolicyCatalogError('Malformed Claude plugin inventory errors', 'malformed');
     }
-    const directories = pluginSkillDirectories(manifestText, manifestPath);
-    for (const directory of directories) {
-      policies.push(...await installedSkillsInDirectory(
-        filesystem,
-        join(plugin.installPath, directory),
-        'plugin',
-        { id: plugin.id, ...(plugin.version === undefined ? {} : { version: plugin.version }), packageRoot },
-      ));
+    if (commandResult.errors && commandResult.errors.length > 0) {
+      throw new ClaudeReviewPolicyCatalogError('Claude plugin inventory reported catalog errors', 'error');
     }
+    if (commandResult.exitCode !== undefined && commandResult.exitCode !== 0) {
+      throw new ClaudeReviewPolicyCatalogError(`Claude plugin inventory exited with ${commandResult.exitCode}`, 'error');
+    }
+    const pluginInventory = parsePluginInventory(commandResult.stdout);
+
+    const standalone = await Promise.all([
+      ...candidate.projectSkillRoots.map((root) => installedSkillsInDirectory(filesystem, root, 'project')),
+      ...candidate.userSkillRoots.map((root) => installedSkillsInDirectory(filesystem, root, 'global')),
+    ]);
+    abortIfNeeded(candidate.signal);
+    const policies = standalone.flat();
+
+    for (const plugin of pluginInventory) {
+      // An inventory item without an installed root is merely a marketplace
+      // listing. It has no local material the review boundary may read.
+      if (!plugin.enabled || !plugin.installPath) continue;
+      const packageRoot = await filesystem.realpath(plugin.installPath);
+      const manifestPath = join(plugin.installPath, '.claude-plugin', 'plugin.json');
+      let manifestText: string;
+      try {
+        manifestText = await filesystem.readFile(manifestPath);
+      } catch (error) {
+        throw new ClaudeReviewPolicyCatalogError(`Unable to read Claude plugin manifest ${manifestPath}: ${String(error)}`, 'unreadable');
+      }
+      const directories = pluginSkillDirectories(manifestText, manifestPath);
+      for (const directory of directories) {
+        policies.push(...await installedSkillsInDirectory(
+          filesystem,
+          join(plugin.installPath, directory),
+          'plugin',
+          { id: plugin.id, ...(plugin.version === undefined ? {} : { version: plugin.version }), packageRoot },
+        ));
+        abortIfNeeded(candidate.signal);
+      }
+    }
+    return policies;
+  } catch (error) {
+    throw asCatalogError(error, candidate.signal);
   }
-  return policies;
 }
