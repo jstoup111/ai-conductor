@@ -1,4 +1,4 @@
-// Covers: task:12, task:13, task:14, task:15
+// Covers: task:12, task:13, task:14, task:15, task:17
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -165,6 +165,9 @@ function serialStepSpan(fixture: SerialFixture) {
 async function runBuiltinGroup(input: {
   outcomes?: Partial<Record<StepName, Array<Awaited<ReturnType<StepRunner['run']>>>>>;
   validationConcurrency?: number;
+  verifyArtifacts?: boolean;
+  telemetry?: TelemetryMode;
+  asBuiltRemediationEnabled?: boolean;
 } = {}): Promise<BuiltinFixture> {
   const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-built-in-group-telemetry-'));
   directories.push(projectRoot);
@@ -179,7 +182,7 @@ async function runBuiltinGroup(input: {
   vi.spyOn(Date, 'now').mockImplementation(() => now);
   const events = new ConductorEventEmitter();
   const observed: ConductorEvent[] = [];
-  for (const type of ['step_started', 'step_completed', 'step_failed', 'step_retry', 'provider_attempt', 'group_member_step'] as const) {
+  for (const type of ['step_started', 'step_completed', 'step_failed', 'step_refused', 'step_retry', 'provider_attempt', 'group_member_step'] as const) {
     events.on(type, (event) => { observed.push(event); });
   }
   const ledgerPath = join(projectRoot, '.pipeline', 'events.jsonl');
@@ -189,19 +192,31 @@ async function runBuiltinGroup(input: {
   const meterProvider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter: metricExporter, exportIntervalMillis: 60_000 })] });
   const metrics = new MetricsListener(new MetricsRecorder(meterProvider.getMeter('built-in-group-telemetry'), { project: 'project', worker: 'worker' }), () => now, 'built-in-group-telemetry');
   const spanExporter = new CapturingSpanExporter();
-  const visualizer = new OtelVisualizer(
-    resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, join(projectRoot, '.pipeline')),
-    { spanExporter, exportTimeoutMillis: 50 },
-  );
-  visualizer.start(events, { runId: 'built-in-group-run', feature: 'built-in-group-telemetry', project: projectRoot });
-  metrics.start(events);
+  const warnings: string[] = [];
+  let visualizer: OtelVisualizer | undefined;
+  if ((input.telemetry ?? 'enabled') !== 'disabled') {
+    const exporter: SpanExporter = input.telemetry === 'failing-exporter'
+      ? { export: () => { throw new Error('controlled exporter fault'); }, shutdown: async () => undefined }
+      : spanExporter;
+    visualizer = new OtelVisualizer(
+      resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, join(projectRoot, '.pipeline')),
+      { spanExporter: exporter, onWarning: (warning) => warnings.push(warning), exportTimeoutMillis: 50 },
+    );
+    visualizer.start(events, { runId: 'built-in-group-run', feature: 'built-in-group-telemetry', project: projectRoot });
+    metrics.start(events);
+  }
 
   const calls: StepName[] = [];
   let boundaryChecks = 0;
   const conductor = new Conductor({
     projectRoot, stateFilePath, events, fromStep: VALIDATION_GROUP.members[0] as StepName, mode: 'auto', daemon: true,
-    maxRetries: 2, verifyArtifacts: false, featureSlug: 'built-in-group-telemetry',
-    config: { validation_concurrency: input.validationConcurrency },
+    maxRetries: 2, verifyArtifacts: input.verifyArtifacts ?? false, featureSlug: 'built-in-group-telemetry',
+    config: {
+      validation_concurrency: input.validationConcurrency,
+      ...(input.asBuiltRemediationEnabled === undefined ? {} : {
+        architecture_review_as_built: { remediation: { enabled: input.asBuiltRemediationEnabled } },
+      }),
+    },
     operatorParkBoundary: async () => ++boundaryChecks > 1,
     stepRunner: {
       run: async (step, _state, options) => {
@@ -226,14 +241,14 @@ async function runBuiltinGroup(input: {
   try {
     const result = await conductor.run();
     await meterProvider.forceFlush();
-    await visualizer.stop();
+    await visualizer?.stop();
     const ledger = (await readFile(ledgerPath, 'utf8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
-    return { result, calls, events: observed, ledger, spans: spanExporter.getFinishedSpans(), metrics: metricExporter, state: JSON.parse(await readFile(stateFilePath, 'utf8')) as ConductState, warnings: [] };
+    return { result, calls, events: observed, ledger, spans: spanExporter.getFinishedSpans(), metrics: metricExporter, state: JSON.parse(await readFile(stateFilePath, 'utf8')) as ConductState, warnings };
   } finally {
     persister.stop();
     metrics.stop();
     await meterProvider.shutdown();
-    await visualizer.stop();
+    await visualizer?.stop();
   }
 }
 
@@ -554,6 +569,39 @@ describe('serial conductor telemetry parity', () => {
       expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === member)).toHaveLength(1);
     }
     expect(metricPoints(fixture.metrics, 'conductor.step.outcomes').find((point) => point.attributes.step === failedMember)?.attributes.outcome).toBe('failure');
+  });
+
+  it('classifies objective group refusal per settled member without extending its frozen duration', async () => {
+    // verifyArtifacts makes the real join reject the deliberately absent
+    // evidence; the fake runner itself still reports success.  That boundary
+    // proves a member cannot receive a successful terminal merely because its
+    // dispatch returned success.
+    const enabled = await runBuiltinGroup({ verifyArtifacts: true, asBuiltRemediationEnabled: false });
+    const disabled = await runBuiltinGroup({ verifyArtifacts: true, asBuiltRemediationEnabled: false, telemetry: 'disabled' });
+    const failing = await runBuiltinGroup({ verifyArtifacts: true, asBuiltRemediationEnabled: false, telemetry: 'failing-exporter' });
+
+    for (const fixture of [enabled, disabled, failing]) {
+      // The normal join may ask the existing remediation seam to classify a
+      // missing PRD artifact; this fixture's boundary is the initial group
+      // admission, not that unrelated follow-up dispatch.
+      expect(fixture.calls.slice(0, VALIDATION_GROUP.members.length)).toEqual(VALIDATION_GROUP.members);
+      expect(fixture.events.filter((event) => event.type === 'step_completed')).toHaveLength(0);
+      for (const member of VALIDATION_GROUP.members) {
+        const started = fixture.events.find((event) => event.type === 'step_started' && event.step === member);
+        const refusal = fixture.ledger.find((event) => event.type === 'step_refused' && event.step === member);
+        expect(refusal).toMatchObject({
+          executionContext: started && 'executionContext' in started ? started.executionContext : undefined,
+          activeInterval: { startedAtMs: 1_000, durationMs: expect.any(Number) },
+        });
+        expect((refusal?.activeInterval as { durationMs: number }).durationMs).toBeLessThanOrEqual(30);
+        expect(fixture.state[member as StepName]).toBe('refused');
+      }
+    }
+    expect(enabled.spans.filter((span) => VALIDATION_GROUP.members.includes(span.name as StepName))).toHaveLength(VALIDATION_GROUP.members.length);
+    expect(enabled.spans.filter((span) => VALIDATION_GROUP.members.includes(span.name as StepName)).every((span) => span.attributes['conductor.step.status'] === 'refused')).toBe(true);
+    expect(disabled.spans).toHaveLength(0);
+    expect(disabled.metrics.getMetrics()).toHaveLength(0);
+    expect(failing.warnings.length).toBeGreaterThan(0);
   });
 
   it('opens one stable configured-member lifecycle under its registered parent group', async () => {
