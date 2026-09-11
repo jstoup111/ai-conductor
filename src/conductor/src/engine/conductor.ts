@@ -9701,12 +9701,12 @@ export class Conductor {
                                   : {}),
                               });
                             } catch (error) {
-                              // A retained sibling re-dispatch is the sole
-                              // width-one validation-group path that borrows
-                              // the group branch's retry contract. Ordinary
-                              // serial validation dispatches — including a
-                              // FINISH-fence recheck — must preserve their
-                              // existing exception routing.
+                              // A retained sibling re-dispatch, including a
+                              // width-one recheck selected by the FINISH
+                              // validation fence, borrows the group branch's
+                              // retry contract. Ordinary serial validation
+                              // dispatches keep their existing exception
+                              // routing.
                               const stateFields = state as Record<string, unknown>;
                               const retainedSiblingExists =
                                 builtinGroup?.name === 'validation' &&
