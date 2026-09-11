@@ -1,3 +1,4 @@
+// Covers: task:3
 // `conduct-ts engineer land` owner-gate WIRING (adr-2026-06-30-*, FR-4 write side).
 //
 // Regression lock: the CLI `land` case must THREAD the target repo's config
@@ -73,16 +74,20 @@ async function showOnBranch(branch: string, relPath: string): Promise<string | n
  * to pass as `--worktree`. Call AFTER any writeConfig so the worktree's base includes
  * the committed config.
  */
-async function seedWorktree(): Promise<string> {
-  const wt = await createEngineerWorktree(repoPath, 'dep bump');
+async function seedWorktree(idea = 'dep bump'): Promise<string> {
+  const stem = idea.replace(/\s+/g, '-');
+  const wt = await createEngineerWorktree(repoPath, idea);
   await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
   const dir = wt.worktreePath;
   await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
   await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
   await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-  await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
-  await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
-  await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS);
+  await writeFile(join(dir, '.docs', 'specs', `${stem}.md`), `# PRD: ${idea}\n\nApproved.\n`);
+  await writeFile(join(dir, '.docs', 'stories', `${stem}.md`), ACCEPTED_STORIES);
+  await writeFile(
+    join(dir, '.docs', 'plans', `${stem}.md`),
+    PLAN_WITH_DEPS.replaceAll('dep bump', idea).replaceAll('dep-bump', stem),
+  );
   return dir;
 }
 
@@ -352,6 +357,76 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
       sourceRef: 'owner/repo#12',
     });
     expect(events[0].reason).toContain('stories artifact is not approved');
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
+  it('persists a coherence-gate rejection with the validator reason', async () => {
+    const worktree = await seedWorktree();
+    await mkdir(join(worktree, '.docs', 'coherence'), { recursive: true });
+    await writeFile(join(worktree, '.docs', 'coherence', 'dep-bump.md'), '');
+    const fakeHome = await makeUserHome('spec_owner: bob\n');
+    const { opts } = captureOpts({ gh: async () => ({ stdout: 'unused\n' }) });
+
+    const code = await withHome(fakeHome, () => dispatchEngineer(
+      { kind: 'land', project: 'alpha', idea: 'dep bump', worktree, sourceRef: 'owner/repo#13' },
+      opts,
+    ));
+
+    expect(code).toBe(1);
+    const ledger = await readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8');
+    const events = ledger.trim().split('\n').map((line) => JSON.parse(line) as Record<string, string>);
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    expect(event).toMatchObject({
+      type: 'land_gate_rejected',
+      gate: 'coherence',
+      reason: expect.stringContaining('coherence gate: empty-coherence-artifact'),
+      sourceRef: 'owner/repo#13',
+    });
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
+  it('appends distinct gate records when two lands against one target are rejected', async () => {
+    const storiesWorktree = await seedWorktree();
+    await writeFile(join(storiesWorktree, '.docs', 'stories', 'dep-bump.md'), '# Stories: dep bump\n');
+    const coherenceIdea = 'coherence bump';
+    const coherenceWorktree = await seedWorktree(coherenceIdea);
+    await mkdir(join(coherenceWorktree, '.docs', 'coherence'), { recursive: true });
+    await writeFile(join(coherenceWorktree, '.docs', 'coherence', 'coherence-bump.md'), '');
+    const fakeHome = await makeUserHome('spec_owner: bob\n');
+    const { opts } = captureOpts({ gh: async () => ({ stdout: 'unused\n' }) });
+
+    await withHome(fakeHome, async () => {
+      await dispatchEngineer(
+        { kind: 'land', project: 'alpha', idea: 'dep bump', worktree: storiesWorktree },
+        opts,
+      );
+      await dispatchEngineer(
+        { kind: 'land', project: 'alpha', idea: coherenceIdea, worktree: coherenceWorktree },
+        opts,
+      );
+    });
+
+    const ledger = await readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8');
+    expect(ledger.trim().split('\n').map((line) => (JSON.parse(line) as { gate: string }).gate))
+      .toEqual(['stories-not-approved', 'coherence']);
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
+  it('omits sourceRef from a persisted rejection when land receives none', async () => {
+    const worktree = await seedWorktree();
+    await writeFile(join(worktree, '.docs', 'stories', 'dep-bump.md'), '# Stories: dep bump\n');
+    const fakeHome = await makeUserHome('spec_owner: bob\n');
+    const { opts } = captureOpts({ gh: async () => ({ stdout: 'unused\n' }) });
+
+    await withHome(fakeHome, () => dispatchEngineer(
+      { kind: 'land', project: 'alpha', idea: 'dep bump', worktree },
+      opts,
+    ));
+
+    const ledger = await readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8');
+    const [event] = ledger.trim().split('\n').map((line) => JSON.parse(line) as Record<string, string>);
+    expect(event).not.toHaveProperty('sourceRef');
     await rm(fakeHome, { recursive: true, force: true });
   });
 
