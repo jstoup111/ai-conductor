@@ -1,3 +1,4 @@
+// Covers: task:1
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +13,11 @@ import { rateCardModelIds } from '../../src/engine/provider-model-policy.js';
 import { RATE_CARD_RELATIVE_PATH, parseRateCard } from '../../src/execution/rate-card.js';
 
 const UPSTREAM = JSON.stringify({
+  'gpt-6-astra': {
+    input_cost_per_token: 8e-6,
+    output_cost_per_token: 4e-5,
+    cache_read_input_token_cost: 8e-7,
+  },
   'gpt-5.6-terra': {
     input_cost_per_token: 2e-6,
     output_cost_per_token: 1.2e-5,
@@ -50,6 +56,7 @@ describe('detectRateCardCommand', () => {
 describe('rateCardModelIds', () => {
   it('covers every codex model the policy can route to, and no claude alias', () => {
     const ids = rateCardModelIds();
+    expect(ids.filter((model) => model === 'gpt-6-astra')).toHaveLength(1);
     expect(ids).toContain('gpt-5.6-terra');
     expect(ids).toContain('gpt-5.6-sol');
     // Reachable only via the escalation ladder — the case a step-model-only
@@ -119,9 +126,62 @@ describe('dispatchRateCard refresh', () => {
     const card = parseRateCard(await readFile(cardPath(), 'utf-8'));
     expect(card?.as_of).toBe('2026-08-24T12:00:00.000Z');
     expect(card?.source).toMatch(/litellm/);
-    expect(Object.keys(card!.models).sort()).toEqual(['gpt-5.6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra']);
+    expect(Object.keys(card!.models).sort()).toEqual([
+      'gpt-5.6-luna',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-6-astra',
+    ]);
     // Pruned: the 3000-model upstream catalog does not land in the repo.
     expect(card?.models['claude-opus-4']).toBeUndefined();
+  });
+
+  it('includes gpt-6-astra with the ordinary policy models when upstream prices it', async () => {
+    const command = detectRateCardCommand(['node', 'conduct', 'rate-card', 'refresh']);
+    await dispatchRateCard(command!, dir, { fetch: async () => UPSTREAM });
+
+    const card = parseRateCard(await readFile(cardPath(), 'utf-8'));
+    expect(Object.keys(card!.models).sort()).toEqual([
+      'gpt-5.6-luna',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-6-astra',
+    ]);
+  });
+
+  it('retains gpt-6-astra and adopts its updated upstream rate on a later ordinary refresh', async () => {
+    await dispatchRateCard({ kind: 'refresh', models: [] }, dir, { fetch: async () => UPSTREAM });
+    expect(parseRateCard(await readFile(cardPath(), 'utf-8'))?.models['gpt-6-astra'])
+      .toMatchObject({ input_cost_per_token: 8e-6 });
+
+    const updatedUpstream = JSON.stringify({
+      ...JSON.parse(UPSTREAM),
+      'gpt-6-astra': { input_cost_per_token: 9e-6, output_cost_per_token: 4.5e-5 },
+    });
+    await dispatchRateCard({ kind: 'refresh', models: [] }, dir, {
+      fetch: async () => updatedUpstream,
+    });
+
+    expect(parseRateCard(await readFile(cardPath(), 'utf-8'))?.models['gpt-6-astra'])
+      .toMatchObject({ input_cost_per_token: 9e-6, output_cost_per_token: 4.5e-5 });
+  });
+
+  it.each([
+    ['absent', undefined],
+    ['malformed', { input_cost_per_token: 'not-a-number', output_cost_per_token: 4e-5 }],
+  ])('names an %s Astra rate as missing without disturbing valid model refreshes', async (_kind, astra) => {
+    const upstream = JSON.parse(UPSTREAM) as Record<string, unknown>;
+    if (astra === undefined) delete upstream['gpt-6-astra'];
+    else upstream['gpt-6-astra'] = astra;
+
+    await dispatchRateCard({ kind: 'refresh', models: [] }, dir, {
+      fetch: async () => JSON.stringify(upstream),
+    });
+
+    const card = parseRateCard(await readFile(cardPath(), 'utf-8'));
+    expect(card?.models['gpt-6-astra']).toBeUndefined();
+    expect(card?.models['gpt-5.6-terra']).toBeDefined();
+    expect(errors.join('\n')).toMatch(/no upstream rate for "gpt-6-astra"/);
   });
 
   it('adds explicitly requested models on top of the policy set', async () => {
@@ -148,6 +208,16 @@ describe('dispatchRateCard refresh', () => {
     await writeFile(cardPath(), 'SENTINEL', 'utf-8');
     const code = await dispatchRateCard({ kind: 'refresh', models: [] }, dir, {
       fetch: async () => JSON.stringify({ 'some-other-model': { input_cost_per_token: 1, output_cost_per_token: 1 } }),
+    });
+    expect(code).toBe(1);
+    expect(await readFile(cardPath(), 'utf-8')).toBe('SENTINEL');
+  });
+
+  it('leaves the committed card untouched when the upstream payload is malformed', async () => {
+    await mkdir(join(dir, '.ai-conductor'), { recursive: true });
+    await writeFile(cardPath(), 'SENTINEL', 'utf-8');
+    const code = await dispatchRateCard({ kind: 'refresh', models: [] }, dir, {
+      fetch: async () => '<html>not-json</html>',
     });
     expect(code).toBe(1);
     expect(await readFile(cardPath(), 'utf-8')).toBe('SENTINEL');

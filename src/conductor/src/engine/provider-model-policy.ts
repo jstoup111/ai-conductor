@@ -172,6 +172,12 @@ const BUILT_IN_PROVIDER_MODEL_POLICIES: Readonly<
   codex: CODEX_MODEL_POLICY,
 });
 
+const BUILT_IN_PROVIDER_OPT_IN_MODEL_IDS: Readonly<
+  Record<string, readonly string[]>
+> = deepFreeze({
+  codex: ['gpt-6-astra'],
+});
+
 export function hasBuiltInProviderModelPolicy(providerKey: string): boolean {
   return Object.hasOwn(BUILT_IN_PROVIDER_MODEL_POLICIES, providerKey);
 }
@@ -199,15 +205,18 @@ const COST_SELF_REPORTING_PROVIDERS: ReadonlySet<string> = new Set(['claude']);
 
 /**
  * Every model id a built-in policy can route a dispatch to for a provider that
- * does NOT report cost: step defaults, tier overrides, and both ladders. This
- * is the set a token-price rate card must cover — a model reachable only by
- * escalation or fallback but absent from the card silently leaves its
- * dispatches cost-unmetered.
+ * does NOT report cost: step defaults, tier overrides, both ladders, and
+ * supported opt-in models. This is the set a token-price rate card must cover
+ * — a model reachable only by escalation or fallback but absent from the card
+ * silently leaves its dispatches cost-unmetered.
  */
 export function rateCardModelIds(): string[] {
   const ids = new Set<string>();
   for (const [provider, policy] of Object.entries(BUILT_IN_PROVIDER_MODEL_POLICIES)) {
     if (COST_SELF_REPORTING_PROVIDERS.has(provider)) continue;
+    for (const model of BUILT_IN_PROVIDER_OPT_IN_MODEL_IDS[provider] ?? []) {
+      ids.add(model);
+    }
     for (const model of Object.values(policy.stepModels)) ids.add(model);
     for (const model of policy.modelEscalationOrder) ids.add(model);
     for (const model of policy.modelFallbackLadder) ids.add(model);
