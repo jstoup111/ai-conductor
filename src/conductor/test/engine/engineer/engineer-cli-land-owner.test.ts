@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:4
 // `conduct-ts engineer land` owner-gate WIRING (adr-2026-06-30-*, FR-4 write side).
 //
 // Regression lock: the CLI `land` case must THREAD the target repo's config
@@ -469,25 +469,66 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     }
   });
 
-  it('keeps the reported rejection and exit code when its event ledger cannot be written', async () => {
+  it('keeps the rejection baseline byte-identical when its event ledger cannot be written', async () => {
     const worktree = await seedWorktree();
     await writeFile(join(worktree, '.docs', 'stories', 'dep-bump.md'), '# Stories: dep bump\n');
+    const fakeHome = await makeUserHome('spec_owner: bob\n');
+    const writable = captureOpts({ gh: async () => ({ stdout: 'unused\n' }) });
+
+    const writableCode = await withHome(fakeHome, () => dispatchEngineer(
+      { kind: 'land', project: 'alpha', idea: 'dep bump', worktree },
+      writable.opts,
+    ));
+
+    expect(writableCode).toBe(1);
+    expect(writable.err).toHaveLength(2);
+
     // A file at this path makes EventPersister's mkdir/write fail deterministically.
+    await rm(join(repoPath, '.pipeline'), { recursive: true, force: true });
     await writeFile(join(repoPath, '.pipeline'), 'not a directory\n');
+    const unwritable = captureOpts({ gh: async () => ({ stdout: 'unused\n' }) });
+    const unwritableCode = await withHome(fakeHome, () => dispatchEngineer(
+      { kind: 'land', project: 'alpha', idea: 'dep bump', worktree },
+      unwritable.opts,
+    ));
+
+    expect(unwritableCode).toBe(writableCode);
+    expect(unwritable.err.slice(0, 2)).toEqual(writable.err);
+    expect(unwritable.err).toHaveLength(3);
+    expect(unwritable.err[2]).toMatch(/^engineer land: could not record rejection event:/);
+    await rm(fakeHome, { recursive: true, force: true });
+  });
+
+  it('persists an unexpected land primitive failure as exactly one unclassified rejection event', async () => {
+    const worktree = await seedWorktree();
+    // All gates pass, then the landing primitive's intake-marker mkdir encounters this
+    // plain file. This is a real, non-gate primitive failure at the command boundary.
+    await writeFile(join(worktree, '.docs', 'intake'), 'not a directory\n');
     const fakeHome = await makeUserHome('spec_owner: bob\n');
     const { err, opts } = captureOpts({ gh: async () => ({ stdout: 'unused\n' }) });
 
-    const code = await withHome(fakeHome, () => dispatchEngineer(
-      { kind: 'land', project: 'alpha', idea: 'dep bump', worktree },
-      opts,
-    ));
+    try {
+      const code = await withHome(fakeHome, () => dispatchEngineer(
+        { kind: 'land', project: 'alpha', idea: 'dep bump', worktree },
+        opts,
+      ));
 
-    expect(code).toBe(1);
-    expect(err[0]).toContain('stories artifact is not approved');
-    expect(err[1]).toBe(`engineer land: worktree kept for inspection at "${worktree}".`);
-    expect(err).toHaveLength(3);
-    expect(err[2]).toMatch(/^engineer land: could not record rejection event:/);
-    await rm(fakeHome, { recursive: true, force: true });
+      expect(code).toBe(1);
+      expect(err[0]).toContain('EEXIST');
+      expect(err[1]).toBe(`engineer land: worktree kept for inspection at "${worktree}".`);
+      const ledger = await readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8');
+      const events = ledger.trim().split('\n').map((line) => JSON.parse(line) as Record<string, string>);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        type: 'land_gate_rejected',
+        gate: 'unclassified',
+        reason: expect.stringContaining('EEXIST'),
+        project: 'alpha',
+        worktreePath: worktree,
+      });
+    } finally {
+      await rm(fakeHome, { recursive: true, force: true });
+    }
   });
 
   // REMOVED: Interim test for un-owned stamp behavior (now throws fail-closed per Story 2).
