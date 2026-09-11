@@ -12,6 +12,7 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { AuthoringGuard } from './authoring-guard.js';
 import { parseWorkRef } from './source-ref.js';
+import { INBOUND_ARMOR_LINE } from './intake/sanitize-inbound.js';
 
 /**
  * Write `.docs/intake/<slug>.md` with `Source-Ref: <sourceRef>` and, when an
@@ -76,10 +77,7 @@ export async function writeIntakeMarker(
     if (sourceRefMatch) {
       existingSourceRef = sourceRefMatch[1];
     }
-    const outcomesIdx = existing.search(/^## Desired outcome\s*$/m);
-    if (outcomesIdx !== -1) {
-      existingOutcomesBlock = existing.slice(outcomesIdx).trimEnd();
-    }
+    existingOutcomesBlock = extractOutcomesSection(existing);
   } catch {
     // File doesn't exist yet, continue normally
   }
@@ -92,10 +90,9 @@ export async function writeIntakeMarker(
 
   if (hasOwner) lines.push(`Owner: ${owner}`);
 
-  // Append the verbatim `## Desired outcome` bullet block staged at worktree
-  // creation (Task 1's outcome-staging.ts), when present — Story 1 happy path.
-  // The staged content's own `Source-Ref:` header line is stripped; only the
-  // `## Desired outcome` section onward is carried into the marker.
+  // Append the staged armor boundary and outcomes verbatim. The staging header
+  // is intentionally stripped; Source-Ref is written above from its canonical
+  // marker field, while the envelope armor remains source-bound and unchanged.
   const outcomesSection = extractOutcomesSection(stagedOutcomesContent) ?? existingOutcomesBlock;
   if (outcomesSection) {
     lines.push('', outcomesSection.trimEnd());
@@ -109,13 +106,22 @@ export async function writeIntakeMarker(
 }
 
 /**
- * Extract the `## Desired outcome` section (heading through trailing bullets)
- * from staged outcomes content written by outcome-staging.ts's
- * `stageIntakeOutcomes`. Returns null when there is no staged content or no
- * such heading.
+ * Extract the staged armored block when present, otherwise the legacy Desired
+ * outcome section. This keeps chat/CLI-origin marker content byte-for-byte
+ * compatible while preserving tracker envelope armor across owner re-writes.
  */
 function extractOutcomesSection(stagedOutcomesContent: string | undefined | null): string | null {
   if (stagedOutcomesContent == null) return null;
+  const lines = stagedOutcomesContent.split('\n');
+  const openingIndex = lines.findIndex(
+    (line) => line.startsWith('<<< INBOUND sourceRef=') && INBOUND_ARMOR_LINE.test(line),
+  );
+  const closingIndex = lines.findIndex(
+    (line, index) => index > openingIndex && INBOUND_ARMOR_LINE.test(line),
+  );
+  if (openingIndex !== -1 && closingIndex !== -1) {
+    return lines.slice(openingIndex, closingIndex + 1).join('\n').trimEnd();
+  }
   const headingIdx = stagedOutcomesContent.search(/^## Desired outcome\s*$/m);
   if (headingIdx === -1) return null;
   return stagedOutcomesContent.slice(headingIdx);

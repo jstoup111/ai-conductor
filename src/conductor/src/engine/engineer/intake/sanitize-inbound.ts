@@ -38,6 +38,17 @@ interface Rule {
 
 const MARKER = (category: InboundCategory): string => `[neutralized:${category}]`;
 const ARMOR_CLOSE = '<<< END INBOUND >>>';
+const ARMOR_OPEN_PREFIX = '<<< INBOUND sourceRef=';
+const ARMOR_OPEN_SUFFIX = ' >>>';
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Matches either verbatim line that delimits a sanitized inbound envelope. */
+export const INBOUND_ARMOR_LINE = new RegExp(
+  `^(?:${escapeRegExp(ARMOR_OPEN_PREFIX)}.+ digest=[a-f0-9]{64}${escapeRegExp(ARMOR_OPEN_SUFFIX)}|${escapeRegExp(ARMOR_CLOSE)})$`,
+);
 
 const RULES: Rule[] = [
   {

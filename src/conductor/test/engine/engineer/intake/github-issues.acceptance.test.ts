@@ -343,6 +343,7 @@ describe('inbound issue text remains sanitized through poll → claim → worktr
       'utf8',
     );
     expect(staged).toContain('Source-Ref: owner/repo#12');
+    expect(staged).toMatch(/^<<< INBOUND sourceRef=owner\/repo#12 digest=[a-f0-9]{64} >>>$/m);
     expect(staged).toContain('- [neutralized:agent-directive]');
     expect(staged).not.toContain(rawDirective);
     expect(await filesContaining(worktreePath, rawDirective)).toEqual([]);
