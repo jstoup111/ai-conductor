@@ -13,6 +13,7 @@ import type {
   SelfHostAuthPreparation,
   TokenUsage,
 } from './llm-provider.js';
+import { reviewAccessRefusal } from './llm-provider.js';
 import { applyRateCard, loadRateCard, type RateCardLoader } from './rate-card.js';
 import {
   epochAnchoredMonotonicClock,
@@ -26,6 +27,7 @@ import { withDaemonSessionMarker } from './daemon-session.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
+import { wrapForContainment } from '../engine/self-host/live-containment.js';
 
 // These are deliberately Codex-specific rather than reusing Claude's error
 // vocabulary. The CLIs report different messages for the same failure class.
@@ -295,6 +297,8 @@ export class CodexProvider implements LLMProvider {
     // session id, but the invariant is enforced uniformly at every adapter
     // entry so no future arg-building change can resurrect reuse.
     options = enforceFreshSessionOptions(options, 'codex');
+    const accessRefusal = reviewAccessRefusal('codex', options.reviewAccess);
+    if (accessRefusal) return accessRefusal;
     const repl = options.interactive === true;
     const jsonOutput = !repl;
     // A real interactive session leaves authorization to the operator. Auto
@@ -307,18 +311,25 @@ export class CodexProvider implements LLMProvider {
     }
 
     const authentication = this.authentication;
-    const args = [...this.selfHostArgs(options), ...this.buildArgs(options, !repl)];
+    const command = {
+      executable: options.selfHost?.executable ?? this.executable,
+      args: [...this.selfHostArgs(options), ...this.buildArgs(options, !repl)],
+      env: this.invocationEnv(options, authentication),
+    };
+    const launch = options.reviewAccess?.kind === 'ready'
+      ? wrapForContainment(command, options.reviewAccess.profile.mountArgs)
+      : command;
     let streamedTokenUsage: TokenUsage | undefined;
 
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
-      const subprocess = this.spawnCodex(options.selfHost?.executable ?? this.executable, args, {
+      const subprocess = this.spawnCodex(launch.executable, launch.args, {
         reject: false,
         input: this.composePrompt(options),
         stdin: 'pipe',
         stdout: options.diagnosticLog ? 'pipe' : repl ? ['pipe', 'inherit'] : 'pipe',
         stderr: options.diagnosticLog ? 'pipe' : repl ? ['pipe', 'inherit'] : 'pipe',
         cwd: options.cwd,
-        env: this.invocationEnv(options, authentication),
+        env: launch.env,
       }, {
         ...options,
         onProviderStream: repl ? undefined : options.streamConsumer?.onProviderStream ?? options.onProviderStream,
