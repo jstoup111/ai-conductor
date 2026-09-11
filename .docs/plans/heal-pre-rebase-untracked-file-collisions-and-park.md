@@ -123,6 +123,8 @@ ordinary test may reach a real LLM, GitHub, or any network service.
 5. A real-git test proves a path that is not untracked and an occupied quarantine destination each leave the worktree unchanged and return the start-failure outcome.
 
 ### Task 3: Report the quarantine on the existing rebase event bridge
+> **Amended 2026-09-11 by operator approval for #415:** Task 5 adds the emitted-payload proof omitted from Task 3 and identified as PG-1 by the as-built review. The operator approved this plan amendment in chat; the existing story and runtime behavior remain the contract.
+
 **Story:** Story 1
 **Type:** happy-path
 **Files:** src/conductor/src/types/events.ts, src/conductor/src/engine/event-sinks.ts, src/conductor/src/engine/rebase.ts, src/conductor/test/engine/rebase.test.ts
@@ -158,12 +160,28 @@ ordinary test may reach a real LLM, GitHub, or any network service.
 3. The finish-time rebase step writes the start-failure note, proven through its existing real-git conductor fixture at that call site.
 4. The play-forward re-kick path writes the same start-failure note from the same outcome, proven at that call site.
 
+### Task 5: Prove the quarantine event carries every moved path and its directory
+**Story:** Story 1
+**Type:** happy-path
+**Files:** src/conductor/test/engine/rebase.test.ts
+**Dependencies:** 3
+
+**Steps:**
+1. Extend the existing `emitRebaseEvent` recording-emitter test to capture complete quarantine events. Use at least two distinct quarantined paths, including a nested path, and an explicit quarantine directory.
+2. For both the healed clean outcome and the start-failure outcome, assert exactly one quarantine occurrence per invocation, with `paths` equal to the complete input path list and `directory` equal to the input quarantine directory. Retain the assertion that this occurrence precedes the outcome event.
+3. The correct payload already exists. Add coverage of that behavior without changing production semantics or claiming pre-implementation RED evidence.
+4. Run the affected rebase test module through `ai-conductor scoped-run` and commit the test-only repair. No external service is needed; the real event bridge and emitter run locally.
+
+**Done when:**
+1. Recorded emissions prove exactly one quarantine occurrence per outcome carrying every quarantined path and the quarantine directory for both healed and start-failure outcomes, before the outcome event.
+2. The affected test module passes with unchanged production code; exact payload assertions reject missing paths and incorrect directories.
+
 ## Coverage Check
 
 | Criterion | Task id(s) | Done when quote | Disposition |
 | --- | --- | --- | --- |
 | Story 1 happy: Given a feature worktree holds an untracked file at a path the base introduces as tracked, when the rebase step runs, then the colliding file is moved into a quarantine directory under the worktree's pipeline directory and the rebase completes with its ordinary clean outcome. | 1, 2 | "A real-git test proves the rebase completes after the heal and leaves the base version of the collided path checked out on the feature branch." | diff-local |
-| Story 1 happy: Given a rebase completed only after colliding untracked files were moved aside, when the rebase step reports its outcome, then the event ledger records one occurrence naming every quarantined path and the quarantine directory holding them. | 3 | "Recorded emissions show the new variant emitted before the outcome's own event for a healed clean outcome and for a start-failure outcome." | diff-local |
+| Story 1 happy: Given a rebase completed only after colliding untracked files were moved aside, when the rebase step reports its outcome, then the event ledger records one occurrence naming every quarantined path and the quarantine directory holding them. | 3, 5 | "Recorded emissions prove exactly one quarantine occurrence per outcome carrying every quarantined path and the quarantine directory for both healed and start-failure outcomes, before the outcome event." | diff-local |
 | Story 1 negative: Given git names a colliding path that is not reported as untracked in the worktree, when the rebase step runs, then no file is moved, the rebase is not retried, and the feature parks. | 1, 2 | "A real-git test proves a path that is not untracked and an occupied quarantine destination each leave the worktree unchanged and return the start-failure outcome." | diff-local |
 | Story 1 negative: Given the quarantine destination for a colliding path is already occupied, when the rebase step runs, then no file is moved or overwritten, the rebase is not retried, and the feature parks. | 1, 2 | "A real-git test proves a path that is not untracked and an occupied quarantine destination each leave the worktree unchanged and return the start-failure outcome." | diff-local |
 | Story 1 negative: Given colliding untracked files were moved aside but the retried rebase stops on a genuine content conflict, when the rebase step reports its outcome, then the quarantined paths are still recorded and the conflict follows the existing paused-rebase handling. | 2 | "A real-git test proves a retry that stops on a genuine content conflict returns the ordinary paused-conflict outcome with the quarantine record still carried." | diff-local |
@@ -188,3 +206,5 @@ the network. No terminal validation task is added.
 
 Task 1 -> Task 2 -> Task 3
 Task 2 -> Task 4
+
+Task 3 -> Task 5
