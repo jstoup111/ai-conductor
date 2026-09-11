@@ -1,23 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-11T12:45:37.996Z
+Status: halted
 Slug: report-progress-bypassed-build-retries-against-the
 Class: needs-human
-Halting step: coverage_binding
-Phase: BUILD
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-report-progress-bypassed-build-retries-against-the
-Head SHA: 081440357b773188603a24bbe9424d2b7f4d4350
-Halted at: 2026-09-11T03:10:28.708Z
+Head SHA: 0207613a788f77be1f2020a2f6b9bc19f19a122e
+Halted at: 2026-09-11T19:26:59.486Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Operator credentials expired and refresh timed out after 60 minutes.
-Credentials file: /home/james-stoup/.claude/.credentials.json
-Expires at: 1789092900826
-Please refresh your OAuth token and re-queue this feature.
+Validation group "prd_audit" halted: needs human DECIDE — As-built review remediation cannot resolve governing clause(s): AB-1: adr-2026-07-05-retry-as-escalation-ladder decision 6. A REMEDIABLE row cites exactly one clause: an APPROVED ADR filename stem plus its decision number, or one task id from this feature's plan.
 ```
