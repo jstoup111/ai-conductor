@@ -1,25 +1,22 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-10T01:14:30.207Z
+Status: halted
 Slug: one-transient-failure-in-a-validation-group-member
 Class: needs-human
-Halting step: build
-Phase: BUILD
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-one-transient-failure-in-a-validation-group-member
-Head SHA: 08d5124fe114619ff9d1034ffd020f855f8247c4
-Halted at: 2026-09-09T23:48:51.241Z
+Head SHA: d2a089cc36957c986e7c879bba3d9c47ad9c9908
+Halted at: 2026-09-11T12:36:44.832Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Provider preparation exhausted.
-step: build
-phase: preparing
-attempt: 417bba93-3c2e-45d7-9879-ea3e5fd01cf8:build:7
-elapsed_ms: 300000
-recovery_count: 1
+Validation group "prd_audit" halted: as-built review verdict is BLOCKED and needs a human decision — DESIGN finding(s): AB-2 (adr-2026-07-10-validation-group-join decision 1)
+
+Blocking findings:
+AB-1 (REMEDIABLE; adr-2026-08-12-execution-lifecycle-completeness-for-timing decision 1): The no-verdict group persists `step_failed`; Conductor closes its private parallel key, but EventPersister and the timing rollup leave the persisted parallel execution open.
+AB-2 (DESIGN; adr-2026-07-10-validation-group-join decision 1): The retained-member FINISH recheck changes width-one serial exception semantics without an APPROVED ADR superseding the binding no-semantic-change clause.
 ```
