@@ -10,6 +10,8 @@
 
 Four bounded tasks deliver #1513. The build step's completion-miss retry decision stops describing a refunded attempt with the fixed slot it never consumes, and starts carrying the progress allowance that actually governed it. One shared formatting helper then renders that allowance at the three retry-line call sites, and the span recorder carries it onto the retry span. Retry budgets, ceiling policy, halt classification, and every non-build retry are outside this slice.
 
+> **Amended 2026-09-11 by James Stoup (#1513):** The operator approved correcting model/effort reporting to match the actual next dispatch, as required by adr-2026-07-05-retry-as-escalation-ladder decision 6. Task 5 owns this bounded repair. No model-selection or budget behavior changes. Task 3's former create-renderer path was replaced upstream by TerminalRenderer; preserve the current production path rather than recreate the removed renderer.
+
 ## Technical Approach
 
 The build step's completion-miss retry decision currently emits the retry with `attempt + 1` and the fixed step maximum, then decrements `attempt` when the progress bypass fired. Because the decrement is a refund, the slot the next attempt will occupy is the current `attempt`, not `attempt + 1` — so on a refunded retry the emitted number is one past the slot and, after enough refunds, one past the maximum on the same event. Emit `attempt` on the refunded branch and leave the ordinary branch emitting `attempt + 1` unchanged. This makes the fixed pair self-consistent on every retry without touching the refund itself, the completion gate, or the ceiling backstop.
@@ -110,6 +112,22 @@ Documentation: the build-progress ceilings section of the stalled-or-stuck-featu
 2. A retry with no allowance fields records only the pre-existing attempt, maximum, and reason attributes and adds no undefined-valued attribute.
 3. The build-progress ceilings runbook section names the allowance fragment and states that the fixed counter now stays within its own maximum.
 
+### Task 5: Report the model and effort of the actual next retry
+**Story:** Story 1
+**Type:** happy-path
+**Files:** src/conductor/src/engine/conductor.ts, src/conductor/test/engine/conductor.test.ts
+**Dependencies:** 1
+
+**Steps:**
+1. Extend the existing bounded refunded-retry fixture to capture the model and effort passed to each injected build dispatch, and compare each retry event with the following dispatch.
+2. Establish RED for the refunded attempt at a rung where the ordinary next attempt would escalate.
+3. Derive the emitted attempt and escalation annotation from one next-attempt value: reuse the current attempt on a progress refund and advance it for an ordinary retry. Keep actual dispatch selection, refunds, budgets and ceilings unchanged.
+4. Verify the ordinary retry and repeated refunded retries against the following dispatch through the same fixture; retain all existing counter and allowance assertions.
+
+**Done when:**
+1. Every observed retry event's escalatedModel and escalatedEffort equal the model and effort passed to its following injected build dispatch, covering both ordinary and refunded retries.
+2. Ordinary retries still advance the fixed attempt; refunded retries reuse the slot and preserve the existing progress allowance and ceiling behavior.
+
 ## Coverage Check
 
 | Criterion | Task id(s) | Done when quote | Disposition |
@@ -130,3 +148,4 @@ All criteria are diff-local: each is decided by fixtures and code inside this di
 
 Task 1 -> Task 2 -> Task 3
 Task 1 -> Task 4
+Task 1 -> Task 5

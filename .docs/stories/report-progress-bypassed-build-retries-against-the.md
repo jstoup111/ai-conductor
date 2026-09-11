@@ -18,6 +18,7 @@ As an operator reading a running build, I want a progress-granted retry to name 
 
 - Given a build attempt resolves more tasks than the previous attempt and the progress-attempt ceiling has not been reached, when the retry is emitted, then its fixed-retry attempt number is the slot the next attempt reuses and is never greater than the stated maximum on the same event.
 - Given that same refunded retry, when it is emitted, then it additionally carries the number of progress attempts consumed so far and the configured progress-attempt ceiling.
+- Given a retry with escalation reporting enabled, whether ordinary or progress-refunded, when its event is emitted, then its reported model and effort equal those used by the next dispatch.
 - Given a refunded retry, when the daemon log line and both terminal renderers render it, then each line shows the in-range fixed counter and, distinctly from it, the consumed progress-attempt count and its ceiling.
 - Given a refunded retry, when the OpenTelemetry span recorder consumes it, then the retry span event carries the consumed progress-attempt count and its ceiling alongside the existing fixed attempt and maximum.
 
