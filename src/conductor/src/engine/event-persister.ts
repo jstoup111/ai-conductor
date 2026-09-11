@@ -180,7 +180,7 @@ export class EventPersister {
 
 /** Member settlement is persisted so its clock boundary reaches the terminal record. */
 function ledgerEventTypes(): ConductorEvent['type'][] {
-  return [...new Set([...persistedEventTypes(), 'group_member_step'])];
+  return [...new Set<ConductorEvent['type']>([...persistedEventTypes(), 'group_member_step'])];
 }
 
 /**
