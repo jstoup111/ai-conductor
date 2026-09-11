@@ -5,7 +5,9 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  readlink,
   realpath,
+  rm,
   writeFile,
 } from 'node:fs/promises';
 import { dirname, isAbsolute, join, posix, relative } from 'node:path';
@@ -42,6 +44,14 @@ export interface CaptureInstalledReviewPolicyBundleOptions {
   readonly materialParent: string;
   /** Source read seam for fault-injected policy-loading tests. */
   readonly sourceReadFile?: (path: string) => Promise<Buffer>;
+  /** Material write seam for fault-injected policy-loading tests. */
+  readonly materialWriteFile?: (path: string, bytes: Buffer) => Promise<void>;
+  /** Capture lifecycle seam for deterministic concurrent-source fixtures. */
+  readonly captureBoundary?: (boundary: 'source-captured' | 'material-written') => Promise<void>;
+}
+
+interface CapturedSourceManifestEntry extends CapturedReviewPolicyBundleEntry {
+  readonly symbolicLinkTarget?: string;
 }
 
 export const MAX_POLICY_BUNDLE_FILES = 4096;
@@ -177,7 +187,7 @@ async function collectPackageFiles(
   currentPath: string,
   relativeParent: string,
   ancestry: ReadonlySet<string>,
-  manifest: CapturedReviewPolicyBundleEntry[],
+  manifest: CapturedSourceManifestEntry[],
   sourceReadFile: (path: string) => Promise<Buffer>,
 ): Promise<void> {
   const canonicalCurrentPath = await canonicalResourcePath(currentPath, relativeParent);
@@ -229,7 +239,11 @@ async function collectPackageFiles(
         throw policyResourceError('is not a regular file', relativePath);
       }
       try {
-        manifest.push({ relativePath, bytes: await sourceReadFile(targetPath) });
+        manifest.push({
+          relativePath,
+          bytes: await sourceReadFile(targetPath),
+          symbolicLinkTarget: await readlink(sourcePath, 'utf8'),
+        });
       } catch {
         throw policyResourceError('is missing or unreadable', relativePath);
       }
@@ -244,6 +258,30 @@ async function collectPackageFiles(
       throw policyResourceError('is missing or unreadable', relativePath);
     }
   }
+}
+
+async function captureSourceManifest(
+  packageRoot: string,
+  sourceReadFile: (path: string) => Promise<Buffer>,
+): Promise<readonly CapturedSourceManifestEntry[]> {
+  const manifest: CapturedSourceManifestEntry[] = [];
+  await collectPackageFiles(packageRoot, packageRoot, '', new Set(), manifest, sourceReadFile);
+  manifest.sort((left, right) => (
+    left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0
+  ));
+  return manifest;
+}
+
+function sameSourceManifest(
+  captured: readonly CapturedSourceManifestEntry[],
+  current: readonly CapturedSourceManifestEntry[],
+): boolean {
+  return captured.length === current.length && captured.every((entry, index) => {
+    const comparison = current[index];
+    return entry.relativePath === comparison.relativePath
+      && entry.bytes.equals(comparison.bytes)
+      && entry.symbolicLinkTarget === comparison.symbolicLinkTarget;
+  });
 }
 
 function validateBundleLimits(manifest: readonly CapturedReviewPolicyBundleEntry[]): void {
@@ -265,19 +303,38 @@ export async function captureInstalledReviewPolicyBundle(
   const packageRoot = await canonicalResourcePath(policy.packageRoot, 'selected package');
   const canonicalSkillPath = await canonicalResourcePath(policy.canonicalSkillPath, 'SKILL.md');
   const definitionRelativePath = relativePackagePath(packageRoot, canonicalSkillPath);
-  const manifest: CapturedReviewPolicyBundleEntry[] = [];
-  await collectPackageFiles(packageRoot, packageRoot, '', new Set(), manifest, options.sourceReadFile ?? readFile);
-  manifest.sort((left, right) => (
-    left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0
-  ));
+  const sourceReadFile = options.sourceReadFile ?? readFile;
+  const capturedSourceManifest = await captureSourceManifest(packageRoot, sourceReadFile);
+  const manifest: readonly CapturedReviewPolicyBundleEntry[] = capturedSourceManifest.map((entry) => ({
+    relativePath: entry.relativePath,
+    bytes: entry.bytes,
+  }));
   validateBundleLimits(manifest);
   validateRequiredResources(policy, manifest);
+  await options.captureBoundary?.('source-captured');
 
-  const materialPath = await mkdtemp(join(options.materialParent, 'policy-bundle-'));
-  for (const entry of manifest) {
-    const destination = join(materialPath, entry.relativePath);
-    await mkdir(dirname(destination), { recursive: true });
-    await writeFile(destination, entry.bytes);
+  let materialPath: string | undefined;
+  try {
+    materialPath = await mkdtemp(join(options.materialParent, 'policy-bundle-'));
+    const materialWriteFile = options.materialWriteFile ?? writeFile;
+    for (const entry of manifest) {
+      const destination = join(materialPath, entry.relativePath);
+      await mkdir(dirname(destination), { recursive: true });
+      try {
+        await materialWriteFile(destination, entry.bytes);
+      } catch {
+        throw policyResourceError('could not be materialized', entry.relativePath);
+      }
+    }
+    await options.captureBoundary?.('material-written');
+
+    const finalSourceManifest = await captureSourceManifest(packageRoot, sourceReadFile);
+    if (!sameSourceManifest(capturedSourceManifest, finalSourceManifest)) {
+      throw new Error('Policy package changed during capture');
+    }
+  } catch (error) {
+    if (materialPath !== undefined) await rm(materialPath, { recursive: true, force: true });
+    throw error;
   }
 
   const metadata = admittedMetadata(policy);
