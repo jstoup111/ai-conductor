@@ -287,14 +287,14 @@ export async function dispatchRewindCommand(
     } });
     await clear(cwd, result.demoted);
   } catch (error) {
+    console.error(`rewind: ${error instanceof Error ? error.message : String(error)}`);
     if (result) {
       try {
         await rollbackRewindState(originalState, config, result, store);
       } catch (rollbackError) {
-        console.error(`rewind: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+        console.error(`rewind: rollback failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
       }
     }
-    console.error(`rewind: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
   if (!result) return 1;

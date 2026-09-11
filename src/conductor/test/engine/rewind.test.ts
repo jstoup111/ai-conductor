@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -169,6 +169,8 @@ describe('rewindState', () => {
     const state = { ...completeState, lint: 'done', last_step: 'finish' } as ConductState;
     const store = new ApplyingStateStore(state);
     const emit = vi.fn(async () => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     await expect(dispatchRewindCommand({ kind: 'rewind', target: 'lint' }, '/fixture', {
       loadConfig: async () => ({ ok: true, config, warnings: [] }),
@@ -181,6 +183,10 @@ describe('rewindState', () => {
 
     expect((state as Record<string, unknown>).lint).toBe('stale');
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({ target: 'lint' }));
+    expect(error).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith('Rewound to lint.');
+    error.mockRestore();
+    log.mockRestore();
   });
 
   it('restores state through the mutation port when derived-record cleanup fails, leaving retry valid', async () => {
@@ -203,6 +209,8 @@ describe('rewindState', () => {
       'rollback failed operator rewind state',
     ]);
     expect(store.corrections).toEqual([]);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith('rewind: cannot clear HALT');
     error.mockRestore();
   });
 
@@ -246,7 +254,10 @@ describe('rewindState', () => {
       clearDerivedRecords: async () => { throw new Error('cannot clear HALT'); },
     })).resolves.toBe(1);
 
-    expect(error).toHaveBeenCalledWith(expect.stringMatching(/test_suite.*build_review/s));
+    expect(error.mock.calls).toEqual([
+      ['rewind: cannot clear HALT'],
+      [expect.stringMatching(/^rewind: rollback failed: .*test_suite.*build_review/s)],
+    ]);
     error.mockRestore();
   });
 
