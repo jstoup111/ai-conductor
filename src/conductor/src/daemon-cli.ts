@@ -2645,6 +2645,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'remediation_adjudication_completed':
       log(`${dot} build_review adjudication completed (${event.caseIds.length} settled case${event.caseIds.length === 1 ? '' : 's'})`);
       break;
+    case 'remediation_case_refuted':
+      log(`${dot} build_review refuted remediation case ${event.caseId}`);
+      break;
     case 'build_review_rubric_started':
       log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} started`);
       break;

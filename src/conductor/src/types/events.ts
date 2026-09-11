@@ -390,6 +390,14 @@ export type ConductorEvent =
       resolution: 'open' | 'resolved';
     }
   | {
+      /** One attempted remediation case was refuted against the current lap. */
+      type: 'remediation_case_refuted';
+      domain: 'build_review';
+      lapId: string;
+      caseId: string;
+      residualEffectId?: string;
+    }
+  | {
       /** One idempotent remediation effect was reserved before execution. */
       type: 'remediation_effect_reserved';
       domain: 'build_review';

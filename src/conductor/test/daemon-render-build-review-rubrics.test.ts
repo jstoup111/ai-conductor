@@ -1,3 +1,4 @@
+// Covers: task:8
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import chalk from 'chalk';
 
@@ -112,6 +113,15 @@ describe('renderDaemonEvent: build_review rubric lifecycle', () => {
       type: 'build_review_rubric_infrastructure_failure', rubric: 'testQuality', lapId: 'lap-12345678',
       reason: 'scoped run timed out',
     })).toEqual(['·   build_review [lap-12345678] testQuality infrastructure failure: scoped run timed out']);
+  });
+
+  it('names the case when a remediation refutation is recorded', () => {
+    expect(lines({
+      type: 'remediation_case_refuted',
+      domain: 'build_review',
+      lapId: 'lap-12345678',
+      caseId: 'case-42',
+    })).toEqual(['· build_review refuted remediation case case-42']);
   });
 
   it('keeps infrastructure failure distinct from judged failure in plain text', () => {
