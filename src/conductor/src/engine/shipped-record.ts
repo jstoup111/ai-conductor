@@ -279,43 +279,6 @@ export function appendTimingSection(
   );
 }
 
-/**
- * Removes generated Cost and Time sections when comparing a shipped record's
- * substantive content. Only exact column-zero headings are recognized; every
- * other byte is preserved unchanged.
- */
-export function projectShippedRecordSubstance(content: string): string {
-  let projected = '';
-  let retainedFrom = 0;
-  let index = 0;
-
-  while (index < content.length) {
-    const atLineStart = index === 0 || content[index - 1] === '\n';
-    const headingEnd = content.indexOf('\n', index);
-    const lineEnd = headingEnd === -1 ? content.length : headingEnd;
-    const heading = content.slice(index, lineEnd);
-    const isGeneratedSection =
-      atLineStart && (heading === '## Cost' || heading === '## Time' || heading === '## Cost\r' || heading === '## Time\r');
-
-    if (!isGeneratedSection) {
-      index = headingEnd === -1 ? content.length : headingEnd + 1;
-      continue;
-    }
-
-    projected += content.slice(retainedFrom, index);
-    let nextSection = headingEnd === -1 ? content.length : headingEnd + 1;
-    while (nextSection < content.length) {
-      const nextLineEnd = content.indexOf('\n', nextSection);
-      if (content.startsWith('## ', nextSection)) break;
-      nextSection = nextLineEnd === -1 ? content.length : nextLineEnd + 1;
-    }
-    retainedFrom = nextSection;
-    index = nextSection;
-  }
-
-  return retainedFrom === 0 ? content : projected + content.slice(retainedFrom);
-}
-
 /** Appends the same validated accepted-risk section used by retained PRs. */
 export function appendBuildReviewAcceptedRisk(
   existingContent: string,
