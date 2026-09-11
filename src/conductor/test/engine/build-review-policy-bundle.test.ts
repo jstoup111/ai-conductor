@@ -1,5 +1,6 @@
-// Covers: task:7
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+// Covers: task:7, task:8
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -38,6 +39,15 @@ async function policyPackage(parent: string): Promise<string> {
   // Deliberately unreferenced: complete-package capture must retain it too.
   await writeFile(join(root, 'criteria', 'unreferenced.bin'), Buffer.from([0, 255, 10]));
   return root;
+}
+
+async function expectRejectedWithoutMaterial(
+  operation: Promise<unknown>,
+  materialParent: string,
+  message: RegExp,
+): Promise<void> {
+  await expect(operation).rejects.toThrow(message);
+  expect(await readdir(materialParent)).toEqual([]);
 }
 
 afterEach(async () => {
@@ -104,6 +114,7 @@ describe('engine/build-review-policy-bundle', () => {
       source: 'plugin',
       plugin: { id: 'checks', version: '2.0.0' },
       canonicalSkillPath: join(pluginRoot, 'skills', 'review', 'SKILL.md'),
+      declaredDependencies: ['skills/review/criteria/scope.md'],
     }), { materialParent });
 
     expect(bundle.manifest.map((entry) => entry.relativePath)).toEqual([
@@ -136,5 +147,144 @@ describe('engine/build-review-policy-bundle', () => {
     expect(first.digest).toBe(second.digest);
     expect(first.digest).not.toBe(changed.digest);
     expect(changed.digest).not.toBe(metadataChanged.digest);
+  });
+
+  it('refuses a missing declared resource before it creates eligible material', async () => {
+    const sourceParent = await temporaryDirectory('build-review-policy-missing-source-');
+    const materialParent = await temporaryDirectory('build-review-policy-missing-material-');
+    const packageRoot = await policyPackage(sourceParent);
+
+    await expectRejectedWithoutMaterial(
+      captureInstalledReviewPolicyBundle(installedSkill(packageRoot, {
+        declaredDependencies: ['criteria/missing.md'],
+      }), { materialParent }),
+      materialParent,
+      /criteria\/missing\.md/,
+    );
+  });
+
+  it('refuses an unreadable declared resource through the source I/O boundary', async () => {
+    const sourceParent = await temporaryDirectory('build-review-policy-unreadable-source-');
+    const materialParent = await temporaryDirectory('build-review-policy-unreadable-material-');
+    const packageRoot = await policyPackage(sourceParent);
+
+    await expectRejectedWithoutMaterial(
+      captureInstalledReviewPolicyBundle(installedSkill(packageRoot), {
+        materialParent,
+        sourceReadFile: async (path) => {
+          if (path.endsWith('criteria/checks.md')) {
+            throw new Error('fixture permission denied');
+          }
+          return readFile(path);
+        },
+      }),
+      materialParent,
+      /criteria\/checks\.md/,
+    );
+  });
+
+  it('refuses a broken local Markdown resource reference before it creates eligible material', async () => {
+    const sourceParent = await temporaryDirectory('build-review-policy-reference-source-');
+    const materialParent = await temporaryDirectory('build-review-policy-reference-material-');
+    const packageRoot = await policyPackage(sourceParent);
+    await writeFile(join(packageRoot, 'SKILL.md'), '# Policy\n[Missing criteria](criteria/missing.md)\n', 'utf8');
+
+    await expectRejectedWithoutMaterial(
+      captureInstalledReviewPolicyBundle(installedSkill(packageRoot), { materialParent }),
+      materialParent,
+      /criteria\/missing\.md/,
+    );
+  });
+
+  it('refuses an escaping symlink and a symlink cycle by their resource names', async () => {
+    const sourceParent = await temporaryDirectory('build-review-policy-link-fault-source-');
+    const materialParent = await temporaryDirectory('build-review-policy-link-fault-material-');
+    const packageRoot = await policyPackage(sourceParent);
+    await writeFile(join(sourceParent, 'outside.md'), 'outside package', 'utf8');
+    await symlink('../../outside.md', join(packageRoot, 'criteria', 'escape.md'));
+
+    await expectRejectedWithoutMaterial(
+      captureInstalledReviewPolicyBundle(installedSkill(packageRoot), { materialParent }),
+      materialParent,
+      /escape\.md/,
+    );
+
+    await rm(join(packageRoot, 'criteria', 'escape.md'));
+    await symlink('cycle-b.md', join(packageRoot, 'criteria', 'cycle-a.md'));
+    await symlink('cycle-a.md', join(packageRoot, 'criteria', 'cycle-b.md'));
+
+    await expectRejectedWithoutMaterial(
+      captureInstalledReviewPolicyBundle(installedSkill(packageRoot), { materialParent }),
+      materialParent,
+      /cycle-[ab]\.md/,
+    );
+  });
+
+  it('refuses special files before materializing a partial package', async () => {
+    // Keep the Unix-domain socket below its platform pathname limit.
+    const sourceParent = await temporaryDirectory('p-');
+    const materialParent = await temporaryDirectory('m-');
+    const packageRoot = await policyPackage(sourceParent);
+    const socketPath = join(packageRoot, 'criteria', 'policy.sock');
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socketPath, resolve);
+    });
+
+    try {
+      await expectRejectedWithoutMaterial(
+        captureInstalledReviewPolicyBundle(installedSkill(packageRoot), { materialParent }),
+        materialParent,
+        /policy\.sock/,
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it('accepts inclusive package file and byte limits', async () => {
+    const sourceParent = await temporaryDirectory('build-review-policy-limit-source-');
+    const materialParent = await temporaryDirectory('build-review-policy-limit-material-');
+    const packageRoot = join(sourceParent, 'policy');
+    await mkdir(packageRoot, { recursive: true });
+    await writeFile(join(packageRoot, 'SKILL.md'), Buffer.alloc(64 * 1024 * 1024));
+    for (let index = 1; index < 4096; index += 1) {
+      await writeFile(join(packageRoot, `resource-${index}.md`), '');
+    }
+
+    const bundle = await captureInstalledReviewPolicyBundle(installedSkill(packageRoot, {
+      declaredDependencies: [],
+    }), { materialParent });
+
+    expect(bundle.manifest).toHaveLength(4096);
+    expect(bundle.manifest.reduce((total, entry) => total + entry.bytes.length, 0)).toBe(64 * 1024 * 1024);
+  });
+
+  it('refuses a package exceeding either complete-package limit without materializing it', async () => {
+    const sourceParent = await temporaryDirectory('build-review-policy-over-limit-source-');
+    const materialParent = await temporaryDirectory('build-review-policy-over-limit-material-');
+    const packageRoot = join(sourceParent, 'policy');
+    await mkdir(packageRoot, { recursive: true });
+    await writeFile(join(packageRoot, 'SKILL.md'), 'policy');
+    for (let index = 1; index <= 4096; index += 1) {
+      await writeFile(join(packageRoot, `resource-${index}.md`), '');
+    }
+
+    await expectRejectedWithoutMaterial(
+      captureInstalledReviewPolicyBundle(installedSkill(packageRoot, { declaredDependencies: [] }), { materialParent }),
+      materialParent,
+      /4096 files/,
+    );
+
+    await rm(packageRoot, { recursive: true });
+    await mkdir(packageRoot, { recursive: true });
+    await writeFile(join(packageRoot, 'SKILL.md'), Buffer.alloc((64 * 1024 * 1024) + 1));
+
+    await expectRejectedWithoutMaterial(
+      captureInstalledReviewPolicyBundle(installedSkill(packageRoot, { declaredDependencies: [] }), { materialParent }),
+      materialParent,
+      /64 MiB/,
+    );
   });
 });

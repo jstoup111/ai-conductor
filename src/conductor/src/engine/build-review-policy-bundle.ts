@@ -8,7 +8,7 @@ import {
   realpath,
   writeFile,
 } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, posix, relative } from 'node:path';
 
 import type { InstalledReviewSkill } from './build-review-policy.js';
 
@@ -40,7 +40,12 @@ export interface CapturedReviewPolicyBundle {
 
 export interface CaptureInstalledReviewPolicyBundleOptions {
   readonly materialParent: string;
+  /** Source read seam for fault-injected policy-loading tests. */
+  readonly sourceReadFile?: (path: string) => Promise<Buffer>;
 }
+
+export const MAX_POLICY_BUNDLE_FILES = 4096;
+export const MAX_POLICY_BUNDLE_BYTES = 64 * 1024 * 1024;
 
 function isWithin(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
@@ -54,6 +59,82 @@ function relativePackagePath(root: string, path: string): string {
     throw new Error(`Policy resource is outside the selected package: ${path}`);
   }
   return value.split('\\').join('/');
+}
+
+function policyResourceError(kind: string, relativePath: string): Error {
+  return new Error(`Policy resource ${kind}: ${relativePath}`);
+}
+
+function resourcePathForError(relativePath: string): string {
+  return relativePath || 'selected package';
+}
+
+async function canonicalResourcePath(sourcePath: string, relativePath: string): Promise<string> {
+  try {
+    return await realpath(sourcePath);
+  } catch (error: unknown) {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ELOOP') {
+      throw policyResourceError('symlink cycle', resourcePathForError(relativePath));
+    }
+    throw policyResourceError('is missing or unreadable', resourcePathForError(relativePath));
+  }
+}
+
+function localMarkdownReferences(markdown: string): readonly string[] {
+  const references: string[] = [];
+  const patterns = [
+    /!?\[[^\]]*]\(\s*(?:<([^>]+)>|([^\s)]+))[^)]*\)/g,
+    /^\s*\[[^\]]+]:\s*(?:<([^>]+)>|(\S+))/gm,
+  ];
+  for (const pattern of patterns) {
+    for (const match of markdown.matchAll(pattern)) {
+      const reference = (match[1] ?? match[2]).trim();
+      if (
+        reference !== ''
+        && !reference.startsWith('#')
+        && !reference.startsWith('//')
+        && !/^[a-z][a-z0-9+.-]*:/i.test(reference)
+      ) {
+        references.push(reference);
+      }
+    }
+  }
+  return references;
+}
+
+function referencedPackagePath(sourceRelativePath: string, reference: string): string {
+  const target = reference.replace(/\\/g, '/').split(/[?#]/, 1)[0];
+  if (!target || target.startsWith('/') || isAbsolute(target)) {
+    throw policyResourceError('escapes the selected package', reference);
+  }
+  const normalized = posix.normalize(posix.join(posix.dirname(sourceRelativePath), target));
+  if (normalized === '..' || normalized.startsWith('../')) {
+    throw policyResourceError('escapes the selected package', reference);
+  }
+  return normalized;
+}
+
+function validateRequiredResources(
+  policy: InstalledReviewSkill,
+  manifest: readonly CapturedReviewPolicyBundleEntry[],
+): void {
+  const availablePaths = new Set(manifest.map((entry) => entry.relativePath));
+  const requireResource = (reference: string, sourceRelativePath = 'SKILL.md') => {
+    const resourcePath = referencedPackagePath(sourceRelativePath, reference);
+    if (!availablePaths.has(resourcePath)) {
+      throw policyResourceError('is missing or unreadable', reference);
+    }
+  };
+
+  for (const dependency of policy.declaredDependencies) {
+    requireResource(dependency);
+  }
+  for (const entry of manifest) {
+    if (!entry.relativePath.toLowerCase().endsWith('.md')) continue;
+    for (const reference of localMarkdownReferences(entry.bytes.toString('utf8'))) {
+      requireResource(reference, entry.relativePath);
+    }
+  }
 }
 
 function admittedMetadata(policy: InstalledReviewSkill): CapturedReviewPolicyBundleMetadata {
@@ -97,47 +178,81 @@ async function collectPackageFiles(
   relativeParent: string,
   ancestry: ReadonlySet<string>,
   manifest: CapturedReviewPolicyBundleEntry[],
+  sourceReadFile: (path: string) => Promise<Buffer>,
 ): Promise<void> {
-  const canonicalCurrentPath = await realpath(currentPath);
+  const canonicalCurrentPath = await canonicalResourcePath(currentPath, relativeParent);
   if (!isWithin(packageRoot, canonicalCurrentPath)) {
-    throw new Error(`Policy resource escapes the selected package: ${currentPath}`);
+    throw policyResourceError('escapes the selected package', resourcePathForError(relativeParent));
   }
   if (ancestry.has(canonicalCurrentPath)) {
-    throw new Error(`Policy resource symlink cycle: ${currentPath}`);
+    throw policyResourceError('symlink cycle', resourcePathForError(relativeParent));
   }
   const nextAncestry = new Set(ancestry).add(canonicalCurrentPath);
-  const entries = await readdir(canonicalCurrentPath, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await readdir(canonicalCurrentPath, { withFileTypes: true });
+  } catch {
+    throw policyResourceError('is missing or unreadable', resourcePathForError(relativeParent));
+  }
   entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
 
   for (const entry of entries) {
     const sourcePath = join(canonicalCurrentPath, entry.name);
     const relativePath = relativeParent ? `${relativeParent}/${entry.name}` : entry.name;
-    const stat = await lstat(sourcePath);
+    let stat;
+    try {
+      stat = await lstat(sourcePath);
+    } catch {
+      throw policyResourceError('is missing or unreadable', relativePath);
+    }
 
     if (stat.isDirectory()) {
-      await collectPackageFiles(packageRoot, sourcePath, relativePath, nextAncestry, manifest);
+      await collectPackageFiles(packageRoot, sourcePath, relativePath, nextAncestry, manifest, sourceReadFile);
       continue;
     }
     if (stat.isSymbolicLink()) {
-      const targetPath = await realpath(sourcePath);
-      const targetStat = await lstat(targetPath);
+      const targetPath = await canonicalResourcePath(sourcePath, relativePath);
+      let targetStat;
+      try {
+        targetStat = await lstat(targetPath);
+      } catch {
+        throw policyResourceError('is missing or unreadable', relativePath);
+      }
       if (!isWithin(packageRoot, targetPath)) {
-        throw new Error(`Policy resource symlink escapes the selected package: ${relativePath}`);
+        throw policyResourceError('symlink escapes the selected package', relativePath);
       }
       if (targetStat.isDirectory()) {
-        await collectPackageFiles(packageRoot, targetPath, relativePath, nextAncestry, manifest);
+        await collectPackageFiles(packageRoot, targetPath, relativePath, nextAncestry, manifest, sourceReadFile);
         continue;
       }
       if (!targetStat.isFile()) {
-        throw new Error(`Policy resource is not a regular file: ${relativePath}`);
+        throw policyResourceError('is not a regular file', relativePath);
       }
-      manifest.push({ relativePath, bytes: await readFile(targetPath) });
+      try {
+        manifest.push({ relativePath, bytes: await sourceReadFile(targetPath) });
+      } catch {
+        throw policyResourceError('is missing or unreadable', relativePath);
+      }
       continue;
     }
     if (!stat.isFile()) {
-      throw new Error(`Policy resource is not a regular file: ${relativePath}`);
+      throw policyResourceError('is not a regular file', relativePath);
     }
-    manifest.push({ relativePath, bytes: await readFile(sourcePath) });
+    try {
+      manifest.push({ relativePath, bytes: await sourceReadFile(sourcePath) });
+    } catch {
+      throw policyResourceError('is missing or unreadable', relativePath);
+    }
+  }
+}
+
+function validateBundleLimits(manifest: readonly CapturedReviewPolicyBundleEntry[]): void {
+  if (manifest.length > MAX_POLICY_BUNDLE_FILES) {
+    throw new Error(`Policy package exceeds ${MAX_POLICY_BUNDLE_FILES} files`);
+  }
+  const totalBytes = manifest.reduce((total, entry) => total + entry.bytes.length, 0);
+  if (totalBytes > MAX_POLICY_BUNDLE_BYTES) {
+    throw new Error('Policy package exceeds 64 MiB');
   }
 }
 
@@ -147,14 +262,16 @@ export async function captureInstalledReviewPolicyBundle(
   options: CaptureInstalledReviewPolicyBundleOptions,
 ): Promise<CapturedReviewPolicyBundle> {
   await mkdir(options.materialParent, { recursive: true });
-  const packageRoot = await realpath(policy.packageRoot);
-  const canonicalSkillPath = await realpath(policy.canonicalSkillPath);
+  const packageRoot = await canonicalResourcePath(policy.packageRoot, 'selected package');
+  const canonicalSkillPath = await canonicalResourcePath(policy.canonicalSkillPath, 'SKILL.md');
   const definitionRelativePath = relativePackagePath(packageRoot, canonicalSkillPath);
   const manifest: CapturedReviewPolicyBundleEntry[] = [];
-  await collectPackageFiles(packageRoot, packageRoot, '', new Set(), manifest);
+  await collectPackageFiles(packageRoot, packageRoot, '', new Set(), manifest, options.sourceReadFile ?? readFile);
   manifest.sort((left, right) => (
     left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0
   ));
+  validateBundleLimits(manifest);
+  validateRequiredResources(policy, manifest);
 
   const materialPath = await mkdtemp(join(options.materialParent, 'policy-bundle-'));
   for (const entry of manifest) {
