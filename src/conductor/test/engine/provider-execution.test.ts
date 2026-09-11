@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:2, task:4
 import { describe, expect, it, vi } from 'vitest';
 import type {
   InvokeOptions,
@@ -159,6 +159,83 @@ describe('executeProviderCandidates', () => {
     // Fresh session per ladder attempt, never the injected store's ids.
     expectFreshSessions(codexInvoke.mock.calls.map(([options]) => options));
   });
+
+  it('stops auxiliary retries and provider walking for an unresolved command while retaining ordinary retries', async () => {
+    const unresolvedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false,
+      output: 'unknown skill command',
+      exitCode: 1,
+      commandUnresolved: true,
+      commandUnresolvedName: '$build-review-scope',
+    }));
+    const secondCandidateInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'must not run',
+      exitCode: 0,
+    }));
+    const unresolvedResult = await executeAuxiliaryProviderCandidates({
+      step: 'build_review',
+      memberId: 'scope',
+      policy: {
+        enabled: true, llm_provider: ['codex', 'claude'], model: 'gpt-5.6-sol', effort: 'high',
+        model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0,
+      },
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: unresolvedInvoke }),
+        runtime('claude', { invoke: secondCandidateInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('unresolved-session')),
+      options: { prompt: '$build-review-scope', cwd: '/workspace' },
+    });
+
+    const ordinaryInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false,
+      output: 'ordinary failure',
+      exitCode: 1,
+    }));
+    const ordinaryResult = await executeAuxiliaryProviderCandidates({
+      step: 'build_review',
+      memberId: 'scope',
+      policy: {
+        enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
+        model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0,
+      },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: ordinaryInvoke })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('ordinary-session')),
+      options: { prompt: '$build-review-scope', cwd: '/workspace' },
+    });
+
+    expect({
+      unresolvedCalls: unresolvedInvoke.mock.calls.length,
+      secondCandidateCalls: secondCandidateInvoke.mock.calls.length,
+      unresolvedResult: {
+        success: unresolvedResult.success,
+        commandUnresolved: unresolvedResult.commandUnresolved,
+        commandUnresolvedName: unresolvedResult.commandUnresolvedName,
+      },
+      ordinaryCalls: ordinaryInvoke.mock.calls.length,
+      ordinaryResult: {
+        success: ordinaryResult.success,
+        commandUnresolved: ordinaryResult.commandUnresolved,
+        commandUnresolvedName: ordinaryResult.commandUnresolvedName,
+      },
+    }).toEqual({
+      unresolvedCalls: 1,
+      secondCandidateCalls: 0,
+      unresolvedResult: {
+        success: false,
+        commandUnresolved: true,
+        commandUnresolvedName: '$build-review-scope',
+      },
+      ordinaryCalls: 3,
+      ordinaryResult: {
+        success: false,
+        commandUnresolved: undefined,
+        commandUnresolvedName: undefined,
+      },
+    });
+  });
+
   it('keeps native model fallback on the active lifecycle permit without using a replacement', async () => {
     const fallbackPermit = vi.fn(() => ({ permitted: false as const, reason: 'revoked' as const }));
     const consumedPermits: InvokeOptions['spawnPermit'][] = [];
