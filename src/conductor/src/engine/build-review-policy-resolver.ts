@@ -5,6 +5,43 @@ import type {
   ReviewPolicyResolution,
 } from './build-review-policy.js';
 
+export type ReviewPolicyCatalogFailureCode =
+  | 'partial'
+  | 'error'
+  | 'malformed'
+  | 'unsupported'
+  | 'unreadable'
+  | 'timeout'
+  | 'cancelled';
+
+/** A discovery failure is policy loading, never provider/model unavailability. */
+export class ReviewPolicyCatalogError extends Error {
+  readonly provider: 'codex' | 'claude';
+  readonly code: ReviewPolicyCatalogFailureCode;
+
+  constructor(
+    provider: 'codex' | 'claude',
+    code: ReviewPolicyCatalogFailureCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ReviewPolicyCatalogError';
+    this.provider = provider;
+    this.code = code;
+  }
+}
+
+export interface ReviewPolicyCatalogLoadFailure {
+  readonly code: 'policy-load';
+  readonly provider: 'codex' | 'claude';
+  readonly reason: ReviewPolicyCatalogFailureCode;
+  readonly message: string;
+}
+
+export type CatalogAwareReviewPolicyResolution =
+  | ReviewPolicyResolution
+  | { readonly kind: 'failure'; readonly failure: ReviewPolicyCatalogLoadFailure };
+
 export type {
   InstalledReviewSkill,
   ReviewPolicyDeclaration,
@@ -102,4 +139,26 @@ export function resolveInstalledReviewPolicy(
       origins: available.map((policy) => policy.installationOrigin),
     },
   };
+}
+
+/**
+ * Preserve catalog failure as an explicit policy-loading outcome. Callers must
+ * stop this candidate here; it is not an absent skill or provider fallback.
+ */
+export function resolveInstalledReviewPolicyCatalog(
+  declaration: ReviewPolicyDeclaration,
+  catalog: readonly InstalledReviewSkill[] | ReviewPolicyCatalogError,
+): CatalogAwareReviewPolicyResolution {
+  if (catalog instanceof ReviewPolicyCatalogError) {
+    return {
+      kind: 'failure',
+      failure: {
+        code: 'policy-load',
+        provider: catalog.provider,
+        reason: catalog.code,
+        message: catalog.message,
+      },
+    };
+  }
+  return resolveInstalledReviewPolicy(declaration, catalog);
 }
