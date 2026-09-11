@@ -144,6 +144,12 @@ llm_provider: [codex, claude]
 conflict_check:
   adr_corpus: repo_wide
 
+# Require the pre-BUILD coverage-binding judge for self-host features. The
+# shipped default remains false, so consumer repositories opt in separately.
+coverage_binding:
+  judge:
+    enabled: true
+
 # Remediation append allowance. The effective cap is
 # min(max_appended_tasks, floor(authored_count * max_appended_ratio)), so BOTH
 # terms bind: raising only the fixed cap leaves a small plan pinned by the ratio.
