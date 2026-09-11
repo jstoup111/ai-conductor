@@ -4,13 +4,6 @@ spec_hash: c99b9e56da566b32312b38817b81de14a41a4675459353e9792e1fd4f5ab36a0
 pr: https://github.com/jstoup111/ai-conductor/pull/2509
 shipped: 2026-09-11
 engine_version: 20260910T220211Z-39b4ec92e0a6
-findings:
-  - gate: architecture_review_as_built
-    finding: AB-1
-    class: REMEDIABLE
-    governing_clause: "Task 1"
-    outcome: remediated
-    summary: "projectShippedRecordSubstance is an exported production primitive with no production caller; only its definition and test references exist."
 ---
 
 ## Cost
@@ -29,8 +22,10 @@ providers:
   claude: input: 134, output: 55654, cache_read: 5555494, cache_creation: 743999, cost_usd: 12.0253, dispatches: 8, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:finish
+state: measured
+active_ms: 11035422
+provider_active_ms: 5590279
+no_provider_active_ms: 5445143
 
 ## Build Review
 laps_to_pass: 1
