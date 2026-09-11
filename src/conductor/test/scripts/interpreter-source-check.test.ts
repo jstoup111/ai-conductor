@@ -143,4 +143,11 @@ describe('checkInterpreterSource', () => {
       expect.objectContaining({ line: 2, message: 'shell expansion in interpreter heredoc source' }),
     ]);
   });
+
+  it('keeps heredoc ownership in the outer lexical context after a completed substitution', () => {
+    expect(checkInterpreterSource('outer-python.sh', 'python3 - "$(printf x)" <<PY\nprint($VALUE)\nPY')).toEqual([
+      expect.objectContaining({ line: 2, message: 'shell expansion in interpreter heredoc source' }),
+    ]);
+    expect(checkInterpreterSource('outer-cat.sh', 'cat "$(python3 -c \'print(1)\')" <<EOF\n$VALUE\nEOF')).toEqual([]);
+  });
 });

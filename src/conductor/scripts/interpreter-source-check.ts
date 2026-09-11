@@ -4,7 +4,7 @@ export interface InterpreterSourceFinding {
   message: string;
 }
 
-type Word = { text: string; line: number; expandable: string[]; closed: boolean; openQuote?: "'" | '"'; regions: string[] };
+type Word = { text: string; line: number; expandable: string[]; closed: boolean; openQuote?: "'" | '"'; regions: string[]; openRegions: string[] };
 type Heredoc = { delimiter: string; expanding: boolean; stripTabs: boolean; interpreter: boolean; line: number };
 const expansion = /(?:\$\{|\$\(|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9]|\$[@*#?$!\-$]|`)/g;
 const interpreter = /^(?:\/[^\s/]+)*\/(?:python3?|node)$|^(?:python3?|node)$/;
@@ -29,6 +29,7 @@ function wordAt(text: string, start: number, line: number): [Word, number] {
   let value = '';
   let expandable = '';
   const regions: string[] = [];
+  const openRegions: string[] = [];
   const enclosing: ("'" | '"' | undefined)[] = [];
   let regionStart = -1;
   while (index < text.length) {
@@ -52,11 +53,15 @@ function wordAt(text: string, start: number, line: number): [Word, number] {
     if (quote !== "'") expandable += char;
     index += 1;
   }
-  if (regionStart >= 0) regions.push(text.slice(regionStart));
-  return [{ text: value, line, expandable: findingsIn(expandable), closed: !quote, openQuote: quote, regions }, index];
+  if (regionStart >= 0) {
+    const openRegion = text.slice(regionStart);
+    regions.push(openRegion);
+    openRegions.push(openRegion);
+  }
+  return [{ text: value, line, expandable: findingsIn(expandable), closed: !quote, openQuote: quote, regions, openRegions }, index];
 }
 
-function commandsOnLine(line: string, lineNumber: number): Word[][] {
+function commandsOnLine(line: string, lineNumber: number, includeNested = true): Word[][] {
   const commands: Word[][] = [[]];
   const nested: Word[][] = [];
   let cursor = 0;
@@ -72,10 +77,22 @@ function commandsOnLine(line: string, lineNumber: number): Word[][] {
     const [word, next] = wordAt(line, cursor, lineNumber);
     if (next === cursor) { cursor += 1; continue; }
     commands.at(-1)?.push(word);
-    nested.push(...word.regions.flatMap((region) => commandsOnLine(region, lineNumber)));
+    if (includeNested) nested.push(...word.regions.flatMap((region) => commandsOnLine(region, lineNumber)));
     cursor = next;
   }
   return [...commands, ...nested].filter((words) => words.length > 0);
+}
+
+/**
+ * A here-doc belongs to the command in its lexical shell context. Completed
+ * substitutions before `<<` are commands of a child context, not the owner;
+ * an unterminated substitution does contain the redirection, so descend only
+ * through that open region.
+ */
+function heredocOwner(prefix: string, lineNumber: number): Word[] | undefined {
+  const owner = commandsOnLine(prefix, lineNumber, false).at(-1);
+  const openRegion = owner?.flatMap((word) => word.openRegions).at(-1);
+  return openRegion ? heredocOwner(openRegion, lineNumber) ?? owner : owner;
 }
 
 /**
@@ -127,10 +144,10 @@ function heredocsOnLine(line: string, lineNumber: number): Heredoc[] {
     // A physical line can queue redirections for several commands. Resolve
     // each one against the command text before that redirection, rather than
     // borrowing the first interpreter found anywhere on the line.
-    // `commandsOnLine` also retains direct calls inside command substitutions.
-    // The final command is the one whose stdin this redirection belongs to.
+    // Completed command substitutions do not own an outer redirection. Only
+    // descend when the redirection appears in an as-yet-open substitution.
     ...(() => {
-      const owner = commandsOnLine(line.slice(0, match.index), lineNumber).at(-1);
+      const owner = heredocOwner(line.slice(0, match.index), lineNumber);
       const executable = owner && directInterpreterIndex(owner);
       return { interpreter: executable !== undefined && executable >= 0 && /python3?$/.test(owner[executable].text) };
     })(),
