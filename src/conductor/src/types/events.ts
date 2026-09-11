@@ -708,6 +708,7 @@ export type ConductorEvent =
       gapId: string;
       disposition: string;
       accepted: string[];
+      field?: 'disposition' | 'category';
     }
   | ({
       /**

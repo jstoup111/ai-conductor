@@ -605,8 +605,16 @@ interface RemediationHintSource {
 
 function formatRejectedDispositions(rejected: readonly RemediationDispositionRejection[]): string {
   if (rejected.length === 0) return '';
-  return `${rejected.map(({ gapId, disposition }) => `${gapId} → "${disposition}"`).join(', ')}; ` +
-    `accepted dispositions are ${rejected[0].accepted.join(' | ')}`;
+  if (rejected.every((rejection) => rejection.field === 'disposition')) {
+    return `${rejected.map(({ gapId, disposition }) => `${gapId} → "${disposition}"`).join(', ')}; ` +
+      `accepted dispositions are ${rejected[0].accepted.join(' | ')}`;
+  }
+  return rejected.map((rejection) => {
+    const field = rejection.field === 'category' ? 'category' : 'disposition';
+    const fieldPlural = field === 'category' ? 'categories' : 'dispositions';
+    return `${rejection.gapId} ${field} → "${rejection.disposition}"; ` +
+      `accepted ${fieldPlural} are ${rejection.accepted.join(' | ')}`;
+  }).join('; ');
 }
 
 /** PRD-audit and as-built review own configured remediation allowances; other gates share the generic cap. */
@@ -3971,6 +3979,7 @@ export class Conductor {
           gapId: rejection.gapId,
           disposition: rejection.disposition,
           accepted: [...rejection.accepted],
+          field: rejection.field,
         });
       } catch {
         // Rejection reporting is observability, not a dependency of its halt.
