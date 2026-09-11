@@ -13,9 +13,9 @@
 // registered repo's intake, so brainStart/brainStop/brainStatus take no repo
 // argument.
 //
-// `status` reads the durable status surface written by the notifier (Task 9)
-// at `<engineerDir>/intake-status.json` and reports the most recent queued
-// idea count alongside tmux-session liveness.
+// `status` reads the durable intake ledger at invocation time for current
+// queue depth. The notifier surface at `<engineerDir>/intake-status.json` is
+// only rendered as a labelled prior notification batch.
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -28,6 +28,10 @@ import {
 } from './daemon-tmux.js';
 import { resolveEngineerDir } from './engineer-store.js';
 import { resolveCanonicalLauncher, shellQuote } from './canonical-launcher.js';
+import { createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
+import { summarizeQueueDepth } from './engineer/intake/queue-depth.js';
+import { loadConfig } from './config.js';
+import { resolveStaleClaimWindowMs } from './resolved-config.js';
 
 /** Session-name prefix for the brain loop's tmux session (ADR Q2 liveness gate). */
 export const BRAIN_SESSION_PREFIX = 'cc-brain-';
@@ -39,10 +43,10 @@ export const BRAIN_SESSION_NAME = `${BRAIN_SESSION_PREFIX}conductor`;
 export const BRAIN_FOREGROUND_COMMAND =
   `${shellQuote(resolveCanonicalLauncher())} intake-loop --continuous`;
 
-/** Shape of the status surface written by the notifier (Task 9); only the
- * fields this CLI reports are declared here. */
+/** Shape of the historical notification surface; only reported fields are declared. */
 interface IntakeStatusSurface {
   count?: number;
+  timestamp?: string;
 }
 
 /** Injectable dependencies — all optional so callers/tests can supply spies. */
@@ -53,13 +57,19 @@ export interface BrainCliDeps {
   cwd?: string;
   /** Output sink (tests capture lines; default: console.log). */
   out?: (line: string) => void;
-  /** Directory containing intake-status.json (status only). Default: resolveEngineerDir({}). */
+  /** Directory containing the intake ledger and notification surface. Default: resolveEngineerDir({}). */
   engineerDir?: string;
   /**
    * Reads the raw status-surface file contents, or null when absent/unreadable.
    * Tests inject a fake; default reads the real file via fs.
    */
   readStatus?: (path: string) => Promise<string | null>;
+  /** Read all durable intake-ledger entries at status invocation time. */
+  readLedgerEntries?: () => Promise<readonly LedgerEntry[]>;
+  /** Clock used for stale-claim classification. Default: Date.now. */
+  now?: () => number;
+  /** Override the stale-claim window in milliseconds. */
+  staleClaimWindowMs?: number;
 }
 
 async function defaultReadStatus(path: string): Promise<string | null> {
@@ -114,8 +124,8 @@ export async function brainStop(deps: BrainCliDeps = {}): Promise<number> {
 
 /**
  * `ai-conductor brain status` — reports liveness (running/stopped, from the
- * `cc-brain-*` tmux session) and the queued-work count from the durable
- * status surface written by the notifier (Task 9).
+ * `cc-brain-*` tmux session), current durable ledger depth, and (when
+ * available) the notifier's prior batch separately.
  */
 export async function brainStatus(deps: BrainCliDeps = {}): Promise<number> {
   const run = deps.run ?? defaultTmuxRunner;
@@ -123,27 +133,64 @@ export async function brainStatus(deps: BrainCliDeps = {}): Promise<number> {
   const engineerDir = deps.engineerDir ?? resolveEngineerDir({});
   const readStatus = deps.readStatus ?? defaultReadStatus;
   const statusPath = join(engineerDir, 'intake-status.json');
+  const readLedgerEntries = deps.readLedgerEntries ?? (() => createLedger(join(engineerDir, 'ledger.json')).list());
+  const now = deps.now ?? Date.now;
 
   try {
     const running = await hasSession(BRAIN_SESSION_NAME, run);
     out(`brain loop: ${running ? 'running' : 'stopped'}`);
 
-    const raw = await readStatus(statusPath);
-    let count = 0;
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw) as IntakeStatusSurface;
-        count = typeof parsed.count === 'number' ? parsed.count : 0;
-      } catch {
-        // Malformed status surface — best-effort, report 0 rather than crash.
-        count = 0;
-      }
+    let entries: readonly LedgerEntry[];
+    try {
+      entries = await readLedgerEntries();
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      out(`intake queue: unavailable — ${reason}`);
+      return 1;
     }
-    out(`queued: ${count}`);
+
+    const depth = summarizeQueueDepth(entries, now(), await resolveStatusStaleClaimWindow(deps));
+    out(`pending: ${depth.pending}`);
+    out(`claimed: ${depth.claimed}`);
+    out(`stranded: ${depth.stranded}`);
+
+    // The notifier surface records a prior notification batch, not the current
+    // queue. It is strictly best-effort and never fabricates a zero batch.
+    const lastNotification = await readLastNotification(readStatus, statusPath);
+    if (lastNotification) {
+      out(`last notification: ${lastNotification.count} at ${lastNotification.timestamp}`);
+    }
     return 0;
   } catch (err) {
     out((err as Error).message);
     return 1;
+  }
+}
+
+async function resolveStatusStaleClaimWindow(deps: BrainCliDeps): Promise<number> {
+  if (deps.staleClaimWindowMs !== undefined) return deps.staleClaimWindowMs;
+  try {
+    const result = await loadConfig(process.cwd());
+    return resolveStaleClaimWindowMs(result.ok ? result.config : undefined);
+  } catch {
+    return resolveStaleClaimWindowMs();
+  }
+}
+
+async function readLastNotification(
+  readStatus: (path: string) => Promise<string | null>,
+  statusPath: string,
+): Promise<{ count: number; timestamp: string } | null> {
+  try {
+    const raw = await readStatus(statusPath);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as IntakeStatusSurface;
+    if (typeof parsed.count !== 'number' || !Number.isFinite(parsed.count) || typeof parsed.timestamp !== 'string' || !parsed.timestamp) {
+      return null;
+    }
+    return { count: parsed.count, timestamp: parsed.timestamp };
+  } catch {
+    return null;
   }
 }
 
