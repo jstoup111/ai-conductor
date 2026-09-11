@@ -9701,11 +9701,19 @@ export class Conductor {
                                   : {}),
                               });
                             } catch (error) {
-                              // Width-one validation groups keep their serial event
-                              // stream, but must retain the group branch's retry
-                              // contract: a runner throw is a retryable no-verdict
-                              // attempt, not a conductor-level exception.
-                              if (getGroupForStep(step.name)?.name === 'validation') {
+                              // A retained sibling re-dispatch is the sole
+                              // width-one validation-group path that borrows
+                              // the group branch's retry contract. Ordinary
+                              // serial validation dispatches — including a
+                              // FINISH-fence recheck — must preserve their
+                              // existing exception routing.
+                              const retainedSiblingExists =
+                                builtinGroup?.name === 'validation' &&
+                                builtinGroup.members.some((member) =>
+                                  member !== step.name &&
+                                  state[`${builtinGroup.name}__${member}`] === 'done',
+                                );
+                              if (this.mode === 'auto' && retainedSiblingExists) {
                                 return {
                                   success: false,
                                   output: error instanceof Error ? error.message : String(error),
