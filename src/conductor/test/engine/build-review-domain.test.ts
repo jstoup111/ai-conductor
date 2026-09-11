@@ -18,6 +18,7 @@ import {
   parseBuildReviewRubricContractVersion,
   parseBuildReviewRubricResult,
   parseBuildReviewSkip,
+  renderBuildReviewUnresolvedSkillRemedy,
   renderBuildReviewJudgedResultShape,
   renderBuildReviewProviderPayloadShape,
   type BuildReviewInfrastructureFailureReason, describeBuildReviewJudgedResultRejection } from '../../src/engine/build-review-domain.js';
@@ -392,6 +393,25 @@ describe('build-review domain', () => {
     expect(parseBuildReviewDispatchFailure({ kind: 'judged' })).toBeUndefined();
     expect(parseBuildReviewDispatchFailure(undefined)).toBeUndefined();
     expect(parseBuildReviewDispatchFailure('dispatch-failure')).toBeUndefined();
+  });
+
+  it('renders a complete remedy for an unresolved rubric skill command', () => {
+    const namedCommand = renderBuildReviewUnresolvedSkillRemedy('build_review', '$build-review');
+    const missingCommand = renderBuildReviewUnresolvedSkillRemedy('build_review', '');
+    const differingNames = renderBuildReviewUnresolvedSkillRemedy('test-quality', '$evaluate-tests');
+
+    expect(namedCommand).toContain('build_review');
+    expect(namedCommand).toContain('$build-review');
+    expect(namedCommand).toContain('No judgement was produced');
+    expect(namedCommand).toContain('retrying cannot make the command resolvable');
+    expect(namedCommand).toContain('Relink the provider skill catalog');
+    expect(namedCommand).toContain('rebase the feature');
+    expect(missingCommand).toContain('build_review');
+    expect(missingCommand).not.toMatch(/undefined|null|""|''/);
+    expect(missingCommand).toContain('Relink the provider skill catalog');
+    expect(missingCommand).toContain('rebase the feature');
+    expect(differingNames).toContain('test-quality');
+    expect(differingNames).toContain('$evaluate-tests');
   });
 
   it('accepts resolved candidate scope evidence pinned to the projected candidate and an applicable obligation', () => {
