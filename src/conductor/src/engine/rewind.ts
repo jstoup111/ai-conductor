@@ -1,5 +1,5 @@
 import type { ConductState, HarnessConfig } from '../types/index.js';
-import type { ConductStateStore, StateMutation } from './conduct-state-store.js';
+import type { ConductStateStore, StateFieldDeletion, StateMutation } from './conduct-state-store.js';
 import { buildStepRegistry } from './steps.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import { readState } from './state.js';
@@ -154,29 +154,38 @@ async function rollbackRewindState(
   const predecessor = steps[targetIndex - 1]!.name as NonNullable<ConductState['last_step']>;
   const previousLastStep = state.last_step;
   if (!previousLastStep) throw new Error('Cannot restore rewind state without a prior last step');
-  const demotionRollback: StateMutation<ConductState>[] = result.demoted.map((step) => {
+  const definedRollback: StateMutation<ConductState>[] = [];
+  const absentRollback: StateFieldDeletion<ConductState>[] = [];
+  for (const step of result.demoted) {
     const original = state[step as keyof ConductState];
-    if (original === undefined) throw new Error(`Cannot restore absent rewind field ${step}`);
-    return {
-      field: step,
-      expected: 'stale',
-      intent: `rollback failed operator rewind to ${result.target}`,
-      next: original,
-    } as StateMutation<ConductState>;
-  });
-
-  const rollback = await store.applyBatch({
-    name: 'rollback failed operator rewind state',
-    mutations: [
-      ...demotionRollback,
-      {
-        field: 'last_step',
-        expected: predecessor,
-        intent: `rollback failed operator rewind to ${result.target}`,
-        next: previousLastStep,
-      } as StateMutation<ConductState>,
-    ],
-  });
+    if (original === undefined) {
+      absentRollback.push({ field: step, expected: 'stale', intent: `rollback failed operator rewind to ${result.target}` } as StateFieldDeletion<ConductState>);
+    } else {
+      definedRollback.push({ field: step, expected: 'stale', intent: `rollback failed operator rewind to ${result.target}`, next: original } as StateMutation<ConductState>);
+    }
+  }
+  const lastStepRollback = {
+    field: 'last_step',
+    expected: predecessor,
+    intent: `rollback failed operator rewind to ${result.target}`,
+    next: previousLastStep,
+  } as StateMutation<ConductState>;
+  const rollback = absentRollback.length === 0
+    ? await store.applyBatch({
+      name: 'rollback failed operator rewind state',
+      mutations: [
+        ...definedRollback,
+        lastStepRollback,
+      ],
+    })
+    : store.applyCorrection
+      ? await store.applyCorrection({
+        name: 'rollback failed operator rewind state',
+        deletions: absentRollback,
+        mutations: [...definedRollback, lastStepRollback],
+        privileged: true,
+      })
+      : { kind: 'persistence' as const, message: `State store does not support corrective mutations for absent rewind fields: ${absentRollback.map(({ field }) => field).join(', ')}` };
   if ('message' in rollback) {
     throw new Error(`Operator rewind rollback failed (${rollback.kind}): ${rollback.message}`);
   }

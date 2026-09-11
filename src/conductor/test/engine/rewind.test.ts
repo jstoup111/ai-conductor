@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,6 +9,7 @@ import type { ConductState, HarnessConfig } from '../../src/types/index.js';
 import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
+  PrivilegedStateCorrection,
   PrivilegedStateReplacement,
   StateMutation,
   StateMutationResult,
@@ -38,6 +40,8 @@ class RefusingStateStore extends RecordingStateStore {
 }
 
 class ApplyingStateStore extends RecordingStateStore {
+  readonly corrections: PrivilegedStateCorrection<ConductState>[] = [];
+
   constructor(readonly state: ConductState) {
     super();
   }
@@ -53,6 +57,24 @@ class ApplyingStateStore extends RecordingStateStore {
     for (const mutation of batch.mutations) {
       mutable[mutation.field] = mutation.next;
     }
+    return { kind: 'applied' };
+  }
+
+  override async applyCorrection(correction: PrivilegedStateCorrection<ConductState>): Promise<StateMutationResult> {
+    this.corrections.push(correction);
+    const mutable = this.state as Record<string, unknown>;
+    for (const deletion of correction.deletions) {
+      if (mutable[deletion.field] !== deletion.expected) {
+        return { kind: 'conflict', message: `${String(deletion.field)} changed` };
+      }
+    }
+    for (const mutation of correction.mutations) {
+      if (mutable[mutation.field] !== mutation.expected) {
+        return { kind: 'conflict', message: `${String(mutation.field)} changed` };
+      }
+    }
+    for (const deletion of correction.deletions) delete mutable[deletion.field];
+    for (const mutation of correction.mutations) mutable[mutation.field] = mutation.next;
     return { kind: 'applied' };
   }
 }
@@ -180,6 +202,51 @@ describe('rewindState', () => {
       'operator rewind state',
       'rollback failed operator rewind state',
     ]);
+    expect(store.corrections).toEqual([]);
+    error.mockRestore();
+  });
+
+  it('restores absent step fields when derived-record cleanup fails', async () => {
+    const state = { ...completeState } as Record<string, unknown> as ConductState;
+    delete (state as Record<string, unknown>).test_suite;
+    delete (state as Record<string, unknown>).build_review;
+    const original = { ...state };
+    const store = new ApplyingStateStore(state);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, '/fixture', {
+      loadConfig: async () => ({ ok: true, config: {}, warnings: [] }),
+      readState: async () => ({ ok: true, value: state }),
+      store,
+      preflightDerivedRecords: async () => {},
+      clearDerivedRecords: async () => { throw new Error('cannot clear HALT'); },
+    })).resolves.toBe(1);
+
+    expect(state).toEqual(original);
+    error.mockRestore();
+  });
+
+  it('reports absent fields that cannot be restored without a corrective store operation', async () => {
+    const state = { ...completeState } as Record<string, unknown> as ConductState;
+    delete (state as Record<string, unknown>).test_suite;
+    delete (state as Record<string, unknown>).build_review;
+    const store = new ApplyingStateStore(state);
+    const withoutCorrection: ConductStateStore<ConductState> = {
+      apply: store.apply.bind(store),
+      applyBatch: store.applyBatch.bind(store),
+      replace: store.replace.bind(store),
+    };
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(dispatchRewindCommand({ kind: 'rewind', target: 'build' }, '/fixture', {
+      loadConfig: async () => ({ ok: true, config: {}, warnings: [] }),
+      readState: async () => ({ ok: true, value: state }),
+      store: withoutCorrection,
+      preflightDerivedRecords: async () => {},
+      clearDerivedRecords: async () => { throw new Error('cannot clear HALT'); },
+    })).resolves.toBe(1);
+
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/test_suite.*build_review/s));
     error.mockRestore();
   });
 
