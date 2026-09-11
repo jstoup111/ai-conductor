@@ -144,6 +144,20 @@ describe('renderDaemonEvent', () => {
     expect(line).toContain('3→5 tasks');
   });
 
+  it('renders step_retry with its progress allowance', () => {
+    const output = lines({
+      type: 'step_retry',
+      step: 'build',
+      attempt: 2,
+      maxAttempts: 3,
+      reason: 'tasks remain',
+      progressAttempt: 2,
+      progressAttemptCeiling: 30,
+    });
+
+    expect(output[0]).toContain('2/3 (progress allowance: attempt 2 of 30)');
+  });
+
   it('renders step_retry without progress delta and collapses multi-line reason', () => {
     const output = lines({
       type: 'step_retry',
