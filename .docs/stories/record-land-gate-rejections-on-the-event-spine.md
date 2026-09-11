@@ -6,7 +6,7 @@ Track: technical
 
 Tier: S
 
-Approved by the operator on 2026-09-06 (delegated), and narrowed by the operator on 2026-09-10. Scope begins after the target repository has been resolved: every rejection raised by the landing primitive gets a stable gate identifier, one new persisted event carrying that identifier and the reason, and emission onto that target repository's existing event ledger. Pre-target command failures, backfill of historical rejections, precision reporting, and gate-strictness changes remain outside this slice.
+Approved by the operator on 2026-09-06 (delegated), and narrowed by the operator on 2026-09-10. Scope begins after the target repository has been resolved: every rejection raised by the landing primitive gets a stable gate identifier, and every rejection for which that canonical target still exists emits one new persisted event carrying the identifier and reason onto the target repository's existing event ledger. Pre-target command failures and target-disappearance failures perform no telemetry write; backfill of historical rejections, precision reporting, and gate-strictness changes remain outside this slice.
 
 ## Story 1: Record every target-resolved land-gate rejection as a spine event naming its gate
 
@@ -21,6 +21,7 @@ Approved by the operator on 2026-09-06 (delegated), and narrowed by the operator
 #### Negative Paths
 
 - Given a land invocation that passes every gate and commits, when the command returns success, then no land-gate-rejection event is recorded.
+- Given the canonical target disappears after initial resolution, when the landing primitive rejects, then the command reports the rejection and retains the idea worktree without recreating the target or writing telemetry beneath it.
 
 ### Done When
 
@@ -43,7 +44,7 @@ Approved by the operator on 2026-09-06 (delegated), and narrowed by the operator
 
 ### Done When
 
-- [ ] Classifier unit cases cover a gate-identified error, target disappearance after initial resolution, an unrecognised error, and an over-cap reason.
+- [ ] Classifier unit cases cover a gate-identified error, an unrecognised error, and an over-cap reason; a command case proves target disappearance bypasses event persistence without any target-path write.
 - [ ] The truncation cap keeps a serialized rejection record small enough for a single atomic append, and the truncated marker is asserted.
 - [ ] A command test with an unwritable ledger location asserts the unchanged stderr text and the unchanged nonzero exit code.
 
