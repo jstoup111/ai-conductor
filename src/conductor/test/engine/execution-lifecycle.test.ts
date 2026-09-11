@@ -40,6 +40,30 @@ describe('engine/execution-lifecycle', () => {
     ]);
   });
 
+  it('does not deliver a mismatched refusal through an open legacy group exception', async () => {
+    const events = new RecordingEvents();
+    const lifecycle = new ExecutionLifecycle({ events });
+    const mismatched: ExecutionContext = {
+      executionId: 'mismatched-refusal',
+      subject: { kind: 'lifecycle-step', step: 'plan' },
+    };
+
+    await lifecycle.admit({
+      type: 'parallel_started', step: 'manual_test', branches: ['manual_test', 'prd_audit'],
+    });
+    await lifecycle.close({
+      type: 'step_refused', step: 'manual_test', kind: 'seal', reason: 'mismatched', executionContext: mismatched,
+    });
+    await lifecycle.close({
+      type: 'step_refused', step: 'manual_test', kind: 'seal', reason: 'legacy',
+    });
+
+    expect(events.emitted).toEqual([
+      { type: 'parallel_started', step: 'manual_test', branches: ['manual_test', 'prd_audit'] },
+      { type: 'step_refused', step: 'manual_test', kind: 'seal', reason: 'legacy' },
+    ]);
+  });
+
   it('keeps interleaved executions and their retries under their own admitted IDs', async () => {
     const events = new RecordingEvents();
     const lifecycle = new ExecutionLifecycle({ events });
