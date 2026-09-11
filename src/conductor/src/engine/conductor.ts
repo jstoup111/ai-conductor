@@ -4026,6 +4026,15 @@ export class Conductor {
       }
     }
     const sealedArtifactGapIds = new Set(sealedArtifactsByGapId.keys());
+    const redirectedSealedArtifactGapIds = new Set(
+      plan.gaps
+        .filter(
+          (gap) =>
+            sealedArtifactGapIds.has(gap.id) &&
+            (gap.disposition === 'build' || gap.disposition === 'acceptance_specs'),
+        )
+        .map((gap) => gap.id),
+    );
     for (const [gapId, target] of sealedArtifactsByGapId) {
       await this.events.emit({ type: 'remediation_sealed_artifact_redirect', gapId, ...target });
     }
@@ -4768,7 +4777,14 @@ export class Conductor {
           satisfied = 'unknown';
         }
       }
-      const remediationEvidence = routedFixes.map((g) => `${g.id}→${g.disposition}`).join('; ');
+      const remediationEvidence = routedFixes.map((gap) => {
+        const redirect = redirectedSealedArtifactGapIds.has(gap.id)
+          ? sealedArtifactsByGapId.get(gap.id)
+          : undefined;
+        return redirect === undefined
+          ? `${gap.id}→${gap.disposition}`
+          : `${gap.id}→${gap.disposition} (${redirect.artifact}: "${redirect.directingClause}")`;
+      }).join('; ');
       // Single source for the actionable BUILD hint: the initial dispatch and
       // the persisted repair obligation derive from this same value (AB-3).
       const repairInstruction = buildRemediationHint(
