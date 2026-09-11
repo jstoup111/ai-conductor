@@ -114,7 +114,9 @@ export class ExecutionLifecycle {
   close(event: LifecycleTerminalEvent): Promise<void> {
     const key = terminalKey(event, this.openExecutions);
     if (key === undefined) {
-      return event.type === 'step_refused' && isOpenLegacyGroupMember(event.step, this.openExecutions)
+      return event.type === 'step_refused'
+        && event.executionContext === undefined
+        && isOpenLegacyGroupMember(event.step, this.openExecutions)
         ? this.deliver(event)
         : Promise.resolve();
     }
