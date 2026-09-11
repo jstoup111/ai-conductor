@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile as execFileCb } from 'node:child_process';
@@ -10,6 +10,9 @@ import {
   moveRebaseUntrackedPathsToQuarantine,
   parseUntrackedOverwriteRefusal,
   REBASE_UNTRACKED_QUARANTINE_DIR,
+  makeGitRunner,
+  performRebase,
+  runGatedRebaseResolution,
   type GitRunner,
 } from '../../src/engine/rebase.js';
 
@@ -98,11 +101,7 @@ describe('engine/rebase — refusal before rebase starts', () => {
       await g(['checkout', '-q', 'feature']);
       await writeFile(join(root, 'generated.txt'), 'untracked version\n');
 
-      const outcome = await (await import('../../src/engine/rebase.js')).performRebase(
-        (await import('../../src/engine/rebase.js')).makeGitRunner(root),
-        root,
-        'main',
-      );
+      const outcome = await performRebase(makeGitRunner(root), root, 'main');
 
       expect(outcome.kind).not.toBe('conflict_halt');
       await expect(readFile(join(root, 'generated.txt'), 'utf8')).resolves.toBe('base version\n');
@@ -112,5 +111,112 @@ describe('engine/rebase — refusal before rebase starts', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it('stops after one retry when the retry is refused again, retaining the quarantine', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-start-blocked-git-'));
+    const g = (args: string[]) => execFile('git', args, { cwd: root });
+    try {
+      await g(['init', '-q', '-b', 'main']);
+      await g(['config', 'user.email', 't@example.test']);
+      await g(['config', 'user.name', 'Test']);
+      await writeFile(join(root, 'initial.txt'), 'initial\n');
+      await g(['add', '.']); await g(['commit', '-q', '-m', 'initial']);
+      await g(['checkout', '-q', '-b', 'feature']);
+      await writeFile(join(root, 'feature.txt'), 'feature\n');
+      await g(['add', '.']); await g(['commit', '-q', '-m', 'feature']);
+      await g(['checkout', '-q', 'main']);
+      await writeFile(join(root, 'generated.txt'), 'base\n');
+      await g(['add', '.']); await g(['commit', '-q', '-m', 'base']);
+      await g(['checkout', '-q', 'feature']);
+      await writeFile(join(root, 'generated.txt'), 'untracked\n');
+
+      const real = makeGitRunner(root);
+      let rebaseCalls = 0;
+      const git: GitRunner = async (args) => {
+        if (args.join(' ') === 'rebase --autostash main' && ++rebaseCalls === 2) {
+          return { exitCode: 1, stdout: '', stderr: refusal };
+        }
+        return real(args);
+      };
+      const outcome = await performRebase(git, root, 'main');
+
+      expect(rebaseCalls).toBe(2);
+      expect(outcome).toMatchObject({ kind: 'conflict_halt', startFailure: true, quarantine: {
+        paths: ['generated.txt'], directory: join(root, REBASE_UNTRACKED_QUARANTINE_DIR),
+      } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('carries quarantine through a resolver-enabled retry conflict on another file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-start-blocked-git-'));
+    const g = (args: string[]) => execFile('git', args, { cwd: root });
+    try {
+      await g(['init', '-q', '-b', 'main']);
+      await g(['config', 'user.email', 't@example.test']); await g(['config', 'user.name', 'Test']);
+      await writeFile(join(root, 'conflict.txt'), 'initial\n');
+      await g(['add', '.']); await g(['commit', '-q', '-m', 'initial']);
+      await g(['checkout', '-q', '-b', 'feature']);
+      await writeFile(join(root, 'conflict.txt'), 'feature\n');
+      await g(['add', '.']); await g(['commit', '-q', '-m', 'feature conflict']);
+      await g(['checkout', '-q', 'main']);
+      await writeFile(join(root, 'conflict.txt'), 'base\n');
+      await writeFile(join(root, 'generated.txt'), 'base generated\n');
+      await g(['add', '.']); await g(['commit', '-q', '-m', 'base conflict and generated']);
+      await g(['checkout', '-q', 'feature']);
+      await writeFile(join(root, 'generated.txt'), 'untracked generated\n');
+
+      const outcome = await performRebase(makeGitRunner(root), root, 'main');
+      expect(outcome).toMatchObject({ kind: 'conflict_halt', conflicts: ['conflict.txt'], quarantine: {
+        paths: ['generated.txt'], directory: join(root, REBASE_UNTRACKED_QUARANTINE_DIR),
+      } });
+      const resolved = await runGatedRebaseResolution({
+        git: makeGitRunner(root), projectRoot: root, outcome, cap: 1,
+        resolve: async () => ({ resolved: false, reason: 'leave for human' }),
+      });
+      expect(resolved).toMatchObject({ kind: 'conflict_halt', reason: 'leave for human', quarantine: outcome.quarantine });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a named non-untracked path without moving it or retrying', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-start-blocked-git-'));
+    const g = (args: string[]) => execFile('git', args, { cwd: root });
+    try {
+      await g(['init', '-q', '-b', 'main']); await g(['config', 'user.email', 't@example.test']); await g(['config', 'user.name', 'Test']);
+      await writeFile(join(root, 'tracked.txt'), 'tracked\n'); await g(['add', '.']); await g(['commit', '-q', '-m', 'initial']);
+      await g(['checkout', '-q', '-b', 'feature']); await writeFile(join(root, 'feature.txt'), 'feature\n'); await g(['add', '.']); await g(['commit', '-q', '-m', 'feature']);
+      await g(['checkout', '-q', 'main']); await writeFile(join(root, 'base.txt'), 'base\n'); await g(['add', '.']); await g(['commit', '-q', '-m', 'base']); await g(['checkout', '-q', 'feature']);
+      const real = makeGitRunner(root); let rebaseCalls = 0;
+      const outcome = await performRebase(async (args) => {
+        if (args.join(' ') === 'rebase --autostash main') { rebaseCalls += 1; return { exitCode: 1, stdout: '', stderr: refusal.replace('generated/a.txt', 'tracked.txt').replace('\n\tnested/generated/b.txt', '') }; }
+        return real(args);
+      }, root, 'main');
+      expect(outcome).toMatchObject({ kind: 'conflict_halt', startFailure: true });
+      expect(rebaseCalls).toBe(1);
+      await expect(readFile(join(root, 'tracked.txt'), 'utf8')).resolves.toBe('tracked\n');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('refuses an occupied quarantine destination without moving or retrying', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-start-blocked-git-'));
+    const g = (args: string[]) => execFile('git', args, { cwd: root });
+    try {
+      await g(['init', '-q', '-b', 'main']); await g(['config', 'user.email', 't@example.test']); await g(['config', 'user.name', 'Test']);
+      await writeFile(join(root, 'initial.txt'), 'initial\n'); await g(['add', '.']); await g(['commit', '-q', '-m', 'initial']);
+      await g(['checkout', '-q', '-b', 'feature']); await writeFile(join(root, 'feature.txt'), 'feature\n'); await g(['add', '.']); await g(['commit', '-q', '-m', 'feature']);
+      await g(['checkout', '-q', 'main']); await writeFile(join(root, 'generated.txt'), 'base\n'); await g(['add', '.']); await g(['commit', '-q', '-m', 'base']);
+      await g(['checkout', '-q', 'feature']); await writeFile(join(root, 'generated.txt'), 'untracked\n');
+      await mkdir(join(root, REBASE_UNTRACKED_QUARANTINE_DIR), { recursive: true });
+      await writeFile(join(root, REBASE_UNTRACKED_QUARANTINE_DIR, 'generated.txt'), 'occupied\n');
+      let rebaseCalls = 0; const real = makeGitRunner(root);
+      const outcome = await performRebase(async (args) => { if (args.join(' ') === 'rebase --autostash main') rebaseCalls += 1; return real(args); }, root, 'main');
+      expect(outcome).toMatchObject({ kind: 'conflict_halt', startFailure: true }); expect(rebaseCalls).toBe(1);
+      await expect(readFile(join(root, 'generated.txt'), 'utf8')).resolves.toBe('untracked\n');
+      await expect(readFile(join(root, REBASE_UNTRACKED_QUARANTINE_DIR, 'generated.txt'), 'utf8')).resolves.toBe('occupied\n');
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 });

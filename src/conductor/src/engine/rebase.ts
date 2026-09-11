@@ -930,10 +930,11 @@ export async function performRebase(
     if (!(await rebaseStateActive(git, projectRoot))) {
       const paths = parseUntrackedOverwriteRefusal(rebase.stderr);
       if (paths.length > 0) {
+        let quarantine: RebaseQuarantine | undefined;
         try {
           const confirmed = await confirmUntrackedRebasePaths(git, projectRoot, paths);
           const directory = await moveRebaseUntrackedPathsToQuarantine(projectRoot, confirmed);
-          const quarantine = { paths: confirmed, directory };
+          quarantine = { paths: confirmed, directory };
           const retry = await git(rebaseArgs);
           if (retry.exitCode === 0) {
             const outcome = await classifyClean(git, preTree, mergeBase);
@@ -962,6 +963,7 @@ export async function performRebase(
             conflicts: [],
             reason: `${rebase.stderr.trim() || 'rebase failed without reported conflicts'}\n${(error as Error).message}`,
             startFailure: true,
+            ...(quarantine === undefined ? {} : { quarantine }),
           };
         }
       }
@@ -1524,7 +1526,10 @@ export async function runGatedRebaseResolution(opts: {
       /* best-effort */
     }
   }
-  return resolved;
+  // A pre-start collision may have been healed before this conflict paused the
+  // rebase. Resolution rebuilds its outcome to preserve the existing guards,
+  // so restore that durable recovery record on every resolved outcome kind.
+  return outcome.quarantine === undefined ? resolved : { ...resolved, quarantine: outcome.quarantine };
 }
 
 // ── Verdict + event wiring (consumed by the conductor) ───────────────────────
