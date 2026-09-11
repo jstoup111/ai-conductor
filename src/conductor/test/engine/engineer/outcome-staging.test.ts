@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 // outcome-staging.test.ts — Task 1 (Story 1 happy path): staging the intake's
 // Desired-outcome bullets into the worktree's gitignored .pipeline/ BEFORE any
 // DECIDE artifact is authored.
@@ -95,6 +95,44 @@ describe('stageIntakeOutcomes', () => {
       contents: `Source-Ref: ${sourceRef}\n\n## Desired outcome\n\n`,
       result: { required: false, bullets: [], sourceRef },
     });
+  });
+
+  it('writes identical canonical heading and bullet blocks for singular and plural origins', async () => {
+    const pluralWorktreePath = await mkdtemp(join(tmpdir(), 'engineer-outcome-staging-'));
+    const sourceRef = 'owner/repo#47';
+    const bullets = '- First outcome\n- Second outcome\n';
+
+    try {
+      const singularPath = await stageIntakeOutcomes(
+        worktreePath,
+        sourceRef,
+        `## Desired outcome\n\n${bullets}`,
+      );
+      const pluralPath = await stageIntakeOutcomes(
+        pluralWorktreePath,
+        sourceRef,
+        `## Desired outcomes\n\n${bullets}`,
+      );
+      const singularContents = await readFile(singularPath!, 'utf8');
+      const pluralContents = await readFile(pluralPath!, 'utf8');
+
+      const stagedShape = (contents: string) => ({
+        heading: contents.match(/^## .+$/m)?.[0],
+        bulletBlock: contents.split('\n').filter((line) => /^- /.test(line)).join('\n'),
+      });
+
+      expect({
+        singular: stagedShape(singularContents),
+        plural: stagedShape(pluralContents),
+        pluralContainsPluralHeading: pluralContents.includes('## Desired outcomes'),
+      }).toEqual({
+        singular: { heading: '## Desired outcome', bulletBlock: '- First outcome\n- Second outcome' },
+        plural: { heading: '## Desired outcome', bulletBlock: '- First outcome\n- Second outcome' },
+        pluralContainsPluralHeading: false,
+      });
+    } finally {
+      await rm(pluralWorktreePath, { recursive: true, force: true });
+    }
   });
 
   it('no-ops (no file, no throw) when there is no sourceRef and no intakeBody (chat/CLI origin)', async () => {
