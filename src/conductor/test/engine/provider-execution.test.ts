@@ -121,6 +121,202 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('runs an auxiliary prepared-candidate cache hit after preparation and before invocation, then tears it down once', async () => {
+    const events: string[] = [];
+    const controller = new AbortController();
+    const invoke = vi.fn(async (): Promise<InvokeResult> => {
+      events.push('invoke');
+      return { success: true, output: 'provider result', exitCode: 0 };
+    });
+    const preparedCandidateOperation = vi.fn(async (context: {
+      candidate: { providerKey: string; model: string; effort: string };
+      prepared: { env: NodeJS.ProcessEnv } | undefined;
+      abortSignal?: AbortSignal;
+      deadlineAt?: number;
+      invoke: () => Promise<InvokeResult>;
+    }) => {
+      events.push('operation');
+      expect(context).toMatchObject({
+        candidate: { providerKey: 'codex', model: 'gpt-5.6-sol', effort: 'high' },
+        prepared: { env: { CODEX_HOME: '/tmp/candidate-home' } },
+        abortSignal: controller.signal,
+        deadlineAt: 9_999_999_999_999,
+      });
+      return {
+        kind: 'hit' as const,
+        result: {
+          success: true,
+          output: 'warm candidate result',
+          exitCode: 0,
+          providerInvocationSkipped: true,
+        },
+      };
+    });
+
+    const result = await executeAuxiliaryProviderCandidates({
+      step: 'build_review',
+      memberId: 'scope',
+      policy: {
+        enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
+        model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0,
+      },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('candidate-session')),
+      options: { prompt: '$build-review-scope', cwd: '/workspace' },
+      abortSignal: controller.signal,
+      deadlineAt: 9_999_999_999_999,
+      preparedCandidateOperation,
+      prepareCandidateSelfHost: async () => {
+        events.push('prepare');
+        return {
+          executable: 'codex', env: { CODEX_HOME: '/tmp/candidate-home' }, args: [],
+          teardown: async () => { events.push('cleanup'); },
+        };
+      },
+    });
+
+    expect({ output: result.output, invoked: result.attempts[0]?.invoked, events, providerCalls: invoke.mock.calls.length }).toEqual({
+      output: 'warm candidate result',
+      invoked: false,
+      events: ['prepare', 'operation', 'cleanup'],
+      providerCalls: 0,
+    });
+  });
+
+  it('classifies a cancelled prepared candidate without claiming a judgment or cache hit', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'must not run', exitCode: 0 }));
+    const operation = vi.fn();
+    const teardown = vi.fn(async () => {});
+
+    const result = await executeAuxiliaryProviderCandidates({
+      step: 'build_review',
+      memberId: 'scope',
+      policy: {
+        enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
+        model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0,
+      },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('candidate-session')),
+      options: { prompt: '$build-review-scope', cwd: '/workspace' },
+      abortSignal: controller.signal,
+      preparedCandidateOperation: operation,
+      prepareCandidateSelfHost: async () => ({ executable: 'codex', env: {}, args: [], teardown }),
+    });
+
+    expect({ success: result.success, invoked: result.attempts[0]?.invoked, operationCalls: operation.mock.calls.length, providerCalls: invoke.mock.calls.length, teardownCalls: teardown.mock.calls.length }).toEqual({
+      success: false,
+      invoked: false,
+      operationCalls: 0,
+      providerCalls: 0,
+      teardownCalls: 1,
+    });
+  });
+
+  it('refuses a cache hit if cancellation arrives while the prepared operation is running', async () => {
+    const controller = new AbortController();
+    const operation = vi.fn(async () => {
+      controller.abort();
+      return {
+        kind: 'hit' as const,
+        result: { success: true, output: 'stale cache hit', exitCode: 0 },
+      };
+    });
+    const teardown = vi.fn(async () => {});
+
+    const result = await executeAuxiliaryProviderCandidates({
+      step: 'build_review',
+      memberId: 'scope',
+      policy: {
+        enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
+        model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0,
+      },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: vi.fn() })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('candidate-session')),
+      options: { prompt: '$build-review-scope', cwd: '/workspace' },
+      abortSignal: controller.signal,
+      preparedCandidateOperation: operation,
+      prepareCandidateSelfHost: async () => ({ executable: 'codex', env: {}, args: [], teardown }),
+    });
+
+    expect({ success: result.success, output: result.output, invoked: result.attempts[0]?.invoked, operationCalls: operation.mock.calls.length, teardownCalls: teardown.mock.calls.length }).toEqual({
+      success: false,
+      output: 'Prepared candidate operation cancelled before judgment.',
+      invoked: false,
+      operationCalls: 1,
+      teardownCalls: 1,
+    });
+  });
+
+  it.each([
+    ['a judged invocation', { success: true, output: 'judged', exitCode: 0 }],
+    ['an authentication failure', { success: false, output: 'authentication failed', exitCode: 1, authFailure: true }],
+    ['a malformed provider result', { success: false, output: 'malformed result', exitCode: 1 }],
+  ] as const)('keeps one prepared candidate cleanup around %s', async (_label, providerResult) => {
+    const events: string[] = [];
+    const invoke = vi.fn(async (): Promise<InvokeResult> => {
+      events.push('invoke');
+      return providerResult;
+    });
+    const operation = vi.fn(async (context: { invoke: () => Promise<InvokeResult> }) => {
+      events.push('operation');
+      return { kind: 'judged' as const, result: await context.invoke() };
+    });
+
+    const result = await executeAuxiliaryProviderCandidates({
+      step: 'build_review',
+      memberId: 'scope',
+      policy: {
+        enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
+        model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0,
+      },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('candidate-session')),
+      options: { prompt: '$build-review-scope', cwd: '/workspace' },
+      preparedCandidateOperation: operation,
+      prepareCandidateSelfHost: async () => ({
+        executable: 'codex', env: {}, args: [], teardown: async () => { events.push('cleanup'); },
+      }),
+    });
+
+    expect({ result: result.output, events, operationCalls: operation.mock.calls.length, providerCalls: invoke.mock.calls.length }).toEqual({
+      result: providerResult.output,
+      events: ['operation', 'invoke', 'cleanup'],
+      operationCalls: 1,
+      providerCalls: 1,
+    });
+  });
+
+  it('classifies a timed-out prepared candidate without invoking its operation', async () => {
+    const operation = vi.fn();
+    const invoke = vi.fn();
+    const teardown = vi.fn(async () => {});
+
+    const result = await executeAuxiliaryProviderCandidates({
+      step: 'build_review',
+      memberId: 'scope',
+      policy: {
+        enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
+        model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false, min_confidence: 0,
+      },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('candidate-session')),
+      options: { prompt: '$build-review-scope', cwd: '/workspace' },
+      deadlineAt: 0,
+      preparedCandidateOperation: operation,
+      prepareCandidateSelfHost: async () => ({ executable: 'codex', env: {}, args: [], teardown }),
+    });
+
+    expect({ success: result.success, invoked: result.attempts[0]?.invoked, operationCalls: operation.mock.calls.length, providerCalls: invoke.mock.calls.length, teardownCalls: teardown.mock.calls.length }).toEqual({
+      success: false,
+      invoked: false,
+      operationCalls: 0,
+      providerCalls: 0,
+      teardownCalls: 1,
+    });
+  });
+
   it('executes an auxiliary rubric through its own provider, fallback ladder, retries, and attribution label', async () => {
     const codexInvoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> =>
       options.model === 'gpt-5.6-sol'
