@@ -1,4 +1,4 @@
-// Covers: task:10
+// Covers: task:10, task:1
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -26,9 +26,10 @@ describe('engine/build-review-registry', () => {
     expect(Object.values(BUILD_REVIEW_RUBRIC_REGISTRY).every(Object.isFrozen)).toBe(true);
   });
 
-  it('recognizes only registered rubrics', () => {
+  it('recognizes only built-in rubrics; custom policy ids stay out of the registry', () => {
     expect(isRegisteredRubric('testQuality')).toBe(true);
     expect(isRegisteredRubric('completeness')).toBe(false);
+    expect(isRegisteredRubric('kotlinPolicy')).toBe(false);
     expect(getBuildReviewRubricDescriptor('testQuality')).toBe(
       BUILD_REVIEW_RUBRIC_REGISTRY.testQuality,
     );
