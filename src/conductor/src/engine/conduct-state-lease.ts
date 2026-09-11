@@ -362,7 +362,17 @@ export function createConductStateLease(
         try {
           await filesystem.writeOwner(ownerPath(leasePath), serializedOwner);
         } catch (error) {
-          await filesystem.releaseDirectory(leasePath).catch(() => undefined);
+          // Publication can lose a race to ownership becoming visible. Only
+          // remove the directory when its owner path is still absent: deleting
+          // on an unreadable or newly-present record could tear down a live
+          // owner's lease while reporting our own publication failure.
+          try {
+            await filesystem.readOwner(ownerPath(leasePath));
+          } catch (ownerError) {
+            if (isMissing(ownerError)) {
+              await filesystem.releaseDirectory(leasePath).catch(() => undefined);
+            }
+          }
           return {
             ok: false,
             kind: 'filesystem',
