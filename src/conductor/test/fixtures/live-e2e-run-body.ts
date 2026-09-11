@@ -12,9 +12,9 @@ import type {
   InvokeResult,
   LLMProvider,
 } from '../../src/execution/llm-provider.js';
-import { deriveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-aggregate.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import { runDaemon } from '../../src/engine/daemon.js';
+import { isOperatorParked } from '../../src/engine/park-marker.js';
 import { resolveProviderModelPolicy } from '../../src/engine/provider-model-policy.js';
 import { DefaultStepRunner, type StepRunnerOptions } from '../../src/engine/step-runners.js';
 import type { ProviderHome } from '../../src/engine/self-host/provider-home.js';
@@ -95,6 +95,8 @@ type LiveProviderPreflight = (homeDir: string, providerKey?: string) => Promise<
 
 export interface LiveE2ERunBodyDependencies {
   readonly binaryAvailable?: (binaryName: string) => boolean;
+  /** Test-only fixture root, retained so a failure can exercise real Git topology. */
+  readonly fixtureRoot?: string;
   readonly provisionProviderHome?: typeof provisionLiveProviderHome;
   readonly preflight?: LiveProviderPreflight;
   /** Test-only fixture seam around the real daemon invocation. */
@@ -207,6 +209,40 @@ export function assertSuccessfulCredentialedRun(
 
 const fixturePlanPath = fileURLToPath(new URL('./daemon-e2e/plan.md', import.meta.url));
 const fixtureStoriesPath = fileURLToPath(new URL('./daemon-e2e/stories.md', import.meta.url));
+
+export interface LiveE2EFixture {
+  readonly mainCheckoutDir: string;
+  readonly projectDir: string;
+  readonly seedSha: string;
+}
+
+/** Seed the live daemon fixture with the production main-checkout/worktree topology. */
+export async function seedLiveE2EFixture(fixtureRoot: string, slug: string): Promise<LiveE2EFixture> {
+  const mainCheckoutDir = join(fixtureRoot, 'main');
+  const projectDir = join(mainCheckoutDir, '.worktrees', slug);
+  await mkdir(mainCheckoutDir, { recursive: true });
+  await initTestRepo(mainCheckoutDir);
+  await mkdir(join(mainCheckoutDir, '.docs/plans'), { recursive: true });
+  await mkdir(join(mainCheckoutDir, '.docs/stories'), { recursive: true });
+  await mkdir(join(mainCheckoutDir, 'test/fixtures/daemon-e2e'), { recursive: true });
+  await copyFile(fixturePlanPath, join(mainCheckoutDir, `.docs/plans/${slug}.md`));
+  await copyFile(fixtureStoriesPath, join(mainCheckoutDir, `.docs/stories/${slug}.md`));
+  await writeFile(
+    join(mainCheckoutDir, '.gitignore'),
+    ['.pipeline/', '.daemon/', '.memory/', '.memory*.bak/', '.worktrees/', '.claude/'].join('\n') + '\n',
+  );
+  await execa('git', ['add', '-A'], { cwd: mainCheckoutDir });
+  await execa('git', ['commit', '-m', 'test: seed live daemon E2E fixture', '-m', 'Task: T0'], { cwd: mainCheckoutDir });
+  const { stdout: seedSha } = await execa('git', ['rev-parse', 'HEAD'], { cwd: mainCheckoutDir });
+  await mkdir(join(mainCheckoutDir, '.worktrees'), { recursive: true });
+  try {
+    await execa('git', ['worktree', 'add', '-b', `feature/${slug}`, projectDir], { cwd: mainCheckoutDir });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes(projectDir)) throw error;
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\nlinked worktree target: ${projectDir}`);
+  }
+  return { mainCheckoutDir, projectDir, seedSha: seedSha.trim() };
+}
 
 export function providerBinaryAvailable(binaryName: string): boolean {
   try {
@@ -363,10 +399,10 @@ export function withLiveE2EFailureDiagnostics<T>(
   return runWithLiveE2EFailureDiagnostics(() => worktreeDir, credentialValues, run);
 }
 
-async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Promise<boolean> {
+export async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Promise<boolean> {
   return existsSync(join(worktreeDir, '.pipeline/DONE')) &&
     !existsSync(join(worktreeDir, '.pipeline/HALT')) &&
-    !existsSync(join(worktreeDir, `.daemon/parked/${slug}`));
+    !await isOperatorParked(worktreeDir, slug);
 }
 
 function assertLiveE2ERunIsNotHalted(worktreeDir: string): void {
@@ -382,6 +418,7 @@ export async function runLiveE2ERunBody(
 ): Promise<void> {
   const credential = process.env[descriptor.credentialEnvVar];
   let worktreeDir: string | undefined;
+  let fixtureRoot: string | undefined;
   const slug = 'daemon-e2e-live';
   let meter: TokenMeter | undefined;
   let provisioned: ProvisionedHome | undefined;
@@ -391,11 +428,14 @@ export async function runLiveE2ERunBody(
     return await runWithLiveE2EFailureDiagnostics(() => worktreeDir, [credential ?? ''], async () => {
     assertLiveProviderBinary(descriptor, dependencies.binaryAvailable);
     assertLiveProviderCredential(descriptor, credential);
-    const liveWorktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-live-'));
+    fixtureRoot = dependencies.fixtureRoot ?? await mkdtemp(join(tmpdir(), 'daemon-e2e-live-'));
+    const fixture = await seedLiveE2EFixture(fixtureRoot, slug);
+    const liveWorktreeDir = fixture.projectDir;
     worktreeDir = liveWorktreeDir;
     const pipelineDir = join(liveWorktreeDir, '.pipeline');
     const statePath = join(pipelineDir, 'conduct-state.json');
     const planPath = join(liveWorktreeDir, `.docs/plans/${slug}.md`);
+    baselineSha = fixture.seedSha;
     const provider = createLiveProvider(descriptor, credential);
     meter = new TokenMeter(provider);
     await assertDescriptorAuthenticationSource(descriptor, provider);
@@ -403,12 +443,6 @@ export async function runLiveE2ERunBody(
     return await enforceLiveE2ETokenCap(async () => {
         delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
         expect(process.env.AI_CONDUCTOR_NO_REAL_EXEC).toBeUndefined();
-        await initTestRepo(liveWorktreeDir);
-        await mkdir(join(liveWorktreeDir, '.docs/plans'), { recursive: true });
-        await mkdir(join(liveWorktreeDir, '.docs/stories'), { recursive: true });
-        await mkdir(join(liveWorktreeDir, 'test/fixtures/daemon-e2e'), { recursive: true });
-        await copyFile(fixturePlanPath, planPath);
-        await copyFile(fixtureStoriesPath, join(liveWorktreeDir, `.docs/stories/${slug}.md`));
         await withProvisionedLiveProviderHome(
       fileURLToPath(new URL('../../../../', import.meta.url)),
       descriptor,
@@ -424,22 +458,8 @@ export async function runLiveE2ERunBody(
         const stepTracker: { current: StepName | undefined } = { current: undefined };
         meter = new TokenMeter(provisioned, () => stepTracker.current);
         await dispatchAfterLivePreflight(providerHome, async () => {
-          // The harness repo gitignores its runtime dirs; without this the
-          // review-era .pipeline writes (rubric caches, verdicts) surface as
-          // uncommitted paths and the completion gate halts the fixture dirty
-          // (0.103.0 release-gate failure). Mirror the harness repo's full
-          // runtime-dir ignore set.
-          await writeFile(
-            join(liveWorktreeDir, '.gitignore'),
-            ['.pipeline/', '.daemon/', '.memory/', '.memory*.bak/', '.worktrees/', '.claude/'].join('\n') + '\n',
-          );
-          await execa('git', ['add', '-A'], { cwd: liveWorktreeDir });
-          await execa('git', ['commit', '-m', 'test: seed live daemon E2E fixture', '-m', 'Task: T0'], { cwd: liveWorktreeDir });
-          const { stdout: seededBaselineSha } = await execa('git', ['rev-parse', 'HEAD'], { cwd: liveWorktreeDir });
-          baselineSha = seededBaselineSha;
           const { stdout: seededFiles } = await execa('git', ['ls-tree', '--name-only', '-r', 'HEAD'], { cwd: liveWorktreeDir });
           expect(seededFiles.split('\n')).not.toContain('test/fixtures/daemon-e2e/touched.txt');
-          await execa('git', ['checkout', '-b', `feature/${slug}`], { cwd: liveWorktreeDir });
           await mkdir(pipelineDir, { recursive: true });
           await writeFile(statePath, JSON.stringify({
             worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
@@ -459,21 +479,6 @@ export async function runLiveE2ERunBody(
                   provenanceHeadSha: (await execa('git', ['rev-parse', 'HEAD'], { cwd: liveWorktreeDir })).stdout.trim(),
                 },
               } as never),
-            },
-            // Parity with the scripted fixture's resolver stub: the disposition
-            // resolver derives the feature identity from the linked-worktree
-            // layout, which this standalone temp repository does not have.
-            // Derive the effective verdict from the aggregate alone; there are
-            // no operator dispositions in a freshly seeded fixture.
-            buildReviewEffectiveResolver: async (_root: string, aggregate: unknown) => {
-              const effective = deriveEffectiveBuildReviewVerdict(aggregate);
-              return effective
-                ? {
-                    ok: true as const,
-                    feature: { version: 'v1' as const, repository: liveWorktreeDir, feature: slug },
-                    effective,
-                  }
-                : { ok: false as const, reason: 'fixture aggregate is invalid' };
             },
           });
           await dependencies.beforeRunDaemon?.(liveWorktreeDir);
@@ -524,6 +529,6 @@ export async function runLiveE2ERunBody(
         dispatches: provisioned?.dispatches ?? 0,
       }, tokenCap);
     }
-    if (worktreeDir) await rm(worktreeDir, { recursive: true, force: true });
+    if (fixtureRoot) await rm(fixtureRoot, { recursive: true, force: true });
   }
 }

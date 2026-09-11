@@ -1,3 +1,5 @@
+// Covers: task:1, task:2, task:4, task:5
+import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,6 +8,11 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AuthenticationReadiness, InvokeOptions, LLMProvider } from '../../src/execution/llm-provider.js';
+import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { buildReviewDispositionStorePath } from '../../src/engine/build-review-dispositions.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
+import { resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
+import { writeOperatorPark } from '../../src/engine/park-marker.js';
 import { dumpPipelineDiagnostics } from './daemon-e2e-diagnostics.js';
 import { LIVE_E2E_PROVIDERS, type LiveE2EProviderDescriptor } from './live-e2e-providers.js';
 import type { LiveE2ERunBodyDependencies } from './live-e2e-run-body.js';
@@ -14,18 +21,150 @@ vi.mock('./daemon-e2e-diagnostics.js', () => ({
   dumpPipelineDiagnostics: vi.fn(),
 }));
 
-// The pre-halt boundary is reached before the fixture needs a real Git repo.
-// Keeping this local setup fake makes the entrypoint regression test runnable
-// in sandboxes that prohibit shell-backed git setup.
-vi.mock('./git-repo.js', () => ({
-  initTestRepo: vi.fn(),
-}));
+const passingAggregate = joinBuildReviewRubricOutcomes({
+  lapId: parseBuildReviewLapId('live-e2e-seed')!,
+  snapshotDigest: 'sha256:live-e2e-seed',
+  results: {
+    testQuality: {
+      kind: 'judged', rubric: 'testQuality', lapId: parseBuildReviewLapId('live-e2e-seed')!,
+      snapshotDigest: 'sha256:live-e2e-seed', contractVersion: 'v3', findings: [], verdict: 'PASS',
+    },
+  },
+});
 
-vi.mock('execa', () => ({
-  execa: vi.fn(async (_command: string, args: readonly string[]) => ({
-    stdout: args[0] === 'rev-parse' ? 'fixture-sha' : '',
-  })),
-}));
+describe('live E2E linked-worktree fixture seeding', () => {
+  it('seeds a linked worktree that resolves its production build-review identity and effective verdict', async () => {
+    const fixtureRoot = await mkdtemp(`${tmpdir()}/live-e2e-seed-`);
+    const slug = 'daemon-e2e-live';
+    let observed: Record<string, unknown> | undefined;
+    let mainCheckoutDir: string | undefined;
+    try {
+      const { seedLiveE2EFixture } = await import('./live-e2e-run-body.js') as {
+        seedLiveE2EFixture: (root: string, feature: string) => Promise<{
+          mainCheckoutDir: string;
+          projectDir: string;
+          seedSha: string;
+        }>;
+      };
+      const seeded = await seedLiveE2EFixture(fixtureRoot, slug);
+      mainCheckoutDir = seeded.mainCheckoutDir;
+      const [identity, resolution] = await Promise.all([
+        resolveBuildReviewFeatureIdentity(seeded.projectDir),
+        resolveEffectiveBuildReviewVerdict(seeded.projectDir, passingAggregate),
+      ]);
+
+      observed = {
+        identity,
+        resolution,
+        worktreePath: seeded.projectDir,
+        seedReachable: (() => {
+          try {
+            execFileSync('git', ['merge-base', '--is-ancestor', seeded.seedSha, `feature/${slug}`], {
+              cwd: seeded.mainCheckoutDir,
+            });
+            return true;
+          } catch {
+            return false;
+          }
+        })(),
+        dispositionStateExists: existsSync(buildReviewDispositionStorePath(seeded.projectDir)),
+      };
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+    expect({ ...observed, fixtureRemoved: !existsSync(fixtureRoot) }).toMatchObject({
+        identity: { version: 'v1', repository: mainCheckoutDir, feature: slug },
+        resolution: { ok: true, feature: { version: 'v1', repository: mainCheckoutDir, feature: slug } },
+        worktreePath: join(mainCheckoutDir!, '.worktrees', slug),
+        seedReachable: true,
+        dispositionStateExists: false,
+        fixtureRemoved: true,
+      });
+  });
+
+  it('rejects an occupied linked-worktree path before provider setup or dispatch', async () => {
+    const fixtureRoot = await mkdtemp(`${tmpdir()}/live-e2e-occupied-`);
+    const slug = 'daemon-e2e-live';
+    const targetPath = join(fixtureRoot, 'main', '.worktrees', slug);
+    const provisionProviderHome = vi.fn();
+    const preflight = vi.fn();
+    const createProvider = vi.fn();
+    try {
+      await mkdir(targetPath, { recursive: true });
+      await writeFile(join(targetPath, 'leftover.txt'), 'occupied\n');
+      const { runLiveE2ERunBody } = await import('./live-e2e-run-body.js') as {
+        runLiveE2ERunBody: (
+          descriptor: LiveE2EProviderDescriptor,
+          tokenCap?: number,
+          dependencies?: LiveE2ERunBodyDependencies,
+        ) => Promise<void>;
+      };
+      const failure = await runLiveE2ERunBody({
+        id: 'codex', binaryName: 'codex', credentialEnvVar: 'CODEX_API_KEY', createProvider,
+        assertCredentialAvailable: () => {},
+      } as unknown as LiveE2EProviderDescriptor, 1, {
+        binaryAvailable: () => true, fixtureRoot, provisionProviderHome, preflight,
+      }).then(() => undefined, (error: unknown) => error);
+
+      expect({
+        message: failure instanceof Error ? failure.message : String(failure),
+        providerConstructions: createProvider.mock.calls.length,
+        providerHomes: provisionProviderHome.mock.calls.length,
+        preflights: preflight.mock.calls.length,
+      }).toMatchObject({
+        message: expect.stringContaining(targetPath),
+        providerConstructions: 0,
+        providerHomes: 0,
+        preflights: 0,
+      });
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reports success for a completed unparked linked worktree through the production park reader', async () => {
+    const fixtureRoot = await mkdtemp(`${tmpdir()}/live-e2e-terminal-`);
+    let terminal: boolean | undefined;
+    try {
+      const { hasSuccessfulTerminalState, seedLiveE2EFixture } = await import('./live-e2e-run-body.js') as {
+        hasSuccessfulTerminalState: (worktreeDir: string, slug: string) => Promise<boolean>;
+        seedLiveE2EFixture: (root: string, slug: string) => Promise<{ projectDir: string }>;
+      };
+      const slug = 'daemon-e2e-live';
+      const seeded = await seedLiveE2EFixture(fixtureRoot, slug);
+      await mkdir(join(seeded.projectDir, '.pipeline'), { recursive: true });
+      await writeFile(join(seeded.projectDir, '.pipeline/DONE'), 'completed\n');
+      terminal = await hasSuccessfulTerminalState(seeded.projectDir, slug);
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+    expect(terminal).toBe(true);
+  });
+
+  it('denies terminal success when the production park writer parks the linked-worktree fixture', async () => {
+    const fixtureRoot = await mkdtemp(`${tmpdir()}/live-e2e-parked-`);
+    let observed: Record<string, boolean> | undefined;
+    try {
+      const { hasSuccessfulTerminalState, seedLiveE2EFixture } = await import('./live-e2e-run-body.js') as {
+        hasSuccessfulTerminalState: (worktreeDir: string, slug: string) => Promise<boolean>;
+        seedLiveE2EFixture: (root: string, slug: string) => Promise<{ mainCheckoutDir: string; projectDir: string }>;
+      };
+      const slug = 'daemon-e2e-live';
+      const seeded = await seedLiveE2EFixture(fixtureRoot, slug);
+      await mkdir(join(seeded.projectDir, '.pipeline'), { recursive: true });
+      await writeFile(join(seeded.projectDir, '.pipeline/DONE'), 'completed\n');
+      await writeOperatorPark(seeded.projectDir, slug);
+      observed = {
+        terminal: await hasSuccessfulTerminalState(seeded.projectDir, slug),
+        mainMarker: existsSync(join(seeded.mainCheckoutDir, '.daemon/parked', slug)),
+        worktreeMarker: existsSync(join(seeded.projectDir, '.daemon/parked', slug)),
+      };
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+    expect(observed).toEqual({ terminal: false, mainMarker: true, worktreeMarker: false });
+  });
+});
 
 describe('ProvisionedHome', () => {
   it.each(['invoke'] as const)('injects its isolated self-host settings into %s', async (method) => {
