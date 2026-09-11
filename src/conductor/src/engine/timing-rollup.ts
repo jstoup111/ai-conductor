@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { resolveExecutionIdentity, type ExecutionScope } from './execution-identity.js';
 import { intersectIntervalUnions, unionIntervals } from './interval-algebra.js';
 
 export interface MeasuredTimingRollup {
@@ -53,11 +54,36 @@ interface TimingEvidence {
   providerEvidenceIncomplete: boolean;
 }
 
+const timingRollupScope: ExecutionScope = {
+  featureId: 'timing-rollup',
+  runId: 'persisted-ledger',
+};
+
+function executionKey(
+  event: Record<string, unknown>,
+  kind: 'step' | 'parallel',
+  step: string,
+): string | undefined {
+  const identity = resolveExecutionIdentity({
+    scope: timingRollupScope,
+    legacyStep: step,
+    executionContext: event.executionContext,
+  });
+  if (identity === undefined) return undefined;
+
+  // Preserve legacy reason vocabulary for context-free ledgers while ensuring
+  // correlated records can close only their own execution.
+  return event.executionContext === undefined
+    ? `${kind}:${step}`
+    : `${kind}:${identity.correlationKey}`;
+}
+
 function collectExecutionEvidence(
   event: Record<string, unknown>,
   evidence: TimingEvidence,
 ): 'step' | 'parallel' | undefined {
   const step = typeof event.step === 'string' ? event.step : undefined;
+  const stepKey = step === undefined ? undefined : executionKey(event, 'step', step);
   const startKind = event.type === 'step_started'
     ? 'step'
     : event.type === 'parallel_started' ? 'parallel' : undefined;
@@ -67,7 +93,7 @@ function collectExecutionEvidence(
   // as a terminal whose active interval went missing.
   const refusalClosesStep = event.type === 'step_refused'
     && step !== undefined
-    && (evidence.openExecutions.has(`step:${step}`) || 'activeInterval' in event);
+    && (stepKey !== undefined && evidence.openExecutions.has(stepKey) || 'activeInterval' in event);
   const terminalKind =
     event.type === 'step_completed' || event.type === 'step_failed' || refusalClosesStep
       ? 'step'
@@ -77,32 +103,42 @@ function collectExecutionEvidence(
         : undefined;
 
   if (startKind && step) {
-    const key = `${startKind}:${step}`;
-    if (startKind === 'parallel') evidence.closedParallelExecutions.delete(key);
-    evidence.openExecutions.set(key, (evidence.openExecutions.get(key) ?? 0) + 1);
+    const key = executionKey(event, startKind, step);
+    if (key === undefined) {
+      evidence.activeEvidenceIncomplete = true;
+    } else {
+      if (startKind === 'parallel') evidence.closedParallelExecutions.delete(key);
+      evidence.openExecutions.set(key, (evidence.openExecutions.get(key) ?? 0) + 1);
+    }
   }
   if (terminalKind) {
-    const key = step ? `${terminalKind}:${step}` : undefined;
+    const key = step === undefined ? undefined : executionKey(event, terminalKind, step);
     const closesKnownParallelExecution =
       terminalKind === 'parallel'
       && key !== undefined
       && !evidence.openExecutions.has(key)
       && evidence.closedParallelExecutions.has(key);
     const hasActiveInterval = 'activeInterval' in event;
-    if (!step || (!hasActiveInterval && !closesKnownParallelExecution)) {
+    const closesOpenExecution = key !== undefined && evidence.openExecutions.has(key);
+    const hasCorrelatedContext = event.executionContext !== undefined;
+    if (
+      !step
+      || key === undefined
+      || (!hasActiveInterval && !closesKnownParallelExecution)
+      || (hasCorrelatedContext && !closesOpenExecution && !closesKnownParallelExecution)
+    ) {
       evidence.activeEvidenceIncomplete = true;
     }
-    if (step) {
-      const executionKey = `${terminalKind}:${step}`;
-      const count = evidence.openExecutions.get(executionKey) ?? 0;
-      if (count > 1) evidence.openExecutions.set(executionKey, count - 1);
-      else evidence.openExecutions.delete(executionKey);
+    if (key !== undefined) {
+      const count = evidence.openExecutions.get(key) ?? 0;
+      if (count > 1) evidence.openExecutions.set(key, count - 1);
+      else evidence.openExecutions.delete(key);
       if (
         terminalKind === 'parallel'
         && count <= 1
         && (count > 0 || hasActiveInterval)
       ) {
-        evidence.closedParallelExecutions.add(executionKey);
+        evidence.closedParallelExecutions.add(key);
       }
     }
     if (hasActiveInterval) evidence.activeIntervals.push(event.activeInterval);

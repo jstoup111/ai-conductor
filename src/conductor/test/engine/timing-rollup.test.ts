@@ -1,3 +1,4 @@
+// Covers: task:4
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,7 +19,10 @@ afterEach(async () => {
   );
 });
 
-async function writeFeatureEvents(events: readonly object[]): Promise<string> {
+async function writeFeatureEvents(
+  events: readonly object[],
+  pipelineEvents: readonly object[] = [],
+): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'timing-rollup-'));
   temporaryDirectories.push(directory);
   const pipelineDirectory = join(directory, '.pipeline');
@@ -26,6 +30,11 @@ async function writeFeatureEvents(events: readonly object[]): Promise<string> {
   await writeFile(
     join(pipelineDirectory, 'events.jsonl'),
     `${events.map((event) => JSON.stringify(event)).join('\n')}\n`,
+    'utf8',
+  );
+  await writeFile(
+    join(pipelineDirectory, 'pipeline-events.jsonl'),
+    `${pipelineEvents.map((event) => JSON.stringify(event)).join('\n')}\n`,
     'utf8',
   );
   return directory;
@@ -246,6 +255,120 @@ describe('computeTimingRollup', () => {
     expect(await computeTimingRollup(directory)).toEqual({
       state: 'partial',
       reason: 'open-executions:step:build',
+    });
+  });
+
+  it('keeps a malformed correlated terminal from closing another execution', async () => {
+    const directory = await writeFeatureEvents([
+      {
+        type: 'step_started',
+        step: 'build',
+        executionContext: {
+          executionId: 'member-a',
+          subject: { kind: 'configured-member', parentGroup: 'quality', member: 'review' },
+        },
+      },
+      {
+        type: 'step_completed',
+        step: 'build',
+        executionContext: {
+          executionId: '',
+          subject: { kind: 'configured-member', parentGroup: 'quality', member: 'review' },
+        },
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+        observedIntervals: [{ startedAtMs: 10, durationMs: 20 }],
+      },
+    ]);
+
+    expect(await computeTimingRollup(directory)).toEqual({
+      state: 'partial',
+      reason: 'active-evidence-incomplete',
+    });
+  });
+
+  it('leaves an earlier correlated execution open when a later same-step execution closes', async () => {
+    const member = (executionId: string) => ({
+      executionId,
+      subject: { kind: 'configured-member', parentGroup: 'quality', member: 'review' },
+    });
+    const directory = await writeFeatureEvents([
+      { type: 'step_started', step: 'build', executionContext: member('member-a') },
+      { type: 'step_started', step: 'build', executionContext: member('member-b') },
+      {
+        type: 'step_completed',
+        step: 'build',
+        executionContext: member('member-b'),
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+      },
+    ]);
+
+    expect(await computeTimingRollup(directory)).toMatchObject({
+      state: 'partial',
+      reason: expect.stringContaining('member-a'),
+    });
+  });
+
+  it('unions persisted group and member intervals while retaining independent member work', async () => {
+    const overlapMember = {
+      executionId: 'member-overlap',
+      subject: { kind: 'configured-member', parentGroup: 'ship_validation', member: 'manual_test' },
+    };
+    const independentMember = {
+      executionId: 'member-independent',
+      subject: { kind: 'configured-member', parentGroup: 'ship_validation', member: 'prd_audit' },
+    };
+    const directory = await writeFeatureEvents([
+      { type: 'parallel_started', step: 'ship_validation', branches: ['manual_test', 'prd_audit'] },
+      { type: 'step_started', step: 'build', executionContext: overlapMember },
+      {
+        type: 'group_member_step',
+        member: 'manual_test',
+        skill: 'manual-test',
+        phase: 'result',
+        outcome: 'completed',
+        executionContext: overlapMember,
+      },
+      {
+        type: 'step_completed',
+        step: 'build',
+        executionContext: overlapMember,
+        activeInterval: { startedAtMs: 20, durationMs: 60 },
+      },
+      {
+        type: 'parallel_completed',
+        step: 'ship_validation',
+        branches: ['manual_test', 'prd_audit'],
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+      },
+      { type: 'step_started', step: 'build', executionContext: independentMember },
+      {
+        type: 'group_member_step',
+        member: 'prd_audit',
+        skill: 'prd-audit',
+        phase: 'result',
+        outcome: 'completed',
+        executionContext: independentMember,
+      },
+      {
+        type: 'step_completed',
+        step: 'build',
+        executionContext: independentMember,
+        activeInterval: { startedAtMs: 150, durationMs: 25 },
+      },
+    ], [
+      { type: 'step_started', step: 'plan' },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        activeInterval: { startedAtMs: 95, durationMs: 25 },
+      },
+    ]);
+
+    expect(await computeTimingRollup(directory)).toEqual({
+      state: 'measured',
+      activeMs: 145,
+      providerActiveMs: 0,
+      noProviderActiveMs: 145,
     });
   });
 
