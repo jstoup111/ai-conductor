@@ -7829,6 +7829,62 @@ export class Conductor {
                 executionContext,
               });
             };
+            const closeMemberFailure = async (
+              member: typeof membership.dispatchable[number],
+              error: string,
+            ) => {
+              const executionContext = memberExecutionContexts.get(member.name);
+              if (executionContext === undefined) return;
+              const result = memberAttemptResults.get(member.name);
+              await emitTracked({
+                type: 'step_failed',
+                step: member.name as StepName,
+                error,
+                retryCount: memberAttemptBudgets.get(member.name) ?? 0,
+                ...(result?.effort !== undefined ? { effort: result.effort } : {}),
+                ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+                ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
+                executionContext,
+              });
+            };
+            const closeMemberRefusal = async (
+              member: typeof membership.dispatchable[number],
+              reason: string,
+            ) => {
+              const executionContext = memberExecutionContexts.get(member.name);
+              if (executionContext === undefined) return;
+              await emitTracked({
+                type: 'step_refused',
+                step: member.name as StepName,
+                kind: 'validation-verdict',
+                reason,
+                executionContext,
+              });
+            };
+            // The group decision may return before the ordinary join has a
+            // chance to classify every member.  Settle each admitted scope
+            // from its own branch outcome so run-finally never invents a
+            // generic interruption terminal for a known result.
+            const closeSettledMembers = async (
+              settled: readonly BranchOutcome[],
+              refusalReason?: string,
+            ) => {
+              for (let index = 0; index < settled.length; index += 1) {
+                const outcome = settled[index];
+                const member = membership.dispatchable[index];
+                if (outcome === undefined || member === undefined) continue;
+                if (outcome.kind === 'verdict' && outcome.verdict === 'pass') {
+                  await closeSuccessfulMember(member);
+                } else if (refusalReason !== undefined) {
+                  await closeMemberRefusal(member, refusalReason);
+                } else if (outcome.kind === 'no-verdict') {
+                  await closeMemberFailure(
+                    member,
+                    `Validation group "${step.name}" branch "${member.name}" produced no-verdict: ${outcome.reason}.`,
+                  );
+                }
+              }
+            };
             const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
               // The validation join normally dispatches each member directly
               // through group-core, bypassing the serial `prd_audit` branch
@@ -8019,6 +8075,7 @@ export class Conductor {
                   : undefined,
               );
               if (park.disposition === 'halt') {
+                await closeSettledMembers(outcomes, park.haltReason);
                 await this.writeHaltMarker(park.haltReason + '\n', 'needs-human');
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(park.haltReason);
@@ -8049,6 +8106,10 @@ export class Conductor {
               inFlightGroupCompletions = undefined;
               if (signalExitRequested) return;
 
+              for (const [index, outcome] of retryOutcomes.entries()) {
+                outcomes[retryIdxs[index]!] = outcome;
+              }
+
               if (park.disposition === 'trial-required') {
                 const failedTrial = retryOutcomes[0];
                 if (failedTrial?.kind === 'no-verdict' && failedTrial.reason === 'authFailure') {
@@ -8061,6 +8122,7 @@ export class Conductor {
                     `Codex cached-login recovery trial for grouped member "${failedMember.name}" ` +
                     `failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(park.probeFailure)}).\n` +
                     'Refresh the Codex login, then re-queue this feature.';
+                  await closeSettledMembers(outcomes, haltReason);
                   await this.writeHaltMarker(haltReason + '\n', 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(haltReason);
@@ -8069,9 +8131,6 @@ export class Conductor {
                   if (!this.daemon) process.off('SIGTERM', sigterm);
                   return;
                 }
-              }
-              for (const [index, outcome] of retryOutcomes.entries()) {
-                outcomes[retryIdxs[index]!] = outcome;
               }
             }
 
@@ -8092,6 +8151,7 @@ export class Conductor {
                 '.\n' +
                 'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
                 `\nProvider detail: ${outcome.reason}`;
+              await closeSettledMembers(outcomes, haltReason);
               await this.writeHaltMarker(haltReason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(haltReason);
@@ -8244,6 +8304,7 @@ export class Conductor {
               const haltReason =
                 `Validation group "${step.name}" halted: branch "${noVerdictMember.name}" produced ` +
                 `no-verdict after ${attemptsSpent} attempts (${noVerdictOutcome.reason}).`;
+              await closeSettledMembers(outcomes);
               await this.writeHaltMarker(haltReason + '\n', 'needs-human');
               // Story 3, negative path: a no-verdict outcome is the validator's
               // own runner dying (thrown branch, terminal error, or exhausted
