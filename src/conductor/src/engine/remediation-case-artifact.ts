@@ -156,7 +156,11 @@ function parseEffect(value: unknown, disposition: RemediationCaseDisposition): P
       return { ok: true, value: { kind: 'none' } };
     }
     if (!hasExactKeys(value, ['kind', 'title', 'body', 'exclusionRationale']) || value.kind !== 'deferral' || !isBoundedString(value.title) || !isBoundedString(value.body) || !isBoundedString(value.exclusionRationale)) {
-      return { ok: false, reason: disposition === 'refute' ? 'invalid-refute-effect' : 'invalid-deferral-effect' };
+      // Keep parser vocabulary aligned with graph validation: a refute row
+      // proposing a deferral has deferral-shaped invalidity, even when one of
+      // its required fields is absent or empty. Other non-none refute effects
+      // remain invalid refute effects.
+      return { ok: false, reason: disposition === 'refute' && value.kind === 'deferral' ? 'invalid-deferral-effect' : disposition === 'refute' ? 'invalid-refute-effect' : 'invalid-deferral-effect' };
     }
     return {
       ok: true,

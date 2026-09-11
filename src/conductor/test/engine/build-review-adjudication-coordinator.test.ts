@@ -1475,6 +1475,121 @@ describe('coordinateBuildReviewAdjudication', () => {
     });
   });
 
+  it('admits an open action refutation, settles its exact source on lap B, and re-dispatches drifted content', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-durable', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The earlier review requested coverage.', resolution: 'open',
+        sources: [{ sourceId: 'testQuality:sha256:prior-action', outcome: 'acted', recordedAt: '2026-09-11T00:00:00.000Z' }],
+        effect: { id: 'effect-durable', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+      }],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-durable',
+      cases: [{ caseId: 'case-durable', priority: 'high', tasks: [{ title: 'Cover the asserted branch' }] }],
+    });
+    await markBuildReviewWorkOrderAttempted(root, feature);
+    await mkdir(join(root, 'test'), { recursive: true });
+    await writeFile(join(root, 'test', 'refutation-evidence.test.ts'), 'the asserted branch is covered\n');
+    const refuted: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'refuted', caseRef: 'refuted-case' }],
+      cases: [{
+        caseRef: 'refuted-case', existingCaseId: 'case-durable', disposition: 'refute', priority: 'high', confidence: 'high',
+        rationale: 'The existing test covers the asserted branch.', effect: { kind: 'none' },
+        refutation: { claim: 'The asserted branch lacks coverage.', assertions: [{
+          assertion: 'The branch remains uncovered.', verdict: 'refuted',
+          evidence: [{ path: 'test/refutation-evidence.test.ts', excerpt: 'asserted branch is covered' }],
+        }] },
+      }],
+    };
+    const events: RemediationCaseLifecycleEvent[] = [];
+    const lapAJudge = vi.fn(async () => refuted);
+    await expect(coordinateBuildReviewAdjudication({
+      ...input(root, lapAJudge), emit: async (event) => { events.push(event); },
+    })).resolves.toMatchObject({ ok: true, route: 'pass' });
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
+      id: 'case-durable', disposition: 'refute', resolution: 'resolved', effect: { kind: 'none' },
+    })] } });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'remediation_case_refuted', caseId: 'case-durable' }));
+
+    const lapBJudge = vi.fn(async () => actionJudgement());
+    const lapB = await coordinateBuildReviewAdjudication({ ...input(root, lapBJudge), emit: async (event) => { events.push(event); } });
+    expect(lapB).toMatchObject({ ok: true, route: 'pass', dispatchSkipped: true });
+    expect(lapBJudge).not.toHaveBeenCalled();
+    expect(events.map((event) => event.type)).not.toContain('remediation_semantic_repeat_halt');
+
+    const driftedAggregate = joinBuildReviewRubricOutcomes({
+      ...aggregate, lapId: 'lap-drifted' as never,
+      results: { testQuality: { ...aggregate.results.testQuality, lapId: 'lap-drifted' as never, findings: [{
+        ...rawSource, anchor: { ...rawSource.anchor, locus: { ...rawSource.anchor.locus, contentHash: 'sha256:drifted' } },
+      }] } },
+    });
+    const driftedSourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(driftedAggregate)![0]!);
+    const driftedJudge = vi.fn(async (context: unknown) => {
+      expect(context).toMatchObject({ currentFindings: [expect.objectContaining({ sourceId: driftedSourceId })] });
+      return {
+        mode: 'case-v1' as const, domain: 'build_review' as const,
+        sourceOutcomes: [{ sourceId: driftedSourceId, outcome: 'rejected' as const, caseRef: 'drifted-case' }],
+        cases: [{ caseRef: 'drifted-case', disposition: 'reject' as const, priority: 'low' as const, confidence: 'high' as const, rationale: 'New content needs no action.', effect: { kind: 'none' as const } }],
+      };
+    });
+    await coordinateBuildReviewAdjudication({ ...input(root, driftedJudge), aggregate: driftedAggregate });
+    expect(driftedJudge).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['applied', { findIssueByEffectMarker: vi.fn().mockResolvedValue(null) } as EffectMarkerTrackerClient, vi.fn().mockResolvedValue({ issueUrl: 'https://github.test/acme/repo/issues/44' }), 'pass'],
+    ['reserved', undefined, undefined, 'halt'],
+    ['failed', { findIssueByEffectMarker: vi.fn().mockResolvedValue(null) } as EffectMarkerTrackerClient, vi.fn().mockRejectedValue(new Error('tracker unavailable')), 'halt'],
+  ] as const)('keeps a refuted %s residual from regressing on lap B', async (_status, tracker, fileIssue, expectedRoute) => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'case-durable', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The earlier review requested coverage.', resolution: 'open',
+        sources: [{ sourceId: 'testQuality:sha256:prior-action', outcome: 'acted', recordedAt: '2026-09-11T00:00:00.000Z' }],
+        effect: { id: 'effect-durable', kind: 'action', status: 'applied', workOrderId: 'order-1' },
+      }],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'effect-durable',
+      cases: [{ caseId: 'case-durable', priority: 'high', tasks: [{ title: 'Cover the asserted branch' }] }],
+    });
+    await markBuildReviewWorkOrderAttempted(root, feature);
+    await mkdir(join(root, 'test'), { recursive: true });
+    await writeFile(join(root, 'test', 'refutation-residual.test.ts'), 'the asserted branch is covered\n');
+    const lapAJudge = vi.fn(async (): Promise<RemediationCaseJudgement> => ({
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId, outcome: 'refuted', caseRef: 'refuted-case' }],
+      cases: [{
+        caseRef: 'refuted-case', existingCaseId: 'case-durable', disposition: 'refute', priority: 'high', confidence: 'high',
+        rationale: 'The existing test covers the asserted branch.',
+        effect: { kind: 'deferral', title: 'Track the unrelated follow-up', body: 'This remains outside the feature.', exclusionRationale: 'The active plan excludes this follow-up.' },
+        refutation: { claim: 'The asserted branch lacks coverage.', assertions: [{
+          assertion: 'The branch remains uncovered.', verdict: 'refuted',
+          evidence: [{ path: 'test/refutation-residual.test.ts', excerpt: 'asserted branch is covered' }],
+        }] },
+      }],
+    }));
+    const events: RemediationCaseLifecycleEvent[] = [];
+    await coordinateBuildReviewAdjudication({
+      ...input(root, lapAJudge), ...(tracker && fileIssue ? { tracker, repo: 'acme/repo', fileIssue } : {}),
+      generateId: sequentialIds('residual'), emit: async (event) => { events.push(event); },
+    });
+
+    const lapBJudge = vi.fn(async () => actionJudgement());
+    const lapB = await coordinateBuildReviewAdjudication({ ...input(root, lapBJudge), emit: async (event) => { events.push(event); } });
+    expect(lapBJudge).not.toHaveBeenCalled();
+    expect(lapB).toMatchObject({ ok: true, route: expectedRoute, trace: expect.stringContaining('residual-1') });
+    expect(events.map((event) => event.type)).not.toContain('remediation_semantic_repeat_halt');
+  });
+
   it('halts a second refutation without rewriting its original record or emitting another refutation occurrence', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, feature);

@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewSettlementObligationCase, renderBuildReviewDeferralIssue, remediationEffectMarker } from '../../src/engine/remediation-case-effects.js';
+import { fileIntakeIssue } from '../../src/engine/engineer/intake/file-issue.js';
+import { sanitizeIntakeText } from '../../src/engine/engineer/intake/sanitize.js';
+import type { TrackerClient } from '../../src/engine/tracker-client.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 
@@ -186,6 +189,45 @@ describe('remediation case effects', () => {
     expect(fileIssue).not.toHaveBeenCalled();
     await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
       disposition: 'refute', effect: { id: 'effect-refuted', kind: 'deferral', status: 'applied', issueUrl: 'https://github.test/acme/repo/issues/42' },
+    })] } });
+  });
+
+  it('files and sanitizes a new refuted residual through the injected tracker client', async () => {
+    const store = await storeWith({ version: 'v1', feature, cases: [{
+      id: 'case-refuted', domain: 'build_review', disposition: 'refute', priority: 'low', confidence: 'high',
+      rationale: 'The original finding is refuted.', resolution: 'resolved',
+      sources: [{ sourceId: 'source-refuted', outcome: 'refuted', recordedAt: '2026-09-11T00:00:00.000Z' }],
+      effect: { id: 'effect-refuted', kind: 'deferral', status: 'reserved' },
+      refutation: { claim: 'The finding is false.', assertions: [{ assertion: 'The behavior exists.', verdict: 'refuted', evidence: [{ path: 'test/evidence.ts', excerpt: 'evidence' }] }] },
+    }] });
+    const createIssue = vi.fn().mockResolvedValue('https://github.test/acme/repo/issues/43');
+    const intakeTracker = { createIssue } as TrackerClient;
+    const effect = {
+      kind: 'deferral' as const,
+      title: 'Deferred refutation',
+      body: 'Follow up with token ghp_abcdefghijklmnopqrstuvwxyz123456 and /home/operator/private-notes.',
+      exclusionRationale: 'outside scope',
+    };
+    const rendered = renderBuildReviewDeferralIssue(effect, 'The original finding is refuted.', 'effect-refuted');
+
+    await expect(applyBuildReviewDeferralEffect({
+      projectRoot: root, feature, store, caseId: 'case-refuted', repo: 'acme/repo', effect,
+      tracker: { findIssueByEffectMarker: vi.fn().mockResolvedValue(null) } as never,
+      fileIssue: async ({ title, body, priority }) => fileIntakeIssue(
+        { title, body, priority, repo: 'acme/repo' },
+        { tracker: intakeTracker, gh: async () => ({ stdout: '{}' }), cwd: root },
+      ),
+    })).resolves.toMatchObject({ ok: true, status: 'applied', effectId: 'effect-refuted' });
+
+    expect(createIssue).toHaveBeenCalledTimes(1);
+    expect(createIssue).toHaveBeenCalledWith({
+      title: 'Deferred refutation',
+      body: sanitizeIntakeText(rendered).text,
+      repo: 'acme/repo',
+    }, root);
+    expect(createIssue.mock.calls[0]![0].body).toContain(remediationEffectMarker('effect-refuted'));
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
+      disposition: 'refute', effect: { id: 'effect-refuted', kind: 'deferral', status: 'applied', issueUrl: 'https://github.test/acme/repo/issues/43' },
     })] } });
   });
 

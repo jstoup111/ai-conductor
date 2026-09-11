@@ -250,6 +250,18 @@ describe('remediation case artifact', () => {
       ...CASE_V1,
       cases: [{ ...CASE_V1.cases[1], effect: { ...CASE_V1.cases[1].effect, exclusionRationale: '' } }],
     }, 'invalid-deferral-effect'],
+    ['refute deferral without an exclusion rationale key', {
+      ...REFUTE_CASE_V1,
+      cases: [{ ...REFUTE_CASE, effect: { kind: 'deferral', title: 'Deferred follow-up', body: 'Track this later.' } }],
+    }, 'invalid-deferral-effect'],
+    ['refute deferral with an empty exclusion rationale', {
+      ...REFUTE_CASE_V1,
+      cases: [{ ...REFUTE_CASE, effect: { kind: 'deferral', title: 'Deferred follow-up', body: 'Track this later.', exclusionRationale: '' } }],
+    }, 'invalid-deferral-effect'],
+    ['refute action effect', {
+      ...REFUTE_CASE_V1,
+      cases: [{ ...REFUTE_CASE, effect: { kind: 'action', route: 'build', tasks: [{ title: 'Not a refute residual.' }] } }],
+    }, 'invalid-refute-effect'],
   ])('rejects %s without exposing partial rows', async (_name, value, reason) => {
     const result = await read(value);
 
