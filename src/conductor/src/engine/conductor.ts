@@ -7777,6 +7777,26 @@ export class Conductor {
             );
             const branchDispatchStartedAt = new Map<string, number>();
             const branchHandshakeFailures = new Map<string, CompletionResult>();
+            const memberExecutionContexts = new Map<string, ExecutionContext>();
+            const memberAttemptResults = new Map<string, StepRunResult>();
+            const closeSuccessfulMember = async (member: typeof membership.dispatchable[number]) => {
+              const executionContext = memberExecutionContexts.get(member.name);
+              if (executionContext === undefined) return;
+              const result = memberAttemptResults.get(member.name);
+              await emitTracked({
+                type: 'step_completed',
+                step: member.name as StepName,
+                status: 'done',
+                ...(result?.model !== undefined ? { model: result.model } : {}),
+                ...(result?.effort !== undefined ? { effort: result.effort } : {}),
+                ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+                ...(result?.preferredProvider !== undefined ? { preferredProvider: result.preferredProvider } : {}),
+                ...(result?.actualProvider !== undefined ? { actualProvider: result.actualProvider } : {}),
+                ...(result?.tokenUsage !== undefined ? { tokenUsage: result.tokenUsage } : {}),
+                ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
+                executionContext,
+              });
+            };
             const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
               // The validation join normally dispatches each member directly
               // through group-core, bypassing the serial `prd_audit` branch
@@ -7812,14 +7832,51 @@ export class Conductor {
                 roundChanges,
               );
               return runWithConcurrency(
-                members.map((member) => () => runGroupBranch(
-                    member,
-                    state,
-                    {
+                members.map((member) => async () => {
+                  // This thunk is launched only after runWithConcurrency admits
+                  // a member under the group cap. A fresh scope therefore cannot
+                  // be fabricated for queued/cancelled work, while branch retries
+                  // retain this one context through their whole policy lifetime.
+                  const executionContext: ExecutionContext = {
+                    executionId: randomUUID(),
+                    subject: { kind: 'lifecycle-step', step: member.name as StepName },
+                  };
+                  memberExecutionContexts.set(member.name, executionContext);
+                  return runGroupBranch(member, state, {
                       stepRunner: this.stepRunner,
                       ...(member.name === 'prd_audit' && this.prdWideningReviewContext
                         ? { prdWideningReviewContext: this.prdWideningReviewContext }
                         : {}),
+                      executionContext,
+                      lifecycleObserver: {
+                        onAdmitted: async (observation) => {
+                          await emitTracked({
+                            type: 'step_started',
+                            step: observation.member as StepName,
+                            index: indexOf(observation.member as StepName),
+                            executionContext,
+                          });
+                        },
+                        onAttempt: async (observation) => {
+                          if (observation.result !== undefined) {
+                            memberAttemptResults.set(observation.member, observation.result);
+                          }
+                        },
+                        onRetry: async (observation) => {
+                          await emitTracked({
+                            type: 'step_retry',
+                            step: observation.member as StepName,
+                            attempt: observation.attempt,
+                            maxAttempts: memberAttemptBudgets.get(observation.member) ?? observation.attempt,
+                            reason: `group member ${observation.member} retry`,
+                            executionContext,
+                          });
+                        },
+                        // The group-core result callback below retains the
+                        // pre-existing handshake ordering and emits the shared
+                        // settlement event before the join can classify it.
+                        onSettled: async () => undefined,
+                      },
                       ...(isVerdictRunIdentityStep(member.name as StepName)
                         ? { runId: branchRunIds.get(member.name) }
                         : {}),
@@ -7846,6 +7903,7 @@ export class Conductor {
                           branchDispatchStartedAt.set(event.member, Date.now());
                         }
                         if (event.phase === 'result') {
+                          await emitTracked(event);
                           // This settles before runGroupBranch returns to the join.
                           await this.stampVerdictRunIdentity(
                             event.member as StepName,
@@ -7865,9 +7923,8 @@ export class Conductor {
                           inFlightGroupCompletions![syntheticKey] = 'done';
                         }
                       },
-                    },
-                    memberAttemptBudgets.get(member.name)!,
-                  )),
+                    }, memberAttemptBudgets.get(member.name)!);
+                }),
                 cap,
               );
             };
@@ -8164,6 +8221,30 @@ export class Conductor {
                     `${err instanceof Error ? err.message : String(err)}`,
                 );
               }
+              const executionContext = memberExecutionContexts.get(noVerdictMember.name);
+              if (executionContext !== undefined) {
+                const result = memberAttemptResults.get(noVerdictMember.name);
+                await emitTracked({
+                  type: 'step_failed',
+                  step: noVerdictMember.name as StepName,
+                  error: haltReason,
+                  retryCount: attemptsSpent,
+                  ...(result?.effort !== undefined ? { effort: result.effort } : {}),
+                  ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
+                  ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
+                  executionContext,
+                });
+              }
+              // A sibling that already returned a passing branch result did
+              // complete its own execution even though the group cannot join
+              // green. Close that scope without mutating the group's state or
+              // granting a gate verdict; only the single-writer join owns that.
+              for (let index = 0; index < membership.dispatchable.length; index += 1) {
+                const outcome = outcomes[index];
+                if (index !== noVerdictIdx && outcome?.kind === 'verdict' && outcome.verdict === 'pass') {
+                  await closeSuccessfulMember(membership.dispatchable[index]!);
+                }
+              }
               await this.emitLoopHalt(haltReason);
               await emitTracked({
                 type: 'parallel_failure',
@@ -8247,6 +8328,11 @@ export class Conductor {
                 `join ${builtinGroup.name} verification group`,
                 joinChanges,
               );
+              // The group join owns state/gate authority, but each admitted
+              // member owns its lifecycle terminal. Its settlement boundary
+              // was emitted by group-core before the join's evidence work, so
+              // delayed sibling/join work cannot extend its duration.
+              for (const member of membership.dispatchable) await closeSuccessfulMember(member);
               await emitTracked({
                 type: 'parallel_completed',
                 step: step.name,
