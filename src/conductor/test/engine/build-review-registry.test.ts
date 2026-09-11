@@ -33,9 +33,10 @@ describe('engine/build-review-registry', () => {
     expect(Object.values(BUILD_REVIEW_RUBRIC_REGISTRY).every(Object.isFrozen)).toBe(true);
   });
 
-  it('recognizes registered rubrics and resolves their descriptors', () => {
+  it('recognizes only built-in rubrics; custom policy ids stay out of the registry', () => {
     expect(isRegisteredRubric('testQuality')).toBe(true);
     expect(isRegisteredRubric('security')).toBe(true);
+    expect(isRegisteredRubric('kotlinPolicy')).toBe(false);
     expect(getBuildReviewRubricDescriptor('testQuality')).toBe(
       BUILD_REVIEW_RUBRIC_REGISTRY.testQuality,
     );

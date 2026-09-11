@@ -123,7 +123,8 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'steps.by_tier': ['model', 'effort', 'max_retries'],
   'build_review.adjudication': ['enabled'],
   'build_review.rubrics': ['enabled', 'max_projection_bytes', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence'],
-  build_review: ['enabled', 'perTaskFloor', 'scopeContainmentEnforced', 'maxParallel', 'adjudication', 'rubrics'],
+  'build_review.custom_rubrics': ['skill', 'question', 'source', 'resources', 'enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence'],
+  build_review: ['enabled', 'perTaskFloor', 'scopeContainmentEnforced', 'maxParallel', 'adjudication', 'rubrics', 'custom_rubrics'],
   ci_watch: ['enabled', 'cooldownMinutes'],
   kickback_escalation: ['enabled'],
   cumulative_kickback_bound: ['enabled'],
@@ -1182,7 +1183,7 @@ export function validateConfig(
           key,
           isValid: (value: unknown) => {
             if (key === 'enabled' || key === 'scopeContainmentEnforced') return typeof value === 'boolean';
-            if (key === 'adjudication') return true;
+            if (key === 'adjudication' || key === 'custom_rubrics') return true;
             return key === 'perTaskFloor' || key === 'maxParallel' || key === 'rubrics';
           },
         })),
