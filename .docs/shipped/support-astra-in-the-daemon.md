@@ -22,8 +22,10 @@ providers:
   claude: input: 148, output: 44701, cache_read: 4456891, cache_creation: 567230, cost_usd: 11.895, dispatches: 7, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:finish
+state: measured
+active_ms: 4174833
+provider_active_ms: 2825099
+no_provider_active_ms: 1349734
 
 ## Build Review
 laps_to_pass: 1
