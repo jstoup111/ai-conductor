@@ -2046,6 +2046,7 @@ export class Conductor {
    * coordinator invokes this rather than relying on a per-conductor listener.
    */
   async closeOpenExecutionsForShutdown(): Promise<void> {
+    this.shutdownRequested = true;
     await this.closeOpenExecutions();
   }
 
@@ -2228,6 +2229,8 @@ export class Conductor {
    * next dispatch onward.
    */
   private pendingLiveBoundaryHalt?: string;
+  /** Public shutdown closes admitted scopes and forbids later queue admission. */
+  private shutdownRequested = false;
   /** Guards the one-time skill relink so it runs before the first build only. */
   /** Breadcrumb of the last step index reached in the main loop, for terminal-verdict diagnostics. */
   private _breadcrumb: { lastAdvancedStep?: string; exitIndex?: number; lastEventType?: string } = {};
@@ -6070,6 +6073,7 @@ export class Conductor {
   }
 
   async run(): Promise<OperatorParkedTermination | undefined> {
+    this.shutdownRequested = false;
     // #788 regression guard: the phase-active marker creates `.pipeline/`
     // via `mkdirSync` as a side effect ahead of any real init (worktree-
     // prepare provisioning session-hooks/, task-status.json, etc). Recorded
@@ -7297,6 +7301,7 @@ export class Conductor {
                   // a member under the group cap. A fresh scope therefore cannot
                   // be fabricated for queued/cancelled work, while branch retries
                   // retain this one context through their whole policy lifetime.
+                  if (this.shutdownRequested) return makeSkippedOutcome();
                   const executionContext: ExecutionContext = {
                     executionId: randomUUID(),
                     subject: { kind: 'lifecycle-step', step: member.name as StepName },
@@ -7394,7 +7399,7 @@ export class Conductor {
             // Round settled (whatever the outcome) — the pending side-channel
             // must never leak into the halt/allGreen/kickback paths below.
             inFlightGroupCompletions = undefined;
-            if (signalExitRequested) return;
+            if (signalExitRequested || this.shutdownRequested) return;
 
             // Task 4 (build-auth-token-check-and-classify, FR-4): an
             // `authFailure` no-verdict is NOT the ordinary "exhausted its
@@ -7473,7 +7478,7 @@ export class Conductor {
               inFlightGroupCompletions = {};
               const retryOutcomes = await dispatchGroupRound(retryMembers);
               inFlightGroupCompletions = undefined;
-              if (signalExitRequested) return;
+              if (signalExitRequested || this.shutdownRequested) return;
 
               for (const [index, outcome] of retryOutcomes.entries()) {
                 outcomes[retryIdxs[index]!] = outcome;

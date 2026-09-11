@@ -584,6 +584,12 @@ describe('serial conductor telemetry parity', () => {
     expect(fixture.spans.filter((span) => span.name === first)).toHaveLength(1);
     expect(fixture.spans.find((span) => span.name === first)?.attributes['conductor.step.status']).toBe('failed');
     expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === first)).toHaveLength(1);
+    expect(fixture.calls).toEqual([first]);
+    for (const queued of VALIDATION_GROUP.members.slice(1)) {
+      expect(fixture.events.filter((event) => event.type === 'step_started' && event.step === queued)).toHaveLength(0);
+      expect(fixture.spans.filter((span) => span.name === queued)).toHaveLength(0);
+      expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === queued)).toHaveLength(0);
+    }
   });
 
   it('retains each member scope across retries and closes an exhausted member as failed', async () => {
