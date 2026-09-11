@@ -1,11 +1,19 @@
-// Covers: task:10
-import { describe, expect, it } from 'vitest';
+// Covers: task:10, task:11
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   BUILD_REVIEW_POLICY_CONTRACT_VERSION,
+  evaluateBuildReviewPolicyPreflight,
+  parseBuildReviewPolicyRuntimeUnsupportedResponse,
   renderBuildReviewPolicyContract,
+  renderBuildReviewPolicyUnsupportedDiagnostic,
+  type BuildReviewPolicyCapabilityProfile,
 } from '../../src/engine/build-review-policy-contract.js';
 import type { CapturedReviewPolicyBundle } from '../../src/engine/build-review-policy-bundle.js';
+import {
+  classifyBuildReviewPolicyIncompatibility,
+  mapBuildReviewPolicyIncompatibilityToCoordinatorFailureReason,
+} from '../../src/engine/build-review-domain.js';
 
 const ordinarySkillText = [
   '---',
@@ -48,6 +56,14 @@ function bundle(skillText = ordinarySkillText): CapturedReviewPolicyBundle {
   };
 }
 
+const readOnlyReviewProfile: BuildReviewPolicyCapabilityProfile = {
+  provider: 'codex',
+  admittedActions: ['read-frozen-input', 'read-policy-material'],
+  admittedCapabilities: ['frozen-input', 'policy-material'],
+  admittedTools: ['git'],
+  admittedDependencies: ['criteria/public-api.md'],
+};
+
 describe('engine/build-review-policy-contract', () => {
   it('adapts an ordinary selected skill unchanged into the versioned read-only review role', () => {
     const selectedBundle = bundle();
@@ -88,5 +104,71 @@ describe('engine/build-review-policy-contract', () => {
     expect(rendered).toContain('Do not choose an aggregate verdict, authorize repair work, edit code, install dependencies, or publish comments.');
     expect(rendered).toContain('The engine alone validates findings and owns aggregate verdicts and repair work orders.');
     expect(rendered).toContain('{ findings: [{ concernKind: string, summary: string, evidenceLocations: string[]');
+  });
+
+  it.each([
+    [{ kind: 'action', action: 'edit-code' }, 'required-action', 'adapt-policy-to-read-only-review'],
+    [{ kind: 'action', action: 'install-dependencies' }, 'required-action', 'adapt-policy-to-read-only-review'],
+    [{ kind: 'action', action: 'publish-comments' }, 'required-action', 'adapt-policy-to-read-only-review'],
+    [{ kind: 'tool', tool: 'kubectl' }, 'unavailable-tool', 'make-tool-available-before-review'],
+    [{ kind: 'dependency', dependency: 'credentials/prod-token', source: 'plugin' }, 'unavailable-dependency', 'install-dependency-outside-review'],
+  ] as const)('refuses declared %o before judging with typed provider, requirement, and recovery', (
+    requirement,
+    kind,
+    recovery,
+  ) => {
+    const activation = vi.fn();
+    const result = evaluateBuildReviewPolicyPreflight({
+      profile: readOnlyReviewProfile,
+      requirements: [requirement],
+      activatePluginComponent: activation,
+    });
+
+    expect(result.kind).toBe('unsupported-policy');
+    if (result.kind !== 'unsupported-policy') throw new Error('expected declared policy incompatibility');
+    expect(result).toEqual({
+      kind: 'unsupported-policy',
+      stage: 'preflight',
+      provider: 'codex',
+      incompatibility: { kind, requirement: kind === 'required-action' ? requirement.action : kind === 'unavailable-tool' ? requirement.tool : requirement.dependency, recovery },
+    });
+    expect(activation).not.toHaveBeenCalled();
+    expect(renderBuildReviewPolicyUnsupportedDiagnostic(result)).toContain('codex');
+    expect(renderBuildReviewPolicyUnsupportedDiagnostic(result)).toContain(kind === 'required-action' ? requirement.action : kind === 'unavailable-tool' ? requirement.tool : requirement.dependency);
+    expect(renderBuildReviewPolicyUnsupportedDiagnostic(result)).toContain(recovery);
+  });
+
+  it('maps a runtime policy refusal to unjudged failed coverage without text-selected routing or repair authority', () => {
+    const runtime = parseBuildReviewPolicyRuntimeUnsupportedResponse(
+      { kind: 'unsupported-policy', requirement: 'requires an undeclared deployment token' },
+      'claude',
+    );
+
+    expect(runtime).toEqual({
+      kind: 'unsupported-policy',
+      stage: 'runtime',
+      provider: 'claude',
+      incompatibility: {
+        kind: 'runtime-unsupported',
+        requirement: 'requires an undeclared deployment token',
+        recovery: 'adapt-policy-to-read-only-review',
+      },
+    });
+    expect(parseBuildReviewPolicyRuntimeUnsupportedResponse({ findings: [] }, 'claude')).toBeUndefined();
+    expect(classifyBuildReviewPolicyIncompatibility(runtime!)).toEqual({
+      kind: 'infrastructure-failure',
+      reason: 'provider-error',
+      detail: runtime!.incompatibility,
+    });
+  });
+
+  it('maps every typed policy incompatibility to a closed infrastructure reason without diagnostic-text routing', () => {
+    expect(mapBuildReviewPolicyIncompatibilityToCoordinatorFailureReason).toEqual({
+      'required-action': 'preflight-failed',
+      'unavailable-capability': 'preflight-failed',
+      'unavailable-tool': 'preflight-failed',
+      'unavailable-dependency': 'preflight-failed',
+      'runtime-unsupported': 'provider-error',
+    });
   });
 });

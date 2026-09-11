@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
+import type {
+  BuildReviewPolicyIncompatibility,
+  BuildReviewPolicyIncompatibilityKind,
+  BuildReviewPolicyUnsupportedResult,
+} from './build-review-policy-contract.js';
 import { buildReviewScopeCandidateIdentityKey } from './build-review-scope-identity.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
 import { isCanonicalBuildReviewRepoRelativePath } from './build-review-scope-source.js';
@@ -15,6 +20,36 @@ export const mapBuildReviewCoordinatorFailureReason = Object.freeze({
 } satisfies Record<string, BuildReviewInfrastructureFailureReason>);
 export type BuildReviewCoordinatorFailureReason = keyof typeof mapBuildReviewCoordinatorFailureReason;
 export function deriveBuildReviewInfrastructureFailureReason(branch: { readonly reason: BuildReviewCoordinatorFailureReason }): BuildReviewInfrastructureFailureReason { return mapBuildReviewCoordinatorFailureReason[branch.reason]; }
+
+/**
+ * Policy incompatibility is a typed closed failure lane.  The requirement
+ * text remains evidence only; it cannot select a waiver, recovery, or route.
+ */
+export const mapBuildReviewPolicyIncompatibilityToCoordinatorFailureReason = Object.freeze({
+  'required-action': 'preflight-failed',
+  'unavailable-capability': 'preflight-failed',
+  'unavailable-tool': 'preflight-failed',
+  'unavailable-dependency': 'preflight-failed',
+  'runtime-unsupported': 'provider-error',
+} satisfies Record<BuildReviewPolicyIncompatibilityKind, BuildReviewInfrastructureFailureReason>);
+
+export interface BuildReviewPolicyIncompatibilityClassification {
+  readonly kind: 'infrastructure-failure';
+  readonly reason: BuildReviewInfrastructureFailureReason;
+  /** Typed cause retained for coverage and later dynamic-rubric projection. */
+  readonly detail: BuildReviewPolicyIncompatibility;
+}
+
+/** Converts policy refusal into unjudged infrastructure coverage, never PASS. */
+export function classifyBuildReviewPolicyIncompatibility(
+  result: BuildReviewPolicyUnsupportedResult,
+): BuildReviewPolicyIncompatibilityClassification {
+  return {
+    kind: 'infrastructure-failure',
+    reason: mapBuildReviewPolicyIncompatibilityToCoordinatorFailureReason[result.incompatibility.kind],
+    detail: result.incompatibility,
+  };
+}
 
 export interface BuildReviewContentRegionReference { readonly path: string; readonly contentHash: string; readonly display: string; readonly occurrence?: number; }
 export type BuildReviewFindingAnchor = { readonly rubric: 'testQuality'; readonly locus: BuildReviewContentRegionReference };
