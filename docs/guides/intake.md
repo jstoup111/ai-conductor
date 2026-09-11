@@ -42,6 +42,10 @@ contradictory bands.
 
 Four sections. Three are required.
 
+Use `## Desired outcome` as the canonical heading. The intake reader also accepts
+`## Desired outcomes`; both forms preserve the section's bullets, while staged and committed
+intake markers use the canonical singular heading.
+
 | Section | Required | Contents |
 | --- | --- | --- |
 | **Observed** | yes | Evidence of the problem — verbatim artifacts, not narrative |
