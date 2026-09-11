@@ -357,16 +357,16 @@ describe('acceptance: finish logs the whole-feature usage total', () => {
     expect(res.ok && res.value.finish).toBe('done');
   });
 
-  it('commits a refreshed Cost block after finish token usage is persisted', async () => {
+  it('keeps the committed Cost block when finish adds only self-updating telemetry', async () => {
     await seedCommittedShippedRecord();
     const events = new ConductorEventEmitter();
     await runMeteredFinish(events, meteredShippingRunner(), fakeGit);
 
     const committedRecord = await git(['show', 'HEAD:.docs/shipped/feat.md']);
-    expect(committedRecord).toMatch(/## Cost\ninput: 50\n/);
+    expect(committedRecord).toMatch(/## Cost\ninput: 10\n/);
   });
 
-  it('verifies the implementation head before committing and pushing the optional Cost refresh', async () => {
+  it('verifies the implementation head without creating or pushing a telemetry-only refresh', async () => {
     await seedCommittedShippedRecord();
     const implementationHead = await seedPushedTrackingBranch();
     const trace: string[] = [];
@@ -412,24 +412,21 @@ describe('acceptance: finish logs the whole-feature usage total', () => {
       persister.stop();
     }
     const refreshedHead = await git(['rev-parse', 'HEAD']);
-    const refreshedParent = await git(['rev-parse', 'HEAD^']);
 
     expect({
       implementationHead,
-      refreshedParent,
       refreshCreatedCommit: refreshedHead !== implementationHead,
       observedCandidates,
       trace,
     }).toEqual({
       implementationHead,
-      refreshedParent: implementationHead,
-      refreshCreatedCommit: true,
+      refreshCreatedCommit: false,
       observedCandidates: [implementationHead],
-      trace: [`verify:${implementationHead}`, `push:${refreshedHead}`],
+      trace: [`verify:${implementationHead}`],
     });
   });
 
-  it('attempts one push and still completes finish when that push throws', async () => {
+  it('does not attempt a push for a telemetry-only record update', async () => {
     await seedCommittedShippedRecord();
     const pushedHead = await seedPushedTrackingBranch();
     let pushAttempts = 0;
@@ -467,7 +464,7 @@ describe('acceptance: finish logs the whole-feature usage total', () => {
       localHead,
       upstreamHead,
     }).toEqual({
-      pushAttempts: 1,
+      pushAttempts: 0,
       finishDispatches: 1,
       loopHalts: 0,
       finishStatus: 'done',
@@ -476,79 +473,12 @@ describe('acceptance: finish logs the whole-feature usage total', () => {
     });
   });
 
-  it('adopts an upstream descendant with the identical post-refresh tree after the final push fails', async () => {
-    await seedCommittedShippedRecord();
-    await seedPushedTrackingBranch();
-    let pushAttempts = 0;
-    let finishDispatches = 0;
-    let loopHalts = 0;
-    let upstreamDescendant = '';
-    let postRefreshTree = '';
-    let upstreamTree = '';
-    const events = new ConductorEventEmitter();
-    events.on('loop_halt', () => {
-      loopHalts += 1;
-    });
-    const racingPushGit: GitRunner = async (args, options) => {
-      if (args[0] === 'push') {
-        pushAttempts += 1;
-        const postRefreshHead = await git(['rev-parse', 'HEAD']);
-        postRefreshTree = await git(['rev-parse', `${postRefreshHead}^{tree}`]);
-        upstreamDescendant = await git([
-          'commit-tree',
-          postRefreshTree,
-          '-p',
-          postRefreshHead,
-          '-m',
-          'metadata-only upstream advance',
-        ]);
-        await git(['update-ref', 'refs/remotes/origin/main', upstreamDescendant]);
-        upstreamTree = await git(['rev-parse', `${upstreamDescendant}^{tree}`]);
-        throw new Error('injected push race');
-      }
-      return realGit(args, options);
-    };
-
-    await runMeteredFinish(
-      events,
-      meteredShippingRunner(() => {
-        finishDispatches += 1;
-      }),
-      racingPushGit,
-      true,
-    );
-    const finalState = await readState(statePath);
-    const localHead = await git(['rev-parse', 'HEAD']);
-    const upstreamHead = await git(['rev-parse', 'refs/remotes/origin/main']);
-
-    expect({
-      pushAttempts,
-      finishDispatches,
-      loopHalts,
-      finishStatus: finalState.ok ? finalState.value.finish : undefined,
-      localHead,
-      upstreamHead,
-      upstreamTreeMatches: upstreamTree === postRefreshTree,
-    }).toEqual({
-      pushAttempts: 1,
-      finishDispatches: 1,
-      loopHalts: 0,
-      finishStatus: 'done',
-      localHead: upstreamDescendant,
-      upstreamHead: upstreamDescendant,
-      upstreamTreeMatches: true,
-    });
-  });
-
-  it('does not adopt an upstream descendant with arbitrary source changes after the final push fails', async () => {
+  it('does not enter final-push recovery when the record update is telemetry-only', async () => {
     await seedCommittedShippedRecord();
     const pushedHead = await seedPushedTrackingBranch();
     let pushAttempts = 0;
     let finishDispatches = 0;
     let loopHalts = 0;
-    let upstreamDescendant = '';
-    let postRefreshTree = '';
-    let upstreamTree = '';
     const events = new ConductorEventEmitter();
     events.on('loop_halt', () => {
       loopHalts += 1;
@@ -556,22 +486,6 @@ describe('acceptance: finish logs the whole-feature usage total', () => {
     const racingPushGit: GitRunner = async (args, options) => {
       if (args[0] === 'push') {
         pushAttempts += 1;
-        const postRefreshHead = await git(['rev-parse', 'HEAD']);
-        postRefreshTree = await git(['rev-parse', `${postRefreshHead}^{tree}`]);
-        await mkdir(join(dir, 'src'), { recursive: true });
-        await writeFile(join(dir, 'src/concurrent-upstream.ts'), 'export const unsafe = true;\n');
-        await git(['add', 'src/concurrent-upstream.ts']);
-        upstreamTree = await git(['write-tree']);
-        await git(['reset', '--hard', postRefreshHead]);
-        upstreamDescendant = await git([
-          'commit-tree',
-          upstreamTree,
-          '-p',
-          postRefreshHead,
-          '-m',
-          'concurrent upstream advance',
-        ]);
-        await git(['update-ref', 'refs/remotes/origin/main', upstreamDescendant]);
         throw new Error('injected push race');
       }
       return realGit(args, options);
@@ -596,15 +510,60 @@ describe('acceptance: finish logs the whole-feature usage total', () => {
       finishStatus: finalState.ok ? finalState.value.finish : undefined,
       localHead,
       upstreamHead,
-      upstreamTreeDiffers: upstreamTree !== postRefreshTree,
     }).toEqual({
-      pushAttempts: 1,
+      pushAttempts: 0,
       finishDispatches: 1,
       loopHalts: 0,
       finishStatus: 'done',
       localHead: pushedHead,
-      upstreamHead: upstreamDescendant,
-      upstreamTreeDiffers: true,
+      upstreamHead: pushedHead,
+    });
+  });
+
+  it('does not invoke a failing push adapter for a telemetry-only record update', async () => {
+    await seedCommittedShippedRecord();
+    const pushedHead = await seedPushedTrackingBranch();
+    let pushAttempts = 0;
+    let finishDispatches = 0;
+    let loopHalts = 0;
+    const events = new ConductorEventEmitter();
+    events.on('loop_halt', () => {
+      loopHalts += 1;
+    });
+    const racingPushGit: GitRunner = async (args, options) => {
+      if (args[0] === 'push') {
+        pushAttempts += 1;
+        throw new Error('injected push race');
+      }
+      return realGit(args, options);
+    };
+
+    await runMeteredFinish(
+      events,
+      meteredShippingRunner(() => {
+        finishDispatches += 1;
+      }),
+      racingPushGit,
+      true,
+    );
+    const finalState = await readState(statePath);
+    const localHead = await git(['rev-parse', 'HEAD']);
+    const upstreamHead = await git(['rev-parse', 'refs/remotes/origin/main']);
+
+    expect({
+      pushAttempts,
+      finishDispatches,
+      loopHalts,
+      finishStatus: finalState.ok ? finalState.value.finish : undefined,
+      localHead,
+      upstreamHead,
+    }).toEqual({
+      pushAttempts: 0,
+      finishDispatches: 1,
+      loopHalts: 0,
+      finishStatus: 'done',
+      localHead: pushedHead,
+      upstreamHead: pushedHead,
     });
   });
 });
