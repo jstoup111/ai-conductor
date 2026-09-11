@@ -272,7 +272,10 @@ scrubbing would gut the evidence.
 An intake issue does not reach the daemon by itself. The path is:
 
 1. **Poll.** `ai-conductor compose poll`, or the intake loop, sweeps GitHub issues into the durable
-   inbox. The ledger dedups, so a repeat poll enqueues nothing new.
+   inbox. Tracker title and body text is treated as untrusted: directive-shaped prose is replaced
+   with a neutralization marker before it reaches the inbox, while fenced, indented, and quoted
+   evidence remains unchanged. The resulting text is enclosed in a source-bound, digested inbound
+   envelope. The ledger dedups, so a repeat poll enqueues nothing new.
 2. **Claim.** `ai-conductor compose claim` dequeues the oldest unblocked idea and persists a claim
    record carrying the Desired-outcome bullets.
 3. **DECIDE.** The [composer loop](engineer-loop.md) authors the full spec artifact set in a per-idea
@@ -288,7 +291,8 @@ An issue that is blocked by another open issue is held back at step 2 — `claim
 
 When a spec lands, the engineer commits `.docs/intake/<slug>.md` alongside it. This is how the
 originating issue and the spec's owner travel with the spec onto the default branch, where the daemon
-can read them — the daemon never sees the intake ledger.
+can read them — the daemon never sees the intake ledger. For a tracker-sourced idea, its Desired
+outcome section remains inside the sanitized inbound envelope rather than copying raw issue text.
 
 ```markdown
 # Intake origin: <slug>
@@ -298,8 +302,15 @@ Owner: <owner-id>
 
 ## Desired outcome
 
-- <bullets carried verbatim from the claim record>
+<<< INBOUND sourceRef=<owner/repo#N> digest=<sha256> >>>
+- <sanitized outcome bullets from the claim record>
+<<< END INBOUND >>>
 ```
+
+The coherence gate compares an outcome-coverage row's quote with the staged sanitized bullet. It
+rejects a raw-tracker quote or any other mismatch, so tracker prose cannot be copied into committed
+coherence artifacts through that field. See the [artifacts reference](../reference/artifacts.md) for
+the exact comparison rule.
 
 | Line | Written when | Read by |
 | --- | --- | --- |
