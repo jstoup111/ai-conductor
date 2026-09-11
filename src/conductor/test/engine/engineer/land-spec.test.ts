@@ -124,6 +124,20 @@ function target() {
   return { name: 'alpha', canonicalPath: repoPath };
 }
 
+/**
+ * Land fixtures that include Mermaid only to satisfy the non-Small artifact
+ * presence gate must not start the real mmdc/Chromium process. Rendering
+ * behavior has dedicated tests below; these cases exercise land selection and
+ * stem validation only.
+ */
+function passingRenderDeps() {
+  return {
+    hasTool: async () => true,
+    writeTemp: async () => '/tmp/land-spec-fixture.mmd',
+    runMmdc: async () => ({ ok: true }),
+  };
+}
+
 /** Create the per-idea worktree and seed valid Accepted DECIDE artifacts. */
 async function seedValidWorktree(idea = 'dep bump'): Promise<string> {
   const wt = await createEngineerWorktree(repoPath, idea);
@@ -1452,7 +1466,9 @@ describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/dec
     );
     await writeFile(join(dir, '.docs', 'decisions', 'dep-bump.md'), '# Review\n\nApproved.\n');
 
-    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+    const result = await landSpec(target(), idea, dir, undefined, {
+      ownerConfig: {}, gh, renderDeps: passingRenderDeps(),
+    });
     expect(result.branch).toBeTruthy();
   });
 });
@@ -1485,7 +1501,9 @@ describe('Task 2: feature-scoped artifact stems at land (#1743)', () => {
   it('lands slug-named normalized artifacts with date prefixes', async () => {
     const dir = await seedNamedTierMWorktree(idea, slug, '2026-08-19-');
 
-    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+    const result = await landSpec(target(), idea, dir, undefined, {
+      ownerConfig: {}, gh, renderDeps: passingRenderDeps(),
+    });
 
     expect(result.branch).toBeTruthy();
   });
@@ -1573,7 +1591,9 @@ describe('Task 3: negative feature-scoped artifact stems at land (#1743)', () =>
       `# Stories: ${idea}\n\n**Status:** Accepted\n\n## Story: validate\n### Acceptance Criteria\n- Given X, when Y, then Z.\n`,
     );
 
-    const result = await landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh });
+    const result = await landSpec(target(), idea, dir, undefined, {
+      ownerConfig: {}, gh, renderDeps: passingRenderDeps(),
+    });
 
     expect(result.branch).toBeTruthy();
   });
