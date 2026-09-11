@@ -39,11 +39,11 @@ describe('engine/execution-identity', () => {
       },
     ] satisfies ConductorEvent[];
 
-    const expectedIdentity = resolveExecutionIdentity({
-      scope: featureOneRunOne,
-      legacyStep: 'build',
-      executionContext: context,
-    });
+    const expectedIdentity = {
+      correlationKey: 'execution\0["feature-one","run-one","execution-1","configured-member","quality/audit","reviewer"]',
+      subjectLabel: 'configured:quality%2Faudit/reviewer',
+      metricLabel: 'configured:quality%2Faudit/reviewer',
+    };
 
     for (const event of events) {
       const identity = resolveExecutionIdentity({

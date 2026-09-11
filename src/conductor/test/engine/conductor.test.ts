@@ -2456,13 +2456,39 @@ describe('engine/conductor', () => {
       outcome: { kind: 'skipped' },
     };
 
+    const lifecycleObserver = {
+      onAdmitted: vi.fn(),
+      onAttempt: vi.fn(),
+      onRetry: vi.fn(),
+      onSettled: vi.fn(),
+    } satisfies GroupBranchLifecycleObserver;
+    const executionContext = {
+      executionId: 'validation-manual-test-1',
+      subject: { kind: 'lifecycle-step' as const, step: 'manual_test' as const },
+    };
+    const attribution = { member: 'manual_test', skill: 'manual-test', executionContext };
+
     const outcome = await runGroupBranch(member, {}, {
       stepRunner,
-      lifecycleObserver: NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER,
+      lifecycleObserver,
+      executionContext,
     }, 1);
 
     expect((outcome as { observedIntervals?: readonly unknown[] }).observedIntervals?.[0])
       .toBe(observedIntervals[0]);
+    expect(lifecycleObserver.onAdmitted.mock.calls).toEqual([[attribution]]);
+    expect(lifecycleObserver.onAttempt.mock.calls).toEqual([[{
+      ...attribution,
+      attempt: 1,
+      result: { success: true, observedIntervals },
+    }]]);
+    expect(lifecycleObserver.onRetry).not.toHaveBeenCalled();
+    expect(lifecycleObserver.onSettled.mock.calls).toEqual([[{
+      ...attribution,
+      outcome,
+      attempts: [{ ...attribution, attempt: 1, result: { success: true, observedIntervals } }],
+      observedIntervals,
+    }]]);
   });
 
   it('preserves all ordered intervals after a grouped session-expired retry', async () => {
