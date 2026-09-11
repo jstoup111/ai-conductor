@@ -4,13 +4,6 @@ spec_hash: 5278281344ef9dd3a362598a3a596f085ed662d993ae1681ef81f1d98484ba72
 pr: https://github.com/jstoup111/ai-conductor/pull/2510
 shipped: 2026-09-11
 engine_version: 20260910T220211Z-39b4ec92e0a6
-findings:
-  - gate: architecture_review_as_built
-    finding: AB-1
-    class: REMEDIABLE
-    governing_clause: "adr-2026-08-12-fail-closed-intake-ledger-durability decision 4"
-    outcome: remediated
-    summary: "`brain status` omits the quarantine location when its new ledger-read boundary encounters a corrupt ledger."
 ---
 
 ## Cost
@@ -29,8 +22,10 @@ providers:
   claude: input: 70, output: 22411, cache_read: 1971916, cache_creation: 404390, cost_usd: 5.5905, dispatches: 6, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:finish
+state: measured
+active_ms: 3979427
+provider_active_ms: 3251508
+no_provider_active_ms: 727919
 
 ## Build Review
 laps_to_pass: 1
