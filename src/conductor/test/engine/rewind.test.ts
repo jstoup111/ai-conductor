@@ -60,7 +60,7 @@ class ApplyingStateStore extends RecordingStateStore {
     return { kind: 'applied' };
   }
 
-  override async applyCorrection(correction: PrivilegedStateCorrection<ConductState>): Promise<StateMutationResult> {
+  async applyCorrection(correction: PrivilegedStateCorrection<ConductState>): Promise<StateMutationResult> {
     this.corrections.push(correction);
     const mutable = this.state as Record<string, unknown>;
     for (const deletion of correction.deletions) {
@@ -370,7 +370,7 @@ describe('rewindState', () => {
         markerFilesystem: {
           rename,
           remove: async (path, options) => {
-            if (path.startsWith(join(root, '.pipeline/gates')) && path.includes('.rewind-clearing')) {
+            if (typeof path === 'string' && path.startsWith(join(root, '.pipeline/gates')) && path.includes('.rewind-clearing')) {
               verdictRemovals += 1;
               if (verdictRemovals === 2) throw new Error('staged verdict removal failed');
             }
