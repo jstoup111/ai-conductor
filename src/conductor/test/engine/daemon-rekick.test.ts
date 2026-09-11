@@ -1,6 +1,6 @@
 // Covers: task:12
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, access, chmod } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile as execFileCb } from 'node:child_process';
@@ -806,6 +806,9 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
     await git('add', '.');
     await git('commit', '-m', 'branch');
     await git('checkout', 'main');
+    await writeFile(join(dir, 'generated.txt'), 'base generated\n');
+    await git('add', 'generated.txt');
+    await git('commit', '-m', 'base generated');
     await writeFile(join(dir, 'src/feature.ts'), 'export const v = 2; // base\n');
     await git('add', '.');
     await git('commit', '-m', 'base');
@@ -1057,6 +1060,25 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
       (await fileExists(join(dir, '.git/rebase-merge'))) ||
       (await fileExists(join(dir, '.git/rebase-apply')));
     expect(inProgress).toBe(true);
+  });
+
+  it('play-forward untracked-collision refusal writes the never-started recovery note', async () => {
+    await initConflictRepo();
+    await writeFile(join(dir, 'generated.txt'), 'untracked generated\n');
+    expect(await git('status', '--porcelain')).toContain('?? generated.txt');
+    const hook = join(dir, '.git/hooks/pre-rebase');
+    await writeFile(hook, `#!/bin/sh\nprintf '%s\\n' 'error: The following untracked working tree files would be overwritten by checkout:' >&2\nprintf '\\tgenerated.txt\\n' >&2\nprintf '%s\\n' 'Please move or remove them before you switch branches.' >&2\nexit 1\n`);
+    await chmod(hook, 0o755);
+    await writeSentinel();
+
+    await expect(resumeRebaseFirst({
+      worktreePath: dir, localBase: 'main', events, ranManualTest: false,
+    })).resolves.toBe('halted');
+
+    const halt = await readFile(join(dir, HALT_MARKER), 'utf8');
+    expect(halt).toContain('rebase did not start — parked for human recovery');
+    expect(halt).toContain('generated.txt');
+    expect(halt).toContain('No git rebase is in progress; do not run git rebase --continue.');
   });
 
   it('a stale seal before rebase halts as a seal error without claiming a rebase conflict', async () => {
