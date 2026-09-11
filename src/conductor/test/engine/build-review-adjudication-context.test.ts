@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:4
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -52,6 +52,25 @@ function priorCase(id: string): RemediationCaseRecord {
   };
 }
 
+function priorRefutedCase(id: string): RemediationCaseRecord {
+  return {
+    ...priorCase(id),
+    disposition: 'refute',
+    rationale: `Case ${id} was refuted by the focused regression test.`,
+    resolution: 'resolved',
+    sources: [{ sourceId: `testQuality:${id}`, outcome: 'refuted', recordedAt: '2026-08-30T12:00:00.000Z' }],
+    effect: { kind: 'none' },
+    refutation: {
+      claim: 'The alleged coverage gap does not exist.',
+      assertions: [{
+        assertion: 'The regression test covers the changed path.',
+        verdict: 'refuted',
+        evidence: [{ path: 'test/regression.test.ts', excerpt: 'covers the changed path' }],
+      }],
+    },
+  };
+}
+
 describe('build-review adjudication context', () => {
   it('projects every current unresolved source and every prior case deterministically', () => {
     const current = aggregate(finding('alpha'), finding('beta'));
@@ -102,6 +121,20 @@ describe('build-review adjudication context', () => {
     expect(result).toMatchObject({ ok: true, context: {
       currentFindings: [expect.objectContaining({ summary: finding('current').summary })],
       suppressionHistory: [expect.objectContaining({ findingId: 'suppressed-id', lastSeenLap: 'lap-prior' })],
+    } });
+  });
+
+  it('projects the complete refutation for a prior refuted case', () => {
+    const refuted = priorRefutedCase('case-refuted');
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: aggregate(finding('current')),
+      priorCases: [refuted],
+    });
+
+    expect(result).toMatchObject({ ok: true, context: {
+      priorCases: [expect.objectContaining({
+        id: 'case-refuted', disposition: 'refute', resolution: 'resolved', refutation: refuted.refutation,
+      })],
     } });
   });
 

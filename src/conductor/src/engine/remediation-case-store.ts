@@ -12,6 +12,7 @@ import type {
   RemediationCaseDisposition,
   RemediationCaseDomain,
   RemediationCasePriority,
+  RemediationCaseRefutation,
   RemediationCaseSourceOutcome,
 } from './remediation-case-artifact.js';
 
@@ -21,6 +22,8 @@ const MAX_REFERENCE_LENGTH = 256;
 const MAX_TEXT_LENGTH = 8_000;
 const MAX_CASES = 128;
 const MAX_SOURCES_PER_CASE = 512;
+const MAX_REFUTATION_ASSERTIONS = 16;
+const MAX_REFUTATION_EVIDENCE_PER_ASSERTION = 8;
 
 export interface RemediationCaseFeatureIdentity {
   readonly version: typeof STORE_VERSION;
@@ -53,6 +56,8 @@ export interface RemediationCaseRecord {
   readonly resolution: 'open' | 'resolved';
   readonly sources: readonly RemediationCaseSourceLink[];
   readonly effect: RemediationCaseEffect;
+  /** Present only for a persisted `refute` disposition; parseState enforces the pairing. */
+  readonly refutation?: RemediationCaseRefutation;
 }
 
 /** Engine-owned history of a sub-floor finding; never operator authority. */
@@ -164,13 +169,13 @@ function sameFeature(left: RemediationCaseFeatureIdentity, right: RemediationCas
 function parseSourceLink(value: unknown): RemediationCaseSourceLink | undefined {
   if (!isRecord(value) || !exactKeys(value, ['sourceId', 'outcome', 'recordedAt']) ||
     !boundedString(value.sourceId, MAX_REFERENCE_LENGTH) || !validTimestamp(value.recordedAt) ||
-    !oneOf(value.outcome, ['acted', 'deferred', 'rejected', 'merged'] as const)) return undefined;
+    !oneOf(value.outcome, ['acted', 'deferred', 'rejected', 'refuted', 'merged'] as const)) return undefined;
   return { sourceId: value.sourceId, outcome: value.outcome, recordedAt: value.recordedAt };
 }
 
 function parseEffect(value: unknown, disposition: RemediationCaseDisposition): RemediationCaseEffect | undefined {
   if (!isRecord(value)) return undefined;
-  if (disposition === 'reject') {
+  if (disposition === 'reject' || disposition === 'refute' && exactKeys(value, ['kind']) && value.kind === 'none') {
     return exactKeys(value, ['kind']) && value.kind === 'none' ? { kind: 'none' } : undefined;
   }
   const expectedKind = disposition === 'act' ? 'action' : 'deferral';
@@ -194,22 +199,46 @@ function parseEffect(value: unknown, disposition: RemediationCaseDisposition): R
   return undefined;
 }
 
+function parseRefutation(value: unknown): RemediationCaseRefutation | undefined {
+  if (!isRecord(value) || !exactKeys(value, ['claim', 'assertions']) || !boundedString(value.claim) ||
+    !Array.isArray(value.assertions) || value.assertions.length === 0 || value.assertions.length > MAX_REFUTATION_ASSERTIONS) return undefined;
+  const assertions = value.assertions.map((assertion) => {
+    if (!isRecord(assertion) || !exactKeys(assertion, ['assertion', 'verdict', 'evidence']) ||
+      !boundedString(assertion.assertion) || !oneOf(assertion.verdict, ['refuted', 'upheld'] as const) ||
+      !Array.isArray(assertion.evidence) || assertion.evidence.length === 0 || assertion.evidence.length > MAX_REFUTATION_EVIDENCE_PER_ASSERTION) return undefined;
+    const evidence = assertion.evidence.map((entry) => {
+      if (!isRecord(entry) || !exactKeys(entry, ['path', 'excerpt']) ||
+        !boundedString(entry.path, MAX_REFERENCE_LENGTH) || !boundedString(entry.excerpt)) return undefined;
+      return { path: entry.path, excerpt: entry.excerpt };
+    });
+    return evidence.some((entry) => entry === undefined)
+      ? undefined
+      : { assertion: assertion.assertion, verdict: assertion.verdict, evidence: evidence as { path: string; excerpt: string }[] };
+  });
+  return assertions.some((assertion) => assertion === undefined)
+    ? undefined
+    : { claim: value.claim, assertions: assertions as RemediationCaseRefutation['assertions'] };
+}
+
 function parseCase(value: unknown):
   | { readonly ok: true; readonly record: RemediationCaseRecord }
   | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state' } {
-  if (!isRecord(value) || !exactKeys(value, [
-    'id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect',
-  ])) return { ok: false, reason: 'malformed-state' };
+  if (!isRecord(value)) return { ok: false, reason: 'malformed-state' };
+  const expectedKeys = value.disposition === 'refute'
+    ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'refutation']
+    : ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect'];
+  if (!exactKeys(value, expectedKeys)) return { ok: false, reason: 'malformed-state' };
   if (value.domain !== 'build_review') return { ok: false, reason: 'foreign-domain' };
   if (!boundedString(value.id, MAX_REFERENCE_LENGTH) ||
-    !oneOf(value.disposition, ['act', 'defer', 'reject'] as const) ||
+    !oneOf(value.disposition, ['act', 'defer', 'reject', 'refute'] as const) ||
     !oneOf(value.priority, ['critical', 'high', 'medium', 'low'] as const) ||
     !boundedString(value.rationale) || !oneOf(value.confidence, ['high', 'medium', 'low'] as const) ||
     !oneOf(value.resolution, ['open', 'resolved'] as const) || !Array.isArray(value.sources) ||
     value.sources.length === 0 || value.sources.length > MAX_SOURCES_PER_CASE) return { ok: false, reason: 'malformed-state' };
   const sources = value.sources.map(parseSourceLink);
   const effect = parseEffect(value.effect, value.disposition);
-  if (sources.some((source) => source === undefined) || effect === undefined) return { ok: false, reason: 'malformed-state' };
+  const refutation = value.disposition === 'refute' ? parseRefutation(value.refutation) : undefined;
+  if (sources.some((source) => source === undefined) || effect === undefined || value.disposition === 'refute' && refutation === undefined) return { ok: false, reason: 'malformed-state' };
   return { ok: true, record: {
     id: value.id,
     domain: 'build_review',
@@ -220,6 +249,7 @@ function parseCase(value: unknown):
     resolution: value.resolution,
     sources: sources as RemediationCaseSourceLink[],
     effect,
+    ...(refutation === undefined ? {} : { refutation }),
   } };
 }
 
