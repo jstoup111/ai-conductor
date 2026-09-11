@@ -10,7 +10,7 @@
 
 Four bounded tasks deliver #2211 by making one shared per-kind projection the source of both the preserve/invalidate decision and the payload that explains it, then reporting the corrected surface and delta from the rebase gate events. Gate decisions, event field names, the event union, and the delta the engine feeds the classifier are unchanged.
 
-> **Amended 2026-09-10 by #2211:** The operator approved completing document-driven invalidation, with minimal machinery and no reruns for unrelated features. Tasks 1–2 now give `coverage_binding` its stories/PRD/plan/coherence surface and reuse the complete rebase delta already computed by the engine. Resolve the active feature’s document inputs with existing artifact/plan-reference helpers, scope document matches to those inputs, and use the same projection for verdicts and events. A relevant document-only rebase invalidates only affected reviews, not BUILD or the full suite. Normal finish must not skip a base advance containing a relevant input change; unrelated documentation remains a no-op. Task 4 owns a real local-Git proof for relevant and unrelated document changes, plus coverage for the conflict-resolution return path. The resume validity check uses the same active-input resolution; Task 4 also owns its focused regression proof and the README/daemon-guide explanation. The original reporting-only statements and unchanged-decision expectations below are superseded only for these approved input changes. No new watcher, ledger, event type, retry policy, or background work is introduced.
+> **Amended 2026-09-10 by #2211:** The operator approved completing document-driven invalidation, with minimal machinery and no reruns for unrelated features. Tasks 1–2 now give `coverage_binding` its stories/PRD/plan/coherence surface and reuse the complete rebase delta already computed by the engine. Resolve the active feature’s document inputs with existing artifact/plan-reference helpers, scope document matches to those inputs, and use the same projection for verdicts and events. A relevant document-only rebase invalidates only affected reviews, not BUILD or the full suite. Normal finish must not skip a base advance containing a relevant input change; unrelated documentation remains a no-op. Task 4 owns a real local-Git proof for relevant and unrelated document changes, plus coverage for the conflict-resolution return path and removal of the unreachable `coverage_binding` resume-validity branch. Coverage binding remains non-tree-attesting; adding a durable resume-validity stamp requires a separate ADR and feature. The README/daemon-guide explanation covers only post-rebase invalidation. The original reporting-only statements and unchanged-decision expectations below are superseded only for these approved input changes. No new watcher, ledger, event type, retry policy, or background work is introduced.
 
 ## Technical Approach
 
@@ -93,17 +93,19 @@ Test design follows the repository's test-authoring rules: the projection and th
 ### Task 4: Keep resume-path and drift-budget preservation payloads correct
 **Story:** Story 2
 **Type:** negative-path
-**Files:** src/conductor/test/engine/daemon-rekick.test.ts, src/conductor/test/engine/rebase.test.ts
+**Files:** src/conductor/src/engine/gate-code-validity.ts, src/conductor/test/engine/gate-code-validity.test.ts, src/conductor/test/engine/daemon-rekick.test.ts, src/conductor/test/engine/rebase.test.ts
 **Dependencies:** 2
 
 **Steps:**
 1. Correct the resume-path integration expectations so both PRD-input gates observe the feature's own runtime paths plus the document-input declaration and an empty considered delta for that fixture's foreign sibling runtime change, keeping the existing invalidated-gate expectations as they are.
-2. Re-run the drift-budget preservation case and the uncomputable-feature-surface case, and assert explicitly that the drift-budget preserved event still carries its basis while an ordinary delta-based preservation carries none.
-3. Run both focused test files and the typecheck target that covers test files, then commit.
+2. Remove the `coverage_binding` resume-validity branch and its direct-helper-only test; coverage binding remains non-tree-attesting and is invalidated only by the real rebase classification path delivered here.
+3. Re-run the drift-budget preservation case and the uncomputable-feature-surface case, and assert explicitly that the drift-budget preserved event still carries its basis while an ordinary delta-based preservation carries none.
+4. Run the focused test files and the typecheck target that covers test files, then commit.
 
 **Done when:**
 1. The resume integration observes both PRD-input gates preserved through the real event emitter with the feature's own runtime paths and the document-input declaration, and an empty considered delta.
-2. The drift-budget preserved event still carries its basis while ordinary delta-based preservation carries none, and the uncomputable-feature-surface path still emits only the pre-verified preservation with its uncomputable declaration.
+2. No production or test-only branch claims tree-attested `coverage_binding` resume validity.
+3. The drift-budget preserved event still carries its basis while ordinary delta-based preservation carries none, and the uncomputable-feature-surface path still emits only the pre-verified preservation with its uncomputable declaration.
 
 ## Coverage Check
 

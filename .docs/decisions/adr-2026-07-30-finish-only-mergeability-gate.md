@@ -61,7 +61,11 @@ Normal finish:
 3. Preserve the already-current no-op.
 4. If behind, evaluate the prospective merge without changing refs, index, worktree, or history.
 5. Clean → return a distinct mergeable-skip result, preserve downstream verdicts, and avoid
-   rebase-only evidence translation and protected-seal rebaselining.
+   rebase-only evidence translation and protected-seal rebaselining, unless the advanced base
+   changes an input document resolved for an active judged review. A clean Git merge proves only
+   textual compatibility; it does not preserve a verdict rendered against an older story, PRD,
+   plan, or coherence artifact. In that narrow case, enter the existing rebase flow so only the
+   affected reviews are invalidated and recomputed. Unrelated documents still take mergeable-skip.
 6. Conflict or indeterminate → enter the existing rebase and bounded resolution flow.
 
 Re-kick:
