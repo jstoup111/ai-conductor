@@ -1,3 +1,4 @@
+// Covers: task:7
 import { describe, expect, it } from 'vitest';
 
 import { reduceBuildReviewAdjudication } from '../../src/engine/build-review-adjudication.js';
@@ -18,6 +19,17 @@ const reject = (): RemediationCaseRecord => ({
   confidence: 'high', resolution: 'open', sources: [{ sourceId: 'finding-1', outcome: 'rejected', recordedAt: '2026-08-30T00:00:00.000Z' }], effect: { kind: 'none' },
 });
 
+const refute = (status: 'none' | 'reserved' | 'failed' = 'none'): RemediationCaseRecord => ({
+  id: 'case-refute', domain: 'build_review', disposition: 'refute', priority: 'low', rationale: 'claim is refuted',
+  confidence: 'high', resolution: 'resolved', sources: [{ sourceId: 'finding-1', outcome: 'refuted', recordedAt: '2026-09-11T00:00:00.000Z' }],
+  effect: status === 'none'
+    ? { kind: 'none' }
+    : status === 'failed'
+      ? { id: 'effect-refute', kind: 'deferral', status, diagnostic: 'intake failed' }
+      : { id: 'effect-refute', kind: 'deferral', status },
+  refutation: { claim: 'the finding is wrong', assertions: [{ assertion: 'the required behavior exists', verdict: 'refuted', evidence: [{ path: 'src/engine/build-review-adjudication.ts', excerpt: 'reduceBuildReviewAdjudication' }] }] },
+});
+
 const reducerInput = (overrides: Partial<Parameters<typeof reduceBuildReviewAdjudication>[0]> = {}) => ({
   currentSourceIds: ['finding-1'],
   cases: [reject()],
@@ -33,6 +45,7 @@ describe('reduceBuildReviewAdjudication', () => {
     ['exhausted mechanical failure', reducerInput({ currentSourceIds: [], cases: [], mechanical: 'halt' }), 'halt'],
     ['mixed action and infrastructure', reducerInput({ cases: [action()], mechanical: 'retry' }), 'build'],
     ['unfinished action effect', reducerInput({ cases: [action('reserved')] }), 'halt'],
+    ['finalized refutation', reducerInput({ cases: [refute()] }), 'pass'],
   ] as const)('%s selects %s', (_label, input, route) => {
     expect(reduceBuildReviewAdjudication(input).route).toBe(route);
   });
@@ -62,5 +75,10 @@ describe('reduceBuildReviewAdjudication', () => {
       currentSourceIds: ['finding-2'],
       cases: [action()],
     })).route).toBe('halt');
+  });
+
+  it.each(['reserved', 'failed'] as const)('halts when a refutation deferral is %s', (status) => {
+    expect(reduceBuildReviewAdjudication(reducerInput({ cases: [refute(status)] })))
+      .toMatchObject({ route: 'halt', reason: 'remediation effect is not finalized' });
   });
 });

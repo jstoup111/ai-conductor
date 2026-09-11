@@ -1,10 +1,10 @@
-// Covers: task:19, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab4-1
+// Covers: task:7, task:19, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab4-1
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildReviewSettlementObligationCase, renderBuildReviewDeferralIssue, remediationEffectMarker } from '../../src/engine/remediation-case-effects.js';
+import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewSettlementObligationCase, renderBuildReviewDeferralIssue, remediationEffectMarker } from '../../src/engine/remediation-case-effects.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
 import { RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 
@@ -37,6 +37,27 @@ describe('remediation case effects', () => {
     ['no effect', { kind: 'none' }, false],
   ] as const)('shared effect-status test flags %s durable evidence', (_label, effect, expected) => {
     expect(hasReservedOrFailedRemediationEffect(record(effect as RemediationCaseRecord['effect']))).toBe(expected);
+  });
+
+  const refutedRecord = (effect: RemediationCaseRecord['effect']) => record(effect, {
+    disposition: 'refute', resolution: 'resolved',
+    sources: [{ sourceId: 'testQuality:finding-1', outcome: 'refuted', recordedAt: '2026-09-11T00:00:00.000Z' }],
+    refutation: { claim: 'the finding is wrong', assertions: [{ assertion: 'the required behavior exists', verdict: 'refuted', evidence: [{ path: 'src/engine/remediation-case-effects.ts', excerpt: 'isBuildEligibleActionCase' }] }] },
+  });
+
+  it.each([
+    ['no effect', { kind: 'none' }],
+    ['reserved deferral', { id: 'effect-refute', kind: 'deferral', status: 'reserved' }],
+    ['failed deferral', { id: 'effect-refute', kind: 'deferral', status: 'failed', diagnostic: 'intake failed' }],
+  ] as const)('keeps a refuted case with %s out of BUILD', (_label, effect) => {
+    expect(isBuildEligibleActionCase(refutedRecord(effect))).toBe(false);
+  });
+
+  it.each([
+    ['reserved', { id: 'effect-refute', kind: 'deferral', status: 'reserved' }],
+    ['failed', { id: 'effect-refute', kind: 'deferral', status: 'failed', diagnostic: 'intake failed' }],
+  ] as const)('treats a refutation with a %s deferral as unfinished', (_label, effect) => {
+    expect(hasReservedOrFailedRemediationEffect(refutedRecord(effect))).toBe(true);
   });
 
   it.each([
