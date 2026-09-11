@@ -1550,7 +1550,10 @@ export async function runGatedRebaseResolution(opts: {
       /* best-effort */
     }
   }
-  return resolved;
+  // A pre-start collision may have been healed before this conflict paused the
+  // rebase. Resolution rebuilds its outcome to preserve the existing guards,
+  // so restore that durable recovery record on every resolved outcome kind.
+  return outcome.quarantine === undefined ? resolved : { ...resolved, quarantine: outcome.quarantine };
 }
 
 // ── Verdict + event wiring (consumed by the conductor) ───────────────────────
