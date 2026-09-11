@@ -2079,12 +2079,19 @@ export class Conductor {
     step: StepName,
     kind: 'seal' | 'needs-human' | 'validation-verdict',
     reason: string,
+    executionContext?: ExecutionContext,
   ): Promise<void> {
     await this.commitStateChanges(state, `record refused ${step} step`, {
       [step]: 'refused',
       last_step: step,
     });
-    await this.emitExecutionEvent({ type: 'step_refused', step, kind, reason });
+    await this.emitExecutionEvent({
+      type: 'step_refused',
+      step,
+      kind,
+      reason,
+      ...(executionContext === undefined ? {} : { executionContext }),
+    });
   }
 
   /**
@@ -8358,7 +8365,16 @@ export class Conductor {
         // Mark in_progress before running
         await this.saveConductorStepStatus(state, step.name, 'in_progress');
 
-        await emitTracked({ type: 'step_started', step: step.name, index: i });
+        const serialExecutionContext: ExecutionContext = {
+          executionId: randomUUID(),
+          subject: { kind: 'lifecycle-step', step: step.name },
+        };
+        await emitTracked({
+          type: 'step_started',
+          step: step.name,
+          index: i,
+          executionContext: serialExecutionContext,
+        });
         // Deterministic freshness guard — applied ONLY when re-entering a step
         // that previously FAILED (`failed`) or was REWORKED (kicked back →
         // `stale`), never on a clean first run. Such a step ran before, so a
@@ -8963,6 +8979,7 @@ export class Conductor {
                             escalate: resolved.escalate,
                             modelOverride: esc.model,
                             effortOverride: esc.effort,
+                            executionContext: serialExecutionContext,
                             // D1 scope: only a SHIP-tail verdict gate hands its
                             // identity to the lifecycle, so that gate's
                             // `attempt.id` and its sidecar stamp are one value.
@@ -9323,12 +9340,13 @@ export class Conductor {
               }
 
               if (attempt < stepMaxRetries) {
-                await emitTracked({
-                  type: 'step_retry',
+              await emitTracked({
+                type: 'step_retry',
                   step: 'finish',
                   attempt: attempt + 1,
                   maxAttempts: stepMaxRetries,
                   reason: lastError,
+                  executionContext: serialExecutionContext,
                 });
                 continue;
               }
@@ -9555,6 +9573,7 @@ export class Conductor {
                   reason:
                     `test_suite infrastructure failure (${fullSuiteFailure.reason}): ` +
                     fullSuiteFailure.message,
+                  executionContext: serialExecutionContext,
                 });
                 // Infrastructure retries are bounded in their own durable
                 // allowance and must not consume the generic step budget.
@@ -9661,7 +9680,13 @@ export class Conductor {
                 haltBeforeAttempt,
               );
               if (stepWrittenHalt) {
-                await this.recordStepRefusal(state, step.name, 'needs-human', stepWrittenHalt);
+                await this.recordStepRefusal(
+                  state,
+                  step.name,
+                  'needs-human',
+                  stepWrittenHalt,
+                  serialExecutionContext,
+                );
                 await this.emitLoopHalt(stepWrittenHalt);
                 process.off('SIGINT', sigintHandler);
                 process.off('SIGTERM', sigterm);
@@ -9710,8 +9735,8 @@ export class Conductor {
                 resolved.escalate,
                 stepModelPolicy,
               );
-              await emitTracked({
-                type: 'step_retry',
+                await emitTracked({
+                  type: 'step_retry',
                 step: step.name,
                 attempt: attempt + 1,
                 maxAttempts: stepMaxRetries,
@@ -9725,6 +9750,7 @@ export class Conductor {
                   escalatedModel: escNext.model,
                   escalatedEffort: escNext.effort,
                 }),
+                executionContext: serialExecutionContext,
               });
               // #814: back off before re-dispatching a grader whose dispatch
               // failed, so a transient spawn/startup failure has time to clear
@@ -10509,7 +10535,13 @@ export class Conductor {
                   haltBeforeAttempt,
                 );
                 if (stepWrittenHalt) {
-                  await this.recordStepRefusal(state, step.name, 'needs-human', stepWrittenHalt);
+                  await this.recordStepRefusal(
+                    state,
+                    step.name,
+                    'needs-human',
+                    stepWrittenHalt,
+                    serialExecutionContext,
+                  );
                   await this.emitLoopHalt(stepWrittenHalt);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
@@ -10543,6 +10575,7 @@ export class Conductor {
                     escalatedModel: escNext.model,
                     escalatedEffort: escNext.effort,
                   }),
+                  executionContext: serialExecutionContext,
                 });
                 // T4: this attempt made forward progress and is under the
                 // progress-attempt ceiling — undo the `attempt++` at the top
@@ -10669,7 +10702,13 @@ export class Conductor {
               reason + '\n',
               kind === 'seal' ? PROTECTED_ARTIFACT_HALT_CLASS : 'needs-human',
             );
-            await this.recordStepRefusal(state, step.name, kind, reason);
+            await this.recordStepRefusal(
+              state,
+              step.name,
+              kind,
+              reason,
+              serialExecutionContext,
+            );
             await this.emitLoopHalt(reason);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
@@ -10721,6 +10760,7 @@ export class Conductor {
             ...(failedStepResult?.observedIntervals
               ? { observedIntervals: failedStepResult.observedIntervals }
               : {}),
+            executionContext: serialExecutionContext,
           });
 
           // Auto mode is unattended — NEVER prompt or open a REPL. An advisory
@@ -12220,6 +12260,7 @@ export class Conductor {
             ...(stepResult?.observedIntervals
               ? { observedIntervals: stepResult.observedIntervals }
               : {}),
+            executionContext: serialExecutionContext,
           });
 
           // Store PR URL from finish step output. Prefer state-file write
