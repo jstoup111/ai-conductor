@@ -21,6 +21,25 @@ function configuredContext(executionId: string): ExecutionContext {
 }
 
 describe('engine/execution-lifecycle', () => {
+  it('rejects a mismatched lifecycle-step context without falling back to a live legacy execution', async () => {
+    const events = new RecordingEvents();
+    const lifecycle = new ExecutionLifecycle({ events });
+    const mismatched: ExecutionContext = {
+      executionId: 'mismatched',
+      subject: { kind: 'lifecycle-step', step: 'plan' },
+    };
+
+    await lifecycle.admit({ type: 'step_started', step: 'build', index: 0, executionContext: mismatched });
+    await lifecycle.admit({ type: 'step_started', step: 'build', index: 0 });
+    await lifecycle.close({ type: 'step_completed', step: 'build', status: 'done', executionContext: mismatched });
+    await lifecycle.close({ type: 'step_completed', step: 'build', status: 'done' });
+
+    expect(events.emitted).toEqual([
+      { type: 'step_started', step: 'build', index: 0 },
+      { type: 'step_completed', step: 'build', status: 'done' },
+    ]);
+  });
+
   it('keeps interleaved executions and their retries under their own admitted IDs', async () => {
     const events = new RecordingEvents();
     const lifecycle = new ExecutionLifecycle({ events });
