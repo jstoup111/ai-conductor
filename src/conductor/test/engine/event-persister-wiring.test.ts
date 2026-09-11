@@ -111,6 +111,7 @@ describe('EventPersister wiring constraints', () => {
         readStateFn: async () => ({ ok: true, value: {} as ConductState }),
         liveRegion: {
           update: () => {}, clear: () => {}, suspend: () => {}, resume: () => {},
+          stop: () => {},
           log: (line: string) => terminalLines.push(line),
         } as LiveRegion,
       });
