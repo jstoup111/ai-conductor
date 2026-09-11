@@ -202,7 +202,6 @@ export async function gateVerdictStillValid(
     surface === 'feature-runtime' ||
     surface === 'feature-codetest' ||
     surface === 'feature-runtime-or-prd-inputs' ||
-    surface === 'feature-runtime-or-coverage-inputs' ||
     surface === 'all-runtime'
       ? await deriveFeatureSurface(ctx)
       : [];
@@ -226,7 +225,6 @@ export async function gateVerdictStillValid(
           : featureSrc.length === 0 && featureTestPaths(delta, F).length === 0;
       break;
     case 'feature-runtime-or-prd-inputs':
-    case 'feature-runtime-or-coverage-inputs':
       isSurfaceMiss = projectGateSurfaces(delta, F, await resolveReviewInputs(ctx.projectRoot, delta))[surface].matchedPaths.length === 0;
       break;
     case 'all-runtime':
@@ -235,6 +233,8 @@ export async function gateVerdictStillValid(
     case 'any-codetest':
       isSurfaceMiss = test.length === 0 && featureSrc.length === 0 && foreignSrc.length === 0;
       break;
+    default:
+      return 'rerun';
   }
 
   return isSurfaceMiss ? 'preserve' : 'rerun';
