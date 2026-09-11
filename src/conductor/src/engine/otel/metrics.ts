@@ -72,6 +72,19 @@ export function dispatchDimensionsFrom(
   };
 }
 
+/**
+ * Duration and retry points retain the existing bounded step dimensions but
+ * deliberately exclude dispatch-only fallback state. Free-text fallback
+ * reasons are never accepted by this projection.
+ */
+export function stepDimensionsFrom(
+  event: DispatchDimensionEvent,
+  observation?: DispatchMeteringObservation,
+): DispatchDimensions {
+  const { fallback: _fallback, ...dimensions } = dispatchDimensionsFrom(event, observation);
+  return dimensions;
+}
+
 export class MetricsRecorder {
   private readonly instruments: MetricInstruments;
   private readonly customAttrs: Attributes;

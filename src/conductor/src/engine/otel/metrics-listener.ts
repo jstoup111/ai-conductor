@@ -3,15 +3,24 @@ import type { ConductorEventEmitter, EventHandler } from '../../ui/events.js';
 import { otelEventTypes, type OtelEventType } from '../event-sinks.js';
 import { DispatchMeteringTracker } from '../dispatch-metering.js';
 import { forwardedFeatureOf } from '../event-persister.js';
-import { dispatchDimensionsFrom, type DispatchDimensions, MetricsRecorder } from './metrics.js';
+import { resolveExecutionIdentity, type ResolvedExecutionIdentity } from '../execution-identity.js';
+import { dispatchDimensionsFrom, stepDimensionsFrom, type DispatchDimensions, MetricsRecorder } from './metrics.js';
 
 type OtelEvent = Extract<ConductorEvent, { type: OtelEventType }>;
-type MetricsHandler = (listener: MetricsListener, event: OtelEvent) => void;
+type MetricsEventType = OtelEventType | 'group_member_step';
+type MetricsEvent = Extract<ConductorEvent, { type: MetricsEventType }>;
+type MetricsHandler = (listener: MetricsListener, event: MetricsEvent) => void;
+
+interface StartedExecution {
+  identity: ResolvedExecutionIdentity;
+  startedAt: number;
+  settledAt?: number;
+}
 
 /** The single event-fed metrics projection used by daemon and interactive runs. */
 export class MetricsListener {
   private readonly handlers: Array<[ConductorEvent['type'], EventHandler]> = [];
-  private readonly starts = new Map<string, Map<string, number>>();
+  private readonly starts = new Map<string, Map<string, StartedExecution>>();
   private readonly dispatchMetering = new Map<string, DispatchMeteringTracker>();
   private readonly latestDispatchDimensions = new Map<string, Map<string, DispatchDimensions>>();
   private readonly terminal = new Set<string>();
@@ -24,7 +33,7 @@ export class MetricsListener {
   ) {}
 
   /** The handler table is the source of truth for both subscription and projection. */
-  static readonly METRICS_HANDLERS: Record<OtelEventType, MetricsHandler> = {
+  static readonly METRICS_HANDLERS: Record<MetricsEventType, MetricsHandler> = {
     memory_setup: (listener, event) => (listener.feature(event) ?? listener.recorder).onMemorySetup(event as Extract<OtelEvent, { type: 'memory_setup' }>),
     daemon_backlog_snapshot: (listener, event) => listener.recorder.onDaemonBacklog(event as Extract<OtelEvent, { type: 'daemon_backlog_snapshot' }>),
     feature_dispatch_started: (listener, event) => {
@@ -53,14 +62,16 @@ export class MetricsListener {
     step_started: (listener, event) => {
       const step = event as Extract<OtelEvent, { type: 'step_started' }>;
       const slug = listener.featureOf(step);
-      if (slug) {
-        const featureStarts = listener.starts.get(slug) ?? new Map<string, number>();
-        featureStarts.set(step.step, listener.now());
+      const identity = listener.identityFor(step, step.step);
+      if (slug && identity) {
+        const featureStarts = listener.starts.get(slug) ?? new Map<string, StartedExecution>();
+        featureStarts.set(identity.correlationKey, { identity, startedAt: listener.now() });
         listener.starts.set(slug, featureStarts);
       }
     },
     step_completed: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_completed' }>),
     step_failed: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_failed' }>),
+    group_member_step: (listener, event) => listener.onMemberSettlement(event as Extract<MetricsEvent, { type: 'group_member_step' }>),
     provider_attempt: (listener, event) => listener.onProviderAttempt(event as Extract<OtelEvent, { type: 'provider_attempt' }>),
     feature_usage_total: (listener, event) => listener.feature(event)?.onFeatureUsageTotal(event as Extract<OtelEvent, { type: 'feature_usage_total' }>),
     feature_cost_snapshot: (listener, event) => listener.feature(event)?.onFeatureCostSnapshot(event as Extract<OtelEvent, { type: 'feature_cost_snapshot' }>),
@@ -68,7 +79,7 @@ export class MetricsListener {
       const retry = event as Extract<OtelEvent, { type: 'step_retry' }>;
       listener.feature(retry)?.onRetry(retry.step, dispatchDimensionsFrom(retry));
     },
-    feature_complete: (listener, event) => listener.closeFeature(event, 'complete'),
+    feature_complete: (listener, event) => listener.closeFeature(event as OtelEvent, 'complete'),
     build_stall: (listener, event) => listener.recorder.onStall((event as Extract<OtelEvent, { type: 'build_stall' }>).reason),
     build_progress: () => {},
     build_no_progress: () => {},
@@ -81,16 +92,20 @@ export class MetricsListener {
       const kickback = event as Extract<OtelEvent, { type: 'kickback' }>;
       listener.feature(kickback)?.onKickback(kickback.from, kickback.to);
     },
-    loop_halt: (listener, event) => listener.closeFeature(event, 'halted'),
+    loop_halt: (listener, event) => listener.closeFeature(event as OtelEvent, 'halted'),
   };
 
   start(emitter: ConductorEventEmitter): void {
     this.emitter = emitter;
     const missing = missingMetricsHandlerTypes();
     if (missing.length > 0) throw new Error(`MetricsListener lacks handlers for OTel event type(s): ${missing.join(', ')}`);
-    for (const type of otelEventTypes()) {
+    // Settlement is a metrics-only lifecycle boundary until Task 8 promotes
+    // its sink declaration. Keeping it in this same handler table avoids a
+    // second projection path and automatically deduplicates that later sink
+    // change.
+    for (const type of new Set<MetricsEventType>([...otelEventTypes(), 'group_member_step'])) {
       const projection = MetricsListener.METRICS_HANDLERS[type];
-      const handler: EventHandler = (event) => { try { projection(this, event as OtelEvent); } catch { /* metrics are best effort */ } };
+      const handler: EventHandler = (event) => { try { projection(this, event as MetricsEvent); } catch { /* metrics are best effort */ } };
       this.handlers.push([type, handler]);
       emitter.on(type, handler);
     }
@@ -123,14 +138,29 @@ export class MetricsListener {
     const slug = this.featureOf(event);
     const metric = this.feature(event);
     if (!slug || !metric) return;
+    const identity = this.identityFor(event, event.step);
+    if (!identity) return;
     const featureStarts = this.starts.get(slug);
-    const start = featureStarts?.get(event.step);
+    const start = featureStarts?.get(identity.correlationKey);
     const compatibilityDispatch = this.observeDispatch(event);
-    const dimensions = this.dispatchDimensionsForClose(slug, event, compatibilityDispatch);
-    if (start !== undefined) metric.onStepClose(event.step, Math.max(0, this.now() - start), 0, event.type === 'step_completed' ? event.tokenUsage : undefined, event.type === 'step_completed' ? event.model : undefined, compatibilityDispatch !== undefined, dimensions);
-    this.latestDispatchDimensions.get(slug)?.delete(event.step);
-    featureStarts?.delete(event.step);
+    const dimensions = this.dispatchDimensionsForClose(slug, identity.correlationKey, event, compatibilityDispatch);
+    if (start !== undefined) {
+      const endedAt = start.settledAt ?? this.now();
+      metric.onStepClose(identity.metricLabel, Math.max(0, endedAt - start.startedAt), 0, event.type === 'step_completed' ? event.tokenUsage : undefined, event.type === 'step_completed' ? event.model : undefined, compatibilityDispatch !== undefined, dimensions);
+    }
+    this.latestDispatchDimensions.get(slug)?.delete(identity.correlationKey);
+    featureStarts?.delete(identity.correlationKey);
     if (featureStarts?.size === 0) this.starts.delete(slug);
+  }
+
+  private onMemberSettlement(event: Extract<MetricsEvent, { type: 'group_member_step' }>): void {
+    if (event.phase !== 'result') return;
+    const slug = this.featureOf(event);
+    const identity = this.identityFor(event, event.member);
+    const started = slug === undefined || identity === undefined
+      ? undefined
+      : this.starts.get(slug)?.get(identity.correlationKey);
+    if (started !== undefined && started.settledAt === undefined) started.settledAt = this.now();
   }
 
   private onProviderAttempt(event: Extract<OtelEvent, { type: 'provider_attempt' }>): void {
@@ -139,8 +169,10 @@ export class MetricsListener {
     if (!observation || !metric) return;
     const dimensions = dispatchDimensionsFrom(event, observation);
     const slug = this.featureOf(event);
-    if (slug) this.rememberDispatchDimensions(slug, event.step, dimensions);
-    metric.onDispatch(event.step, observation.tokenUsage, observation.model, dimensions);
+    const identity = this.identityFor(event, event.step);
+    if (!identity) return;
+    if (slug) this.rememberDispatchDimensions(slug, identity.correlationKey, dimensions);
+    metric.onDispatch(identity.metricLabel, observation.tokenUsage, dimensions);
   }
 
   private observeDispatch(event: Extract<OtelEvent, { type: 'provider_attempt' | 'step_completed' | 'step_failed' }>) {
@@ -151,20 +183,31 @@ export class MetricsListener {
     return tracker.observe(event);
   }
 
-  private rememberDispatchDimensions(slug: string, step: string, dimensions: DispatchDimensions): void {
+  private rememberDispatchDimensions(slug: string, key: string, dimensions: DispatchDimensions): void {
     if (dimensions.model === undefined || dimensions.effort === undefined
       || dimensions.provider === undefined || dimensions.tier === undefined) return;
     const feature = this.latestDispatchDimensions.get(slug) ?? new Map<string, DispatchDimensions>();
-    feature.set(step, dimensions);
+    feature.set(key, dimensions);
     this.latestDispatchDimensions.set(slug, feature);
   }
 
   private dispatchDimensionsForClose(
     slug: string,
+    key: string,
     event: Extract<OtelEvent, { type: 'step_completed' | 'step_failed' }>,
     observation: ReturnType<DispatchMeteringTracker['observe']>,
   ): DispatchDimensions {
-    return { ...this.latestDispatchDimensions.get(slug)?.get(event.step), ...dispatchDimensionsFrom(event, observation) };
+    return { ...this.latestDispatchDimensions.get(slug)?.get(key), ...stepDimensionsFrom(event, observation) };
+  }
+
+  private identityFor(event: ConductorEvent, legacyStep: string): ResolvedExecutionIdentity | undefined {
+    const feature = this.featureOf(event);
+    if (feature === undefined) return undefined;
+    return resolveExecutionIdentity({
+      scope: { featureId: feature, runId: 'metrics-listener' },
+      legacyStep,
+      executionContext: 'executionContext' in event ? event.executionContext : undefined,
+    });
   }
 
 }
