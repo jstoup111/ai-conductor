@@ -1,3 +1,4 @@
+// Covers: task:1
 /**
  * Unit specs for the claimed-environmental-blocker audit (#1106).
  *
@@ -11,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ENVIRONMENT_CLAIM_REFUTED,
   auditEnvironmentBlockerClaims,
+  hasUnboundedCommandDenialClaim,
   writeFenceDeniableOperations,
 } from '../../src/engine/self-host/environment-claim-audit.js';
 
@@ -33,6 +35,27 @@ const INCIDENT_OUTPUT = [
 const CLAUDE_DISPATCH = { provider: 'claude', writeFenceInstalled: true } as const;
 
 describe('environment claim audit', () => {
+  it('recognizes only assertions of unbounded command denial across the full output', () => {
+    const cases = [
+      ['blocks all Bash commands', true],
+      ['rejects every Bash call', true],
+      ['unable to run any shell commands', true],
+      ['cannot run any shell commands', true],
+      ["can't execute every Bash command", true],
+      ['can not use all terminal invocations', true],
+      ['The sandbox imposes an unconditional denial.', true],
+      ['The write fence blocks everything.', true],
+      [INCIDENT_OUTPUT, false],
+      ['All tests pass and every task is committed.', false],
+      ['Every verification gate passed.', false],
+      ['The write fence blocks all\nBash commands.', true],
+    ] as const;
+
+    expect(cases.map(([output, expected]) => hasUnboundedCommandDenialClaim(output) === expected)).toEqual(
+      cases.map(() => true),
+    );
+  });
+
   it('refutes the incident blocker on an unsandboxed, write-fenced claude dispatch', () => {
     const audit = auditEnvironmentBlockerClaims(INCIDENT_OUTPUT, CLAUDE_DISPATCH);
 
