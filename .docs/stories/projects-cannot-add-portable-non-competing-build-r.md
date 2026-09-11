@@ -363,7 +363,7 @@ As an operator, I want accepted custom-policy repairs to receive fresh verificat
 
 #### Negative Paths
 
-- Given an attempted or regressed case is reported again with equivalent substance despite wording or code movement, when the aggregate identifies that recurrence, then it follows the existing repeated-case stop rather than granting a fresh repair allowance.
+- Given an attempted or regressed case is reported again with equivalent substance despite wording or code movement, when the aggregate identifies that unrefuted recurrence and again proposes action, then it follows the existing repeated-case stop rather than granting a fresh repair allowance.
 - Given the cumulative bound is exhausted or a policy is renamed, updated, disabled, and re-enabled, when new repair routing is evaluated, then those changes do not reset the feature's accumulated charges or authorize an over-limit route.
 - Given repair completes but invalidated test or review evidence is stale, missing, or failing, when progression is attempted, then the feature cannot proceed on the pre-repair success and the known failure remains blocking.
 

@@ -25,6 +25,8 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 
 ## Prerequisites
 
+> **Amended 2026-09-11 by #1986:** Main now carries the approved #2409 refutation contract in the shared case ADRs. Its implementation must land before this feature builds; issue #1986 is ordered after #2409 through the existing GitHub dependency gate. This feature reuses that case primitive rather than reimplementing #2409. An attempted case proposed again as act still stops; an admitted evidence-backed refute/refuted outcome settles through that inherited bounded lane without a repair charge.
+
 - Accepted stories, PASS conflict report, and both approved 2026-09-10 ADRs are in this spec change set before BUILD. DECIDE already owns the adjacent ADR amendments; no implementation task edits a foreign feature artifact.
 - Initial runtime support is Linux with two-sided and nested read-only containment probes. Unsupported environments return the approved capability diagnostic; no writable fallback. The private Kotlin package is not an acceptance prerequisite and remains unverified.
 - All ordinary automated tests fake every third-party boundary. Metadata and model transports must prove production-to-fake reachability before refused/destructive argument fixtures; private fixture state is mandatory. A separately named opt-in local containment smoke may exercise bubblewrap on disposable files without a third-party call.
@@ -615,9 +617,12 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 4. Run the same scoped command and observe GREEN. Each mapped criterion uses the named boundary assertion below; direct helper proof cannot replace a task's entry-point obligation.
 5. Commit the scoped change with message `feat(build-review): represent consistency, admission, and escalation in case-v2` after its checks pass.
 
+> **Amended 2026-09-11 by #1986:** Preserve the newly merged #2409 contract under the explicit implementation dependency above. The existing repeat-stop wording means an unrefuted attempted repair; admitted refutation uses the predecessor-owned resolution lane.
+
 **Done when:**
 - The remediation parser round-trips case-v2 duplicate/consistent-repair graphs with every original source, merge rationale, admission task id, and consistency verdict while retaining case-v1/non-case compatibility.
 - Case-v2 can represent blocked consistency and product/plan/architecture escalation with source evidence and rationale without manufacturing an action, operator approval, or external effect.
+- Case-v2 parsing retains the inherited #2409 refute/refuted payload, existing-case binding, assertion evidence, and terminal state through the shared case contract rather than creating a second refutation schema.
 
 **Files:** `src/conductor/src/engine/remediation-case-artifact.ts`; `skills/remediate/SKILL.md`; `src/conductor/test/engine/remediation-case-artifact.test.ts`
 
@@ -636,9 +641,12 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 4. Run the same scoped command and observe GREEN. Each mapped criterion uses the named boundary assertion below; direct helper proof cannot replace a task's entry-point obligation.
 5. Commit the scoped change with message `feat(build-review): reject incomplete source graphs and illegal partial action sets` after its checks pass.
 
+> **Amended 2026-09-11 by #1986:** Preserve the newly merged #2409 contract under the explicit implementation dependency above. The existing repeat-stop wording means an unrefuted attempted repair; admitted refutation uses the predecessor-owned resolution lane.
+
 **Done when:**
 - The case validator accepts exhaustive duplicate/consistent graphs but rejects omitted, duplicate, invented, unresolved-merge, nonexistent-reference, missing-consistency, contradictory-outcome, and missing-admission fixtures.
 - Validation/application integration authorizes zero action effects for any invalid graph, blocked consistency, or escalation, including otherwise valid sibling actions.
+- Case-v2 validation delegates refutations to the inherited one-time attempted-act refutation validator: invalid binding, missing high-confidence assertion evidence, unresolvable current-tree path/excerpt, or repeated refutation rejects the whole judgment with no action effects.
 
 **Files:** `src/conductor/src/engine/remediation-case-validator.ts`; `src/conductor/src/engine/build-review-adjudication.ts`; `src/conductor/test/engine/remediation-case-validator.test.ts`
 
@@ -780,10 +788,13 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 4. Run the same scoped command and observe GREEN. Each mapped criterion uses the named boundary assertion below; direct helper proof cannot replace a task's entry-point obligation.
 5. Commit the scoped change with message `feat(build-review): preserve cumulative charges and semantic repeat stops for custom cases` after its checks pass.
 
+> **Amended 2026-09-11 by #1986:** Preserve the newly merged #2409 contract under the explicit implementation dependency above. The existing repeat-stop wording means an unrefuted attempted repair; admitted refutation uses the predecessor-owned resolution lane.
+
 **Done when:**
 - Convergence integration charges one new aggregate action effect, reuses exact settled non-actions without charge, and stops attempted/regressed semantic recurrence or an exhausted bound.
 - Policy rename/update/disable/re-enable, fallback, incidental movement, and restart cannot reset charges; existing genuine rebase invalidation, fresh-session, and operator-reset fixtures retain their authorized ledger transitions.
 - Infrastructure-only custom failures retain the existing total mechanical allowance and needs-human exhaustion route, with no semantic charge; mixed content remains governed by the separate aggregate action effect.
+- The convergence path distinguishes an unrefuted attempted act from an admitted #2409 refutation: the former halts under the existing repeat rule, while the latter settles once without a BUILD route, semantic charge, or operator-risk mutation.
 
 **Files:** `src/conductor/src/engine/kickback-ledger.ts`; `src/conductor/src/engine/build-review-adjudication.ts`; `src/conductor/src/engine/remediation-case-reconciler.ts`; `src/conductor/test/engine/build-review-custom-convergence.test.ts`
 
@@ -960,7 +971,7 @@ Each row quotes a named mechanism's completion assertion from a cited task. Mult
 | Story 14 negative: Given a gap affects the current approved outcome, when a reviewer proposes treating it as an unrelated future improvement, then review cannot settle it through a non-blocking deferral; after an explicit owning decision changes the approved baseline, recovery re-evaluates without rewriting the old verdict into PASS. | 31 | "Current-outcome gaps cannot settle through deferral, restart alone retains decision/repeat stops, and an explicitly changed approved baseline causes new evaluation while preserving the old verdict." | diff-local |
 | Story 15 happy: Given a new consistent set of admitted code repairs within the remaining allowance, when the aggregate authorizes repair and BUILD completes it, then one repair route is charged and all tests and reviews invalidated by that repair must supply current evidence before the feature proceeds. | 35, 36 | "The repair/progression entry flow applies one admitted custom repair, reopens its invalidated test/review obligations, and proceeds only after all required evidence binds to the repaired input." | diff-local |
 | Story 15 happy: Given a settled non-action custom finding recurs with the same effective identity, when the next lap is evaluated, then its permitted finalized outcome can be reused without a new adjudicator call or semantic repair charge, while retaining the original case evidence. | 24, 37 | "The existing reconciler reuses an exact settled custom non-action without judging or charge but rejects exact reuse after policy identity changes and retains the original case history." | diff-local |
-| Story 15 negative: Given an attempted or regressed case is reported again with equivalent substance despite wording or code movement, when the aggregate identifies that recurrence, then it follows the existing repeated-case stop rather than granting a fresh repair allowance. | 37 | "Convergence integration charges one new aggregate action effect, reuses exact settled non-actions without charge, and stops attempted/regressed semantic recurrence or an exhausted bound." | diff-local |
+| Story 15 negative: Given an attempted or regressed case is reported again with equivalent substance despite wording or code movement, when the aggregate identifies that unrefuted recurrence and again proposes action, then it follows the existing repeated-case stop rather than granting a fresh repair allowance. | 37 | "Convergence integration charges one new aggregate action effect, reuses exact settled non-actions without charge, and stops attempted/regressed semantic recurrence or an exhausted bound." | diff-local |
 | Story 15 negative: Given the cumulative bound is exhausted or a policy is renamed, updated, disabled, and re-enabled, when new repair routing is evaluated, then those changes do not reset the feature's accumulated charges or authorize an over-limit route. | 37 | "Policy rename/update/disable/re-enable, fallback, incidental movement, and restart cannot reset charges; existing genuine rebase invalidation, fresh-session, and operator-reset fixtures retain their authorized ledger transitions." | diff-local |
 | Story 15 negative: Given repair completes but invalidated test or review evidence is stale, missing, or failing, when progression is attempted, then the feature cannot proceed on the pre-repair success and the known failure remains blocking. | 36 | "Progression integration refuses stale, missing, or failing post-repair test/review evidence and cannot consume the pre-repair PASS as current proof." | diff-local |
 | Story 16 happy: Given an admitted custom-policy action is interrupted around decision persistence, work publication, or charge recording, when recovery runs, then it completes only missing authorized effects, retains original source attribution, and records at most one publication and one semantic charge for that action. | 38 | "Recovery integration at each decision/work-publication/charge boundary completes only missing effects and observes at most one publication and one semantic charge with original custom source attribution." | diff-local |

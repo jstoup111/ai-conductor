@@ -1,6 +1,12 @@
 # ai-conductor project configuration
 # See the harness config schema (src/conductor/src/types/config.ts) for all keys.
 
+otel:
+  exporter: otlp
+  endpoint: http://localhost:4318
+  attributes:
+    verification.marker: a6227ff34d1a221e
+
 # Auto-reconciliation of parked features, explicitly enabled (operator order,
 # 2026-07-30, matches the documented default but pinned here so it survives
 # regardless of a future default change). A merged parked slug with a

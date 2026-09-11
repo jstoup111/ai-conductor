@@ -198,6 +198,42 @@ unresolved equivalent finding. A previously deferred or rejected case reuses tha
 current adjudication confirms the binding. A resolved case that reappears also halts as a regression
 of an adjudicated case rather than reopening an unbounded route.
 
+> **Amended 2026-09-09 by #2409:** Decision 7's repeat rule assumed the judge either confirms the
+> attempted case or has nothing to say. A re-raised finding whose claim the judge concludes is
+> refuted by evidence had no representable outcome: re-proposing `act` halted as a semantic repeat
+> and rebinding as `reject` was an illegal disposition transition. The bounded refutation lane adds
+> one representable move without weakening the repeat rule:
+>
+> - **D7.1** The case disposition vocabulary of Decision 4 gains `refute` and the source outcome
+>   vocabulary gains `refuted`. A `refute` row MUST bind an `existingCaseId`; a `refute` row without a
+>   binding is rejected by the validator. Its effect is exactly `{ "kind": "none" }` or a complete
+>   deferral effect carrying the narrow true remainder, which files an intake issue through the
+>   existing deferral executor and never a BUILD action.
+> - **D7.2** A `refute` row carries a schema-constrained refutation: the refuted claim, one or more
+>   assertion verdicts each `refuted` or `upheld` with evidence expressed as the existing
+>   canonical repo-relative path reference plus a whitespace-normalized excerpt (path and excerpt —
+>   never line numbers, hunk offsets, or commit SHAs), and case `confidence` exactly `high`. At least
+>   one assertion is `refuted`. The engine resolves every evidence reference against the current
+>   tree: the path must exist and the normalized excerpt must occur in that file; an unresolvable
+>   reference rejects the whole judgement fail-closed, and no waiver covers it.
+> - **D7.3** The only legal disposition transition is `act` → `refute`, admitted solely when the
+>   bound case is open, BUILD already attempted it, its action effect is `applied`, and it carries no
+>   prior refutation. Any other binding remains `illegal-disposition-transition`. A second `refute`
+>   binding of a case that already carries a refutation is rejected and the lap halts `needs-human`
+>   naming the case; a judge that re-proposes `act` on an attempted case still halts exactly as the
+>   sentence above prescribes.
+> - **D7.4** An admitted refutation resolves the case with a `refuted` terminal, persists the
+>   refutation and rationale in the case store, consumes no kickback, grants no route, and is never
+>   recorded as, merged into, or promoted to an operator accepted-risk disposition. It is an
+>   autonomous case outcome under Decision 2 exactly as `reject` is.
+> - **D7.5** Decision 5's resolution path widens: a case may also be resolved by an admitted
+>   refutation in the current lap, not only by absence. A refuted case is finalized for the settled
+>   predicate of the successor ADR, so an exact-id re-raise of its source is excluded from the live
+>   source set and never halts as a regression.
+> - **D7.6** The engine emits one additive `remediation_case_refuted` occurrence per admitted
+>   refutation on the existing spine, registered with every sink, so the durable resolution is never
+>   a silent state change.
+
 ### D8 — The effective verdict is derived only after required effects settle
 
 The effective result is:

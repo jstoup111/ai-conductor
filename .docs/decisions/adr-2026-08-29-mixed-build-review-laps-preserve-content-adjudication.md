@@ -81,6 +81,15 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 
 > **Amended 2026-09-10 by #1986:** for custom-policy laps, a consistency or owning-decision stop precedes D3's actionable-content route; independently blocking infrastructure remains recorded. Only a complete consistent result with admitted repairs can publish the existing work order. Escalation itself neither charges BUILD nor appends a task (adr-2026-09-10-portable-build-review-policy D9).
 
+> **Amended 2026-09-09 by #2409:** Decision 3 now distinguishes an *unrefuted* repeat from a
+> *refuted* re-raise.
+>
+> - **D3.4** A repeated attempted case that the judge again proposes as `act` still halts without a
+>   second charge or a free route. A re-raised attempted case that the judge binds with an admitted
+>   `refute` row (adr-2026-08-29-build-review-remediate-case-adjudication D7.1–D7.3) is a finalized
+>   permitted autonomous outcome for D3.3: it converts nothing about infrastructure, consumes no
+>   semantic kickback, and joins the deferred/rejected/merged set of D3.2.
+
 ### D4 — Grader confidence and an operator floor suppress a finding before it fails the gate
 
 > **Amended 2026-09-06 by #2383:** D1 admits every "valid operator-unresolved content finding" to
@@ -163,6 +172,14 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 > coordinator emits the existing `remediation_adjudication_completed` event for the lap with the
 > settled case ids and no new effect ids, so the skipped session is visible on the spine and in the
 > daemon log as a completed adjudication rather than as an absence.
+
+> **Amended 2026-09-09 by #2409:** the settled predicate admits the refuted terminal.
+>
+> - **D5.3** A case with disposition `refute` whose effect is `none` or an `applied` deferral is
+>   finalized for D5.1. Its source links are removed from the live source set on every later lap by
+>   exact id, so a refuted claim is neither re-dispatched to the judge nor halted as a regression.
+>   A `refute` case whose deferral effect is `reserved` or `failed` does not satisfy the predicate,
+>   exactly as D5.2 prescribes for every other unfinished effect.
 
 ## Consequences
 

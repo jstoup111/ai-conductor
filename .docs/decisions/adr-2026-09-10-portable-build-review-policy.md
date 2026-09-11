@@ -117,6 +117,8 @@ Keep built-in-only compatibility paths intact where their existing behavior diff
 
 ### D11 — Reuse durable effects and all existing convergence limits
 
+> **Amended 2026-09-11 by #1986:** The newly merged #2409 amendment to the shared case ADRs is retained. Repeated-case stop here means an unrefuted attempted act; an admitted one-time evidence-backed refutation uses the inherited refute/refuted terminal without a BUILD route or charge. #2409 owns that primitive and must implement it before this feature builds. Custom case-v2 retains its validated contract.
+
 Keep the current case store, work-order store, exact operator disposition store, and kickback ledger as the only owners of their state. Extend their schemas additively/versionedly to carry custom identity, consistency, and escalation. Production defaults remain filesystem-backed, leased, atomically replaced, and fail closed on corruption. No new independent retry ledger or case store is introduced.
 
 Preserve one charge per new aggregate action effect, idempotent interrupted-effect recovery, attempted-case repeat stops, and current-lap source binding. Configuration removal, policy-content changes, provider fallback, and incidental tree movement never reset cumulative limits. An unapplied effect cannot become a settled PASS. A changed custom policy invalidates stale evidence and exact settled-source reuse; semantic prior-case reasoning still prevents repeated repair under drifting identifiers.

@@ -414,3 +414,5 @@ These have no recognized approval declaration and no changed subject overlap; no
 - `adr-2026-07-04-park-unpark-cli-verbs` — no recognized status line
 - `adr-2026-07-12-judged-attribution-verdict-persistence` — no recognized status line
 - `adr-2026-08-23-committed-halt-record` — no recognized status line
+
+> **Amended 2026-09-11 by #1986 (main integration):** Rechecked the newly merged #2409 amendment to the shared case and mixed-lap ADRs against this feature. Refuted re-raises settle through the approved predecessor-owned one-time evidence-backed lane; unrefuted attempted acts retain the repeat stop. The criterion/plan references are qualified accordingly, and the implementation is dependency-ordered after #2409 rather than duplicated here. Both sides of the textual merge conflict are retained. Result: PASS, no remaining substantive conflict.
