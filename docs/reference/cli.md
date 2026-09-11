@@ -761,8 +761,9 @@ fact that the spec shipped and the daemon stops re-dispatching it. Never run it 
 
 It resolves the plan identity, hashes `.docs/plans/<slug>.md` and its stories file — the plan's
 `**Stories:**` reference first, then `.docs/stories/<slug>.md` — renders the record with a cost block
-when one can be computed, then `git add`s the file and commits it as `shipped record: <slug>` only when
-the staged content actually changed. Identical already-committed content produces no duplicate commit.
+when one can be computed, then compares its substantive content to the committed record, ignoring the
+generated `## Cost` and `## Time` blocks. Equal substance produces no duplicate commit; otherwise it
+`git add`s the file and commits it as `shipped record: <slug>` when the staged content changed.
 
 It also appends a `## Time` block computed independently from `.pipeline/events.jsonl`, reporting
 `state: measured|partial|unavailable` with `active_ms`, `provider_active_ms`, and

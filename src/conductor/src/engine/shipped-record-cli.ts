@@ -29,6 +29,7 @@ import {
   appendBuildReviewReducedCoverageEvidence,
   appendBuildReviewMetrics,
   parseStoriesReference,
+  projectShippedRecordSubstance,
   specHash,
   renderShippedRecord,
   renderShippedRecordWithCost,
@@ -241,6 +242,23 @@ export async function dispatchShippedRecord(
       );
       return 1;
     }
+    // Cost and Time are self-updating telemetry: the dispatch that writes this
+    // record also grows their ledger. When every other byte matches HEAD,
+    // retain the committed record verbatim so the worktree remains clean.
+    const committed = await execa('git', ['show', `HEAD:${relPath}`], {
+      cwd,
+      reject: false,
+      stripFinalNewline: false,
+    }).catch(() => undefined);
+    if (
+      committed?.exitCode === 0
+      && projectShippedRecordSubstance(committed.stdout) === projectShippedRecordSubstance(recordBody)
+    ) {
+      await writeShippedRecord(join(cwd, relPath), committed.stdout);
+      console.log(`  ✓ shipped record already committed: ${relPath}`);
+      return 0;
+    }
+
     await writeShippedRecord(join(cwd, relPath), recordBody);
 
     await execa('git', ['add', relPath], { cwd });

@@ -1,3 +1,5 @@
+// Covers: task:2
+
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -59,7 +61,8 @@ beforeEach(async () => {
   await git(['config', 'user.email', 'test@example.com']);
   await git(['config', 'user.name', 'Test']);
   await writeFile(join(repo, 'README.md'), 'seed\n');
-  await git(['add', 'README.md']);
+  await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
+  await git(['add', 'README.md', '.gitignore']);
   await git(['commit', '-q', '-m', 'seed']);
   // The implementation branch the finish flow runs on, with the spec committed
   // (worktrees are cut from base with the vetted plan+stories already merged).
@@ -178,6 +181,102 @@ describe('conduct shipped-record — record committed on the implementation bran
 
     expect(await git(['rev-parse', 'HEAD'])).toBe(firstHead);
     expect(await git(['rev-list', '--count', 'HEAD'])).toBe(firstCount);
+  });
+
+  it('idempotent re-run: ignores ledger growth after its committed record is authoritative', async () => {
+    const pr = 'https://github.com/acme/repo/pull/42';
+    const ledgerPath = join(repo, '.pipeline/events.jsonl');
+    const firstDispatch = {
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      actualProvider: 'codex',
+      activeInterval: { startedAtMs: 0, durationMs: 100 },
+      tokenUsage: { input: 100, output: 20, cacheRead: 10, cacheCreation: 5, costUsd: 0.03 },
+    };
+    const laterDispatch = {
+      ...firstDispatch,
+      activeInterval: { startedAtMs: 100, durationMs: 200 },
+    };
+    await mkdir(join(repo, '.pipeline'), { recursive: true });
+    await writeFile(ledgerPath, [
+      { type: 'step_started', step: 'build' },
+      firstDispatch,
+    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
+
+    expect(await runShippedRecord(SLUG, pr)).toBe(0);
+    const committedRecord = await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8');
+    expect(committedRecord).toContain('dispatches: 1');
+    expect(committedRecord).toContain('active_ms: 100');
+
+    await writeFile(ledgerPath, [
+      { type: 'step_started', step: 'build' },
+      firstDispatch,
+      { type: 'step_started', step: 'build' },
+      laterDispatch,
+    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
+    const outs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((message: unknown) => {
+      outs.push(String(message));
+    });
+
+    expect(await runShippedRecord(SLUG, pr)).toBe(0);
+    expect((await git(['log', '--format=%s'])).split('\n').filter(
+      (subject) => subject === `shipped record: ${SLUG}`,
+    )).toHaveLength(1);
+    expect(outs.filter((line) => line.includes('✓ shipped record already committed:'))).toHaveLength(1);
+    expect(await git(['status', '--porcelain'])).toBe('');
+    const { stdout: committedBytes } = await execFile('git', [
+      'show',
+      `HEAD:.docs/shipped/${SLUG}.md`,
+    ], { cwd: repo });
+    expect(await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8')).toBe(
+      committedBytes,
+    );
+  });
+
+  it('replaces the committed record when a rerun identifies a different PR', async () => {
+    const firstPr = 'https://github.com/acme/repo/pull/42';
+    const replacementPr = 'https://github.com/acme/repo/pull/43';
+    const ledgerPath = join(repo, '.pipeline/events.jsonl');
+    const firstDispatch = {
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      actualProvider: 'codex',
+      activeInterval: { startedAtMs: 0, durationMs: 100 },
+      tokenUsage: { input: 100, output: 20, cacheRead: 10, cacheCreation: 5, costUsd: 0.03 },
+    };
+    const laterDispatch = {
+      ...firstDispatch,
+      activeInterval: { startedAtMs: 100, durationMs: 200 },
+    };
+    await mkdir(join(repo, '.pipeline'), { recursive: true });
+    await writeFile(ledgerPath, [
+      { type: 'step_started', step: 'build' },
+      firstDispatch,
+    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
+
+    expect(await runShippedRecord(SLUG, firstPr)).toBe(0);
+
+    await writeFile(ledgerPath, [
+      { type: 'step_started', step: 'build' },
+      firstDispatch,
+      { type: 'step_started', step: 'build' },
+      laterDispatch,
+    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
+
+    expect(await runShippedRecord(SLUG, replacementPr)).toBe(0);
+    expect((await git(['log', '--format=%s'])).split('\n').filter(
+      (subject) => subject === `shipped record: ${SLUG}`,
+    )).toHaveLength(2);
+    const { stdout: committedRecord } = await execFile('git', [
+      'show',
+      `HEAD:.docs/shipped/${SLUG}.md`,
+    ], { cwd: repo });
+    expect(committedRecord).toContain(`pr: ${replacementPr}`);
+    expect(committedRecord).toContain('dispatches: 2');
+    expect(committedRecord).toContain('active_ms: 300');
   });
 
   it.each([
