@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:1, task:4
 // engineer-agent-hosted.test.ts
 //
 // Orphaned-primitives guard + agent-hosted execution conformance (ADR-008 Phase 9.3),
@@ -758,7 +758,10 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
     await mkdir(join(dir, '.docs', 'architecture'), { recursive: true });
     await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
     await writeFile(join(dir, '.docs', 'conflicts', `2026-06-28-${slug}.md`), '# Conflicts\n\nNone.\n');
-    await writeFile(join(dir, '.docs', 'architecture', `${slug}.md`), '# Architecture\n\nDiagram.\n');
+    await writeFile(
+      join(dir, '.docs', 'architecture', `${slug}.md`),
+      '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n',
+    );
     await writeFile(
       join(dir, '.docs', 'decisions', 'adr-2026-09-08-streaming.md'),
       `# ADR-001\n\n**Status:** ${opts.adrStatus ?? 'APPROVED'}\n\n## Decision\n\n1. **Use streaming.**\n`,
@@ -773,6 +776,11 @@ describe('landSpec primitive (src/engine/engineer/land-spec.ts)', () => {
     const { landSpec } = await import('../../src/engine/engineer/land-spec.js');
     const result = await landSpec({ name: 'target', canonicalPath: repoPath }, idea, worktree, undefined, {
       ownerConfig: { spec_owner: 'test-owner' },
+      renderDeps: {
+        hasTool: async () => true,
+        writeTemp: async () => '/tmp/agent-hosted-architecture.mmd',
+        runMmdc: async () => ({ ok: true }),
+      },
     });
 
     const tracked = await git(['ls-tree', '-r', '--name-only', result.branch], repoPath);

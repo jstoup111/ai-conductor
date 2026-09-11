@@ -122,6 +122,8 @@ false-fails on a box without a browser.)
 > `mmdc` is unavailable (an unvalidated diagram never lands). So a broken diagram cannot reach a
 > merged spec regardless of whether this step was run by hand. Install `@mermaid-js/mermaid-cli`
 > (a `bin/install` mermaid preset) so the gate can validate.
+> A non-Small architecture artifact with no fenced Mermaid block is also refused at land, so an
+> ASCII sketch is not an acceptable substitute.
 
 Present all diagrams to the engineer for validation before proceeding.
 
