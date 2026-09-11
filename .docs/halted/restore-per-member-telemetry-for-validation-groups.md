@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-11T13:43:01.942Z
+Status: halted
 Slug: restore-per-member-telemetry-for-validation-groups
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-restore-per-member-telemetry-for-validation-groups
-Head SHA: 75ed5e2542ab7f3d49c742b29f74494e4e3f8d30
-Halted at: 2026-09-11T13:33:38.058Z
+Head SHA: 5ff6e6d81ce9d1f30f307e7d8290e8bfc8f5b819
+Halted at: 2026-09-11T13:56:38.300Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: semantic remediation case repeat 48d287bd-9eb9-48df-9a33-e776f2e87e9f
+step 'build_review' cannot make progress: its inputs cannot change on a re-dispatch. Re-run 'test_suite' before retrying 'build_review'.
 ```
