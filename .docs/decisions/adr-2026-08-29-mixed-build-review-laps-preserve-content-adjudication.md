@@ -59,6 +59,8 @@ this dispatch and is not included as repairable content. The predecessor's sourc
 bounded all-history input, engine validation, case reconciliation, and deterministic effect rules are
 unchanged. No new step, skill, provider member, or second adjudicator is introduced.
 
+> **Amended 2026-09-10 by #1986:** custom-policy laps extend this same case flow with versioned consistency, plan-admission, and decision-escalation outcomes. The shared operation serves attended and daemon execution exactly once per lap. A blocked consistency decision, any decision escalation, or invalid admission evidence prevents action effects before a worker receives repairs. The inherited source-complete, mixed-lap infrastructure, suppression, settled-recurrence, durable-effect, and cumulative-bound contracts remain effective (adr-2026-09-10-portable-build-review-policy D8–D11).
+
 ### D3 — Content action and infrastructure blocking compose without erasure
 
 After complete adjudication and required-effect settlement, transition precedence is:
@@ -76,6 +78,8 @@ After complete adjudication and required-effect settlement, transition precedenc
 Adjudication or effect failure remains fail-closed and blocks both PASS and partial routing. A
 repeated attempted/regressed semantic case still halts without a second charge or a free route. Every
 actual first-time BUILD route still increments the cumulative convergence bound.
+
+> **Amended 2026-09-10 by #1986:** for custom-policy laps, a consistency or owning-decision stop precedes D3's actionable-content route; independently blocking infrastructure remains recorded. Only a complete consistent result with admitted repairs can publish the existing work order. Escalation itself neither charges BUILD nor appends a task (adr-2026-09-10-portable-build-review-policy D9).
 
 ### D4 — Grader confidence and an operator floor suppress a finding before it fails the gate
 
