@@ -1,4 +1,4 @@
-// Covers: task:1, task:3
+// Covers: task:1, task:3, task:5
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -1608,22 +1608,29 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
 
   it('reports a quarantine before its healed outcome', async () => {
     const events = new ConductorEventEmitter();
-    const seen: string[] = [];
+    const seen: Array<{ type: string; paths?: string[]; directory?: string }> = [];
     for (const type of ['rebase_untracked_quarantined', 'rebase_changed', 'rebase_conflict_halt'] as const) {
       events.on(type, (event) => {
-        seen.push(event.type);
+        seen.push(event.type === 'rebase_untracked_quarantined'
+          ? { type: event.type, paths: event.paths, directory: event.directory }
+          : { type: event.type });
       });
     }
-    const quarantine = { paths: ['generated.txt'], directory: '.pipeline/rebase-untracked-quarantine' };
+    const quarantine = {
+      paths: ['generated.txt', 'nested/generated.json'],
+      directory: '.pipeline/rebase-untracked-quarantine',
+    };
 
-    await emitRebaseEvent(events, { kind: 'changed', changedCodePaths: ['generated.txt'], quarantine });
+    await emitRebaseEvent(events, {
+      kind: 'changed', changedCodePaths: ['generated.txt', 'nested/generated.json'], quarantine,
+    });
     await emitRebaseEvent(events, {
       kind: 'conflict_halt', conflicts: [], reason: 'still refused', startFailure: true, quarantine,
     });
 
     expect(seen).toEqual([
-      'rebase_untracked_quarantined', 'rebase_changed',
-      'rebase_untracked_quarantined', 'rebase_conflict_halt',
+      { type: 'rebase_untracked_quarantined', ...quarantine }, { type: 'rebase_changed' },
+      { type: 'rebase_untracked_quarantined', ...quarantine }, { type: 'rebase_conflict_halt' },
     ]);
   });
 
