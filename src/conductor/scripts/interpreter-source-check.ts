@@ -74,6 +74,21 @@ function wordAt(text: string, start: number, line: number, lineAt: (offset: numb
 
 type CommandScan = { commands: Word[][]; heredocs: Heredoc[] };
 
+/**
+ * Returns the byte after a non-heredoc redirection and its operand.  Redirection
+ * operands are shell syntax, not arguments to the command being classified.
+ */
+function redirectionEnd(line: string, cursor: number, lineNumber: number, lineAt: (offset: number) => number): number | undefined {
+  let operatorStart = cursor;
+  while (/\d/.test(line[operatorStart] ?? '')) operatorStart += 1;
+  const operator = ['&>>', '>>', '>|', '<>', '>&', '<&', '&>', '>', '<'].find((candidate) => line.startsWith(candidate, operatorStart));
+  if (!operator) return undefined;
+  let target = operatorStart + operator.length;
+  while (/\s/.test(line[target] ?? '')) target += 1;
+  const [, next] = wordAt(line, target, lineNumber, lineAt);
+  return next > target ? next : target;
+}
+
 function commandsOnLine(line: string, lineNumber: number, includeNested = true, lineAt: (offset: number) => number = () => lineNumber): CommandScan {
   const commands: Word[][] = [[]];
   const nested: Word[][] = [];
@@ -82,11 +97,7 @@ function commandsOnLine(line: string, lineNumber: number, includeNested = true, 
   while (cursor < line.length) {
     while (/\s/.test(line[cursor] ?? '')) cursor += 1;
     if (cursor >= line.length || line[cursor] === '#') break;
-    if (';|&'.includes(line[cursor])) {
-      while (cursor < line.length && ';|&'.includes(line[cursor])) cursor += 1;
-      commands.push([]);
-      continue;
-    }
+    // Handle here-strings and heredocs before ordinary input redirections.
     if (line.startsWith('<<<', cursor)) { cursor += 3; continue; }
     if (line.startsWith('<<', cursor)) {
       cursor += 2;
@@ -96,12 +107,18 @@ function commandsOnLine(line: string, lineNumber: number, includeNested = true, 
       const [delimiter, next] = wordAt(line, cursor, lineNumber, lineAt);
       if (next === cursor) continue;
       const owner = commands.at(-1) ?? [];
-      const executable = directInterpreterIndex(owner);
       heredocs.push({
         ...heredocDelimiter(delimiter.raw), stripTabs,
         interpreter: false, line: lineAt(cursor), owner,
       });
       cursor = next;
+      continue;
+    }
+    const redirectEnd = redirectionEnd(line, cursor, lineNumber, lineAt);
+    if (redirectEnd !== undefined) { cursor = redirectEnd; continue; }
+    if (';|&'.includes(line[cursor])) {
+      while (cursor < line.length && ';|&'.includes(line[cursor])) cursor += 1;
+      commands.push([]);
       continue;
     }
     // Arithmetic commands are syntax, not nested shell command contexts.
@@ -110,7 +127,6 @@ function commandsOnLine(line: string, lineNumber: number, includeNested = true, 
       cursor = close < 0 ? line.length : close + 2;
       continue;
     }
-    if ('<>'.includes(line[cursor])) { cursor += 1; continue; }
     const [word, next] = wordAt(line, cursor, lineNumber, lineAt);
     if (next === cursor) { cursor += 1; continue; }
     commands.at(-1)?.push(word);

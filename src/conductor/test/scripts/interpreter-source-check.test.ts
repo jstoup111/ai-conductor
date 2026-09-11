@@ -158,6 +158,24 @@ describe('checkInterpreterSource', () => {
     expect(checkInterpreterSource('prefix-heredoc-safe.sh', "<<'PY' python3\nprint($VALUE)\nPY")).toEqual([]);
   });
 
+  it.each([
+    ['input redirection before python', '<input python3 -c "print($VALUE)"'],
+    ['numbered output redirection before node', '2>/dev/null node -e "console.log($VALUE)"'],
+    ['redirection after python', 'python3 2>/dev/null -c "print($VALUE)"'],
+    ['descriptor duplication before node', '>&2 node --eval="console.log($VALUE)"'],
+  ])('does not treat %s operands as command words', (_name, text) => {
+    expect(checkInterpreterSource('redirection-command.sh', text)).toEqual([
+      expect.objectContaining({ line: 1, message: 'shell expansion in interpreter command source' }),
+    ]);
+  });
+
+  it('associates heredocs with interpreters despite ordinary redirections', () => {
+    expect(checkInterpreterSource('redirection-heredoc.sh', '>output <<PY python3\nprint($VALUE)\nPY')).toEqual([
+      expect.objectContaining({ line: 2, message: 'shell expansion in interpreter heredoc source' }),
+    ]);
+    expect(checkInterpreterSource('redirection-heredoc-safe.sh', "2>/dev/null <<'PY' python3\nprint($VALUE)\nPY")).toEqual([]);
+  });
+
   it('terminates after case-pattern separators at end of line', () => {
     expect(checkInterpreterSource('case.sh', 'case "$name" in\n  conduct-ts)\n    true\n    ;;\nesac')).toEqual([]);
   });
