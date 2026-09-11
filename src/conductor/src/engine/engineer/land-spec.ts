@@ -115,12 +115,14 @@ export type LandGateIdentifier =
   | 'required-artifacts-missing'
   | 'plan-protected-targets'
   | 'plan-done-when'
+  | 'plan-task-count'
   | 'plan-stories-reference'
   | 'stories-not-approved'
   | 'tier-artifacts-missing'
   | 'artifact-stem-mismatch'
   | 'adr-not-approved'
   | 'adr-uncitable-decision'
+  | 'adr-filename'
   | 'coherence'
   | 'mermaid-render'
   | 'mermaid-tool-missing'
@@ -139,7 +141,7 @@ export function landGateError(gate: LandGateIdentifier, message: string): LandGa
   return new LandGateError(gate, message);
 }
 
-export type LandGateRejectionIdentifier = LandGateIdentifier | 'target-path-missing' | 'unclassified';
+export type LandGateRejectionIdentifier = LandGateIdentifier | 'unclassified';
 
 const REASON_LIMIT = 1000;
 const TRUNCATION_MARKER = '… [truncated]';
@@ -156,9 +158,7 @@ export function classifyLandGateRejection(error: unknown): {
   return {
     gate: error instanceof LandGateError
       ? error.gate
-      : error instanceof TargetPathMissingError
-        ? 'target-path-missing'
-        : 'unclassified',
+      : 'unclassified',
     reason,
   };
 }
@@ -345,7 +345,7 @@ export async function landSpec(
     const declarationProblem = taskCountValidation.kind === 'unauthorized'
       ? 'no scope exception declaration was provided'
       : 'the scope exception declaration is malformed';
-    throw new Error(
+    throw landGateError('plan-task-count',
       `landSpec: plan has ${taskCountValidation.taskCount} addressable tasks, reaching hard-stop ` +
         `boundary ${PLAN_TASK_HARD_STOP_BOUNDARY}; ${declarationProblem}.`,
     );
@@ -528,7 +528,7 @@ export async function landSpec(
     );
   }
   if (nonCanonicalNewAdrs.length > 0) {
-    throw new Error(
+    throw landGateError('adr-filename',
       `landSpec: newly added ADRs must use canonical filenames: ${nonCanonicalNewAdrs.join('; ')}. ` +
         'Required format: adr-YYYY-MM-DD-lowercase-hyphenated-slug.md.',
     );

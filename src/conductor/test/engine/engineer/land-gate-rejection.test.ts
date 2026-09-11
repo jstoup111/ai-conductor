@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { TargetPathMissingError } from '../../../src/engine/engineer/target.js';
 import {
   classifyLandGateRejection,
   landGateError,
@@ -17,8 +16,17 @@ describe('land-gate rejection classification', () => {
     expect(error.message).toBe('stories must be accepted');
   });
 
-  it('classifies missing targets and unexpected failures without dropping either', () => {
-    expect(classifyLandGateRejection(new TargetPathMissingError('/missing')).gate).toBe('target-path-missing');
+  it.each(['plan-task-count', 'adr-filename'] as const)(
+    'classifies the %s gate with its stable identifier',
+    (gate) => {
+      expect(classifyLandGateRejection(landGateError(gate, 'unchanged message'))).toEqual({
+        gate,
+        reason: 'unchanged message',
+      });
+    },
+  );
+
+  it('classifies unexpected failures as unclassified', () => {
     expect(classifyLandGateRejection(new Error('unexpected')).gate).toBe('unclassified');
   });
 
