@@ -1,4 +1,4 @@
-// Covers: task:3, task:4, task:6
+// Covers: task:2, task:3, task:4, task:6
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import chalk from 'chalk';
 import { readFileSync } from 'node:fs';
@@ -323,6 +323,19 @@ describe('renderDaemonEvent', () => {
       artifact: '.docs/specs/another-feature.md',
     })).toEqual([
       '· ↩ remediation gap sealed-gap → plan — sealed artifact .docs/specs/another-feature.md',
+    ]);
+  });
+
+  it('renders a sealed-artifact redirect with its quoted directing clause and source', () => {
+    expect(lines({
+      type: 'remediation_sealed_artifact_redirect',
+      gapId: 'sealed-gap',
+      artifact: '.docs/specs/another-feature.md',
+      directingClause: 'Amend .docs/specs/another-feature.md with the corrected assertion.',
+      directingSource: 'task title',
+    } as unknown as ConductorEvent)).toEqual([
+      '· ↩ remediation gap sealed-gap → plan — sealed artifact .docs/specs/another-feature.md '
+        + '— task title: "Amend .docs/specs/another-feature.md with the corrected assertion."',
     ]);
   });
 

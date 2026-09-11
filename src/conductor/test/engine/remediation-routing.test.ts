@@ -1,3 +1,4 @@
+// Covers: task:2, task:3, task:4
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
@@ -33,7 +34,7 @@ describe('sealed-artifact remediation routing', () => {
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  async function remediate(dispositions: unknown[], source = 'prd-audit') {
+  async function remediate(dispositions: unknown[], source = 'prd-audit', daemon = true) {
     const dispatched: StepName[] = [];
     const runner: StepRunner = {
       run: async (step) => {
@@ -57,7 +58,7 @@ describe('sealed-artifact remediation routing', () => {
       events,
       projectRoot,
       mode: 'auto',
-      daemon: true,
+      daemon,
       verifyArtifacts: false,
       maxRetries: 1,
     });
@@ -67,7 +68,7 @@ describe('sealed-artifact remediation routing', () => {
         steps: typeof ALL_STEPS,
         dispatchContext: string,
         hintSource: { source: string; evidenceFile: string },
-      ) => Promise<{ kind: string; target?: string; detail?: string }>;
+      ) => Promise<{ kind: string; target?: string; detail?: string; evidence?: string }>;
     }).planRemediation(
       { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
       ALL_STEPS,
@@ -273,7 +274,42 @@ describe('sealed-artifact remediation routing', () => {
       expect(redirects).toEqual([]);
   });
 
-  it('emits the foreign artifact and gap id when redirecting a sealed rationale target', async () => {
+  it('keeps a newline-separated rationale citation on its authored build route', async () => {
+    const { outcome, redirects } = await remediate([{
+      id: 'newline-citation',
+      disposition: 'build',
+      category: null,
+      rationale: 'Update the parser to reject null\nEvidence: .docs/stories/another-feature.md:12',
+      tasks: [{ id: 'parser-repair', title: 'Repair parser behavior' }],
+    }]);
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(redirects).toEqual([]);
+  });
+
+  it('emits the directing task-title clause and source when redirecting a sealed target', async () => {
+    const { outcome, redirects } = await remediate([{
+      id: 'title-event-gap',
+      disposition: 'build',
+      category: null,
+      rationale: 'The accepted assertion is incorrect.',
+      tasks: [{
+        id: 'foreign-title',
+        title: 'Amend .docs/specs/another-feature.md with the corrected assertion.',
+      }],
+    }]);
+
+    expect(outcome).toMatchObject({ kind: 'halt' });
+    expect(redirects).toEqual([{
+      type: 'remediation_sealed_artifact_redirect',
+      gapId: 'title-event-gap',
+      artifact: '.docs/specs/another-feature.md',
+      directingClause: 'Amend .docs/specs/another-feature.md with the corrected assertion.',
+      directingSource: 'task title',
+    }]);
+  });
+
+  it('emits the foreign artifact, rationale clause, and source when redirecting a sealed rationale target', async () => {
     const seen: unknown[] = [];
     const dispositions = [{
       id: 'event-gap', disposition: 'build', category: null,
@@ -296,11 +332,134 @@ describe('sealed-artifact remediation routing', () => {
       ) => Promise<unknown>;
     }).planRemediation(
       { session_started_at: Date.now() - 1000, feature_desc: 'feature' }, ALL_STEPS, 'blocked', { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' });
-    expect(seen).toEqual([{ type: 'remediation_sealed_artifact_redirect', gapId: 'event-gap', artifact: '.docs/specs/another-feature.md' }]);
+    expect(seen).toEqual([{
+      type: 'remediation_sealed_artifact_redirect',
+      gapId: 'event-gap',
+      artifact: '.docs/specs/another-feature.md',
+      directingClause: 'Amend .docs/specs/another-feature.md.',
+      directingSource: 'rationale',
+    }]);
     expect(await readFile(join(projectRoot, '.pipeline/events.jsonl'), 'utf8')).toContain(
       '"type":"remediation_sealed_artifact_redirect","gapId":"event-gap","artifact":".docs/specs/another-feature.md"',
     );
     persister.stop();
+  });
+
+  it('persists one parseable redirect record and carries an oversized normalized clause to halt evidence', async () => {
+    const title = [
+      'Amend .docs/specs/another-feature.md with a correction that contains deliberately extensive supporting context',
+      'across several lines so the diagnostic quote must be collapsed into one bounded operator-facing line before it',
+      'is carried to event persistence or halt evidence.',
+    ].join('\n  ');
+    const normalized = title.replace(/\s+/g, ' ').trim();
+    const directingClause = `${normalized.slice(0, 159)}…`;
+    const dispositions = [{
+      id: 'oversized-event-gap', disposition: 'build', category: null,
+      rationale: 'The accepted assertion is incorrect.',
+      tasks: [{ id: 'oversized-foreign-title', title }],
+    }];
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline/events.jsonl'), events);
+    persister.start();
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
+      projectRoot,
+      stepRunner: {
+        run: async () => {
+          await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify({ dispositions }));
+          return { success: true };
+        },
+      },
+      events,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+    });
+
+    try {
+      const outcome = await (conductor as unknown as {
+        planRemediation: (
+          state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string,
+          hintSource: { source: string; evidenceFile: string },
+        ) => Promise<{ kind: string; detail?: string }>;
+      }).planRemediation(
+        { session_started_at: Date.now() - 1_000, feature_desc: 'feature' },
+        ALL_STEPS,
+        'blocked',
+        { source: 'prd-audit', evidenceFile: '.pipeline/prd-audit.md' },
+      );
+
+      const lines = (await readFile(join(projectRoot, '.pipeline/events.jsonl'), 'utf8'))
+        .split('\n')
+        .filter(Boolean);
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0])).toMatchObject({
+        type: 'remediation_sealed_artifact_redirect',
+        gapId: 'oversized-event-gap',
+        artifact: '.docs/specs/another-feature.md',
+        directingClause,
+        directingSource: 'task title',
+      });
+      expect(directingClause).toHaveLength(160);
+      expect(outcome).toMatchObject({ kind: 'halt' });
+      expect(outcome.detail).toContain(`"${directingClause}"`);
+    } finally {
+      persister.stop();
+    }
+  });
+
+  it('names the redirected gap’s directing text in DECIDE halt evidence while ordinary gaps stay bare', async () => {
+    const { outcome } = await remediate([
+      {
+        id: 'ordinary-build-gap',
+        disposition: 'build',
+        category: null,
+        rationale: 'Repair ordinary source behavior.',
+        tasks: [{ id: 'ordinary-source-repair', title: 'Repair src/engine/conductor.ts' }],
+      },
+      {
+        id: 'ordinary-acceptance-gap',
+        disposition: 'acceptance_specs',
+        category: null,
+        rationale: 'Repair an ordinary acceptance specification.',
+        tasks: [{ id: 'ordinary-acceptance-repair', title: 'Repair test/acceptance/feature.test.ts' }],
+      },
+      {
+        id: 'redirected-sealed-gap',
+        disposition: 'build',
+        category: null,
+        rationale: 'The accepted assertion is incorrect.',
+        tasks: [{
+          id: 'redirected-sealed-repair',
+          title: 'Amend .docs/specs/another-feature.md with the corrected assertion.',
+        }],
+      },
+    ]);
+
+    expect(outcome).toMatchObject({ kind: 'halt' });
+    expect(outcome.detail).toContain(
+      'ordinary-build-gap→build; ordinary-acceptance-gap→acceptance_specs; redirected-sealed-gap→plan',
+    );
+    expect(outcome.detail).toContain('.docs/specs/another-feature.md');
+    expect(outcome.detail).toContain('"Amend .docs/specs/another-feature.md with the corrected assertion."');
+
+    const { outcome: routed } = await remediate([
+      {
+        id: 'redirected-sealed-gap',
+        disposition: 'build',
+        category: null,
+        rationale: 'The accepted assertion is incorrect.',
+        tasks: [{
+          id: 'redirected-sealed-repair',
+          title: 'Amend .docs/specs/another-feature.md with the corrected assertion.',
+        }],
+      },
+    ], 'prd-audit', false);
+
+    expect(routed).toMatchObject({ kind: 'route', target: 'plan' });
+    expect(routed.evidence).toContain('.docs/specs/another-feature.md');
+    expect(routed.evidence).toContain('"Amend .docs/specs/another-feature.md with the corrected assertion."');
   });
 
   it('writes no request, ledger, or record artifact while redirecting a sealed cross-feature gap', async () => {

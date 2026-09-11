@@ -710,6 +710,10 @@ export type ConductorEvent =
       type: 'remediation_sealed_artifact_redirect';
       gapId: string;
       artifact: string;
+      /** The planner prose clause that directed the sealed-artifact edit. */
+      directingClause?: string;
+      /** Which remediation input supplied the directing clause. */
+      directingSource?: 'task title' | 'rationale';
     }
   | {
       /** A remediation planner disposition was not recognized by the engine. */

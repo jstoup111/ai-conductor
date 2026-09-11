@@ -4023,16 +4023,29 @@ export class Conductor {
       : isAbsolute(activePlanPath)
         ? activePlanPath
         : join(this.projectRoot, activePlanPath);
-    const sealedArtifactsByGapId = new Map<string, string>();
+    const sealedArtifactsByGapId = new Map<string, {
+      artifact: string;
+      directingClause: string;
+      directingSource: 'task title' | 'rationale';
+    }>();
     if (planPath) {
       for (const gap of plan.gaps) {
-        const artifact = remediationGapTargetsAnotherFeatureSealedArtifact(gap, planStem(planPath));
-        if (artifact) sealedArtifactsByGapId.set(gap.id, artifact);
+        const target = remediationGapTargetsAnotherFeatureSealedArtifact(gap, planStem(planPath));
+        if (target) sealedArtifactsByGapId.set(gap.id, target);
       }
     }
     const sealedArtifactGapIds = new Set(sealedArtifactsByGapId.keys());
-    for (const [gapId, artifact] of sealedArtifactsByGapId) {
-      await this.events.emit({ type: 'remediation_sealed_artifact_redirect', gapId, artifact });
+    const redirectedSealedArtifactGapIds = new Set(
+      plan.gaps
+        .filter(
+          (gap) =>
+            sealedArtifactGapIds.has(gap.id) &&
+            (gap.disposition === 'build' || gap.disposition === 'acceptance_specs'),
+        )
+        .map((gap) => gap.id),
+    );
+    for (const [gapId, target] of sealedArtifactsByGapId) {
+      await this.events.emit({ type: 'remediation_sealed_artifact_redirect', gapId, ...target });
     }
     const gaps = plan.gaps.map((gap) =>
       sealedArtifactGapIds.has(gap.id) &&
@@ -4773,7 +4786,14 @@ export class Conductor {
           satisfied = 'unknown';
         }
       }
-      const remediationEvidence = routedFixes.map((g) => `${g.id}→${g.disposition}`).join('; ');
+      const remediationEvidence = routedFixes.map((gap) => {
+        const redirect = redirectedSealedArtifactGapIds.has(gap.id)
+          ? sealedArtifactsByGapId.get(gap.id)
+          : undefined;
+        return redirect === undefined
+          ? `${gap.id}→${gap.disposition}`
+          : `${gap.id}→${gap.disposition} (${redirect.artifact}: "${redirect.directingClause}")`;
+      }).join('; ');
       // Single source for the actionable BUILD hint: the initial dispatch and
       // the persisted repair obligation derive from this same value (AB-3).
       const repairInstruction = buildRemediationHint(
@@ -13865,7 +13885,11 @@ export function resolveExistingTaskBindingsForAdmission(
 function remediationGapTargetsAnotherFeatureSealedArtifact(
   gap: RemediationGap,
   activePlanStem: string,
-): string | undefined {
+): {
+  artifact: string;
+  directingClause: string;
+  directingSource: 'task title' | 'rationale';
+} | undefined {
   // Task titles are prose, not plan Files declarations — remediation tasks
   // routinely cite .docs artifacts as evidence ("the sequence contract at
   // .docs/architecture/sequences/<slug>.md:87 requires ..."), and treating the
@@ -13875,13 +13899,26 @@ function remediationGapTargetsAnotherFeatureSealedArtifact(
   // protected path with an edit verb in its own preceding clause is a target.
   const taskTarget = gap.tasks
     .map((task) => directedProtectedTarget(task.title, activePlanStem))
-    .find((path) => path !== undefined);
-  if (taskTarget) return taskTarget;
+    .find((target) => target !== undefined);
+  if (taskTarget) {
+    return {
+      artifact: taskTarget.path,
+      directingClause: taskTarget.clause,
+      directingSource: 'task title',
+    };
+  }
 
   // Rationale is prose rather than a plan Files declaration. Treat it as a
   // target only when it both names a resolvable protected artifact and directs
   // an edit; a context-only citation must not re-route source work.
-  return directedProtectedTarget(gap.rationale, activePlanStem);
+  const rationaleTarget = directedProtectedTarget(gap.rationale, activePlanStem);
+  return rationaleTarget === undefined
+    ? undefined
+    : {
+      artifact: rationaleTarget.path,
+      directingClause: rationaleTarget.clause,
+      directingSource: 'rationale',
+    };
 }
 
 /**
@@ -13889,10 +13926,10 @@ function remediationGapTargetsAnotherFeatureSealedArtifact(
  * verb appears in the same clause before it; a context-only citation never
  * re-routes source work.
  */
-function directedProtectedTarget(
+export function directedProtectedTarget(
   prose: string,
   activePlanStem: string,
-): string | undefined {
+): { path: string; clause: string } | undefined {
   const prosePaths = Array.from(
     prose.matchAll(
       /(?:^|[\s`])((?:\.\/)?\.docs\/(?:architecture|decisions|plans|stories|specs)\/[A-Za-z0-9._-]+\.md)\b/g,
@@ -13911,11 +13948,23 @@ function directedProtectedTarget(
       beforePath.lastIndexOf(';'),
       beforePath.lastIndexOf('\n'),
     );
-    return action.test(beforePath.slice(clauseStart + 1)) ? [path] : [];
+    const clause = prose.slice(clauseStart + 1).trim();
+    return action.test(beforePath.slice(clauseStart + 1)) ? [{ path, clause }] : [];
   });
   if (directedPaths.length === 0) return undefined;
-  const directedScope = `### Task directed: remediation\n\n**Files:** ${directedPaths.join(', ')}`;
-  return scanPlanProtectedTargets(directedScope, activePlanStem)[0]?.path;
+  const directedScope = `### Task directed: remediation\n\n**Files:** ${directedPaths.map(({ path }) => path).join(', ')}`;
+  const target = scanPlanProtectedTargets(directedScope, activePlanStem)[0]?.path;
+  const targetClause = target === undefined
+    ? undefined
+    : directedPaths.find(({ path }) => path.replace(/^\.\//, '') === target.replace(/^\.\//, ''))?.clause;
+  return targetClause === undefined || target === undefined
+    ? undefined
+    : { path: target, clause: normalizeDirectingClause(targetClause) };
+}
+
+function normalizeDirectingClause(clause: string): string {
+  const normalized = clause.replace(/\s+/g, ' ').trim();
+  return normalized.length <= 160 ? normalized : `${normalized.slice(0, 159)}…`;
 }
 
 /**
