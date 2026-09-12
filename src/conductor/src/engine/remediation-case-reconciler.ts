@@ -78,7 +78,7 @@ function isDurableId(value: string): boolean {
 }
 
 function effectFor(caseRow: RemediationCaseRow, id: string | undefined): RemediationCaseEffect {
-  if (caseRow.disposition === 'reject') return { kind: 'none' };
+  if (caseRow.disposition === 'reject' || caseRow.disposition === 'escalate') return { kind: 'none' };
   return caseRow.disposition === 'act'
     ? { id: id!, kind: 'action', status: 'reserved' }
     : { id: id!, kind: 'deferral', status: 'reserved' };
@@ -162,7 +162,9 @@ function reconcileState(
       if (typeof caseId !== 'string' || caseId === 'id-generation-failed' || caseId === 'id-collision') {
         return { ok: false, reason: caseId };
       }
-      const effectId = caseRow.disposition === 'reject' ? undefined : takeId(input.generateId, usedIds);
+      const effectId = caseRow.disposition === 'reject' || caseRow.disposition === 'escalate'
+        ? undefined
+        : takeId(input.generateId, usedIds);
       if (effectId === 'id-generation-failed' || effectId === 'id-collision') return { ok: false, reason: effectId };
       claimed.add(caseId);
       caseIdsByRef.set(caseRow.caseRef, caseId);
@@ -180,6 +182,7 @@ function reconcileState(
           recordedAt: input.recordedAt,
         })),
         effect: effectFor(caseRow, effectId),
+        ...(caseRow.escalation === undefined ? {} : { escalation: caseRow.escalation }),
       });
       continue;
     }
