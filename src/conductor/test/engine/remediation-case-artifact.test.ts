@@ -78,6 +78,38 @@ const REFUTE_CASE_V1 = {
   cases: [REFUTE_CASE],
 } as const;
 
+const CASE_V2 = {
+  mode: 'case-v2',
+  domain: 'build_review',
+  sourceOutcomes: [
+    { sourceId: 'customA:finding-1', outcome: 'acted', caseRef: 'case-repair' },
+    { sourceId: 'customB:finding-2', outcome: 'merged', caseRef: 'case-repair' },
+  ],
+  cases: [{
+    caseRef: 'case-repair',
+    existingCaseId: 'remcase-existing-repair',
+    disposition: 'act',
+    priority: 'high',
+    rationale: 'Both policies identify the same missing behavior.',
+    confidence: 'high',
+    effect: {
+      kind: 'action',
+      route: 'build',
+      tasks: [{
+        title: 'src/widget.ts:20 — cover the changed branch.',
+        admittedTaskIds: ['29'],
+        admissionRationale: 'Task 29 owns the case-v2 artifact contract.',
+      }],
+    },
+  }],
+  consistency: {
+    verdict: 'consistent',
+    sourceIds: ['customA:finding-1', 'customB:finding-2'],
+    caseRefs: ['case-repair'],
+    rationale: 'One repair satisfies both findings without changing approved scope.',
+  },
+} as const;
+
 describe('remediation case artifact', () => {
   let projectRoot: string;
 
@@ -99,6 +131,57 @@ describe('remediation case artifact', () => {
     const result = await read(CASE_V1);
 
     expect(result).toEqual({ ok: true, judgement: CASE_V1 });
+  });
+
+  it('round-trips a case-v2 duplicate repair graph with task admission and consistency provenance', async () => {
+    const result = await read(CASE_V2);
+
+    expect(result).toEqual({ ok: true, judgement: CASE_V2 });
+  });
+
+  it.each(['product', 'plan', 'architecture'] as const)(
+    'round-trips a case-v2 %s escalation without an action effect',
+    async (owner) => {
+      const judgement = {
+        mode: 'case-v2',
+        domain: 'build_review',
+        sourceOutcomes: [{ sourceId: `custom:${owner}`, outcome: 'escalate', caseRef: 'case-stop' }],
+        cases: [{
+          caseRef: 'case-stop',
+          disposition: 'escalate',
+          priority: 'high',
+          rationale: `The finding requires a ${owner} decision.`,
+          confidence: 'high',
+          effect: { kind: 'none' },
+          escalation: { owner },
+        }],
+        consistency: {
+          verdict: 'blocked',
+          sourceIds: [`custom:${owner}`],
+          caseRefs: ['case-stop'],
+          rationale: `The ${owner} decision is outside the approved implementation scope.`,
+        },
+      } as const;
+
+      expect(await read(judgement)).toEqual({ ok: true, judgement });
+    },
+  );
+
+  it('round-trips the inherited refute payload and existing-case binding in case-v2', async () => {
+    const judgement = {
+      mode: 'case-v2',
+      domain: 'build_review',
+      sourceOutcomes: [{ sourceId: 'testQuality:finding-refuted', outcome: 'refuted', caseRef: 'case-refuted' }],
+      cases: [REFUTE_CASE],
+      consistency: {
+        verdict: 'consistent',
+        sourceIds: ['testQuality:finding-refuted'],
+        caseRefs: ['case-refuted'],
+        rationale: 'The bound case is terminally refuted by current assertion evidence.',
+      },
+    } as const;
+
+    expect(await read(judgement)).toEqual({ ok: true, judgement });
   });
 
   it('parses a refute row and its typed refutation record', async () => {
@@ -219,7 +302,7 @@ describe('remediation case artifact', () => {
   it.each([
     ['missing exact top-level key', (({ cases, ...value }) => value)(CASE_V1), 'invalid-top-level-keys'],
     ['duplicate exact top-level key', { ...CASE_V1, dispositions: [] }, 'invalid-top-level-keys'],
-    ['unknown mode', { ...CASE_V1, mode: 'case-v2' }, 'unknown-mode'],
+    ['unknown mode', { ...CASE_V1, mode: 'case-v3' }, 'unknown-mode'],
     ['unknown domain', { ...CASE_V1, domain: 'prd_audit' }, 'unknown-domain'],
     ['unknown source outcome', {
       ...CASE_V1,
