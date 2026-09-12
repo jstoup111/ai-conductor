@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import type { BuildReviewRubricId } from "../types/config.js";
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import {
@@ -27,6 +29,7 @@ import {
   type BuildReviewCacheEntry,
   type BuildReviewCacheEntryCandidate,
   type BuildReviewEngineIdentity,
+  type BuildReviewCacheSemanticIdentity,
 } from "./build-review-cache.js";
 import {
   parseBuildReviewBranchArtifact,
@@ -143,6 +146,7 @@ export interface BuildReviewCoordinationInput {
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
     policyFingerprint: string,
+    semanticIdentity: BuildReviewCacheSemanticIdentity,
   ) => Promise<BuildReviewCacheEntryCandidate | undefined>;
   readonly dispatchModel: (
     branch: BuildReviewDispatchableRubric,
@@ -230,6 +234,33 @@ export function preflightProjection(preflight: TautologyPreflightResult): BuildR
 
 function infrastructure(rubric: BuildReviewRubricId, reason: BuildReviewCoordinatorFailureReason, detail?: string, setupExhaustion?: ProviderSetupExhaustion): BuildReviewCoordinatedBranch {
   return { kind: "infrastructure-failure", rubric, reason, ...(detail === undefined ? {} : { detail }), ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}) };
+}
+
+/** Complete built-in candidate identity for the v2 cache envelope. */
+function builtinCacheIdentity(
+  branch: BuildReviewDispatchableRubric,
+  projection: BuildReviewRubricProjection,
+  engineIdentity: BuildReviewCoordinationEngineIdentity,
+  skillDigest: string,
+): BuildReviewCacheSemanticIdentity {
+  const executionPolicyFingerprint = fingerprintBuildReviewRubricPolicy(branch.policy);
+  const declarationFingerprint = `sha256:${createHash('sha256').update(JSON.stringify({
+    rubric: branch.rubric,
+    contractVersion: projection.contractVersion,
+    projectionVersion: projection.projectionVersion,
+  })).digest('hex')}`;
+  return {
+    declarationFingerprint,
+    effectiveBundleDigest: skillDigest,
+    contractVersion: projection.contractVersion,
+    projectionVersion: projection.projectionVersion,
+    semanticInputDigest: projection.digest,
+    executionPolicyFingerprint,
+    engineStamp: engineIdentity.engineStamp,
+    provider: Array.isArray(branch.policy.llm_provider) ? branch.policy.llm_provider[0]! : branch.policy.llm_provider,
+    model: branch.policy.model,
+    effort: branch.policy.effort,
+  };
 }
 
 /**
@@ -616,9 +647,10 @@ export async function coordinateBuildReviewRubrics(
       skillDigest: skillDigest.digest,
     };
     const policyFingerprint = fingerprintBuildReviewRubricPolicy(branch.policy);
+    const semanticIdentity = builtinCacheIdentity(branch, projection, input.engineIdentity, skillDigest.digest);
     let candidate: BuildReviewCacheEntryCandidate | undefined;
     try {
-      candidate = await input.readCache(branch, projection, policyFingerprint);
+      candidate = await input.readCache(branch, projection, policyFingerprint, semanticIdentity);
     } catch {
       resolved.set(branch.rubric, infrastructure(branch.rubric, "cache-read-failed"));
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "cache-read-failed" });
@@ -631,6 +663,7 @@ export async function coordinateBuildReviewRubrics(
       projectionDigest: projection.digest,
       policyFingerprint,
       engineIdentity,
+      semanticIdentity,
       lapId: input.lapId,
       snapshotDigest: projection.snapshotDigest,
     });
@@ -726,13 +759,14 @@ export async function coordinateBuildReviewRubrics(
         }
         try {
           await input.writeCache({
-            version: 1,
+            version: 2,
             rubric,
             contractVersion: projection.contractVersion,
             projectionVersion: projection.projectionVersion,
             projectionDigest: projection.digest,
             policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
             engineIdentity: { engineStamp: input.engineIdentity.engineStamp, skillDigest: skillDigest.digest },
+            semanticIdentity: builtinCacheIdentity(branch, projection, input.engineIdentity, skillDigest.digest),
             result: written,
           });
         } catch {

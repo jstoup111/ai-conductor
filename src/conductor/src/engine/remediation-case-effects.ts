@@ -192,7 +192,12 @@ export async function applyBuildReviewActionEffects(input: {
         // reject/defer/refute/escalate history as BUILD work.
         sources: record.sources
           .filter(({ outcome }) => outcome === 'acted' || outcome === 'merged')
-          .map(({ sourceId, outcome, recordedAt }) => ({ sourceId, outcome, recordedAt })),
+          .map(({ sourceId, outcome, recordedAt }) => ({
+            sourceId,
+            // The preceding filter closes this vocabulary to action sources.
+            outcome: outcome as 'acted' | 'merged',
+            recordedAt,
+          })),
         tasks,
       });
     }
