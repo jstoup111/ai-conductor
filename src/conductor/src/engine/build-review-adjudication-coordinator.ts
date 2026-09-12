@@ -10,6 +10,7 @@ import {
   type BuildReviewAdjudicationTaskStatus,
 } from './build-review-adjudication-context.js';
 import { planContractPointers, readActivePlanPath } from './remediation-context-pointers.js';
+import { parsePlanTaskBodies } from './plan-task-parse.js';
 import { orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
@@ -61,15 +62,21 @@ async function sourcePlanContract(
   aggregate: BuildReviewAggregate,
 ): Promise<BuildReviewAdjudicationPlanContract> {
   const path = await readActivePlanPath(projectRoot);
-  if (!path) return { path: null, pointers: [] };
+  if (!path) return { path: null, pointers: [], admittedTaskContracts: [] };
   try {
     const plan = await readFile(isAbsolute(path) ? path : join(projectRoot, path), 'utf-8');
     const findings = Object.values(aggregate.results).flatMap((result) =>
       result.kind === 'judged' ? result.findings : [],
     );
-    return { path, pointers: planContractPointers(findings, plan, path) };
+    return {
+      path,
+      pointers: planContractPointers(findings, plan, path),
+      admittedTaskContracts: [...parsePlanTaskBodies(plan).entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([id, contract]) => ({ id, contract })),
+    };
   } catch {
-    return { path, pointers: [] };
+    return { path: null, pointers: [], admittedTaskContracts: [] };
   }
 }
 
