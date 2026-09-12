@@ -101,7 +101,13 @@ function convergedCaseFor(
   claimed: ReadonlySet<string>,
 ): RemediationCaseRecord | undefined {
   return state.cases.find((record) => {
-    if (claimed.has(record.id) || record.resolution !== 'open') return false;
+    // A completed non-action case is a mechanically settled recurrence when
+    // its engine-owned source identities and outcomes match exactly.  This is
+    // intentionally narrower than semantic equivalence: a policy digest is
+    // inside a custom finding id, so a policy update cannot reuse this row.
+    const settledNonAction = record.resolution === 'resolved' && record.disposition !== 'act' &&
+      (record.effect.kind === 'none' || record.effect.status === 'applied');
+    if (claimed.has(record.id) || (record.resolution !== 'open' && !settledNonAction)) return false;
     if (record.disposition !== proposed.case.disposition) return false;
     if (record.sources.length !== proposed.sources.length) return false;
     return proposed.sources.every((source) =>
