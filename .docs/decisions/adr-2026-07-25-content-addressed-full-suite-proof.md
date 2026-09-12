@@ -83,6 +83,17 @@ Choose **Option C**.
    directory, timeout, additional input globs, and names of environment
    variables whose values affect verification. No inferred default satisfies
    the gate.
+
+   > **Amended 2026-09-11 by #2358:** Approved by James Stoup with
+   > architecture-review-2026-09-11-support-multiple-test-suites-in-build.
+   > An aggregate declaration may instead be a non-empty ordered `commands`
+   > list of project-owned command entries, each with an optional working
+   > directory and timeout. The scalar `command` and list are mutually
+   > exclusive. Entry overrides inherit shared settings, then existing
+   > defaults; explicit directories remain relative to the project root.
+   > The same verifier executes the list serially, stops on the first failure,
+   > and requires every entry to pass. No test-runner identity or output
+   > grammar is required. Shared scoped invocation semantics remain unchanged.
 4. Calculate a content fingerprint from:
    - the normalized suite declaration;
    - the resolved execution working directory and command;
@@ -101,6 +112,19 @@ Choose **Option C**.
    timings, exit code, provenance SHA, and bounded diagnostic output. Secret
    environment values contribute only to the combined fingerprint and are
    never written to evidence.
+
+   > **Amended 2026-09-11 by #2358:** Approved by James Stoup with
+   > architecture-review-2026-09-11-support-multiple-test-suites-in-build.
+   > List-form aggregate execution uses version 5 evidence with declared entry
+   > count, a contiguous attempted-result prefix, and the failed-entry index
+   > when applicable. Only complete successful list proof is reusable for a
+   > list declaration. Version 4 scalar/scoped execution and proof remain
+   > supported without changing scalar fingerprints; a v4 aggregate pass
+   > never attests to list execution. The ordered effective list participates
+   > in unbudgetable project-configuration identity. Existing atomic evidence,
+   > redaction, and whole-project input semantics are retained; per-entry
+   > output shares a bounded diagnostic budget. Typed terminal results also
+   > reach the existing event spine and failure/repair reporting.
 7. Recalculate freshness at every engine, CLI, and finish entry. Missing
    config, invalid config, unresolved required input, launch failure, timeout,
    or non-zero exit blocks. Indeterminate freshness never reuses evidence.
