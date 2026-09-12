@@ -31,6 +31,7 @@ export type RemediationCaseReconciliationRejection =
   | 'illegal-disposition-transition'
   | 'refutation-repeat'
   | 'illegal-source-link'
+  | 'decision-stop-pending'
   | 'id-generation-failed'
   | 'id-collision';
 
@@ -78,7 +79,7 @@ function isDurableId(value: string): boolean {
 }
 
 function effectFor(caseRow: RemediationCaseRow, id: string | undefined): RemediationCaseEffect {
-  if (caseRow.disposition === 'reject') return { kind: 'none' };
+  if (caseRow.disposition === 'reject' || caseRow.disposition === 'escalate') return { kind: 'none' };
   return caseRow.disposition === 'act'
     ? { id: id!, kind: 'action', status: 'reserved' }
     : { id: id!, kind: 'deferral', status: 'reserved' };
@@ -101,7 +102,13 @@ function convergedCaseFor(
   claimed: ReadonlySet<string>,
 ): RemediationCaseRecord | undefined {
   return state.cases.find((record) => {
-    if (claimed.has(record.id) || record.resolution !== 'open') return false;
+    // A completed non-action case is a mechanically settled recurrence when
+    // its engine-owned source identities and outcomes match exactly.  This is
+    // intentionally narrower than semantic equivalence: a policy digest is
+    // inside a custom finding id, so a policy update cannot reuse this row.
+    const settledNonAction = record.resolution === 'resolved' && record.disposition !== 'act' &&
+      (record.effect.kind === 'none' || record.effect.status === 'applied');
+    if (claimed.has(record.id) || (record.resolution !== 'open' && !settledNonAction)) return false;
     if (record.disposition !== proposed.case.disposition) return false;
     if (record.sources.length !== proposed.sources.length) return false;
     return proposed.sources.every((source) =>
@@ -156,7 +163,9 @@ function reconcileState(
       if (typeof caseId !== 'string' || caseId === 'id-generation-failed' || caseId === 'id-collision') {
         return { ok: false, reason: caseId };
       }
-      const effectId = caseRow.disposition === 'reject' ? undefined : takeId(input.generateId, usedIds);
+      const effectId = caseRow.disposition === 'reject' || caseRow.disposition === 'escalate'
+        ? undefined
+        : takeId(input.generateId, usedIds);
       if (effectId === 'id-generation-failed' || effectId === 'id-collision') return { ok: false, reason: effectId };
       claimed.add(caseId);
       caseIdsByRef.set(caseRow.caseRef, caseId);
@@ -174,6 +183,7 @@ function reconcileState(
           recordedAt: input.recordedAt,
         })),
         effect: effectFor(caseRow, effectId),
+        ...(caseRow.escalation === undefined ? {} : { escalation: caseRow.escalation }),
       });
       continue;
     }
@@ -232,6 +242,19 @@ function reconcileState(
     } else if (appendedSources.length !== existing.sources.length) {
       replacements.set(existingCaseId, { ...existing, sources: appendedSources });
     }
+  }
+
+  // An empty graph is restart/no-current-source settlement, not evidence that
+  // an owner changed the approved baseline. Unlike ordinary non-action
+  // history, a durable decision stop cannot be retired by that absence: doing
+  // so would let the caller turn an unresolved current-outcome gap into PASS.
+  // A later non-empty admitted graph remains the explicit re-evaluation lane.
+  if (
+    input.resolveAbsentOpenNonActionCases
+    && input.graph.sourceOutcomes.length === 0
+    && state.cases.some((record) => record.resolution === 'open' && record.disposition === 'escalate')
+  ) {
+    return { ok: false, reason: 'decision-stop-pending' };
   }
 
   let changed = additions.length > 0 || replacements.size > 0;

@@ -1,4 +1,4 @@
-// Covers: task:7, task:19, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab4-1
+// Covers: task:7, task:19, task:35, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab4-1
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -101,6 +101,63 @@ describe('remediation case effects', () => {
     await expect(applyBuildReviewActionEffects(input)).resolves.toMatchObject({ ok: true, status: 'already-applied', effectId: 'effect-1' });
     const read = await store.read();
     expect(read.ok && read.state.cases[0]?.effect).toEqual({ id: 'effect-1', kind: 'action', status: 'applied', workOrderId: 'order-1' });
+  });
+
+  it('publishes only current admitted acts with their custom source links and admission rationale', async () => {
+    const store = await storeWith({ version: 'v1', feature, cases: [
+      {
+        id: 'case-custom-merged', domain: 'build_review', disposition: 'act', priority: 'high', rationale: 'The compatible repair covers both policies.', confidence: 'high', resolution: 'open',
+        sources: [
+          { sourceId: 'custom:policy-a:finding-1', outcome: 'acted', recordedAt: '2026-09-11T00:00:00.000Z' },
+          { sourceId: 'custom:policy-b:finding-2', outcome: 'merged', recordedAt: '2026-09-11T00:00:00.000Z' },
+        ],
+        effect: { id: 'effect-custom-merged', kind: 'action', status: 'reserved' },
+      },
+      {
+        id: 'case-escalated', domain: 'build_review', disposition: 'escalate', priority: 'critical', rationale: 'Owner decision is required.', confidence: 'high', resolution: 'open',
+        sources: [{ sourceId: 'custom:policy-c:finding-3', outcome: 'escalate', recordedAt: '2026-09-11T00:00:00.000Z' }],
+        escalation: { owner: 'architecture' }, effect: { kind: 'none' },
+      },
+      {
+        id: 'case-deferred', domain: 'build_review', disposition: 'defer', priority: 'low', rationale: 'Future work.', confidence: 'high', resolution: 'open',
+        sources: [{ sourceId: 'custom:policy-d:finding-4', outcome: 'deferred', recordedAt: '2026-09-11T00:00:00.000Z' }],
+        effect: { id: 'effect-deferred', kind: 'deferral', status: 'reserved' },
+      },
+    ] });
+    const publishWorkOrder = vi.fn().mockResolvedValue({ ok: true, workOrder: {} });
+
+    await expect(applyBuildReviewActionEffects({
+      projectRoot: root, feature, store,
+      tasksByCaseId: new Map([
+        ['case-custom-merged', [{
+          title: 'Preserve both policy contracts at the implementation boundary',
+          admittedTaskIds: ['35'],
+          admissionRationale: 'Task 35 owns the admitted consistent repair publication boundary.',
+        }]],
+        ['case-escalated', [{ title: 'Never publish a decision stop' }]],
+        ['case-deferred', [{ title: 'Never publish a deferral' }]],
+      ]),
+      chargeInput: { treeHash: 'tree', resolvedCount: 0, reason: 'case-custom-merged' },
+      workOrderId: () => 'order-custom-merged', publishWorkOrder,
+      chargeEffect: vi.fn().mockResolvedValue({ status: 'charged', exhausted: false, cumulativeExhausted: false, entry: { count: 1, cumulative: 1 } }),
+    })).resolves.toMatchObject({ ok: true, status: 'applied', effectId: 'effect-custom-merged' });
+
+    expect(publishWorkOrder).toHaveBeenCalledWith(root, expect.objectContaining({
+      effectId: 'effect-custom-merged',
+      cases: [{
+        caseId: 'case-custom-merged',
+        priority: 'high',
+        sources: [
+          { sourceId: 'custom:policy-a:finding-1', outcome: 'acted', recordedAt: '2026-09-11T00:00:00.000Z' },
+          { sourceId: 'custom:policy-b:finding-2', outcome: 'merged', recordedAt: '2026-09-11T00:00:00.000Z' },
+        ],
+        tasks: [{
+          title: 'Preserve both policy contracts at the implementation boundary',
+          admittedTaskIds: ['35'],
+          admissionRationale: 'Task 35 owns the admitted consistent repair publication boundary.',
+        }],
+      }],
+    }));
   });
 
   it('records failed action effects without writing the active plan when the charge is exhausted', async () => {

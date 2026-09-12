@@ -10,6 +10,7 @@ import {
   mapBuildReviewCoordinatorFailureReason,
   parseBuildReviewCanonicalPathReference,
   parseBuildReviewCandidateScopeResolutions,
+  parseBuildReviewCustomReviewerPayload,
   parseBuildReviewDispatchFailure,
   parseBuildReviewFindingAnchor,
   parseBuildReviewInfrastructureFailure,
@@ -24,7 +25,12 @@ import {
   type BuildReviewInfrastructureFailureReason, describeBuildReviewJudgedResultRejection } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { matchesBuildReviewDisposition, type BuildReviewDispositionRecord } from '../../src/engine/build-review-dispositions.js';
-import type { BuildReviewRubricProjection } from '../../src/engine/build-review-projections.js';
+import {
+  buildReviewEffectiveResultDescriptor,
+  parseBuildReviewReviewerPayload,
+  type BuildReviewRubricProjection,
+} from '../../src/engine/build-review-projections.js';
+import type { ResolvedBuildReviewCatalogEntry } from '../../src/engine/resolved-config.js';
 
 const HASH = `sha256:${'a'.repeat(64)}`;
 const locus = { path: 'test/widget.test.ts', contentHash: HASH, display: 'widget persists state' };
@@ -40,11 +46,95 @@ function finding(overrides: Record<string, unknown> = {}): Record<string, unknow
   };
 }
 
+const customCatalogEntry: ResolvedBuildReviewCatalogEntry = {
+  id: 'portablePolicy', kind: 'custom', skill: 'portable-policy',
+  question: 'Does this preserve the portable policy contract?', resources: [],
+  policy: {
+    enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium',
+    model_fallback_ladder: [], max_retries: 1, escalate: false, min_confidence: 0,
+  },
+};
+
+function customPayload(
+  findings: readonly unknown[],
+  rest: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return { kind: 'custom-findings', version: 'v1', findings, ...rest };
+}
+
+function customFinding(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    concernId: 'portable-policy-gap', summary: 'The changed boundary lacks the required compatibility evidence.',
+    evidenceLocations: ['src/widget.ts:8'],
+    sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }],
+    ...overrides,
+  };
+}
+
 function titleHash(text: string): string {
   return `sha256:${createHash('sha256').update(text).digest('hex')}`;
 }
 
 describe('build-review domain', () => {
+  it('parses the bounded custom finding contract through an effective custom descriptor', () => {
+    const descriptor = buildReviewEffectiveResultDescriptor(customCatalogEntry);
+    const payload = customPayload([customFinding({ confidence: 72 })]);
+
+    expect(descriptor).toEqual({ kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' });
+    expect(parseBuildReviewReviewerPayload(payload, descriptor)).toEqual({
+      kind: 'custom-findings', version: 'v1', findings: [{
+        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks the required compatibility evidence.',
+        confidence: 72, evidenceLocations: ['src/widget.ts:8'],
+        sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }],
+      }],
+    });
+    expect(parseBuildReviewReviewerPayload(customPayload([customFinding()]), descriptor)).toMatchObject({
+      kind: 'custom-findings', findings: [{ concernId: 'portable-policy-gap' }],
+    });
+    const withoutConfidence = parseBuildReviewCustomReviewerPayload(customPayload([customFinding({ confidence: undefined })]));
+    expect(withoutConfidence).toMatchObject({ kind: 'custom-findings' });
+    if (withoutConfidence?.kind !== 'custom-findings') throw new Error('expected custom findings payload');
+    expect(withoutConfidence.findings[0]).not.toHaveProperty('confidence');
+  });
+
+  it('rejects custom reviewer identity claims and invalid bounded finding values', () => {
+    const descriptor = buildReviewEffectiveResultDescriptor(customCatalogEntry);
+    const valid = customPayload([customFinding()]);
+    const forged = ['rubric', 'lapId', 'policy', 'provider', 'verdict', 'caseId', 'effectId', 'disposition'];
+
+    for (const field of forged) {
+      expect(parseBuildReviewReviewerPayload({ ...valid, [field]: 'forged' }, descriptor), field).toBeUndefined();
+    }
+    for (const confidence of [-1, 101, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 'high']) {
+      expect(parseBuildReviewReviewerPayload(customPayload([customFinding({ confidence })]), descriptor), String(confidence)).toBeUndefined();
+    }
+    for (const malformed of [
+      customPayload([customFinding({ concernId: '' })]),
+      customPayload([customFinding({ concernId: 'x'.repeat(129) })]),
+      customPayload([customFinding({ evidenceLocations: [] })]),
+      customPayload([customFinding({ sourceRegions: [] })]),
+      customPayload([customFinding({ sourceRegions: [{ path: '../escape.ts', startLine: 1, endLine: 1, contentHash: HASH, display: 'escape' }] })]),
+      customPayload([customFinding({ unsupported: true })]),
+    ]) {
+      expect(parseBuildReviewReviewerPayload(malformed, descriptor), JSON.stringify(malformed)).toBeUndefined();
+    }
+  });
+
+  it('keeps test-quality specialized and custom unsupported payloads distinct from empty findings', () => {
+    const customDescriptor = buildReviewEffectiveResultDescriptor(customCatalogEntry);
+    const builtInDescriptor = buildReviewEffectiveResultDescriptor({
+      id: 'testQuality', kind: 'builtin', policy: customCatalogEntry.policy,
+    });
+    const customEmpty = customPayload([]);
+    const unsupported = { kind: 'unsupported-policy', requirement: 'requires a deployment credential' };
+
+    expect(parseBuildReviewReviewerPayload(customEmpty, customDescriptor)).toMatchObject({ kind: 'custom-findings', findings: [] });
+    expect(parseBuildReviewReviewerPayload(unsupported, customDescriptor)).toEqual(unsupported);
+    expect(parseBuildReviewReviewerPayload(customEmpty, builtInDescriptor)).toBeUndefined();
+    expect(parseBuildReviewReviewerPayload(judged([]), customDescriptor)).toBeUndefined();
+    expect(parseBuildReviewReviewerPayload(judged([]), builtInDescriptor)).toMatchObject({ kind: 'judged', rubric: 'testQuality', verdict: 'PASS' });
+  });
+
   it('retains optional integer confidence and rejects values outside 0 through 100', () => {
     for (const confidence of [0, 72, 100]) {
       expect(parseBuildReviewJudgedResult(judged([finding({ confidence })]))?.findings[0]?.confidence).toBe(confidence);

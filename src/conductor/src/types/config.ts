@@ -689,10 +689,25 @@ export interface BuildReviewRubricConfig {
   min_confidence?: number;
 }
 
+/** A project-declared build-review rubric, identified by its map key. */
+export interface BuildReviewCustomRubricConfig extends BuildReviewRubricConfig {
+  /** Skill invoked to judge this rubric. */
+  skill: string;
+  /** Question supplied to the custom rubric skill. */
+  question: string;
+  /** Optional primary source supplied to the custom rubric skill. */
+  source?: string;
+  /** Optional supplementary resources supplied to the custom rubric skill. */
+  resources?: string[];
+}
+
 /** Per-rubric settings keyed by the closed {@link BuildReviewRubricId} set. */
 export type BuildReviewRubricsConfig = Partial<
   Record<BuildReviewRubricId, BuildReviewRubricConfig>
 >;
+
+/** Project-defined rubric declarations keyed by their stable rubric IDs. */
+export type BuildReviewCustomRubricsConfig = Record<string, BuildReviewCustomRubricConfig>;
 
 /** Default-on compatibility switch for post-join remediation adjudication. */
 export interface BuildReviewAdjudicationConfig {
@@ -702,8 +717,8 @@ export interface BuildReviewAdjudicationConfig {
 
 /**
  * Configuration for the default-on `build_review` judgement gate. Legacy
- * fields retain their tolerant per-key parsing; the rubric execution subtree
- * is a closed policy map.
+ * fields retain their tolerant per-key parsing; built-in rubric execution
+ * remains a closed policy map while projects may add custom rubric declarations.
  */
 export interface BuildReviewConfig {
   /** Enable the build_review gate. Default: true. */
@@ -719,6 +734,8 @@ export interface BuildReviewConfig {
   adjudication?: BuildReviewAdjudicationConfig;
   /** Closed per-rubric enablement and execution-policy overrides. */
   rubrics?: BuildReviewRubricsConfig;
+  /** Project-defined rubric declarations. */
+  custom_rubrics?: BuildReviewCustomRubricsConfig;
 }
 
 /**

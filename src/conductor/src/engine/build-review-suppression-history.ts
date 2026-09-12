@@ -6,6 +6,32 @@ import {
   type RemediationCaseSuppressionEntry,
 } from './remediation-case-store.js';
 
+export interface BuildReviewCustomSuppressionSource {
+  readonly rubric: string;
+  readonly findingId: string;
+  readonly summary: string;
+  readonly confidence?: number;
+}
+
+/**
+ * Reads the current custom findings from their self-describing evidence. The
+ * identity has to agree with the current result's complete policy-bearing
+ * envelope; a matching rubric name or summary is deliberately insufficient.
+ */
+export function projectBuildReviewCustomSuppressionSources(
+  aggregate: BuildReviewAggregate,
+): readonly BuildReviewCustomSuppressionSource[] | undefined {
+  const current = new Set(aggregate.currentCustomRubrics ?? []);
+  const sources = projectBuildReviewAggregateSources(aggregate);
+  if (!sources) return undefined;
+  return Object.freeze(sources.filter((source) => current.has(source.rubric)).map((source) => ({
+    rubric: source.rubric,
+    findingId: source.findingId,
+    summary: source.summary,
+    ...(source.confidence === undefined ? {} : { confidence: source.confidence }),
+  })));
+}
+
 /**
  * The one projection of a lap's sub-floor findings into durable suppression
  * entries (adr-2026-08-29 D4.6).  A finding without a reported confidence was
@@ -18,7 +44,11 @@ export function projectBuildReviewSuppressionEntries(input: {
 }): readonly RemediationCaseSuppressionEntry[] {
   if (input.suppressedFindingIds.length === 0) return [];
   const suppressed = new Set(input.suppressedFindingIds);
-  return (projectBuildReviewAggregateSources(input.aggregate) ?? []).flatMap((source) => {
+  // The aggregate projection is the one source authority for both built-in
+  // and current custom findings. Do not append the custom view again: that
+  // would duplicate one durable suppression entry per custom finding.
+  const sources = projectBuildReviewAggregateSources(input.aggregate) ?? [];
+  return sources.flatMap((source) => {
     if (!suppressed.has(source.findingId) || source.confidence === undefined) return [];
     const floor = input.floors[source.rubric];
     if (floor === undefined) return [];

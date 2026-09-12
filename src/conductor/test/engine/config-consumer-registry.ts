@@ -207,6 +207,19 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.rubrics.max_retries': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.escalate': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.min_confidence': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.skill': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.question': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.source': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.resources': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.enabled': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.llm_provider': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.model': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.effort': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.model_fallback_ladder': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.max_retries': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.escalate': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.min_confidence': consumer(RESOLVED_CONFIG),
 
   // ── coverage_binding ────────────────────────────────────────────────────
   // The step runner consumes the resolved boolean; resolution is the sole

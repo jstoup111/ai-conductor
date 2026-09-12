@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
   publishBuildReviewWorkOrder,
   type BuildReviewWorkOrderCase,
+  type BuildReviewWorkOrderTask,
 } from './build-review-work-order.js';
 import { orderBuildReviewActionCases } from './build-review-adjudication.js';
 import {
@@ -42,9 +43,59 @@ type DeferralCase = RemediationCaseRecord & {
   readonly effect: Extract<RemediationCaseRecord['effect'], { readonly kind: 'deferral' }>;
 };
 
+export type PersistBuildReviewDecisionStopResult =
+  | { readonly ok: true; readonly status: 'persisted' | 'already-persisted'; readonly caseId: string }
+  | { readonly ok: false; readonly reason: 'invalid-decision-stop' | 'conflicting-case-id' | `case store ${string}` };
+
 /** The shared lifecycle vocabulary for reducers and effect execution. */
 export function isOpenRemediationCase(record: RemediationCaseRecord): boolean {
   return record.resolution === 'open';
+}
+
+/** An open owner stop is durable blocking state, never a deferral-shaped effect. */
+export function isBuildReviewDecisionStop(record: RemediationCaseRecord): boolean {
+  return isOpenRemediationCase(record)
+    && record.disposition === 'escalate'
+    && record.effect.kind === 'none'
+    && record.escalation !== undefined;
+}
+
+function sameDecisionStop(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
+  return left.id === right.id && left.domain === right.domain && left.disposition === 'escalate' &&
+    right.disposition === 'escalate' && left.priority === right.priority && left.rationale === right.rationale &&
+    left.confidence === right.confidence && left.resolution === right.resolution &&
+    left.effect.kind === 'none' && right.effect.kind === 'none' &&
+    left.escalation?.owner === right.escalation?.owner && left.sources.length === right.sources.length &&
+    left.sources.every((source, index) => {
+      const other = right.sources[index];
+      return other !== undefined && source.sourceId === other.sourceId && source.outcome === other.outcome && source.recordedAt === other.recordedAt;
+    });
+}
+
+/**
+ * The effect-state owner persists decision stops through its existing lease,
+ * but deliberately has no publication, tracker, artifact, or charge adapter.
+ */
+export async function persistBuildReviewDecisionStop(input: {
+  readonly store: RemediationCaseStore;
+  readonly record: RemediationCaseRecord;
+}): Promise<PersistBuildReviewDecisionStopResult> {
+  if (!isBuildReviewDecisionStop(input.record)) return { ok: false, reason: 'invalid-decision-stop' };
+  const mutation = await input.store.mutate<PersistBuildReviewDecisionStopResult>(async (state) => {
+    const existing = state.cases.find((record) => record.id === input.record.id);
+    if (existing) {
+      return {
+        value: sameDecisionStop(existing, input.record)
+          ? { ok: true as const, status: 'already-persisted' as const, caseId: existing.id }
+          : { ok: false as const, reason: 'conflicting-case-id' as const },
+      };
+    }
+    return {
+      value: { ok: true as const, status: 'persisted' as const, caseId: input.record.id },
+      nextState: { ...state, cases: [...state.cases, input.record] },
+    };
+  });
+  return mutation.ok ? mutation.value : { ok: false, reason: `case store ${mutation.reason}` };
 }
 
 function isActionCase(record: RemediationCaseRecord): record is ActionCase {
@@ -75,7 +126,7 @@ export function hasReservedOrFailedRemediationEffect(record: RemediationCaseReco
 /** Open cases whose durable effect blocks recovery or terminal PASS settlement. */
 export function isBuildReviewSettlementObligationCase(record: RemediationCaseRecord): boolean {
   return isOpenRemediationCase(record)
-    && (isBuildEligibleActionCase(record) || hasReservedOrFailedRemediationEffect(record));
+    && (isBuildReviewDecisionStop(record) || isBuildEligibleActionCase(record) || hasReservedOrFailedRemediationEffect(record));
 }
 
 function replaceCases(
@@ -94,7 +145,12 @@ export async function applyBuildReviewActionEffects(input: {
   readonly projectRoot: string;
   readonly feature: RemediationCaseFeatureIdentity;
   readonly store: RemediationCaseStore;
-  readonly tasksByCaseId: ReadonlyMap<string, readonly { readonly title: string }[]>;
+  /**
+   * The validated-consistent adjudication selection. Re-checking case state
+   * under the store lease below makes a late exact operator disposition win
+   * without dropping unrelated admitted actions.
+   */
+  readonly tasksByCaseId: ReadonlyMap<string, readonly BuildReviewWorkOrderTask[]>;
   readonly chargeInput: BumpKickbackGateInput;
   readonly workOrderId?: () => string;
   /** Testable I/O boundaries; production defaults retain the durable adapters. */
@@ -128,7 +184,22 @@ export async function applyBuildReviewActionEffects(input: {
     for (const record of actionCases) {
       const tasks = input.tasksByCaseId.get(record.id);
       if (!tasks || tasks.length === 0) return { value: { ok: false as const, reason: `action case ${record.id} has no work-order tasks` } };
-      cases.push({ caseId: record.id, priority: record.priority, tasks });
+      cases.push({
+        caseId: record.id,
+        priority: record.priority,
+        // Case-v2 validation admits only acted or merged links to an action;
+        // preserve that closed action evidence and never deliver unrelated
+        // reject/defer/refute/escalate history as BUILD work.
+        sources: record.sources
+          .filter(({ outcome }) => outcome === 'acted' || outcome === 'merged')
+          .map(({ sourceId, outcome, recordedAt }) => ({
+            sourceId,
+            // The preceding filter closes this vocabulary to action sources.
+            outcome: outcome as 'acted' | 'merged',
+            recordedAt,
+          })),
+        tasks,
+      });
     }
     // The charge identity is the FIRST-TIME route's own reserved effect, taken
     // in the same deterministic order the work order publishes. Charging

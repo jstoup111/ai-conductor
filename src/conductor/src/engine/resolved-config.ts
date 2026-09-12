@@ -1,6 +1,8 @@
 import { homedir } from 'os';
 import type { StepName, Phase, ComplexityTier } from '../types/index.js';
 import type {
+  BuildReviewCustomRubricConfig,
+  BuildReviewRubricConfig,
   BuildReviewRubricId,
   HarnessConfig,
   EffortLevel,
@@ -692,15 +694,37 @@ const BUILD_REVIEW_RUBRIC_IDS: readonly BuildReviewRubricId[] = ['testQuality'];
 
 /** Concrete execution policy for one independently-dispatched review rubric. */
 export interface ResolvedBuildReviewRubricPolicy {
-  enabled: boolean;
-  llm_provider: ProviderSelection;
-  model: string;
-  effort: EffortLevel;
-  model_fallback_ladder: readonly string[];
-  max_retries: number;
-  escalate: boolean;
-  min_confidence: number;
+  readonly enabled: boolean;
+  readonly llm_provider: ProviderSelection;
+  readonly model: string;
+  readonly effort: EffortLevel;
+  readonly model_fallback_ladder: readonly string[];
+  readonly max_retries: number;
+  readonly escalate: boolean;
+  readonly min_confidence: number;
 }
+
+/** An enabled built-in rubric published for build-review execution. */
+export interface ResolvedBuildReviewBuiltinCatalogEntry {
+  readonly id: BuildReviewRubricId;
+  readonly kind: 'builtin';
+  readonly policy: ResolvedBuildReviewRubricPolicy;
+}
+
+/** An enabled project-defined rubric published for build-review execution. */
+export interface ResolvedBuildReviewCustomCatalogEntry {
+  readonly id: string;
+  readonly kind: 'custom';
+  readonly skill: string;
+  readonly question: string;
+  readonly source?: string;
+  readonly resources: readonly string[];
+  readonly policy: ResolvedBuildReviewRubricPolicy;
+}
+
+export type ResolvedBuildReviewCatalogEntry =
+  | ResolvedBuildReviewBuiltinCatalogEntry
+  | ResolvedBuildReviewCustomCatalogEntry;
 
 /** Concrete post-join remediation adjudication setting. */
 export interface ResolvedBuildReviewAdjudicationConfig {
@@ -714,6 +738,8 @@ export interface ResolvedBuildReviewConfig {
   scopeContainmentEnforced: boolean;
   maxParallel: number;
   rubrics: Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
+  /** Immutable enabled execution branches. */
+  catalog: readonly ResolvedBuildReviewCatalogEntry[];
 }
 
 /**
@@ -742,6 +768,22 @@ const DEFAULT_RUBRIC_ENABLED: Readonly<Record<BuildReviewRubricId, boolean>> = {
   testQuality: false,
 };
 
+function freezeProviderSelection(selection: ProviderSelection): ProviderSelection {
+  return Array.isArray(selection)
+    ? Object.freeze([...selection]) as unknown as string[]
+    : selection;
+}
+
+function freezeRubricPolicy(
+  policy: ResolvedBuildReviewRubricPolicy,
+): ResolvedBuildReviewRubricPolicy {
+  return Object.freeze({
+    ...policy,
+    llm_provider: freezeProviderSelection(policy.llm_provider),
+    model_fallback_ladder: Object.freeze([...policy.model_fallback_ladder]),
+  });
+}
+
 export function resolveBuildReviewConfig(
   config?: HarnessConfig,
   policy: ProviderModelPolicy = CLAUDE_MODEL_POLICY,
@@ -754,13 +796,16 @@ export function resolveBuildReviewConfig(
   const inheritedPolicy = outerStepConfig?.llm_provider === undefined && config?.llm_provider === undefined
     ? policy
     : resolveProviderModelPolicy(inheritedPrimaryProvider);
-  const rubrics = Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => {
-    const rubric = block?.rubrics?.[rubricId];
+  const resolveRubricPolicy = (
+    rubric: BuildReviewRubricConfig | BuildReviewCustomRubricConfig | undefined,
+    defaultEnabled: boolean,
+    defaultEffort?: EffortLevel,
+  ): ResolvedBuildReviewRubricPolicy => {
     // Default efforts weight the judgement-heavy rubrics up and the narrow
     // root-cause check down. They apply only when neither the rubric nor the
     // outer step authored an effort — explicit config always wins.
     const rubricEffort = rubric?.effort
-      ?? (outerStepConfig?.effort === undefined ? DEFAULT_RUBRIC_EFFORT[rubricId] : undefined);
+      ?? (outerStepConfig?.effort === undefined ? defaultEffort : undefined);
     const rubricProvider = rubric?.llm_provider ?? inheritedProviderSelection;
     const rubricPrimaryProvider = normalizeProviderSelection(rubricProvider)[0] ?? inheritedPrimaryProvider;
     const rubricPolicy = rubric?.llm_provider === undefined
@@ -806,8 +851,8 @@ export function resolveBuildReviewConfig(
       rubricConfig,
       options,
     );
-    return [rubricId, {
-      enabled: rubric?.enabled ?? DEFAULT_RUBRIC_ENABLED[rubricId],
+    return freezeRubricPolicy({
+      enabled: rubric?.enabled ?? defaultEnabled,
       llm_provider: rubricProvider,
       model: resolvedNative.model,
       effort: resolvedNative.effort,
@@ -818,9 +863,48 @@ export function resolveBuildReviewConfig(
       max_retries: resolvedNeutral.max_retries,
       escalate: resolvedNeutral.escalate,
       min_confidence: rubric?.min_confidence ?? 0,
-    } satisfies ResolvedBuildReviewRubricPolicy];
-  })) as Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
-  const enabledRubricCount = Object.values(rubrics).filter((rubric) => rubric.enabled).length;
+    });
+  };
+  const rubrics = Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [
+    rubricId,
+    resolveRubricPolicy(
+      block?.rubrics?.[rubricId],
+      DEFAULT_RUBRIC_ENABLED[rubricId],
+      DEFAULT_RUBRIC_EFFORT[rubricId],
+    ),
+  ])) as Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
+  const customRubrics = block?.custom_rubrics;
+  const customEntries = customRubrics !== null
+    && typeof customRubrics === 'object'
+    && !Array.isArray(customRubrics)
+    ? Object.entries(customRubrics)
+    : [];
+  const catalog = block?.enabled === false
+    ? Object.freeze([]) as readonly ResolvedBuildReviewCatalogEntry[]
+    : Object.freeze([
+      ...BUILD_REVIEW_RUBRIC_IDS.flatMap((id): ResolvedBuildReviewCatalogEntry[] => {
+        const policy = rubrics[id];
+        return policy.enabled
+          ? [Object.freeze({ id, kind: 'builtin' as const, policy })]
+          : [];
+      }),
+      ...customEntries.flatMap(([id, custom]): ResolvedBuildReviewCatalogEntry[] => {
+        const declaration = custom as BuildReviewCustomRubricConfig;
+        const policy = resolveRubricPolicy(declaration, false);
+        return policy.enabled
+          ? [Object.freeze({
+              id,
+              kind: 'custom' as const,
+              skill: declaration.skill,
+              question: declaration.question,
+              ...(declaration.source === undefined ? {} : { source: declaration.source }),
+              resources: Object.freeze([...(declaration.resources ?? [])]),
+              policy,
+            })]
+          : [];
+      }),
+    ]);
+  const enabledRubricCount = catalog.length;
 
   return {
     enabled: block?.enabled ?? DEFAULT_BUILD_REVIEW_ENABLED,
@@ -836,5 +920,6 @@ export function resolveBuildReviewConfig(
       enabledRubricCount,
     ),
     rubrics,
+    catalog,
   };
 }

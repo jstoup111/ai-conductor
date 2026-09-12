@@ -37,6 +37,12 @@ import {
   safeRepoRelativePath,
   type BuildReviewPathChange,
 } from './build-review-scope-source.js';
+import {
+  materializeBuildReviewLap,
+  type BuildReviewLapMaterialization,
+  type BuildReviewMaterializationMember,
+  type BuildReviewMaterializationOptions,
+} from './build-review-materialization.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -102,6 +108,8 @@ export interface BuildReviewInputs {
 export interface BuildReviewFrozenInputs extends BuildReviewInputs {
   readonly testSuiteProof: FullSuitePassEvidence;
   readonly sourceSnapshot: BuildReviewSourceSnapshot;
+  /** Present only for a lap that includes an enabled custom policy member. */
+  readonly sourceMaterialization?: BuildReviewLapMaterialization;
 }
 
 /** One frozen source view. Rubric branches receive projections of this value, never live reads. */
@@ -141,6 +149,30 @@ export interface BuildReviewSourceSnapshot {
   readonly testScopeEvidence?: readonly BuildReviewPinnedScopeEvidence[];
   /** Machine-readable changed paths from the pinned diff, retaining rename pairs. */
   readonly sourceChanges?: readonly BuildReviewPathChange[];
+}
+
+/**
+ * The commit and content identity a materialized review source must preserve.
+ * This is deliberately smaller than the snapshot: paths into a private source
+ * view are transport details, never review identity.
+ */
+export interface BuildReviewSourceViewIdentity {
+  readonly snapshotDigest: string;
+  readonly contentDigest: string;
+  readonly mergeBase: string;
+  readonly headSha: string;
+}
+
+/** Return the one stable identity shared by all members of a custom lap. */
+export function buildReviewSourceViewIdentity(
+  snapshot: BuildReviewSourceSnapshot,
+): BuildReviewSourceViewIdentity {
+  return Object.freeze({
+    snapshotDigest: snapshot.digest,
+    contentDigest: snapshot.contentDigest,
+    mergeBase: snapshot.mergeBase,
+    headSha: snapshot.headSha,
+  });
 }
 
 /** One executable changed-test selector's declared title evidence. */
@@ -190,6 +222,10 @@ export interface BuildReviewInputOptions {
   readonly inspectTestSuite?: () => Promise<FullSuiteInspectionResult>;
   /** Test seam for a parser/analyzer failure; consumer source is never loaded. */
   readonly analyzeTestScope?: (input: BuildReviewTestScopeInput) => BuildReviewTestScope;
+  /** Enabled members for the lap being prepared; omitted preserves legacy built-in preparation. */
+  readonly lapMembers?: readonly BuildReviewMaterializationMember[];
+  /** Private source-view placement, supplied by the review execution owner. */
+  readonly materialization?: BuildReviewMaterializationOptions;
 }
 
 /** The three distinguishable grading-provenance cases (Task 24). */
@@ -862,6 +898,14 @@ export async function assembleBuildReviewInputs(
     digest: snapshotDigest(snapshotWithoutDigest),
     contentDigest: contentSnapshotDigest(snapshotWithoutDigest),
   });
+  const sourceMaterialization = options.lapMembers === undefined
+    ? undefined
+    : await materializeBuildReviewLap(
+        git,
+        sourceSnapshot,
+        options.lapMembers,
+        options.materialization ?? { projectRoot },
+      );
 
   return {
     diff: diffResult.stdout,
@@ -877,6 +921,7 @@ export async function assembleBuildReviewInputs(
     repairProvenance,
     testSuiteProof: inspection.evidence,
     sourceSnapshot,
+    ...(sourceMaterialization === undefined ? {} : { sourceMaterialization }),
     patchEquivalentExclusion: equivalentExclusion,
   };
 }

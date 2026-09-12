@@ -253,6 +253,128 @@ describe('build_review rubric validation', () => {
     expect(validateConfig({ build_review: { rubrics: { wiring: {} } } })).toMatchObject({ ok: true });
     expect(validateConfig({ build_review: { maxParallel: 4 } })).toMatchObject({ ok: true });
   });
+
+  it.each([
+    ['an empty id', ''],
+    ['a non-letter-leading id', '9policy'],
+    ['a non-ASCII id', 'policÿ'],
+    ['an oversized id', 'a'.repeat(65)],
+    ['a built-in id', 'testQuality'],
+    ['a retired id', 'rootCause'],
+    ['a prototype key', '__proto__'],
+    ['a constructor key', 'constructor'],
+    ['a prototype member key', 'prototype'],
+  ])('rejects custom declarations with %s before dispatch', (_name, id) => {
+    const customRubrics = JSON.parse(JSON.stringify({
+      [id]: { skill: 'project-review', question: 'Review this change.', enabled: true },
+    }));
+
+    const result = validateConfig({ build_review: { custom_rubrics: customRubrics } });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { type: 'validation_error', message: expect.stringMatching(new RegExp(`custom_rubrics\\.${id.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}`, 'i')) },
+    });
+  });
+
+  it.each([
+    ['an unknown declaration field', { skill: 'project-review', question: 'Review.', typo: true }, /Unknown key/i],
+    ['a missing skill', { question: 'Review.' }, /skill.*non-empty string/i],
+    ['a blank question', { skill: 'project-review', question: '' }, /question.*non-empty string/i],
+    ['an invalid source', { skill: 'project-review', question: 'Review.', source: 'remote' }, /source.*project\|global\|plugin/i],
+    ['a non-array resource list', { skill: 'project-review', question: 'Review.', resources: 'README.md' }, /resources.*array/i],
+    ['a non-string resource', { skill: 'project-review', question: 'Review.', resources: ['README.md', 7] }, /resources.*non-empty strings/i],
+  ])('rejects custom declarations with %s before dispatch', (_name, declaration, diagnostic) => {
+    const result = validateConfig({
+      build_review: { custom_rubrics: { projectReview: declaration } },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { type: 'validation_error', message: expect.stringMatching(diagnostic) },
+    });
+  });
+
+  it('rejects more than 32 custom declarations before dispatch', () => {
+    const custom_rubrics = Object.fromEntries(
+      Array.from({ length: 33 }, (_, index) => [
+        `policy${index}`,
+        { skill: 'project-review', question: 'Review.' },
+      ]),
+    );
+
+    expect(validateConfig({ build_review: { custom_rubrics } })).toMatchObject({
+      ok: false,
+      error: { type: 'validation_error', message: expect.stringMatching(/custom_rubrics.*32/i) },
+    });
+  });
+
+  it('rejects an enabled custom declaration when aggregate adjudication is disabled', () => {
+    const result = validateConfig({
+      build_review: {
+        adjudication: { enabled: false },
+        custom_rubrics: {
+          projectReview: { skill: 'project-review', question: 'Review.', enabled: true },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        type: 'validation_error',
+        message: expect.stringMatching(/custom_rubrics.*adjudication.*enabled/i),
+      },
+    });
+  });
+
+  it('retains legacy unknown-key rejection and retired-key no-op behavior beside custom declarations', () => {
+    expect(validateConfig({
+      build_review: {
+        rubrics: { invented: {} },
+        custom_rubrics: { projectReview: { skill: 'project-review', question: 'Review.' } },
+      },
+    })).toMatchObject({
+      ok: false,
+      error: { message: expect.stringMatching(/Unknown rubric ID.*invented/i) },
+    });
+
+    const result = validateConfig({
+      build_review: {
+        rubrics: { rootCause: { enabled: true } },
+        custom_rubrics: { projectReview: { skill: 'project-review', question: 'Review.' } },
+      },
+    });
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.warnings).toContainEqual(expect.stringMatching(/rootCause.*retired/i));
+  });
+
+  it('rejects duplicate custom declaration mapping keys through the YAML parser', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'duplicate-custom-rubric-'));
+    try {
+      await mkdir(join(projectRoot, '.ai-conductor'));
+      await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), [
+        'build_review:',
+        '  custom_rubrics:',
+        '    projectReview:',
+        '      skill: project-review',
+        '      question: First question.',
+        '    projectReview:',
+        '      skill: project-review',
+        '      question: Second question.',
+      ].join('\n'), 'utf-8');
+
+      const result = await loadConfig(projectRoot);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { type: 'parse_error', message: expect.stringMatching(/duplicated mapping key|duplicate/i) },
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('engine_refresh_min_interval_seconds config field', () => {

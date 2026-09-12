@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:8
+// Covers: task:1, task:3, task:8, task:12
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -22,6 +22,7 @@ import { BuildReviewSourceReadError } from '../../src/engine/build-review-scope-
 import { recordTestSuiteRemediation } from '../../src/engine/test-suite-remediation.js';
 import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
+import { materializeBuildReviewLap } from '../../src/engine/build-review-materialization.js';
 
 const CURRENT_PROOF = {
   status: 'CURRENT',
@@ -1913,5 +1914,19 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(calls.find((args) => args[0] === 'log')).toBeUndefined();
     });
 
+  });
+});
+
+describe('engine/build-review-inputs — custom-lap source preparation', () => {
+  it('does not require a source materialization for a built-in-only lap', async () => {
+    const git = vi.fn<GitRunner>(async () => ({ exitCode: 1, stdout: '', stderr: 'must not run' }));
+    const snapshot = {
+      digest: 'sha256:snapshot', contentDigest: 'sha256:content', mergeBase: 'a'.repeat(40), headSha: 'b'.repeat(40),
+    } as BuildReviewFrozenInputs['sourceSnapshot'];
+
+    await expect(materializeBuildReviewLap(git, snapshot, [{ id: 'testQuality', kind: 'builtin' }], {
+      projectRoot: '/fixture',
+    })).resolves.toBeUndefined();
+    expect(git).not.toHaveBeenCalled();
   });
 });

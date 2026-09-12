@@ -516,8 +516,12 @@ describe("build-review coordinator: frozen fan-out", () => {
     });
     expect(input.writeCache).toHaveBeenCalledTimes(1);
     expect(input.writeCache).toHaveBeenCalledWith(expect.objectContaining({
-      version: 1, rubric: "testQuality", contractVersion: "v3", projectionVersion: expect.any(String),
+      version: 2, rubric: "testQuality", contractVersion: "v3", projectionVersion: expect.any(String),
       projectionDigest: expect.stringMatching(/^sha256:/), policyFingerprint: expect.any(String),
+      semanticIdentity: expect.objectContaining({
+        semanticInputDigest: expect.stringMatching(/^sha256:/),
+        effectiveBundleDigest: "sha256:skill-a",
+      }),
       result: expect.objectContaining({ kind: "judged", rubric: "testQuality", lapId: "lap-current", verdict: "PASS" }),
     }));
     expect(testQualityBranch(result)).toMatchObject({ kind: "dispatched", rubric: "testQuality", result: { kind: "judged", verdict: "PASS" } });

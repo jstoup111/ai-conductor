@@ -46,6 +46,7 @@ import { createGithubTrackerClient } from './tracker-client.js';
 import { fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
+import type { BuildReviewFinding } from './build-review-domain.js';
 import { planContractPointers, priorAttemptPointers, readActivePlanPath } from './remediation-context-pointers.js';
 import type { CoverageBindingPayloadError } from './step-runners.js';
 import type {
@@ -5217,10 +5218,10 @@ export class Conductor {
           const artifact = parseBuildReviewBranchArtifact(JSON.parse(await readFile(
             join(this.projectRoot, '.pipeline', 'build-review', lapId, file), 'utf-8',
           )));
-          if (artifact?.result.kind === 'judged') {
+          if (artifact?.result.kind === 'judged' && artifact.result.rubric === 'testQuality') {
             priorLaps.push({
               artifactPath: `.pipeline/build-review/${lapId}/${file}`,
-              findings: artifact.result.findings.map((finding, index) => ({ findingRef: String(index), finding })),
+              findings: (artifact.result.findings as readonly BuildReviewFinding[]).map((finding, index) => ({ findingRef: String(index), finding })),
             });
           }
         } catch {
@@ -10950,7 +10951,7 @@ export class Conductor {
             // keyed by 'build_review' (the same anti-ping-pong mechanism the
             // gate-driven tail uses for other gates), bounded by
             // MAX_KICKBACKS_PER_GATE like the other self-heal loops.
-            if (this.daemon && step.name === 'build_review') {
+            if (step.name === 'build_review' && (this.daemon || this.mode === 'auto')) {
               let verdictRaw: unknown = null;
               try {
                 verdictRaw = JSON.parse(

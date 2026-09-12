@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
 import type {
+  BuildReviewEffectiveResultDescriptor,
   BuildReviewInfrastructureFailure,
   BuildReviewLapId,
   BuildReviewScopeIncompleteFault,
@@ -9,6 +10,7 @@ import type {
 import type { BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import type { BuildReviewFrozenInputs, BuildReviewSourceSnapshot, BuildReviewUnresolvedMarker } from './build-review-inputs.js';
 import { getBuildReviewRubricDescriptor } from './build-review-registry.js';
+import type { ResolvedBuildReviewCatalogEntry } from './resolved-config.js';
 import type {
   RevertedProductionFileReference,
   TestQualityPreflightEvidence,
@@ -116,6 +118,28 @@ export type BuildReviewRubricProjection = TestQualityProjection;
 export type BuildReviewRubricProjections = {
   readonly testQuality: TestQualityProjection;
 };
+
+/**
+ * Bind parser choice to one already-resolved effective catalog member.  This
+ * intentionally does not consult the built-in registry or an enabled map:
+ * custom policy ids are dynamic while built-ins retain their bespoke parser.
+ */
+export function buildReviewEffectiveResultDescriptor(
+  entry: ResolvedBuildReviewCatalogEntry,
+): BuildReviewEffectiveResultDescriptor {
+  return entry.kind === 'builtin'
+    ? Object.freeze({ kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' })
+    : Object.freeze({ kind: 'custom', rubric: entry.id, parser: 'custom-findings-v1' });
+}
+
+/** Parse a reviewer response using the parser bound by the effective member. */
+export { parseBuildReviewReviewerPayload } from './build-review-domain.js';
+/** Custom result stamping stays adjacent to effective parser selection. */
+export {
+  stampBuildReviewCustomJudgedResult,
+  type BuildReviewCustomJudgedResult,
+  type BuildReviewCustomResultStamp,
+} from './build-review-finding-identity.js';
 
 /** One current-lap reduced-coverage stamp, shared by every reader-facing surface. */
 export interface BuildReviewReducedCoverageEntry {
