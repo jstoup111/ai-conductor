@@ -524,7 +524,10 @@ export async function coordinateBuildReviewAdjudication(input: {
   // source: its case is dropped before reservation, and every sibling case is
   // still reconciled, effected, and routed. Failing the whole lap closed here
   // is what made any pre-existing acceptance un-adjudicable.
-  const graph = validateRemediationCaseGraph(dispatchSourceIds, judgement);
+  const graph = validateRemediationCaseGraph(dispatchSourceIds, judgement, {
+    existingCaseIds: prior.state.cases.map((record) => record.id),
+    admittedTaskIds: planContract.admittedTaskContracts?.map((task) => task.id) ?? [],
+  });
   if (!graph.ok) return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, { settleAbsentAttempted: true });
   for (const proposed of graph.graph.cases) {
     if (proposed.case.disposition !== 'refute') continue;
