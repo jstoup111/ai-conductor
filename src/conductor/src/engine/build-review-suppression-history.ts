@@ -6,6 +6,56 @@ import {
   type RemediationCaseSuppressionEntry,
 } from './remediation-case-store.js';
 
+export interface BuildReviewCustomSuppressionSource {
+  readonly rubric: string;
+  readonly findingId: string;
+  readonly summary: string;
+  readonly confidence?: number;
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function validConfidence(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100;
+}
+
+/**
+ * Reads the current custom findings from their self-describing evidence. The
+ * identity has to agree with the current result's complete policy-bearing
+ * envelope; a matching rubric name or summary is deliberately insufficient.
+ */
+export function projectBuildReviewCustomSuppressionSources(
+  aggregate: BuildReviewAggregate,
+): readonly BuildReviewCustomSuppressionSource[] | undefined {
+  const sources: BuildReviewCustomSuppressionSource[] = [];
+  for (const rubric of aggregate.currentCustomRubrics ?? []) {
+    const result = aggregate.customResults?.[rubric]?.result;
+    if (!result || result.kind !== 'judged') return undefined;
+    for (const value of result.findings) {
+      const finding = record(value);
+      const identity = record(finding?.identity);
+      const payload = record(identity?.canonicalPayload);
+      if (!finding || !identity || !payload || typeof finding.summary !== 'string' || finding.summary.length === 0 ||
+        typeof identity.id !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(identity.id) ||
+        payload.rubric !== rubric || JSON.stringify(payload.declaration) !== JSON.stringify(result.declaration) ||
+        JSON.stringify(payload.policy) !== JSON.stringify(result.policy) ||
+        JSON.stringify(payload.candidate) !== JSON.stringify(result.candidate) ||
+        JSON.stringify(payload.reviewedInput) !== JSON.stringify(result.reviewedInput) ||
+        typeof payload.concernId !== 'string' || payload.concernId.length === 0 ||
+        (finding.confidence !== undefined && !validConfidence(finding.confidence))) return undefined;
+      sources.push({
+        rubric,
+        findingId: identity.id,
+        summary: finding.summary,
+        ...(finding.confidence === undefined ? {} : { confidence: finding.confidence }),
+      });
+    }
+  }
+  return Object.freeze(sources);
+}
+
 /**
  * The one projection of a lap's sub-floor findings into durable suppression
  * entries (adr-2026-08-29 D4.6).  A finding without a reported confidence was
@@ -18,7 +68,11 @@ export function projectBuildReviewSuppressionEntries(input: {
 }): readonly RemediationCaseSuppressionEntry[] {
   if (input.suppressedFindingIds.length === 0) return [];
   const suppressed = new Set(input.suppressedFindingIds);
-  return (projectBuildReviewAggregateSources(input.aggregate) ?? []).flatMap((source) => {
+  const sources = [
+    ...(projectBuildReviewAggregateSources(input.aggregate) ?? []),
+    ...(projectBuildReviewCustomSuppressionSources(input.aggregate) ?? []),
+  ];
+  return sources.flatMap((source) => {
     if (!suppressed.has(source.findingId) || source.confidence === undefined) return [];
     const floor = input.floors[source.rubric];
     if (floor === undefined) return [];

@@ -19,6 +19,7 @@ import { CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION } from './build-review-dom
 import { resolveMainRepoRoot } from './park-marker.js';
 import type { ConductorEvent } from '../types/events.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
+import { projectBuildReviewCustomSuppressionSources } from './build-review-suppression-history.js';
 
 type DispositionStore = {
   list(feature: unknown): Promise<BuildReviewDispositionListResult>;
@@ -34,7 +35,7 @@ export interface BuildReviewEffectiveResolverDeps {
   /** Reports ignored legacy records supplied by a custom disposition store. */
   readonly log?: (message: string) => void;
   /** Resolved operator floors, supplied by the live build-review runner. */
-  readonly minConfidence?: Partial<Record<import('../types/config.js').BuildReviewRubricId, number>>;
+  readonly minConfidence?: Partial<Record<string, number>>;
 }
 
 export type BuildReviewEffectiveResolution =
@@ -49,6 +50,39 @@ export type BuildReviewEffectiveResolution =
 
 function sameFeature(left: BuildReviewFeatureIdentity, right: BuildReviewFeatureIdentity): boolean {
   return left.version === right.version && left.repository === right.repository && left.feature === right.feature;
+}
+
+function applyCurrentCustomEffectiveVerdict(
+  aggregate: BuildReviewAggregate,
+  effective: BuildReviewEffectiveVerdict,
+  minConfidence: Partial<Record<string, number>>,
+): BuildReviewEffectiveVerdict | undefined {
+  const customSources = projectBuildReviewCustomSuppressionSources(aggregate);
+  if (!customSources) return undefined;
+  const customJudged = (aggregate.currentCustomRubrics ?? []).filter((rubric) =>
+    aggregate.customResults?.[rubric]?.result.kind === 'judged',
+  ).length;
+  const customFailure = (aggregate.currentCustomRubrics ?? []).some((rubric) =>
+    aggregate.customResults?.[rubric]?.result.kind === 'infrastructure-failure',
+  );
+  if (customJudged === 0 && !customFailure) return effective;
+  const unresolved = [...effective.unresolvedFindingIds];
+  const suppressed = [...effective.suppressedFindingIds];
+  for (const source of customSources) {
+    if (source.confidence !== undefined && source.confidence < (minConfidence[source.rubric] ?? 0)) suppressed.push(source.findingId);
+    else unresolved.push(source.findingId);
+  }
+  const builtinJudged = Object.values(aggregate.results).filter((result) => result.kind === 'judged').length;
+  return Object.freeze({
+    ...effective,
+    verdict: builtinJudged + customJudged > 0 && unresolved.length === 0 &&
+      effective.uncoveredInfrastructureFailureRubrics.length === 0 &&
+      (effective.uncoveredScopeIncompleteRubrics?.length ?? 0) === 0 && !customFailure
+      ? 'PASS'
+      : 'FAIL',
+    unresolvedFindingIds: Object.freeze(unresolved),
+    suppressedFindingIds: Object.freeze(suppressed),
+  });
 }
 
 /**
@@ -127,7 +161,8 @@ export async function resolveEffectiveBuildReviewVerdict(
   }
   let effective: BuildReviewEffectiveVerdict | undefined;
   try {
-    effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence);
+    const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>> | undefined);
+    effective = builtin === undefined ? undefined : applyCurrentCustomEffectiveVerdict(aggregate, builtin, deps.minConfidence ?? {});
   } catch {
     return { ok: false, reason: 'build-review disposition state is invalid' };
   }

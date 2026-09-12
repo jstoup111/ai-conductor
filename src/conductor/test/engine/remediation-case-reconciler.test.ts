@@ -116,6 +116,40 @@ describe('remediation case reconciler', () => {
     });
   });
 
+  it('reuses an exact settled custom non-action case without a new identity, but retains history after its policy identity changes', async () => {
+    const projectRoot = await createProjectRoot();
+    const store = new RemediationCaseStore(projectRoot, FEATURE);
+    const exactSource = 'portablePolicy:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    await store.mutate(async (state) => ({
+      value: null,
+      nextState: {
+        ...state,
+        cases: [{
+          id: 'settled-custom', domain: 'build_review', disposition: 'reject', priority: 'low', confidence: 'high',
+          rationale: 'The exact custom finding was rejected.', resolution: 'resolved',
+          sources: [{ sourceId: exactSource, outcome: 'rejected', recordedAt: RECORDED_AT }], effect: { kind: 'none' },
+        }],
+      },
+    }));
+
+    const exact = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'exact-custom', disposition: 'reject', effect: { kind: 'none' } }, [
+        { sourceId: exactSource, outcome: 'rejected', caseRef: 'exact-custom' },
+      ]),
+      recordedAt: '2026-08-30T13:00:00.000Z', generateId: () => { throw new Error('exact non-action recurrence must not charge'); },
+    });
+    expect(exact).toMatchObject({ ok: true, caseIdsByRef: new Map([['exact-custom', 'settled-custom']]) });
+
+    const changedPolicy = await reconcileRemediationCases(store, {
+      graph: graph({ ...ACTION_CASE, caseRef: 'changed-custom', disposition: 'reject', effect: { kind: 'none' } }, [
+        { sourceId: 'portablePolicy:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', outcome: 'rejected', caseRef: 'changed-custom' },
+      ]),
+      recordedAt: '2026-08-30T14:00:00.000Z', generateId: generatedIds('changed-custom'),
+    });
+    expect(changedPolicy).toMatchObject({ ok: true, caseIdsByRef: new Map([['changed-custom', 'changed-custom']]) });
+    expect(changedPolicy.ok && changedPolicy.state.cases.map((entry) => entry.id)).toEqual(['settled-custom', 'changed-custom']);
+  });
+
   it('appends a later source link to its explicitly bound durable case', async () => {
     const projectRoot = await createProjectRoot();
     const store = new RemediationCaseStore(projectRoot, FEATURE);
