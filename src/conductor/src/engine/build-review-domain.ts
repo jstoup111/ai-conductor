@@ -86,6 +86,10 @@ export interface BuildReviewCustomFinding {
   readonly evidenceLocations: readonly string[];
   readonly sourceRegions: readonly BuildReviewCandidateScopeSourceRegion[];
 }
+/** Frozen source authority for a custom reviewer payload. */
+export interface BuildReviewCustomFindingReferenceContext {
+  readonly sourceRegions: readonly BuildReviewCandidateScopeSourceRegion[];
+}
 /** Reviewer-owned payload only; engine-owned result identity is stamped later. */
 export interface BuildReviewCustomFindingsPayload {
   readonly kind: 'custom-findings';

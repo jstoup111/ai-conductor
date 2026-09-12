@@ -134,6 +134,12 @@ export function buildReviewEffectiveResultDescriptor(
 
 /** Parse a reviewer response using the parser bound by the effective member. */
 export { parseBuildReviewReviewerPayload } from './build-review-domain.js';
+/** Custom result stamping stays adjacent to effective parser selection. */
+export {
+  stampBuildReviewCustomJudgedResult,
+  type BuildReviewCustomJudgedResult,
+  type BuildReviewCustomResultStamp,
+} from './build-review-finding-identity.js';
 
 /** One current-lap reduced-coverage stamp, shared by every reader-facing surface. */
 export interface BuildReviewReducedCoverageEntry {

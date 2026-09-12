@@ -11,6 +11,7 @@ import {
   canonicalBuildReviewFindingJson,
   canonicalizeBuildReviewFindingIdentity,
   canonicalizeBuildReviewFindingSet,
+  stampBuildReviewCustomJudgedResult,
   parseBuildReviewFindingCanonicalPayload,
   rehydrateBuildReviewFindingIdentity,
   type BuildReviewFindingCanonicalPayload,
@@ -23,12 +24,41 @@ import {
 
 const HASH_A = `sha256:${'a'.repeat(64)}`;
 const HASH_B = `sha256:${'b'.repeat(64)}`;
+const HASH_C = `sha256:${'c'.repeat(64)}`;
 
 function finding(locus: Record<string, unknown> = {}, rest: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
     anchor: { rubric: 'testQuality', locus: { path: 'test/widget.test.ts', contentHash: HASH_A, display: 'widget persists state', ...locus } },
     ...rest,
+  };
+}
+
+const customStamp = {
+  rubric: 'portablePolicy',
+  lapId: 'lap-1',
+  declaration: {
+    version: 'v1', rubricId: 'portablePolicy', semanticSkill: 'portable-policy',
+    question: 'Does this preserve the portable policy contract?', source: 'project', resources: ['criteria.md'],
+  },
+  policy: { version: 'v1', bundleDigest: HASH_B },
+  candidate: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' },
+  reviewedInput: { version: 'v1', contentDigest: HASH_C },
+} as const;
+
+const customReferenceContext = {
+  sourceRegions: [{
+    path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH_A, display: 'public boundary',
+  }],
+} as const;
+
+function customPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    kind: 'custom-findings', version: 'v1', findings: [{
+      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      confidence: 72, evidenceLocations: ['src/widget.ts:8'], sourceRegions: customReferenceContext.sourceRegions,
+    }],
+    ...overrides,
   };
 }
 
@@ -192,5 +222,54 @@ describe('build-review finding identity', () => {
         expect(normalized.some((member) => /(?:^|[-_])other(?:$|[-_])/.test(member))).toBe(false);
       }
     }
+  });
+
+  it('stamps custom findings from frozen references and engine-owned identity only', () => {
+    const stamped = stampBuildReviewCustomJudgedResult(customPayload(), customStamp, customReferenceContext);
+
+    expect(stamped).toMatchObject({
+      kind: 'judged', rubric: 'portablePolicy', lapId: 'lap-1', verdict: 'FAIL',
+      declaration: customStamp.declaration, policy: customStamp.policy,
+      candidate: customStamp.candidate, reviewedInput: customStamp.reviewedInput,
+      findings: [{
+        concernId: 'portable-policy-gap', confidence: 72,
+        sourceRegions: customReferenceContext.sourceRegions,
+      }],
+    });
+    expect(stamped?.findings[0]?.identity.canonicalJson).not.toContain('confidence');
+    expect(stamped?.findings[0]?.identity.canonicalJson).not.toContain('lap-1');
+    expect(stamped?.findings[0]?.identity.canonicalJson).not.toContain('summary');
+    expect(Object.isFrozen(stamped?.findings ?? [])).toBe(true);
+  });
+
+  it('refuses custom evidence outside frozen input before a judged envelope can exist', () => {
+    const invalidReferences = [
+      customPayload({ findings: [{ ...customPayload().findings![0] as object, evidenceLocations: ['src/widget.ts:13'] }] }),
+      customPayload({ findings: [{ ...customPayload().findings![0] as object, evidenceLocations: ['src/other.ts:8'] }] }),
+      customPayload({ findings: [{ ...customPayload().findings![0] as object, sourceRegions: [{ ...customReferenceContext.sourceRegions[0], startLine: 7 }] }] }),
+      customPayload({ findings: [{ ...customPayload().findings![0] as object, sourceRegions: [{ ...customReferenceContext.sourceRegions[0], contentHash: HASH_B }] }] }),
+    ];
+
+    for (const payload of invalidReferences) {
+      expect(stampBuildReviewCustomJudgedResult(payload, customStamp, customReferenceContext)).toBeUndefined();
+    }
+  });
+
+  it('changes custom exact identity for declaration or effective policy changes, not confidence or publication timing', () => {
+    const first = stampBuildReviewCustomJudgedResult(customPayload(), customStamp, customReferenceContext)!;
+    const confidenceDrift = stampBuildReviewCustomJudgedResult(
+      customPayload({ findings: [{ ...customPayload().findings![0] as object, confidence: 5 }] }),
+      { ...customStamp, lapId: 'lap-2' }, customReferenceContext,
+    )!;
+    const policyChange = stampBuildReviewCustomJudgedResult(
+      customPayload(), { ...customStamp, policy: { version: 'v1', bundleDigest: HASH_C } }, customReferenceContext,
+    )!;
+    const declarationChange = stampBuildReviewCustomJudgedResult(
+      customPayload(), { ...customStamp, declaration: { ...customStamp.declaration, resources: ['stricter-criteria.md'] } }, customReferenceContext,
+    )!;
+
+    expect(confidenceDrift.findings[0]!.identity.id).toBe(first.findings[0]!.identity.id);
+    expect(policyChange.findings[0]!.identity.id).not.toBe(first.findings[0]!.identity.id);
+    expect(declarationChange.findings[0]!.identity.id).not.toBe(first.findings[0]!.identity.id);
   });
 });
