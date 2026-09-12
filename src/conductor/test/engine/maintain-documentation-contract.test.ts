@@ -610,10 +610,16 @@ describe('repository-local maintain-documentation contract', () => {
   });
 
   it('aligns repository release policy without changing consumer defaults', async () => {
-    const [claudePolicy, pullRequestTemplate] = await Promise.all([
+    const [claudePolicy, architecture, pullRequestTemplate] = await Promise.all([
       readFile(join(repoRoot, 'CLAUDE.md'), 'utf-8'),
+      readFile(join(repoRoot, 'ARCHITECTURE.md'), 'utf-8'),
       readFile(join(repoRoot, '.github/pull_request_template.md'), 'utf-8'),
     ]);
+    // Publication mechanics live in the architecture reference, not session instructions.
+    const botOwnedPublication = (reference: string) =>
+      /bot-owned release\s+PR is maintained on every merge to main[\s\S]*publishes only when the commit on `main` is (?:\*\*)?that exact\s+PR's merge/i.test(
+        reference,
+      );
     const releasePolicyContract = (policy: string) => ({
       implementationBranchesDoNotWriteArtifacts:
         /implementation branches never write `CHANGELOG\.md` or `VERSION`/i.test(policy),
@@ -628,10 +634,6 @@ describe('repository-local maintain-documentation contract', () => {
         ),
       dispositionValidation:
         /required check validates the disposition[\s\S]*missing, malformed, or contradictory metadata/i.test(
-          policy,
-        ),
-      botOwnedPublication:
-          /bot-owned release\s+PR is maintained on every merge to main[\s\S]*publishes only when the commit on `main` is (?:\*\*)?that exact\s+PR's merge/i.test(
           policy,
         ),
       migrationBlocks:
@@ -665,6 +667,7 @@ describe('repository-local maintain-documentation contract', () => {
 
     expect({
       claudePolicy: policyContract(claudePolicy),
+      architecture: { botOwnedPublication: botOwnedPublication(architecture) },
       pullRequestTemplate: {
         declaresNoNote: /Release-Disposition: no-note/.test(pullRequestTemplate),
         declaresNoteFields:
@@ -687,9 +690,9 @@ describe('repository-local maintain-documentation contract', () => {
         acceptsMalformedDisposition: !releasePolicyContract(
           'A required check validates the disposition.',
         ).dispositionValidation,
-        allowsOrdinaryPushPublication: !releasePolicyContract(
+        allowsOrdinaryPushPublication: !botOwnedPublication(
           'A release workflow publishes after every ordinary push to main.',
-        ).botOwnedPublication,
+        ),
         putsMigrationInChangelog: !releasePolicyContract(
           'Migration blocks for breaking changes travel in CHANGELOG.md.',
         ).migrationBlocks,
@@ -708,7 +711,6 @@ describe('repository-local maintain-documentation contract', () => {
           noNoteDefault: true,
           noteVariant: true,
           dispositionValidation: true,
-          botOwnedPublication: true,
           migrationBlocks: true,
         },
         consumerIsolation: true,
@@ -717,6 +719,7 @@ describe('repository-local maintain-documentation contract', () => {
           noEmptyFailureClaim: true,
         },
       },
+      architecture: { botOwnedPublication: true },
       pullRequestTemplate: {
         declaresNoNote: true,
         declaresNoteFields: true,
