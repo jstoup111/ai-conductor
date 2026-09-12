@@ -5,6 +5,8 @@ import type { RemediationCaseRefutation } from './remediation-case-artifact.js';
 
 export const BUILD_REVIEW_ADJUDICATION_CONTEXT_LIMITS = Object.freeze({
   maxCurrentSources: 512,
+  maxPolicyCriteria: 64,
+  maxAdmittedTaskContracts: 128,
   maxPriorCases: 128,
   maxSourcesPerCase: 512,
   maxEvidenceLocations: 64,
@@ -34,6 +36,13 @@ export interface BuildReviewAdjudicationPlanContract {
   /** `null` states that no plan is bound — never an omitted field. */
   readonly path: string | null;
   readonly pointers: readonly string[];
+  /** Every active plan task's complete body, available for repair admission. */
+  readonly admittedTaskContracts?: readonly BuildReviewAdjudicationTaskContract[];
+}
+
+export interface BuildReviewAdjudicationTaskContract {
+  readonly id: string;
+  readonly contract: string;
 }
 
 /** Engine-supplied task-status evidence for the active plan. */
@@ -42,8 +51,27 @@ export interface BuildReviewAdjudicationTaskStatus {
   readonly tasks: readonly { readonly id: string; readonly status: string }[];
 }
 
-const ABSENT_PLAN_CONTRACT: BuildReviewAdjudicationPlanContract = Object.freeze({ path: null, pointers: Object.freeze([]) });
+const ABSENT_PLAN_CONTRACT: BuildReviewAdjudicationPlanContract = Object.freeze({ path: null, pointers: Object.freeze([]), admittedTaskContracts: Object.freeze([]) });
 const ABSENT_TASK_STATUS: BuildReviewAdjudicationTaskStatus = Object.freeze({ path: null, tasks: Object.freeze([]) });
+
+/** The approved lifecycle boundaries that a policy finding cannot reclaim. */
+const RESERVED_LIFECYCLE_OWNERS = Object.freeze({
+  buildTaskCompletion: 'build_task_close',
+  testRealness: 'build_review:testQuality',
+  productCompletion: 'prd_audit',
+  manualFunctionality: 'manual_test',
+  architectureChoice: 'architecture_review',
+  adrConformance: 'architecture_review_as_built',
+  planGrowth: 'prd_audit',
+});
+
+export interface BuildReviewAdjudicationPolicyContext {
+  readonly rubric: string;
+  readonly question: string;
+  readonly effectivePolicyIdentity: string;
+  /** Declared supporting policy resources; no mutable policy body is re-read. */
+  readonly criteria: readonly string[];
+}
 
 /**
  * The complete input to one post-join remediate judgement.
@@ -56,11 +84,15 @@ const ABSENT_TASK_STATUS: BuildReviewAdjudicationTaskStatus = Object.freeze({ pa
  */
 export interface BuildReviewAdjudicationContext {
   readonly version: 'v1';
-  readonly mode: 'case-v1';
+  readonly mode: 'case-v1' | 'case-v2';
   readonly domain: 'build_review';
   readonly lapId: string;
   readonly snapshotDigest: string;
   readonly currentFindings: readonly BuildReviewAdjudicationCurrentSource[];
+  /** Question/criteria/identity for every current source rubric. */
+  readonly policyContext: readonly BuildReviewAdjudicationPolicyContext[];
+  /** Engine-stamped owners that policy findings may not supersede. */
+  readonly lifecycleOwners: typeof RESERVED_LIFECYCLE_OWNERS;
   readonly priorCases: readonly BuildReviewAdjudicationPriorCase[];
   readonly planContract: BuildReviewAdjudicationPlanContract;
   readonly taskStatus: BuildReviewAdjudicationTaskStatus;
@@ -86,7 +118,8 @@ export interface AssembleBuildReviewAdjudicationContextInput {
 
 export type BuildReviewAdjudicationContextStop =
   | { readonly code: 'invalid-aggregate' }
-  | { readonly code: 'field-overflow'; readonly subject: 'current-source' | 'prior-case'; readonly field: string; readonly limit: number; readonly actual: number; readonly caseId?: string }
+  | { readonly code: 'missing-scope-evidence'; readonly subject: 'policy-context' | 'admitted-task-contracts' | 'task-status' }
+  | { readonly code: 'field-overflow'; readonly subject: 'current-source' | 'prior-case' | 'policy-context' | 'admitted-task-contract'; readonly field: string; readonly limit: number; readonly actual: number; readonly caseId?: string }
   | { readonly code: 'unrepresentable-prior-case'; readonly caseId: string; readonly field: string }
   | { readonly code: 'serialized-byte-overflow'; readonly limit: number; readonly actual: number };
 
@@ -104,7 +137,7 @@ function bytes(value: string): number {
 function boundedString(
   value: unknown,
   max: number,
-  subject: 'current-source' | 'prior-case',
+  subject: 'current-source' | 'prior-case' | 'policy-context' | 'admitted-task-contract',
   field: string,
   caseId?: string,
 ): BuildReviewAdjudicationContextStop | undefined {
@@ -115,6 +148,87 @@ function boundedString(
   }
   const actual = bytes(value);
   return actual > max ? { code: 'field-overflow', subject, field, limit: max, actual, ...(caseId === undefined ? {} : { caseId }) } : undefined;
+}
+
+function customPolicyContext(
+  aggregate: BuildReviewAggregate,
+  rubric: string,
+): BuildReviewAdjudicationPolicyContext | undefined {
+  const descriptor = aggregate.customResults?.[rubric]?.descriptor;
+  if (!descriptor || descriptor.declaration.rubricId !== rubric) return undefined;
+  return Object.freeze({
+    rubric,
+    question: descriptor.declaration.question,
+    effectivePolicyIdentity: descriptor.effectivePolicy.bundleDigest,
+    criteria: Object.freeze([...descriptor.declaration.resources]),
+  });
+}
+
+function policyContexts(
+  aggregate: BuildReviewAggregate,
+  sources: readonly BuildReviewAdjudicationCurrentSource[],
+): BuildReviewAdjudicationPolicyContext[] | undefined {
+  const rubrics = [...new Set(sources.map((source) => source.rubric))].sort();
+  const contexts: BuildReviewAdjudicationPolicyContext[] = [];
+  for (const rubric of rubrics) {
+    const custom = customPolicyContext(aggregate, rubric);
+    if (custom) {
+      contexts.push(custom);
+      continue;
+    }
+    if (rubric !== 'testQuality') return undefined;
+    const contractVersion = sources.find((source) => source.rubric === rubric)!.contractVersion;
+    contexts.push(Object.freeze({
+      rubric,
+      question: 'Are the tests for new behavior real?',
+      effectivePolicyIdentity: `testQuality:${contractVersion}`,
+      criteria: Object.freeze(['test-insensitive']),
+    }));
+  }
+  return contexts;
+}
+
+function validateCustomScope(
+  policyContext: readonly BuildReviewAdjudicationPolicyContext[],
+  planContract: BuildReviewAdjudicationPlanContract,
+  taskStatus: BuildReviewAdjudicationTaskStatus,
+): BuildReviewAdjudicationContextStop | undefined {
+  const custom = policyContext.some((policy) => policy.rubric !== 'testQuality');
+  if (!custom) return undefined;
+  if (planContract.path === null || !Array.isArray(planContract.admittedTaskContracts)) {
+    return { code: 'missing-scope-evidence', subject: 'admitted-task-contracts' };
+  }
+  if (taskStatus.path === null) return { code: 'missing-scope-evidence', subject: 'task-status' };
+  if (planContract.admittedTaskContracts.length > LIMITS.maxAdmittedTaskContracts) {
+    return { code: 'field-overflow', subject: 'admitted-task-contract', field: 'admittedTaskContracts', limit: LIMITS.maxAdmittedTaskContracts, actual: planContract.admittedTaskContracts.length };
+  }
+  const contractIds = new Set<string>();
+  for (const task of planContract.admittedTaskContracts) {
+    const id = boundedString(task?.id, LIMITS.maxReferenceBytes, 'admitted-task-contract', 'id');
+    if (id) return id;
+    const contract = boundedString(task?.contract, LIMITS.maxTextBytes, 'admitted-task-contract', 'contract');
+    if (contract) return contract;
+    if (contractIds.has(task.id)) return { code: 'missing-scope-evidence', subject: 'admitted-task-contracts' };
+    contractIds.add(task.id);
+  }
+  const statuses = new Set(taskStatus.tasks.map((task) => task.id));
+  if ([...contractIds].some((id) => !statuses.has(id))) {
+    return { code: 'missing-scope-evidence', subject: 'task-status' };
+  }
+  for (const policy of policyContext) {
+    const question = boundedString(policy.question, LIMITS.maxTextBytes, 'policy-context', 'question');
+    if (question) return question;
+    const identity = boundedString(policy.effectivePolicyIdentity, LIMITS.maxReferenceBytes, 'policy-context', 'effectivePolicyIdentity');
+    if (identity) return identity;
+    if (policy.criteria.length > LIMITS.maxPolicyCriteria) {
+      return { code: 'field-overflow', subject: 'policy-context', field: 'criteria', limit: LIMITS.maxPolicyCriteria, actual: policy.criteria.length };
+    }
+    for (const criterion of policy.criteria) {
+      const criterionStop = boundedString(criterion, LIMITS.maxReferenceBytes, 'policy-context', 'criteria[]');
+      if (criterionStop) return criterionStop;
+    }
+  }
+  return undefined;
 }
 
 function validateCurrent(source: BuildReviewRawSourceProjection): BuildReviewAdjudicationContextStop | undefined {
@@ -267,6 +381,8 @@ export function assembleBuildReviewAdjudicationContext(
     currentFindings.push(Object.freeze({ ...source, sourceId: buildReviewAdjudicationSourceId(source) }));
   }
   currentFindings.sort((left, right) => left.sourceId.localeCompare(right.sourceId));
+  const policyContext = policyContexts(input.aggregate, currentFindings);
+  if (!policyContext) return { ok: false, stop: { code: 'missing-scope-evidence', subject: 'policy-context' } };
 
   if (input.priorCases.length > LIMITS.maxPriorCases) {
     return { ok: false, stop: { code: 'field-overflow', subject: 'prior-case', field: 'priorCases', limit: LIMITS.maxPriorCases, actual: input.priorCases.length } };
@@ -283,12 +399,27 @@ export function assembleBuildReviewAdjudicationContext(
   priorCases.sort((left, right) => left.id.localeCompare(right.id));
 
   const attempted = new Set(input.attemptedCaseIds ?? []);
+  const planContract = input.planContract ?? ABSENT_PLAN_CONTRACT;
+  const taskStatus = input.taskStatus ?? ABSENT_TASK_STATUS;
+  const scopeStop = validateCustomScope(policyContext, planContract, taskStatus);
+  if (scopeStop) return { ok: false, stop: scopeStop };
+  const mode = policyContext.some((policy) => policy.rubric !== 'testQuality') ? 'case-v2' as const : 'case-v1' as const;
   const context: BuildReviewAdjudicationContext = Object.freeze({
-    version: 'v1', mode: 'case-v1', domain: 'build_review',
+    version: 'v1', mode, domain: 'build_review',
     lapId: input.aggregate.lapId, snapshotDigest: input.aggregate.snapshotDigest,
-    currentFindings: Object.freeze(currentFindings), priorCases: Object.freeze(priorCases),
-    planContract: Object.freeze(input.planContract ?? ABSENT_PLAN_CONTRACT),
-    taskStatus: Object.freeze(input.taskStatus ?? ABSENT_TASK_STATUS),
+    currentFindings: Object.freeze(currentFindings),
+    policyContext: Object.freeze(policyContext),
+    lifecycleOwners: RESERVED_LIFECYCLE_OWNERS,
+    priorCases: Object.freeze(priorCases),
+    planContract: Object.freeze({
+      path: planContract.path,
+      pointers: Object.freeze([...planContract.pointers]),
+      admittedTaskContracts: Object.freeze([...(planContract.admittedTaskContracts ?? [])].map((task) => Object.freeze({ ...task }))),
+    }),
+    taskStatus: Object.freeze({
+      path: taskStatus.path,
+      tasks: Object.freeze(taskStatus.tasks.map((task) => Object.freeze({ ...task }))),
+    }),
     effectPointers: Object.freeze(priorCases.flatMap((priorCase) => {
       const source = input.priorCases.find((record) => record.id === priorCase.id)!;
       const pointer = effectPointerFor(source, attempted);

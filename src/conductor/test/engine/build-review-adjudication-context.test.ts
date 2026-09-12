@@ -1,4 +1,4 @@
-// Covers: task:3, task:4
+// Covers: task:3, task:4, task:28
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -7,11 +7,13 @@ import {
 } from '../../src/engine/build-review-adjudication-context.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
+import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import type { RemediationCaseRecord } from '../../src/engine/remediation-case-store.js';
 
 const lapId = parseBuildReviewLapId('lap-current')!;
 const snapshotDigest = 'sha256:snapshot';
 const HASH = `sha256:${'a'.repeat(64)}`;
+const POLICY_DIGEST = `sha256:${'c'.repeat(64)}`;
 
 function finding(name: string): BuildReviewFinding {
   return {
@@ -36,6 +38,48 @@ function aggregate(...findings: readonly BuildReviewFinding[]) {
       },
     },
   });
+}
+
+function customAggregate() {
+  const declaration = {
+    version: 'v1' as const, rubricId: 'security', semanticSkill: 'security-review',
+    question: 'Does the changed code preserve the security boundary?',
+    source: 'plugin' as const, resources: ['references/security-criteria.md'],
+  };
+  const descriptor = {
+    version: 'v1' as const, semanticSkill: 'security-review', declaration,
+    installation: { source: 'plugin' as const, plugin: { id: 'security-suite', version: '2.1.0' } },
+    effectivePolicy: { version: 'v1' as const, bundleDigest: POLICY_DIGEST },
+    reviewedInput: { version: 'v1' as const, contentDigest: POLICY_DIGEST },
+    producer: { provider: 'codex', model: 'gpt-5.6', effort: 'high' },
+  };
+  const sourceRegion = { path: 'src/handler.ts', startLine: 12, endLine: 16, contentHash: HASH, display: 'changed handler' };
+  const result = stampBuildReviewCustomJudgedResult({
+    kind: 'custom-findings', version: 'v1',
+    findings: [{
+      concernId: 'authorization-bypass', summary: 'The changed handler bypasses authorization.',
+      evidenceLocations: ['src/handler.ts:12'], confidence: 92, sourceRegions: [sourceRegion],
+    }],
+  }, {
+    rubric: 'security', lapId, declaration, policy: descriptor.effectivePolicy,
+    candidate: descriptor.producer, reviewedInput: descriptor.reviewedInput,
+  }, { sourceRegions: [sourceRegion] })!;
+  return joinBuildReviewRubricOutcomes({
+    lapId, snapshotDigest,
+    results: {
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest, contractVersion: 'v3',
+        findings: [], verdict: 'PASS',
+      },
+    },
+    customResults: {
+      security: {
+        descriptor,
+        result,
+      },
+    },
+    currentCustomRubrics: ['security'],
+  } as never);
 }
 
 function priorCase(id: string): RemediationCaseRecord {
@@ -236,8 +280,8 @@ describe('build-review adjudication context', () => {
     // names exactly these input fields. A context missing any of them routes a
     // real dispatch into the legacy gap-plan branch.
     expect(Object.keys(result.context).sort()).toEqual([
-      'currentFindings', 'domain', 'effectPointers', 'lapId', 'mode', 'planContract',
-      'priorCases', 'snapshotDigest', 'suppressionHistory', 'taskStatus', 'version',
+      'currentFindings', 'domain', 'effectPointers', 'lapId', 'lifecycleOwners', 'mode',
+      'planContract', 'policyContext', 'priorCases', 'snapshotDigest', 'suppressionHistory', 'taskStatus', 'version',
     ]);
     expect(result.context).toMatchObject({
       mode: 'case-v1',
@@ -262,5 +306,49 @@ describe('build-review adjudication context', () => {
       taskStatus: { path: null, tasks: [] },
       effectPointers: [],
     } });
+  });
+
+  it('delivers every custom policy boundary, reserved owner, and full admitted task contract', () => {
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: customAggregate(),
+      priorCases: [priorCase('case-security')],
+      planContract: {
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{
+          id: '28',
+          contract: '**Steps:**\n1. Preserve the authorization boundary.\n\n**Done when:**\n- The authorized route is covered.',
+        }],
+      },
+      taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '28', status: 'in_progress' }] },
+    });
+
+    expect(result).toMatchObject({ ok: true, context: {
+      mode: 'case-v2',
+      currentFindings: [expect.objectContaining({ rubric: 'security', concernKind: 'authorization-bypass' })],
+      policyContext: [{
+        rubric: 'security',
+        question: 'Does the changed code preserve the security boundary?',
+        effectivePolicyIdentity: POLICY_DIGEST,
+        criteria: ['references/security-criteria.md'],
+      }],
+      lifecycleOwners: expect.objectContaining({
+        productCompletion: 'prd_audit', architectureChoice: 'architecture_review', planGrowth: 'prd_audit',
+      }),
+      planContract: expect.objectContaining({
+        admittedTaskContracts: [{ id: '28', contract: expect.stringContaining('authorization boundary') }],
+      }),
+      priorCases: [expect.objectContaining({ id: 'case-security' })],
+    } });
+  });
+
+  it('stops rather than dispatching a custom policy without complete scope evidence', () => {
+    expect(assembleBuildReviewAdjudicationContext({
+      aggregate: customAggregate(), priorCases: [],
+      planContract: { path: '.docs/plans/example.md', pointers: [] },
+      taskStatus: { path: null, tasks: [] },
+    })).toEqual({
+      ok: false,
+      stop: { code: 'missing-scope-evidence', subject: 'admitted-task-contracts' },
+    });
   });
 });
