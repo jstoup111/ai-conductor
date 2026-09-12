@@ -6,6 +6,7 @@ otel:
   endpoint: http://localhost:4318
   attributes:
     verification.marker: a6227ff34d1a221e
+    team.name: jamesstoup
 
 # Auto-reconciliation of parked features, explicitly enabled (operator order,
 # 2026-07-30, matches the documented default but pinned here so it survives
