@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-12T01:24:46.626Z
 Slug: projects-cannot-add-portable-non-competing-build-r
 Class: needs-human
 Halting step: unknown
