@@ -24,6 +24,8 @@ Two intake outcomes are deterministic-machinery concerns, not LLM work:
    round-trip). On failure it logs a single classified reason and **disables ci-fix for the
    run** rather than letting the daemon emit an identical per-PR crash.
 
+   > **Amended 2026-09-11 by #2153:** The operator approved CI repair inheriting the existing build provider/model/effort/fallback configuration. The later `adr-2026-07-24-provider-aware-step-execution-fresh-session-scope` and `adr-2026-07-29-codex-readiness-probe-failure-disposition` govern readiness and execution. The independent Claude-only startup veto is no longer required or permitted: selected-provider readiness belongs at the existing provider execution boundary. Preserve explicit, classified diagnostics and do not consume a repair attempt on a proven pre-execution refusal. Authentication failure does not authorize provider fallback; an inconclusive Codex readiness probe retains its established ordinary-dispatch behavior. This clarification changes neither general provider routing nor the authority of guards, configured verification, and lease-protected publication.
+
 2. **Error classification at the resolver boundary.** When a dispatch/spawn fails, classify it
    into `flag-invalid` (arg-parse / unknown-option), `auth` (credential/login failure),
    `spawn-env` (ENOENT / PATH), or `unknown`, and log a diagnosable line. Replace the bare
