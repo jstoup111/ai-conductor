@@ -18,8 +18,11 @@ This page covers the integrity script only. Runtime gates that block a feature's
 bash test/test_harness_integrity.sh
 ```
 
-Run it from the worktree root when validating a harness change. It takes no arguments;
-validation is required before declaring the work complete, not before each commit.
+Run it from the worktree root. It takes no arguments. In managed self-host runs, the
+release gate owns this suite; other steps consume its evidence instead of rerunning it.
+For an operator-requested hotfix outside the lifecycle, run it once on the completed
+change. A file edit or step completion is not a separate suite trigger. The `test_suite`
+gate independently owns aggregate application tests.
 
 Two result classes:
 
