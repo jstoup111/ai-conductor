@@ -57,12 +57,10 @@ effect. Do not create BUILD work, amend a plan, write a remediation artifact, or
 from markdown/prose. For every other mode, including `build_review` `case-v1`/`case-v2` and legacy gap
 planning, skip this branch and follow the existing instructions unchanged.
 
-## Engine-selected build_review case mode
+## Engine-selected build_review case-v1 mode
 
-Use this branch **only when this engine context is the engine-stamped `build_review` case context
-declaring `domain: "build_review"` and `mode: "case-v1"` or `"case-v2"`**. It is one judgement by
-the existing `remediate` skill, not a new skill or a second dispatch. Do not create a skill or
-dispatch another agent. For every other context, including all SHIP and stall remediation, skip this
+Use this branch **only when this engine context is the engine-stamped `build_review` `case-v1` case context declaring `domain: "build_review"` and `mode: "case-v1"` or `"case-v2"`**. It is one judgement by
+the existing `remediate` skill, not a new skill or a second dispatch. Do not create a skill or dispatch another agent. For every other context, including all SHIP and stall remediation, skip this
 section and follow the legacy gap-plan instructions below unchanged.
 
 ### Supplied input — complete or stop
