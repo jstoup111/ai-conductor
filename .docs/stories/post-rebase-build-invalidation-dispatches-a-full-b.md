@@ -33,12 +33,10 @@ costs ~1–2 minutes and zero LLM tokens instead of ~45–60 minutes.
 
 #### Negative Paths
 - Given the rebase outcome is `noop` or `changelog_resolved` (docs-only), when verdicts are
-  applied, then no pre-verify runs and no gate is invalidated — identical to today (FR-4
-  preserved).
+  applied, then no BUILD pre-verify is needed and no code/test gate is invalidated solely for documents; changed active review inputs still reopen their owning reviews.
 - Given the mechanical pre-verify itself throws (e.g. plan file unreadable, git command fails
   mid-derivation), when the rebase step applies its verdicts, then the build gate is written
-  `satisfied: false` with `kickback: { from: 'rebase' }` exactly as today — an erroring
-  pre-verify NEVER confirms a gate (fail-closed).
+  unsatisfied and continuation blocks with evidence-recovery diagnostics; an erroring pre-verify never confirms completion or blindly dispatches completed tasks.
 
 ### Done When
 - [ ] `test/integration/rebase-loop.test.ts` evidence-intact case asserts `buildRuns === 1`
@@ -47,70 +45,45 @@ costs ~1–2 minutes and zero LLM tokens instead of ~45–60 minutes.
       newer than the rebase, and a mechanical-re-verify reason string.
 - [ ] `events.jsonl` contains a `rebase_gate_reverified` event for `build` on that lap.
 - [ ] A unit test makes the injected pre-verify throw and asserts the written build verdict is
-      `satisfied: false` with `kickback.from === 'rebase'`.
+      unsatisfied with a blocking evidence-recovery outcome and no blind BUILD dispatch.
 
 ---
 
-## Story 2: Genuinely-pending work after a rebase still dispatches the build agent
+## Story 2: Unavailable post-rebase completion blocks for evidence recovery
 
-As a daemon operator, I want the build agent still dispatched whenever the mechanical gate
-finds unresolved plan tasks after a file-changing rebase, so the gate-first optimization never
-ships un-built work (the fail-closed invariant of Phase 9.0 FR-5/FR-6 is unchanged).
+As a daemon operator, I want missing completion evidence distinguished from concrete implementation failure.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a file-changing rebase and a plan containing at least one task with no git evidence
-  trailer (genuinely incomplete), when the rebase step applies its verdicts, then the build
-  gate is written `satisfied: false` with `kickback: { from: 'rebase', evidence: <changed
-  paths> }` and the loop re-dispatches the build agent — byte-for-byte today's behavior.
+- Given completed work whose evidence cannot be established after rebase, when preverification runs, then continuation blocks for evidence recovery or halt without blindly dispatching the completed task list.
 
 #### Negative Paths
-- Given a task whose evidence trailer exists but fails path corroboration (trailer commit
-  touches none of the task's plan paths), when the pre-verify derives completion, then that
-  task does not count as resolved and the build gate is invalidated and dispatched (the
-  existing evidence bar is not lowered by this feature).
-- Given a forged `task-status.json` marking all tasks completed but no evidence stamps in the
-  sidecar, when the pre-verify runs, then the gate does not pass (H6/H7 sidecar-only trust is
-  unchanged) and build is dispatched.
+- Given forged completion rows without authoritative task evidence, when preverification runs, then completion is refused and publication remains blocked.
+- Given an independently established ordinary repair obligation, when rebase preservation is considered, then that obligation remains outstanding and follows its normal repair owner.
 
 ### Done When
-- [ ] `test/integration/rebase-loop.test.ts` keeps a case pinning `buildRuns === 2` when a plan
-      task has no evidence post-rebase (C3).
-- [ ] The written verdict in that case carries `kickback.from === 'rebase'` with the
-      changed-paths evidence string, unchanged in shape from today.
+- [ ] A missing-evidence integration fixture observes no blind BUILD dispatch and blocking recovery diagnostics.
+- [ ] Forged state cannot pass; an ordinary review-requested repair is still dispatched.
 
 ---
 
-## Story 3: Non-tree-attesting gates are always invalidated by a file-changing rebase
+## Story 3: Non-tree-attesting reviews require valid scoped preservation
 
-As a daemon operator, I want `build_review` and `manual_test` (when it ran) unconditionally
-invalidated by a file-changing rebase, so gates whose predicates cannot attest the rebased tree
-are never confirmed from stale same-session artifacts.
+As a daemon operator, I want reviews preserved only when their relevant authority remains valid.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a file-changing rebase where the build pre-verify passes, when verdicts are applied,
-  then `build_review` and (if it ran) `manual_test` are still written `satisfied: false` with
-  `kickback: { from: 'rebase' }` and re-run on the lap — only `build` is eligible for
-  mechanical confirmation.
+- Given a file-changing rebase with unchanged expected replay and unchanged active review inputs, when gate decisions are applied, then already-passing feature-scoped reviews may remain complete while applicable runtime testing still revalidates changed runtime inputs.
 
 #### Negative Paths
-- Given a pre-rebase `.pipeline/manual-test-results.md` written earlier in the SAME daemon
-  session (mtime fresh, latest attempt all PASS), when the rebase changes code paths, then
-  manual_test is invalidated anyway — the session-fresh clean results file must NOT satisfy the
-  gate on this lap without a re-run.
-- Given manual_test was skipped for the feature, when verdicts are applied, then manual_test is
-  not kicked back (today's `ranManualTest` behavior preserved) while `build_review` still is.
+- Given changed or unproved replay or changed active inputs, when the decision is applied, then affected reviews are reopened rather than accepted on artifact presence alone.
+- Given manual_test is skipped, when the decision is applied, then it remains skipped.
 
 ### Done When
-- [ ] Integration case asserts `build_review` re-runs (its runner invoked) on an
-      evidence-intact lap where build was skipped.
-- [ ] Integration/unit case asserts manual_test's verdict is `satisfied: false` after a
-      file-changing rebase despite a fresh all-PASS results file from the same session.
-- [ ] Unit test on `applyRebaseVerdicts` pins the kicked-back set: `['build_review']` or
-      `['build_review','manual_test']` when the pre-verify passes, plus `'build'` when it fails.
+- [ ] Production rebase integration distinguishes preserved feature reviews, affected review reruns, and runtime testing.
+- [ ] A pre-existing review artifact alone never grants preservation after relevant change.
 
 ---
 
@@ -160,9 +133,7 @@ behavior in tests/legacy paths.
 
 #### Negative Paths
 - Given `applyRebaseVerdicts` is called WITHOUT the pre-verify capability (unit tests, any
-  legacy caller), when a file-changing rebase outcome is applied, then all of today's targets
-  (`build`, `build_review`, + `manual_test` if it ran) are invalidated unconditionally —
-  absence of the capability fail-closes to current behavior.
+  legacy caller), when a file-changing rebase outcome is applied, then no mechanical completion claim is fabricated; missing BUILD evidence blocks for recovery and applicable reviews remain subject to conservative revalidation.
 - Given the pre-verify passed for build, when `advanceTail` re-emits kickback events, then no
   kickback event is emitted for build (event stream must match the actual kicked-back set — no
   phantom kickbacks in `daemon.log` forensics).
@@ -170,7 +141,5 @@ behavior in tests/legacy paths.
 ### Done When
 - [ ] Unit test: `advanceTail` (or its extracted helper) leaves build `done` and resets exactly
       the `kickedBack` list from `applyRebaseVerdicts`.
-- [ ] Unit test: `applyRebaseVerdicts` without the capability invalidates the full target set
-      (existing `test/engine/rebase.test.ts` expectations remain green unchanged).
-- [ ] Event-stream assertion: kickback events on an evidence-intact lap name only
-      `build_review`/`manual_test`, never `build`.
+- [ ] Unit test: `applyRebaseVerdicts` without the capability rejects unsupported completion and preserves the explicit conservative review/recovery distinction.
+- [ ] Event-stream assertion: kickback events on an evidence-intact lap name exactly the affected gates, never a mechanically preserved BUILD.

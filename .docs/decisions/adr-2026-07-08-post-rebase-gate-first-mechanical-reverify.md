@@ -10,6 +10,10 @@ completion in ~1–2 minutes with zero LLM tokens.
 
 ## Decision
 
+### D1 — Post-rebase evidence recovery amendment
+
+> **Amended 2026-09-11 by #2253:** adr-2026-09-11-selective-post-rebase-verification retains BUILD evidence preverification but replaces rebase-only blind redispatch when that evidence cannot be established with explicit evidence recovery or halt. Completed acceptance authoring and BUILD are not reopened by positional navigation. A concrete suite failure still enters ordinary bounded BUILD repair; genuine outstanding repair obligations are never cancelled by rebase preservation.
+
 On a file-changing clean rebase (`outcome.kind === 'changed'`), `applyRebaseVerdicts`
 (`src/conductor/src/engine/rebase.ts:725`) re-evaluates the **build** gate's mechanical
 completion predicate against the freshly-rebased tree **before** writing its

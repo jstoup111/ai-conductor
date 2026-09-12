@@ -41,6 +41,8 @@ wired into the re-dispatch path.
 
 ## Decision
 
+> **Amended 2026-09-11 by #2253:** adr-2026-09-11-selective-post-rebase-verification adds an engine-owned, replay-bound preservation authority to the existing gate evidence contract. Completion, sweep, and finish readers validate the same original verdict, immutable replay identities, exact expected-tree proof, and relevant inputs before honoring preservation across a shared-file upstream edit. Missing binding or later relevant changes remain fail-closed. This does not rewrite judge attempt identity or relax fresh-dispatch requirements.
+
 **Preserve a judged-gate verdict across re-dispatch when, and only when, the code under that gate's
 declared surface is unchanged since the verdict was recorded — reusing `GATE_SURFACE` + `partitionDelta`.
 Replace the cross-dispatch mtime-freshness rejection with this code-validity check; keep the

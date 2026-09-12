@@ -139,6 +139,8 @@ re-check already gate on, and the condition the daemon production path always se
 
 ### D3 — The re-check reads; it never writes
 
+> **Amended 2026-09-11 by #2253:** adr-2026-09-11-selective-post-rebase-verification D6 narrows the consequence for a completed BUILD whose evidence becomes unavailable after a completed rebase: block for explicit evidence recovery or halt rather than blindly dispatching the completed task list. The predicate remains read-only and authoritative. Ordinary outstanding repair and native suite revalidation retain their existing dispatch routes.
+
 No state mutation, no verdict write, no event-driven demotion. A predicate that contradicts a
 persisted `done` causes the step to be **dispatched**; the step's own success path then records its
 outcome through the existing machinery. This is what distinguishes the decision from
@@ -152,6 +154,8 @@ The re-check calls `checkStepCompletion` with the same `completionCtx` the DECID
 verdict file at this seam — the verdict layer keeps its own role at the clamp and the tail.
 
 ### D5 — Fail-closed on an unreadable predicate, and the direction is stated
+
+> **Amended 2026-09-11 by #2253:** The completed-BUILD post-rebase exception in D3 also governs an unreadable predicate: block with evidence-recovery diagnostics rather than blindly dispatching completed tasks. Ordinary repair and native suite verification retain their established routes.
 
 A predicate that throws is treated as **not satisfied**, so the step is dispatched. The cost of a
 wrong answer in that direction is a redundant re-run of a mechanical step; the cost in the other
