@@ -42,9 +42,59 @@ type DeferralCase = RemediationCaseRecord & {
   readonly effect: Extract<RemediationCaseRecord['effect'], { readonly kind: 'deferral' }>;
 };
 
+export type PersistBuildReviewDecisionStopResult =
+  | { readonly ok: true; readonly status: 'persisted' | 'already-persisted'; readonly caseId: string }
+  | { readonly ok: false; readonly reason: 'invalid-decision-stop' | 'conflicting-case-id' | `case store ${string}` };
+
 /** The shared lifecycle vocabulary for reducers and effect execution. */
 export function isOpenRemediationCase(record: RemediationCaseRecord): boolean {
   return record.resolution === 'open';
+}
+
+/** An open owner stop is durable blocking state, never a deferral-shaped effect. */
+export function isBuildReviewDecisionStop(record: RemediationCaseRecord): boolean {
+  return isOpenRemediationCase(record)
+    && record.disposition === 'escalate'
+    && record.effect.kind === 'none'
+    && record.escalation !== undefined;
+}
+
+function sameDecisionStop(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
+  return left.id === right.id && left.domain === right.domain && left.disposition === 'escalate' &&
+    right.disposition === 'escalate' && left.priority === right.priority && left.rationale === right.rationale &&
+    left.confidence === right.confidence && left.resolution === right.resolution &&
+    left.effect.kind === 'none' && right.effect.kind === 'none' &&
+    left.escalation?.owner === right.escalation?.owner && left.sources.length === right.sources.length &&
+    left.sources.every((source, index) => {
+      const other = right.sources[index];
+      return other !== undefined && source.sourceId === other.sourceId && source.outcome === other.outcome && source.recordedAt === other.recordedAt;
+    });
+}
+
+/**
+ * The effect-state owner persists decision stops through its existing lease,
+ * but deliberately has no publication, tracker, artifact, or charge adapter.
+ */
+export async function persistBuildReviewDecisionStop(input: {
+  readonly store: RemediationCaseStore;
+  readonly record: RemediationCaseRecord;
+}): Promise<PersistBuildReviewDecisionStopResult> {
+  if (!isBuildReviewDecisionStop(input.record)) return { ok: false, reason: 'invalid-decision-stop' };
+  const mutation = await input.store.mutate<PersistBuildReviewDecisionStopResult>(async (state) => {
+    const existing = state.cases.find((record) => record.id === input.record.id);
+    if (existing) {
+      return {
+        value: sameDecisionStop(existing, input.record)
+          ? { ok: true as const, status: 'already-persisted' as const, caseId: existing.id }
+          : { ok: false as const, reason: 'conflicting-case-id' as const },
+      };
+    }
+    return {
+      value: { ok: true as const, status: 'persisted' as const, caseId: input.record.id },
+      nextState: { ...state, cases: [...state.cases, input.record] },
+    };
+  });
+  return mutation.ok ? mutation.value : { ok: false, reason: `case store ${mutation.reason}` };
 }
 
 function isActionCase(record: RemediationCaseRecord): record is ActionCase {
@@ -75,7 +125,7 @@ export function hasReservedOrFailedRemediationEffect(record: RemediationCaseReco
 /** Open cases whose durable effect blocks recovery or terminal PASS settlement. */
 export function isBuildReviewSettlementObligationCase(record: RemediationCaseRecord): boolean {
   return isOpenRemediationCase(record)
-    && (isBuildEligibleActionCase(record) || hasReservedOrFailedRemediationEffect(record));
+    && (isBuildReviewDecisionStop(record) || isBuildEligibleActionCase(record) || hasReservedOrFailedRemediationEffect(record));
 }
 
 function replaceCases(

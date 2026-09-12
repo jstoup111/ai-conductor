@@ -1,5 +1,5 @@
 import type { BuildReviewWorkOrderCase } from './build-review-work-order.js';
-import { hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isOpenRemediationCase } from './remediation-case-effects.js';
+import { hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, isOpenRemediationCase } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
 import type { ValidateRemediationCaseGraphResult } from './remediation-case-validator.js';
 import type { RemediationCaseRecord } from './remediation-case-store.js';
@@ -78,6 +78,17 @@ export function reduceBuildReviewAdjudication(input: {
   }
   if (input.cases.some(hasUnfinishedEffect)) {
     return { route: 'halt', remainingMechanical: input.mechanical !== 'healthy', reason: 'remediation effect is not finalized' };
+  }
+  const currentDecisionOwners = [...new Set(input.cases
+    .filter(isBuildReviewDecisionStop)
+    .filter((record) => record.sources.some((source) => input.currentSourceIds.includes(source.sourceId)))
+    .map((record) => record.escalation!.owner))];
+  if (currentDecisionOwners.length > 0) {
+    return {
+      route: 'halt',
+      remainingMechanical: input.mechanical !== 'healthy',
+      reason: `${currentDecisionOwners.join(', ')} decision is required for current remediation sources`,
+    };
   }
   if (input.cases.some((record) =>
     isBuildEligibleActionCase(record) && record.sources.some((source) => input.currentSourceIds.includes(source.sourceId)),
