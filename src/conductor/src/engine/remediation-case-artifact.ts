@@ -291,6 +291,9 @@ function parseCaseRow(value: unknown, mode: RemediationCaseJudgement['mode']): P
   if (value.disposition === 'escalate' && (!isRecord(value.escalation) || !hasExactKeys(value.escalation, ['owner']) || !oneOf(value.escalation.owner, ['product', 'plan', 'architecture'] as const))) {
     return { ok: false, reason: 'invalid-escalation' };
   }
+  const escalation = value.disposition === 'escalate'
+    ? value.escalation as { readonly owner: RemediationCaseEscalationOwner }
+    : undefined;
   return {
     ok: true,
     value: {
@@ -302,7 +305,7 @@ function parseCaseRow(value: unknown, mode: RemediationCaseJudgement['mode']): P
       confidence: value.confidence,
       effect: effect.value,
       ...(refutation === undefined ? {} : { refutation: refutation.value }),
-      ...(value.disposition === 'escalate' ? { escalation: { owner: value.escalation.owner as RemediationCaseEscalationOwner } } : {}),
+      ...(escalation === undefined ? {} : { escalation }),
     },
   };
 }
