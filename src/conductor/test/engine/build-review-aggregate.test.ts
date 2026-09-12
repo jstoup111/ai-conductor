@@ -18,6 +18,25 @@ import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-r
 const lapId = parseBuildReviewLapId('lap-current')!;
 const snapshotDigest = 'sha256:snapshot';
 const HASH = `sha256:${'a'.repeat(64)}`;
+const CUSTOM_DIGEST = `sha256:${'c'.repeat(64)}`;
+
+const customAggregateMember = {
+  descriptor: {
+    version: 'v1', semanticSkill: 'security-review',
+    declaration: { version: 'v1', rubricId: 'security', semanticSkill: 'security-review', question: 'Find security regressions.', source: 'plugin', resources: ['references/security.md'] },
+    installation: { source: 'plugin', plugin: { id: 'security-suite', version: '2.1.0' } },
+    effectivePolicy: { version: 'v1', bundleDigest: CUSTOM_DIGEST },
+    reviewedInput: { version: 'v1', contentDigest: CUSTOM_DIGEST },
+    producer: { provider: 'codex', model: 'gpt-5.6', effort: 'high' },
+  },
+  result: {
+    kind: 'judged', contractVersion: 'custom-v1', rubric: 'security', lapId: 'lap-current',
+    declaration: { version: 'v1', rubricId: 'security', semanticSkill: 'security-review', question: 'Find security regressions.', source: 'plugin', resources: ['references/security.md'] },
+    policy: { version: 'v1', bundleDigest: CUSTOM_DIGEST }, candidate: { provider: 'codex', model: 'gpt-5.6', effort: 'high' },
+    reviewedInput: { version: 'v1', contentDigest: CUSTOM_DIGEST }, findings: [], verdict: 'PASS',
+    identity: { id: CUSTOM_DIGEST, canonicalPayload: {}, canonicalJson: '{}' },
+  },
+} as const;
 
 function judged(findings: readonly BuildReviewFinding[] = []): BuildReviewJudgedResult {
   return {
@@ -50,6 +69,54 @@ function currentAggregate() {
 }
 
 describe('build-review raw aggregate', () => {
+  it('retains historic custom descriptors while the lap catalog alone selects current custom membership', () => {
+    const current = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest, results: { testQuality: judged() },
+      customResults: { security: customAggregateMember }, currentCustomRubrics: ['security'],
+    } as never);
+    const disabledLater = { ...current, currentCustomRubrics: [] };
+
+    expect(parseBuildReviewAggregate(current)).toMatchObject({
+      customResults: { security: { descriptor: customAggregateMember.descriptor, result: { kind: 'judged', rubric: 'security' } } },
+      currentCustomRubrics: ['security'],
+    });
+    expect(parseBuildReviewAggregate(disabledLater)).toMatchObject({
+      customResults: { security: { descriptor: customAggregateMember.descriptor } }, currentCustomRubrics: [],
+    });
+  });
+
+  it('rejects a custom failure that tries to carry a judged descriptor', () => {
+    const aggregate = {
+      ...currentAggregate(), aggregateVersion: 'v2',
+      customResults: {
+        security: {
+          ...customAggregateMember,
+          result: { kind: 'infrastructure-failure', rubric: 'security', reason: 'policy-load-failed', detail: 'plugin unavailable' },
+        },
+      },
+      currentCustomRubrics: ['security'],
+    };
+
+    expect(parseBuildReviewAggregate(aggregate)).toBeUndefined();
+  });
+
+  it('counts only catalog-selected custom evidence as a current blocker', () => {
+    const failedCustom = {
+      result: { kind: 'infrastructure-failure', rubric: 'security', reason: 'policy-load-failed', detail: 'plugin unavailable' },
+    } as const;
+    const active = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest, results: { testQuality: judged() },
+      customResults: { security: failedCustom }, currentCustomRubrics: ['security'],
+    } as never);
+    const disabled = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest, results: { testQuality: judged() },
+      customResults: { security: failedCustom }, currentCustomRubrics: [],
+    } as never);
+
+    expect(active.verdict).toBe('FAIL');
+    expect(disabled).toMatchObject({ verdict: 'PASS', customResults: { security: failedCustom }, currentCustomRubrics: [] });
+  });
+
   it('retains judged findings while deriving a blocking scope-incomplete fault from validated indeterminacy', () => {
     const result = {
       ...judged([finding]),

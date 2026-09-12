@@ -8,8 +8,38 @@ import {
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
 
-const ARTIFACT_VERSION = 1 as const;
+const ARTIFACT_VERSION = 2 as const;
 const ARTIFACT_DIRECTORY = '.pipeline/build-review';
+
+type BuildReviewArtifactVersion = 1 | typeof ARTIFACT_VERSION;
+export type BuildReviewArtifactRubric = BuildReviewRubricId | string;
+
+/**
+ * Durable, self-describing provenance for a custom policy judgement.  It is
+ * intentionally separate from the current catalog: historical evidence must
+ * not need today's configuration in order to remain attributable.
+ */
+export interface BuildReviewCustomEvidenceDescriptor {
+  readonly version: 'v1';
+  readonly semanticSkill: string;
+  readonly declaration: {
+    readonly version: 'v1'; readonly rubricId: string; readonly semanticSkill: string;
+    readonly question: string; readonly source?: 'project' | 'global' | 'plugin'; readonly resources: readonly string[];
+  };
+  readonly installation: { readonly source: 'project' | 'global' | 'plugin'; readonly plugin?: { readonly id: string; readonly version?: string } };
+  readonly effectivePolicy: { readonly version: 'v1'; readonly bundleDigest: string };
+  readonly reviewedInput: { readonly version: 'v1'; readonly contentDigest: string };
+  readonly producer: { readonly provider: string; readonly model: string; readonly effort: string };
+}
+
+export type BuildReviewCustomArtifactResult =
+  | { readonly kind: 'judged'; readonly contractVersion: 'custom-v1'; readonly rubric: string; readonly lapId: string; readonly declaration: BuildReviewCustomEvidenceDescriptor['declaration']; readonly policy: BuildReviewCustomEvidenceDescriptor['effectivePolicy']; readonly candidate: BuildReviewCustomEvidenceDescriptor['producer']; readonly reviewedInput: BuildReviewCustomEvidenceDescriptor['reviewedInput']; readonly findings: readonly unknown[]; readonly verdict: 'PASS' | 'FAIL'; readonly identity: { readonly id: string; readonly canonicalPayload: unknown; readonly canonicalJson: string } }
+  | { readonly kind: 'infrastructure-failure'; readonly rubric: string; readonly reason: string; readonly detail: string };
+
+export interface BuildReviewCustomArtifactMember {
+  readonly descriptor?: BuildReviewCustomEvidenceDescriptor;
+  readonly result: BuildReviewCustomArtifactResult;
+}
 
 export type BuildReviewBranchProvenance =
   | { readonly kind: 'fresh' }
@@ -23,12 +53,16 @@ export type BuildReviewBranchProvenance =
 
 /** Engine-stamped, branch-local evidence for exactly one current rubric lap. */
 export interface BuildReviewBranchArtifact {
-  readonly version: typeof ARTIFACT_VERSION;
-  readonly rubric: BuildReviewRubricId;
+  readonly version: BuildReviewArtifactVersion;
+  readonly rubric: BuildReviewArtifactRubric;
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
-  readonly result: BuildReviewRubricResult;
+  readonly result: BuildReviewRubricResult | BuildReviewCustomArtifactResult;
   readonly provenance: BuildReviewBranchProvenance;
+  /** Present only for a current lap that reused an earlier judgement. */
+  readonly reuse?: { readonly sourceLapId: BuildReviewLapId; readonly sourceSnapshotDigest: string };
+  /** Required for custom judged evidence; forbidden for unjudged failures. */
+  readonly descriptor?: BuildReviewCustomEvidenceDescriptor;
 }
 
 /** Injected so branch-artifact tests never write to the host filesystem. */
@@ -41,6 +75,10 @@ export interface BuildReviewArtifactFilesystem {
 
 function isRubric(value: unknown): value is BuildReviewRubricId {
   return value === 'testQuality';
+}
+
+function isCustomRubric(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value) && value !== 'testQuality';
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -64,6 +102,45 @@ function strictResult(value: unknown): BuildReviewRubricResult | undefined {
   return exactKeys(candidate, expected) ? parseBuildReviewRubricResult(candidate) : undefined;
 }
 
+function stringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every(isNonEmptyString) && new Set(value).size === value.length;
+}
+
+function parseCustomDescriptor(value: unknown): BuildReviewCustomEvidenceDescriptor | undefined {
+  const source = typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  if (!source || !exactKeys(source, ['version', 'semanticSkill', 'declaration', 'installation', 'effectivePolicy', 'reviewedInput', 'producer']) || source.version !== 'v1' || !isNonEmptyString(source.semanticSkill)) return undefined;
+  const declaration = source.declaration as Record<string, unknown> | undefined;
+  const installation = source.installation as Record<string, unknown> | undefined;
+  const policy = source.effectivePolicy as Record<string, unknown> | undefined;
+  const input = source.reviewedInput as Record<string, unknown> | undefined;
+  const producer = source.producer as Record<string, unknown> | undefined;
+  const sourceKeys = declaration?.source === undefined ? ['version', 'rubricId', 'semanticSkill', 'question', 'resources'] : ['version', 'rubricId', 'semanticSkill', 'question', 'source', 'resources'];
+  if (!declaration || !installation || !policy || !input || !producer || !exactKeys(declaration, sourceKeys) || declaration.version !== 'v1' || !isCustomRubric(declaration.rubricId) || !isNonEmptyString(declaration.semanticSkill) || declaration.semanticSkill !== source.semanticSkill || !isNonEmptyString(declaration.question) || (declaration.source !== undefined && !['project', 'global', 'plugin'].includes(declaration.source as string)) || !stringArray(declaration.resources) || !exactKeys(policy, ['version', 'bundleDigest']) || policy.version !== 'v1' || !isNonEmptyString(policy.bundleDigest) || !exactKeys(input, ['version', 'contentDigest']) || input.version !== 'v1' || !isNonEmptyString(input.contentDigest) || !exactKeys(producer, ['provider', 'model', 'effort']) || !isNonEmptyString(producer.provider) || !isNonEmptyString(producer.model) || !isNonEmptyString(producer.effort)) return undefined;
+  const plugin = installation.plugin as Record<string, unknown> | undefined;
+  const installationKeys = plugin === undefined ? ['source'] : ['source', 'plugin'];
+  const pluginKeys = plugin?.version === undefined ? ['id'] : ['id', 'version'];
+  if (!exactKeys(installation, installationKeys) || !['project', 'global', 'plugin'].includes(installation.source as string) || (plugin !== undefined && (!exactKeys(plugin, pluginKeys) || !isNonEmptyString(plugin.id) || (plugin.version !== undefined && !isNonEmptyString(plugin.version)))) || (installation.source === 'plugin' && plugin === undefined)) return undefined;
+  return source as unknown as BuildReviewCustomEvidenceDescriptor;
+}
+
+/** Strictly distinguishes a self-describing custom judgement from an uncovered failure. */
+export function parseBuildReviewCustomArtifactMember(value: unknown): BuildReviewCustomArtifactMember | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const result = source.result as Record<string, unknown> | undefined;
+  if (!result) return undefined;
+  if (result.kind === 'infrastructure-failure') {
+    if (!exactKeys(source, ['result']) || !exactKeys(result, ['kind', 'rubric', 'reason', 'detail']) || !isCustomRubric(result.rubric) || !isNonEmptyString(result.reason) || !isNonEmptyString(result.detail)) return undefined;
+    return { result: result as BuildReviewCustomArtifactResult };
+  }
+  if (result.kind !== 'judged' || !exactKeys(source, ['descriptor', 'result'])) return undefined;
+  const descriptor = parseCustomDescriptor(source.descriptor);
+  const expected = ['kind', 'contractVersion', 'rubric', 'lapId', 'declaration', 'policy', 'candidate', 'reviewedInput', 'findings', 'verdict', 'identity'];
+  const identity = result.identity as Record<string, unknown> | undefined;
+  if (!descriptor || !exactKeys(result, expected) || result.contractVersion !== 'custom-v1' || result.rubric !== descriptor.declaration.rubricId || !isCustomRubric(result.rubric) || !isNonEmptyString(result.lapId) || JSON.stringify(result.declaration) !== JSON.stringify(descriptor.declaration) || JSON.stringify(result.policy) !== JSON.stringify(descriptor.effectivePolicy) || JSON.stringify(result.candidate) !== JSON.stringify(descriptor.producer) || JSON.stringify(result.reviewedInput) !== JSON.stringify(descriptor.reviewedInput) || !Array.isArray(result.findings) || (result.verdict !== 'PASS' && result.verdict !== 'FAIL') || !identity || !exactKeys(identity, ['id', 'canonicalPayload', 'canonicalJson']) || !isNonEmptyString(identity.id) || !isNonEmptyString(identity.canonicalJson)) return undefined;
+  return { descriptor, result: result as BuildReviewCustomArtifactResult };
+}
+
 function parseProvenance(value: unknown): BuildReviewBranchProvenance | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
@@ -85,7 +162,7 @@ function parseProvenance(value: unknown): BuildReviewBranchProvenance | undefine
 export function buildReviewBranchArtifactPath(
   projectRoot: string,
   lapId: BuildReviewLapId,
-  rubric: BuildReviewRubricId,
+  rubric: BuildReviewArtifactRubric,
 ): string {
   return join(projectRoot, ARTIFACT_DIRECTORY, lapId, `${rubric}.json`);
 }
@@ -98,14 +175,28 @@ function artifactDirectory(projectRoot: string, lapId: BuildReviewLapId): string
 export function parseBuildReviewBranchArtifact(value: unknown): BuildReviewBranchArtifact | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
-  if (!exactKeys(candidate, ['version', 'rubric', 'lapId', 'snapshotDigest', 'result', 'provenance']) ||
-    candidate.version !== ARTIFACT_VERSION || !isRubric(candidate.rubric) || !isNonEmptyString(candidate.snapshotDigest)) return undefined;
+  const isV1 = candidate.version === 1;
+  const isV2 = candidate.version === ARTIFACT_VERSION;
+  const expected = isV1
+    ? ['version', 'rubric', 'lapId', 'snapshotDigest', 'result', 'provenance']
+    : ['version', 'rubric', 'lapId', 'snapshotDigest', 'result', 'provenance', ...(candidate.descriptor === undefined ? [] : ['descriptor']), ...(candidate.reuse === undefined ? [] : ['reuse'])];
+  if (!exactKeys(candidate, expected) || (!isV1 && !isV2) || !isNonEmptyString(candidate.snapshotDigest)) return undefined;
   const lapId = parseBuildReviewLapId(candidate.lapId);
-  const result = strictResult(candidate.result);
   const provenance = parseProvenance(candidate.provenance);
-  if (!lapId || !result || !provenance || result.rubric !== candidate.rubric) return undefined;
-  if (result.kind === 'judged' && (result.lapId !== lapId || result.snapshotDigest !== candidate.snapshotDigest)) return undefined;
-  return { version: ARTIFACT_VERSION, rubric: candidate.rubric, lapId, snapshotDigest: candidate.snapshotDigest, result, provenance };
+  if (!lapId || !provenance) return undefined;
+  const builtin = isRubric(candidate.rubric) ? strictResult(candidate.result) : undefined;
+  const custom = isV2 && isCustomRubric(candidate.rubric) ? parseBuildReviewCustomArtifactMember({ ...(candidate.descriptor === undefined ? {} : { descriptor: candidate.descriptor }), result: candidate.result }) : undefined;
+  const result = builtin ?? custom?.result;
+  if (!result || result.rubric !== candidate.rubric) return undefined;
+  if (builtin && builtin.kind === 'judged' && (builtin.lapId !== lapId || builtin.snapshotDigest !== candidate.snapshotDigest)) return undefined;
+  if (custom && custom.result.kind === 'judged' && custom.result.lapId !== lapId) return undefined;
+  const reuse = candidate.reuse as Record<string, unknown> | undefined;
+  if (reuse !== undefined && (!custom || custom.result.kind !== 'judged' || !exactKeys(reuse, ['sourceLapId', 'sourceSnapshotDigest']) || !parseBuildReviewLapId(reuse.sourceLapId) || !isNonEmptyString(reuse.sourceSnapshotDigest))) return undefined;
+  return {
+    version: candidate.version as BuildReviewArtifactVersion, rubric: candidate.rubric as BuildReviewArtifactRubric, lapId, snapshotDigest: candidate.snapshotDigest,
+    result, provenance, ...(custom?.descriptor === undefined ? {} : { descriptor: custom.descriptor }),
+    ...(reuse === undefined ? {} : { reuse: { sourceLapId: reuse.sourceLapId as BuildReviewLapId, sourceSnapshotDigest: reuse.sourceSnapshotDigest as string } }),
+  };
 }
 
 /** Atomically writes a validated artifact to the single branch-local location. */
@@ -126,7 +217,7 @@ export async function writeBuildReviewBranchArtifact(
 /** Reads only the requested branch path and rejects stale/mismatched evidence. */
 export async function readBuildReviewBranchArtifact(
   projectRoot: string,
-  rubric: BuildReviewRubricId,
+  rubric: BuildReviewArtifactRubric,
   lapId: BuildReviewLapId,
   snapshotDigest: string,
   fs: BuildReviewArtifactFilesystem,

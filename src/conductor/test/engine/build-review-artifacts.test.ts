@@ -84,6 +84,38 @@ const persistedV3Artifact = {
   provenance: { kind: 'fresh' },
 } as const;
 
+const CUSTOM_DIGEST = `sha256:${'c'.repeat(64)}`;
+const customDescriptor = {
+  version: 'v1',
+  semanticSkill: 'security-review',
+  declaration: {
+    version: 'v1', rubricId: 'security', semanticSkill: 'security-review', question: 'Find security regressions.',
+    source: 'plugin', resources: ['references/security.md'],
+  },
+  installation: { source: 'plugin', plugin: { id: 'security-suite', version: '2.1.0' } },
+  effectivePolicy: { version: 'v1', bundleDigest: CUSTOM_DIGEST },
+  reviewedInput: { version: 'v1', contentDigest: CUSTOM_DIGEST },
+  producer: { provider: 'codex', model: 'gpt-5.6', effort: 'high' },
+} as const;
+
+const customJudgedResult = {
+  kind: 'judged', contractVersion: 'custom-v1', rubric: 'security', lapId: 'lap-current',
+  declaration: customDescriptor.declaration,
+  policy: customDescriptor.effectivePolicy,
+  candidate: customDescriptor.producer,
+  reviewedInput: customDescriptor.reviewedInput,
+  findings: [], verdict: 'PASS',
+  identity: {
+    id: CUSTOM_DIGEST,
+    canonicalPayload: {
+      version: 'v1', rubric: 'security', declaration: customDescriptor.declaration,
+      policy: customDescriptor.effectivePolicy, candidate: customDescriptor.producer,
+      reviewedInput: customDescriptor.reviewedInput, findingIds: [],
+    },
+    canonicalJson: '{}',
+  },
+} as const;
+
 describe('build-review current-lap branch artifacts', () => {
   it('uses a write-disjoint path for every lap', () => {
     expect([
@@ -227,5 +259,32 @@ describe('build-review current-lap branch artifacts', () => {
     } as const;
     expect(parseBuildReviewBranchArtifact(artifact)).toEqual(artifact);
     expect(parseBuildReviewBranchArtifact({ ...artifact, result: { ...artifact.result, lapId: parseBuildReviewLapId('lap-old')! } })).toBeUndefined();
+  });
+
+  it('round-trips versioned self-describing custom judgement provenance and a separate current-lap reuse link', async () => {
+    const fs = filesystem();
+    const artifact = {
+      version: 2,
+      rubric: 'security', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot',
+      descriptor: customDescriptor,
+      result: customJudgedResult,
+      provenance: { kind: 'cache-hit', cachedLapId: 'lap-prior', cachedSnapshotDigest: 'sha256:prior', projectionDigest: CUSTOM_DIGEST, policyFingerprint: CUSTOM_DIGEST },
+      reuse: { sourceLapId: 'lap-prior', sourceSnapshotDigest: 'sha256:prior' },
+    };
+
+    expect(parseBuildReviewBranchArtifact(artifact)).toEqual(artifact);
+    await writeBuildReviewBranchArtifact('/feature', artifact as never, fs);
+    await expect(readBuildReviewBranchArtifact('/feature', 'security' as never, 'lap-current' as never, 'sha256:snapshot', fs)).resolves.toEqual(artifact);
+  });
+
+  it('keeps a custom loading failure distinct from a judged descriptor', () => {
+    const failure = {
+      version: 2, rubric: 'security', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot',
+      result: { kind: 'infrastructure-failure', rubric: 'security', reason: 'policy-load-failed', detail: 'plugin is unavailable' },
+      provenance: { kind: 'fresh' },
+    };
+
+    expect(parseBuildReviewBranchArtifact(failure)).toMatchObject({ result: { kind: 'infrastructure-failure' } });
+    expect(parseBuildReviewBranchArtifact({ ...failure, descriptor: customDescriptor })).toBeUndefined();
   });
 });
