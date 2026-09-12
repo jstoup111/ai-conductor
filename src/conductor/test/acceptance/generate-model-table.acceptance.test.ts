@@ -270,3 +270,22 @@ describe('public CLI provider-labelled contract drift', () => {
     30_000,
   );
 });
+
+describe('public CLI evaluator-row drift', () => {
+  it('rejects a hand-edited evaluator row in the generated table', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'generate-model-table-evaluator-drift-'));
+    const file = join(dir, 'ARCHITECTURE.md');
+    const committed = await readFile(join(harnessRoot, 'ARCHITECTURE.md'), 'utf8');
+    const originalRow = committed.match(/^\| evaluator \|.*$/m)?.[0];
+    expect(originalRow).toBeDefined();
+    const handEditedRow = `${originalRow!.slice(0, -1)} Hand-edited evaluator drift. |`;
+    await writeFile(file, committed.replace(originalRow!, handEditedRow), 'utf8');
+
+    const result = await runCli({ harnessMdPath: file, mode: 'check' });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.message).toContain('evaluator');
+    expect(result.message).toContain(`-${handEditedRow}`);
+    expect(result.message).toContain(`+${originalRow}`);
+  });
+});

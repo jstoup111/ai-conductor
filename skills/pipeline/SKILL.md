@@ -362,6 +362,8 @@ runs the full 3-stage review from the `code-review` skill on this scoped context
 | **Medium** | Every 8 tasks | Always | **Sonnet** | **Opus** |
 | **Large (>15 tasks)** | Every 4 tasks | Always | Sonnet | Opus |
 
+**Risk-domain override:** A batch involving concurrency, state mutation, security, auth, or money elevates that batch's evaluator to Claude Code Fable, the top Claude tier, regardless of its tier row.
+
 Rationale: intermediate-batch reviews check compliance against a narrow diff + a handful
 of acceptance criteria — a task Sonnet handles well. The final batch review evaluates
 cross-batch integration and the full architectural picture, which is where Opus's deeper
