@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { dirname, join } from "node:path";
 
 import type { BuildReviewRubricId } from "../types/config.js";
 import {
@@ -10,7 +11,8 @@ import {
 } from "./build-review-domain.js";
 import { isRetiredBuildReviewRubric } from './build-review-dispositions.js';
 
-const CACHE_VERSION = 1;
+const LEGACY_CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 const CACHE_DIRECTORY = ".pipeline/build-review/cache";
 
 /**
@@ -43,16 +45,19 @@ export interface BuildReviewCacheSemanticIdentity {
   effort: string;
 }
 
-/** One bounded, feature-scoped reusable semantic judgement per rubric. */
+/**
+ * One reusable semantic judgement. Version-one entries remain readable only
+ * for staged misses; writers create version-two, candidate-partitioned entries.
+ */
 export interface BuildReviewCacheEntry {
-  version: typeof CACHE_VERSION;
+  version: typeof LEGACY_CACHE_VERSION | typeof CACHE_VERSION;
   rubric: BuildReviewRubricId;
   contractVersion: "v3";
   projectionVersion: "v3";
   projectionDigest: string;
   policyFingerprint: string;
   engineIdentity: BuildReviewEngineIdentity;
-  /** Candidate-bound identity; absent only while older caller wiring remains. */
+  /** Candidate-bound identity; absent only on legacy/incomplete entries. */
   semanticIdentity?: BuildReviewCacheSemanticIdentity;
   result: BuildReviewJudgedResult;
 }
@@ -133,12 +138,35 @@ export type BuildReviewCacheLookupResolution =
       cachedEngineStamp?: string;
     };
 
-export function cacheEntryPath(projectRoot: string, rubric: BuildReviewRubricId): string {
-  return join(projectRoot, CACHE_DIRECTORY, `${rubric}.json`);
+function cacheCandidateIdentityKey(identity: BuildReviewCacheSemanticIdentity): string {
+  return createHash("sha256").update(JSON.stringify({
+    declarationFingerprint: identity.declarationFingerprint,
+    effectiveBundleDigest: identity.effectiveBundleDigest,
+    contractVersion: identity.contractVersion,
+    projectionVersion: identity.projectionVersion,
+    semanticInputDigest: identity.semanticInputDigest,
+    executionPolicyFingerprint: identity.executionPolicyFingerprint,
+    engineStamp: identity.engineStamp,
+    provider: identity.provider,
+    model: identity.model,
+    effort: identity.effort,
+  })).digest("hex");
 }
 
-function cacheDirectory(projectRoot: string): string {
-  return join(projectRoot, CACHE_DIRECTORY);
+/**
+ * Current entries are partitioned by the complete, path-free candidate
+ * identity. The two-argument legacy location remains readable during the
+ * staged migration but is never a target for a new write.
+ */
+export function cacheEntryPath(
+  projectRoot: string,
+  rubric: BuildReviewRubricId,
+  semanticIdentity?: BuildReviewCacheSemanticIdentity,
+): string {
+  const directory = join(projectRoot, CACHE_DIRECTORY);
+  return semanticIdentity === undefined
+    ? join(directory, `${rubric}.json`)
+    : join(directory, rubric, `${cacheCandidateIdentityKey(semanticIdentity)}.json`);
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -209,7 +237,7 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
     : parseBuildReviewCacheSemanticIdentity(candidate.semanticIdentity);
   if (candidate.semanticIdentity !== undefined && !semanticIdentity) return undefined;
   const contractVersion = parseBuildReviewRubricContractVersion(candidate.contractVersion);
-  if (candidate.version !== CACHE_VERSION || !isRubric(candidate.rubric) || !contractVersion ||
+  if ((candidate.version !== LEGACY_CACHE_VERSION && candidate.version !== CACHE_VERSION) || !isRubric(candidate.rubric) || !contractVersion ||
     (candidate.projectionVersion !== "v1" && candidate.projectionVersion !== "v2" && candidate.projectionVersion !== "v3") ||
     !isNonEmptyString(candidate.projectionDigest) || !isNonEmptyString(candidate.policyFingerprint)) {
     return undefined;
@@ -219,7 +247,7 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
     return undefined;
   }
   return {
-    version: CACHE_VERSION,
+    version: candidate.version,
     rubric: candidate.rubric,
     contractVersion,
     projectionVersion: candidate.projectionVersion,
@@ -234,8 +262,16 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
 /** Strictly parses entries current code may persist or reuse. */
 export function parseBuildReviewCacheEntry(value: unknown): BuildReviewCacheEntry | undefined {
   const entry = parseBuildReviewCacheEntryCandidate(value);
-  return entry?.contractVersion === "v3" && entry.projectionVersion === "v3" && entry.engineIdentity !== undefined
-    ? { ...entry, contractVersion: "v3", projectionVersion: "v3", engineIdentity: entry.engineIdentity }
+  return entry?.version === CACHE_VERSION && entry.contractVersion === "v3" && entry.projectionVersion === "v3" &&
+    entry.engineIdentity !== undefined && entry.semanticIdentity !== undefined
+    ? {
+        ...entry,
+        version: CACHE_VERSION,
+        contractVersion: "v3",
+        projectionVersion: "v3",
+        engineIdentity: entry.engineIdentity,
+        semanticIdentity: entry.semanticIdentity,
+      }
     : undefined;
 }
 
@@ -244,9 +280,10 @@ export async function readBuildReviewCacheEntry(
   projectRoot: string,
   rubric: BuildReviewRubricId,
   fs: BuildReviewCacheFilesystem,
+  semanticIdentity?: BuildReviewCacheSemanticIdentity,
 ): Promise<BuildReviewCacheEntryCandidate | undefined> {
   try {
-    const entry = parseBuildReviewCacheEntryCandidate(JSON.parse(await fs.readFile(cacheEntryPath(projectRoot, rubric))));
+    const entry = parseBuildReviewCacheEntryCandidate(JSON.parse(await fs.readFile(cacheEntryPath(projectRoot, rubric, semanticIdentity))));
     return entry && !isRetiredBuildReviewRubric(entry.rubric) ? entry : undefined;
   } catch {
     return undefined;
@@ -277,6 +314,16 @@ export function classifyBuildReviewCacheLookup(
   }
   if (entry.policyFingerprint !== lookup.policyFingerprint) {
     return { kind: "miss", reason: "policy-fingerprint-mismatch" };
+  }
+  if (entry.engineIdentity?.engineStamp !== lookup.engineIdentity.engineStamp) {
+    return {
+      kind: "miss",
+      reason: "engine-version-mismatch",
+      ...(entry.engineIdentity === undefined ? {} : { cachedEngineStamp: entry.engineIdentity.engineStamp }),
+    };
+  }
+  if (entry.engineIdentity.skillDigest !== lookup.engineIdentity.skillDigest) {
+    return { kind: "miss", reason: "skill-digest-mismatch", cachedEngineStamp: entry.engineIdentity.engineStamp };
   }
   if (lookup.semanticIdentity !== undefined) {
     const cachedIdentity = entry.semanticIdentity;
@@ -312,16 +359,6 @@ export function classifyBuildReviewCacheLookup(
       return { kind: "miss", reason: "effort-mismatch" };
     }
   }
-  if (entry.engineIdentity?.engineStamp !== lookup.engineIdentity.engineStamp) {
-    return {
-      kind: "miss",
-      reason: "engine-version-mismatch",
-      ...(entry.engineIdentity === undefined ? {} : { cachedEngineStamp: entry.engineIdentity.engineStamp }),
-    };
-  }
-  if (entry.engineIdentity.skillDigest !== lookup.engineIdentity.skillDigest) {
-    return { kind: "miss", reason: "skill-digest-mismatch", cachedEngineStamp: entry.engineIdentity.engineStamp };
-  }
   return {
     kind: "hit",
     hit: {
@@ -341,17 +378,18 @@ export function classifyBuildReviewCacheLookup(
   };
 }
 
-/** Atomically replaces the rubric's single bounded entry after validating it. */
+/** Atomically replaces one complete candidate entry after validating it. */
 export async function writeBuildReviewCacheEntry(
   projectRoot: string,
   entry: BuildReviewCacheEntry,
   fs: BuildReviewCacheFilesystem,
 ): Promise<void> {
-  if (!parseBuildReviewCacheEntry(entry)) {
-    throw new Error("build-review cache: entry must contain a valid judged result");
+  const validated = parseBuildReviewCacheEntry(entry);
+  if (!validated) {
+    throw new Error("build-review cache: entry must contain a valid judged result and complete effective candidate identity");
   }
-  const path = cacheEntryPath(projectRoot, entry.rubric);
-  await fs.mkdir(cacheDirectory(projectRoot));
-  await fs.writeFile(`${path}.tmp`, JSON.stringify(entry));
+  const path = cacheEntryPath(projectRoot, validated.rubric, validated.semanticIdentity);
+  await fs.mkdir(dirname(path));
+  await fs.writeFile(`${path}.tmp`, JSON.stringify(validated));
   await fs.rename(`${path}.tmp`, path);
 }
