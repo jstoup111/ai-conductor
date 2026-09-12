@@ -13,14 +13,6 @@ export interface BuildReviewCustomSuppressionSource {
   readonly confidence?: number;
 }
 
-function record(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-}
-
-function validConfidence(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100;
-}
-
 /**
  * Reads the current custom findings from their self-describing evidence. The
  * identity has to agree with the current result's complete policy-bearing
@@ -29,31 +21,15 @@ function validConfidence(value: unknown): value is number {
 export function projectBuildReviewCustomSuppressionSources(
   aggregate: BuildReviewAggregate,
 ): readonly BuildReviewCustomSuppressionSource[] | undefined {
-  const sources: BuildReviewCustomSuppressionSource[] = [];
-  for (const rubric of aggregate.currentCustomRubrics ?? []) {
-    const result = aggregate.customResults?.[rubric]?.result;
-    if (!result || result.kind !== 'judged') return undefined;
-    for (const value of result.findings) {
-      const finding = record(value);
-      const identity = record(finding?.identity);
-      const payload = record(identity?.canonicalPayload);
-      if (!finding || !identity || !payload || typeof finding.summary !== 'string' || finding.summary.length === 0 ||
-        typeof identity.id !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(identity.id) ||
-        payload.rubric !== rubric || JSON.stringify(payload.declaration) !== JSON.stringify(result.declaration) ||
-        JSON.stringify(payload.policy) !== JSON.stringify(result.policy) ||
-        JSON.stringify(payload.candidate) !== JSON.stringify(result.candidate) ||
-        JSON.stringify(payload.reviewedInput) !== JSON.stringify(result.reviewedInput) ||
-        typeof payload.concernId !== 'string' || payload.concernId.length === 0 ||
-        (finding.confidence !== undefined && !validConfidence(finding.confidence))) return undefined;
-      sources.push({
-        rubric,
-        findingId: identity.id,
-        summary: finding.summary,
-        ...(finding.confidence === undefined ? {} : { confidence: finding.confidence }),
-      });
-    }
-  }
-  return Object.freeze(sources);
+  const current = new Set(aggregate.currentCustomRubrics ?? []);
+  const sources = projectBuildReviewAggregateSources(aggregate);
+  if (!sources) return undefined;
+  return Object.freeze(sources.filter((source) => current.has(source.rubric)).map((source) => ({
+    rubric: source.rubric,
+    findingId: source.findingId,
+    summary: source.summary,
+    ...(source.confidence === undefined ? {} : { confidence: source.confidence }),
+  })));
 }
 
 /**
@@ -68,10 +44,10 @@ export function projectBuildReviewSuppressionEntries(input: {
 }): readonly RemediationCaseSuppressionEntry[] {
   if (input.suppressedFindingIds.length === 0) return [];
   const suppressed = new Set(input.suppressedFindingIds);
-  const sources = [
-    ...(projectBuildReviewAggregateSources(input.aggregate) ?? []),
-    ...(projectBuildReviewCustomSuppressionSources(input.aggregate) ?? []),
-  ];
+  // The aggregate projection is the one source authority for both built-in
+  // and current custom findings. Do not append the custom view again: that
+  // would duplicate one durable suppression entry per custom finding.
+  const sources = projectBuildReviewAggregateSources(input.aggregate) ?? [];
   return sources.flatMap((source) => {
     if (!suppressed.has(source.findingId) || source.confidence === undefined) return [];
     const floor = input.floors[source.rubric];

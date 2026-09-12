@@ -199,7 +199,9 @@ async function runFlow(input: {
       }],
     }] : [];
     expect(options.prompt).toContain('Portable policy');
-    return { success: true, output: JSON.stringify({ findings }), exitCode: 0 };
+    return { success: true, output: JSON.stringify({
+      kind: 'custom-findings', version: 'v1', findings,
+    }), exitCode: 0 };
   });
   const provider: LLMProvider = {
     supportsSessionResume: true,
@@ -220,6 +222,26 @@ async function runFlow(input: {
     if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
   });
   const config = customConfig();
+  const resolveCustomAggregate: NonNullable<CompletionContext['buildReviewEffectiveResolver']> = async (_root, aggregate) => {
+    const candidate = aggregate as unknown as {
+      customResults?: Record<string, { result?: { findings?: Array<{ identity?: { id?: string }; findingId?: string; id?: string }> } }>;
+    };
+    const finding = candidate.customResults?.portablePolicy?.result?.findings?.[0];
+    return {
+      ok: true as const,
+      feature: { version: 'v1' as const, repository: 'acme/conductor', feature: SLUG },
+      effective: {
+        rawVerdict: finding ? 'FAIL' as const : 'PASS' as const,
+        verdict: finding ? 'FAIL' as const : 'PASS' as const,
+        acceptedFindingIds: [],
+        unresolvedFindingIds: finding ? [finding.identity?.id ?? finding.findingId ?? finding.id ?? 'stale-policy-cache'] : [],
+        suppressedFindingIds: [],
+        skippedRubrics: [],
+        infrastructureFailureRubrics: [],
+        uncoveredInfrastructureFailureRubrics: [],
+      },
+    };
+  };
   const buildReviewRunner = new DefaultStepRunner(provider, 'acceptance-session', root, {
     featureDesc: SLUG,
     pipelineDir: join(root, '.pipeline'),
@@ -231,6 +253,17 @@ async function runFlow(input: {
     providerRuntimes: new ProviderRuntimeSet([runtime]),
     configuredProviders: ['claude'],
     sessionStore: new ProviderSessionStore(),
+    buildReviewEffectiveResolver: resolveCustomAggregate as never,
+    // Faithful prepared-candidate catalog fake: the acceptance boundary owns
+    // orchestration and durable aggregation, while host metadata discovery is
+    // covered at its dedicated adapter boundary.
+    buildReviewPolicyCatalog: async () => [{
+      semanticName: 'portable-policy', source: 'project' as const,
+      installationOrigin: join(root, '.claude', 'skills', 'portable-policy'),
+      canonicalSkillPath: join(root, '.claude', 'skills', 'portable-policy', 'SKILL.md'),
+      packageRoot: join(root, '.claude', 'skills', 'portable-policy'),
+      declaredDependencies: [], availability: 'available' as const,
+    }],
     buildReviewInputOptions: {
       inspectTestSuite: async () => ({ status: 'CURRENT', evidence: PASS_EVIDENCE } as never),
     },
@@ -246,11 +279,10 @@ async function runFlow(input: {
       if (step === 'remediate') {
         remediateDispatches += 1;
         const aggregate = JSON.parse(await readFile(join(root, '.pipeline', 'build-review.json'), 'utf8')) as {
-          results: Record<string, { findings?: Array<{ findingId?: string; id?: string }> }>;
+          customResults?: Record<string, { result?: { findings?: Array<{ identity?: { id?: string }; findingId?: string; id?: string }> } }>;
         };
-        const custom = aggregate.results.portablePolicy;
-        const stampedFinding = custom?.findings?.[0];
-        const sourceId = `portablePolicy:${stampedFinding?.findingId ?? stampedFinding?.id ?? 'stale-policy-cache'}`;
+        const stampedFinding = aggregate.customResults?.portablePolicy?.result?.findings?.[0];
+        const sourceId = `portablePolicy:${stampedFinding?.identity?.id ?? stampedFinding?.findingId ?? stampedFinding?.id ?? 'stale-policy-cache'}`;
         await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
           mode: 'case-v1',
           domain: 'build_review',
@@ -295,24 +327,7 @@ async function runFlow(input: {
         reason: proof === 'missing' ? 'preflight_failed' as const : 'nonzero_exit' as const,
         message: proof === 'missing' ? 'post-repair evidence is missing' : 'post-repair verification failed',
       });
-  const effectiveResolver: NonNullable<CompletionContext['buildReviewEffectiveResolver']> = vi.fn(async (_root, aggregate) => {
-    const candidate = aggregate as unknown as { results?: Record<string, { findings?: Array<{ findingId?: string; id?: string }> }> };
-    const finding = candidate.results?.portablePolicy?.findings?.[0];
-    return {
-      ok: true as const,
-      feature: { version: 'v1' as const, repository: 'acme/conductor', feature: SLUG },
-      effective: {
-        rawVerdict: finding ? 'FAIL' as const : 'PASS' as const,
-        verdict: finding ? 'FAIL' as const : 'PASS' as const,
-        acceptedFindingIds: [],
-        unresolvedFindingIds: finding ? [finding.findingId ?? finding.id ?? 'stale-policy-cache'] : [],
-        suppressedFindingIds: [],
-        skippedRubrics: [],
-        infrastructureFailureRubrics: [],
-        uncoveredInfrastructureFailureRubrics: [],
-      },
-    };
-  }) as never;
+  const effectiveResolver: NonNullable<CompletionContext['buildReviewEffectiveResolver']> = vi.fn(resolveCustomAggregate) as never;
 
   const conductor = new Conductor({
     projectRoot: root,
@@ -329,9 +344,13 @@ async function runFlow(input: {
     fullSuiteVerifier: { inspect, ensure },
     git: scriptedGit(() => head),
   } as never);
-  await conductor.run().catch((error: unknown) => {
-    if (!(error instanceof Error) || error.message !== 'acceptance boundary reached') throw error;
-  });
+  await conductor.run();
+  const halt = await readFile(join(root, '.pipeline', 'HALT'), 'utf8').catch(() => '');
+  // The fake uses this sentinel only to end an otherwise unbounded full
+  // conductor walk. It is not a product failure, so remove the exact
+  // test-boundary marker before asserting the route outcome.
+  const stoppedAtTestBoundary = halt.includes('conductor error: Error: acceptance boundary reached');
+  if (stoppedAtTestBoundary) await rm(join(root, '.pipeline', 'HALT'), { force: true });
 
   return {
     buildDispatches,
@@ -340,7 +359,7 @@ async function runFlow(input: {
     manualTestReached,
     remediateDispatches,
     suiteEnsures: ensure.mock.calls.length,
-    halt: await readFile(join(root, '.pipeline', 'HALT'), 'utf8').catch(() => ''),
+    halt: stoppedAtTestBoundary ? '' : halt,
   };
 }
 
@@ -372,6 +391,11 @@ describe('portable custom build-review policy acceptance', () => {
     expect(run.suiteEnsures).toBeGreaterThanOrEqual(1);
     expect(run.manualTestReached).toBe(progresses);
     expect(run.kickbacks.filter((event) => event.from === 'build_review')).toHaveLength(1);
-    expect(run.kickbacks.filter((event) => event.from === 'test_suite')).toHaveLength(progresses ? 0 : 1);
+    // A missing evidence artifact is an infrastructure failure, so it blocks
+    // safely without spending a semantic BUILD retry; a completed failing
+    // suite keeps the existing repair kickback.
+    expect(run.kickbacks.filter((event) => event.from === 'test_suite')).toHaveLength(
+      progresses || proof === 'missing' ? 0 : 1,
+    );
   });
 });
