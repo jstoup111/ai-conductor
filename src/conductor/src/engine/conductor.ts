@@ -10951,7 +10951,7 @@ export class Conductor {
             // keyed by 'build_review' (the same anti-ping-pong mechanism the
             // gate-driven tail uses for other gates), bounded by
             // MAX_KICKBACKS_PER_GATE like the other self-heal loops.
-            if (this.daemon && step.name === 'build_review') {
+            if (step.name === 'build_review' && (this.daemon || this.mode === 'auto')) {
               let verdictRaw: unknown = null;
               try {
                 verdictRaw = JSON.parse(

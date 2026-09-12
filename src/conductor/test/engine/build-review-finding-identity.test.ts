@@ -242,6 +242,17 @@ describe('build-review finding identity', () => {
     expect(Object.isFrozen(stamped?.findings ?? [])).toBe(true);
   });
 
+  it('accepts the versioned digest emitted by the captured policy package', () => {
+    const digest = `sha256-v1:${'d'.repeat(64)}`;
+    const stamped = stampBuildReviewCustomJudgedResult(
+      customPayload(),
+      { ...customStamp, policy: { version: 'v1', bundleDigest: digest } },
+      customReferenceContext,
+    );
+
+    expect(stamped?.policy.bundleDigest).toBe(digest);
+  });
+
   it('refuses custom evidence outside frozen input before a judged envelope can exist', () => {
     const invalidReferences = [
       customPayload({ findings: [{ ...customPayload().findings![0] as object, evidenceLocations: ['src/widget.ts:13'] }] }),

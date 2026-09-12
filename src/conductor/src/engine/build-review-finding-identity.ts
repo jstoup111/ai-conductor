@@ -119,6 +119,7 @@ export interface BuildReviewCustomJudgedResult {
 }
 
 const SHA256 = /^sha256:[a-f0-9]{64}$/;
+const POLICY_BUNDLE_DIGEST = /^sha256-v1:[a-f0-9]{64}$/;
 const CUSTOM_RUBRIC = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const CUSTOM_SEMANTIC_NAME = /^[A-Za-z][A-Za-z0-9:_.-]{0,127}$/;
 const CUSTOM_CONCERN = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/;
@@ -126,7 +127,9 @@ const LOCATION = /^(.*):([1-9][0-9]*)$/;
 function nonEmptyText(value: unknown, max = 4_096): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 }
-function hash(value: unknown): value is string { return typeof value === 'string' && SHA256.test(value); }
+function hash(value: unknown): value is string {
+  return typeof value === 'string' && (SHA256.test(value) || POLICY_BUNDLE_DIGEST.test(value));
+}
 function sameSourceRegion(left: BuildReviewCandidateScopeSourceRegion, right: BuildReviewCandidateScopeSourceRegion): boolean {
   return left.path === right.path && left.startLine === right.startLine && left.endLine === right.endLine && left.contentHash === right.contentHash;
 }
@@ -189,7 +192,9 @@ export function stampBuildReviewCustomJudgedResult(
   stamp: BuildReviewCustomResultStamp,
   references: BuildReviewCustomFindingReferenceContext,
 ): BuildReviewCustomJudgedResult | undefined {
-  if (!validStamp(stamp) || !Array.isArray(references.sourceRegions) || references.sourceRegions.length === 0) return undefined;
+  // A PASS has no reviewer-owned locations to bind.  Findings still require
+  // at least one frozen source region through `bindSourceRegions` below.
+  if (!validStamp(stamp) || !Array.isArray(references.sourceRegions)) return undefined;
   const payload = parseBuildReviewCustomReviewerPayload(value);
   if (!payload || payload.kind !== 'custom-findings') return undefined;
   const findings = payload.findings.map((finding): BuildReviewStampedCustomFinding | undefined => {

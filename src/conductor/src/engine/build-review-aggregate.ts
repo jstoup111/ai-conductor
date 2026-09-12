@@ -1,12 +1,12 @@
+import { createHash } from 'node:crypto';
+
 import type { BuildReviewRubricId } from '../types/config.js';
 import { DEPRECATED_BUILD_REVIEW_RUBRIC_IDS } from './config.js';
 import {
   deriveBuildReviewScopeIncompleteFault,
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
-  type BuildReviewFindingAnchor,
   type BuildReviewLapId,
-  type BuildReviewRubricContractVersion,
   type BuildReviewInfrastructureFailure,
   type BuildReviewRubricResult,
   type BuildReviewScopeIncompleteFault,
@@ -102,11 +102,11 @@ export interface BuildReviewEffectiveVerdict {
 
 /** Raw, registry-neutral content preserved by the mechanical aggregate join. */
 export interface BuildReviewRawSourceProjection {
-  readonly rubric: BuildReviewRubricId;
+  /** Built-in and custom rubric ids share the one adjudication source lane. */
+  readonly rubric: string;
   readonly findingId: string;
-  readonly contractVersion: BuildReviewRubricContractVersion;
+  readonly contractVersion: string;
   readonly concernKind: string;
-  readonly anchor: BuildReviewFindingAnchor;
   readonly summary: string;
   readonly evidenceLocations: readonly string[];
   readonly confidence?: number;
@@ -114,6 +114,57 @@ export interface BuildReviewRawSourceProjection {
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function sorted(value: unknown): unknown {
+  const source = record(value);
+  if (Array.isArray(value)) return value.map(sorted);
+  return source === undefined
+    ? value
+    : Object.fromEntries(Object.keys(source).sort().map((key) => [key, sorted(source[key])]));
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(sorted(value));
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+function customSourceProjection(
+  rubric: string,
+  result: BuildReviewCustomArtifactMember['result'],
+): readonly BuildReviewRawSourceProjection[] | undefined {
+  if (result.kind === 'infrastructure-failure') return [];
+  const sources: BuildReviewRawSourceProjection[] = [];
+  for (const value of result.findings) {
+    const finding = record(value);
+    const identity = record(finding?.identity);
+    const payload = record(identity?.canonicalPayload);
+    const evidenceLocations = finding?.evidenceLocations;
+    const confidence = finding?.confidence;
+    if (!finding || !identity || !payload || typeof finding.summary !== 'string' || finding.summary.length === 0 ||
+      !Array.isArray(evidenceLocations) || evidenceLocations.length === 0 || evidenceLocations.some((location) => typeof location !== 'string' || location.length === 0) ||
+      (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100)) ||
+      typeof identity.id !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(identity.id) ||
+      typeof identity.canonicalJson !== 'string' || identity.canonicalJson !== canonicalJson(payload) ||
+      identity.id !== `sha256:${createHash('sha256').update(identity.canonicalJson).digest('hex')}` ||
+      payload.version !== 'v1' || payload.rubric !== rubric || payload.concernId !== finding.concernId ||
+      typeof payload.concernId !== 'string' || payload.concernId.length === 0 ||
+      !sameJson(payload.declaration, result.declaration) || !sameJson(payload.policy, result.policy) ||
+      !sameJson(payload.candidate, result.candidate) || !sameJson(payload.reviewedInput, result.reviewedInput) ||
+      !Array.isArray(payload.sourceRegions) || payload.sourceRegions.length === 0) return undefined;
+    sources.push(Object.freeze({
+      rubric, findingId: identity.id, contractVersion: result.contractVersion,
+      concernKind: payload.concernId, summary: finding.summary,
+      evidenceLocations: Object.freeze([...evidenceLocations] as string[]),
+      ...(confidence === undefined ? {} : { confidence: confidence as number }),
+    }));
+  }
+  return new Set(sources.map((source) => source.findingId)).size === sources.length
+    ? Object.freeze(sources)
+    : undefined;
 }
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -379,12 +430,18 @@ export function projectBuildReviewAggregateSources(value: unknown): readonly Bui
         findingId: identity.id,
         contractVersion: result.contractVersion,
         concernKind: finding.concernKind,
-        anchor: finding.anchor,
         summary: finding.summary,
         evidenceLocations: Object.freeze([...finding.evidenceLocations]),
         ...(finding.confidence === undefined ? {} : { confidence: finding.confidence }),
       }));
     }
+  }
+  for (const rubric of aggregate.currentCustomRubrics ?? []) {
+    const result = aggregate.customResults?.[rubric]?.result;
+    if (!result) return undefined;
+    const custom = customSourceProjection(rubric, result);
+    if (!custom) return undefined;
+    sources.push(...custom);
   }
   return Object.freeze(sources);
 }

@@ -193,6 +193,7 @@ function sha256(value: string): string {
 }
 
 const SHA256 = /^sha256:[a-f0-9]{64}$/;
+const POLICY_BUNDLE_DIGEST = /^sha256-v1:[a-f0-9]{64}$/;
 const CUSTOM_RUBRIC = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const CUSTOM_SEMANTIC_NAME = /^[A-Za-z][A-Za-z0-9:_.-]{0,127}$/;
 const CUSTOM_CONCERN = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/;
@@ -227,7 +228,7 @@ function parseCustomFindingPayload(value: unknown): BuildReviewCustomFindingCano
   const candidate = record(source.candidate);
   const reviewedInput = record(source.reviewedInput);
   if (!declaration || declaration.rubricId !== source.rubric || !policy || !exactKeys(policy, ['version', 'bundleDigest']) ||
-    policy.version !== 'v1' || typeof policy.bundleDigest !== 'string' || !SHA256.test(policy.bundleDigest) ||
+    policy.version !== 'v1' || typeof policy.bundleDigest !== 'string' || !(SHA256.test(policy.bundleDigest) || POLICY_BUNDLE_DIGEST.test(policy.bundleDigest)) ||
     !candidate || !exactKeys(candidate, ['provider', 'model', 'effort']) || !boundedText(candidate.provider, 64) ||
     !boundedText(candidate.model, 256) || !boundedText(candidate.effort, 64) || !reviewedInput ||
     !exactKeys(reviewedInput, ['version', 'contentDigest']) || reviewedInput.version !== 'v1' ||
