@@ -149,19 +149,22 @@ export async function resolveEffectiveBuildReviewVerdict(
     return false;
   });
   for (const record of dispositions) {
-    if (record.finding.canonicalPayload.contractVersion !== CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION) {
+    const payload = record.finding.canonicalPayload;
+    if (!('contractVersion' in payload)) continue;
+    if (payload.contractVersion !== CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION) {
       await deps.emit?.({
         type: 'build_review_disposition_version_invalidated',
         feature: feature.feature,
         findingId: record.finding.id,
         rubric: record.finding.canonicalPayload.rubric,
-        contractVersion: record.finding.canonicalPayload.contractVersion,
+        contractVersion: payload.contractVersion,
       });
     }
   }
   let effective: BuildReviewEffectiveVerdict | undefined;
   try {
-    const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>> | undefined);
+    const builtinDispositions = dispositions.filter((record) => record.finding.canonicalPayload.rubric === 'testQuality');
+    const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, builtinDispositions, reducedCoverageRecords, deps.minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>> | undefined);
     effective = builtin === undefined ? undefined : applyCurrentCustomEffectiveVerdict(aggregate, builtin, deps.minConfidence ?? {});
   } catch {
     return { ok: false, reason: 'build-review disposition state is invalid' };
