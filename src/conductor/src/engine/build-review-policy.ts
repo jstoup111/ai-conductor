@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 /** The installation source through which a policy may be selected. */
 export type InstalledReviewSkillSource = 'project' | 'global' | 'plugin';
 
@@ -32,6 +34,33 @@ export interface InstalledReviewSkill {
 export interface ReviewPolicyDeclaration {
   readonly skill: string;
   readonly source?: InstalledReviewSkillSource;
+}
+
+/** Path-free declaration facts that select a review obligation. */
+export interface BuildReviewPolicyDeclarationIdentity {
+  readonly rubric: string;
+  readonly skill: string;
+  readonly question: string;
+  readonly source?: InstalledReviewSkillSource;
+  readonly resources: readonly string[];
+}
+
+/**
+ * Fingerprints the complete configured policy obligation. Resource ordering
+ * is incidental, but each resource selection remains meaningful.
+ */
+export function fingerprintBuildReviewPolicyDeclaration(
+  declaration: BuildReviewPolicyDeclarationIdentity,
+): string {
+  const canonical = JSON.stringify({
+    version: 1,
+    rubric: declaration.rubric,
+    skill: declaration.skill,
+    question: declaration.question,
+    ...(declaration.source === undefined ? {} : { source: declaration.source }),
+    resources: [...declaration.resources].sort(),
+  });
+  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
 }
 
 export interface ReviewPolicyResolutionFailure {

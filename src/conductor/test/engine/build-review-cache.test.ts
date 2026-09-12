@@ -12,6 +12,7 @@ import { engineContentStamp } from "../../src/engine/engine-version-id.js";
 import { coordinateBuildReviewRubrics } from "../../src/engine/build-review-coordinator.js";
 import { parseBuildReviewLapId } from "../../src/engine/build-review-domain.js";
 import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
+import { fingerprintBuildReviewPolicyDeclaration } from "../../src/engine/build-review-policy.js";
 
 function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
   return {
@@ -63,6 +64,78 @@ function memoryFilesystem(files: Record<string, string> = {}): BuildReviewCacheF
 }
 
 describe("build-review semantic cache", () => {
+  it("uses every semantic policy component while keeping producing provenance incidental", () => {
+    const declaration = {
+      rubric: "kotlin-review",
+      skill: "acme:kotlin-review",
+      question: "Does this change preserve Kotlin nullability?",
+      source: "plugin" as const,
+      resources: ["references/nullability.md", "references/style.md"],
+    };
+    const semanticIdentity = {
+      declarationFingerprint: fingerprintBuildReviewPolicyDeclaration(declaration),
+      effectiveBundleDigest: "sha256:bundle-a",
+      contractVersion: "v3" as const,
+      projectionVersion: "v3" as const,
+      semanticInputDigest: "sha256:input-a",
+      executionPolicyFingerprint: "sha256:execution-a",
+      engineStamp: "8e7daae72ad7",
+      provider: "codex",
+      model: "gpt-5.6",
+      effort: "high",
+    };
+    const cached = { ...entry(), semanticIdentity };
+    const lookup = {
+      rubric: "testQuality" as const,
+      contractVersion: "v3" as const,
+      projectionVersion: "v3" as const,
+      projectionDigest: "sha256:projection-a",
+      policyFingerprint: "sha256:policy-a",
+      engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:skill-a" },
+      semanticIdentity,
+      // These are current-use fields, never semantic eligibility fields.
+      lapId: "lap-current-after-rebase" as never,
+      snapshotDigest: "snapshot-current-after-rebase",
+    };
+
+    const changedDeclaration = {
+      ...semanticIdentity,
+      declarationFingerprint: fingerprintBuildReviewPolicyDeclaration({
+        ...declaration,
+        resources: ["references/nullability.md", "references/concurrency.md"],
+      }),
+    };
+    const mutations = [
+      ["rubric", { ...semanticIdentity, declarationFingerprint: fingerprintBuildReviewPolicyDeclaration({ ...declaration, rubric: "java-review" }) }, "declaration-fingerprint-mismatch"],
+      ["skill", { ...semanticIdentity, declarationFingerprint: fingerprintBuildReviewPolicyDeclaration({ ...declaration, skill: "acme:java-review" }) }, "declaration-fingerprint-mismatch"],
+      ["question", { ...semanticIdentity, declarationFingerprint: fingerprintBuildReviewPolicyDeclaration({ ...declaration, question: "Does this change preserve Kotlin concurrency?" }) }, "declaration-fingerprint-mismatch"],
+      ["source", { ...semanticIdentity, declarationFingerprint: fingerprintBuildReviewPolicyDeclaration({ ...declaration, source: "global" }) }, "declaration-fingerprint-mismatch"],
+      ["resources", changedDeclaration, "declaration-fingerprint-mismatch"],
+      ["definition bytes", { ...semanticIdentity, effectiveBundleDigest: "sha256:bundle-definition-edited" }, "effective-bundle-digest-mismatch"],
+      ["support bytes", { ...semanticIdentity, effectiveBundleDigest: "sha256:bundle-support-edited" }, "effective-bundle-digest-mismatch"],
+      ["contract", { ...semanticIdentity, contractVersion: "v2" }, "contract-version-mismatch"],
+      ["projection", { ...semanticIdentity, projectionVersion: "v2" }, "projection-version-mismatch"],
+      ["input", { ...semanticIdentity, semanticInputDigest: "sha256:input-b" }, "semantic-input-digest-mismatch"],
+      ["execution", { ...semanticIdentity, executionPolicyFingerprint: "sha256:execution-b" }, "execution-policy-fingerprint-mismatch"],
+      ["engine", { ...semanticIdentity, engineStamp: "aaaaaaaaaaaa" }, "engine-content-stamp-mismatch"],
+      ["provider", { ...semanticIdentity, provider: "claude" }, "provider-mismatch"],
+      ["model", { ...semanticIdentity, model: "gpt-5.7" }, "model-mismatch"],
+      ["effort", { ...semanticIdentity, effort: "medium" }, "effort-mismatch"],
+    ] as const;
+
+    expect(classifyBuildReviewCacheLookup(cached, lookup)).toMatchObject({
+      kind: "hit",
+      hit: {
+        result: { lapId: "lap-current-after-rebase", snapshotDigest: "snapshot-current-after-rebase" },
+        provenance: { cachedLapId: "lap-a", cachedSnapshotDigest: "snapshot-a" },
+      },
+    });
+    expect(mutations.map(([, semanticIdentity, reason]) => [
+      reason,
+      classifyBuildReviewCacheLookup(cached, { ...lookup, semanticIdentity }),
+    ])).toEqual(mutations.map(([, , reason]) => [reason, { kind: "miss", reason }]));
+  });
+
   it("rejects v2 entries at the current public parse boundary", () => {
     expect(parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v2" })).toBeUndefined();
   });

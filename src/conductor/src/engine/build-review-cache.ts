@@ -25,6 +25,24 @@ export interface BuildReviewEngineIdentity {
   skillDigest: string;
 }
 
+/**
+ * Complete path-free eligibility identity for one actual prepared candidate.
+ * Producing provenance stays outside this value so a judgment can be reused
+ * and rematerialized for a later lap.
+ */
+export interface BuildReviewCacheSemanticIdentity {
+  declarationFingerprint: string;
+  effectiveBundleDigest: string;
+  contractVersion: BuildReviewRubricContractVersion;
+  projectionVersion: "v1" | "v2" | "v3";
+  semanticInputDigest: string;
+  executionPolicyFingerprint: string;
+  engineStamp: string;
+  provider: string;
+  model: string;
+  effort: string;
+}
+
 /** One bounded, feature-scoped reusable semantic judgement per rubric. */
 export interface BuildReviewCacheEntry {
   version: typeof CACHE_VERSION;
@@ -34,6 +52,8 @@ export interface BuildReviewCacheEntry {
   projectionDigest: string;
   policyFingerprint: string;
   engineIdentity: BuildReviewEngineIdentity;
+  /** Candidate-bound identity; absent only while older caller wiring remains. */
+  semanticIdentity?: BuildReviewCacheSemanticIdentity;
   result: BuildReviewJudgedResult;
 }
 
@@ -53,6 +73,8 @@ export interface BuildReviewCacheLookup {
   projectionDigest: string;
   policyFingerprint: string;
   engineIdentity: BuildReviewEngineIdentity;
+  /** Candidate-bound identity; old callers retain their established lookup. */
+  semanticIdentity?: BuildReviewCacheSemanticIdentity;
   lapId: BuildReviewLapId;
   snapshotDigest: string;
 }
@@ -67,6 +89,7 @@ export interface BuildReviewCacheEntryCandidate extends Omit<BuildReviewCacheEnt
    * Newly written entries always carry it.
    */
   engineIdentity?: BuildReviewEngineIdentity;
+  semanticIdentity?: BuildReviewCacheSemanticIdentity;
 }
 
 /** Explicit cache provenance accompanies a newly materialized current-lap result. */
@@ -89,6 +112,15 @@ export type BuildReviewCacheMissReason =
   | "projection-version-mismatch"
   | "projection-digest-mismatch"
   | "policy-fingerprint-mismatch"
+  | "semantic-identity-missing"
+  | "declaration-fingerprint-mismatch"
+  | "effective-bundle-digest-mismatch"
+  | "semantic-input-digest-mismatch"
+  | "execution-policy-fingerprint-mismatch"
+  | "engine-content-stamp-mismatch"
+  | "provider-mismatch"
+  | "model-mismatch"
+  | "effort-mismatch"
   | "engine-version-mismatch"
   | "skill-digest-mismatch";
 
@@ -126,6 +158,36 @@ function parseBuildReviewEngineIdentity(value: unknown): BuildReviewEngineIdenti
     : undefined;
 }
 
+function parseBuildReviewCacheSemanticIdentity(value: unknown): BuildReviewCacheSemanticIdentity | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const keys = [
+    "declarationFingerprint", "effectiveBundleDigest", "contractVersion", "projectionVersion",
+    "semanticInputDigest", "executionPolicyFingerprint", "engineStamp", "provider", "model", "effort",
+  ];
+  if (Object.keys(candidate).length !== keys.length || Object.keys(candidate).some((key) => !keys.includes(key))) {
+    return undefined;
+  }
+  const contractVersion = parseBuildReviewRubricContractVersion(candidate.contractVersion);
+  if (!contractVersion || (candidate.projectionVersion !== "v1" && candidate.projectionVersion !== "v2" && candidate.projectionVersion !== "v3")) {
+    return undefined;
+  }
+  if (!keys.filter((key) => key !== "contractVersion" && key !== "projectionVersion")
+    .every((key) => isNonEmptyString(candidate[key]))) return undefined;
+  return {
+    declarationFingerprint: candidate.declarationFingerprint as string,
+    effectiveBundleDigest: candidate.effectiveBundleDigest as string,
+    contractVersion,
+    projectionVersion: candidate.projectionVersion,
+    semanticInputDigest: candidate.semanticInputDigest as string,
+    executionPolicyFingerprint: candidate.executionPolicyFingerprint as string,
+    engineStamp: candidate.engineStamp as string,
+    provider: candidate.provider as string,
+    model: candidate.model as string,
+    effort: candidate.effort as string,
+  };
+}
+
 /** Strictly parses the cache boundary; unknown fields and non-judgements miss closed. */
 function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEntryCandidate | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -133,6 +195,7 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
   const keys = [
     "version", "rubric", "contractVersion", "projectionVersion", "projectionDigest",
     "policyFingerprint", "result", ...(candidate.engineIdentity === undefined ? [] : ["engineIdentity"]),
+    ...(candidate.semanticIdentity === undefined ? [] : ["semanticIdentity"]),
   ];
   if (Object.keys(candidate).length !== keys.length || Object.keys(candidate).some((key) => !keys.includes(key))) {
     return undefined;
@@ -141,6 +204,10 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
     ? undefined
     : parseBuildReviewEngineIdentity(candidate.engineIdentity);
   if (candidate.engineIdentity !== undefined && !engineIdentity) return undefined;
+  const semanticIdentity = candidate.semanticIdentity === undefined
+    ? undefined
+    : parseBuildReviewCacheSemanticIdentity(candidate.semanticIdentity);
+  if (candidate.semanticIdentity !== undefined && !semanticIdentity) return undefined;
   const contractVersion = parseBuildReviewRubricContractVersion(candidate.contractVersion);
   if (candidate.version !== CACHE_VERSION || !isRubric(candidate.rubric) || !contractVersion ||
     (candidate.projectionVersion !== "v1" && candidate.projectionVersion !== "v2" && candidate.projectionVersion !== "v3") ||
@@ -159,6 +226,7 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
     projectionDigest: candidate.projectionDigest,
     policyFingerprint: candidate.policyFingerprint,
     ...(engineIdentity === undefined ? {} : { engineIdentity }),
+    ...(semanticIdentity === undefined ? {} : { semanticIdentity }),
     result,
   };
 }
@@ -209,6 +277,40 @@ export function classifyBuildReviewCacheLookup(
   }
   if (entry.policyFingerprint !== lookup.policyFingerprint) {
     return { kind: "miss", reason: "policy-fingerprint-mismatch" };
+  }
+  if (lookup.semanticIdentity !== undefined) {
+    const cachedIdentity = entry.semanticIdentity;
+    if (cachedIdentity === undefined) return { kind: "miss", reason: "semantic-identity-missing" };
+    if (cachedIdentity.declarationFingerprint !== lookup.semanticIdentity.declarationFingerprint) {
+      return { kind: "miss", reason: "declaration-fingerprint-mismatch" };
+    }
+    if (cachedIdentity.effectiveBundleDigest !== lookup.semanticIdentity.effectiveBundleDigest) {
+      return { kind: "miss", reason: "effective-bundle-digest-mismatch" };
+    }
+    if (cachedIdentity.contractVersion !== lookup.semanticIdentity.contractVersion) {
+      return { kind: "miss", reason: "contract-version-mismatch" };
+    }
+    if (cachedIdentity.projectionVersion !== lookup.semanticIdentity.projectionVersion) {
+      return { kind: "miss", reason: "projection-version-mismatch" };
+    }
+    if (cachedIdentity.semanticInputDigest !== lookup.semanticIdentity.semanticInputDigest) {
+      return { kind: "miss", reason: "semantic-input-digest-mismatch" };
+    }
+    if (cachedIdentity.executionPolicyFingerprint !== lookup.semanticIdentity.executionPolicyFingerprint) {
+      return { kind: "miss", reason: "execution-policy-fingerprint-mismatch" };
+    }
+    if (cachedIdentity.engineStamp !== lookup.semanticIdentity.engineStamp) {
+      return { kind: "miss", reason: "engine-content-stamp-mismatch" };
+    }
+    if (cachedIdentity.provider !== lookup.semanticIdentity.provider) {
+      return { kind: "miss", reason: "provider-mismatch" };
+    }
+    if (cachedIdentity.model !== lookup.semanticIdentity.model) {
+      return { kind: "miss", reason: "model-mismatch" };
+    }
+    if (cachedIdentity.effort !== lookup.semanticIdentity.effort) {
+      return { kind: "miss", reason: "effort-mismatch" };
+    }
   }
   if (entry.engineIdentity?.engineStamp !== lookup.engineIdentity.engineStamp) {
     return {
