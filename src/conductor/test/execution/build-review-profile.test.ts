@@ -183,7 +183,7 @@ describe('build-review access profile', () => {
 
     await provider.invoke(baseOptions);
 
-    const [executable, args] = subprocessFactory.mock.calls[0] as [string, readonly string[]];
+    const [executable, args] = subprocessFactory.mock.calls[0] as unknown as [string, readonly string[]];
     expect(executable).toBe(providerName === 'codex' ? '/provider/codex' : 'claude');
     expect(args).not.toContain('bwrap');
     if (providerName === 'codex') expect(args).toContain('sandbox_mode="workspace-write"');

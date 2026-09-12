@@ -534,7 +534,13 @@ export interface StepRunnerOptions {
   /** Shared raw-aggregate/disposition join. Tests inject a bounded fake store. */
   buildReviewEffectiveResolver?: typeof resolveEffectiveBuildReviewVerdict;
   /** Test seam for a missing or malformed current-lap branch artifact. */
-  buildReviewArtifactReader?: typeof readBuildReviewBranchArtifact;
+  buildReviewArtifactReader?: (
+    projectRoot: string,
+    rubric: string,
+    lapId: BuildReviewLapId,
+    snapshotDigest: string,
+    fs: import('./build-review-artifacts.js').BuildReviewArtifactFilesystem,
+  ) => Promise<unknown>;
   /** Candidate-local installed-policy catalog. Tests supply a faithful host fake. */
   buildReviewPolicyCatalog?: (input: {
     readonly provider: string;
@@ -649,7 +655,7 @@ export class DefaultStepRunner implements StepRunner {
   private buildReviewScopedLauncher: BuildReviewScopedLauncher;
   private buildReviewCoordinator?: StepRunnerOptions['buildReviewCoordinator'];
   private buildReviewEffectiveResolver: typeof resolveEffectiveBuildReviewVerdict;
-  private buildReviewArtifactReader: typeof readBuildReviewBranchArtifact;
+  private buildReviewArtifactReader: NonNullable<StepRunnerOptions['buildReviewArtifactReader']>;
   private buildReviewPolicyCatalog?: StepRunnerOptions['buildReviewPolicyCatalog'];
   private buildReviewPolicyCapture: typeof captureInstalledReviewPolicyBundle;
   private events?: ConductorEventEmitter;
@@ -2083,12 +2089,12 @@ export class DefaultStepRunner implements StepRunner {
       lapId,
       engineIdentity,
       preflight: async () => this.runTautologyPreflight(inputs),
-      readCache: async (branch) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
+      readCache: async (branch, _projection, _policyFingerprint, semanticIdentity) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
         readFile: async (path) => readFile(path, 'utf-8'),
         mkdir: async (path) => { await mkdir(path, { recursive: true }); },
         writeFile,
         rename,
-      }),
+      }, semanticIdentity),
       dispatchModel: async (branch, projection) => this.dispatchBuildReviewRubric(branch, projection, tier),
       writeArtifact: async (artifact) => writeBuildReviewBranchArtifact(this.projectDir, artifact, {
         readFile: async (path) => readFile(path, 'utf-8'),
@@ -2117,7 +2123,7 @@ export class DefaultStepRunner implements StepRunner {
 
     const results = Object.fromEntries(await Promise.all(coordination.branches.map(async (branch) => {
       if (branch.kind === 'cache-hit' || branch.kind === 'dispatched') {
-        const artifact = await this.buildReviewArtifactReader(
+        const rawArtifact = await this.buildReviewArtifactReader(
           this.projectDir,
           branch.rubric,
           lapId,
@@ -2129,6 +2135,10 @@ export class DefaultStepRunner implements StepRunner {
             rename,
           },
         );
+        const artifact = rawArtifact as import('./build-review-artifacts.js').BuildReviewBranchArtifact | undefined;
+        if (rawArtifact !== undefined && (typeof rawArtifact !== 'object' || rawArtifact === null || !artifact)) {
+          return [branch.rubric, { kind: 'malformed' as const, rubric: branch.rubric }];
+        }
         if (artifact && !parseBuildReviewRubricResult(artifact.result)) {
           return [branch.rubric, { kind: 'malformed' as const, rubric: branch.rubric }];
         }

@@ -45,14 +45,8 @@ export interface CodexPluginReadResponse {
 }
 
 export interface CodexAppServerSession {
-  request(
-    method: 'skills/list',
-    params: { readonly cwds: readonly string[]; readonly forceReload: true },
-  ): Promise<CodexSkillsListResponse>;
-  request(
-    method: 'plugin/read',
-    params: { readonly pluginName: string },
-  ): Promise<CodexPluginReadResponse>;
+  /** The app server is an untrusted JSON boundary; validation happens below. */
+  request(method: string, params: object): Promise<unknown>;
   close(): Promise<void>;
 }
 
@@ -155,7 +149,7 @@ export async function listCodexInstalledReviewSkills(
       forceReload: true,
     });
     abortIfNeeded(environment.signal);
-    const entry = requireCodexCatalogResponse(response, environment.cwd);
+    const entry = requireCodexCatalogResponse(response as CodexSkillsListResponse, environment.cwd);
     entry.skills.forEach(requireCodexSkill);
 
     const pluginIds = [...new Set(entry.skills
@@ -166,7 +160,7 @@ export async function listCodexInstalledReviewSkills(
     for (const pluginId of pluginIds) {
       const plugin = await session.request('plugin/read', { pluginName: pluginId });
       abortIfNeeded(environment.signal);
-      plugins.set(pluginId, requireCodexPlugin(plugin, pluginId));
+      plugins.set(pluginId, requireCodexPlugin(plugin as CodexPluginReadResponse, pluginId));
     }
 
     return entry.skills.flatMap((skill): InstalledReviewSkill[] => {

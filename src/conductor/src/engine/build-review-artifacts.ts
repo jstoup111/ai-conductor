@@ -264,6 +264,20 @@ export async function writeBuildReviewBranchArtifact(
 }
 
 /** Reads only the requested branch path and rejects stale/mismatched evidence. */
+export function readBuildReviewBranchArtifact(
+  projectRoot: string,
+  rubric: BuildReviewRubricId,
+  lapId: BuildReviewLapId,
+  snapshotDigest: string,
+  fs: BuildReviewArtifactFilesystem,
+): Promise<(BuildReviewBranchArtifact & { readonly rubric: BuildReviewRubricId; readonly result: BuildReviewRubricResult }) | undefined>;
+export function readBuildReviewBranchArtifact(
+  projectRoot: string,
+  rubric: BuildReviewArtifactRubric,
+  lapId: BuildReviewLapId,
+  snapshotDigest: string,
+  fs: BuildReviewArtifactFilesystem,
+): Promise<BuildReviewBranchArtifact | undefined>;
 export async function readBuildReviewBranchArtifact(
   projectRoot: string,
   rubric: BuildReviewArtifactRubric,

@@ -254,11 +254,16 @@ describe('build-review finding identity', () => {
   });
 
   it('refuses custom evidence outside frozen input before a judged envelope can exist', () => {
+    const finding = {
+      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      confidence: 72, evidenceLocations: ['src/widget.ts:8'], sourceRegions: customReferenceContext.sourceRegions,
+    };
+    const region = customReferenceContext.sourceRegions[0]!;
     const invalidReferences = [
-      customPayload({ findings: [{ ...customPayload().findings![0] as object, evidenceLocations: ['src/widget.ts:13'] }] }),
-      customPayload({ findings: [{ ...customPayload().findings![0] as object, evidenceLocations: ['src/other.ts:8'] }] }),
-      customPayload({ findings: [{ ...customPayload().findings![0] as object, sourceRegions: [{ ...customReferenceContext.sourceRegions[0], startLine: 7 }] }] }),
-      customPayload({ findings: [{ ...customPayload().findings![0] as object, sourceRegions: [{ ...customReferenceContext.sourceRegions[0], contentHash: HASH_B }] }] }),
+      customPayload({ findings: [{ ...finding, evidenceLocations: ['src/widget.ts:13'] }] }),
+      customPayload({ findings: [{ ...finding, evidenceLocations: ['src/other.ts:8'] }] }),
+      customPayload({ findings: [{ ...finding, sourceRegions: [{ ...region, startLine: 7 }] }] }),
+      customPayload({ findings: [{ ...finding, sourceRegions: [{ ...region, contentHash: HASH_B }] }] }),
     ];
 
     for (const payload of invalidReferences) {
@@ -267,9 +272,13 @@ describe('build-review finding identity', () => {
   });
 
   it('changes custom exact identity for declaration or effective policy changes, not confidence or publication timing', () => {
+    const finding = {
+      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+      confidence: 72, evidenceLocations: ['src/widget.ts:8'], sourceRegions: customReferenceContext.sourceRegions,
+    };
     const first = stampBuildReviewCustomJudgedResult(customPayload(), customStamp, customReferenceContext)!;
     const confidenceDrift = stampBuildReviewCustomJudgedResult(
-      customPayload({ findings: [{ ...customPayload().findings![0] as object, confidence: 5 }] }),
+      customPayload({ findings: [{ ...finding, confidence: 5 }] }),
       { ...customStamp, lapId: 'lap-2' }, customReferenceContext,
     )!;
     const policyChange = stampBuildReviewCustomJudgedResult(

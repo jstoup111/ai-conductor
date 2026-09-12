@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 
+import { resolveFeaturePlanPath } from './artifacts.js';
+
 import {
   assembleBuildReviewAdjudicationContext,
   buildReviewAdjudicationSourceId,
@@ -65,8 +67,14 @@ export type BuildReviewAdjudicationCoordinatorResult =
 async function sourcePlanContract(
   projectRoot: string,
   aggregate: BuildReviewAggregate,
+  feature: BuildReviewFeatureIdentity,
 ): Promise<BuildReviewAdjudicationPlanContract> {
-  const path = await readActivePlanPath(projectRoot);
+  // Engineer/daemon entries can begin at BUILD after DECIDE has already
+  // completed, so engine-state has no activePlanPath yet.  Reuse the same
+  // feature-scoped plan resolver that the conductor uses for remediation;
+  // treating that established plan as absent would make every custom finding
+  // unadjudicable despite a valid task-status contract.
+  const path = await readActivePlanPath(projectRoot) ?? await resolveFeaturePlanPath(projectRoot, feature.feature);
   if (!path) return { path: null, pointers: [], admittedTaskContracts: [] };
   try {
     const plan = await readFile(isAbsolute(path) ? path : join(projectRoot, path), 'utf-8');
@@ -486,7 +494,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   }
   const attemptedCaseIds = attemptEvidence.ok ? attemptEvidence.attemptedCaseIds : [];
   const attempted = new Set(attemptedCaseIds);
-  const planContract = await (input.readPlanContract ?? (() => sourcePlanContract(input.projectRoot, input.aggregate)))();
+  const planContract = await (input.readPlanContract ?? (() => sourcePlanContract(input.projectRoot, input.aggregate, input.feature)))();
   const taskStatus = await (input.readTaskStatus ?? (() => sourceTaskStatus(input.projectRoot)))();
   const contextEvidence = { planContract, taskStatus, attemptedCaseIds };
   const context = assembleBuildReviewAdjudicationContext({

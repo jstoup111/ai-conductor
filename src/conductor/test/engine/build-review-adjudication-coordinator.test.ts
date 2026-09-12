@@ -1717,7 +1717,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const driftedAggregate = joinBuildReviewRubricOutcomes({
       ...aggregate, lapId: 'lap-drifted' as never,
       results: { testQuality: { ...judgedResult, lapId: 'lap-drifted' as never, findings: [{
-        ...rawSource, anchor: { ...rawSource.anchor, locus: { ...rawSource.anchor.locus, contentHash: 'sha256:drifted' } },
+        ...judgedResult.findings[0]!, anchor: { ...judgedResult.findings[0]!.anchor, locus: { ...judgedResult.findings[0]!.anchor.locus, contentHash: 'sha256:drifted' } },
       }] } },
     });
     const driftedSourceId = buildReviewAdjudicationSourceId(projectBuildReviewAggregateSources(driftedAggregate)![0]!);
@@ -1840,7 +1840,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     const driftedAggregate = joinBuildReviewRubricOutcomes({
       ...aggregate, lapId: 'lap-drifted' as never,
       results: { testQuality: { ...judgedResult, lapId: 'lap-drifted' as never, findings: [{
-        ...rawSource, anchor: { ...rawSource.anchor, locus: { ...rawSource.anchor.locus, contentHash: 'sha256:drifted' } },
+        ...judgedResult.findings[0]!, anchor: { ...judgedResult.findings[0]!.anchor, locus: { ...judgedResult.findings[0]!.anchor.locus, contentHash: 'sha256:drifted' } },
       }] } },
     });
     const driftedJudge = vi.fn(async () => ({ mode: 'case-v1' as const, domain: 'build_review' as const, sourceOutcomes: [], cases: [] }));

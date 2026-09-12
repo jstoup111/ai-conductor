@@ -388,7 +388,7 @@ function sameFeature(left: BuildReviewFeatureIdentity, right: BuildReviewFeature
  */
 export function matchesBuildReviewDisposition(
   feature: BuildReviewFeatureIdentity,
-  finding: BuildReviewFindingIdentity,
+  finding: BuildReviewAcceptedRiskFinding,
   dispositions: readonly BuildReviewDispositionRecord[],
 ): boolean {
   const canonicalFinding = parseFindingIdentity(finding);
