@@ -55,4 +55,41 @@ describe('custom build-review convergence', () => {
       },
     });
   });
+
+  it('refuses empty restart settlement while a decision-owner escalation awaits an approved-baseline change', async () => {
+    const projectRoot = await mkdtemp(join(process.env.TMPDIR!, 'build-review-custom-convergence-'));
+    roots.push(projectRoot);
+    const store = new RemediationCaseStore(projectRoot, feature);
+    const sourceId = 'portable-policy:sha256:old-baseline:finding-1';
+    const graph: RemediationCaseGraph = {
+      sourceOutcomes: [{ sourceId, outcome: 'escalate', caseRef: 'architecture-stop' }],
+      cases: [{
+        case: {
+          caseRef: 'architecture-stop', disposition: 'escalate', priority: 'high', confidence: 'high',
+          rationale: 'The portable build policy requires an architecture decision.',
+          effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+        },
+        sources: [{ sourceId, outcome: 'escalate', caseRef: 'architecture-stop' }],
+      }],
+    };
+    await reconcileRemediationCases(store, {
+      graph, recordedAt: '2026-09-11T00:00:00.000Z', generateId: () => 'case-architecture-stop',
+    });
+
+    const restarted = await reconcileRemediationCases(store, {
+      graph: { sourceOutcomes: [], cases: [] }, recordedAt: '2026-09-11T00:01:00.000Z',
+      generateId: () => 'must-not-be-used', resolveAbsentOpenNonActionCases: true,
+    });
+
+    expect(restarted).toEqual({ ok: false, reason: 'decision-stop-pending' });
+    await expect(store.read()).resolves.toMatchObject({
+      ok: true,
+      state: {
+        cases: [{
+          id: 'case-architecture-stop', disposition: 'escalate', resolution: 'open',
+          effect: { kind: 'none' }, escalation: { owner: 'architecture' },
+        }],
+      },
+    });
+  });
 });
