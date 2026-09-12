@@ -1,5 +1,5 @@
-// Covers: task:16
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+// Covers: task:16, task:26
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -39,6 +39,24 @@ function git() {
   };
 }
 
+const passingEffectiveResolver = async () => ({
+  ok: true,
+  feature: { version: 'v1', repository: '/repo', feature: 'feature' },
+  effective: {
+    rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+    skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
+  },
+}) as never;
+
+const failingEffectiveResolver = async () => ({
+  ok: true,
+  feature: { version: 'v1', repository: '/repo', feature: 'feature' },
+  effective: {
+    rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+    skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
+  },
+}) as never;
+
 describe('custom build-review policy runner', () => {
   it.each([
     ['claude', 'project'], ['claude', 'global'], ['claude', 'plugin'],
@@ -59,6 +77,7 @@ describe('custom build-review policy runner', () => {
       providerRuntimes: new ProviderRuntimeSet([{ key: providerKey, provider, policy, builtIn: true, availability: new ModelAvailability(policy.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(),
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: passingEffectiveResolver,
       buildReviewPolicyCatalog: async () => [{
         semanticName: 'portable-policy', source, ...(source === 'plugin' ? { plugin: { id: 'policy-plugin', version: '1.0.0' } } : {}), installationOrigin: `/fixture/${source}`, canonicalSkillPath: `/fixture/${source}/SKILL.md`, packageRoot: `/fixture/${source}`, declaredDependencies: [], availability: 'available',
       }],
@@ -71,9 +90,10 @@ describe('custom build-review policy runner', () => {
     });
 
     const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
-    expect(result).toMatchObject({ success: true });
+    expect(result.success, result.output).toBe(true);
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke.mock.calls[0]?.[0].prompt).toContain('Portable policy');
+    const firstInvocation = (invoke.mock.calls as unknown as Array<[Parameters<LLMProvider['invoke']>[0]]>)[0]?.[0];
+    expect(firstInvocation?.prompt).toContain('Portable policy');
   });
 
   it('refuses an ambiguous installed selection without invoking a provider', async () => {
@@ -96,5 +116,40 @@ describe('custom build-review policy runner', () => {
     expect(result.success).toBe(false);
     expect(result.output).toContain('ambiguous');
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('publishes a first-use custom loading failure with its declaration and no invented content', async () => {
+    const root = await fixture();
+    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: '{}' }));
+    const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const runner = new DefaultStepRunner(provider, 'custom-policy-failure', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        portable: { enabled: true, skill: 'portable-policy', question: 'Check the selected policy.', source: 'project', resources: ['criteria.md'], llm_provider: 'codex' },
+      } } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(),
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: failingEffectiveResolver,
+      buildReviewPolicyCatalog: async () => [{
+        semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available',
+      }],
+      buildReviewPolicyCapture: async () => { throw new Error('missing criteria.md'); },
+    });
+
+    const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    const aggregate = JSON.parse(await readFile(join(root, '.pipeline', 'build-review.json'), 'utf8'));
+
+    expect({ result, aggregate, calls: invoke.mock.calls.length }).toMatchObject({
+      result: { success: false }, calls: 0,
+      aggregate: {
+        currentCustomRubrics: ['portable'],
+        customResults: { portable: {
+          declaration: { rubricId: 'portable', semanticSkill: 'portable-policy', question: 'Check the selected policy.', source: 'project', resources: ['criteria.md'] },
+          result: { kind: 'infrastructure-failure', reason: 'policy-load-failed' },
+        } },
+      },
+    });
+    expect(aggregate.customResults.portable).not.toHaveProperty('descriptor');
   });
 });

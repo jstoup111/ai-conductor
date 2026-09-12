@@ -21,6 +21,12 @@ import {
   type BuildReviewCustomFindingIdentity,
   type BuildReviewFindingIdentity,
 } from './build-review-finding-identity.js';
+import {
+  isBuildReviewCustomInfrastructureFailureReason,
+  parseBuildReviewCustomDeclaration,
+  type BuildReviewCustomDeclaration,
+  type BuildReviewCustomInfrastructureFailureReason,
+} from './build-review-artifacts.js';
 
 const STORE_VERSION = 'v1' as const;
 const STORE_PATH = '.pipeline/build-review-dispositions.json';
@@ -46,9 +52,21 @@ export interface BuildReviewDispositionRecord {
 export type BuildReviewAcceptedRiskFinding = BuildReviewFindingIdentity | BuildReviewCustomFindingIdentity;
 
 /** The closed, durable subject of a reduced-coverage decision. */
-export interface BuildReviewReducedCoverageIdentity {
+export interface BuildReviewBuiltinReducedCoverageIdentity {
   readonly rubric: BuildReviewRubricId;
   readonly reason: BuildReviewInfrastructureFailureReason;
+}
+
+/** Missing custom coverage binds to the declared obligation, never unavailable bytes. */
+export interface BuildReviewCustomReducedCoverageIdentity {
+  readonly declaration: BuildReviewCustomDeclaration;
+  readonly reason: BuildReviewCustomInfrastructureFailureReason;
+}
+
+export interface BuildReviewReducedCoverageIdentity {
+  readonly rubric?: BuildReviewRubricId;
+  readonly declaration?: BuildReviewCustomDeclaration;
+  readonly reason: BuildReviewInfrastructureFailureReason | BuildReviewCustomInfrastructureFailureReason;
 }
 
 /**
@@ -78,13 +96,11 @@ export interface BuildReviewDispositionInput {
   readonly operator: string;
 }
 
-export interface BuildReviewReducedCoverageInput {
+export type BuildReviewReducedCoverageInput = {
   readonly feature: BuildReviewFeatureIdentity;
-  readonly rubric: BuildReviewRubricId;
-  readonly reason: BuildReviewInfrastructureFailureReason;
   readonly rationale: string;
   readonly operator: string;
-}
+} & (BuildReviewBuiltinReducedCoverageIdentity | BuildReviewCustomReducedCoverageIdentity);
 
 export interface BuildReviewDispositionFilesystem {
   readFile(path: string): Promise<string>;
@@ -294,10 +310,16 @@ function parseDispositionRecord(value: unknown): BuildReviewDispositionRecord | 
 
 function parseReducedCoverageIdentity(value: unknown): BuildReviewReducedCoverageIdentity | undefined {
   const source = record(value);
-  return source && exactKeys(source, ['rubric', 'reason']) &&
+  if (!source) return undefined;
+  if (exactKeys(source, ['rubric', 'reason']) &&
     typeof source.rubric === 'string' && REDUCED_COVERAGE_RUBRICS.has(source.rubric as BuildReviewRubricId) &&
-    typeof source.reason === 'string' && REDUCED_COVERAGE_REASONS.has(source.reason as BuildReviewInfrastructureFailureReason)
-    ? { rubric: source.rubric as BuildReviewRubricId, reason: source.reason as BuildReviewInfrastructureFailureReason }
+    typeof source.reason === 'string' && REDUCED_COVERAGE_REASONS.has(source.reason as BuildReviewInfrastructureFailureReason)) {
+    return { rubric: source.rubric as BuildReviewRubricId, reason: source.reason as BuildReviewInfrastructureFailureReason };
+  }
+  if (!exactKeys(source, ['declaration', 'reason'])) return undefined;
+  const declaration = parseBuildReviewCustomDeclaration(source.declaration);
+  return declaration && isBuildReviewCustomInfrastructureFailureReason(source.reason)
+    ? { declaration, reason: source.reason }
     : undefined;
 }
 
@@ -397,8 +419,11 @@ export function matchesBuildReviewReducedCoverageDisposition(
     const recordedIdentity = parseReducedCoverageIdentity(disposition.identity);
     return recordedIdentity !== undefined &&
       sameFeature(disposition.feature, feature) &&
-      recordedIdentity.rubric === canonicalIdentity.rubric &&
-      recordedIdentity.reason === canonicalIdentity.reason;
+      recordedIdentity.reason === canonicalIdentity.reason &&
+      (recordedIdentity.declaration !== undefined || canonicalIdentity.declaration !== undefined
+        ? recordedIdentity.declaration !== undefined && canonicalIdentity.declaration !== undefined &&
+          canonicalJson(recordedIdentity.declaration) === canonicalJson(canonicalIdentity.declaration)
+        : recordedIdentity.rubric === canonicalIdentity.rubric);
   });
 }
 
@@ -572,7 +597,11 @@ export class BuildReviewDispositionStore {
     validate: (records: readonly BuildReviewReducedCoverageDispositionRecord[]) => Promise<boolean>,
   ): Promise<BuildReviewReducedCoverageAppendResult> {
     const feature = parseFeatureIdentity(input.feature);
-    const identity = parseReducedCoverageIdentity({ rubric: input.rubric, reason: input.reason });
+    const identity = parseReducedCoverageIdentity(
+      'rubric' in input
+        ? { rubric: input.rubric, reason: input.reason }
+        : { declaration: input.declaration, reason: input.reason },
+    );
     if (!feature || !identity || !nonEmptyString(input.rationale) || !nonEmptyString(input.operator)) {
       return { ok: false, kind: 'invalid', message: 'build-review reduced-coverage input is invalid' };
     }
@@ -584,7 +613,7 @@ export class BuildReviewDispositionStore {
       if (!await validate(Object.freeze(records))) {
         return { ok: false, kind: 'invalid', message: 'current reduced-coverage state is invalid' };
       }
-      if (records.some((record) => record.identity.rubric === identity.rubric && record.identity.reason === identity.reason)) {
+      if (records.some((record) => matchesBuildReviewReducedCoverageDisposition(feature, identity, [record]))) {
         return { ok: false, kind: 'invalid', message: 'reduced coverage is already recorded for this rubric and cause' };
       }
       const disposition: BuildReviewReducedCoverageDispositionRecord = {

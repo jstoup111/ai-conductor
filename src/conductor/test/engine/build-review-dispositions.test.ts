@@ -1,3 +1,4 @@
+// Covers: task:26
 import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -12,6 +13,7 @@ import { renderBuildReviewAcceptedRisk } from '../../src/engine/build-review-acc
 import {
   BuildReviewDispositionStore,
   matchesBuildReviewDisposition,
+  matchesBuildReviewReducedCoverageDisposition,
   type BuildReviewReducedCoverageDispositionRecord,
   type BuildReviewDispositionFilesystem,
   type BuildReviewDispositionRecord,
@@ -217,6 +219,36 @@ describe('build-review dispositions', () => {
     }, async () => true)).resolves.toMatchObject({
       ok: true, record: { identity: { rubric: 'testQuality', reason: 'scope-incomplete' }, operator: 'james' },
     });
+  });
+
+  it('persists declaration-scoped custom coverage without package or execution identity', async () => {
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem,
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+    const declaration = {
+      version: 'v1' as const, rubricId: 'portablePolicy', semanticSkill: 'portable-policy',
+      question: 'Does this preserve the portable policy contract?', source: 'project' as const, resources: ['criteria.md'],
+    };
+    const appended = await store.appendReducedCoverageIfCurrent({
+      feature, declaration, reason: 'policy-load-failed', rationale: 'The policy cannot be loaded.', operator: 'james',
+    }, async () => true);
+    const listed = await store.listReducedCoverage(feature);
+    const records = listed.ok ? listed.records : [];
+    const invalid = await store.appendReducedCoverageIfCurrent({
+      feature,
+      declaration: { ...declaration, resources: [''] },
+      reason: 'policy-load-failed', rationale: 'invalid declaration', operator: 'james',
+    }, async () => true);
+
+    expect({
+      appended,
+      invalid,
+      exact: matchesBuildReviewReducedCoverageDisposition(feature, { declaration, reason: 'policy-load-failed' }, records),
+      changedQuestion: matchesBuildReviewReducedCoverageDisposition(feature, { declaration: { ...declaration, question: 'Does this preserve the revised portable policy contract?' }, reason: 'policy-load-failed' }, records),
+      changedReason: matchesBuildReviewReducedCoverageDisposition(feature, { declaration, reason: 'provider-error' }, records),
+    }).toMatchObject({ appended: { ok: true }, invalid: { ok: false, kind: 'invalid' }, exact: true, changedQuestion: false, changedReason: false });
   });
 
   it('refuses blank rationales without writing a reduced-coverage decision', async () => {
