@@ -31,6 +31,7 @@ export type RemediationCaseReconciliationRejection =
   | 'illegal-disposition-transition'
   | 'refutation-repeat'
   | 'illegal-source-link'
+  | 'decision-stop-pending'
   | 'id-generation-failed'
   | 'id-collision';
 
@@ -241,6 +242,19 @@ function reconcileState(
     } else if (appendedSources.length !== existing.sources.length) {
       replacements.set(existingCaseId, { ...existing, sources: appendedSources });
     }
+  }
+
+  // An empty graph is restart/no-current-source settlement, not evidence that
+  // an owner changed the approved baseline. Unlike ordinary non-action
+  // history, a durable decision stop cannot be retired by that absence: doing
+  // so would let the caller turn an unresolved current-outcome gap into PASS.
+  // A later non-empty admitted graph remains the explicit re-evaluation lane.
+  if (
+    input.resolveAbsentOpenNonActionCases
+    && input.graph.sourceOutcomes.length === 0
+    && state.cases.some((record) => record.resolution === 'open' && record.disposition === 'escalate')
+  ) {
+    return { ok: false, reason: 'decision-stop-pending' };
   }
 
   let changed = additions.length > 0 || replacements.size > 0;
