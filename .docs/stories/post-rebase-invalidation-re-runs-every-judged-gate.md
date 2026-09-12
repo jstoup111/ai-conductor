@@ -70,9 +70,9 @@ not paid for deltas that cannot change the audit verdicts.
 - Given `D_featureSrc = ∅` but the `prd_audit` verdict file is absent/`satisfied:false` before the
   rebase, when the tail runs, then the gate is NOT falsely marked preserved-done — preservation only
   keeps an already-satisfied gate satisfied; a not-yet-passed gate is still selected to run.
-- Given a delta that is test-only for the feature BUT also contains a feature-owned runtime path,
+- Given a delta that is test-only for the feature BUT also contains a feature-owned runtime path without valid unchanged-replay evidence,
   when the decision runs, then `D_featureSrc ≠ ∅` and the gates are NOT preserved (they re-run) —
-  a single feature runtime path defeats preservation.
+  a feature runtime change without valid unchanged-replay evidence defeats preservation.
 
 ### Done When
 - [ ] Integration/unit test: a rebase with delta = {foreign runtime paths} ∪ {one feature test file}
@@ -87,7 +87,7 @@ not paid for deltas that cannot change the audit verdicts.
 
 **Requirement:** Acceptance (2)
 
-As the conductor, I want any rebase that touches the feature's own runtime source to re-run
+As the conductor, I want a rebase that changes the feature's contribution, or lacks proof of its preservation, to re-run
 `prd_audit` and `architecture_review_as_built`, so a genuinely changed implementation is re-audited
 against its FRs / APPROVED ADRs.
 
@@ -95,7 +95,7 @@ against its FRs / APPROVED ADRs.
 
 #### Happy Path
 - Given a `changed` rebase where `D_featureSrc ≠ ∅` (a conflict resolution modified a feature-owned
-  `src/**` runtime file), when the tail runs, then `prd_audit` and `architecture_review_as_built`
+  `src/**` runtime file and unchanged replay is not proved), when the tail runs, then `prd_audit` and `architecture_review_as_built`
   are **invalidated**: a `satisfied:false` `kickback:{from:'rebase'}`-shaped invalidation is applied
   and each is re-selected to run.
 - Given the same rebase, when the audit trail is inspected, then a `rebase_gate_invalidated` event is
@@ -104,12 +104,12 @@ against its FRs / APPROVED ADRs.
 #### Negative Paths
 - Given `D_featureSrc` contains only a `.docs/**` path from the feature (docs excluded from D by
   `isCodeOrTestPath`), when the decision runs, then the judged gates are NOT invalidated on that
-  basis (docs are not runtime source) — confirming docs-only feature changes do not force a re-audit.
-- Given `D_featureSrc ≠ ∅`, when invalidation is applied, then the gate is reset to be re-run and its
+  basis alone (docs are not runtime source); changed active review inputs still invalidate their owning reviews through the document-input policy.
+- Given `D_featureSrc ≠ ∅` and unchanged replay is not proved, when invalidation is applied, then the gate is reset to be re-run and its
   prior (now stale) `done`/verdict is not left in place to satisfy the gate.
 
 ### Done When
-- [ ] Test: a rebase whose delta includes a feature-owned `src/**` file re-runs both judged gates.
+- [ ] Test: a changed or unproved feature replay touching a feature-owned runtime file re-runs both judged gates; valid unchanged-replay evidence may preserve them when their review inputs are unchanged.
 - [ ] `rebase_gate_invalidated` events name the matched feature-source paths.
 - [ ] Docs-only feature paths never appear in `D_featureSrc` (excluded upstream).
 
@@ -153,32 +153,22 @@ gates, so runtime behavior is re-validated without paying for a re-audit that ca
 
 **Requirement:** Acceptance (4)
 
-As the conductor, I want the `markDownstreamStale` sweep to be delta-gated, so re-opening
-`manual_test` does not mark a preserved downstream judged gate stale (the current blanket cascade is
-exactly why the audit tail re-runs today).
+As the conductor, I want the explicit post-rebase decision applied without positional downstream staleness so preserved work stays complete.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `manual_test` is invalidated and re-opened via `navigateBack`, and `prd_audit` /
-  `architecture_review_as_built` were decided **preserved** for this rebase, when the downstream-stale
-  sweep runs in the `advanceTail` rebase branch, then the preserved judged gates are left/restored to
-  `done` (not marked `stale`), while genuinely-invalidated downstream steps are marked stale as today.
-- Given the sweep completes, when the loop selects the next step, then no preserved judged gate is
-  re-selected for dispatch.
+- Given manual_test is invalidated and the audit gates are validly preserved, when the rebase decision is applied, then the preserved audits remain done and are not redispatched.
+- Given a gate is explicitly invalidated, when the post-rebase transition applies, then that gate is reopened through the shared mutation authority.
 
 #### Negative Paths
-- Given a judged gate was **invalidated** (not preserved) this rebase, when the sweep runs, then it IS
-  marked stale/re-run — the delta-gating must not accidentally preserve a gate the decision invalidated.
-- Given a downstream step that is neither a judged gate nor rebase-decided (an ordinary tail step
-  after `manual_test`), when the sweep runs, then its existing stale behavior is unchanged — the
-  gating narrows only the specific preserved gates, not the whole sweep.
+- Given a gate has an outstanding ordinary repair failure, when rebase preservation is considered, then it cannot be restored to PASS.
+- Given an ordinary completed step is not explicitly invalidated, when another gate reopens, then that step is not marked stale merely because of its position; required publication continuation remains explicitly selected.
 
 ### Done When
-- [ ] Test: with `manual_test` re-opened and the audits preserved, the audits remain `done` after the
-      sweep and are not re-dispatched.
-- [ ] Test: an invalidated judged gate is still marked stale by the sweep.
-- [ ] Non-gate downstream steps retain today's stale semantics.
+- [ ] The production rebase transition preserves valid audits while reopening exactly the requested checks.
+- [ ] Completed acceptance authoring, BUILD, and unrelated steps are not swept stale by adjacency.
+- [ ] Ordinary non-rebase repair still follows its existing downstream invalidation behavior.
 
 ---
 
@@ -186,31 +176,22 @@ exactly why the audit tail re-runs today).
 
 **Requirement:** Acceptance (5)
 
-As an operator, I want the system to fall back to today's invalidate-everything behavior whenever the
-rebase delta or feature surface cannot be computed, so the optimization never trades away correctness.
+As an operator, I want unavailable delta or replay evidence to prevent unsupported preservation while keeping completed work out of a blind positional replay.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given `F` is uncomputable (missing `mergeBase` or a git-error diff) on a `changed` rebase, when the
-  invalidation decision runs, then the system invalidates the **full fixed set**
-  `{build (per its pre-verify), build_review, wiring_check, (+manual_test if it ran)}` and applies the
-  blanket downstream-stale cascade — byte-for-byte today's behavior — and NO judged gate is preserved.
-- Given the fail-closed path is taken, when the audit trail is inspected, then a single event/reason
-  records that delta-aware invalidation was skipped (fail-closed) with the cause.
+- Given the rebase delta or feature surface cannot be computed, when revalidation is selected, then applicable reviews are conservatively reopened without claiming unchanged replay.
+- Given completion evidence remains valid, when conservative review revalidation proceeds, then completed acceptance authoring and BUILD are not reopened by position.
 
 #### Negative Paths
-- Given `D` itself is uncomputable (the `preTree..HEAD` diff errors), when the decision runs, then
-  fail-closed invalidate-all is taken — the decision never proceeds on a partial/empty delta that
-  would preserve gates unsoundly.
-- Given fail-closed is taken, when downstream runs, then `prd_audit` / `architecture_review_as_built`
-  DO re-run (via the unchanged blanket cascade) — preservation is never applied under uncertainty.
+- Given a Git error prevents computing the delta, when preservation is evaluated, then the error cannot be interpreted as an empty unchanged delta.
+- Given BUILD completion evidence is also unavailable, when continuation is evaluated, then evidence recovery or halt blocks publication without blindly redispatching completed tasks.
 
 ### Done When
-- [ ] Test: forcing `mergeBase` empty on a changed rebase yields the full legacy invalidation set +
-      cascade with zero preservations.
-- [ ] Test: a git-error on either diff (`D` or `F`) triggers fail-closed.
-- [ ] A fail-closed reason is recorded in the event/verdict trail.
+- [ ] Missing-base and Git-error fixtures report unproved preservation and conservatively required reviews.
+- [ ] Missing completion evidence blocks with recovery diagnostics, not a positional task replay.
+- [ ] The event/verdict trail names the actual conservative disposition.
 
 ---
 
@@ -251,8 +232,7 @@ so the preserve/re-run behavior is transparent and debuggable.
 
 **Requirement:** Acceptance (7)
 
-As the conductor, I want the existing `build` mechanical pre-verify (ADR-2026-07-08) to keep working
-unchanged, so this feature composes with, rather than regresses, the prior optimization.
+As the conductor, I want the existing `build` mechanical pre-verify (ADR-2026-07-08) to retain evidence derivation, so this feature composes with, rather than regresses, the prior optimization.
 
 ### Acceptance Criteria
 
@@ -264,15 +244,11 @@ unchanged, so this feature composes with, rather than regresses, the prior optim
   preserve/invalidate surface map (it is governed solely by its pre-verify).
 
 #### Negative Paths
-- Given build evidence is genuinely missing post-rebase, when the pre-verify runs, then `build` is
-  invalidated and re-dispatched exactly as today — the delta-aware layer does not suppress a real
-  build re-run.
-- Given the delta-aware decision preserves the judged gates, when `build`'s pre-verify fails, then
-  `build` re-running does NOT force the preserved judged gates to re-run beyond what the delta
-  decision and the (delta-gated) downstream sweep dictate.
+- Given build evidence is genuinely missing post-rebase, when the pre-verify runs, then continuation blocks for evidence recovery or halt rather than blindly redispatching completed tasks; independently established repair obligations still retain their ordinary owner.
+- Given the delta-aware decision preserves the judged gates, when `build`'s pre-verify fails, then continuation cannot publish on those preserved reviews alone; a later concrete test/review failure enters ordinary BUILD repair and downstream validation.
 
 ### Done When
-- [ ] Existing build pre-verify tests (`rebase-loop.test.ts` buildRuns cases) still pass unchanged.
+- [ ] Evidence-intact build preverification stays covered; missing-evidence cases assert recovery/halt rather than blind BUILD redispatch.
 - [ ] `build` never appears in a `rebase_gate_preserved`/`rebase_gate_invalidated` event.
 
 ---
