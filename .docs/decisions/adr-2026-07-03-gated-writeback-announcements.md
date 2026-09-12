@@ -1,7 +1,7 @@
 # ADR: Gated-spec announcements via the pr-labels seam, warn-once per state change
 
 **Date:** 2026-07-03
-**Status:** APPROVED
+**Status:** SUPERSEDED by adr-2026-09-11-github-operation-ownership
 **Deciders:** James (operator), engineer DECIDE session for #208
 
 ## Context
@@ -37,6 +37,11 @@ and swallowed.
 Rejected by operator during scoping — the block must be visible where the work lives.
 
 ## Decision
+
+> **Amended 2026-09-11 by #2516:** The operator approved supersession by adr-2026-09-11-github-operation-ownership D8. Foreign-resource announcements are refused; local GATED visibility and the authorized-resource idempotency, ordering, and best-effort behavior survive. The historical decision below is retained for provenance.
+
+
+### D1 — Historical announcement policy (superseded)
 
 **Option A**, with **re-announce on state change**: the upsert body embeds the gate reason;
 since `upsertComment` edits in place, a reason transition (e.g. `unowned-indeterminate` →

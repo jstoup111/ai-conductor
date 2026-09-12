@@ -13,8 +13,7 @@ already excluded and will never build; they must be **suppressed**. A **verbose*
 (config `daemon_verbose: true`, default `false`) surfaces them for debugging. The
 suppression covers only these gate-writeback skip **logs** — the operator's OWN work
 (build/start/resume/status lines, a different code path) still logs at default verbosity,
-and the announce/label/comment write behavior, the existing `warnedSkips` dedup, and the
-non-throwing contract are all unchanged.
+and the existing `warnedSkips` dedup and non-throwing contract remain. All announcement writes require independent authorization under adr-2026-09-11-github-operation-ownership D8; verbosity never grants permission. Typed ownership refusals and canonical events are distinct from these optional skip notices.
 
 The verbose signal is threaded as an optional `verbose?: boolean` on `GateWritebackDeps`
 (alongside `warnedSkips`) and consulted inside `logSkipOnce`: when `verbose` is falsy the
@@ -42,11 +41,7 @@ spec that this daemon will never build.
   (`grep 'gated spec' daemon.log` returns nothing for `S`).
 
 #### Negative Paths
-- Given default verbosity and a gated spec `S` whose no-PR notice is suppressed, when a later
-  pass finds `S` now HAS an OPEN/MERGED `prUrl`, then the announce path still proceeds
-  normally — the `owner-gated` label is ensured/applied and the marker comment is upserted
-  (spy on injected `runGh`) — i.e. suppression silences only the skip LOG, never the
-  announcement work.
+- Given default verbosity and a foreign-owned gated spec whose no-PR notice was suppressed, when a later pass finds its OPEN or MERGED PR, then no label or comment mutation occurs; local GATED visibility and the typed ownership refusal remain available.
 - Given deps WITHOUT a `verbose` field set and WITHOUT `warnedSkips` (a bare legacy/test
   caller), when `announceGatedPr` skips a no-PR spec, then existing behavior for that caller
   shape is preserved (the notice is not newly emitted in a way that breaks unmodified
@@ -57,8 +52,7 @@ spec that this daemon will never build.
 - [ ] A test drives `announceGatedPr` with `prUrl` falsy and `verbose: false` deps, asserting
       zero `[gate-writeback]` log lines and zero `gh` calls.
 - [ ] A test drives the same across two consecutive passes, asserting still zero lines.
-- [ ] A test asserts that after a suppressed no-PR skip, a later pass with a real `prUrl`
-      still performs the label ensure/add and comment upsert.
+- [ ] A test asserts that after a suppressed no-PR skip, a later pass with a foreign-owned PR performs zero remote mutations and preserves local GATED visibility.
 
 ## Story 2: Default verbosity suppresses the terminal-PR-state and no-Source-Ref notices
 
@@ -115,9 +109,7 @@ daemon is gating and why.
   `announceGatedPr` runs for the same no-PR spec `S` on two consecutive passes, then the
   notice logs exactly ONCE (verbose re-enables the log; the pre-existing dedup still bounds
   it to once per `(slug, reason)` per run — verbose does not defeat dedup).
-- Given verbose-enabled deps, when the announce path later has a real PR / valid ref, then
-  label + comment upserts still happen exactly as at default verbosity (verbose changes only
-  which skip logs appear, never the announcement work).
+- Given verbose-enabled deps and a real PR or valid issue reference, when announcement is requested, then authorization matches default verbosity: authorized writes may proceed and foreign writes are refused; verbose never bypasses permission.
 
 ### Done When
 - [ ] A test drives `announceGatedPr` with `prUrl` falsy and `verbose: true` deps, asserting

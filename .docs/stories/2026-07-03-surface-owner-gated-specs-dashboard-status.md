@@ -206,83 +206,46 @@ work per repo so that I can diagnose an ownership stall without shell access to 
 
 ---
 
-## Story: Gated spec PR gets a warn-once announcement and label
+## Story: Authorized gated spec PR announcements preserve local visibility
 
-**Requirement:** FR-8, FR-10, FR-12
-
-As a collaborating operator, I want a gated spec's PR to say it is blocked and why so that
-the block is visible where the work lives.
+**Requirement:** FR-8, FR-10, FR-12; adr-2026-09-11-github-operation-ownership D8
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a spec newly gated as `other-owner: alice` whose spec PR exists, when the pass's
-  write-back runs, then the PR gains the `owner-gated` label and one comment carrying the
-  hidden marker, the reason, and the remedy hint.
-- Given the same spec still gated on the next 10 passes, when write-back runs each pass,
-  then the PR still has exactly ONE marker comment (upsert edits in place; count asserted).
-- Given the gate reason transitions (`unowned-indeterminate` → `other-owner` after a stamp
-  appears), when write-back runs, then the single existing comment's body is updated to the
-  new reason.
+- Given an independently authorized PR announcement, when write-back runs, then it applies an existing owner-gated label and upserts one marker comment with the reason and remedy after local gated state is recorded.
+- Given repeated authorized announcements or a reason change, when write-back runs, then one marker comment remains and its body reflects the current authorized reason.
 
 #### Negative Paths
-- Given the spec PR is already MERGED (normal for a merged spec), when write-back runs, then
-  the comment/label apply to the merged PR without error (GitHub permits both).
-- Given `gh` exits non-zero on the comment upsert (rate limit, network), when write-back
-  runs, then the failure is logged once, no retry storm occurs within the pass, and the
-  scan's gated channel + snapshot are already written (ordering asserted: local state
-  before GitHub calls) — dispatch and dashboard are unaffected.
-- Given the marker-comment lookup succeeds but the in-place edit (PATCH) fails, when
-  write-back runs, then NO fallback create is attempted (mirrors `upsertComment` terminal
-  PATCH semantics — duplicate pileup is the failure being prevented).
-- Given no PR exists for the spec branch (local-commit fallback spec), when write-back runs,
-  then the PR step is skipped with a logged notice — no `findOrCreatePr` draft creation for
-  gated specs (write-back must never mutate repo branch state).
-- Given label creation races another daemon (`ensureLabel` conflict), when write-back runs,
-  then the existing best-effort semantics swallow the conflict and the comment still lands.
+- Given a spec gated as other-owner, when write-back finds its PR, then no PR label, comment, or body mutation occurs and local GATED visibility remains available.
+- Given authorization or evidence is missing, conflicting, or unavailable, when write-back runs, then no remote mutation occurs and a typed refusal remains available.
+- Given an authorized merged PR, when write-back runs, then merged state alone does not prevent the authorized announcement.
+- Given an authorized comment edit fails, when write-back handles the failure, then it never creates a duplicate comment as fallback and local visibility remains intact.
+- Given no PR exists, when write-back runs, then it does not create a PR or change branch state.
+- Given a needed shared label is absent, when explicit shared-resource permission is absent, then label creation is refused rather than force-updating a shared definition.
 
 ### Done When
-- [ ] New hidden marker constant and `owner-gated` label wired through the existing
-      pr-labels seam (REST label calls, not `gh pr edit --add-label`).
-- [ ] Idempotency test: 10 gated passes → exactly one comment, one label.
-- [ ] Reason-transition test updates the comment body in place.
-- [ ] Failure-injection tests: PATCH failure (no create), gh unavailable (advisory,
-      ordering preserved), missing PR (skip, no branch mutation).
+- [ ] Two-operator fixtures show zero foreign PR mutations while local GATED output persists.
+- [ ] Authorized fixtures retain one-comment idempotency, reason updates, local-before-remote ordering, and no create-after-edit-failure behavior.
 
 ---
 
-## Story: Intake-originated gated specs announce on the Source-Ref issue
+## Story: Intake-originated gated announcements require independent issue permission
 
-**Requirement:** FR-9, FR-10, FR-12
-
-As the operator who filed the intake issue, I want the originating issue to show the block so
-that intake work I'm tracking doesn't stall silently.
+**Requirement:** FR-9, FR-10, FR-12; adr-2026-09-11-github-operation-ownership D8
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a gated spec whose committed intake marker carries `Source-Ref: owner/repo#42`, when
-  write-back runs, then issue #42 receives the same marker-comment upsert with reason and
-  remedy (one living comment, updated on reason change).
+- Given a valid Source-Ref and independent issue authorization, when write-back runs, then the source issue receives the marker-comment upsert with reason and remedy without changing its assignees.
 
 #### Negative Paths
-- Given a gated spec with NO intake marker (chat-originated), when write-back runs, then the
-  issue step is skipped silently — no error, no attempt to guess an issue.
-- Given the intake marker exists but its `Source-Ref:` line is malformed
-  (`Source-Ref: not-a-ref`), when write-back runs, then the issue step is skipped with a
-  logged notice — never a gh call with garbage arguments.
-- Given the referenced issue is CLOSED, when write-back runs, then the comment still posts
-  (commenting closed issues is valid and is the visible-where-it-lives intent).
-- Given the issue comment fails but the PR comment succeeded, when write-back completes,
-  then the PR announcement is not rolled back and the pass completes normally (per-surface
-  independence; both advisory).
-- Given repo-level warnings (identity unresolved / no cutover) exist this pass, when
-  write-back runs, then NO GitHub write occurs for them (ADR: dashboard/status-only).
+- Given a source issue owned by another operator, when write-back runs, then a valid Source-Ref alone does not permit any issue mutation.
+- Given no intake marker or an invalid Source-Ref, when write-back runs, then no issue is guessed and no malformed remote call occurs.
+- Given an authorized closed issue, when write-back runs, then closed state alone does not prevent the authorized comment.
+- Given an authorized issue write fails after an authorized PR write succeeded, when the pass ends, then no rollback is attempted on the PR and neither surface reports a false success.
+- Given a repo-level warning without a target, when write-back runs, then no GitHub write occurs.
 
 ### Done When
-- [ ] Source-Ref parsing reuses the existing single parse source (`issue-ref.ts`), never a
-      new regex.
-- [ ] Tests: valid ref, absent marker, malformed ref, closed issue, per-surface failure
-      independence, repo-warning exclusion.
-
----
+- [ ] Source-Ref resolution and issue authorization are independently exercised; foreign, missing, malformed, and unavailable evidence produce no write.
+- [ ] Authorized issue updates preserve assignees and per-surface best-effort independence.

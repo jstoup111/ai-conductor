@@ -72,6 +72,8 @@ say why it is blocked and what would unblock it.
   reason and remedy hint.
 - **FR-9:** When a gated spec originated from intake (it carries a source reference to an
   issue), the daemon also announces the block on that originating issue.
+> **Amended 2026-09-11 by #2516:** FR-8 and FR-9 remote announcements require independent target authorization under adr-2026-09-11-github-operation-ownership D8. Foreign-owned PRs receive no labels or comments, and a Source-Ref alone does not authorize issue mutation. Local GATED discovery/dashboard/status remains the visibility surface when remote authorization fails. The operator explicitly approved this supersession; original requirements above remain as historical context.
+
 - **FR-10:** Gate announcements on PRs and issues are idempotent: repeated scans of a
   still-gated spec update the existing announcement in place rather than posting duplicates.
 - **FR-11:** Repo-wide gate conditions — the daemon's own operator identity being
