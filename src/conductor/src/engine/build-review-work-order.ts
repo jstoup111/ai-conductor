@@ -15,15 +15,34 @@ const MAX_REFERENCE_LENGTH = 256;
 const MAX_TEXT_LENGTH = 8_000;
 const MAX_CASES = 128;
 const MAX_TASKS_PER_CASE = 32;
+const MAX_SOURCES_PER_CASE = 512;
 
-export interface BuildReviewWorkOrderTask {
-  readonly title: string;
+export type BuildReviewWorkOrderTask =
+  | {
+    readonly title: string;
+  }
+  | {
+    readonly title: string;
+    /** Engine-validated plan task ownership for a case-v2 action. */
+    readonly admittedTaskIds: readonly string[];
+    /** Adjudicator rationale for admitting this task to the repair. */
+    readonly admissionRationale: string;
+  };
+
+/** The durable identity of every custom finding that an admitted repair covers. */
+export interface BuildReviewWorkOrderSource {
+  readonly sourceId: string;
+  /** An action can retain its own source or an adjudicator-merged source only. */
+  readonly outcome: 'acted' | 'merged';
+  readonly recordedAt: string;
 }
 
 /** One canonical action case in its caller-supplied priority order. */
 export interface BuildReviewWorkOrderCase {
   readonly caseId: string;
   readonly priority: RemediationCasePriority;
+  /** Omitted only by work orders persisted before custom source provenance existed. */
+  readonly sources?: readonly BuildReviewWorkOrderSource[];
   readonly tasks: readonly BuildReviewWorkOrderTask[];
 }
 
@@ -109,6 +128,10 @@ function boundedString(value: unknown, maximum = MAX_TEXT_LENGTH): value is stri
   return typeof value === 'string' && value.trim().length > 0 && value.length <= maximum;
 }
 
+function validTimestamp(value: unknown): value is string {
+  return boundedString(value, MAX_REFERENCE_LENGTH) && !Number.isNaN(Date.parse(value));
+}
+
 function sameFeature(left: RemediationCaseFeatureIdentity, right: RemediationCaseFeatureIdentity): boolean {
   return left.version === right.version && left.repository === right.repository && left.feature === right.feature;
 }
@@ -120,16 +143,49 @@ function parseFeature(value: unknown): RemediationCaseFeatureIdentity | undefine
 }
 
 function parseCase(value: unknown): BuildReviewWorkOrderCase | undefined {
-  if (!isRecord(value) || !exactKeys(value, ['caseId', 'priority', 'tasks']) ||
+  if (!isRecord(value) || !exactKeys(value, value.sources === undefined
+    ? ['caseId', 'priority', 'tasks']
+    : ['caseId', 'priority', 'sources', 'tasks']) ||
     !boundedString(value.caseId, MAX_REFERENCE_LENGTH) ||
     !['critical', 'high', 'medium', 'low'].includes(value.priority as string) ||
     !Array.isArray(value.tasks) || value.tasks.length === 0 || value.tasks.length > MAX_TASKS_PER_CASE) return undefined;
   const tasks: BuildReviewWorkOrderTask[] = [];
   for (const task of value.tasks) {
-    if (!isRecord(task) || !exactKeys(task, ['title']) || !boundedString(task.title)) return undefined;
-    tasks.push({ title: task.title });
+    if (!isRecord(task) || !boundedString(task.title)) return undefined;
+    if (exactKeys(task, ['title'])) {
+      tasks.push({ title: task.title });
+      continue;
+    }
+    if (!exactKeys(task, ['title', 'admittedTaskIds', 'admissionRationale']) ||
+      !Array.isArray(task.admittedTaskIds) || task.admittedTaskIds.length === 0 ||
+      task.admittedTaskIds.length > MAX_TASKS_PER_CASE || !boundedString(task.admissionRationale)) return undefined;
+    const admittedTaskIds: string[] = [];
+    for (const taskId of task.admittedTaskIds) {
+      if (!boundedString(taskId, MAX_REFERENCE_LENGTH) || admittedTaskIds.includes(taskId)) return undefined;
+      admittedTaskIds.push(taskId);
+    }
+    tasks.push({ title: task.title, admittedTaskIds, admissionRationale: task.admissionRationale });
   }
-  return { caseId: value.caseId, priority: value.priority as RemediationCasePriority, tasks };
+  let sources: BuildReviewWorkOrderSource[] | undefined;
+  if (value.sources !== undefined) {
+    if (!Array.isArray(value.sources) || value.sources.length === 0 || value.sources.length > MAX_SOURCES_PER_CASE) return undefined;
+    const sourceIds = new Set<string>();
+    sources = [];
+    for (const source of value.sources) {
+      if (!isRecord(source) || !exactKeys(source, ['sourceId', 'outcome', 'recordedAt']) ||
+        !boundedString(source.sourceId, MAX_REFERENCE_LENGTH) || !validTimestamp(source.recordedAt) ||
+        !['acted', 'merged'].includes(source.outcome as string) ||
+        sourceIds.has(source.sourceId)) return undefined;
+      sourceIds.add(source.sourceId);
+      sources.push({ sourceId: source.sourceId, outcome: source.outcome as 'acted' | 'merged', recordedAt: source.recordedAt });
+    }
+  }
+  return {
+    caseId: value.caseId,
+    priority: value.priority as RemediationCasePriority,
+    ...(sources === undefined ? {} : { sources }),
+    tasks,
+  };
 }
 
 function parseWorkOrder(value: unknown): PublishBuildReviewWorkOrderResult {
@@ -241,8 +297,14 @@ export function appendBuildReviewWorkOrderContext(
   ];
   for (const [caseIndex, caseRow] of workOrder.cases.entries()) {
     lines.push(`${caseIndex + 1}. [${caseRow.priority}] ${caseRow.caseId}`);
+    if (caseRow.sources) {
+      lines.push(`   sources: ${caseRow.sources.map((source) => `${source.sourceId} [${source.outcome}]`).join(', ')}`);
+    }
     for (const [taskIndex, task] of caseRow.tasks.entries()) {
       lines.push(`   ${taskIndex + 1}. ${task.title}`);
+      if ('admittedTaskIds' in task) {
+        lines.push(`      admitted tasks: ${task.admittedTaskIds.join(', ')} — ${task.admissionRationale}`);
+      }
     }
   }
   return lines.join('\n');

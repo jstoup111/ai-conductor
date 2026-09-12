@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
   publishBuildReviewWorkOrder,
   type BuildReviewWorkOrderCase,
+  type BuildReviewWorkOrderTask,
 } from './build-review-work-order.js';
 import { orderBuildReviewActionCases } from './build-review-adjudication.js';
 import {
@@ -144,7 +145,12 @@ export async function applyBuildReviewActionEffects(input: {
   readonly projectRoot: string;
   readonly feature: RemediationCaseFeatureIdentity;
   readonly store: RemediationCaseStore;
-  readonly tasksByCaseId: ReadonlyMap<string, readonly { readonly title: string }[]>;
+  /**
+   * The validated-consistent adjudication selection. Re-checking case state
+   * under the store lease below makes a late exact operator disposition win
+   * without dropping unrelated admitted actions.
+   */
+  readonly tasksByCaseId: ReadonlyMap<string, readonly BuildReviewWorkOrderTask[]>;
   readonly chargeInput: BumpKickbackGateInput;
   readonly workOrderId?: () => string;
   /** Testable I/O boundaries; production defaults retain the durable adapters. */
@@ -178,7 +184,17 @@ export async function applyBuildReviewActionEffects(input: {
     for (const record of actionCases) {
       const tasks = input.tasksByCaseId.get(record.id);
       if (!tasks || tasks.length === 0) return { value: { ok: false as const, reason: `action case ${record.id} has no work-order tasks` } };
-      cases.push({ caseId: record.id, priority: record.priority, tasks });
+      cases.push({
+        caseId: record.id,
+        priority: record.priority,
+        // Case-v2 validation admits only acted or merged links to an action;
+        // preserve that closed action evidence and never deliver unrelated
+        // reject/defer/refute/escalate history as BUILD work.
+        sources: record.sources
+          .filter(({ outcome }) => outcome === 'acted' || outcome === 'merged')
+          .map(({ sourceId, outcome, recordedAt }) => ({ sourceId, outcome, recordedAt })),
+        tasks,
+      });
     }
     // The charge identity is the FIRST-TIME route's own reserved effect, taken
     // in the same deterministic order the work order publishes. Charging

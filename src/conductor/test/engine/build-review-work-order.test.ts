@@ -1,4 +1,4 @@
-// Covers: task:9
+// Covers: task:9, task:35
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -39,6 +39,26 @@ const WORK_ORDER = {
   ],
 } as const satisfies BuildReviewWorkOrder;
 
+const CUSTOM_WORK_ORDER = {
+  version: 'v1',
+  domain: 'build_review',
+  feature: FEATURE,
+  effectId: 'effect-custom-1',
+  cases: [{
+    caseId: 'case-custom-merged',
+    priority: 'high',
+    sources: [
+      { sourceId: 'custom:policy-a:finding-1', outcome: 'acted', recordedAt: '2026-09-11T00:00:00.000Z' },
+      { sourceId: 'custom:policy-b:finding-2', outcome: 'merged', recordedAt: '2026-09-11T00:00:00.000Z' },
+    ],
+    tasks: [{
+      title: 'Preserve both policy contracts at the implementation boundary',
+      admittedTaskIds: ['35'],
+      admissionRationale: 'Task 35 owns the admitted consistent repair publication boundary.',
+    }],
+  }],
+} as const satisfies BuildReviewWorkOrder;
+
 const temporaryDirectories: string[] = [];
 
 async function createProjectRoot(): Promise<string> {
@@ -68,6 +88,19 @@ describe('build-review work order', () => {
     });
   });
 
+  it('round-trips admitted custom repair provenance without exposing non-action evidence as work', async () => {
+    const projectRoot = await createProjectRoot();
+
+    await expect(publishBuildReviewWorkOrder(projectRoot, CUSTOM_WORK_ORDER)).resolves.toEqual({
+      ok: true,
+      workOrder: CUSTOM_WORK_ORDER,
+    });
+    await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, 'effect-custom-1')).resolves.toEqual({
+      ok: true,
+      workOrder: CUSTOM_WORK_ORDER,
+    });
+  });
+
   it('adds ordered file-scoped work to BUILD retry context without replacing existing context', () => {
     expect(appendBuildReviewWorkOrderContext('Existing retry context.', WORK_ORDER)).toBe([
       'Existing retry context.',
@@ -81,11 +114,24 @@ describe('build-review work order', () => {
     ].join('\n'));
   });
 
+  it('renders only the admitted custom source links and task rationale into BUILD context', () => {
+    expect(appendBuildReviewWorkOrderContext('Existing retry context.', CUSTOM_WORK_ORDER)).toBe([
+      'Existing retry context.',
+      '',
+      'Build-review remediation work order (effect: effect-custom-1):',
+      '1. [high] case-custom-merged',
+      '   sources: custom:policy-a:finding-1 [acted], custom:policy-b:finding-2 [merged]',
+      '   1. Preserve both policy contracts at the implementation boundary',
+      '      admitted tasks: 35 — Task 35 owns the admitted consistent repair publication boundary.',
+    ].join('\n'));
+  });
+
   it.each([
     ['unsupported version', { ...WORK_ORDER, version: 'v2' }, 'unknown-version'],
     ['foreign domain', { ...WORK_ORDER, domain: 'prd_audit' }, 'foreign-domain'],
     ['missing stable effect id', { ...WORK_ORDER, effectId: '' }, 'malformed-order'],
     ['taskless case', { ...WORK_ORDER, cases: [{ ...WORK_ORDER.cases[0], tasks: [] }] }, 'malformed-order'],
+    ['non-action source evidence', { ...CUSTOM_WORK_ORDER, cases: [{ ...CUSTOM_WORK_ORDER.cases[0], sources: [{ ...CUSTOM_WORK_ORDER.cases[0].sources[0], outcome: 'deferred' }] }] }, 'malformed-order'],
   ] as const)('refuses to publish %s', async (_description, workOrder, reason) => {
     const projectRoot = await createProjectRoot();
 
