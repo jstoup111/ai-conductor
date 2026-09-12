@@ -39,12 +39,10 @@ kicks back to does that.
 **Run when `build_review` fails, or at SHIP when a prior audit BLOCKED — dispatched by the
 conductor on the blocking path.**
 
-## Engine-selected build_review case mode
+## Engine-selected build_review case-v1 mode
 
-Use this branch **only when this engine context is the engine-stamped `build_review` case context
-declaring `domain: "build_review"` and `mode: "case-v1"` or `"case-v2"`**. It is one judgement by
-the existing `remediate` skill, not a new skill or a second dispatch. Do not create a skill or
-dispatch another agent. For every other context, including all SHIP and stall remediation, skip this
+Use this branch **only when this engine context is the engine-stamped `build_review` `case-v1` case context declaring `domain: "build_review"` and `mode: "case-v1"` or `"case-v2"`**. It is one judgement by
+the existing `remediate` skill, not a new skill or a second dispatch. Do not create a skill or dispatch another agent. For every other context, including all SHIP and stall remediation, skip this
 section and follow the legacy gap-plan instructions below unchanged.
 
 ### Supplied input — complete or stop
