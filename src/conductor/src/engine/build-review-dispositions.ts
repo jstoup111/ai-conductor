@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
@@ -11,11 +11,14 @@ import {
 } from './conduct-state-lease.js';
 import {
   parseBuildReviewLapId,
+  parseBuildReviewCanonicalPathReference,
   type BuildReviewInfrastructureFailureReason,
   type BuildReviewLapId,
 } from './build-review-domain.js';
 import {
   rehydrateBuildReviewFindingIdentity,
+  type BuildReviewCustomFindingCanonicalPayload,
+  type BuildReviewCustomFindingIdentity,
   type BuildReviewFindingIdentity,
 } from './build-review-finding-identity.js';
 
@@ -31,13 +34,16 @@ export interface BuildReviewFeatureIdentity {
 export interface BuildReviewDispositionRecord {
   readonly version: typeof STORE_VERSION;
   readonly feature: BuildReviewFeatureIdentity;
-  readonly finding: BuildReviewFindingIdentity;
+  readonly finding: BuildReviewAcceptedRiskFinding;
   readonly sourceLapId: BuildReviewLapId;
   readonly summary: string;
   readonly rationale: string;
   readonly operator: string;
   readonly acceptedAt: string;
 }
+
+/** A risk decision binds either the legacy built-in finding or a stamped custom finding. */
+export type BuildReviewAcceptedRiskFinding = BuildReviewFindingIdentity | BuildReviewCustomFindingIdentity;
 
 /** The closed, durable subject of a reduced-coverage decision. */
 export interface BuildReviewReducedCoverageIdentity {
@@ -65,7 +71,7 @@ type BuildReviewStoredDispositionRecord =
 
 export interface BuildReviewDispositionInput {
   readonly feature: BuildReviewFeatureIdentity;
-  readonly finding: BuildReviewFindingIdentity;
+  readonly finding: BuildReviewAcceptedRiskFinding;
   readonly sourceLapId: BuildReviewLapId;
   readonly summary: string;
   readonly rationale: string;
@@ -173,12 +179,99 @@ function parseFeatureIdentity(value: unknown): BuildReviewFeatureIdentity | unde
  * parser: those are two different schemas, and putting one on top of the other
  * made every non-scope identity the engine produced unstorable (#1769).
  */
-function parseFindingIdentity(value: unknown): BuildReviewFindingIdentity | undefined {
+function canonicalJson(value: unknown): string {
+  const sort = (item: unknown): unknown => {
+    if (Array.isArray(item)) return item.map(sort);
+    const source = record(item);
+    return source ? Object.fromEntries(Object.keys(source).sort().map((key) => [key, sort(source[key])])) : item;
+  };
+  return JSON.stringify(sort(value));
+}
+
+function sha256(value: string): string {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
+}
+
+const SHA256 = /^sha256:[a-f0-9]{64}$/;
+const CUSTOM_RUBRIC = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const CUSTOM_SEMANTIC_NAME = /^[A-Za-z][A-Za-z0-9:_.-]{0,127}$/;
+const CUSTOM_CONCERN = /^[A-Za-z][A-Za-z0-9._-]{0,127}$/;
+
+function boundedText(value: unknown, maximum = 4_096): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= maximum;
+}
+
+function parseCustomDeclaration(value: unknown): BuildReviewCustomFindingCanonicalPayload['declaration'] | undefined {
+  const source = record(value);
+  const keys = source?.source === undefined
+    ? ['version', 'rubricId', 'semanticSkill', 'question', 'resources']
+    : ['version', 'rubricId', 'semanticSkill', 'question', 'source', 'resources'];
+  if (!source || !exactKeys(source, keys) || source.version !== 'v1' || !CUSTOM_RUBRIC.test(String(source.rubricId)) ||
+    !CUSTOM_SEMANTIC_NAME.test(String(source.semanticSkill)) || !boundedText(source.question) ||
+    (source.source !== undefined && source.source !== 'project' && source.source !== 'global' && source.source !== 'plugin') ||
+    !Array.isArray(source.resources) || !source.resources.every((resource) => parseBuildReviewCanonicalPathReference(resource) !== undefined) ||
+    new Set(source.resources).size !== source.resources.length) return undefined;
+  return {
+    version: 'v1', rubricId: source.rubricId as string, semanticSkill: source.semanticSkill as string,
+    question: source.question as string, ...(source.source === undefined ? {} : { source: source.source as 'project' | 'global' | 'plugin' }),
+    resources: source.resources as string[],
+  };
+}
+
+function parseCustomFindingPayload(value: unknown): BuildReviewCustomFindingCanonicalPayload | undefined {
+  const source = record(value);
+  if (!source || !exactKeys(source, ['version', 'rubric', 'declaration', 'policy', 'candidate', 'reviewedInput', 'concernId', 'sourceRegions']) ||
+    source.version !== 'v1' || !CUSTOM_RUBRIC.test(String(source.rubric)) || !CUSTOM_CONCERN.test(String(source.concernId))) return undefined;
+  const declaration = parseCustomDeclaration(source.declaration);
+  const policy = record(source.policy);
+  const candidate = record(source.candidate);
+  const reviewedInput = record(source.reviewedInput);
+  if (!declaration || declaration.rubricId !== source.rubric || !policy || !exactKeys(policy, ['version', 'bundleDigest']) ||
+    policy.version !== 'v1' || typeof policy.bundleDigest !== 'string' || !SHA256.test(policy.bundleDigest) ||
+    !candidate || !exactKeys(candidate, ['provider', 'model', 'effort']) || !boundedText(candidate.provider, 64) ||
+    !boundedText(candidate.model, 256) || !boundedText(candidate.effort, 64) || !reviewedInput ||
+    !exactKeys(reviewedInput, ['version', 'contentDigest']) || reviewedInput.version !== 'v1' ||
+    typeof reviewedInput.contentDigest !== 'string' || !SHA256.test(reviewedInput.contentDigest) || !Array.isArray(source.sourceRegions) || source.sourceRegions.length === 0) return undefined;
+  const sourceRegions = source.sourceRegions.map((entry) => {
+    const region = record(entry);
+    return region && exactKeys(region, ['path', 'startLine', 'endLine', 'contentHash']) &&
+      parseBuildReviewCanonicalPathReference(region.path) !== undefined && Number.isInteger(region.startLine) && (region.startLine as number) > 0 &&
+      Number.isInteger(region.endLine) && (region.endLine as number) >= (region.startLine as number) &&
+      typeof region.contentHash === 'string' && SHA256.test(region.contentHash)
+      ? { path: region.path as string, startLine: region.startLine as number, endLine: region.endLine as number, contentHash: region.contentHash }
+      : undefined;
+  });
+  if (sourceRegions.some((region) => !region)) return undefined;
+  const regions = sourceRegions as BuildReviewCustomFindingCanonicalPayload['sourceRegions'][number][];
+  const sorted = [...regions].sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
+  if (new Set(sorted.map(canonicalJson)).size !== sorted.length || sorted.some((region, index) => canonicalJson(region) !== canonicalJson(regions[index]))) return undefined;
+  return {
+    version: 'v1', rubric: source.rubric as string, declaration,
+    policy: { version: 'v1', bundleDigest: policy.bundleDigest as string },
+    candidate: { provider: candidate.provider as string, model: candidate.model as string, effort: candidate.effort as string },
+    reviewedInput: { version: 'v1', contentDigest: reviewedInput.contentDigest as string },
+    concernId: source.concernId as string, sourceRegions: regions,
+  };
+}
+
+function rehydrateCustomFindingIdentity(value: unknown): BuildReviewCustomFindingIdentity | undefined {
+  const payload = parseCustomFindingPayload(value);
+  if (!payload) return undefined;
+  const canonicalJsonValue = canonicalJson(payload);
+  return { id: sha256(canonicalJsonValue), canonicalPayload: payload, canonicalJson: canonicalJsonValue };
+}
+
+/** Rehydrates the closed built-in or custom accepted-risk identity from its canonical payload. */
+export function rehydrateBuildReviewAcceptedRiskFinding(value: unknown): BuildReviewAcceptedRiskFinding | undefined {
+  return rehydrateBuildReviewFindingIdentity(value) ?? rehydrateCustomFindingIdentity(value);
+}
+
+function parseFindingIdentity(value: unknown): BuildReviewAcceptedRiskFinding | undefined {
   const source = record(value);
   if (!source || !exactKeys(source, ['id', 'canonicalPayload', 'canonicalJson']) || typeof source.id !== 'string' || typeof source.canonicalJson !== 'string') {
     return undefined;
   }
-  const canonical = rehydrateBuildReviewFindingIdentity(source.canonicalPayload);
+  const canonical = rehydrateBuildReviewAcceptedRiskFinding(source.canonicalPayload);
   return canonical && canonical.id === source.id && canonical.canonicalJson === source.canonicalJson ? canonical : undefined;
 }
 
