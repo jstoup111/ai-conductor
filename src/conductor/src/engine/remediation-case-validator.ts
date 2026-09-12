@@ -23,7 +23,25 @@ export type RemediationCaseGraphRejection =
   | 'refutation-without-refuted-assertion'
   | 'refutation-confidence-not-high'
   | 'invalid-refute-effect'
-  | 'provider-durable-id';
+  | 'provider-durable-id'
+  | 'missing-consistency-source'
+  | 'duplicate-consistency-source'
+  | 'unknown-consistency-source'
+  | 'missing-consistency-case-reference'
+  | 'duplicate-consistency-case-reference'
+  | 'unknown-consistency-case-reference'
+  | 'missing-consistency-rationale'
+  | 'unknown-existing-case'
+  | 'missing-admission-task'
+  | 'duplicate-admission-task'
+  | 'unknown-admission-task'
+  | 'missing-admission-rationale';
+
+/** Engine-supplied identities; provider output cannot expand either set. */
+export interface RemediationCaseValidationReferences {
+  readonly existingCaseIds?: readonly string[];
+  readonly admittedTaskIds?: readonly string[];
+}
 
 export interface ProposedRemediationCase {
   readonly case: RemediationCaseRow;
@@ -57,17 +75,37 @@ function hasProviderDurableId(caseRow: RemediationCaseRow): boolean {
   return ['caseId', 'effectId', 'id'].some((key) => hasOwn(candidate, key) || hasOwn(effect, key));
 }
 
-function validateEffect(caseRow: RemediationCaseRow): RemediationCaseGraphRejection | undefined {
+function validateEffect(
+  caseRow: RemediationCaseRow,
+  judgement: RemediationCaseJudgement,
+  references: RemediationCaseValidationReferences,
+): RemediationCaseGraphRejection | undefined {
   const effect = caseRow.effect as unknown as Record<string, unknown>;
   if (caseRow.disposition === 'act') {
     if (effect.kind !== 'action' || effect.route !== 'build' || !Array.isArray(effect.tasks) || effect.tasks.length === 0) {
       return 'invalid-action-effect';
     }
-    return effect.tasks.every((task) => (
+    if (!effect.tasks.every((task) => (
       typeof task === 'object'
       && task !== null
       && nonEmptyString((task as Record<string, unknown>).title)
-    )) ? undefined : 'invalid-action-effect';
+    ))) return 'invalid-action-effect';
+    if (judgement.mode !== 'case-v2') return undefined;
+    const admittedTaskIds = new Set(references.admittedTaskIds ?? []);
+    for (const task of effect.tasks) {
+      const admission = task as Record<string, unknown>;
+      if (!Array.isArray(admission.admittedTaskIds) || admission.admittedTaskIds.length === 0) {
+        return 'missing-admission-task';
+      }
+      if (!nonEmptyString(admission.admissionRationale)) return 'missing-admission-rationale';
+      const seen = new Set<string>();
+      for (const taskId of admission.admittedTaskIds) {
+        if (!nonEmptyString(taskId) || !admittedTaskIds.has(taskId)) return 'unknown-admission-task';
+        if (seen.has(taskId)) return 'duplicate-admission-task';
+        seen.add(taskId);
+      }
+    }
+    return undefined;
   }
   if (caseRow.disposition === 'defer') {
     return effect.kind === 'deferral' && nonEmptyString(effect.exclusionRationale)
@@ -99,6 +137,36 @@ function outcomeMatchesDisposition(
     || (outcome === 'refuted' && disposition === 'refute');
 }
 
+function validateConsistency(
+  currentSources: ReadonlySet<string>,
+  casesByRef: ReadonlyMap<string, RemediationCaseRow>,
+  judgement: Extract<RemediationCaseJudgement, { readonly mode: 'case-v2' }>,
+): RemediationCaseGraphRejection | undefined {
+  const consistency = judgement.consistency as unknown as Record<string, unknown>;
+  if (!nonEmptyString(consistency.rationale)) return 'missing-consistency-rationale';
+  if (!Array.isArray(consistency.sourceIds)) return 'missing-consistency-source';
+  const consistencySources = new Set<string>();
+  for (const sourceId of consistency.sourceIds) {
+    if (!nonEmptyString(sourceId) || !currentSources.has(sourceId)) return 'unknown-consistency-source';
+    if (consistencySources.has(sourceId)) return 'duplicate-consistency-source';
+    consistencySources.add(sourceId);
+  }
+  for (const sourceId of currentSources) {
+    if (!consistencySources.has(sourceId)) return 'missing-consistency-source';
+  }
+  if (!Array.isArray(consistency.caseRefs)) return 'missing-consistency-case-reference';
+  const consistencyCases = new Set<string>();
+  for (const caseRef of consistency.caseRefs) {
+    if (!nonEmptyString(caseRef) || !casesByRef.has(caseRef)) return 'unknown-consistency-case-reference';
+    if (consistencyCases.has(caseRef)) return 'duplicate-consistency-case-reference';
+    consistencyCases.add(caseRef);
+  }
+  for (const caseRef of casesByRef.keys()) {
+    if (!consistencyCases.has(caseRef)) return 'missing-consistency-case-reference';
+  }
+  return undefined;
+}
+
 /**
  * Validates a provider result as one all-or-nothing graph over the frozen
  * current source set. It has no persistence or effect boundary: callers only
@@ -107,6 +175,7 @@ function outcomeMatchesDisposition(
 export function validateRemediationCaseGraph(
   currentSourceIds: readonly string[],
   judgement: RemediationCaseJudgement,
+  references: RemediationCaseValidationReferences = {},
 ): ValidateRemediationCaseGraphResult {
   const currentSources = new Set<string>();
   for (const sourceId of currentSourceIds) {
@@ -117,7 +186,11 @@ export function validateRemediationCaseGraph(
   const casesByRef = new Map<string, RemediationCaseRow>();
   for (const caseRow of judgement.cases) {
     if (hasProviderDurableId(caseRow)) return { ok: false, reason: 'provider-durable-id' };
-    const effectError = validateEffect(caseRow);
+    if (judgement.mode === 'case-v2' && caseRow.existingCaseId &&
+      !(references.existingCaseIds ?? []).includes(caseRow.existingCaseId)) {
+      return { ok: false, reason: 'unknown-existing-case' };
+    }
+    const effectError = validateEffect(caseRow, judgement, references);
     if (effectError) return { ok: false, reason: effectError };
 
     const prior = casesByRef.get(caseRow.caseRef);
@@ -140,7 +213,11 @@ export function validateRemediationCaseGraph(
 
     const caseRow = casesByRef.get(source.caseRef);
     if (!caseRow) return { ok: false, reason: 'unknown-case-reference' };
-    if (!outcomeMatchesDisposition(source.outcome, caseRow.disposition)) {
+    if (source.outcome === 'escalate') {
+      if (judgement.mode !== 'case-v2' || caseRow.disposition !== 'escalate') {
+        return { ok: false, reason: 'contradictory-source-outcome' };
+      }
+    } else if (!outcomeMatchesDisposition(source.outcome, caseRow.disposition)) {
       return { ok: false, reason: 'contradictory-source-outcome' };
     }
 
@@ -155,6 +232,10 @@ export function validateRemediationCaseGraph(
   }
   for (const caseRow of judgement.cases) {
     if (!sourcesByCase.has(caseRow.caseRef)) return { ok: false, reason: 'unreferenced-case' };
+  }
+  if (judgement.mode === 'case-v2') {
+    const consistencyError = validateConsistency(currentSources, casesByRef, judgement);
+    if (consistencyError) return { ok: false, reason: consistencyError };
   }
 
   return {
