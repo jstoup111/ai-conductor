@@ -2,8 +2,10 @@ import { join } from 'node:path';
 
 import type { BuildReviewRubricId } from '../types/config.js';
 import {
+  parseBuildReviewCanonicalPathReference,
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
+  type BuildReviewInfrastructureFailureReason,
   type BuildReviewLapId,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
@@ -19,25 +21,50 @@ export type BuildReviewArtifactRubric = BuildReviewRubricId | string;
  * intentionally separate from the current catalog: historical evidence must
  * not need today's configuration in order to remain attributable.
  */
+export interface BuildReviewCustomDeclaration {
+  readonly version: 'v1';
+  readonly rubricId: string;
+  readonly semanticSkill: string;
+  readonly question: string;
+  readonly source?: 'project' | 'global' | 'plugin';
+  readonly resources: readonly string[];
+}
+
 export interface BuildReviewCustomEvidenceDescriptor {
   readonly version: 'v1';
   readonly semanticSkill: string;
-  readonly declaration: {
-    readonly version: 'v1'; readonly rubricId: string; readonly semanticSkill: string;
-    readonly question: string; readonly source?: 'project' | 'global' | 'plugin'; readonly resources: readonly string[];
-  };
+  readonly declaration: BuildReviewCustomDeclaration;
   readonly installation: { readonly source: 'project' | 'global' | 'plugin'; readonly plugin?: { readonly id: string; readonly version?: string } };
   readonly effectivePolicy: { readonly version: 'v1'; readonly bundleDigest: string };
   readonly reviewedInput: { readonly version: 'v1'; readonly contentDigest: string };
   readonly producer: { readonly provider: string; readonly model: string; readonly effort: string };
 }
 
+export type BuildReviewCustomInfrastructureFailureReason =
+  | BuildReviewInfrastructureFailureReason
+  | 'policy-load-failed';
+
+const CUSTOM_INFRASTRUCTURE_FAILURE_REASONS = new Set<BuildReviewCustomInfrastructureFailureReason>([
+  'policy-load-failed', 'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact',
+  'stale-artifact', 'identity-mismatch', 'preflight-failed', 'artifact-read-failed',
+  'artifact-write-failed', 'scope-incomplete',
+]);
+
+export function isBuildReviewCustomInfrastructureFailureReason(
+  value: unknown,
+): value is BuildReviewCustomInfrastructureFailureReason {
+  return typeof value === 'string' && CUSTOM_INFRASTRUCTURE_FAILURE_REASONS.has(value as BuildReviewCustomInfrastructureFailureReason);
+}
+
 export type BuildReviewCustomArtifactResult =
   | { readonly kind: 'judged'; readonly contractVersion: 'custom-v1'; readonly rubric: string; readonly lapId: string; readonly declaration: BuildReviewCustomEvidenceDescriptor['declaration']; readonly policy: BuildReviewCustomEvidenceDescriptor['effectivePolicy']; readonly candidate: BuildReviewCustomEvidenceDescriptor['producer']; readonly reviewedInput: BuildReviewCustomEvidenceDescriptor['reviewedInput']; readonly findings: readonly unknown[]; readonly verdict: 'PASS' | 'FAIL'; readonly identity: { readonly id: string; readonly canonicalPayload: unknown; readonly canonicalJson: string } }
-  | { readonly kind: 'infrastructure-failure'; readonly rubric: string; readonly reason: string; readonly detail: string };
+  | { readonly kind: 'infrastructure-failure'; readonly rubric: string; readonly reason: BuildReviewCustomInfrastructureFailureReason; readonly detail: string };
 
 export interface BuildReviewCustomArtifactMember {
+  /** Present for a judged result; never trusted for an infrastructure failure. */
   readonly descriptor?: BuildReviewCustomEvidenceDescriptor;
+  /** A declared policy may fail before effective content or producer provenance exists. */
+  readonly declaration?: BuildReviewCustomDeclaration;
   readonly result: BuildReviewCustomArtifactResult;
 }
 
@@ -63,6 +90,8 @@ export interface BuildReviewBranchArtifact {
   readonly reuse?: { readonly sourceLapId: BuildReviewLapId; readonly sourceSnapshotDigest: string };
   /** Required for custom judged evidence; forbidden for unjudged failures. */
   readonly descriptor?: BuildReviewCustomEvidenceDescriptor;
+  /** Validated declared obligation for a custom failure with unavailable content. */
+  readonly declaration?: BuildReviewCustomDeclaration;
 }
 
 /** Injected so branch-artifact tests never write to the host filesystem. */
@@ -106,16 +135,26 @@ function stringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every(isNonEmptyString) && new Set(value).size === value.length;
 }
 
+export function parseBuildReviewCustomDeclaration(value: unknown): BuildReviewCustomDeclaration | undefined {
+  const declaration = value as Record<string, unknown> | undefined;
+  const sourceKeys = declaration?.source === undefined ? ['version', 'rubricId', 'semanticSkill', 'question', 'resources'] : ['version', 'rubricId', 'semanticSkill', 'question', 'source', 'resources'];
+  if (!declaration || !exactKeys(declaration, sourceKeys) || declaration.version !== 'v1' || !isCustomRubric(declaration.rubricId) ||
+    !isNonEmptyString(declaration.semanticSkill) || !isNonEmptyString(declaration.question) ||
+    (declaration.source !== undefined && !['project', 'global', 'plugin'].includes(declaration.source as string)) ||
+    !stringArray(declaration.resources) ||
+    !declaration.resources.every((resource) => parseBuildReviewCanonicalPathReference(resource) !== undefined)) return undefined;
+  return declaration as unknown as BuildReviewCustomDeclaration;
+}
+
 function parseCustomDescriptor(value: unknown): BuildReviewCustomEvidenceDescriptor | undefined {
   const source = typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
   if (!source || !exactKeys(source, ['version', 'semanticSkill', 'declaration', 'installation', 'effectivePolicy', 'reviewedInput', 'producer']) || source.version !== 'v1' || !isNonEmptyString(source.semanticSkill)) return undefined;
-  const declaration = source.declaration as Record<string, unknown> | undefined;
   const installation = source.installation as Record<string, unknown> | undefined;
   const policy = source.effectivePolicy as Record<string, unknown> | undefined;
   const input = source.reviewedInput as Record<string, unknown> | undefined;
   const producer = source.producer as Record<string, unknown> | undefined;
-  const sourceKeys = declaration?.source === undefined ? ['version', 'rubricId', 'semanticSkill', 'question', 'resources'] : ['version', 'rubricId', 'semanticSkill', 'question', 'source', 'resources'];
-  if (!declaration || !installation || !policy || !input || !producer || !exactKeys(declaration, sourceKeys) || declaration.version !== 'v1' || !isCustomRubric(declaration.rubricId) || !isNonEmptyString(declaration.semanticSkill) || declaration.semanticSkill !== source.semanticSkill || !isNonEmptyString(declaration.question) || (declaration.source !== undefined && !['project', 'global', 'plugin'].includes(declaration.source as string)) || !stringArray(declaration.resources) || !exactKeys(policy, ['version', 'bundleDigest']) || policy.version !== 'v1' || !isNonEmptyString(policy.bundleDigest) || !exactKeys(input, ['version', 'contentDigest']) || input.version !== 'v1' || !isNonEmptyString(input.contentDigest) || !exactKeys(producer, ['provider', 'model', 'effort']) || !isNonEmptyString(producer.provider) || !isNonEmptyString(producer.model) || !isNonEmptyString(producer.effort)) return undefined;
+  const declaration = parseBuildReviewCustomDeclaration(source.declaration);
+  if (!declaration || !installation || !policy || !input || !producer || declaration.semanticSkill !== source.semanticSkill || !exactKeys(policy, ['version', 'bundleDigest']) || policy.version !== 'v1' || !isNonEmptyString(policy.bundleDigest) || !exactKeys(input, ['version', 'contentDigest']) || input.version !== 'v1' || !isNonEmptyString(input.contentDigest) || !exactKeys(producer, ['provider', 'model', 'effort']) || !isNonEmptyString(producer.provider) || !isNonEmptyString(producer.model) || !isNonEmptyString(producer.effort)) return undefined;
   const plugin = installation.plugin as Record<string, unknown> | undefined;
   const installationKeys = plugin === undefined ? ['source'] : ['source', 'plugin'];
   const pluginKeys = plugin?.version === undefined ? ['id'] : ['id', 'version'];
@@ -130,8 +169,12 @@ export function parseBuildReviewCustomArtifactMember(value: unknown): BuildRevie
   const result = source.result as Record<string, unknown> | undefined;
   if (!result) return undefined;
   if (result.kind === 'infrastructure-failure') {
-    if (!exactKeys(source, ['result']) || !exactKeys(result, ['kind', 'rubric', 'reason', 'detail']) || !isCustomRubric(result.rubric) || !isNonEmptyString(result.reason) || !isNonEmptyString(result.detail)) return undefined;
-    return { result: result as BuildReviewCustomArtifactResult };
+    const declaration = source.declaration === undefined ? undefined : parseBuildReviewCustomDeclaration(source.declaration);
+    if (!exactKeys(source, declaration === undefined ? ['result'] : ['declaration', 'result']) || !exactKeys(result, ['kind', 'rubric', 'reason', 'detail']) || !isCustomRubric(result.rubric) || !isBuildReviewCustomInfrastructureFailureReason(result.reason) || !isNonEmptyString(result.detail) || (declaration !== undefined && declaration.rubricId !== result.rubric)) return undefined;
+    return {
+      ...(declaration === undefined ? {} : { declaration }),
+      result: result as Extract<BuildReviewCustomArtifactResult, { readonly kind: 'infrastructure-failure' }>,
+    };
   }
   if (result.kind !== 'judged' || !exactKeys(source, ['descriptor', 'result'])) return undefined;
   const descriptor = parseCustomDescriptor(source.descriptor);
@@ -179,13 +222,17 @@ export function parseBuildReviewBranchArtifact(value: unknown): BuildReviewBranc
   const isV2 = candidate.version === ARTIFACT_VERSION;
   const expected = isV1
     ? ['version', 'rubric', 'lapId', 'snapshotDigest', 'result', 'provenance']
-    : ['version', 'rubric', 'lapId', 'snapshotDigest', 'result', 'provenance', ...(candidate.descriptor === undefined ? [] : ['descriptor']), ...(candidate.reuse === undefined ? [] : ['reuse'])];
+    : ['version', 'rubric', 'lapId', 'snapshotDigest', 'result', 'provenance', ...(candidate.descriptor === undefined ? [] : ['descriptor']), ...(candidate.declaration === undefined ? [] : ['declaration']), ...(candidate.reuse === undefined ? [] : ['reuse'])];
   if (!exactKeys(candidate, expected) || (!isV1 && !isV2) || !isNonEmptyString(candidate.snapshotDigest)) return undefined;
   const lapId = parseBuildReviewLapId(candidate.lapId);
   const provenance = parseProvenance(candidate.provenance);
   if (!lapId || !provenance) return undefined;
   const builtin = isRubric(candidate.rubric) ? strictResult(candidate.result) : undefined;
-  const custom = isV2 && isCustomRubric(candidate.rubric) ? parseBuildReviewCustomArtifactMember({ ...(candidate.descriptor === undefined ? {} : { descriptor: candidate.descriptor }), result: candidate.result }) : undefined;
+  const custom = isV2 && isCustomRubric(candidate.rubric) ? parseBuildReviewCustomArtifactMember({
+    ...(candidate.descriptor === undefined ? {} : { descriptor: candidate.descriptor }),
+    ...(candidate.declaration === undefined ? {} : { declaration: candidate.declaration }),
+    result: candidate.result,
+  }) : undefined;
   const result = builtin ?? custom?.result;
   if (!result || result.rubric !== candidate.rubric) return undefined;
   if (builtin && builtin.kind === 'judged' && (builtin.lapId !== lapId || builtin.snapshotDigest !== candidate.snapshotDigest)) return undefined;
@@ -194,7 +241,9 @@ export function parseBuildReviewBranchArtifact(value: unknown): BuildReviewBranc
   if (reuse !== undefined && (!custom || custom.result.kind !== 'judged' || !exactKeys(reuse, ['sourceLapId', 'sourceSnapshotDigest']) || !parseBuildReviewLapId(reuse.sourceLapId) || !isNonEmptyString(reuse.sourceSnapshotDigest))) return undefined;
   return {
     version: candidate.version as BuildReviewArtifactVersion, rubric: candidate.rubric as BuildReviewArtifactRubric, lapId, snapshotDigest: candidate.snapshotDigest,
-    result, provenance, ...(custom?.descriptor === undefined ? {} : { descriptor: custom.descriptor }),
+    result, provenance,
+    ...(custom?.descriptor === undefined ? {} : { descriptor: custom.descriptor }),
+    ...(custom?.declaration === undefined ? {} : { declaration: custom.declaration }),
     ...(reuse === undefined ? {} : { reuse: { sourceLapId: reuse.sourceLapId as BuildReviewLapId, sourceSnapshotDigest: reuse.sourceSnapshotDigest as string } }),
   };
 }

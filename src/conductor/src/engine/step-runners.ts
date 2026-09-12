@@ -2450,14 +2450,29 @@ export class DefaultStepRunner implements StepRunner {
     lapId: BuildReviewLapId,
     tier: ConductState['complexity_tier'],
   ): Promise<{ readonly id: string; readonly success: boolean; readonly output: string; readonly member?: BuildReviewCustomArtifactMember }> {
+    const declaration = {
+      version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
+      question: entry.question,
+      ...(entry.source === undefined ? {} : { source: entry.source as 'project' | 'global' | 'plugin' }),
+      resources: entry.resources,
+    };
+    const failedMember = (reason: import('./build-review-artifacts.js').BuildReviewCustomInfrastructureFailureReason, detail: string): BuildReviewCustomArtifactMember => ({
+      declaration,
+      result: { kind: 'infrastructure-failure', rubric: entry.id, reason, detail },
+    });
     if (!this.providerRuntimes || !this.sessionStore || !this.buildReviewPolicyCatalog) {
-      return { id: entry.id, success: false, output: `build_review custom policy ${entry.id} requires a candidate policy catalog adapter` };
+      const output = `build_review custom policy ${entry.id} requires a candidate policy catalog adapter`;
+      return { id: entry.id, success: true, output, member: failedMember('policy-load-failed', output) };
     }
     const options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'> = {
       prompt: `Build-review custom policy ${entry.id}: the candidate will supply the selected immutable policy contract before judgment. Return only the custom findings payload.`,
       cwd: this.projectDir,
       dangerouslySkipPermissions: true,
     };
+    let failure: { reason: import('./build-review-artifacts.js').BuildReviewCustomInfrastructureFailureReason; detail: string } = {
+      reason: 'provider-error', detail: `custom policy ${entry.id} did not produce a judgment`,
+    };
+    let coverageFailure = false;
     const result = await executeAuxiliaryProviderCandidates({
       step: 'build_review', memberId: entry.id, policy: entry.policy,
       runtimes: this.providerRuntimes, sessions: this.sessionStore.beginBranch(`build-review:${entry.id}`),
@@ -2477,9 +2492,10 @@ export class DefaultStepRunner implements StepRunner {
           ...(entry.source === undefined ? {} : { source: entry.source as InstalledReviewSkill['source'] }),
         }, catalog);
         if (resolved.kind === 'failure') {
+          failure = { reason: 'policy-load-failed', detail: `Installed build-review policy ${entry.skill} is unavailable: ${resolved.failure.code}` };
           return { kind: 'failure' as const, result: {
             success: false, exitCode: 1,
-            output: `Installed build-review policy ${entry.skill} is unavailable: ${resolved.failure.code}`,
+            output: failure.detail,
           } };
         }
         const policy = {
@@ -2492,9 +2508,11 @@ export class DefaultStepRunner implements StepRunner {
             materialParent: join(this.projectDir, '.pipeline', 'build-review', 'policy-material'),
           });
         } catch (error) {
+          coverageFailure = true;
+          failure = { reason: 'policy-load-failed', detail: `Installed build-review policy ${entry.skill} could not be loaded: ${error instanceof Error ? error.message : String(error)}` };
           return { kind: 'failure' as const, result: {
             success: false, exitCode: 1,
-            output: `Installed build-review policy ${entry.skill} could not be loaded: ${error instanceof Error ? error.message : String(error)}`,
+            output: failure.detail,
           } };
         }
         // `invoke` is intentionally the candidate-owned callback. Mutating
@@ -2506,15 +2524,24 @@ export class DefaultStepRunner implements StepRunner {
           scope: `Frozen build-review input ${inputs.sourceSnapshot.contentDigest}.`,
         });
         const invoked = await context.invoke();
-        if (!invoked.success) return { kind: 'failure' as const, result: invoked };
+        if (!invoked.success) {
+          coverageFailure = true;
+          failure = { reason: 'provider-error', detail: invoked.output ?? `Installed build-review policy ${entry.skill} provider failed` };
+          return { kind: 'failure' as const, result: invoked };
+        }
         const raw = extractJudgedResultCandidate(invoked.output);
         const parsed = parseBuildReviewCustomReviewerPayload(raw);
         if (!parsed || parsed.kind === 'unsupported-policy') {
-          return { kind: 'failure' as const, result: {
-            success: false, exitCode: 1,
-            output: parsed?.kind === 'unsupported-policy'
+          coverageFailure = true;
+          failure = {
+            reason: parsed?.kind === 'unsupported-policy' ? 'preflight-failed' : 'malformed-artifact',
+            detail: parsed?.kind === 'unsupported-policy'
               ? `Installed build-review policy ${entry.skill} is unsupported: ${parsed.requirement}`
               : 'Installed build-review policy returned an invalid custom findings payload',
+          };
+          return { kind: 'failure' as const, result: {
+            success: false, exitCode: 1,
+            output: failure.detail,
           } };
         }
         // Provider locations may only refer to a path in the frozen changed
@@ -2522,9 +2549,11 @@ export class DefaultStepRunner implements StepRunner {
         // location to this candidate-owned result before it becomes durable.
         const changedPaths = new Set((inputs.sourceSnapshot.sourceChanges ?? []).map((change) => change.path));
         if (parsed.findings.some((finding) => finding.sourceRegions.some((region) => !changedPaths.has(region.path)))) {
+          coverageFailure = true;
+          failure = { reason: 'malformed-artifact', detail: 'Installed build-review policy cited a source region outside the frozen input' };
           return { kind: 'failure' as const, result: {
             success: false, exitCode: 1,
-            output: 'Installed build-review policy cited a source region outside the frozen input',
+            output: failure.detail,
           } };
         }
         const sourceRegions = parsed.findings.flatMap((finding) => finding.sourceRegions);
@@ -2546,14 +2575,16 @@ export class DefaultStepRunner implements StepRunner {
           reviewedInput: { version: 'v1', contentDigest: inputs.sourceSnapshot.contentDigest },
         }, { sourceRegions });
         if (!stamped) {
+          coverageFailure = true;
+          failure = { reason: 'malformed-artifact', detail: 'Installed build-review policy returned findings that could not be stamped against the frozen input' };
           return { kind: 'failure' as const, result: {
             success: false, exitCode: 1,
-            output: 'Installed build-review policy returned findings that could not be stamped against the frozen input',
+            output: failure.detail,
           } };
         }
         const member: BuildReviewCustomArtifactMember = {
           descriptor: {
-            version: 'v1', semanticSkill: policy.semanticName,
+            version: 'v1', semanticSkill: entry.skill,
             declaration: stamped.declaration,
             installation: {
               source: policy.source,
@@ -2572,7 +2603,13 @@ export class DefaultStepRunner implements StepRunner {
       },
     });
     this.callCount++;
-    const member = result.success ? parseBuildReviewCustomArtifactMember(JSON.parse(result.output)) : undefined;
+    const member = result.success ? (() => {
+      try { return parseBuildReviewCustomArtifactMember(JSON.parse(result.output)); } catch { return undefined; }
+    })() : undefined;
+    if (!result.success) {
+      if (!coverageFailure) return { id: entry.id, success: false, output: result.output ?? failure.detail };
+      return { id: entry.id, success: true, output: result.output ?? failure.detail, member: failedMember(failure.reason, failure.detail) };
+    }
     return {
       id: entry.id,
       success: result.success && member !== undefined,

@@ -1,3 +1,4 @@
+// Covers: task:26
 import { describe, expect, it, vi } from 'vitest';
 
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
@@ -277,14 +278,15 @@ describe('build-review current-lap branch artifacts', () => {
     await expect(readBuildReviewBranchArtifact('/feature', 'security' as never, 'lap-current' as never, 'sha256:snapshot', fs)).resolves.toEqual(artifact);
   });
 
-  it('keeps a custom loading failure distinct from a judged descriptor', () => {
+  it('retains a validated declaration on a custom loading failure without inventing judged provenance', () => {
     const failure = {
       version: 2, rubric: 'security', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot',
+      declaration: customDescriptor.declaration,
       result: { kind: 'infrastructure-failure', rubric: 'security', reason: 'policy-load-failed', detail: 'plugin is unavailable' },
       provenance: { kind: 'fresh' },
     };
 
-    expect(parseBuildReviewBranchArtifact(failure)).toMatchObject({ result: { kind: 'infrastructure-failure' } });
+    expect(parseBuildReviewBranchArtifact(failure)).toMatchObject({ declaration: customDescriptor.declaration, result: { kind: 'infrastructure-failure' } });
     expect(parseBuildReviewBranchArtifact({ ...failure, descriptor: customDescriptor })).toBeUndefined();
   });
 });

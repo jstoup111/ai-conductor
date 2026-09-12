@@ -1,4 +1,4 @@
-// Covers: S3.2, task:3, task:15
+// Covers: S3.2, task:3, task:15, task:26
 import { describe, expect, it } from 'vitest';
 
 import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';

@@ -10,6 +10,7 @@ import {
 import {
   BuildReviewDispositionStore,
   isRetiredBuildReviewRubric,
+  matchesBuildReviewReducedCoverageDisposition,
   type BuildReviewDispositionListResult,
   type BuildReviewDispositionRecord,
   type BuildReviewFeatureIdentity,
@@ -55,6 +56,8 @@ function sameFeature(left: BuildReviewFeatureIdentity, right: BuildReviewFeature
 function applyCurrentCustomEffectiveVerdict(
   aggregate: BuildReviewAggregate,
   effective: BuildReviewEffectiveVerdict,
+  feature: BuildReviewFeatureIdentity,
+  reducedCoverage: readonly import('./build-review-dispositions.js').BuildReviewReducedCoverageDispositionRecord[],
   minConfidence: Partial<Record<string, number>>,
 ): BuildReviewEffectiveVerdict | undefined {
   const customSources = projectBuildReviewCustomSuppressionSources(aggregate);
@@ -62,10 +65,22 @@ function applyCurrentCustomEffectiveVerdict(
   const customJudged = (aggregate.currentCustomRubrics ?? []).filter((rubric) =>
     aggregate.customResults?.[rubric]?.result.kind === 'judged',
   ).length;
-  const customFailure = (aggregate.currentCustomRubrics ?? []).some((rubric) =>
+  const customFailures = (aggregate.currentCustomRubrics ?? []).flatMap((rubric) => {
+    const member = aggregate.customResults?.[rubric];
+    if (member?.result.kind !== 'infrastructure-failure' || member.declaration === undefined) return [];
+    return [{ declaration: member.declaration, reason: member.result.reason }];
+  });
+  const hasCustomFailure = (aggregate.currentCustomRubrics ?? []).some((rubric) =>
     aggregate.customResults?.[rubric]?.result.kind === 'infrastructure-failure',
   );
-  if (customJudged === 0 && !customFailure) return effective;
+  if (customJudged === 0 && !hasCustomFailure) return effective;
+  const uncoveredCustomFailure = customFailures.length !== (aggregate.currentCustomRubrics ?? []).filter((rubric) =>
+    aggregate.customResults?.[rubric]?.result.kind === 'infrastructure-failure',
+  ).length || customFailures.some((member) => !matchesBuildReviewReducedCoverageDisposition(
+    feature,
+    { declaration: member.declaration, reason: member.reason },
+    reducedCoverage,
+  ));
   const unresolved = [...effective.unresolvedFindingIds];
   const suppressed = [...effective.suppressedFindingIds];
   for (const source of customSources) {
@@ -77,7 +92,7 @@ function applyCurrentCustomEffectiveVerdict(
     ...effective,
     verdict: builtinJudged + customJudged > 0 && unresolved.length === 0 &&
       effective.uncoveredInfrastructureFailureRubrics.length === 0 &&
-      (effective.uncoveredScopeIncompleteRubrics?.length ?? 0) === 0 && !customFailure
+      (effective.uncoveredScopeIncompleteRubrics?.length ?? 0) === 0 && !uncoveredCustomFailure
       ? 'PASS'
       : 'FAIL',
     unresolvedFindingIds: Object.freeze(unresolved),
@@ -165,7 +180,9 @@ export async function resolveEffectiveBuildReviewVerdict(
   try {
     const builtinDispositions = dispositions.filter((record) => record.finding.canonicalPayload.rubric === 'testQuality');
     const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, builtinDispositions, reducedCoverageRecords, deps.minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>> | undefined);
-    effective = builtin === undefined ? undefined : applyCurrentCustomEffectiveVerdict(aggregate, builtin, deps.minConfidence ?? {});
+    effective = builtin === undefined ? undefined : applyCurrentCustomEffectiveVerdict(
+      aggregate, builtin, feature, reducedCoverageRecords, deps.minConfidence ?? {},
+    );
   } catch {
     return { ok: false, reason: 'build-review disposition state is invalid' };
   }
