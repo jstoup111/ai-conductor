@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { scrubTmuxEnvironment } from '../execution/child-environment.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { TestSuiteConfig } from '../types/config.js';
+import { resolveFullSuiteCommandEntries } from './full-suite-commands.js';
 
 export const DEFAULT_FULL_SUITE_TIMEOUT_MS = 30 * 60 * 1_000;
 const FULL_SUITE_TERMINATION_GRACE_MS = 100;
@@ -42,6 +43,9 @@ export interface FullSuiteExecutionSuccess extends FullSuiteCommandSuccess {
   startedAt: string;
   endedAt: string;
   durationMs: number;
+  plannedEntryCount?: number;
+  failedEntryIndex?: never;
+  entries?: FullSuiteExecutionAttempt[];
 }
 
 interface FullSuiteExecutionFailureBase {
@@ -53,6 +57,16 @@ interface FullSuiteExecutionFailureBase {
   durationMs: number;
   stdout: string;
   stderr: string;
+  plannedEntryCount?: number;
+  failedEntryIndex?: number;
+  entries?: FullSuiteExecutionAttempt[];
+}
+
+/** A completed list member. Output stays on the aggregate result only. */
+export interface FullSuiteExecutionAttempt {
+  index: number;
+  result: 'passed' | 'failed';
+  durationMs: number;
 }
 
 type FullSuiteExecutionFailureDetails =
@@ -323,52 +337,56 @@ export async function executeFullSuite(
       processTreeCleanup,
     )
   );
-  if (testSuite.command === undefined) {
-    throw new Error('test_suite.command is required for aggregate execution');
+  if (testSuite.command === undefined && testSuite.commands === undefined) {
+    throw new Error('test_suite.command or test_suite.commands is required for aggregate execution');
   }
-  const command = testSuite.command;
-  const cwd = resolve(projectRoot, testSuite.working_directory ?? '.');
-  const timeoutMs = testSuite.timeout_seconds === undefined
-    ? DEFAULT_FULL_SUITE_TIMEOUT_MS
-    : testSuite.timeout_seconds * 1_000;
-  const started = clock();
-  let result: FullSuiteCommandSuccess;
-  try {
-    result = await runner(command, {
-      cwd,
-      env: scrubTmuxEnvironment(environment),
-      shell: true,
-      timeoutMs,
-    });
-  } catch (error) {
-    const failure = errorRecord(error);
-    const classification = classifyFailure(failure);
-    const ended = clock();
-    return {
-      ok: false,
-      ...classification,
-      command,
-      cwd,
-      startedAt: started.toISOString(),
-      endedAt: ended.toISOString(),
-      durationMs: ended.getTime() - started.getTime(),
-      stdout: errorOutput(failure, 'stdout'),
-      stderr: errorOutput(
-        failure,
-        'stderr',
-        classification.reason === 'internal_error',
-      ),
-    };
+  const entries = testSuite.commands === undefined
+    ? [{
+        command: testSuite.command!,
+        working_directory: resolve(projectRoot, testSuite.working_directory ?? '.'),
+        timeout_seconds: testSuite.timeout_seconds ?? DEFAULT_FULL_SUITE_TIMEOUT_MS / 1_000,
+      }]
+    : resolveFullSuiteCommandEntries({ ...testSuite, project_root: projectRoot });
+  const listExecution = testSuite.commands !== undefined;
+  const attempts: FullSuiteExecutionAttempt[] = [];
+  const aggregateStarted = clock();
+  for (const [index, entry] of entries.entries()) {
+    const command = entry.command;
+    const cwd = entry.working_directory;
+    const timeoutMs = entry.timeout_seconds * 1_000;
+    // Scalar execution retains its historical two clock reads. List members
+    // begin at the aggregate start for index zero and at the preceding settle.
+    const started = index === 0 ? aggregateStarted : clock();
+    try {
+      const result = await runner(command, {
+        cwd,
+        env: scrubTmuxEnvironment(environment),
+        shell: true,
+        timeoutMs,
+      });
+      const ended = clock();
+      attempts.push({ index, result: 'passed', durationMs: ended.getTime() - started.getTime() });
+      if (index !== entries.length - 1) continue;
+      return {
+        ok: true, command, cwd,
+        startedAt: aggregateStarted.toISOString(), endedAt: ended.toISOString(),
+        durationMs: ended.getTime() - aggregateStarted.getTime(), ...result,
+        ...(listExecution ? { plannedEntryCount: entries.length, entries: attempts } : {}),
+      };
+    } catch (error) {
+      const failure = errorRecord(error);
+      const classification = classifyFailure(failure);
+      const ended = clock();
+      attempts.push({ index, result: 'failed', durationMs: ended.getTime() - started.getTime() });
+      return {
+        ok: false, ...classification, command, cwd,
+        startedAt: aggregateStarted.toISOString(), endedAt: ended.toISOString(),
+        durationMs: ended.getTime() - aggregateStarted.getTime(),
+        stdout: errorOutput(failure, 'stdout'),
+        stderr: errorOutput(failure, 'stderr', classification.reason === 'internal_error'),
+        ...(listExecution ? { plannedEntryCount: entries.length, failedEntryIndex: index, entries: attempts } : {}),
+      };
+    }
   }
-  const ended = clock();
-
-  return {
-    ok: true,
-    command,
-    cwd,
-    startedAt: started.toISOString(),
-    endedAt: ended.toISOString(),
-    durationMs: ended.getTime() - started.getTime(),
-    ...result,
-  };
+  throw new Error('test_suite.commands must not be empty');
 }
