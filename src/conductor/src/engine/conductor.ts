@@ -14498,6 +14498,7 @@ export class Conductor {
         replay: transitionReplay,
         invalidated: verdict.kickedBack,
         preserved: verdict.preservedGates ?? [],
+        preservedCandidates: verdict.preservedCandidates ?? [],
         reverified: verdict.reverified,
       });
       if (transition.stateResult === 'refused') {

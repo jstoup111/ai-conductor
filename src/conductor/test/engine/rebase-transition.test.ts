@@ -1,10 +1,29 @@
 import { describe, expect, it, afterEach } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { applyRebaseTransition } from '../../src/engine/rebase-transition.js';
+
+function preservedCandidate(gate: 'prd_audit', checkedAt = 2) {
+  const original = { satisfied: true, checkedAt, reason: 'approved' };
+  // The production caller uses this same JSON digest to bind the candidate to
+  // the original verdict captured before transition writes begin.
+  const originalVerdictDigest = createHash('sha256').update(JSON.stringify(original)).digest('hex');
+  return {
+    gate,
+    original: {
+      artifactDigest: originalVerdictDigest,
+      attemptId: `${checkedAt}`,
+      runId: `${checkedAt}`,
+      codeStamp: 'a',
+    },
+    originalVerdictDigest,
+    relevantInputIdentities: [],
+  };
+}
 
 const dirs: string[] = [];
 afterEach(async () => { while (dirs.length) await rm(dirs.pop()!, { recursive: true, force: true }); });
@@ -24,6 +43,7 @@ describe('applyRebaseTransition', () => {
       replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
       invalidated: ['build_review', 'manual_test'],
       preserved: ['prd_audit'],
+      preservedCandidates: [preservedCandidate('prd_audit')],
     });
     expect(result.stateResult).toBe('applied');
     expect(JSON.parse(await (await import('node:fs/promises')).readFile(join(dir, '.pipeline/conduct-state.json'), 'utf8'))).toMatchObject({ build_review: 'pending', manual_test: 'skipped', acceptance_specs: 'done' });
@@ -31,6 +51,11 @@ describe('applyRebaseTransition', () => {
     expect((await readVerdict(dir, 'prd_audit'))?.preservation).toMatchObject({
       gate: 'prd_audit',
       operationId: 'operation-1',
+      original: {
+        attemptId: '2',
+        runId: '2',
+        codeStamp: 'a',
+      },
       replay: { expectedTree: 'e' },
     });
   });
@@ -47,6 +72,7 @@ describe('applyRebaseTransition', () => {
       replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
       invalidated: ['build_review'] as const,
       preserved: [] as const,
+      preservedCandidates: [] as const,
     };
     expect((await applyRebaseTransition(input)).stateResult).toBe('applied');
     expect((await applyRebaseTransition(input)).stateResult).toBe('already-applied');
@@ -78,6 +104,7 @@ describe('applyRebaseTransition', () => {
       replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
       invalidated: ['build_review'],
       preserved: ['prd_audit'],
+      preservedCandidates: [preservedCandidate('prd_audit', 1)],
     });
 
     expect(result.stateResult).toBe('applied');

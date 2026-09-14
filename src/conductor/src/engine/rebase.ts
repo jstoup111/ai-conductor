@@ -1,4 +1,5 @@
 import { execa } from 'execa';
+import { createHash } from 'node:crypto';
 import { writeFile, readFile, access, mkdir, rename } from 'node:fs/promises';
 import { join, isAbsolute, relative, basename, resolve, dirname } from 'node:path';
 import type { CiRepairDiagnosticReason, StepName } from '../types/index.js';
@@ -37,6 +38,7 @@ import {
 } from './rebase-replay.js';
 import type { ReplayEvidence } from './gate-verdicts.js';
 import { isApplicableOriginalPass } from './gate-code-validity.js';
+import type { RebasePreservedCandidate } from './rebase-transition.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -1677,14 +1679,14 @@ export async function runGatedRebaseResolution(opts: {
 async function applicableOriginalPass(
   projectRoot: string,
   gate: StepName,
-): Promise<boolean> {
+): Promise<GateVerdict | undefined> {
   const verdict = await readVerdict(projectRoot, gate);
-  if (!isApplicableOriginalPass(verdict)) return false;
+  if (!isApplicableOriginalPass(verdict)) return undefined;
 
   const completion = await checkGateCompletion(projectRoot, gate);
-  if (!completion.done) return false;
+  if (!completion.done) return undefined;
 
-  return true;
+  return verdict;
 }
 
 /**
@@ -1714,6 +1716,8 @@ export async function applyRebaseVerdicts(
   preserved?: Array<{ gate: StepName; basis: 'test_suite_drift_budget' }>;
   /** The replay-aware decision actually applied to gate records. */
   preservedGates?: StepName[];
+  /** Immutable original PASS candidates consumed by the transition service. */
+  preservedCandidates?: RebasePreservedCandidate[];
   replay?: ReplayEvidence;
 }> {
   if (outcome.kind === 'conflict_halt' || outcome.kind === 'setup_stop') {
@@ -1823,10 +1827,34 @@ export async function applyRebaseVerdicts(
       : classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
     : undefined;
   const applicablePreservations = new Set<StepName>();
+  const preservedCandidates: RebasePreservedCandidate[] = [];
+  // Only the replay classifier has immutable candidate provenance. The legacy
+  // path retains its existing gate-selection behavior but cannot mint bounded
+  // replay authority from a path-only preservation.
+  const replayCandidates = replayComparison && partition !== undefined
+    ? partition.candidates
+    : [];
   if (partition !== undefined) {
-    for (const candidate of partition.preserved as StepName[]) {
-      const original = await applicableOriginalPass(projectRoot, candidate);
-      if (original) applicablePreservations.add(candidate);
+    for (const gate of partition.preserved as StepName[]) {
+      const original = await applicableOriginalPass(projectRoot, gate);
+      if (original) applicablePreservations.add(gate);
+      const classified = replayCandidates.find((candidate) => candidate.gate === gate);
+      if (original && classified) {
+        const originalIdentity = `${original.checkedAt}`;
+        preservedCandidates.push({
+          gate,
+          original: {
+            artifactDigest: createHash('sha256').update(JSON.stringify(original)).digest('hex'),
+            attemptId: originalIdentity,
+            runId: originalIdentity,
+            codeStamp: replayComparison?.identity.preRebaseHead ?? '',
+          },
+          originalVerdictDigest: createHash('sha256').update(JSON.stringify(original)).digest('hex'),
+          relevantInputIdentities: classified.source.activeInputs.map(
+            (path) => `${path}@${replayComparison?.identity.completedHead ?? ''}`,
+          ),
+        });
+      }
     }
   }
   const unprovedPreservations = partition === undefined
@@ -1867,6 +1895,7 @@ export async function applyRebaseVerdicts(
     kickedBack,
     reverified,
     ...([...applicablePreservations].length === 0 ? {} : { preservedGates: [...applicablePreservations] }),
+    ...(preservedCandidates.length === 0 ? {} : { preservedCandidates }),
     ...(preserved.length === 0 ? {} : { preserved }),
     ...(replayComparison ? { replay: {
           preRebaseHead: replayComparison.identity.preRebaseHead,
