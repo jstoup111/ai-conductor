@@ -14,7 +14,7 @@ import {
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/state.js';
 
-// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, S3.2, S3.3, S3.5, S3.6, task:1, task:2, task:3, task:4, task:5
+// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, S2.3, S2.4, S2.5, S3.2, S3.3, S3.5, S3.6, task:1, task:2, task:3, task:4, task:5, task:6
 
 const temporaryDirectories: string[] = [];
 
@@ -98,6 +98,11 @@ function sharedLeaseFilesystem(): ConductStateLeaseFilesystem & {
       }
     },
   };
+}
+
+function successorClaimPath(statePath: string, ownerToken: string, predecessorToken: string): string {
+  const slot = createHash('sha256').update(JSON.stringify([ownerToken, predecessorToken])).digest('hex');
+  return `${statePath}.lease/recovery.${slot}.json`;
 }
 
 describe('conduct-state lease', () => {
@@ -392,7 +397,9 @@ describe('conduct-state lease', () => {
     }).acquire();
     if (!acquired.ok) throw new Error(acquired.message);
     const claims = claimFactory(statePath);
-    for (const [path, claim] of claims) await filesystem.writeRecoveryClaim(path, JSON.stringify(claim));
+    for (const [path, claim] of claims as Array<[string, unknown]>) {
+      await filesystem.writeRecoveryClaim(path, JSON.stringify(claim));
+    }
 
     const released = await acquired.handle.release();
 
@@ -428,6 +435,96 @@ describe('conduct-state lease', () => {
       stillHeld: shared.hasDirectory(`${statePath}.lease`),
     }).toEqual({
       released: { ok: false, message: 'Conduct-state lease ownership was lost before release' },
+      stillHeld: true,
+    });
+  });
+
+  it.each([
+    ['a truncated successor', () => '{"version": 1, "pid":'],
+    ['an unsupported successor', () => JSON.stringify({ version: 2, pid: 303, token: 'successor', claimedAt: '1970-01-01T00:00:00.000Z' })],
+    ['an owner-mismatched successor', () => JSON.stringify({
+      version: 1, pid: 303, token: 'successor', claimedAt: '1970-01-01T00:00:00.000Z', ownerToken: 'other-owner', predecessorToken: 'root-claim',
+    })],
+    ['a predecessor-mismatched successor', () => JSON.stringify({
+      version: 1, pid: 303, token: 'successor', claimedAt: '1970-01-01T00:00:00.000Z', ownerToken: 'dead-owner', predecessorToken: 'other-claim',
+    })],
+    ['a repeated successor identity', () => JSON.stringify({
+      version: 1, pid: 303, token: 'root-claim', claimedAt: '1970-01-01T00:00:00.000Z', ownerToken: 'dead-owner', predecessorToken: 'root-claim',
+    })],
+  ])('refuses recovery through %s without moving the lease', async (_case, successor) => {
+    const statePath = '/worktree/inconsistent-successor/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared,
+      pid: 101,
+      newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    await shared.writeRecoveryClaim(`${statePath}.lease/recovery.json`, JSON.stringify({
+      version: 1, pid: 202, token: 'root-claim', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'dead-owner', predecessorToken: null,
+    }));
+    await shared.writeRecoveryClaim(
+      successorClaimPath(statePath, 'dead-owner', 'root-claim'),
+      (successor as () => string)(),
+    );
+    let claimWrites = 0;
+    let moves = 0;
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async writeRecoveryClaim(path, contents): Promise<void> {
+        claimWrites += 1;
+        if (claimWrites > 2) throw new Error('repeated successor traversal');
+        await shared.writeRecoveryClaim(path, contents);
+      },
+      async moveDirectory(path, destination): Promise<void> {
+        moves += 1;
+        await shared.moveDirectory(path, destination);
+      },
+    };
+
+    const result = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 404,
+      newToken: () => 'contender',
+      processIsLive: () => false,
+    }).acquire();
+
+    expect({ result, moves, stillHeld: shared.hasDirectory(`${statePath}.lease`) }).toMatchObject({
+      result: { ok: false, kind: 'recovery_refused', message: 'Unable to recover conduct-state lease: recovery claim is invalid or inconsistent' },
+      moves: 0,
+      stillHeld: true,
+    });
+  });
+
+  it('refuses recovery when claimant liveness is unverifiable', async () => {
+    const statePath = '/worktree/unverifiable-claimant/.pipeline/conduct-state.json';
+    const filesystem = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 101,
+      newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    await filesystem.writeRecoveryClaim(`${statePath}.lease/recovery.json`, JSON.stringify({
+      version: 1, pid: 202, token: 'claimant', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'dead-owner', predecessorToken: null,
+    }));
+
+    const result = await createConductStateLease(statePath, {
+      filesystem,
+      processIsLive: (candidatePid) => {
+        if (candidatePid === 202) throw new Error('probe denied');
+        return false;
+      },
+    }).acquire();
+
+    expect({ result, stillHeld: filesystem.hasDirectory(`${statePath}.lease`) }).toEqual({
+      result: {
+        ok: false,
+        kind: 'recovery_refused',
+        message: 'Unable to recover conduct-state lease: recovery claimant liveness is unverifiable (probe denied)',
+      },
       stillHeld: true,
     });
   });
