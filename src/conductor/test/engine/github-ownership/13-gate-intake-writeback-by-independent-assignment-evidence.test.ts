@@ -11,6 +11,7 @@ import {
 import type { Ledger } from '../../../src/engine/engineer/intake/ledger.js';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 import { dispatchEngineer } from '../../../src/engine/engineer-cli.js';
+import { backfillIntakeLabels } from '../../../src/engine/engineer/intake/backfill.js';
 
 const REPOSITORY = 'acme/intake';
 const SOURCE_REF = `${REPOSITORY}#17`;
@@ -136,6 +137,36 @@ describe('intake writeback — independent assignment authorization', () => {
 
     await expect(intake.report(SOURCE_REF, 'done', { prUrl: 'https://github.com/acme/owned/pull/9' })).resolves.toMatchObject({ ok: false });
     expect(fake.mutations).toEqual([]);
+  });
+
+  it('routes intake-backfill labels through fresh assignment authorization with no raw fallback', async () => {
+    const authorizedFake = terminal(['alice']);
+    const authorizedReport = await backfillIntakeLabels([
+      { ref: SOURCE_REF, body: '', labels: [] },
+    ], {
+      gh: authorizedFake.gh,
+      cwd: '/fixture/worktree',
+      resolveActor: async () => ({ resolved: true, id: 'alice' }),
+    });
+
+    expect(authorizedReport.labelled).toHaveLength(1);
+    // Each issue-label write receives a fresh assignment read. Shared label
+    // creation has no approval and therefore never reaches this fake boundary.
+    expect(authorizedFake.assignmentReads).toHaveLength(2);
+    expect(authorizedFake.mutations).toHaveLength(2);
+    expect(authorizedFake.mutations.every((args) => args[0] === 'api' && args.includes('POST'))).toBe(true);
+
+    const refusedFake = terminal(['bob']);
+    const refusedReport = await backfillIntakeLabels([
+      { ref: SOURCE_REF, body: '', labels: [] },
+    ], {
+      gh: refusedFake.gh,
+      cwd: '/fixture/worktree',
+      resolveActor: async () => ({ resolved: true, id: 'alice' }),
+    });
+
+    expect(refusedReport.failed).toMatchObject([{ ref: SOURCE_REF }]);
+    expect(refusedFake.mutations).toEqual([]);
   });
 
   it('uses the same independent assignment guard for engineer forget comment, close, and cleanup', async () => {
