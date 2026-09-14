@@ -31,6 +31,8 @@ fails ~often on refactors and relocations because its revert-preflight classific
 
 > **Amended 2026-09-10 by #1986:** membership also admits explicitly enabled project-declared custom rubrics through the effective catalog, under adr-2026-09-10-portable-build-review-policy D1/D7. The built-in member remains default-off; empty-container PASS, retired-key handling, and the prohibition on rubric-driven plan growth remain unchanged.
 
+> **Amended 2026-09-14 by #2034:** the registry gains a second built-in member, `security` (`skills/build-review-security/SKILL.md`), **enabled: false by default** like test-quality. Its question is whether the whole feature diff since the merge base introduces a security defect in a closed set of classes (the five named in #2034 plus the diff-gradable OWASP Top 10 categories, ten in all). This is the member this decision's Context anticipated; it is not a project-declared custom rubric. #2034 records the membership decision for this rubric only; #2020 keeps the general catalog-membership and blocking-authority question. Empty-container PASS, retired-key handling, and the prohibition on rubric-driven plan growth remain unchanged.
+
 2. **Retired rubric keys** (`scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`,
    `wiring`) stay on the accepted-key list and are ignored with a one-time `config_deprecated_key`
    warning naming the key and this ADR — the adr-2026-08-14 wiring precedent, extended. They are
@@ -55,6 +57,8 @@ fails ~often on refactors and relocations because its revert-preflight classific
    the four-rubric enumerations in the amended ADRs are narrowed to the registry, not re-cut by hand.
 
 > **Amended 2026-09-10 by #1986:** the built-in contract remains specialized. Custom members use a separate versioned finding contract and self-describing policy identity through all evidence, cache, disposition, and recovery consumers (adr-2026-09-10-portable-build-review-policy D6/D7); they do not broaden the test-quality vocabulary.
+
+> **Amended 2026-09-14 by #2034:** the `security` member reuses every preserved contract in decision 4 with its own closed `concernKind` vocabulary and a `content-region` `locus` anchor over normalized hunk content; it has no preflight, no scope resolutions, and no counterfactual evidence. It never produces a `beyond` record: see adr-2026-08-21-review-bound-by-plan-done-when-criteria decision 3 as amended by #2034.
 
 5. S-tier: build_review runs for S exactly as for L (adr-2026-07-21 D4 holds); with the container
    empty it is a no-dispatch PASS at every tier.

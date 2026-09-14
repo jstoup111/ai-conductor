@@ -55,6 +55,8 @@ The ownership map is:
 
 > **Amended 2026-08-31 by #2088:** the map gains one question — *Does the cited plan task's `Done when` assert the story criterion it is claimed to cover?* — owned by the `coverage_binding` step (default off; `adr-2026-08-31-coverage-binding-judge-step` D4–D7), judged before BUILD from the criterion text and the `Done when` block alone. It may halt `needs-human`; it never appends a task and never routes to `plan`, so the appender clause and `prd_audit`'s completion authority are untouched.
 
+> **Amended 2026-09-14 by #2034:** the map gains one question — *Does the diff introduce a security defect?* — owned by the build_review `security` rubric (opt-in; adr-2026-08-22-build-review-opt-in-rubric-container decision 1 as amended by #2034), judged over the whole feature diff since the merge base. The incidental security bullets in `skills/code-review/SKILL.md` are removed in the same change so the substance has one owner. Its findings enter the shared build-review adjudicator like every other rubric's; it may fail a lap, it never appends a task and never routes to `plan`, so the appender clause and `prd_audit`'s completion authority are untouched.
+
 The `scope`, `completeness`, and `rootCause` rubrics are retired and deleted with their exemptions,
 projections, vocabularies, fixtures, and tests (FR-23). `prd_audit` replaces `completeness` as the
 completion authority wherever an ADR named it; those ADRs carry an amendment note and keep their
