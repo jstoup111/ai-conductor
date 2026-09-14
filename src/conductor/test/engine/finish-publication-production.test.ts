@@ -16,10 +16,38 @@ import type { BuildReviewDispositionRecord } from '../../src/engine/build-review
 import { routeFinishPublicationDisposition } from '../../src/engine/finish-publication.js';
 import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
+import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
 import type { dispatchFinishRecord } from '../../src/engine/finish-record-cli.js';
 import type { ConductState } from '../../src/types/index.js';
 
 const commandResult = { stdout: '' };
+
+/**
+ * Fixture-owned terminal boundary. The production coordinator sees only the
+ * typed runner; this adapter lets legacy in-memory PR fixtures retain their
+ * body state without a real GitHub call.
+ */
+function guardedOperations(
+  gh: (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>,
+): GithubOperationRunner {
+  return {
+    async run(request) {
+      if (request.target.kind !== 'pull-request') throw new Error('unexpected non-PR operation');
+      const prUrl = `https://github.com/${request.target.repository}/pull/${request.target.number}`;
+      if (request.operation === 'pull-request.edit') {
+        const body = request.payload && 'body' in request.payload ? request.payload.body : undefined;
+        if (typeof body !== 'string') throw new Error('missing edit body');
+        await gh(['pr', 'edit', prUrl, '--body', body], { cwd: '/fixture' });
+        return {};
+      }
+      if (request.operation === 'pull-request.ready') {
+        await gh(['pr', 'ready', prUrl], { cwd: '/fixture' });
+        return {};
+      }
+      throw new Error(`unexpected operation: ${request.operation}`);
+    },
+  };
+}
 
 describe('production FINISH publication composition', () => {
   it.each([
@@ -646,13 +674,18 @@ describe('production FINISH publication composition', () => {
       finding, sourceLapId: parseBuildReviewLapId('lap-7')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
     };
     const gh = vi.fn(async () => commandResult);
+    const operations = { run: vi.fn(async () => ({})) };
 
     await expect(publishAcceptedBuildReviewRiskToRetainedPr({
-      prUrl: 'https://github.com/acme/conductor/pull/1', body: '## Summary', records: [accepted], gh, cwd: '/project',
+      prUrl: 'https://github.com/acme/conductor/pull/1', body: '## Summary', records: [accepted], operations,
     })).resolves.toEqual({ ok: true, changed: true });
-    expect(gh).toHaveBeenCalledWith(expect.arrayContaining(['pr', 'edit', 'https://github.com/acme/conductor/pull/1', '--body']), { cwd: '/project' });
+    expect(operations.run).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'pull-request.edit',
+      target: { repository: 'acme/conductor', kind: 'pull-request', number: 1 },
+    }));
+    expect(gh).not.toHaveBeenCalled();
     await expect(publishAcceptedBuildReviewRiskToRetainedPr({
-      prUrl: 'https://github.com/acme/conductor/pull/1', body: '## Summary', records: [{ ...accepted, rationale: '' }], gh, cwd: '/project',
+      prUrl: 'https://github.com/acme/conductor/pull/1', body: '## Summary', records: [{ ...accepted, rationale: '' }], operations,
     })).resolves.toMatchObject({ ok: false });
   });
 
