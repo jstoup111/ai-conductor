@@ -304,6 +304,107 @@ describe('mergeable-sweep native CI state + bounded CI-fix dispatch', () => {
     expect(persisted.lastCiFixAt).toBeDefined();
   });
 
+  it.each([
+    ['not-started', async () => ({ kind: 'not-started' as const }), true],
+    ['branch-gone', async () => ({ kind: 'branch-gone' as const }), true],
+    ['noop', async () => ({ kind: 'noop' as const }), false],
+    ['failed', async () => ({ kind: 'failed' as const, stage: 'provider' as const }), false],
+    ['published', async () => ({ kind: 'published' as const }), false],
+    ['unknown result', async () => undefined, false],
+    ['thrown dispatch', async () => { throw new Error('ambiguous dispatch failure'); }, false],
+  ])('reconciles the reservation only for direct %s proof', async (_name, dispatch, refunds) => {
+    const prUrl = 'https://github.com/acme/widget/pull/1';
+    const priorTimestamp = '2026-07-01T00:00:00.000Z';
+    await enrollWatch(projectRoot, {
+      prUrl,
+      slug: 'widget',
+      repoCwd: projectRoot,
+      ciFixAttempts: 1,
+      lastCiFixAt: priorTimestamp,
+      ciFailureDetected: true,
+    });
+    const calls: GhCall[] = [];
+    const observedAtDispatch: WatchEntry[] = [];
+
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: makeGh({ [prUrl]: { checks: FAILED_CHECKS } }, calls),
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async (reserved) => {
+          observedAtDispatch.push({ ...reserved });
+          return dispatch();
+        },
+        now: () => new Date('2026-07-08T12:00:00.000Z'),
+      },
+    });
+
+    expect(observedAtDispatch).toMatchObject([{
+      ciFixAttempts: 2,
+      lastCiFixAt: '2026-07-08T12:00:00.000Z',
+      ciFailureDetected: true,
+    }]);
+    const [persisted] = await readEntries(projectRoot);
+    expect(persisted).toMatchObject({
+      ciFixAttempts: refunds ? 1 : 2,
+      lastCiFixAt: refunds ? priorTimestamp : '2026-07-08T12:00:00.000Z',
+      ciFailureDetected: true,
+    });
+  });
+
+  it('refunds an absent prior timestamp without erasing this sweep’s failure detection', async () => {
+    const prUrl = 'https://github.com/acme/widget/pull/1';
+    await enrollWatch(projectRoot, { prUrl, slug: 'widget', repoCwd: projectRoot });
+
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: makeGh({ [prUrl]: { checks: FAILED_CHECKS } }, []),
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async () => ({ kind: 'not-started' }),
+        now: () => new Date('2026-07-08T12:00:00.000Z'),
+      },
+    });
+
+    const [persisted] = await readEntries(projectRoot);
+    expect(persisted).toMatchObject({ ciFixAttempts: 0, ciFailureDetected: true });
+    expect(persisted.lastCiFixAt).toBeUndefined();
+  });
+
+  it('leaves local publication charged until a later remote-green sweep resets it', async () => {
+    const prUrl = 'https://github.com/acme/widget/pull/1';
+    await enrollWatch(projectRoot, {
+      prUrl, slug: 'widget', repoCwd: projectRoot, ciFixAttempts: 1,
+      lastCiFixAt: '2026-07-01T00:00:00.000Z', ciFailureDetected: true,
+    });
+
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: makeGh({ [prUrl]: { checks: FAILED_CHECKS } }, []),
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async () => ({ kind: 'published' }),
+        now: () => new Date('2026-07-08T12:00:00.000Z'),
+      },
+    });
+    expect((await readEntries(projectRoot))[0]).toMatchObject({
+      ciFixAttempts: 2,
+      ciFailureDetected: true,
+    });
+
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: makeGh({ [prUrl]: { checks: GREEN_CHECKS } }, []),
+    });
+    expect((await readEntries(projectRoot))[0]).toMatchObject({
+      ciFixAttempts: 0,
+      ciFailureDetected: false,
+    });
+  });
+
   it('TR-3 happy: dispatches at most once per tick — a second eligible failed entry is deferred', async () => {
     const prUrlA = 'https://github.com/acme/widget/pull/1';
     const prUrlB = 'https://github.com/acme/widget/pull/2';
