@@ -560,6 +560,12 @@ The local patterns are semantic reuse: executeAuxiliaryProviderCandidates owns p
 
 **Files:** `src/conductor/src/engine/build-review-dispositions.ts`; `src/conductor/src/engine/build-review-effective.ts`; `src/conductor/test/engine/build-review-dispositions.test.ts`; `src/conductor/test/engine/build-review-effective.test.ts`
 
+> **Amended 2026-09-12 by operator authorization on #2523:** The operator approved repairing the prerequisite artifact/producer path as part of Task 26. This is a bounded file-scope correction for the existing Story 17 outcomes, not new feature scope. Task 23's current failure envelope rejects declaration metadata, and the custom dispatch path returns before assembling durable failure evidence. Preserve the validated declaration (id, semantic skill, question, source, explicit resources) on exhausted custom infrastructure failures and through artifact/aggregate round trips so the existing declaration-and-closed-reason waiver can be matched. Do not fabricate content digests or judged results, weaken the minimum-judged-coverage rule, or broaden operator waivers. Task 26 owns this prerequisite repair and its integration proof; previously completed tasks retain their status.
+
+**Files:** `src/conductor/src/engine/build-review-artifacts.ts`; `src/conductor/src/engine/step-runners.ts`; `src/conductor/src/engine/build-review-aggregate.ts`; `src/conductor/test/engine/build-review-artifacts.test.ts`; `src/conductor/test/engine/build-review-aggregate.test.ts`; `src/conductor/test/integration/build-review-custom-policy.integration.test.ts`; `src/conductor/test/engine/step-runners.test.ts`
+
+The additional Files declaration extends the original list above. Change aggregate code only where required to preserve and consume this failure evidence. Verify through the custom-policy dispatch boundary that an exhausted first-load failure retains the declaration without claiming content was loaded, and that exact current operator coverage can apply with a healthy judged sibling while changed declarations/reasons and wholly unjudged laps remain blocked. Run only the affected checks through the scoped runner; the existing aggregate gate owns the full-suite run.
+
 **Dependencies:** Task 1, Task 23
 
 ### Task 27: Expose custom operator decisions through existing CLI and late-state checks

@@ -1,4 +1,4 @@
-// Covers: task:10
+// Covers: task:10, task:1
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -8,7 +8,9 @@ import {
   getBuildReviewRubricDescriptor,
   isRegisteredRubric,
 } from '../../src/engine/build-review-registry.js';
+import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-config.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 
 describe('engine/build-review-registry', () => {
   it('registers only the test-quality rubric with its versioned execution descriptor', () => {
@@ -26,9 +28,26 @@ describe('engine/build-review-registry', () => {
     expect(Object.values(BUILD_REVIEW_RUBRIC_REGISTRY).every(Object.isFrozen)).toBe(true);
   });
 
-  it('recognizes only registered rubrics', () => {
+  it('recognizes only built-in rubrics; custom policy ids stay out of the registry', () => {
+    const config = resolveBuildReviewConfig({
+      build_review: {
+        custom_rubrics: {
+          kotlinPolicy: {
+            skill: 'kotlin-review',
+            question: 'Does this change preserve Kotlin API compatibility?',
+            enabled: true,
+          },
+        },
+      },
+    } as HarnessConfig);
+
     expect(isRegisteredRubric('testQuality')).toBe(true);
     expect(isRegisteredRubric('completeness')).toBe(false);
+    expect(isRegisteredRubric('kotlinPolicy')).toBe(false);
+    expect(config.catalog).toContainEqual(expect.objectContaining({
+      id: 'kotlinPolicy',
+      kind: 'custom',
+    }));
     expect(getBuildReviewRubricDescriptor('testQuality')).toBe(
       BUILD_REVIEW_RUBRIC_REGISTRY.testQuality,
     );

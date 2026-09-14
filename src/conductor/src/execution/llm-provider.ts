@@ -1,4 +1,5 @@
 import type { ObservedInterval } from './observed-interval.js';
+import type { BuildReviewContainmentResult } from '../engine/build-review-containment.js';
 
 export interface TokenUsage {
   /**
@@ -243,6 +244,36 @@ export interface InvokeResult {
   safetyDiagnostics?: readonly string[];
 }
 
+/**
+ * A containment result prepared for one custom-policy build-review candidate.
+ * It stays optional so ordinary BUILD and general custom-step invocations
+ * retain their existing writable process contracts.
+ */
+export type BuildReviewAccessProfile = BuildReviewContainmentResult;
+
+/** Convert a rejected review boundary into a non-launching provider result. */
+export function reviewAccessRefusal(
+  provider: 'claude' | 'codex',
+  profile: BuildReviewAccessProfile | undefined,
+): InvokeResult | undefined {
+  if (!profile) return undefined;
+  if (profile.provider !== provider) {
+    return {
+      success: false,
+      output: `Build-review read-only profile is for ${profile.provider}, not ${provider}. Recovery action: prepare containment for ${provider} before review.`,
+      exitCode: 1,
+      providerUnavailable: false,
+    };
+  }
+  if (profile.kind === 'ready') return undefined;
+  return {
+    success: false,
+    output: `Build-review read-only profile is unsupported for ${provider}: ${profile.reason}. Recovery action: ${profile.recovery}.`,
+    exitCode: 1,
+    providerUnavailable: false,
+  };
+}
+
 export interface InvokeOptions {
   prompt: string;
   systemPrompt?: string;
@@ -289,6 +320,11 @@ export interface InvokeOptions {
   diagnosticLog?: (message: string) => void;
   /** Set only for the resolved self-host provider candidate. */
   selfHost?: SelfHostInvocation;
+  /**
+   * A proved read-only boundary for a custom-policy build-review candidate.
+   * A rejected profile refuses before any provider preparation or model launch.
+   */
+  reviewAccess?: BuildReviewAccessProfile;
   /**
    * Fired on every observed stdout/stderr activity boundary from the spawned
    * provider subprocess (each streamed JSON event line). Used to drive the

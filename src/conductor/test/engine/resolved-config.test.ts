@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect, vi } from 'vitest';
 import {
   resolveStepConfig,
@@ -16,11 +17,35 @@ import {
   resolveTeardownTimeoutSeconds,
   resolveCoverageBindingConfig,
 } from '../../src/engine/resolved-config.js';
+import {
+  coordinateBuildReviewRubrics,
+  type BuildReviewCoordinationInput,
+} from '../../src/engine/build-review-coordinator.js';
+import type { BuildReviewFrozenInputs } from '../../src/engine/build-review-inputs.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 
 type TeardownTimeoutConfig = HarnessConfig & { teardown_timeout_seconds?: unknown };
 type DispatchStartTimeoutConfig = HarnessConfig & { dispatch_start_timeout_seconds?: unknown };
+
+type EffectiveReviewCatalogMember = {
+  id: string;
+  kind: 'builtin' | 'custom';
+  skill?: string;
+  question?: string;
+  source?: string;
+  resources?: readonly string[];
+  policy: {
+    enabled: boolean;
+    llm_provider: string[];
+    model: string;
+    effort: string;
+    model_fallback_ladder: string[];
+    max_retries: number;
+    escalate: boolean;
+    min_confidence: number;
+  };
+};
 
 describe('engine/resolved-config', () => {
   describe('resolveCoverageBindingConfig', () => {
@@ -292,6 +317,168 @@ describe('engine/resolved-config', () => {
         effort: 'max',
         model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
       });
+    });
+
+    it('publishes enabled custom declarations as immutable tagged catalog members with inherited policy', () => {
+      const resolved = resolveBuildReviewConfig({
+        llm_provider: ['claude', 'codex'],
+        defaults: { model: 'haiku', effort: 'low', max_retries: 1, escalate: false },
+        phases: { BUILD: { effort: 'medium', max_retries: 2, escalate: false } },
+        steps: { build_review: { model: 'opus', effort: 'high', max_retries: 4, escalate: true } },
+        build_review: {
+          rubrics: { testQuality: { enabled: true } },
+          custom_rubrics: {
+            kotlinPolicy: {
+              skill: 'kotlin-review',
+              question: 'Does this change preserve Kotlin API compatibility?',
+              source: 'project',
+              resources: ['references/compatibility.md'],
+              enabled: true,
+              min_confidence: 0.8,
+            },
+          },
+        },
+      } as HarnessConfig) as ReturnType<typeof resolveBuildReviewConfig> & {
+        catalog: readonly EffectiveReviewCatalogMember[];
+      };
+
+      const kotlinPolicy = resolved.catalog.find(({ id }) => id === 'kotlinPolicy');
+      const testQuality = resolved.catalog.find(({ id }) => id === 'testQuality');
+
+      expect(resolved.catalog.map(({ id }) => id)).toEqual(['testQuality', 'kotlinPolicy']);
+      expect(testQuality).toMatchObject({
+        id: 'testQuality',
+        kind: 'builtin',
+        policy: {
+          enabled: true,
+          llm_provider: ['claude', 'codex'],
+          model: 'opus',
+          effort: 'high',
+          model_fallback_ladder: ['fable', 'opus', 'sonnet'],
+          max_retries: 4,
+          escalate: true,
+          min_confidence: 0,
+        },
+      });
+      expect(kotlinPolicy).toMatchObject({
+        id: 'kotlinPolicy',
+        kind: 'custom',
+        skill: 'kotlin-review',
+        question: 'Does this change preserve Kotlin API compatibility?',
+        source: 'project',
+        resources: ['references/compatibility.md'],
+        policy: {
+          enabled: true,
+          llm_provider: ['claude', 'codex'],
+          model: 'opus',
+          effort: 'high',
+          model_fallback_ladder: ['fable', 'opus', 'sonnet'],
+          max_retries: 4,
+          escalate: true,
+          min_confidence: 0.8,
+        },
+      });
+      expect(Object.isFrozen(resolved.catalog)).toBe(true);
+      expect(Object.isFrozen(testQuality)).toBe(true);
+      expect(Object.isFrozen(testQuality?.policy)).toBe(true);
+      expect(Object.isFrozen(testQuality?.policy.llm_provider)).toBe(true);
+      expect(Object.isFrozen(testQuality?.policy.model_fallback_ladder)).toBe(true);
+      expect(Object.isFrozen(kotlinPolicy)).toBe(true);
+      expect(Object.isFrozen(kotlinPolicy?.policy)).toBe(true);
+      expect(Object.isFrozen(kotlinPolicy?.policy.llm_provider)).toBe(true);
+      expect(Object.isFrozen(kotlinPolicy?.policy.model_fallback_ladder)).toBe(true);
+      expect(Object.isFrozen(kotlinPolicy?.kind === 'custom' ? kotlinPolicy.resources : undefined)).toBe(true);
+    });
+
+    it('omits disabled custom declarations and every rubric when the public gate is disabled', () => {
+      const disabledCustom = resolveBuildReviewConfig({
+        build_review: {
+          rubrics: { testQuality: { enabled: true } },
+          custom_rubrics: {
+            kotlinPolicy: {
+              skill: 'kotlin-review',
+              question: 'Does this change preserve Kotlin API compatibility?',
+            },
+          },
+        },
+      } as HarnessConfig) as ReturnType<typeof resolveBuildReviewConfig> & {
+        catalog: readonly { id: string }[];
+      };
+      const disabledGate = resolveBuildReviewConfig({
+        build_review: {
+          enabled: false,
+          rubrics: { testQuality: { enabled: true } },
+          custom_rubrics: {
+            kotlinPolicy: {
+              skill: 'kotlin-review',
+              question: 'Does this change preserve Kotlin API compatibility?',
+              enabled: true,
+            },
+          },
+        },
+      } as HarnessConfig) as ReturnType<typeof resolveBuildReviewConfig> & {
+        catalog: readonly { id: string }[];
+      };
+
+      expect(disabledCustom.catalog.map(({ id }) => id)).toEqual(['testQuality']);
+      expect(disabledGate.catalog).toEqual([]);
+    });
+
+    it('keeps disabled custom declarations out of the catalog and does not call coordinator hooks when the public gate is disabled', async () => {
+      const disabledCustom = resolveBuildReviewConfig({
+        build_review: {
+          custom_rubrics: {
+            kotlinPolicy: {
+              skill: 'kotlin-review',
+              question: 'Does this change preserve Kotlin API compatibility?',
+              enabled: false,
+            },
+          },
+        },
+      } as HarnessConfig) as ReturnType<typeof resolveBuildReviewConfig> & {
+        catalog: readonly EffectiveReviewCatalogMember[];
+      };
+      const disabledGate = resolveBuildReviewConfig({
+        build_review: {
+          enabled: false,
+          custom_rubrics: {
+            kotlinPolicy: {
+              skill: 'kotlin-review',
+              question: 'Does this change preserve Kotlin API compatibility?',
+              enabled: true,
+            },
+          },
+        },
+      } as HarnessConfig) as ReturnType<typeof resolveBuildReviewConfig> & {
+        catalog: readonly EffectiveReviewCatalogMember[];
+      };
+
+      expect(disabledCustom.catalog).toEqual([]);
+      expect(disabledGate.catalog).toEqual([]);
+
+      const preflight = vi.fn(async () => { throw new Error('preflight must not run'); });
+      const readCache = vi.fn(async () => { throw new Error('cache read must not run'); });
+      const dispatchModel = vi.fn(async () => { throw new Error('judge must not run'); });
+      const writeArtifact = vi.fn(async () => { throw new Error('artifact write must not run'); });
+      const writeCache = vi.fn(async () => { throw new Error('cache write must not run'); });
+      const input = {
+        config: disabledGate,
+        inputs: { sourceSnapshot: {} } as BuildReviewFrozenInputs,
+        lapId: 'task-1-disabled-gate' as never,
+        preflight,
+        engineIdentity: { engineStamp: 'task-1', skillDigests: {} },
+        readCache,
+        dispatchModel,
+        writeArtifact,
+        writeCache,
+      } satisfies BuildReviewCoordinationInput;
+
+      await expect(coordinateBuildReviewRubrics(input)).resolves.toEqual({ kind: 'gate-disabled' });
+      expect(preflight).not.toHaveBeenCalled();
+      expect(readCache).not.toHaveBeenCalled();
+      expect(dispatchModel).not.toHaveBeenCalled();
+      expect(writeArtifact).not.toHaveBeenCalled();
+      expect(writeCache).not.toHaveBeenCalled();
     });
   });
 

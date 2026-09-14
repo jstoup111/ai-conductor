@@ -515,3 +515,11 @@ export function resolveScratchHome(options: ResolveScratchHomeOptions): string {
 
   return join(normalize(worktreeRoot), '.daemon', 'scratch', runId, `${attempt}-${provider}`);
 }
+
+/**
+ * Candidate-private bookkeeping for a read-only build review. The containing
+ * provider lease remains the owner and cleanup boundary for this directory.
+ */
+export function resolveReviewScratchHome(options: ResolveScratchHomeOptions): string {
+  return resolveScratchHome(options);
+}

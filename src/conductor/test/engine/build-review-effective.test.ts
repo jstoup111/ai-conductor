@@ -1,9 +1,13 @@
+// Covers: task:26
 import { describe, expect, it } from 'vitest';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewRubricContractVersion } from '../../src/engine/build-review-domain.js';
-import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
+import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
+import { projectBuildReviewSuppressionEntries } from '../../src/engine/build-review-suppression-history.js';
+import type { BuildReviewCustomDeclaration } from '../../src/engine/build-review-artifacts.js';
+import type { BuildReviewReducedCoverageDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 
 const lapId = parseBuildReviewLapId('lap-current')!;
 const root = '/repo';
@@ -13,6 +17,60 @@ type Rubric = 'testQuality';
 const currentContractVersion: BuildReviewRubricContractVersion = 'v3';
 
 const testQualityFinding = { concernKind: 'test-insensitive', summary: 'Actionable finding summary', evidenceLocations: ['test/a.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } };
+const CUSTOM_DIGEST = `sha256:${'c'.repeat(64)}`;
+const customDeclaration: BuildReviewCustomDeclaration = {
+  version: 'v1', rubricId: 'portablePolicy', semanticSkill: 'portable-policy',
+  question: 'Does this preserve the portable policy contract?', source: 'project', resources: ['criteria.md'],
+};
+const customStamp = {
+  rubric: 'portablePolicy', lapId: 'lap-current',
+  declaration: customDeclaration,
+  policy: { version: 'v1', bundleDigest: CUSTOM_DIGEST },
+  candidate: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' },
+  reviewedInput: { version: 'v1', contentDigest: CUSTOM_DIGEST },
+} as const;
+const customReferences = {
+  sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'public boundary' }],
+} as const;
+
+function customAggregate(confidence: number | undefined) {
+  const findings = [{
+    concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+    evidenceLocations: ['src/widget.ts:8'], sourceRegions: customReferences.sourceRegions,
+    ...(confidence === undefined ? {} : { confidence }),
+  }];
+  const judged = stampBuildReviewCustomJudgedResult({ kind: 'custom-findings', version: 'v1', findings }, customStamp, customReferences)!;
+  const descriptor = {
+    version: 'v1', semanticSkill: 'portable-policy', declaration: customStamp.declaration,
+    installation: { source: 'project' }, effectivePolicy: customStamp.policy,
+    reviewedInput: customStamp.reviewedInput, producer: customStamp.candidate,
+  } as const;
+  return {
+    aggregate: joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: { testQuality: { kind: 'judged' as const, rubric: 'testQuality' as const, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: currentContractVersion, findings: [], verdict: 'PASS' as const } },
+      customResults: { portablePolicy: { descriptor, result: judged } }, currentCustomRubrics: ['portablePolicy'],
+    } as never),
+    findingId: judged.findings[0]!.identity.id,
+  };
+}
+
+function customFailureAggregate(
+  declaration: BuildReviewCustomDeclaration = customStamp.declaration,
+  reason: 'policy-load-failed' | 'provider-error' = 'policy-load-failed',
+) {
+  return joinBuildReviewRubricOutcomes({
+    lapId, snapshotDigest: 'sha256:snapshot',
+    results: { testQuality: { kind: 'judged' as const, rubric: 'testQuality' as const, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: currentContractVersion, findings: [], verdict: 'PASS' as const } },
+    customResults: {
+      portablePolicy: {
+        declaration,
+        result: { kind: 'infrastructure-failure' as const, rubric: 'portablePolicy', reason, detail: 'policy could not be loaded' },
+      },
+    },
+    currentCustomRubrics: ['portablePolicy'],
+  } as never);
+}
 
 function reducedCoverageDecision(rubric: Rubric) {
   return { kind: 'reduced-coverage' as const, version: 'v1' as const, feature, identity: { rubric, reason: 'provider-error' as const }, rationale: 'mechanical fault is covered', operator: 'operator', acceptedAt: '2026-08-14T00:00:00.000Z' };
@@ -100,7 +158,7 @@ describe('live build-review effective resolver', () => {
   });
 
   it('recomputes corrected pinned scope and renders an attributed scope-incomplete decision only while it remains current', async () => {
-    const coverage = [{
+    const coverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [{
       kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
       identity: { rubric: 'testQuality' as const, reason: 'scope-incomplete' as const },
       rationale: 'The association cannot be recovered.', operator: 'operator', acceptedAt: '2026-09-06T00:00:00.000Z',
@@ -239,5 +297,95 @@ describe('live build-review effective resolver', () => {
       createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), listReducedCoverage: async () => ({ ok: true as const, records: [] }) }),
     });
     expect(result).toMatchObject({ ok: true, effective: { rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], infrastructureFailureRubrics: [] } });
+  });
+
+  it('applies digestless reduced coverage only to the current custom declaration and closed failure reason', async () => {
+    const raw = customFailureAggregate();
+    const coverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [{
+      kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
+      identity: { declaration: customStamp.declaration, reason: 'policy-load-failed' },
+      rationale: 'The initial policy load is unavailable.', operator: 'operator', acceptedAt: '2026-09-12T00:00:00.000Z',
+    }];
+    const result = await resolveEffectiveBuildReviewVerdict(worktree, raw, {
+      ...identityDeps,
+      createStore: () => ({
+        list: async () => ({ ok: true as const, records: [] }),
+        listReducedCoverage: async () => ({ ok: true as const, records: coverage }),
+      }),
+    });
+
+    expect(result).toMatchObject({ ok: true, effective: { rawVerdict: 'FAIL', verdict: 'PASS', unresolvedFindingIds: [] } });
+  });
+
+  it('keeps changed custom declarations and reasons uncovered', async () => {
+    const coverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [{
+      kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
+      identity: { declaration: customStamp.declaration, reason: 'policy-load-failed' },
+      rationale: 'The initial policy load is unavailable.', operator: 'operator', acceptedAt: '2026-09-12T00:00:00.000Z',
+    }];
+    const resolve = (raw: ReturnType<typeof customFailureAggregate>) => resolveEffectiveBuildReviewVerdict(worktree, raw, {
+      ...identityDeps,
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), listReducedCoverage: async () => ({ ok: true as const, records: coverage }) }),
+    });
+
+    await expect(resolve(customFailureAggregate({ ...customStamp.declaration, question: 'Does this preserve the revised portable policy contract?' }))).resolves.toMatchObject({ ok: true, effective: { verdict: 'FAIL' } });
+    await expect(resolve(customFailureAggregate({ ...customStamp.declaration, source: 'global' }))).resolves.toMatchObject({ ok: true, effective: { verdict: 'FAIL' } });
+    await expect(resolve(customFailureAggregate({ ...customStamp.declaration, resources: ['revised-criteria.md'] }))).resolves.toMatchObject({ ok: true, effective: { verdict: 'FAIL' } });
+    await expect(resolve(customFailureAggregate(customStamp.declaration, 'provider-error'))).resolves.toMatchObject({ ok: true, effective: { verdict: 'FAIL' } });
+  });
+
+  it('does not let custom coverage suppress a healed policy finding or a wholly unjudged lap', async () => {
+    const coverage: readonly BuildReviewReducedCoverageDispositionRecord[] = [{
+      kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
+      identity: { declaration: customStamp.declaration, reason: 'policy-load-failed' },
+      rationale: 'The initial policy load is unavailable.', operator: 'operator', acceptedAt: '2026-09-12T00:00:00.000Z',
+    }];
+    const resolver = (raw: ReturnType<typeof joinBuildReviewRubricOutcomes>) => resolveEffectiveBuildReviewVerdict(worktree, raw, {
+      ...identityDeps,
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), listReducedCoverage: async () => ({ ok: true as const, records: coverage }) }),
+    });
+    const healed = customAggregate(undefined).aggregate;
+    const unjudged = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: { testQuality: { kind: 'skipped' as const, rubric: 'testQuality' as const, reason: 'disabled' as const } },
+      customResults: { portablePolicy: { declaration: customStamp.declaration, result: { kind: 'infrastructure-failure' as const, rubric: 'portablePolicy', reason: 'policy-load-failed' as const, detail: 'policy could not be loaded' } } },
+      currentCustomRubrics: ['portablePolicy'],
+    } as never);
+
+    await expect(resolver(healed)).resolves.toMatchObject({ ok: true, effective: { verdict: 'FAIL', unresolvedFindingIds: [expect.any(String)] } });
+    await expect(resolver(unjudged)).resolves.toMatchObject({ ok: true, effective: { verdict: 'FAIL', unresolvedFindingIds: [] } });
+  });
+
+  it('keeps custom confidence suppression visible, non-blocking, and durably attributable without operator authority', async () => {
+    const { aggregate: raw, findingId } = customAggregate(72);
+    const result = await resolveEffectiveBuildReviewVerdict(worktree, raw, {
+      ...identityDeps,
+      minConfidence: { portablePolicy: 80 },
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), listReducedCoverage: async () => ({ ok: true as const, records: [] }) }),
+    });
+
+    expect(result).toMatchObject({ ok: true, effective: {
+      rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [findingId],
+    } });
+    expect(projectBuildReviewSuppressionEntries({
+      aggregate: raw, suppressedFindingIds: [findingId], floors: { portablePolicy: 80 },
+    })).toEqual([{
+      findingId, rubric: 'portablePolicy', summary: 'The changed boundary lacks compatibility evidence.',
+      confidence: 72, floor: 80, lastSeenLap: 'lap-current',
+    }]);
+  });
+
+  it('leaves a custom finding with missing confidence unresolved and absent from suppression history', async () => {
+    const { aggregate: raw, findingId } = customAggregate(undefined);
+    await expect(resolveEffectiveBuildReviewVerdict(worktree, raw, {
+      ...identityDeps,
+      minConfidence: { portablePolicy: 80 },
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), listReducedCoverage: async () => ({ ok: true as const, records: [] }) }),
+    })).resolves.toMatchObject({ ok: true, effective: {
+      verdict: 'FAIL', unresolvedFindingIds: [findingId], suppressedFindingIds: [],
+    } });
+    expect(projectBuildReviewSuppressionEntries({
+      aggregate: raw, suppressedFindingIds: [findingId], floors: { portablePolicy: 80 },
+    })).toEqual([]);
   });
 });

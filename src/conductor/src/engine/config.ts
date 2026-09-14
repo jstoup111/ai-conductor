@@ -91,6 +91,10 @@ const ARCHITECTURE_REVIEW_AS_BUILT_DEFAULTS = {
   remediation: { enabled: true },
 } as const;
 const BUILD_REVIEW_RUBRIC_IDS = ['testQuality'] as const;
+const MAX_CUSTOM_BUILD_REVIEW_RUBRICS = 32;
+const CUSTOM_BUILD_REVIEW_RUBRIC_ID = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+const CUSTOM_BUILD_REVIEW_FORBIDDEN_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+const CUSTOM_BUILD_REVIEW_SOURCES = new Set(['project', 'global', 'plugin']);
 /** Accepted config-key universe used by the consumer-registry coverage gate. */
 export const CONFIG_CONSUMER_KEY_SETS = {
   top: [
@@ -119,7 +123,8 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'steps.by_tier': ['model', 'effort', 'max_retries'],
   'build_review.adjudication': ['enabled'],
   'build_review.rubrics': ['enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence'],
-  build_review: ['enabled', 'perTaskFloor', 'scopeContainmentEnforced', 'maxParallel', 'adjudication', 'rubrics'],
+  'build_review.custom_rubrics': ['skill', 'question', 'source', 'resources', 'enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence'],
+  build_review: ['enabled', 'perTaskFloor', 'scopeContainmentEnforced', 'maxParallel', 'adjudication', 'rubrics', 'custom_rubrics'],
   ci_watch: ['enabled', 'cooldownMinutes'],
   kickback_escalation: ['enabled'],
   cumulative_kickback_bound: ['enabled'],
@@ -261,6 +266,123 @@ function validateBuildReviewRubrics(
     }
     if (policy.min_confidence !== undefined && (typeof policy.min_confidence !== 'number' || !Number.isInteger(policy.min_confidence) || policy.min_confidence < 0 || policy.min_confidence > 100)) {
       return { type: 'validation_error', message: `${path}.min_confidence must be an integer between 0 and 100` };
+    }
+  }
+  return null;
+}
+
+function validateBuildReviewCustomRubrics(
+  customRubrics: unknown,
+  adjudicationEnabled: boolean,
+): ConfigError | null {
+  if (customRubrics === undefined) return null;
+  if (!isPlainObject(customRubrics)) {
+    return {
+      type: 'validation_error',
+      message: 'build_review.custom_rubrics must be an object',
+    };
+  }
+
+  const declarations = Object.entries(customRubrics);
+  if (declarations.length > MAX_CUSTOM_BUILD_REVIEW_RUBRICS) {
+    return {
+      type: 'validation_error',
+      message: `build_review.custom_rubrics supports at most ${MAX_CUSTOM_BUILD_REVIEW_RUBRICS} declarations`,
+    };
+  }
+
+  const allowedKeys = new Set<string>(CONFIG_CONSUMER_KEY_SETS['build_review.custom_rubrics']);
+  for (const [rubricId, declaration] of declarations) {
+    const path = `build_review.custom_rubrics.${rubricId}`;
+    if (CUSTOM_BUILD_REVIEW_FORBIDDEN_IDS.has(rubricId)) {
+      return { type: 'validation_error', message: `${path} is a forbidden prototype key` };
+    }
+    if (!CUSTOM_BUILD_REVIEW_RUBRIC_ID.test(rubricId)) {
+      return {
+        type: 'validation_error',
+        message: `${path} must be a 1-64 character ASCII letter-leading identifier`,
+      };
+    }
+    if (BUILD_REVIEW_RUBRIC_IDS.includes(rubricId as (typeof BUILD_REVIEW_RUBRIC_IDS)[number])) {
+      return { type: 'validation_error', message: `${path} is a reserved built-in rubric ID` };
+    }
+    if (DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET.has(rubricId)) {
+      return { type: 'validation_error', message: `${path} is a reserved retired rubric ID` };
+    }
+    if (!isPlainObject(declaration)) {
+      return { type: 'validation_error', message: `${path} must be an object` };
+    }
+    for (const key of Object.keys(declaration)) {
+      if (!allowedKeys.has(key)) {
+        return { type: 'validation_error', message: `Unknown key in ${path}: "${key}"` };
+      }
+    }
+    if (typeof declaration.skill !== 'string' || declaration.skill === '') {
+      return { type: 'validation_error', message: `${path}.skill must be a non-empty string` };
+    }
+    if (typeof declaration.question !== 'string' || declaration.question === '') {
+      return { type: 'validation_error', message: `${path}.question must be a non-empty string` };
+    }
+    if (
+      declaration.source !== undefined
+      && (!CUSTOM_BUILD_REVIEW_SOURCES.has(declaration.source as string))
+    ) {
+      return { type: 'validation_error', message: `${path}.source must be project|global|plugin` };
+    }
+    if (
+      declaration.resources !== undefined
+      && (!Array.isArray(declaration.resources)
+        || declaration.resources.some((resource) => typeof resource !== 'string' || resource === ''))
+    ) {
+      return {
+        type: 'validation_error',
+        message: `${path}.resources must be an array of non-empty strings`,
+      };
+    }
+    if (declaration.enabled !== undefined && typeof declaration.enabled !== 'boolean') {
+      return { type: 'validation_error', message: `${path}.enabled must be a boolean` };
+    }
+    const providerError = validateProviderSelection(declaration.llm_provider, `${path}.llm_provider`);
+    if (providerError) return providerError;
+    if (declaration.model !== undefined && typeof declaration.model !== 'string') {
+      return { type: 'validation_error', message: `${path}.model must be a string` };
+    }
+    if (declaration.effort !== undefined && !VALID_EFFORTS.has(declaration.effort as EffortLevel)) {
+      return { type: 'validation_error', message: `${path}.effort must be low|medium|high|xhigh|max` };
+    }
+    if (
+      declaration.model_fallback_ladder !== undefined
+      && (!Array.isArray(declaration.model_fallback_ladder)
+        || declaration.model_fallback_ladder.some((model) => typeof model !== 'string' || model === ''))
+    ) {
+      return {
+        type: 'validation_error',
+        message: `${path}.model_fallback_ladder must be an array of non-empty strings`,
+      };
+    }
+    if (declaration.max_retries !== undefined && typeof declaration.max_retries !== 'number') {
+      return { type: 'validation_error', message: `${path}.max_retries must be a number` };
+    }
+    if (declaration.escalate !== undefined && typeof declaration.escalate !== 'boolean') {
+      return { type: 'validation_error', message: `${path}.escalate must be a boolean` };
+    }
+    if (
+      declaration.min_confidence !== undefined
+      && (typeof declaration.min_confidence !== 'number'
+        || !Number.isInteger(declaration.min_confidence)
+        || declaration.min_confidence < 0
+        || declaration.min_confidence > 100)
+    ) {
+      return {
+        type: 'validation_error',
+        message: `${path}.min_confidence must be an integer between 0 and 100`,
+      };
+    }
+    if (declaration.enabled === true && !adjudicationEnabled) {
+      return {
+        type: 'validation_error',
+        message: `${path} cannot be enabled while build_review.adjudication.enabled is false`,
+      };
     }
   }
   return null;
@@ -1156,7 +1278,7 @@ export function validateConfig(
           key,
           isValid: (value: unknown) => {
             if (key === 'enabled' || key === 'scopeContainmentEnforced') return typeof value === 'boolean';
-            if (key === 'adjudication') return true;
+            if (key === 'adjudication' || key === 'custom_rubrics') return true;
             return key === 'perTaskFloor' || key === 'maxParallel' || key === 'rubrics';
           },
         })),
@@ -1182,6 +1304,12 @@ export function validateConfig(
         deprecatedKeys,
       );
       if (rubricError) return { ok: false, error: rubricError };
+      const adjudicationEnabled = (br.adjudication as Record<string, unknown> | undefined)?.enabled !== false;
+      const customRubricError = validateBuildReviewCustomRubrics(
+        br.custom_rubrics,
+        adjudicationEnabled,
+      );
+      if (customRubricError) return { ok: false, error: customRubricError };
       const activeRubricInput = isPlainObject(rubricInput)
         ? Object.fromEntries(
             Object.entries(rubricInput).filter(

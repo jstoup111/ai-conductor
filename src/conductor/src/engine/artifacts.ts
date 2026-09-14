@@ -2263,7 +2263,14 @@ export function validateBuildReviewVerdict(
   // New fan-out aggregates carry a stricter raw-results envelope in addition
   // to the legacy top-level verdict projection. A malformed envelope must not
   // be ignored merely because its compatibility fields happen to look valid.
-  if (e.aggregateVersion !== undefined && (!parseBuildReviewAggregate(e) || !deriveEffectiveBuildReviewVerdict(e))) {
+  const aggregate = e.aggregateVersion !== undefined ? parseBuildReviewAggregate(e) : undefined;
+  // Custom-only laps intentionally have no built-in effective verdict to
+  // derive here. Their current custom membership is resolved by the shared
+  // disposition resolver below; insisting on the legacy built-in reducer
+  // would make every valid custom FAIL look malformed before it can route.
+  if (e.aggregateVersion !== undefined && (!aggregate || (
+    (aggregate.currentCustomRubrics?.length ?? 0) === 0 && !deriveEffectiveBuildReviewVerdict(e)
+  ))) {
     return { ok: false, reason: `${BUILD_REVIEW_VERDICT} aggregate is incomplete, malformed, or identity-mismatched` };
   }
   if (e.verdict !== 'PASS' && e.verdict !== 'FAIL') {
@@ -2318,7 +2325,11 @@ export function validateBuildReviewVerdict(
       reason: `${BUILD_REVIEW_VERDICT} "verdict" PASS requires every rubric flag to be false (failed: ${failedRubrics.join(', ')})`,
     };
   }
-  if (e.verdict === 'FAIL' && failedRubrics.length === 0) {
+  const customFailure = aggregate?.verdict === 'FAIL' && (aggregate.currentCustomRubrics ?? []).some((rubricName) => {
+    const result = aggregate.customResults?.[rubricName]?.result;
+    return result?.kind === 'infrastructure-failure' || (result?.kind === 'judged' && result.findings.length > 0);
+  });
+  if (e.verdict === 'FAIL' && failedRubrics.length === 0 && !customFailure) {
     return {
       ok: false,
       reason: `${BUILD_REVIEW_VERDICT} "verdict" FAIL requires at least one rubric flag to be true`,

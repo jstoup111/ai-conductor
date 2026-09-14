@@ -13,10 +13,11 @@ const MAX_REFUTATION_ASSERTIONS = 16;
 const MAX_REFUTATION_EVIDENCE = 8;
 
 export type RemediationCaseDomain = 'build_review';
-export type RemediationCaseSourceOutcome = 'acted' | 'deferred' | 'rejected' | 'refuted' | 'merged';
-export type RemediationCaseDisposition = 'act' | 'defer' | 'reject' | 'refute';
+export type RemediationCaseSourceOutcome = 'acted' | 'deferred' | 'rejected' | 'refuted' | 'merged' | 'escalate';
+export type RemediationCaseDisposition = 'act' | 'defer' | 'reject' | 'refute' | 'escalate';
 export type RemediationCasePriority = 'critical' | 'high' | 'medium' | 'low';
 export type RemediationCaseConfidence = 'high' | 'medium' | 'low';
+export type RemediationCaseEscalationOwner = 'product' | 'plan' | 'architecture';
 
 export interface RemediationCaseSourceRow {
   readonly sourceId: string;
@@ -28,6 +29,16 @@ export interface RemediationCaseActionEffect {
   readonly kind: 'action';
   readonly route: 'build';
   readonly tasks: readonly { readonly title: string }[];
+}
+
+export interface RemediationCaseV2ActionEffect {
+  readonly kind: 'action';
+  readonly route: 'build';
+  readonly tasks: readonly {
+    readonly title: string;
+    readonly admittedTaskIds: readonly string[];
+    readonly admissionRationale: string;
+  }[];
 }
 
 export interface RemediationCaseDeferralEffect {
@@ -43,6 +54,7 @@ export interface RemediationCaseNoEffect {
 
 export type RemediationCaseEffect =
   | RemediationCaseActionEffect
+  | RemediationCaseV2ActionEffect
   | RemediationCaseDeferralEffect
   | RemediationCaseNoEffect;
 
@@ -71,14 +83,32 @@ export interface RemediationCaseRow {
   readonly confidence: RemediationCaseConfidence;
   readonly effect: RemediationCaseEffect;
   readonly refutation?: RemediationCaseRefutation;
+  readonly escalation?: { readonly owner: RemediationCaseEscalationOwner };
 }
 
-export interface RemediationCaseJudgement {
+export interface RemediationCaseV1Judgement {
   readonly mode: 'case-v1';
   readonly domain: RemediationCaseDomain;
   readonly sourceOutcomes: readonly RemediationCaseSourceRow[];
   readonly cases: readonly RemediationCaseRow[];
 }
+
+export interface RemediationCaseV2Consistency {
+  readonly verdict: 'consistent' | 'blocked';
+  readonly sourceIds: readonly string[];
+  readonly caseRefs: readonly string[];
+  readonly rationale: string;
+}
+
+export interface RemediationCaseV2Judgement {
+  readonly mode: 'case-v2';
+  readonly domain: RemediationCaseDomain;
+  readonly sourceOutcomes: readonly RemediationCaseSourceRow[];
+  readonly cases: readonly RemediationCaseRow[];
+  readonly consistency: RemediationCaseV2Consistency;
+}
+
+export type RemediationCaseJudgement = RemediationCaseV1Judgement | RemediationCaseV2Judgement;
 
 export type RemediationCaseArtifactRejection =
   | 'missing-or-stale-artifact'
@@ -88,6 +118,7 @@ export type RemediationCaseArtifactRejection =
   | 'unknown-domain'
   | 'invalid-source-keys'
   | 'invalid-source-outcome'
+  | 'invalid-consistency'
   | 'invalid-case-keys'
   | 'invalid-case-disposition'
   | 'invalid-case-priority'
@@ -96,6 +127,8 @@ export type RemediationCaseArtifactRejection =
   | 'invalid-deferral-effect'
   | 'invalid-reject-effect'
   | 'invalid-refute-effect'
+  | 'invalid-escalate-effect'
+  | 'invalid-escalation'
   | 'invalid-refutation'
   | 'malformed-refutation-evidence';
 
@@ -123,33 +156,56 @@ function oneOf<T extends string>(value: unknown, values: readonly T[]): value is
   return typeof value === 'string' && values.includes(value as T);
 }
 
-function parseSourceRow(value: unknown): ParseResult<RemediationCaseSourceRow> {
+function parseSourceRow(value: unknown, mode: RemediationCaseJudgement['mode']): ParseResult<RemediationCaseSourceRow> {
   if (!isRecord(value) || !hasExactKeys(value, ['sourceId', 'outcome', 'caseRef'])) {
     return { ok: false, reason: 'invalid-source-keys' };
   }
   if (!isBoundedString(value.sourceId, MAX_REFERENCE_LENGTH) || !isBoundedString(value.caseRef, MAX_REFERENCE_LENGTH)) {
     return { ok: false, reason: 'invalid-source-keys' };
   }
-  if (!oneOf(value.outcome, ['acted', 'deferred', 'rejected', 'refuted', 'merged'] as const)) {
+  if (!oneOf(value.outcome, mode === 'case-v2'
+    ? ['acted', 'deferred', 'rejected', 'refuted', 'merged', 'escalate'] as const
+    : ['acted', 'deferred', 'rejected', 'refuted', 'merged'] as const)) {
     return { ok: false, reason: 'invalid-source-outcome' };
   }
   return { ok: true, value: { sourceId: value.sourceId, outcome: value.outcome, caseRef: value.caseRef } };
 }
 
-function parseEffect(value: unknown, disposition: RemediationCaseDisposition): ParseResult<RemediationCaseEffect> {
-  if (!isRecord(value)) return { ok: false, reason: disposition === 'act' ? 'invalid-action-effect' : disposition === 'defer' ? 'invalid-deferral-effect' : disposition === 'refute' ? 'invalid-refute-effect' : 'invalid-reject-effect' };
+function parseEffect(
+  value: unknown,
+  disposition: RemediationCaseDisposition,
+  mode: RemediationCaseJudgement['mode'],
+): ParseResult<RemediationCaseEffect> {
+  if (!isRecord(value)) return { ok: false, reason: disposition === 'act' ? 'invalid-action-effect' : disposition === 'defer' ? 'invalid-deferral-effect' : disposition === 'refute' ? 'invalid-refute-effect' : disposition === 'escalate' ? 'invalid-escalate-effect' : 'invalid-reject-effect' };
   if (disposition === 'act') {
     if (!hasExactKeys(value, ['kind', 'route', 'tasks']) || value.kind !== 'action' || value.route !== 'build' || !Array.isArray(value.tasks) || value.tasks.length === 0 || value.tasks.length > MAX_ACTION_TASKS) {
       return { ok: false, reason: 'invalid-action-effect' };
     }
-    const tasks: { title: string }[] = [];
+    const tasks: ({ title: string } | { title: string; admittedTaskIds: string[]; admissionRationale: string })[] = [];
     for (const task of value.tasks) {
-      if (!isRecord(task) || !hasExactKeys(task, ['title']) || !isBoundedString(task.title)) {
+      const expectedKeys = mode === 'case-v2'
+        ? ['title', 'admittedTaskIds', 'admissionRationale']
+        : ['title'];
+      if (!isRecord(task) || !hasExactKeys(task, expectedKeys) || !isBoundedString(task.title)) {
         return { ok: false, reason: 'invalid-action-effect' };
       }
-      tasks.push({ title: task.title });
+      if (mode === 'case-v2') {
+        if (!Array.isArray(task.admittedTaskIds) || task.admittedTaskIds.length === 0 || task.admittedTaskIds.length > MAX_ACTION_TASKS || !task.admittedTaskIds.every((id) => isBoundedString(id, MAX_REFERENCE_LENGTH)) || !isBoundedString(task.admissionRationale)) {
+          return { ok: false, reason: 'invalid-action-effect' };
+        }
+        tasks.push({ title: task.title, admittedTaskIds: task.admittedTaskIds, admissionRationale: task.admissionRationale });
+      } else {
+        tasks.push({ title: task.title });
+      }
     }
-    return { ok: true, value: { kind: 'action', route: 'build', tasks } };
+    return { ok: true, value: mode === 'case-v2'
+      ? { kind: 'action', route: 'build', tasks: tasks as { title: string; admittedTaskIds: string[]; admissionRationale: string }[] }
+      : { kind: 'action', route: 'build', tasks: tasks as { title: string }[] } };
+  }
+  if (disposition === 'escalate') {
+    return hasExactKeys(value, ['kind']) && value.kind === 'none'
+      ? { ok: true, value: { kind: 'none' } }
+      : { ok: false, reason: 'invalid-escalate-effect' };
   }
   if (disposition === 'defer' || disposition === 'refute') {
     if (disposition === 'refute' && hasExactKeys(value, ['kind']) && value.kind === 'none') {
@@ -198,22 +254,28 @@ function parseRefutation(value: unknown): ParseResult<RemediationCaseRefutation>
   return { ok: true, value: { claim: value.claim, assertions } };
 }
 
-function parseCaseRow(value: unknown): ParseResult<RemediationCaseRow> {
+function parseCaseRow(value: unknown, mode: RemediationCaseJudgement['mode']): ParseResult<RemediationCaseRow> {
   if (!isRecord(value)) return { ok: false, reason: 'invalid-case-keys' };
-  if (!oneOf(value.disposition, ['act', 'defer', 'reject', 'refute'] as const)) {
+  if (!oneOf(value.disposition, mode === 'case-v2'
+    ? ['act', 'defer', 'reject', 'refute', 'escalate'] as const
+    : ['act', 'defer', 'reject', 'refute'] as const)) {
     return { ok: false, reason: 'invalid-case-disposition' };
   }
   if (value.disposition === 'refute' && value.refutation === undefined) {
     return { ok: false, reason: 'invalid-refutation' };
   }
-  const keys = value.disposition === 'refute'
+  const baseKeys = value.disposition === 'refute'
     ? value.existingCaseId === undefined
       ? ['caseRef', 'disposition', 'priority', 'rationale', 'confidence', 'effect', 'refutation']
       : ['caseRef', 'existingCaseId', 'disposition', 'priority', 'rationale', 'confidence', 'effect', 'refutation']
+    : value.disposition === 'escalate'
+    ? value.existingCaseId === undefined
+      ? ['caseRef', 'disposition', 'priority', 'rationale', 'confidence', 'effect', 'escalation']
+      : ['caseRef', 'existingCaseId', 'disposition', 'priority', 'rationale', 'confidence', 'effect', 'escalation']
     : value.existingCaseId === undefined
     ? ['caseRef', 'disposition', 'priority', 'rationale', 'confidence', 'effect']
     : ['caseRef', 'existingCaseId', 'disposition', 'priority', 'rationale', 'confidence', 'effect'];
-  if (!hasExactKeys(value, keys) || !isBoundedString(value.caseRef, MAX_REFERENCE_LENGTH) || (value.existingCaseId !== undefined && !isBoundedString(value.existingCaseId, MAX_REFERENCE_LENGTH)) || !isBoundedString(value.rationale)) {
+  if (!hasExactKeys(value, baseKeys) || !isBoundedString(value.caseRef, MAX_REFERENCE_LENGTH) || (value.existingCaseId !== undefined && !isBoundedString(value.existingCaseId, MAX_REFERENCE_LENGTH)) || !isBoundedString(value.rationale)) {
     return { ok: false, reason: 'invalid-case-keys' };
   }
   if (!oneOf(value.priority, ['critical', 'high', 'medium', 'low'] as const)) {
@@ -222,10 +284,16 @@ function parseCaseRow(value: unknown): ParseResult<RemediationCaseRow> {
   if (!oneOf(value.confidence, ['high', 'medium', 'low'] as const)) {
     return { ok: false, reason: 'invalid-case-confidence' };
   }
-  const effect = parseEffect(value.effect, value.disposition);
+  const effect = parseEffect(value.effect, value.disposition, mode);
   if (!effect.ok) return effect;
   const refutation = value.disposition === 'refute' ? parseRefutation(value.refutation) : undefined;
   if (refutation !== undefined && !refutation.ok) return refutation;
+  if (value.disposition === 'escalate' && (!isRecord(value.escalation) || !hasExactKeys(value.escalation, ['owner']) || !oneOf(value.escalation.owner, ['product', 'plan', 'architecture'] as const))) {
+    return { ok: false, reason: 'invalid-escalation' };
+  }
+  const escalation = value.disposition === 'escalate'
+    ? value.escalation as { readonly owner: RemediationCaseEscalationOwner }
+    : undefined;
   return {
     ok: true,
     value: {
@@ -237,32 +305,50 @@ function parseCaseRow(value: unknown): ParseResult<RemediationCaseRow> {
       confidence: value.confidence,
       effect: effect.value,
       ...(refutation === undefined ? {} : { refutation: refutation.value }),
+      ...(escalation === undefined ? {} : { escalation }),
     },
   };
 }
 
+function parseConsistency(value: unknown): ParseResult<RemediationCaseV2Consistency> {
+  if (!isRecord(value) || !hasExactKeys(value, ['verdict', 'sourceIds', 'caseRefs', 'rationale']) || !oneOf(value.verdict, ['consistent', 'blocked'] as const) || !Array.isArray(value.sourceIds) || value.sourceIds.length === 0 || value.sourceIds.length > MAX_SOURCE_ROWS || !value.sourceIds.every((sourceId) => isBoundedString(sourceId, MAX_REFERENCE_LENGTH)) || !Array.isArray(value.caseRefs) || value.caseRefs.length === 0 || value.caseRefs.length > MAX_CASE_ROWS || !value.caseRefs.every((caseRef) => isBoundedString(caseRef, MAX_REFERENCE_LENGTH)) || !isBoundedString(value.rationale)) {
+    return { ok: false, reason: 'invalid-consistency' };
+  }
+  return { ok: true, value: { verdict: value.verdict, sourceIds: value.sourceIds, caseRefs: value.caseRefs, rationale: value.rationale } };
+}
+
 function parseRemediationCaseJudgement(value: unknown): ParseResult<RemediationCaseJudgement> {
-  if (!isRecord(value) || !hasExactKeys(value, ['mode', 'domain', 'sourceOutcomes', 'cases'])) {
+  if (!isRecord(value)) {
     return { ok: false, reason: 'invalid-top-level-keys' };
   }
-  if (value.mode !== 'case-v1') return { ok: false, reason: 'unknown-mode' };
+  if (value.mode !== 'case-v1' && value.mode !== 'case-v2') return { ok: false, reason: 'unknown-mode' };
+  const mode = value.mode;
+  if (!hasExactKeys(value, mode === 'case-v2'
+    ? ['mode', 'domain', 'sourceOutcomes', 'cases', 'consistency']
+    : ['mode', 'domain', 'sourceOutcomes', 'cases'])) {
+    return { ok: false, reason: 'invalid-top-level-keys' };
+  }
   if (value.domain !== 'build_review') return { ok: false, reason: 'unknown-domain' };
   if (!Array.isArray(value.sourceOutcomes) || value.sourceOutcomes.length > MAX_SOURCE_ROWS || !Array.isArray(value.cases) || value.cases.length > MAX_CASE_ROWS) {
     return { ok: false, reason: 'invalid-top-level-keys' };
   }
   const sourceOutcomes: RemediationCaseSourceRow[] = [];
   for (const source of value.sourceOutcomes) {
-    const parsed = parseSourceRow(source);
+    const parsed = parseSourceRow(source, mode);
     if (!parsed.ok) return parsed;
     sourceOutcomes.push(parsed.value);
   }
   const cases: RemediationCaseRow[] = [];
   for (const judgement of value.cases) {
-    const parsed = parseCaseRow(judgement);
+    const parsed = parseCaseRow(judgement, mode);
     if (!parsed.ok) return parsed;
     cases.push(parsed.value);
   }
-  return { ok: true, value: { mode: 'case-v1', domain: 'build_review', sourceOutcomes, cases } };
+  if (mode === 'case-v1') return { ok: true, value: { mode, domain: 'build_review', sourceOutcomes, cases } };
+  const consistency = parseConsistency(value.consistency);
+  return consistency.ok
+    ? { ok: true, value: { mode, domain: 'build_review', sourceOutcomes, cases, consistency: consistency.value } }
+    : consistency;
 }
 
 /**

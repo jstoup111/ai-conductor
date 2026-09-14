@@ -1,12 +1,12 @@
+import { createHash } from 'node:crypto';
+
 import type { BuildReviewRubricId } from '../types/config.js';
 import { DEPRECATED_BUILD_REVIEW_RUBRIC_IDS } from './config.js';
 import {
   deriveBuildReviewScopeIncompleteFault,
   parseBuildReviewLapId,
   parseBuildReviewRubricResult,
-  type BuildReviewFindingAnchor,
   type BuildReviewLapId,
-  type BuildReviewRubricContractVersion,
   type BuildReviewInfrastructureFailure,
   type BuildReviewRubricResult,
   type BuildReviewScopeIncompleteFault,
@@ -21,8 +21,13 @@ import {
   type BuildReviewReducedCoverageDispositionRecord,
 } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
+import {
+  parseBuildReviewCustomArtifactMember,
+  type BuildReviewCustomArtifactMember,
+} from './build-review-artifacts.js';
 
 const AGGREGATE_VERSION = 'v1' as const;
+const CUSTOM_AGGREGATE_VERSION = 'v2' as const;
 const RUBRICS = ['testQuality'] as const;
 const RETIRED_REASON_PREFIX = new RegExp(`^\\[(${DEPRECATED_BUILD_REVIEW_RUBRIC_IDS.join('|')})\\]`);
 
@@ -38,7 +43,7 @@ export type BuildReviewVerdictEnvelopeValidation =
 
 /** The sole raw join: four attributable outcomes plus legacy gate fields. */
 export interface BuildReviewAggregate {
-  readonly aggregateVersion: typeof AGGREGATE_VERSION;
+  readonly aggregateVersion: typeof AGGREGATE_VERSION | typeof CUSTOM_AGGREGATE_VERSION;
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
   readonly results: Readonly<Record<BuildReviewRubricId, BuildReviewRubricResult>>;
@@ -52,6 +57,10 @@ export interface BuildReviewAggregate {
   /** Engine-stamped current-lap reduced-coverage evidence, when an allowance was used. */
   readonly reducedCoverageEvidence?: string;
   readonly codeStamp?: string | null;
+  /** Self-describing evidence remains readable even after its policy is removed. */
+  readonly customResults?: Readonly<Record<string, BuildReviewCustomArtifactMember>>;
+  /** The current lap catalog, not historical evidence, selects active custom members. */
+  readonly currentCustomRubrics?: readonly string[];
 }
 
 export interface BuildReviewAggregateInput {
@@ -59,6 +68,8 @@ export interface BuildReviewAggregateInput {
   readonly snapshotDigest: string;
   readonly results: Readonly<Record<BuildReviewRubricId, BuildReviewRubricResult>>;
   readonly codeStamp?: string | null;
+  readonly customResults?: Readonly<Record<string, BuildReviewCustomArtifactMember>>;
+  readonly currentCustomRubrics?: readonly string[];
 }
 
 /** Raw and accepted-risk state remain independently inspectable after join. */
@@ -91,11 +102,11 @@ export interface BuildReviewEffectiveVerdict {
 
 /** Raw, registry-neutral content preserved by the mechanical aggregate join. */
 export interface BuildReviewRawSourceProjection {
-  readonly rubric: BuildReviewRubricId;
+  /** Built-in and custom rubric ids share the one adjudication source lane. */
+  readonly rubric: string;
   readonly findingId: string;
-  readonly contractVersion: BuildReviewRubricContractVersion;
+  readonly contractVersion: string;
   readonly concernKind: string;
-  readonly anchor: BuildReviewFindingAnchor;
   readonly summary: string;
   readonly evidenceLocations: readonly string[];
   readonly confidence?: number;
@@ -105,12 +116,81 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
+function sorted(value: unknown): unknown {
+  const source = record(value);
+  if (Array.isArray(value)) return value.map(sorted);
+  return source === undefined
+    ? value
+    : Object.fromEntries(Object.keys(source).sort().map((key) => [key, sorted(source[key])]));
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(sorted(value));
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+function customSourceProjection(
+  rubric: string,
+  result: BuildReviewCustomArtifactMember['result'],
+): readonly BuildReviewRawSourceProjection[] | undefined {
+  if (result.kind === 'infrastructure-failure') return [];
+  const sources: BuildReviewRawSourceProjection[] = [];
+  for (const value of result.findings) {
+    const finding = record(value);
+    const identity = record(finding?.identity);
+    const payload = record(identity?.canonicalPayload);
+    const evidenceLocations = finding?.evidenceLocations;
+    const confidence = finding?.confidence;
+    if (!finding || !identity || !payload || typeof finding.summary !== 'string' || finding.summary.length === 0 ||
+      !Array.isArray(evidenceLocations) || evidenceLocations.length === 0 || evidenceLocations.some((location) => typeof location !== 'string' || location.length === 0) ||
+      (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100)) ||
+      typeof identity.id !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(identity.id) ||
+      typeof identity.canonicalJson !== 'string' || identity.canonicalJson !== canonicalJson(payload) ||
+      identity.id !== `sha256:${createHash('sha256').update(identity.canonicalJson).digest('hex')}` ||
+      payload.version !== 'v1' || payload.rubric !== rubric || payload.concernId !== finding.concernId ||
+      typeof payload.concernId !== 'string' || payload.concernId.length === 0 ||
+      !sameJson(payload.declaration, result.declaration) || !sameJson(payload.policy, result.policy) ||
+      !sameJson(payload.candidate, result.candidate) || !sameJson(payload.reviewedInput, result.reviewedInput) ||
+      !Array.isArray(payload.sourceRegions) || payload.sourceRegions.length === 0) return undefined;
+    sources.push(Object.freeze({
+      rubric, findingId: identity.id, contractVersion: result.contractVersion,
+      concernKind: payload.concernId, summary: finding.summary,
+      evidenceLocations: Object.freeze([...evidenceLocations] as string[]),
+      ...(confidence === undefined ? {} : { confidence: confidence as number }),
+    }));
+  }
+  return new Set(sources.map((source) => source.findingId)).size === sources.length
+    ? Object.freeze(sources)
+    : undefined;
+}
+
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(value).length === keys.length && Object.keys(value).every((key) => keys.includes(key));
 }
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+function isCustomRubric(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value) && value !== 'testQuality';
+}
+
+function parseCustomResults(
+  value: unknown,
+  current: unknown,
+): { readonly results: Readonly<Record<string, BuildReviewCustomArtifactMember>>; readonly current: readonly string[] } | undefined {
+  const source = record(value);
+  if (!source || !Array.isArray(current) || current.some((rubric) => !isCustomRubric(rubric)) || new Set(current).size !== current.length) return undefined;
+  const parsed = Object.entries(source).map(([rubric, member]) => {
+    const parsedMember = parseBuildReviewCustomArtifactMember(member);
+    return isCustomRubric(rubric) && parsedMember && parsedMember.result.rubric === rubric ? [rubric, parsedMember] as const : undefined;
+  });
+  if (parsed.some((entry) => !entry) || current.some((rubric) => !(rubric in source))) return undefined;
+  return { results: Object.freeze(Object.fromEntries(parsed as readonly (readonly [string, BuildReviewCustomArtifactMember])[])), current: Object.freeze([...current] as string[]) };
 }
 
 function strictResult(value: unknown): BuildReviewRubricResult | undefined {
@@ -201,9 +281,15 @@ function legacyFailure(result: BuildReviewRubricResult): boolean {
   return result.kind === 'infrastructure-failure' || (result.kind === 'judged' && (result.findings.length > 0 || scopeFaultFor(result) !== undefined));
 }
 
-function aggregateVerdict(results: Readonly<Record<BuildReviewRubricId, BuildReviewRubricResult>>): 'PASS' | 'FAIL' {
-  const judgedCount = RUBRICS.filter((name) => results[name].kind === 'judged').length;
-  return judgedCount > 0 && !RUBRICS.some((name) => legacyFailure(results[name])) ? 'PASS' : 'FAIL';
+function aggregateVerdict(
+  results: Readonly<Record<BuildReviewRubricId, BuildReviewRubricResult>>,
+  custom?: { readonly results: Readonly<Record<string, BuildReviewCustomArtifactMember>>; readonly current: readonly string[] },
+): 'PASS' | 'FAIL' {
+  const currentCustom = custom?.current.map((rubric) => custom.results[rubric]!) ?? [];
+  const judgedCount = RUBRICS.filter((name) => results[name].kind === 'judged').length + currentCustom.filter((member) => member.result.kind === 'judged').length;
+  return judgedCount > 0 && !RUBRICS.some((name) => legacyFailure(results[name])) && !currentCustom.some((member) =>
+    member.result.kind === 'infrastructure-failure' || member.result.verdict === 'FAIL',
+  ) ? 'PASS' : 'FAIL';
 }
 
 /** Derives an immutable, backward-compatible aggregate from every raw branch. */
@@ -225,11 +311,15 @@ export function joinBuildReviewRubricOutcomes(input: BuildReviewAggregateInput):
       reasons.push(`[${name}] scope incomplete: ${scopeFault.detail}`);
     }
   }
+  const hasCustom = input.customResults !== undefined || input.currentCustomRubrics !== undefined;
+  const custom = hasCustom ? parseCustomResults(input.customResults ?? {}, input.currentCustomRubrics ?? []) : undefined;
+  if (hasCustom && !custom) throw new Error('build-review aggregate requires valid self-describing custom evidence');
   const aggregate: BuildReviewAggregate = {
-    aggregateVersion: AGGREGATE_VERSION, lapId: input.lapId, snapshotDigest: input.snapshotDigest,
-    results: input.results, scopeIncomplete: Object.freeze(scopeIncomplete), coverage, verdict: aggregateVerdict(input.results),
+    aggregateVersion: hasCustom ? CUSTOM_AGGREGATE_VERSION : AGGREGATE_VERSION, lapId: input.lapId, snapshotDigest: input.snapshotDigest,
+    results: input.results, scopeIncomplete: Object.freeze(scopeIncomplete), coverage, verdict: aggregateVerdict(input.results, custom),
     rubric, findings, reasons,
     ...(input.codeStamp !== undefined ? { codeStamp: input.codeStamp } : {}),
+    ...(custom === undefined ? {} : { customResults: custom.results, currentCustomRubrics: custom.current }),
   };
   const validated = parseBuildReviewAggregate(aggregate);
   if (!validated) throw new Error('build-review aggregate requires four current, valid rubric results');
@@ -263,20 +353,24 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
       ? entry.filter((reason) => typeof reason !== 'string' || !RETIRED_REASON_PREFIX.test(reason))
       : carriedRetiredRubric && memberMap ? Object.fromEntries(Object.entries(memberMap).filter(([member]) => !isRetiredBuildReviewRubric(member))) : entry];
   }));
+  const isV1 = source?.aggregateVersion === AGGREGATE_VERSION;
+  const isV2 = source?.aggregateVersion === CUSTOM_AGGREGATE_VERSION;
   if (!source || !exactKeys(source, [
     'aggregateVersion', 'lapId', 'snapshotDigest', 'results', 'scopeIncomplete', 'coverage', 'verdict', 'rubric', 'findings', 'reasons',
     ...(source.reducedCoverageEvidence === undefined ? [] : ['reducedCoverageEvidence']),
     ...(source.codeStamp === undefined ? [] : ['codeStamp']),
-  ]) || source.aggregateVersion !== AGGREGATE_VERSION || !isNonEmptyString(source.snapshotDigest) ||
+    ...(isV2 ? ['customResults', 'currentCustomRubrics'] : []),
+  ]) || (!isV1 && !isV2) || !isNonEmptyString(source.snapshotDigest) ||
     (source.reducedCoverageEvidence !== undefined && !isNonEmptyString(source.reducedCoverageEvidence)) ||
     (source.codeStamp !== undefined && source.codeStamp !== null && !isNonEmptyString(source.codeStamp))) return undefined;
   const lapId = parseBuildReviewLapId(source.lapId);
   if (!lapId) return undefined;
   const results = parseResults(source.results, lapId, source.snapshotDigest);
+  const custom = isV2 ? parseCustomResults(source.customResults, source.currentCustomRubrics) : undefined;
   const coverage = record(source.coverage);
   const rubric = record(source.rubric);
   const findings = record(source.findings);
-  if (!results || !coverage || !rubric || !findings || !Array.isArray(source.scopeIncomplete) || !Array.isArray(source.reasons) || source.reasons.some((reason) => typeof reason !== 'string') ||
+  if (!results || (isV2 && !custom) || !coverage || !rubric || !findings || !Array.isArray(source.scopeIncomplete) || !Array.isArray(source.reasons) || source.reasons.some((reason) => typeof reason !== 'string') ||
     !exactKeys(coverage, RUBRICS) || !exactKeys(rubric, RUBRICS) || !exactKeys(findings, RUBRICS)) return undefined;
   const expectedCoverage = {} as Record<BuildReviewRubricId, Coverage>;
   const expectedRubric = {} as RubricFlags;
@@ -296,17 +390,18 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
       expectedReasons.push(`[${name}] scope incomplete: ${scopeFault.detail}`);
     }
   }
-  const verdict = aggregateVerdict(results);
+  const verdict = aggregateVerdict(results, custom);
   const verdictTolerated = carriedRetiredRubric && (source.verdict === 'PASS' || source.verdict === 'FAIL');
   if ((source.verdict !== verdict && !verdictTolerated) || JSON.stringify(coverage) !== JSON.stringify(expectedCoverage) ||
     JSON.stringify(rubric) !== JSON.stringify(expectedRubric) || JSON.stringify(findings) !== JSON.stringify(expectedFindings) ||
     JSON.stringify(source.scopeIncomplete) !== JSON.stringify(expectedScopeIncomplete) ||
     JSON.stringify(source.reasons) !== JSON.stringify(expectedReasons)) return undefined;
   return {
-    aggregateVersion: AGGREGATE_VERSION, lapId, snapshotDigest: source.snapshotDigest, results, scopeIncomplete: Object.freeze(expectedScopeIncomplete), coverage: expectedCoverage,
+    aggregateVersion: isV2 ? CUSTOM_AGGREGATE_VERSION : AGGREGATE_VERSION, lapId, snapshotDigest: source.snapshotDigest, results, scopeIncomplete: Object.freeze(expectedScopeIncomplete), coverage: expectedCoverage,
     verdict, rubric: expectedRubric, findings: expectedFindings, reasons: expectedReasons,
     ...(source.reducedCoverageEvidence !== undefined ? { reducedCoverageEvidence: source.reducedCoverageEvidence as string } : {}),
     ...(source.codeStamp !== undefined ? { codeStamp: source.codeStamp as string | null } : {}),
+    ...(custom === undefined ? {} : { customResults: custom.results, currentCustomRubrics: custom.current }),
   };
 }
 
@@ -335,12 +430,18 @@ export function projectBuildReviewAggregateSources(value: unknown): readonly Bui
         findingId: identity.id,
         contractVersion: result.contractVersion,
         concernKind: finding.concernKind,
-        anchor: finding.anchor,
         summary: finding.summary,
         evidenceLocations: Object.freeze([...finding.evidenceLocations]),
         ...(finding.confidence === undefined ? {} : { confidence: finding.confidence }),
       }));
     }
+  }
+  for (const rubric of aggregate.currentCustomRubrics ?? []) {
+    const result = aggregate.customResults?.[rubric]?.result;
+    if (!result) return undefined;
+    const custom = customSourceProjection(rubric, result);
+    if (!custom) return undefined;
+    sources.push(...custom);
   }
   return Object.freeze(sources);
 }

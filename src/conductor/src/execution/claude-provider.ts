@@ -7,6 +7,7 @@ import type {
   SelfHostAuthPreparation,
   TokenUsage,
 } from './llm-provider.js';
+import { reviewAccessRefusal } from './llm-provider.js';
 import {
   epochAnchoredMonotonicClock,
   observeInterval,
@@ -28,6 +29,7 @@ import {
   scaleRateLimitDurationSeconds,
 } from './rate-limit-duration.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
+import { wrapForContainment } from '../engine/self-host/live-containment.js';
 
 // Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
 // Patterns: "rate limit", "429", "overloaded"
@@ -555,15 +557,20 @@ export class ClaudeProvider implements LLMProvider {
 
   private async runClaude(
     args: string[],
-    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onProviderStream' | 'onSpawn' | 'selfHost' | 'spawnPermit'>,
+    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onProviderStream' | 'onSpawn' | 'selfHost' | 'spawnPermit' | 'reviewAccess'>,
   ) {
-    const { diagnosticLog, onActivity, onProviderStream, onSpawn, selfHost, spawnPermit, ...execaOptions } = options;
+    const { diagnosticLog, onActivity, onProviderStream, onSpawn, selfHost, spawnPermit, reviewAccess, ...execaOptions } = options;
     const permit = validateSpawnPermit(spawnPermit);
     if (!permit.permitted) {
       throw new Error(`Claude process spawn denied: ${permit.reason}`);
     }
-    const subprocess = this.subprocessFactory(selfHost?.executable ?? 'claude', args, {
+    const command = { executable: selfHost?.executable ?? 'claude', args, env: execaOptions.env };
+    const launch = reviewAccess?.kind === 'ready'
+      ? wrapForContainment(command, reviewAccess.profile.mountArgs)
+      : command;
+    const subprocess = this.subprocessFactory(launch.executable, launch.args as string[], {
       ...execaOptions,
+      env: launch.env,
       // A daemon feature must retain the diagnostic in its scoped/persisted
       // log. Other callers preserve the existing live inherited stdio path.
       stdout: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
@@ -636,6 +643,8 @@ export class ClaudeProvider implements LLMProvider {
     // enforceFreshSessionOptions for the 2026-08-14 megatoken incident this
     // deterministically prevents.
     options = enforceFreshSessionOptions(options, 'claude');
+    const accessRefusal = reviewAccessRefusal('claude', options.reviewAccess);
+    if (accessRefusal) return accessRefusal;
     const hasMachineEnvelope = !options.interactive;
     const args = this.buildArgs(options);
 
@@ -665,6 +674,7 @@ export class ClaudeProvider implements LLMProvider {
         onSpawn: options.onSpawn,
         selfHost: options.selfHost,
         spawnPermit: options.spawnPermit,
+        reviewAccess: options.reviewAccess,
       }),
     );
 

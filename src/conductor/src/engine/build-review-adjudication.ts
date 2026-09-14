@@ -1,5 +1,7 @@
 import type { BuildReviewWorkOrderCase } from './build-review-work-order.js';
-import { hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isOpenRemediationCase } from './remediation-case-effects.js';
+import { hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, isOpenRemediationCase } from './remediation-case-effects.js';
+import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
+import type { ValidateRemediationCaseGraphResult } from './remediation-case-validator.js';
 import type { RemediationCaseRecord } from './remediation-case-store.js';
 
 /** The only routes a post-join review is allowed to publish. */
@@ -17,6 +19,26 @@ export interface BuildReviewAdjudicationTransition {
  * semantic reducer never clears it and never infers operator coverage.
  */
 export type BuildReviewMechanicalState = 'healthy' | 'retry' | 'halt';
+
+/**
+ * The application boundary receives no actionable cases until the whole v2
+ * judgement is mechanically valid and free of its declared decision stops.
+ * It deliberately consumes the adjudicator's verdict without interpreting
+ * finding prose or attempting a second semantic compatibility judgement.
+ */
+export function authorizeBuildReviewRemediationActionEffects(input: {
+  readonly judgement: RemediationCaseJudgement;
+  readonly validation: ValidateRemediationCaseGraphResult;
+}): readonly string[] {
+  if (!input.validation.ok) return [];
+  if (input.judgement.mode === 'case-v2' &&
+    (input.judgement.consistency.verdict === 'blocked' || input.judgement.cases.some((caseRow) => caseRow.disposition === 'escalate'))) {
+    return [];
+  }
+  return input.validation.graph.cases
+    .filter(({ case: caseRow }) => caseRow.disposition === 'act')
+    .map(({ case: caseRow }) => caseRow.caseRef);
+}
 
 function hasUnfinishedEffect(record: RemediationCaseRecord): boolean {
   return (isOpenRemediationCase(record) && record.effect.kind !== 'none' && record.effect.status !== 'applied')
@@ -56,6 +78,17 @@ export function reduceBuildReviewAdjudication(input: {
   }
   if (input.cases.some(hasUnfinishedEffect)) {
     return { route: 'halt', remainingMechanical: input.mechanical !== 'healthy', reason: 'remediation effect is not finalized' };
+  }
+  const currentDecisionOwners = [...new Set(input.cases
+    .filter(isBuildReviewDecisionStop)
+    .filter((record) => record.sources.some((source) => input.currentSourceIds.includes(source.sourceId)))
+    .map((record) => record.escalation!.owner))];
+  if (currentDecisionOwners.length > 0) {
+    return {
+      route: 'halt',
+      remainingMechanical: input.mechanical !== 'healthy',
+      reason: `${currentDecisionOwners.join(', ')} decision is required for current remediation sources`,
+    };
   }
   if (input.cases.some((record) =>
     isBuildEligibleActionCase(record) && record.sources.some((source) => input.currentSourceIds.includes(source.sourceId)),

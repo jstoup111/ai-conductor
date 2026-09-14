@@ -3,10 +3,11 @@ import { userInfo } from 'node:os';
 import { join } from 'node:path';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggregate } from './build-review-aggregate.js';
-import { BuildReviewDispositionStore, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult, type BuildReviewReducedCoverageListResult, type BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
+import { BuildReviewDispositionStore, matchesBuildReviewReducedCoverageDisposition, rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult, type BuildReviewReducedCoverageListResult, type BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId, type BuildReviewInfrastructureFailureReason } from './build-review-domain.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
+import type { BuildReviewCustomDeclaration, BuildReviewCustomInfrastructureFailureReason } from './build-review-artifacts.js';
 import { RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { resolveCliFeatureWorktree } from './cli-operator-authority.js';
@@ -100,6 +101,13 @@ type ExhaustedMechanicalFault = {
   readonly diagnostic: string;
 };
 
+type CurrentReducedCoverageFault = {
+  readonly rubric: string;
+  readonly cause: BuildReviewInfrastructureFailureReason | BuildReviewCustomInfrastructureFailureReason;
+  readonly diagnostic: string;
+  readonly declaration?: BuildReviewCustomDeclaration;
+};
+
 /** The closed faults an operator may cover after the existing allowance is exhausted. */
 function reducedCoverageFault(result: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>['results'][BuildReviewRubricId]): ExhaustedMechanicalFault | undefined {
   if (result.kind === 'infrastructure-failure') {
@@ -107,6 +115,54 @@ function reducedCoverageFault(result: NonNullable<ReturnType<typeof parseBuildRe
   }
   const scopeFault = result.kind === 'judged' ? deriveBuildReviewScopeIncompleteFault(result) : undefined;
   return scopeFault && { rubric: scopeFault.rubric, cause: scopeFault.reason, diagnostic: scopeFault.detail };
+}
+
+/** Selects a reducible subject from validated, current aggregate state only. */
+function currentReducedCoverageFault(
+  aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>,
+  rubric: string,
+): CurrentReducedCoverageFault | undefined {
+  if (isBuildReviewRubricId(rubric)) return reducedCoverageFault(aggregate.results[rubric]);
+  if (!aggregate.currentCustomRubrics?.includes(rubric)) return undefined;
+  const member = aggregate.customResults?.[rubric];
+  return member?.result.kind === 'infrastructure-failure' && member.declaration !== undefined
+    ? { rubric, cause: member.result.reason, diagnostic: member.result.detail, declaration: member.declaration }
+    : undefined;
+}
+
+type CurrentFinding = {
+  readonly summary: string;
+  readonly identity: NonNullable<ReturnType<typeof rehydrateBuildReviewAcceptedRiskFinding>>;
+};
+
+/** Rehydrates the stamped custom identity rather than accepting a CLI supplied payload. */
+function currentFindings(aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>): readonly CurrentFinding[] {
+  const builtin = Object.values(aggregate.results).flatMap((result) => result.kind === 'judged'
+    ? result.findings.flatMap((finding) => {
+      const identity = canonicalizeBuildReviewFindingIdentity({
+        rubric: result.rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
+      });
+      return identity ? [{ summary: finding.summary, identity }] : [];
+    })
+    : []);
+  const custom = (aggregate.currentCustomRubrics ?? []).flatMap((rubric) => {
+    const result = aggregate.customResults?.[rubric]?.result;
+    if (result?.kind !== 'judged') return [];
+    return result.findings.flatMap((finding) => {
+      const value = typeof finding === 'object' && finding !== null && !Array.isArray(finding)
+        ? finding as Record<string, unknown>
+        : undefined;
+      const identity = rehydrateBuildReviewAcceptedRiskFinding(
+        typeof value?.identity === 'object' && value.identity !== null
+          ? (value.identity as Record<string, unknown>).canonicalPayload
+          : undefined,
+      );
+      return identity && typeof value?.summary === 'string' && value.summary.length > 0
+        ? [{ summary: value.summary, identity }]
+        : [];
+    });
+  });
+  return [...builtin, ...custom];
 }
 
 /** Only a published mechanical fault after its allowance is exhausted is terminal. */
@@ -338,12 +394,7 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
   if (aggregate.lapId !== requestedLap) {
     return refuse('requested-lap-not-current', `build-review accept: refused for '${command.feature}'; lap '${command.lapId}' is not the current lap ('${aggregate.lapId}').`);
   }
-  const currentFinding = [...Object.values(aggregate.results)].flatMap((result) => result.kind === 'judged'
-    ? result.findings.map((finding) => ({
-      finding,
-      identity: canonicalizeBuildReviewFindingIdentity({ rubric: result.rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor }),
-    }))
-    : []).find((candidate) => candidate.identity?.id === command.findingId);
+  const currentFinding = currentFindings(aggregate).find((candidate) => candidate.identity.id === command.findingId);
   if (!currentFinding?.identity) {
     return refuse('finding-not-current', `build-review accept: refused for '${command.feature}'; '${command.findingId}' is not a current judged finding on lap '${aggregate.lapId}'.`);
   }
@@ -351,17 +402,21 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
   try {
     const minConfidence = await resolveCliMinConfidence(worktree, deps);
     const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
-    const appendInput = { feature, finding: identity, sourceLapId: requestedLap, summary: currentFinding.finding.summary, rationale: command.rationale.trim(), operator: operator.trim() };
+    const appendInput = { feature, finding: identity, sourceLapId: requestedLap, summary: currentFinding.summary, rationale: command.rationale.trim(), operator: operator.trim() };
     const unchanged = async (): Promise<boolean> => {
       const current = await readAggregate();
       return current !== undefined && current.lapId === requestedLap && current.snapshotDigest === aggregate.snapshotDigest &&
-        JSON.stringify(current.results) === JSON.stringify(aggregate.results);
+        JSON.stringify(current.results) === JSON.stringify(aggregate.results) &&
+        JSON.stringify(current.customResults) === JSON.stringify(aggregate.customResults) &&
+        JSON.stringify(current.currentCustomRubrics) === JSON.stringify(aggregate.currentCustomRubrics);
     };
     const appended = store.appendIfCurrent
       ? await store.appendIfCurrent(appendInput, async (records) => {
         if (!await unchanged()) return false;
         const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records, [], minConfidence);
-        return effective?.unresolvedFindingIds.includes(identity.id) === true;
+        return identity.canonicalPayload.rubric === 'testQuality'
+          ? effective?.unresolvedFindingIds.includes(identity.id) === true
+          : !records.some((record) => record.finding.id === identity.id && record.finding.canonicalJson === identity.canonicalJson);
       })
       : await (async () => {
         const listed = await store.list(feature);
@@ -370,7 +425,10 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
           return { ok: false as const, kind: 'invalid' as const, message: 'current review lap changed while waiting for disposition state' };
         }
         const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records, [], minConfidence);
-        if (!effective || !effective.unresolvedFindingIds.includes(identity.id)) return { ok: false as const, kind: 'invalid' as const, message: 'finding is already accepted or not actionable' };
+        const actionable = identity.canonicalPayload.rubric === 'testQuality'
+          ? effective?.unresolvedFindingIds.includes(identity.id) === true
+          : !listed.records.some((record) => record.finding.id === identity.id && record.finding.canonicalJson === identity.canonicalJson);
+        if (!actionable) return { ok: false as const, kind: 'invalid' as const, message: 'finding is already accepted or not actionable' };
         return store.append(appendInput);
       })();
     if (!appended.ok) {
@@ -426,14 +484,14 @@ export async function dispatchBuildReviewRecordReducedCoverage(
     if (!requestedLap || !command.rationale.trim()) {
       return refuse('invalid-lap-or-blank-rationale', 'build-review record-reduced-coverage: requires an exact current lap and non-empty rationale.');
     }
-    if (!isBuildReviewRubricId(command.rubric)) {
-      return refuse('unknown-rubric', `build-review record-reduced-coverage: '${command.rubric}' is not a known rubric.`);
-    }
     const rubric = command.rubric;
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
     const aggregate = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree, '.pipeline/build-review.json'))));
     if (!aggregate || aggregate.lapId !== requestedLap) throw new Error('requested lap is not current');
-    const fault = reducedCoverageFault(aggregate.results[rubric]);
+    if (!isBuildReviewRubricId(rubric) && !aggregate.currentCustomRubrics?.includes(rubric)) {
+      return refuse('unknown-rubric', `build-review record-reduced-coverage: '${rubric}' is not a known rubric on the current lap.`);
+    }
+    const fault = currentReducedCoverageFault(aggregate, rubric);
     if (!fault) {
       return refuse('rubric-not-reduced-coverage-fault', `build-review record-reduced-coverage: '${rubric}' has no current infrastructure failure or scope-incomplete fault.`);
     }
@@ -446,20 +504,18 @@ export async function dispatchBuildReviewRecordReducedCoverage(
       }
       return ledger.gates.build_review?.mechanicalFaults;
     });
-    const appended = await (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree).appendReducedCoverageIfCurrent({
-      feature,
-      rubric,
-      reason: fault.cause,
-      rationale: command.rationale.trim(),
-      operator: operator.trim(),
-    }, async (records) => {
+    const input = fault.declaration === undefined
+      ? { feature, rubric: fault.rubric as BuildReviewRubricId, reason: fault.cause as BuildReviewInfrastructureFailureReason, rationale: command.rationale.trim(), operator: operator.trim() }
+      : { feature, declaration: fault.declaration, reason: fault.cause as BuildReviewCustomInfrastructureFailureReason, rationale: command.rationale.trim(), operator: operator.trim() };
+    const appended = await (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree).appendReducedCoverageIfCurrent(input, async (records) => {
       const current = parseBuildReviewAggregate(JSON.parse(await readFile(join(worktree!, '.pipeline/build-review.json'))));
       if (!current || current.lapId !== requestedLap || current.snapshotDigest !== aggregate.snapshotDigest || JSON.stringify(current.results) !== JSON.stringify(aggregate.results)) {
         stateRefusal = 'the inspected review lap changed';
         return false;
       }
-      const currentFault = reducedCoverageFault(current.results[rubric]);
-      if (!currentFault || currentFault.cause !== fault.cause) {
+      const currentFault = currentReducedCoverageFault(current, rubric);
+      if (!currentFault || currentFault.cause !== fault.cause ||
+        JSON.stringify(currentFault.declaration) !== JSON.stringify(fault.declaration)) {
         stateRefusal = `the current '${rubric}' reduced-coverage fault changed`;
         return false;
       }
@@ -467,7 +523,10 @@ export async function dispatchBuildReviewRecordReducedCoverage(
         stateRefusal = 'the mechanical-fault allowance remains';
         return false;
       }
-      if (records.some((record) => record.identity.rubric === rubric && record.identity.reason === fault.cause)) {
+      const identity = fault.declaration === undefined
+        ? { rubric: fault.rubric as BuildReviewRubricId, reason: fault.cause as BuildReviewInfrastructureFailureReason }
+        : { declaration: fault.declaration, reason: fault.cause as BuildReviewCustomInfrastructureFailureReason };
+      if (records.some((record) => matchesBuildReviewReducedCoverageDisposition(feature!, identity, [record]))) {
         stateRefusal = `reduced coverage is already recorded for '${rubric}'`;
         return false;
       }
