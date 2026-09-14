@@ -4200,7 +4200,13 @@ export class Conductor {
       mechanicalFailure: {
         // The coordinator consumes this bounded remediate allowance only for
         // mechanical failures; it never charges BUILD or plan-growth counters.
-        remainingAttempts: this.config.steps?.remediate?.max_retries ?? this.config.defaults?.max_retries ?? 1,
+        remainingAttempts: resolveStepConfig(
+          'remediate',
+          phaseForStep('remediate'),
+          this.modelPolicyForStep('remediate'),
+          this.config,
+          { tier: state.complexity_tier },
+        ).max_retries,
         classify: (error) => {
           const detail = error instanceof Error ? error.message : String(error);
           if (/timeout|timed out/i.test(detail)) return 'timeout';

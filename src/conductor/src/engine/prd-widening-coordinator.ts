@@ -84,8 +84,16 @@ function sameFreshness(left: PrdWideningFreshness, right: PrdWideningFreshness):
     left.contractVersion === right.contractVersion;
 }
 
-function replayIdentity(context: PrdWideningContext, freshness: PrdWideningFreshness | undefined): string | undefined {
-  return freshness === undefined ? undefined : digest({ currentSources: context.currentSources, freshness });
+function replayIdentity(
+  context: PrdWideningContext,
+  freshness: PrdWideningFreshness | undefined,
+  sampledDecisionRevision: number | undefined,
+): string | undefined {
+  return freshness === undefined ? undefined : digest({
+    currentSources: context.currentSources,
+    freshness,
+    sampledDecisionRevision,
+  });
 }
 
 function decisionRevision(read: AcceptedWideningDecisionReadResult): number | undefined {
@@ -168,7 +176,16 @@ export async function coordinatePrdWidening(input: {
   const sampledFreshness = input.freshness === undefined
     ? undefined
     : await input.freshness.sample();
-  const expectedReplayIdentity = replayIdentity(input.context, sampledFreshness);
+  const sampledDecision = input.decisionStore === undefined
+    ? undefined
+    : await input.decisionStore.read();
+  const sampledDecisionRevision = sampledDecision === undefined
+    ? undefined
+    : decisionRevision(sampledDecision);
+  if (sampledDecision !== undefined && sampledDecisionRevision === undefined) {
+    return { kind: 'failed', reason: 'store-failed' };
+  }
+  const expectedReplayIdentity = replayIdentity(input.context, sampledFreshness, sampledDecisionRevision);
   // Reuse runs in a short read-only mutation before the judge. This retains
   // the store's single transition seam while ensuring no provider call occurs
   // under its lease.
@@ -176,21 +193,23 @@ export async function coordinatePrdWidening(input: {
   // publication result. The replay read has a different value shape but uses
   // the same generic store transition without changing that test-facing seam.
   const readStore = input.store as unknown as PrdWideningReadStore;
-  const replay = await readStore.mutate(async (state) => ({
-    value: hasCurrentSnapshot(state, input.context)
-      ? replayedResult(currentCases(state), input.context, expectedReplayIdentity)
-      : undefined,
-  }));
+  const replay = await readStore.mutate(async (state) => {
+    // Recheck authority while the case-store lease is held before reusing a
+    // relation. This keeps the case-then-decision order and makes a concurrent
+    // decision append invalidate replay instead of returning stale authority.
+    if (sampledDecision !== undefined) {
+      const currentDecisionRevision = decisionRevision(await input.decisionStore!.read());
+      if (currentDecisionRevision === undefined || currentDecisionRevision !== sampledDecisionRevision) return { value: undefined };
+    }
+    return {
+      value: hasCurrentSnapshot(state, input.context)
+        ? replayedResult(currentCases(state), input.context, expectedReplayIdentity)
+        : undefined,
+    };
+  });
   if (!replay.ok) return { kind: 'failed', reason: 'store-failed' };
   if (replay.value !== undefined) {
     return { kind: 'published', result: replay.value, reused: true };
-  }
-
-  const sampledDecision = input.decisionStore === undefined
-    ? undefined
-    : await input.decisionStore.read();
-  if (sampledDecision !== undefined && decisionRevision(sampledDecision) === undefined) {
-    return { kind: 'failed', reason: 'store-failed' };
   }
 
   let rawResult = input.rawResult;

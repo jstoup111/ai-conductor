@@ -5021,24 +5021,6 @@ export interface PrdGapClassification {
 }
 
 /**
- * Shared projection used by routing and artifact renderers.  It deliberately
- * accepts only engine-published relation freshness plus stored decisions; a
- * reviewer summary cannot independently turn an OVER_SCOPE row into accepted.
- */
-export function classifyPrdWideningFindings(
-  findings: readonly PrdAuditFinding[],
-  decisions: readonly import('./accepted-widenings.js').AcceptedWideningDecision[],
-  relations: ReadonlyMap<string, { readonly kind: 'same-case' | 'different' | 'uncertain'; readonly caseId?: string; readonly fresh: boolean }>,
-): ReadonlyMap<string, PrdWideningClassification> {
-  return new Map(findings.map((finding) => [finding.criterion, classifyPrdWidening({
-    grade: finding.grade,
-    criterion: finding.criterion,
-    relation: relations.get(finding.criterion),
-    decisions,
-  })]));
-}
-
-/**
  * Read the two durable PRD-widening stores once, then project every current
  * report finding through the same freshness-aware authority resolver used by
  * routing and completion.  A broken store is evidence of a broken store, not
