@@ -107,6 +107,7 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { verdictProducedByRun } from '../../src/engine/gate-code-validity.js';
+import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
 
 describe('engine/artifacts', () => {
   let dir: string;
@@ -4000,6 +4001,40 @@ describe('engine/artifacts', () => {
       );
     }
 
+    async function publishV2AcceptedRelation(criterion: string, evidence: string): Promise<void> {
+      const feature = { version: 'v1', repository: 'test/repository', feature: 'artifact-fixture' };
+      const sourceId = prdWideningSourceId({ criterion, grade: 'OVER_SCOPE', evidence, prdIds: [] });
+      await createFile('.pipeline/remediation-cases.json', JSON.stringify({
+        version: 'v2', feature, cases: [], suppressions: [],
+        prdWideningCases: [{
+          id: 'case-accepted', domain: 'prd_widening',
+          originalSources: [{
+            sourceId: prdWideningSourceId({
+              criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: 'Original offered behavior.', prdIds: [],
+            }),
+            snapshot: 'Original offered behavior.',
+          }],
+          currentSources: [{ sourceId, snapshot: evidence, recordedAt: '2026-09-09T00:00:00.000Z' }],
+          relationships: [{ currentSourceId: sourceId, kind: 'same-case', caseId: 'case-accepted', reason: 'Published fresh relation.' }],
+          reconciliationDigest: 'fixture-published-relation',
+        }],
+      }));
+      await createFile('.pipeline/accepted-widenings.json', JSON.stringify({
+        version: 2,
+        feature: { version: 1, repository: feature.repository, feature: feature.feature },
+        decisions: [{
+          id: 'decision-accepted', criterion: 'NC.1', authority: 'accept', rationale: 'Approved.', operator: 'test', revision: 1,
+          originalSource: {
+            id: prdWideningSourceId({
+              criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: 'Original offered behavior.', prdIds: [],
+            }),
+            snapshot: 'Original offered behavior.',
+          },
+          originalCaseId: 'case-accepted', offerEntryId: 'offer-accepted',
+        }],
+      }));
+    }
+
     it('an OVER_SCOPE finding the operator accepted no longer blocks the gate', async () => {
       await writeReport('| S3.1 | OVER_SCOPE | — | none | outside-visible | conductor.ts:8163 |\n');
       await accept('S3.1');
@@ -4007,7 +4042,7 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(true);
     });
 
-    it('honors an accepted NC finding only when its normalized evidence summary still matches', async () => {
+    it('does not bind an NC finding to retired v1 summary text', async () => {
       const summary = '  Visible behavior outside the approved plan.  ';
       await createFile(
         '.pipeline/prd-audit.md',
@@ -4033,7 +4068,9 @@ describe('engine/artifacts', () => {
         }),
       );
 
-      expect((await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 })).done).toBe(true);
+      const legacy = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+      expect(legacy.done).toBe(false);
+      expect(legacy.reason).toContain('NC.1 (OVER_SCOPE)');
 
       await createFile(
         '.pipeline/prd-audit.md',
@@ -4044,8 +4081,8 @@ describe('engine/artifacts', () => {
           '| --- | --- | --- | --- |\n' +
           '| NC.1 | OVER_SCOPE | outside-visible | Changed visible behavior outside the approved plan. |\n',
       );
-      // A reworded rendering of the same finding stays accepted (#2145).
-      expect((await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 })).done).toBe(true);
+      // Reworded reviewer prose is not evidence of the same operator decision.
+      expect((await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 })).done).toBe(false);
 
       await createFile(
         '.pipeline/prd-audit.md',
@@ -4059,6 +4096,28 @@ describe('engine/artifacts', () => {
       const mismatched = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
       expect(mismatched.done).toBe(false);
       expect(mismatched.reason).toContain('NC.1 (OVER_SCOPE)');
+    });
+
+    it('completes only from a fresh v2 relation and names corrupt evidence', async () => {
+      const evidence = 'Replacement wording for the accepted behavior.';
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' + table +
+          '| S3.1 | PASS | — | none | within | Covered behavior |\n\n' +
+          '## Findings without an owning criterion\n' +
+          '| Finding | Grade | Intent relation | Evidence |\n' +
+          '| --- | --- | --- | --- |\n' +
+          `| NC.9 | OVER_SCOPE | outside-visible | ${evidence} |\n`,
+      );
+      await publishV2AcceptedRelation('NC.9', evidence);
+
+      expect((await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 })).done).toBe(true);
+
+      await createFile('.pipeline/remediation-cases.json', '{broken');
+      const corrupt = await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 });
+      expect(corrupt.done).toBe(false);
+      expect(corrupt.reason).toContain('NC.9 (OVER_SCOPE) [corrupt-case-store]');
+      expect((await classifyPrdAuditGaps(dir, undefined)).summary).toContain('NC.9 (corrupt-case-store)');
     });
 
     it('the same finding still blocks when the operator has NOT accepted it', async () => {
@@ -5942,7 +6001,7 @@ Task 1 → Task 2
         })).resolves.toMatchObject({ done: true });
       });
 
-      it('preserves a stale report with a matching accepted NC finding', async () => {
+      it('does not preserve a stale report from retired NC-summary authority', async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
@@ -5971,7 +6030,7 @@ Task 1 → Task 2
         await writeSidecar(gdir, baseline);
 
         const result = await checkStepCompletion(gdir, 'prd_audit', ctxFor(gdir));
-        expect(result).toMatchObject({ done: true, verdictFreshness: { outcome: 'preserved_surface_miss' } });
+        expect(result).toMatchObject({ done: false, verdictFreshness: { outcome: 'stale_invalidated' } });
       });
 
       it('does not preserve a stale all-PASS report when the current report has rejected rows', async () => {

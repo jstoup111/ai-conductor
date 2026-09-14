@@ -39,6 +39,24 @@ kicks back to does that.
 **Run when `build_review` fails, or at SHIP when a prior audit BLOCKED — dispatched by the
 conductor on the blocking path.**
 
+## Engine-selected PRD widening reconciliation mode
+
+Use this branch **only when the engine-stamped context declares**
+`mode: "prd-widening-reconciliation"`. It is one bounded equivalence judgment through the
+existing `remediate` dispatch, not a lifecycle step, a new skill, or a BUILD remediation plan.
+
+Judge only the engine-supplied projection. For each current source, decide whether the supplied
+evidence supports the same retained case, a different case, or uncertainty. A same-case judgment
+must name only an existing supplied case and explain the substantive behavioral equivalence; when
+the supplied evidence cannot establish that relation, choose uncertainty rather than guessing from
+summary wording, ordinal, commit, or path similarity. Do not inspect the repository, seek extra
+evidence, or invent a new case, source, decision, or operator authority.
+
+The engine owns the projection, native schema, terminal-result validation, durable IDs, and every
+effect. Do not create BUILD work, amend a plan, write a remediation artifact, or recover a result
+from markdown/prose. For every other mode, including `build_review` `case-v1` and legacy gap
+planning, skip this branch and follow the existing instructions unchanged.
+
 ## Engine-selected build_review case-v1 mode
 
 Use this branch **only when this engine context is the engine-stamped `build_review` `case-v1`

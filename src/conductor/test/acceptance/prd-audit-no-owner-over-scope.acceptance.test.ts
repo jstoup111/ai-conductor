@@ -6,21 +6,33 @@
  * filesystem is the persistence boundary; no third-party service is used.
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+vi.mock('../../src/engine/build-review-effective.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/build-review-effective.js')>(),
+  resolveBuildReviewFeatureIdentity: vi.fn(async () => ({
+    version: 'v1' as const,
+    repository: '/fixture/repository',
+    feature: 'prd-audit-no-owner-over-scope',
+  })),
+}));
 
 import { Conductor, routePrdAuditOverScope, type StepRunner } from '../../src/engine/conductor.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import {
+  AcceptedWideningDecisionStore,
   parseClearedOverScopeDecisions,
   readOverScopeDecisions,
   recordOverScopeDecisions,
   renderOverScopeDecisionBlock,
 } from '../../src/engine/accepted-widenings.js';
+import { persistPrdWideningOffers } from '../../src/engine/prd-widening-offers.js';
+import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
 
 const SUMMARY = 'unplanned npm test change';
 
@@ -134,13 +146,39 @@ describe('an accepted scope decision closes only its own blocker (S5.3)', () => 
       JSON.stringify({ activePlanPath: '.docs/plans/feature.md' }),
     );
     await writeFile(join(root, '.pipeline', 'prd-audit.md'), mixedReport(withFixable));
-    await recordOverScopeDecisions(root, [{
-      criterion: 'NC.1', summary: SUMMARY, decision: 'accept', rationale: 'Approved.', operator: 'acceptance-test',
+    const caseFeature = { version: 'v1' as const, repository: '/fixture/repository', feature: 'prd-audit-no-owner-over-scope' };
+    const decisionFeature = { version: 1 as const, repository: '/fixture/repository', feature: 'prd-audit-no-owner-over-scope' };
+    const currentSourceId = prdWideningSourceId({
+      criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: SUMMARY, prdIds: [],
+    });
+    const offers = await persistPrdWideningOffers(root, caseFeature, [{
+      criterion: 'NC.1', sourceId: currentSourceId, evidence: SUMMARY,
+      reportSnapshot: mixedReport(withFixable), relation: 'outside-visible',
     }]);
+    if (!offers.ok) throw new Error(`fixture offer failed: ${offers.reason}`);
+    const offer = offers.offers[0]!;
+    const accepted = await new AcceptedWideningDecisionStore(root, decisionFeature).append({
+      criterion: 'NC.1', authority: 'accept', rationale: 'Approved.', operator: 'acceptance-test',
+      originalSource: offer.originalSource, originalCaseId: offer.originalCaseId, offerEntryId: offer.offerEntryId,
+    });
+    if (!accepted.ok) throw new Error(`fixture acceptance failed: ${accepted.reason}`);
 
     let remediateRuns = 0;
     const runner: StepRunner = {
-      run: async (step: StepName) => {
+      run: async (step: StepName, _state, options) => {
+        if (step === 'remediate' && options?.remediationRequest?.mode === 'prd-widening-reconciliation') {
+          return {
+            success: true,
+            finalStructuredResult: {
+              version: 'v1',
+              results: [{
+                sourceId: currentSourceId,
+                kind: 'same-case', caseId: offer.originalCaseId,
+                reason: 'Fixture relation confirms the current accepted behavior.',
+              }],
+            },
+          };
+        }
         if (step === 'remediate') {
           remediateRuns++;
           await writeFile(join(root!, '.pipeline', 'remediation.json'), JSON.stringify({

@@ -119,6 +119,139 @@ describe('ClaudeProvider', () => {
       expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
     });
 
+    describe('native output schema', () => {
+      const schema = {
+        type: 'object',
+        properties: { version: { const: 1 }, relationships: { type: 'array' } },
+        required: ['version', 'relationships'],
+        additionalProperties: false,
+      };
+
+      it('passes the engine schema to Claude and extracts only the parsed terminal result', async () => {
+        const constrainedResult = { version: 1, relationships: [] };
+        mockExeca.mockResolvedValue({
+          stdout: [
+            JSON.stringify({
+              type: 'assistant',
+              message: { content: [{ type: 'tool_use', name: 'inspect', input: { structured_output: { forged: true } } }] },
+            }),
+            JSON.stringify({
+              type: 'result',
+              result: 'Reconciliation complete.',
+              structured_output: JSON.stringify(constrainedResult),
+              usage: { input_tokens: 12, output_tokens: 7 },
+            }),
+          ].join('\n'),
+          stderr: '',
+          exitCode: 0,
+          failed: false,
+        } as any);
+
+        const result = await provider.invoke({ ...baseOptions, nativeSchema: schema });
+
+        const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
+        const schemaIndex = args.indexOf('--json-schema');
+        expect(schemaIndex).toBeGreaterThanOrEqual(0);
+        expect(JSON.parse(args[schemaIndex + 1]!)).toEqual(schema);
+        expect(result).toMatchObject({
+          success: true,
+          output: 'Reconciliation complete.',
+          finalStructuredResult: constrainedResult,
+        });
+      });
+
+      it.each([
+        {
+          name: 'has no terminal result envelope',
+          stdout: JSON.stringify({
+            type: 'assistant',
+            message: { content: [{ type: 'tool_use', name: 'inspect', input: { structured_output: { forged: true } } }] },
+          }),
+          expected: 'missing terminal result record',
+        },
+        {
+          name: 'is absent from the terminal result envelope',
+          stdout: JSON.stringify({ type: 'result', result: 'Reconciliation complete.' }),
+          expected: 'missing its structured result',
+        },
+        {
+          name: 'is malformed JSON in the terminal result envelope',
+          stdout: JSON.stringify({
+            type: 'result',
+            result: 'Reconciliation complete.',
+            structured_output: '{not valid JSON',
+          }),
+          expected: 'malformed structured result',
+        },
+      ])('fails closed when the structured result $name', async ({ stdout, expected }) => {
+        mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode: 0, failed: false } as any);
+
+        const result = await provider.invoke({ ...baseOptions, nativeSchema: schema });
+
+        expect(result).toMatchObject({ success: false, exitCode: 0 });
+        expect(result.output).toContain(expected);
+        expect(result.finalStructuredResult).toBeUndefined();
+      });
+
+      it('does not expose a terminal structured value from a failed provider invocation', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: JSON.stringify({
+            type: 'result',
+            result: 'Provider failed after a partial response.',
+            structured_output: JSON.stringify({ version: 1, relationships: [] }),
+          }),
+          stderr: 'service unavailable',
+          exitCode: 1,
+          failed: true,
+        } as any);
+
+        const result = await provider.invoke({ ...baseOptions, nativeSchema: schema });
+
+        expect(result).toMatchObject({ success: false, exitCode: 1 });
+        expect(result.output).toContain('service unavailable');
+        expect(result.finalStructuredResult).toBeUndefined();
+      });
+
+      it('fails with a named unsupported-capability result instead of silently using a REPL', async () => {
+        const result = await provider.invoke({
+          ...baseOptions,
+          interactive: true,
+          nativeSchema: schema,
+        });
+
+        expect(result).toMatchObject({
+          success: false,
+          nativeSchemaUnsupported: true,
+        });
+        expect(result.output).toContain('unsupported for interactive Claude invocation');
+        expect(mockExeca).not.toHaveBeenCalled();
+      });
+
+      it('keeps a no-schema invocation on its existing argument and result path', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: JSON.stringify({
+            type: 'result',
+            result: 'Normal invocation complete.',
+            usage: { input_tokens: 12, output_tokens: 7 },
+          }),
+          stderr: '',
+          exitCode: 0,
+          failed: false,
+        } as any);
+
+        const result = await provider.invoke(baseOptions);
+
+        const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
+        expect(args).not.toContain('--json-schema');
+        expect(result).toMatchObject({
+          success: true,
+          output: 'Normal invocation complete.',
+          tokenUsage: { input: 12, output: 7 },
+        });
+        expect(result.finalStructuredResult).toBeUndefined();
+      });
+    });
+
     it('selects the stream-json envelope for a non-REPL dispatch', async () => {
       mockExeca.mockResolvedValue({ stdout: '', stderr: '', exitCode: 0, failed: false } as any);
 

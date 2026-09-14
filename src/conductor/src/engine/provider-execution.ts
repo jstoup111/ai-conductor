@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { basename } from 'node:path';
 import type {
   InvokeOptions,
   InvokeResult,
@@ -43,6 +44,7 @@ import {
   type ProviderSetupUnavailable,
   type ProviderSetupExhaustion,
 } from './provider-setup-failure.js';
+import { acquireScratchHome, releaseScratchHome } from './self-host/provider-scratch.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -214,6 +216,12 @@ export interface ExecuteProviderCandidatesInput {
   attempt?: number;
   /** Run identity held by the enclosing step runner for self-host scratch homes. */
   runId?: string;
+  /** Feature-owned worktree identity for schema-only Codex scratch. */
+  nativeSchemaScratch?: {
+    readonly worktreeRoot: string;
+    readonly repository: string;
+    readonly featureSlug: string;
+  };
   escalate?: boolean;
   modelOverride?: string;
   effortOverride?: EffortLevel;
@@ -299,6 +307,17 @@ function skippedCandidateSetupUnavailable(provider: string, result: InvokeResult
     recoveryAction: 'Update the provider to declare and synchronously consume lifecycleCapability.synchronousSpawnPermit.',
   };
   return undefined;
+}
+
+/** Fail closed before dispatch rather than requesting an unconstrained answer. */
+function unsupportedNativeSchemaProviderResult(providerKey: string): InvokeResult {
+  return {
+    success: false,
+    output: `Provider ${providerKey} cannot enforce the requested native output schema: missing native output schema capability. Recovery action: select or update a provider that declares nativeSchemaCapability.nativeOutputSchema and returns InvokeResult.finalStructuredResult from its terminal result envelope.`,
+    exitCode: 1,
+    nativeSchemaUnsupported: true,
+    providerInvocationSkipped: true,
+  };
 }
 
 export function classifyProviderAttempt(
@@ -605,6 +624,7 @@ export async function executeProviderCandidates({
   tier,
   attempt = 1,
   runId,
+  nativeSchemaScratch,
   escalate = true,
   modelOverride,
   effortOverride,
@@ -666,6 +686,12 @@ export async function executeProviderCandidates({
           ...(options.spawnPermit !== undefined
             ? { spawnPermit: options.spawnPermit }
             : {}),
+          // The output contract belongs to the engine-owned logical request,
+          // not candidate-local prompt rendering. A candidate cannot clear or
+          // replace it and thereby dispatch an unconstrained invocation.
+          ...(options.nativeSchema !== undefined
+            ? { nativeSchema: options.nativeSchema }
+            : {}),
         }
       : options;
     let candidateObserver: ReturnType<NonNullable<typeof candidateOptions.providerStreamObserverForCandidate>> | undefined;
@@ -696,6 +722,8 @@ export async function executeProviderCandidates({
         effort: resolved.effort,
       };
       let selfHost: SelfHostInvocation | undefined;
+      let schemaScratchHome: string | undefined;
+      let schemaScratchRunId: string | undefined;
       try {
         try {
           selfHost = await prepareCandidateSelfHost?.(candidate, runtime, {
@@ -714,12 +742,32 @@ export async function executeProviderCandidates({
           }
           throw error;
         }
+        if (
+          selfHost === undefined &&
+          providerKey === 'codex' &&
+          candidateInvocationOptions.nativeSchema !== undefined &&
+          nativeSchemaScratch !== undefined
+        ) {
+          schemaScratchRunId = runId ?? randomUUID();
+          schemaScratchHome = await acquireScratchHome({
+            worktreeRoot: nativeSchemaScratch.worktreeRoot,
+            repository: nativeSchemaScratch.repository,
+            featureSlug: nativeSchemaScratch.featureSlug || basename(nativeSchemaScratch.worktreeRoot),
+            runId: schemaScratchRunId,
+            attempt,
+            provider: 'codex',
+          });
+        }
         invocation = await invokeProviderCandidate({
           providerKey,
           runtime,
           sessions,
           resolved,
-          options: selfHost ? { ...candidateInvocationOptions, selfHost } : candidateInvocationOptions,
+          options: {
+            ...candidateInvocationOptions,
+            ...(selfHost ? { selfHost } : {}),
+            ...(schemaScratchHome ? { nativeSchemaScratchHome: schemaScratchHome } : {}),
+          },
           modelFallbackLadder,
         });
         return invocation.result;
@@ -728,9 +776,23 @@ export async function executeProviderCandidates({
           await selfHost?.teardown();
         } finally {
           try {
-            candidateObserver?.close();
-          } catch {
-            // Observation close/flush is best effort and cannot affect fallback.
+            if (schemaScratchHome !== undefined) {
+              const released = await releaseScratchHome({
+                worktreeRoot: nativeSchemaScratch!.worktreeRoot,
+                runId: schemaScratchRunId!,
+                attempt,
+                provider: 'codex',
+              });
+              if (released.kind === 'failed') {
+                throw new Error(`native schema scratch teardown failed: ${released.error}`);
+              }
+            }
+          } finally {
+            try {
+              candidateObserver?.close();
+            } catch {
+              // Observation close/flush is best effort and cannot affect fallback.
+            }
           }
         }
       }
@@ -738,19 +800,24 @@ export async function executeProviderCandidates({
     const requiresLifecycleCapability = candidateOptions.spawnPermit !== undefined;
     const supportsLifecycleCapability =
       runtimes.lifecycleCapabilityFor(providerKey)?.synchronousSpawnPermit === true;
+    const requiresNativeSchemaCapability = candidateOptions.nativeSchema !== undefined;
+    const supportsNativeSchemaCapability =
+      runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
     const result = requiresLifecycleCapability && !supportsLifecycleCapability
       ? unsupportedLifecycleProviderResult(providerKey)
-      : withCandidateSafety
-        ? await withCandidateSafety(
-            {
-              step,
-              providerKey,
-              model: resolved.model,
-              effort: resolved.effort,
-            },
-            invoke,
-          )
-        : await invoke();
+      : requiresNativeSchemaCapability && !supportsNativeSchemaCapability
+        ? unsupportedNativeSchemaProviderResult(providerKey)
+        : withCandidateSafety
+          ? await withCandidateSafety(
+              {
+                step,
+                providerKey,
+                model: resolved.model,
+                effort: resolved.effort,
+              },
+              invoke,
+            )
+          : await invoke();
     setupUnavailable ??= skippedCandidateSetupUnavailable(providerKey, result, cachedUnavailable);
     const invokedModel = invocation?.invokedModel;
     const suppression = invocation?.sessionPolicySuppression;
