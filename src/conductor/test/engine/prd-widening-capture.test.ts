@@ -43,6 +43,7 @@ function offerState(): RemediationCaseStoreState {
 
 function siblingOfferState(): RemediationCaseStoreState {
   const state = offerState();
+  if (state.version !== 'v2') throw new Error('expected v2 offer state');
   return {
     ...state,
     prdWideningCases: [...state.prdWideningCases, {

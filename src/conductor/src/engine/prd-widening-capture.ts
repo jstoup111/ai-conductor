@@ -284,9 +284,10 @@ export async function capturePrdWideningDecisions(
         offerEntryId: legacyClearReference('entry', entry),
       };
       const existing = options.decisionStore.read === undefined ? undefined : await options.decisionStore.read();
+      const originalSource = input.originalSource;
       const prior = existing?.kind === 'valid'
         ? existing.state.decisions.filter((decision) => decision.originalCaseId === input.originalCaseId &&
-          decision.originalSource?.id === input.originalSource?.id && decision.originalSource.snapshot === input.originalSource?.snapshot).at(-1)
+          decision.originalSource?.id === originalSource.id && decision.originalSource?.snapshot === originalSource.snapshot).at(-1)
         : undefined;
       if (prior && sameLegacyAuthority(prior, entry, input.operator)) {
         captured.push(prior);

@@ -155,7 +155,7 @@ function project(
     decisions.push(decision);
     latestDecisionBySource.set(key, decision);
   }
-  for (const entry of legacyClear?.entries ?? []) {
+  if (legacyClear !== undefined) for (const entry of legacyClear.entries) {
     if (!bounded(entry.criterion, MAX_REFERENCE_LENGTH) || !bounded(entry.summary) || !bounded(entry.rationale) ||
       !bounded(legacyClear.operator, MAX_REFERENCE_LENGTH)) return undefined;
     const key = sourceKey(entry);
