@@ -13,7 +13,7 @@ import {
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/state.js';
 
-// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, task:1, task:2, task:3, task:4
+// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, S3.3, S3.5, task:1, task:2, task:3, task:4
 
 const temporaryDirectories: string[] = [];
 
@@ -225,6 +225,81 @@ describe('conduct-state lease', () => {
     if (acquired.ok) await expect(acquired.handle.release()).resolves.toEqual({ ok: true });
   });
 
+  it('retains a delayed foreign claim and recovers a replacement through its bound authority path', async () => {
+    const statePath = '/worktree/replaced-owner/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const oldOwner = await createConductStateLease(statePath, {
+      filesystem: shared,
+      pid: 101,
+      newToken: () => 'old-owner',
+    }).acquire();
+    if (!oldOwner.ok) throw new Error(oldOwner.message);
+
+    let resumeOldClaim: (() => void) | undefined;
+    const oldClaimMayResume = new Promise<void>((resolve) => { resumeOldClaim = resolve; });
+    let oldClaimStarted: (() => void) | undefined;
+    const oldClaimHasStarted = new Promise<void>((resolve) => { oldClaimStarted = resolve; });
+    const claimPaths: string[] = [];
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async writeRecoveryClaim(path, contents): Promise<void> {
+        if (path.endsWith('/recovery.json') && claimPaths.length === 0) {
+          oldClaimStarted?.();
+          await oldClaimMayResume;
+        }
+        await shared.writeRecoveryClaim(path, contents);
+        claimPaths.push(path);
+      },
+    };
+    let now = 0;
+    const delayed = createConductStateLease(statePath, {
+      filesystem,
+      pid: 202,
+      newToken: () => 'delayed-contender',
+      now: () => now,
+      wait: async (milliseconds) => { now += milliseconds; },
+      waitTimeoutMs: 1,
+      retryDelayMs: 1,
+      processIsLive: (candidatePid) => candidatePid === 303,
+    }).acquire();
+    await oldClaimHasStarted;
+    await oldOwner.handle.release();
+    const replacement = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 303,
+      newToken: () => 'replacement-owner',
+    }).acquire();
+    if (!replacement.ok) throw new Error(replacement.message);
+    resumeOldClaim?.();
+    const delayedResult = await delayed;
+    const replacementOwnerBeforeRecovery = shared.owner;
+    const foreignRootBeforeRecovery = await shared.readRecoveryClaim(`${statePath}.lease/recovery.json`);
+
+    const recovered = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 404,
+      newToken: () => 'current-recoverer',
+      processIsLive: () => false,
+    }).acquire();
+
+    expect({
+      recovered: recovered.ok,
+      delayedKind: delayedResult.ok ? undefined : delayedResult.kind,
+      replacementOwnerBeforeRecovery,
+      foreignRootBeforeRecovery,
+      foreignRootWrites: claimPaths.filter((path) => path.endsWith('/recovery.json')).length,
+      currentAuthorityPaths: claimPaths.filter((path) => !path.endsWith('/recovery.json')),
+    }).toMatchObject({
+      recovered: true,
+      delayedKind: 'timeout',
+      replacementOwnerBeforeRecovery: expect.stringContaining('"token":"replacement-owner"'),
+      foreignRootBeforeRecovery: expect.stringContaining('"ownerToken":"old-owner"'),
+      foreignRootWrites: 1,
+      currentAuthorityPaths: [expect.any(String)],
+    });
+    if (recovered.ok) await recovered.handle.release();
+  });
+
   it.each([
     ['truncated JSON', '{"version": 1, "pid":'],
     ['an unsupported version', JSON.stringify({ version: 2, pid: 303, token: 'claim', claimedAt: '1970-01-01T00:00:00.000Z' })],
@@ -233,7 +308,6 @@ describe('conduct-state lease', () => {
     ['an invalid claimed time', JSON.stringify({ version: 1, pid: 303, token: 'claim', claimedAt: 'not-a-date' })],
     ['only an owner binding', JSON.stringify({ version: 1, pid: 303, token: 'claim', claimedAt: '1970-01-01T00:00:00.000Z', ownerToken: 'existing-owner' })],
     ['only a predecessor binding', JSON.stringify({ version: 1, pid: 303, token: 'claim', claimedAt: '1970-01-01T00:00:00.000Z', predecessorToken: null })],
-    ['a foreign root binding', JSON.stringify({ version: 1, pid: 303, token: 'claim', claimedAt: '1970-01-01T00:00:00.000Z', ownerToken: 'other-owner', predecessorToken: null })],
     ['a root predecessor binding', JSON.stringify({ version: 1, pid: 303, token: 'claim', claimedAt: '1970-01-01T00:00:00.000Z', ownerToken: 'existing-owner', predecessorToken: 'earlier-claim' })],
   ])('refuses %s recovery claim at acquisition without changing lease ownership', async (_case, malformedClaim) => {
     const statePath = '/worktree/malformed-recovery-claim/.pipeline/conduct-state.json';
