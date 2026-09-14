@@ -6082,12 +6082,21 @@ export class Conductor {
       return;
     }
 
+    const publication = await createShipDraftPublicationDependencies({
+      cwd: this.projectRoot,
+      branch: state.worktree_branch,
+      baseBranch: this.baseBranch,
+      featureDesc: state.feature_desc,
+      git: this.git,
+      gh: this.gh,
+    });
     const outcome = await clearHaltStateForResume(
       this.gh,
       this.projectRoot,
       prUrl,
       this.log ?? console.warn,
       this.sleep,
+      publication?.operations,
     );
     // A partial clear leaves the marker visible to reconciliation. Do not
     // consume this run's retry until the cleanup has been verified, otherwise
