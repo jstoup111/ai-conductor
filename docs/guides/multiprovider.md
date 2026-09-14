@@ -85,7 +85,9 @@ next entry only on **unavailability**, not on ordinary step failure:
 
 - run-scoped provider unavailability — the binary is missing (`ENOENT` or exit `127`), or the host
   reports an auth/credit condition that makes the whole run impossible;
-- model unavailability, but only after that host's own internal model ladder is exhausted.
+- model unavailability, but only after that host's own internal model ladder is exhausted;
+- explicit setup unavailability — a candidate cannot meet a required pre-invocation capability, so it
+  is skipped without starting a provider process.
 
 A step that runs and fails on its merits ends the run there. It does not silently re-run on the
 other host.
@@ -96,8 +98,11 @@ other host.
 Step <step>: provider claude unavailable (<reason>); falling back to codex.
 ```
 
-When every candidate is unavailable the step fails with
-`All configured providers are unavailable for step <step>: <provider> (<reason>); …`.
+When every candidate is unavailable after invocation or model resolution, the step fails with
+`All configured providers are unavailable for step <step>: <provider> (<reason>); …`. When every
+candidate is unavailable during setup, the daemon writes a `needs-human` HALT after one ordered
+pass. The HALT lists each provider's reason and recovery action; complete one listed action, then
+re-queue the feature.
 
 Duplicates are collapsed, preserving first-occurrence order.
 
