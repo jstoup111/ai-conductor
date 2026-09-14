@@ -41,8 +41,31 @@ describe('GitHub invocation audit', () => {
       "import type { GhRunner } from './tracker-client.js';",
       'async function write(gh: GhRunner, argv: string[]) { await gh(argv, { cwd: \'/tmp\' }); }',
     ].join('\n');
+    const destructured = [
+      "import type { GhRunner } from './tracker-client.js';",
+      'async function write(deps: { gh: GhRunner }) {',
+      "  const { gh: run } = deps; await run(['pr', 'edit', 'https://github.com/acme/app/pull/1']);",
+      '}',
+    ].join('\n');
+    const propertyAlias = [
+      "import type { GhRunner } from './tracker-client.js';",
+      'interface Dependencies { gh: GhRunner }',
+      'async function write(deps: Dependencies) {',
+      "  const run = deps.gh; await run(['pr', 'edit', 'https://github.com/acme/app/pull/1']);",
+      '}',
+    ].join('\n');
+    const readOnlyForwarding = [
+      "import { createBlockerResolver } from './blocker-resolver.js';",
+      "import type { GhRunner } from './tracker-client.js';",
+      'function read(deps: { gh: GhRunner }) {',
+      "  const { gh: run } = deps; return createBlockerResolver({ run: (args) => run(args, { cwd: '/tmp' }) });",
+      '}',
+    ].join('\n');
     expect(auditGithubInvocationSource('engine/bypass.ts', direct)[0]).toMatchObject({ message: 'direct injected GitHub mutation outside guarded adapter' });
     expect(auditGithubInvocationSource('engine/bypass.ts', forwarding)[0]).toMatchObject({ message: 'unresolvable mutable GitHub command forwarding outside guarded adapter' });
+    expect(auditGithubInvocationSource('engine/bypass.ts', destructured)[0]).toMatchObject({ line: 3, message: 'direct injected GitHub mutation outside guarded adapter' });
+    expect(auditGithubInvocationSource('engine/bypass.ts', propertyAlias)[0]).toMatchObject({ line: 4, message: 'direct injected GitHub mutation outside guarded adapter' });
+    expect(auditGithubInvocationSource('engine/bypass.ts', readOnlyForwarding)).toEqual([]);
     expect(auditGithubInvocationSource('engine/tracker-client.ts', direct)).toEqual([]);
   });
 
