@@ -629,17 +629,17 @@ describe("ModelAvailability", () => {
     it.each([
       {
         name: 'every unavailable model was affirmatively refused',
-        dispositions: ['not-started', 'not-started', 'not-started'],
+        dispositions: ['not-started', 'not-started', 'not-started'] as const,
         preservesNoStart: true,
       },
       {
         name: 'the first unavailable model has unknown start disposition',
-        dispositions: [undefined, 'not-started', 'not-started'],
+        dispositions: [undefined, 'not-started', 'not-started'] as const,
         preservesNoStart: false,
       },
       {
         name: 'an intermediate unavailable model was attempted or unknown',
-        dispositions: ['not-started', undefined, 'not-started'],
+        dispositions: ['not-started', undefined, 'not-started'] as const,
         preservesNoStart: false,
       },
     ])('retains no-start proof only when $name', async ({ dispositions, preservesNoStart }) => {

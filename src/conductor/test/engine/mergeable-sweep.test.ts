@@ -1459,12 +1459,12 @@ describe('sweepMergeableLabels — Task 11: bump-before-dispatch crash safety', 
 describe('sweepMergeableLabels — selected-state diagnostic and refund', () => {
   it('reports malformed selected context without dispatching or consuming the reservation', async () => {
     const { gh } = makeFakeGh({
-      [PR_URL]: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: { bad: true }, labels: [] }),
+      [PR_URL]: { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: { bad: true }, labels: [] }) },
     });
     const original = { ...entry(), ciFixAttempts: 1, lastCiFixAt: '2026-07-01T00:00:00.000Z', ciFailureDetected: true };
     await enrollWatch(tmpDir, original);
     const diagnostic = vi.fn();
-    const dispatch = vi.fn();
+    const dispatch = vi.fn(async () => undefined);
     await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, ciFix: {
       enabled: true, isEligible: async () => ({ eligible: true }), dispatch, diagnostic,
     } });

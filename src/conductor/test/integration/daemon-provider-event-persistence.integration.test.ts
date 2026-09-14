@@ -497,7 +497,8 @@ describe('daemon feature provider-event persistence', () => {
     const firstReader = await read();
     const restartedReader = await read();
     expect(firstReader).toEqual(restartedReader);
-    expect(firstReader.map((event) => [event.type, event.slug, event.stage, event.reason, event.provider])).toEqual([
+    const diagnostics = firstReader.filter((event): event is Extract<ConductorEvent, { type: 'ci_repair_diagnostic' }> => event.type === 'ci_repair_diagnostic');
+    expect(diagnostics.map((event) => [event.type, event.slug, event.stage, event.reason, event.provider])).toEqual([
       ['ci_repair_diagnostic', 'widget', 'verification', 'verification-failed', 'codex'],
       ['ci_repair_diagnostic', 'widget', 'publication', 'verified-publication', 'claude'],
     ]);

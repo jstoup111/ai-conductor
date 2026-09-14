@@ -29,7 +29,7 @@ function factory(overrides: Partial<Parameters<typeof createDaemonCiFixDispatch>
     expect(hint).toContain('(unnamed check #3)');
     expect(hint).toContain('https://github.com/acme/widget/actions/runs/41');
     expect(hint).not.toContain('passing');
-    return { kind: 'published' as const };
+    return { kind: 'session-completed' as const };
   });
   const run = vi.fn(async (_entry, branch, hint, deps) => {
     expect(branch).toBe('repair-branch');
@@ -45,7 +45,7 @@ function factory(overrides: Partial<Parameters<typeof createDaemonCiFixDispatch>
 describe('daemon CI-fix production dispatch callback', () => {
   it('delivers the sweep snapshot’s mixed identities and usable context despite optional log failure, without a second check read', async () => {
     const { dispatch, gh, runner, run } = factory();
-    await expect(dispatch(entry, selected)).resolves.toEqual({ kind: 'published' });
+    await expect(dispatch(entry, selected)).resolves.toEqual({ kind: 'session-completed' });
     expect(runner).toHaveBeenCalledOnce();
     expect(run).toHaveBeenCalledOnce();
     expect(gh.mock.calls.filter(([args]) => args[0] === 'pr')).toHaveLength(1);
