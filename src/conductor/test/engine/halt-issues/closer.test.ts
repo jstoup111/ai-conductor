@@ -127,6 +127,15 @@ class FakeGh implements TrackerClient {
   async viewPullRequest(): Promise<{ state?: string; mergedAt?: string | null }> {
     throw new Error('not used in this test');
   }
+  async getPullRequestHeadRef(): Promise<string> {
+    throw new Error('not used in this test');
+  }
+  async viewWorkflowRunFailedLog(): Promise<string> {
+    throw new Error('not used in this test');
+  }
+  async readPullRequestMergeState(): ReturnType<TrackerClient['readPullRequestMergeState']> {
+    throw new Error('not used in this test');
+  }
   async createLabel(): Promise<void> {
     throw new Error('not used in this test');
   }

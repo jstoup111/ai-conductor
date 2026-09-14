@@ -17,6 +17,7 @@ import { writeState } from '../../src/engine/state.js';
 import * as eventPersisterModule from '../../src/engine/event-persister.js';
 import { startDaemonEventPersistence } from '../../src/engine/event-persister.js';
 import { renderDaemonEvent } from '../../src/daemon-cli.js';
+import { ciRepairOutcomeDiagnostic } from '../../src/engine/daemon-ci-fix.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { InvokeOptions, LLMProvider } from '../../src/execution/llm-provider.js';
 import type {
@@ -481,15 +482,10 @@ describe('daemon feature provider-event persistence', () => {
     // A failing renderer is an observational subscriber and cannot make emit
     // reject or prevent the persisted event from being available to a reader.
     events.on('ci_repair_diagnostic', () => { throw new Error('renderer unavailable'); });
-    await expect(events.emit({
-      type: 'ci_repair_diagnostic',
-      prUrl: 'https://github.com/acme/widget/pull/7',
-      slug: 'widget',
-      stage: 'publication',
-      reason: 'verified-publication',
-      disposition: 'published',
-      provider: 'claude',
-    })).resolves.toBeUndefined();
+    await expect(events.emit(ciRepairOutcomeDiagnostic(
+      { prUrl: 'https://github.com/acme/widget/pull/7', slug: 'widget', repoCwd: root },
+      { kind: 'published', provider: 'claude' },
+    ))).resolves.toBeUndefined();
     persistence.stop();
 
     const read = async () => (await readFile(join(root, '.daemon', 'events.jsonl'), 'utf-8'))

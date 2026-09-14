@@ -1,6 +1,11 @@
 // Covers: task:11
 import { describe, expect, it, vi } from 'vitest';
-import { classifyCiContextFailure, createDaemonCiFixDispatch } from '../src/engine/daemon-ci-fix.js';
+import {
+  ciRepairOutcomeDiagnostic,
+  ciRepairPreDispatchDisposition,
+  classifyCiContextFailure,
+  createDaemonCiFixDispatch,
+} from '../src/engine/daemon-ci-fix.js';
 import type { PrMergeState } from '../src/engine/pr-labels.js';
 import type { WatchEntry } from '../src/engine/mergeable-sweep.js';
 
@@ -38,7 +43,7 @@ function factory(overrides: Partial<Parameters<typeof createDaemonCiFixDispatch>
   const dispatch = createDaemonCiFixDispatch({
     tracker: {
       getPullRequestHeadRef: async () => JSON.parse((await gh(['pr'])).stdout).headRefName,
-      viewWorkflowRunFailedLog: async (repo, run, cwd, opts) => (await gh(['run', 'view', run, '--repo', repo, '--log-failed'], { cwd, ...opts })).stdout,
+      viewWorkflowRunFailedLog: async (repo: string, run: string, _cwd: string, _opts: { timeout: number; maxBuffer: number }) => (await gh(['run', 'view', run, '--repo', repo, '--log-failed'])).stdout,
     } as any, createDispatcher: () => ({ resolveCiFailure: async () => ({ kind: 'session-completed' }) }),
     fixRunner: { run: runner }, run, ...overrides,
   });
@@ -63,6 +68,17 @@ describe('daemon CI-fix production dispatch callback', () => {
     expect(run).toHaveBeenCalledOnce();
     expect(gh.mock.calls.filter(([args]) => args[0] === 'pr')).toHaveLength(1);
     expect(gh.mock.calls.filter(([args]) => args[0] === 'run')).toHaveLength(2);
+  });
+
+  it('emits an attributed degraded log-enrichment diagnostic while still dispatching', async () => {
+    const diagnostic = vi.fn();
+    const { dispatch, runner } = factory({ diagnostic });
+    await dispatch(entry, selected);
+    expect(runner).toHaveBeenCalledOnce();
+    expect(diagnostic).toHaveBeenCalledWith({
+      entry, stage: 'log-enrichment', reason: 'log-unavailable',
+    });
+    expect(ciRepairPreDispatchDisposition('log-enrichment')).toBe('degraded');
   });
 
   it.each<PrMergeState>([
@@ -146,5 +162,41 @@ describe('daemon CI-fix production dispatch callback', () => {
     });
     await expect(dispatch(entry, state)).resolves.toEqual({ kind: 'failed', stage: 'provider' });
     expect(logReads).toBe(3);
+  });
+
+  it('emits a context-truncated degradation while retaining a bounded dispatch hint', async () => {
+    const diagnostic = vi.fn();
+    const state: PrMergeState = {
+      ...selected,
+      statusCheckRollup: [41, 42, 43].map((run) => ({
+        kind: 'check-run' as const, status: 'COMPLETED', conclusion: 'FAILURE', name: `unit-${run}`,
+        detailsUrl: `https://github.com/acme/widget/actions/runs/${run}`,
+      })),
+    };
+    const dispatch = createDaemonCiFixDispatch({
+      tracker: {
+        getPullRequestHeadRef: async () => 'repair-branch',
+        viewWorkflowRunFailedLog: async () => 'x'.repeat(20_000),
+      } as any,
+      createDispatcher: () => ({ resolveCiFailure: async () => ({ kind: 'session-completed' }) }),
+      diagnostic,
+      run: async () => ({ kind: 'noop' }),
+    });
+    await dispatch(entry, state);
+    expect(diagnostic).toHaveBeenCalledWith({
+      entry, stage: 'log-enrichment', reason: 'context-truncated',
+    });
+  });
+
+  it.each([
+    [{ kind: 'failed', stage: 'guard', provider: 'codex' }, 'guard', 'guard-refused', 'failed'],
+    [{ kind: 'failed', stage: 'verification', provider: 'codex' }, 'verification', 'verification-failed', 'failed'],
+    [{ kind: 'failed', stage: 'publication', provider: 'codex' }, 'publication', 'publication-refused', 'failed'],
+    [{ kind: 'published', provider: 'codex' }, 'publication', 'verified-publication', 'published'],
+    [{ kind: 'failed', stage: 'provider', provider: 'codex', reason: 'timeout' }, 'execution', 'timeout', 'failed'],
+  ] as const)('maps attributed repair outcome diagnostics', (outcome, stage, reason, disposition) => {
+    expect(ciRepairOutcomeDiagnostic(entry, outcome)).toMatchObject({
+      prUrl: entry.prUrl, slug: entry.slug, stage, reason, disposition, provider: 'codex',
+    });
   });
 });

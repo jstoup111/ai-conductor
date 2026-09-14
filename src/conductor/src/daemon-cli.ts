@@ -22,7 +22,12 @@ import {
 import {
   isEligibleForCiFix,
 } from './engine/ci-fix.js';
-import { classifyCiContextFailure, createDaemonCiFixDispatch } from './engine/daemon-ci-fix.js';
+import {
+  ciRepairOutcomeDiagnostic,
+  ciRepairPreDispatchDisposition,
+  classifyCiContextFailure,
+  createDaemonCiFixDispatch,
+} from './engine/daemon-ci-fix.js';
 import {
   resolveRebaseResolutionAttempts,
   resolveDispatchStartTimeoutSeconds,
@@ -2279,6 +2284,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         await sweepMergeableLabels({
           projectRoot,
           log,
+          tracker,
           teardownWorktree: deps.teardownWorktree,
           canRemoveWorktree,
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING
@@ -2422,7 +2428,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 diagnostic: async ({ stage, reason, provider }) => {
                   void events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
                     stage, reason,
-                    disposition: stage === 'log-enrichment' ? 'degraded' : 'deferred', provider });
+                    disposition: ciRepairPreDispatchDisposition(stage), provider });
                 },
                 createDispatcher: () => ({
                 // Route the ci-fix dispatch through resolveCiFailure (T4):
@@ -2467,11 +2473,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 log(`[ci-fix] setup-only provider exhaustion for ${entry.prUrl}; parking for human recovery`);
               }
               if (outcome.kind === 'failed' || outcome.kind === 'published') {
-                await events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
-                  stage: outcome.kind === 'published' ? 'publication' : outcome.stage === 'guard' ? 'guard' : outcome.stage === 'verification' ? 'verification' : outcome.stage === 'publication' ? 'publication' : 'execution',
-                  reason: outcome.kind === 'published' ? 'verified-publication' : outcome.stage === 'guard' ? 'guard-refused' : outcome.stage === 'verification' ? 'verification-failed' : outcome.stage === 'publication' ? 'publication-refused' : outcome.reason ?? 'unknown',
-                  disposition: outcome.kind === 'published' ? 'published' : 'failed',
-                  ...(outcome.provider ? { provider: outcome.provider } : {}) });
+                await events.emit(ciRepairOutcomeDiagnostic(entry, outcome));
               }
               return outcome;
             },

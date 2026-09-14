@@ -26,11 +26,11 @@ import {
   ensureLabel,
   addLabel,
   removeLabel,
-  prMergeState,
   isMergeable,
   upsertComment,
   type PrMergeState,
 } from './pr-labels.js';
+import { createGithubTrackerClient, type TrackerClient } from './tracker-client.js';
 import type { ConductorEvent } from '../types/events.js';
 import type { FeatureWorktree } from './daemon-runner.js';
 import { shippedRecordOnMain } from './shipped-record-on-main.js';
@@ -275,6 +275,8 @@ export interface SweepOpts {
   projectRoot: string;
   log?: (msg: string) => void;
   runGh?: GhRunner;
+  /** Typed PR-state reader; raw gh remains scoped to legacy label mutations. */
+  tracker?: Pick<TrackerClient, 'readPullRequestMergeState'>;
   /** Task 17: optional autoresolve dispatch, run once per tick after the label pass. */
   autoresolve?: AutoresolveDispatchOpts;
   /** Task 10: optional CI fix dispatch, run once per tick after the label pass. */
@@ -306,6 +308,7 @@ export async function sweepMergeableLabels({
   projectRoot,
   log,
   runGh,
+  tracker,
   autoresolve,
   ciFix,
   teardownWorktree,
@@ -314,6 +317,7 @@ export async function sweepMergeableLabels({
   onEvent,
 }: SweepOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
+  const prStateTracker = tracker ?? createGithubTrackerClient(gh);
   const git = makeProductionGit();
   const probe =
     shippedRecordProbe ??
@@ -336,7 +340,7 @@ export async function sweepMergeableLabels({
 
     for (const entry of entries) {
       try {
-        const state = await prMergeState(gh, entry.repoCwd, entry.prUrl, log);
+        const state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
 
         // GitHub checks are authoritative for CI state. Retire the redundant
         // custom label whenever a reconciliation read finds it on a PR.
@@ -463,7 +467,7 @@ export async function sweepMergeableLabels({
           // detection read above and this point in the sweep. Racing an
           // escalation comment onto an already-resolved PR is pure noise, so
           // prune the entry and skip the label/comment/event work entirely.
-          const freshState = await prMergeState(gh, entry.repoCwd, entry.prUrl, log);
+          const freshState = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
           if (
             freshState.state === 'MERGED' ||
             freshState.state === 'CLOSED' ||

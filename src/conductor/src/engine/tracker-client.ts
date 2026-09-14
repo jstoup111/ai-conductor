@@ -11,6 +11,7 @@
 
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
+import type { PrMergeState } from './pr-labels.js';
 
 const execFileP = promisify(execFileCb);
 const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
@@ -146,6 +147,12 @@ export interface TrackerClient {
     cwd: string,
     opts: { timeout: number; maxBuffer: number },
   ): Promise<string>;
+  /** Read and classify the merge state/check rollup for a watched pull request. */
+  readPullRequestMergeState(
+    prUrl: string,
+    cwd: string,
+    log?: (message: string) => void,
+  ): Promise<PrMergeState>;
   /** `gh label create <name> -R <repo>` — create a label (idempotent; caller swallows "already exists"). */
   createLabel(repo: string, name: string, cwd: string): Promise<void>;
   /** `gh api --method DELETE repos/<repo>/issues/<number>/labels/<name>` — remove a label via REST. */
@@ -386,6 +393,14 @@ export function createGithubTrackerClient(runner: GhRunner): EffectMarkerTracker
         { cwd, ...opts },
       );
       return stdout;
+    },
+
+    async readPullRequestMergeState(prUrl, cwd, log) {
+      // Keep parsing and sentinel classification single-sourced in pr-labels.
+      // A dynamic import avoids making that legacy PR helper's tracker import
+      // an eager runtime cycle.
+      const { prMergeState } = await import('./pr-labels.js');
+      return prMergeState(runner, cwd, prUrl, log);
     },
 
     async createLabel(repo, name, cwd) {

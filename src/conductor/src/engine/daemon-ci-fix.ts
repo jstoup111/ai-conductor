@@ -13,6 +13,7 @@ import type { PrMergeState } from './pr-labels.js';
 import type { TrackerClient } from './tracker-client.js';
 import type { ResolveWorktreeLiveness } from './autoresolve.js';
 import type { CiRepairDiagnosticReason, CiRepairDiagnosticStage } from '../types/events.js';
+import type { ConductorEvent } from '../types/events.js';
 
 export type CiFixDiagnostic = (input: {
   entry: WatchEntry;
@@ -52,6 +53,41 @@ export function classifyCiContextFailure(state: PrMergeState): CiRepairDiagnosti
   if (/permission|forbidden|403/.test(text)) return 'permission';
   if (/timeout|timed out/.test(text)) return 'timeout';
   return 'api';
+}
+
+/** The only pre-dispatch diagnostic that represents degraded, usable context. */
+export function ciRepairPreDispatchDisposition(stage: CiRepairDiagnosticStage): 'degraded' | 'deferred' {
+  return stage === 'log-enrichment' ? 'degraded' : 'deferred';
+}
+
+/** Translate final CI-fix outcomes into the root-bus diagnostic contract. */
+export function ciRepairOutcomeDiagnostic(
+  entry: WatchEntry,
+  outcome: Extract<CiFixOutcome, { kind: 'failed' | 'published' }>,
+): Extract<ConductorEvent, { type: 'ci_repair_diagnostic' }> {
+  const stage: CiRepairDiagnosticStage = outcome.kind === 'published'
+    ? 'publication'
+    : outcome.stage === 'guard'
+      ? 'guard'
+      : outcome.stage === 'verification'
+        ? 'verification'
+        : outcome.stage === 'publication'
+          ? 'publication'
+          : 'execution';
+  const reason: CiRepairDiagnosticReason = outcome.kind === 'published'
+    ? 'verified-publication'
+    : outcome.stage === 'guard'
+      ? 'guard-refused'
+      : outcome.stage === 'verification'
+        ? 'verification-failed'
+        : outcome.stage === 'publication'
+          ? 'publication-refused'
+          : outcome.reason ?? 'unknown';
+  return {
+    type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug, stage, reason,
+    disposition: outcome.kind === 'published' ? 'published' : 'failed',
+    ...(outcome.provider ? { provider: outcome.provider } : {}),
+  };
 }
 
 /**
