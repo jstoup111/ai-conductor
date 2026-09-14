@@ -1,5 +1,7 @@
+// Covers: task:1
 import { describe, it, expect } from 'vitest';
 import { classifyChecksOutcome, prMergeState, isMergeable, parseIssueRef } from '../../src/engine/pr-labels.js';
+import { GhCapabilityError } from '../../src/engine/tracker-client.js';
 
 describe('parseIssueRef — pr-labels own URL-based grammar (independent of source-ref)', () => {
   it('parses a github.com pull URL even when the owner segment looks Jira-shaped', () => {
@@ -122,6 +124,101 @@ describe('checksOutcome classification', () => {
   });
 
   describe('prMergeState integration', () => {
+    it('preserves typed check-run and external-status identities with their links', async () => {
+      const fakeGhRunner = async () => ({
+        stdout: JSON.stringify({
+          state: 'OPEN',
+          mergeable: 'MERGEABLE',
+          statusCheckRollup: [
+            {
+              __typename: 'CheckRun',
+              status: 'COMPLETED',
+              conclusion: 'FAILURE',
+              name: 'test / unit',
+              detailsUrl: 'https://github.com/owner/repo/actions/runs/123/jobs/456',
+            },
+            {
+              __typename: 'StatusContext',
+              state: 'FAILURE',
+              context: 'external/security-scan',
+              targetUrl: 'https://security.example.test/scans/789',
+            },
+          ],
+          labels: [],
+        }),
+      });
+
+      const state = await prMergeState(fakeGhRunner, '/tmp', 'https://github.com/owner/repo/pull/1');
+
+      expect(state.statusCheckRollup).toEqual([
+        {
+          kind: 'check-run',
+          status: 'COMPLETED',
+          conclusion: 'FAILURE',
+          name: 'test / unit',
+          detailsUrl: 'https://github.com/owner/repo/actions/runs/123/jobs/456',
+        },
+        {
+          kind: 'status-context',
+          state: 'FAILURE',
+          context: 'external/security-scan',
+          targetUrl: 'https://security.example.test/scans/789',
+        },
+      ]);
+    });
+
+    it('classifies a failed external StatusContext as failed', async () => {
+      const fakeGhRunner = async () => ({
+        stdout: JSON.stringify({
+          state: 'OPEN',
+          mergeable: 'MERGEABLE',
+          statusCheckRollup: [{
+            __typename: 'StatusContext',
+            state: 'FAILURE',
+            context: 'external/security-scan',
+            targetUrl: 'https://security.example.test/scans/789',
+          }],
+          labels: [],
+        }),
+      });
+
+      const state = await prMergeState(fakeGhRunner, '/tmp', 'https://github.com/owner/repo/pull/1');
+
+      expect(state.checksOutcome).toBe('failed');
+    });
+
+    it('classifies a successful external StatusContext as green', async () => {
+      const state = await prMergeState(async () => ({ stdout: JSON.stringify({
+        state: 'OPEN', mergeable: 'MERGEABLE', labels: [],
+        statusCheckRollup: [{ __typename: 'StatusContext', state: 'SUCCESS', context: 'external' }],
+      }) }), '/tmp', 'https://github.com/owner/repo/pull/1');
+
+      expect(state.checksOutcome).toBe('green');
+    });
+
+    it.each([
+      ['invalid JSON', async () => ({ stdout: '{' }), 'readFailure', { kind: 'invalid-json' }],
+      ['non-array rollup', async () => ({ stdout: JSON.stringify({ statusCheckRollup: {} }) }), 'contextFailure', { kind: 'invalid-rollup' }],
+      ['invalid entry fields', async () => ({ stdout: JSON.stringify({ statusCheckRollup: [{ __typename: 'CheckRun', name: 1 }] }) }), 'contextFailure', { kind: 'invalid-rollup-entry', index: 0 }],
+    ] as const)('returns a classified failure for %s', async (_name, runner, field, expected) => {
+      const state = await prMergeState(runner, '/tmp', 'https://github.com/owner/repo/pull/1');
+
+      expect(state[field]).toMatchObject(expected);
+    });
+
+    it('retains a canonical GhCapabilityError as a classified read failure', async () => {
+      const capability = new GhCapabilityError('statusCheckRollup', new Error('unsupported'));
+      const state = await prMergeState(async () => { throw capability; }, '/tmp', 'https://github.com/owner/repo/pull/1');
+
+      expect(state.readFailure).toEqual({ kind: 'capability', error: capability });
+    });
+
+    it('keeps a generic rejected read distinct from an empty successful rollup', async () => {
+      const state = await prMergeState(async () => { throw new Error('timeout'); }, '/tmp', 'https://github.com/owner/repo/pull/1');
+
+      expect(state.readFailure).toMatchObject({ kind: 'runner' });
+    });
+
     it('includes checksOutcome in the returned state', async () => {
       const fakeGhRunner = async () => ({
         stdout: JSON.stringify({
