@@ -6,7 +6,7 @@ Track: technical
 
 Tier: S
 
-Approved by the operator on 2026-09-06 (delegated), and narrowed by the operator on 2026-09-10 and 2026-09-11. Scope begins after the target repository has been resolved: every rejection raised by the landing primitive except a target-disappearance error gets a stable gate identifier, and every rejection for which that canonical target still exists emits one new persisted event carrying the identifier and reason onto the target repository's existing event ledger. Pre-target command failures and target-disappearance failures are exempt from gate identification and perform no telemetry write; backfill of historical rejections, precision reporting, and gate-strictness changes remain outside this slice.
+Approved by the operator on 2026-09-06 (delegated), and narrowed by the operator on 2026-09-10 and 2026-09-11. Scope begins after the target repository has been resolved: every rejection raised by the landing primitive except a target-disappearance error gets a stable gate identifier, and every rejection for which that canonical target still exists emits one new persisted event carrying the identifier and reason onto the target repository's composer-owned event ledger (`.pipeline/composer-events.jsonl`, the same `ConductorEvent` schema as the engine ledger, one writer per file per adr-2026-08-08 D2). Pre-target command failures and target-disappearance failures are exempt from gate identification and perform no telemetry write; backfill of historical rejections, precision reporting, and gate-strictness changes remain outside this slice.
 
 ## Story 1: Record every target-resolved land-gate rejection as a spine event naming its gate
 
@@ -14,7 +14,7 @@ Approved by the operator on 2026-09-06 (delegated), and narrowed by the operator
 
 #### Happy Path
 
-- Given a land invocation is rejected because its stories artifact is not approved, when the command reports the failure, then the target repository's persisted event ledger gains one land-gate-rejection event whose gate identifier names the stories-approval gate and whose reason carries the rejection message.
+- Given a land invocation is rejected because its stories artifact is not approved, when the command reports the failure, then the target repository's composer-owned event ledger gains one land-gate-rejection event whose gate identifier names the stories-approval gate and whose reason carries the rejection message.
 - Given a land invocation is rejected by the coherence gate, when the command reports the failure, then the recorded event's gate identifier names the coherence gate and its reason carries the coherence validator's own message.
 - Given several land invocations against one repository are rejected by different gates, when the persisted ledger is replayed, then each rejection appears as its own event and the per-gate counts and reasons are derivable from those events alone.
 
@@ -26,7 +26,7 @@ Approved by the operator on 2026-09-06 (delegated), and narrowed by the operator
 ### Done When
 
 - [ ] Every rejection site in the landing primitive except the target-disappearance check raises an error carrying one gate identifier drawn from a closed enumeration, and the coherence gate's own rejections surface under the coherence identifier.
-- [ ] An end-to-end command test drives a rejected land and reads the emitted event back from the target repository's persisted ledger, asserting gate identifier and reason.
+- [ ] An end-to-end command test drives a rejected land and reads the emitted event back from the target repository's composer-owned ledger, asserting gate identifier and reason.
 - [ ] A successful end-to-end land in the same test file leaves no land-gate-rejection event in that ledger.
 
 ## Story 2: Never let recording degrade the rejection the operator sees

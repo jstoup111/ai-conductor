@@ -1043,7 +1043,11 @@ export async function dispatchEngineer(
         try {
           const rejection = classifyLandGateRejection(err);
           const events = new ConductorEventEmitter();
-          const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'events.jsonl'), events);
+          // D2 of adr-2026-08-08: one writer per ledger file. The compose loop is a
+          // separate process from the engine, so it owns its own sibling ledger
+          // (`composer-events.jsonl`, same ConductorEvent schema) at the target
+          // root; readers merge by `ts`.
+          const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
           persister.start();
           try {
             await events.emitOrThrow({

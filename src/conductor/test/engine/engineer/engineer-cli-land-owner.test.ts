@@ -346,7 +346,7 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     expect(code).toBe(1);
     expect(err.join('\n')).toContain('stories artifact is not approved');
     expect(err).toContain(`engineer land: worktree kept for inspection at "${worktree}".`);
-    const ledger = await readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8');
+    const ledger = await readFile(join(repoPath, '.pipeline', 'composer-events.jsonl'), 'utf-8');
     const events = ledger.trim().split('\n').map((line) => JSON.parse(line) as Record<string, string>);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -373,7 +373,7 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     ));
 
     expect(code).toBe(1);
-    const ledger = await readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8');
+    const ledger = await readFile(join(repoPath, '.pipeline', 'composer-events.jsonl'), 'utf-8');
     const events = ledger.trim().split('\n').map((line) => JSON.parse(line) as Record<string, string>);
     expect(events).toHaveLength(1);
     const [event] = events;
@@ -407,7 +407,7 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
       );
     });
 
-    const ledger = await readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8');
+    const ledger = await readFile(join(repoPath, '.pipeline', 'composer-events.jsonl'), 'utf-8');
     expect(ledger.trim().split('\n').map((line) => (JSON.parse(line) as { gate: string }).gate))
       .toEqual(['stories-not-approved', 'coherence']);
     await rm(fakeHome, { recursive: true, force: true });
@@ -424,7 +424,7 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
       opts,
     ));
 
-    const ledger = await readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8');
+    const ledger = await readFile(join(repoPath, '.pipeline', 'composer-events.jsonl'), 'utf-8');
     const [event] = ledger.trim().split('\n').map((line) => JSON.parse(line) as Record<string, string>);
     expect(event).not.toHaveProperty('sourceRef');
     await rm(fakeHome, { recursive: true, force: true });
@@ -441,7 +441,7 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     ));
 
     expect(code).toBe(0);
-    await expect(readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8'))
+    await expect(readFile(join(repoPath, '.pipeline', 'composer-events.jsonl'), 'utf-8'))
       .rejects.toMatchObject({ code: 'ENOENT' });
     await rm(fakeHome, { recursive: true, force: true });
   });
@@ -461,7 +461,7 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
 
       expect(code).toBe(1);
       expect(err).toHaveLength(2);
-      await expect(readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8'))
+      await expect(readFile(join(repoPath, '.pipeline', 'composer-events.jsonl'), 'utf-8'))
         .rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       landSpec.mockRestore();
@@ -516,7 +516,7 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
       expect(code).toBe(1);
       expect(err[0]).toContain('EEXIST');
       expect(err[1]).toBe(`engineer land: worktree kept for inspection at "${worktree}".`);
-      const ledger = await readFile(join(repoPath, '.pipeline', 'events.jsonl'), 'utf-8');
+      const ledger = await readFile(join(repoPath, '.pipeline', 'composer-events.jsonl'), 'utf-8');
       const events = ledger.trim().split('\n').map((line) => JSON.parse(line) as Record<string, string>);
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
