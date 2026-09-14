@@ -110,6 +110,8 @@ describe('custom build-review policy runner', () => {
     expect(result.success, result.output).toBe(true);
     expect(invoke).toHaveBeenCalledTimes(1);
     const firstInvocation = (invoke.mock.calls as unknown as Array<[Parameters<LLMProvider['invoke']>[0]]>)[0]?.[0];
+    if (!firstInvocation?.model || !firstInvocation.effort) throw new Error('expected a prepared provider candidate');
+    const preparedCandidate = { provider: providerKey, model: firstInvocation.model, effort: firstInvocation.effort };
     expect(firstInvocation?.prompt).toContain('Portable policy');
     expect(buildReviewProjections.buildReviewEffectiveResultDescriptor).toHaveBeenCalledWith(expect.objectContaining({
       id: 'portable', kind: 'custom', skill: source === 'plugin' ? 'policy-plugin:portable-policy' : 'portable-policy',
@@ -122,7 +124,9 @@ describe('custom build-review policy runner', () => {
       source, bundleDigest: `sha256-v1:${'a'.repeat(64)}`,
       provenance: expect.objectContaining({
         inputDigest: expect.any(String),
-        candidate: expect.objectContaining({ provider: providerKey }),
+        // Every source choice must remain bound to the actual prepared
+        // candidate that receives its material, not the parent default.
+        candidate: preparedCandidate,
         ...(source === 'plugin' ? { plugin: { id: 'policy-plugin', version: '1.0.0' } } : {}),
       }),
     })]);
