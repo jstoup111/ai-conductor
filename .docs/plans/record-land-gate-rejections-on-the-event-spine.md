@@ -116,6 +116,27 @@ Testing follows the repository test rules. The classifier and the gate identifie
 2. An unclassified landing failure is still recorded as a rejection event under the unclassified identifier.
 3. The reference documentation lists the new event among the persisted types, its counts match the sink record, and it states the ledger location and the reason for it.
 
+### Task 5: Merge the compose-owned ledger into the run report reader
+**Story:** Story 1
+**Type:** happy-path
+**Files:** src/conductor/src/engine/report-renderer.ts, src/conductor/test/engine/report-renderer.test.ts, docs/reference/artifacts.md
+**Dependencies:** 4
+
+> **Amended 2026-09-14 by operator decision (AB-1, adr-2026-08-08-pipeline-owned-closeout-timestamps D2):** a sibling ledger needs a production reader that merges by `ts`. The existing `--report` reader is that consumer; it gains the compose-owned ledger and one per-gate rejection table. No new channel, file, or command.
+
+**Steps:**
+1. Write a failing report-renderer case whose fixture root holds both `events.jsonl` and a sibling `composer-events.jsonl` carrying `land_gate_rejected` events, and assert the rendered report contains a land-gate rejection table with one row per gate, its count, and its latest reason.
+2. Establish RED, then make `renderReport` read the optional sibling `composer-events.jsonl` next to the given ledger, merge the two parsed streams ordered by `ts`, and aggregate `land_gate_rejected` events per gate.
+3. Add a case proving a missing or empty sibling ledger renders the existing tables unchanged with no rejection table, and a case proving a malformed sibling line is skipped like a malformed primary line.
+4. Update the reference documentation row for `composer-events.jsonl` to name the run report as its reader.
+5. Run the focused test file, the typecheck target that includes tests, and the repository validation suite, then commit.
+
+**Done when:**
+1. The run report renders one land-gate rejection row per gate with its count and latest reason when the sibling ledger holds rejection events.
+2. Rejection rows are ordered by the merged `ts` sequence across both ledgers, not by file.
+3. A missing, empty, or partially malformed sibling ledger leaves every existing report table byte-identical and adds no rejection table.
+4. The reference documentation names the run report as the reader of the compose-owned ledger.
+
 ## Coverage Check
 
 > **Amended 2026-09-11 by operator approval for #1628:** Target-disappearance errors are explicitly outside both the stable-identifier requirement and the recording contract. Preserve their existing rejection, retained-worktree, and no-write behavior. The operator approved this story exception rather than adding an identifier for a scenario outside the intended operating scope. All other target-resolved rejections retain the existing gate-identification and event requirements.
@@ -124,7 +145,7 @@ Testing follows the repository test rules. The classifier and the gate identifie
 | --- | --- | --- | --- |
 | Story 1 happy: Given a land invocation is rejected because its stories artifact is not approved, when the command reports the failure, then the target repository's composer-owned event ledger gains one land-gate-rejection event whose gate identifier names the stories-approval gate and whose reason carries the rejection message. | 1, 3 | "A rejected landing appends exactly one rejection event to the target repository's composer-owned event ledger (`.pipeline/composer-events.jsonl`), carrying the gate identifier, the reason, the project name, and the worktree path." | diff-local |
 | Story 1 happy: Given a land invocation is rejected by the coherence gate, when the command reports the failure, then the recorded event's gate identifier names the coherence gate and its reason carries the coherence validator's own message. | 1, 3 | "Coherence validator rejections reach the caller under the coherence identifier with the validator's own message preserved as the reason." | diff-local |
-| Story 1 happy: Given several land invocations against one repository are rejected by different gates, when the persisted ledger is replayed, then each rejection appears as its own event and the per-gate counts and reasons are derivable from those events alone. | 3 | "Two rejections tripping different gates produce two ledger records whose gate identifiers differ, so per-gate counts and reasons are derivable from the ledger alone." | diff-local |
+| Story 1 happy: Given several land invocations against one repository are rejected by different gates, when the persisted ledger is replayed, then each rejection appears as its own event and the per-gate counts and reasons are derivable from those events alone. | 3, 5 | "Two rejections tripping different gates produce two ledger records whose gate identifiers differ, so per-gate counts and reasons are derivable from the ledger alone." | diff-local |
 | Story 1 negative: Given a land invocation that passes every gate and commits, when the command returns success, then no land-gate-rejection event is recorded. | 3 | "A successful landing appends no rejection event to that ledger." | diff-local |
 | Story 2 happy: Given a rejection message longer than the recorded-reason cap, when the event is built, then the recorded reason is truncated to the cap and marked as truncated, while the message printed to the operator remains complete. | 2 | "A reason longer than the cap is returned truncated to the cap with an explicit truncation marker, and the classifier never mutates the error it was given." | diff-local |
 | Story 2 negative: Given a recordable land failure other than target disappearance that no gate identifier classifies, when the event is built, then it is recorded under the unclassified gate identifier rather than dropped. | 2, 4 | "The classifier returns the error's own gate identifier for a gate error and `unclassified` for any other recordable error from the target-resolved landing boundary; target disappearance never reaches the persister." | diff-local |
@@ -136,7 +157,7 @@ All criteria are diff-local against controlled fixtures. Task 1 and Task 2 own u
 
 ## Task Dependency Graph
 
-Task 1 -> Task 2 -> Task 3 -> Task 4
+Task 1 -> Task 2 -> Task 3 -> Task 4 -> Task 5
 
 ## Verify-Claims Ledger — operator scope correction — 2026-09-11
 
