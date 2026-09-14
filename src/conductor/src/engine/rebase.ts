@@ -1533,7 +1533,7 @@ async function resolveRebaseConflictsInner(
     }
     const documentInputs = await resolveReviewInputs(projectRoot, allChangedPaths ?? []);
     const documentsChanged = allChangedPaths?.some((path) => documentInputs.includes(path)) ?? false;
-    const resolvedOutcome = changedCodePaths.length > 0 || documentsChanged
+    const resolvedOutcome: RebaseOutcome = changedCodePaths.length > 0 || documentsChanged
       ? { documentInputs, ...(changedCodePaths.length === 0 ? { featureSurface: [] } : {}), kind: 'changed', changedCodePaths, ...(allChangedPaths === undefined ? {} : { allChangedPaths }) }
       : { kind: 'noop', ...(allChangedPaths === undefined ? {} : { allChangedPaths }) };
     return attachResolvedReplay(resolvedOutcome);
