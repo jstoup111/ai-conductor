@@ -1880,7 +1880,11 @@ export class DefaultStepRunner implements StepRunner {
     });
     if (providerResult) {
       return {
-        attempted: true,
+        kind: providerResult.success
+          ? 'session-completed'
+          : providerResult.executionDisposition === 'not-started'
+            ? 'not-started'
+            : 'failed',
         ...this.providerAttribution(providerResult),
       };
     }
@@ -1893,7 +1897,7 @@ export class DefaultStepRunner implements StepRunner {
 
     // Walk the fallback ladder so the CI-failure resolver is not blocked by
     // one model's unavailability.
-    await this.modelAvailability.invokeWithLadder(this.provider, {
+    const result = await this.modelAvailability.invokeWithLadder(this.provider, {
       prompt,
       sessionId,
       resume: false,
@@ -1904,9 +1908,7 @@ export class DefaultStepRunner implements StepRunner {
       cwd: ctx.worktreePath,
     }, async () => ({ sessionId: uuidv4(), resume: false }));
 
-    // Always report attempted: true — the success of the fix is determined by
-    // whether CI subsequently passes.
-    return { attempted: true };
+    return { kind: result.success ? 'session-completed' : 'failed' };
   }
 
   /**

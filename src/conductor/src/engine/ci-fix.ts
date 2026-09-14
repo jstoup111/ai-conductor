@@ -321,7 +321,25 @@ async function evaluateEligibilityGates(
 /**
  * Result of a CI fix attempt.
  */
-export type CiFixOutcome = { kind: 'changed' } | { kind: 'noop' } | { kind: 'branch-gone' } | { kind: 'needs-human'; providerSetupExhaustion: ProviderSetupExhaustion };
+export type CiFixOutcome =
+  | { kind: 'not-started' }
+  | { kind: 'noop' }
+  | { kind: 'failed'; stage: 'provider' | 'guard' | 'verification' | 'publication' | 'worktree' }
+  | { kind: 'published' }
+  | { kind: 'branch-gone' }
+  | { kind: 'needs-human'; providerSetupExhaustion: ProviderSetupExhaustion };
+
+/** Internal result emitted by the provider-session boundary. */
+export type CiFixSessionOutcome =
+  | { kind: 'not-started' }
+  | { kind: 'failed' }
+  | { kind: 'session-completed' }
+  /** @deprecated compatibility for existing injected seams; treated as completed. */
+  | { kind: 'changed' }
+  /** @deprecated compatibility for existing injected seams; treated as no-start. */
+  | { kind: 'noop' }
+  /** Every provider candidate was unavailable during setup; park for human recovery. */
+  | { kind: 'needs-human'; providerSetupExhaustion: ProviderSetupExhaustion };
 
 /**
  * Injected fix-runner seam (pattern: {@link RebaseResolver} in rebase.ts).
@@ -338,7 +356,7 @@ export interface CiFixRunner {
     hint: string;
     entry: WatchEntry;
     dispatcher?: CiFixDispatcher;
-  }): Promise<CiFixOutcome>;
+  }): Promise<CiFixSessionOutcome>;
 }
 
 /**
@@ -366,9 +384,9 @@ export interface CiFixDispatcher {
  * no-op outcome without invoking the dispatcher.
  */
 export const productionCiFixRunner: CiFixRunner = {
-  async run({ worktreePath, hint, entry, dispatcher }): Promise<CiFixOutcome> {
+  async run({ worktreePath, hint, entry, dispatcher }): Promise<CiFixSessionOutcome> {
     if (process.env.AI_CONDUCTOR_NO_REAL_EXEC) {
-      return { kind: 'noop' };
+      return { kind: 'not-started' };
     }
 
     if (!dispatcher) {
@@ -381,7 +399,7 @@ export const productionCiFixRunner: CiFixRunner = {
     const attempt = await dispatcher.resolveCiFailure({ worktreePath, hint, entry });
     return attempt.providerSetupExhaustion
       ? { kind: 'needs-human', providerSetupExhaustion: attempt.providerSetupExhaustion }
-      : { kind: 'changed' };
+      : { kind: attempt.kind };
   },
 };
 
@@ -492,12 +510,21 @@ export async function runCiFix(
         }
       }
 
-      // Run the fix-runner seam inside the worktree, propagating its result
-      // as the dispatch outcome (Task 18).
+      const beforeHead = await git(['rev-parse', 'HEAD']);
+      if (beforeHead.exitCode !== 0) return { kind: 'failed', stage: 'worktree' };
+
+      // Run the provider session inside the worktree. A completed session is
+      // only a candidate repair; the committed HEAD check below is authoritative.
       const fixOutcome = await deps.fixRunner.run({ worktreePath, hint, entry });
 
-      if (fixOutcome.kind !== 'changed') {
-        return fixOutcome;
+      if (fixOutcome.kind === 'needs-human') return fixOutcome;
+      if (fixOutcome.kind === 'not-started' || fixOutcome.kind === 'noop') return { kind: 'not-started' };
+      if (fixOutcome.kind === 'failed') return { kind: 'failed', stage: 'provider' };
+
+      const afterHead = await git(['rev-parse', 'HEAD']);
+      if (afterHead.exitCode !== 0) return { kind: 'failed', stage: 'worktree' };
+      if (afterHead.stdout.trim() === beforeHead.stdout.trim()) {
+        return { kind: 'noop' };
       }
 
       // Task 19: guards + suite gate before push.
@@ -506,36 +533,41 @@ export async function runCiFix(
         const reason = `${guardsResult.guard}: ${guardsResult.reason}`;
         log(`${prUrl}: ci-fix acceptance guard failed: ${reason}`);
         logOutcome(log, prUrl, 'ci-fix-acceptance-guards', 'escalated');
-        return fixOutcome;
+        return { kind: 'failed', stage: 'guard' };
       }
 
       const verify = deps.verify ?? ((projectRoot: string) =>
         dispatchTestSuiteCommand({ kind: 'run' }, { projectRoot, print: log }));
-      const suiteExitCode = await verify(worktreePath);
+      let suiteExitCode: number;
+      try {
+        suiteExitCode = await verify(worktreePath);
+      } catch {
+        return { kind: 'failed', stage: 'verification' };
+      }
       if (suiteExitCode !== 0) {
         log(`${prUrl}: ci-fix suite gate failed`);
         logOutcome(log, prUrl, 'ci-fix-suite-gate', 'escalated');
-        return fixOutcome;
+        return { kind: 'failed', stage: 'verification' };
       }
 
       const pushResult = await pushRefreshedBranch(git, branch, log);
       if (!pushResult.pushed) {
         log(`${prUrl}: ci-fix lease push failed: ${pushResult.reason}`);
         logOutcome(log, prUrl, 'ci-fix-lease-push', 'escalated');
-        return fixOutcome;
+        return { kind: 'failed', stage: 'publication' };
       }
 
       logOutcome(log, prUrl, 'ci-fix-lease-push', 'refreshed');
-      return fixOutcome;
+      return { kind: 'published' };
     }, undefined, deps.liveness ?? {});
 
-    return outcome;
+    return outcome as CiFixOutcome;
   } catch (err) {
-    // Any unhandled error in worktree setup gets logged but re-thrown
+    // Worktree failures are conservative and never become a refund.
     const tag = classifyFixError(err);
     const message = err instanceof Error ? err.message : String(err);
     log(`${prUrl}: unexpected error in ci-fix resolver [${tag}]: ${message}`);
-    throw err;
+    return { kind: 'failed', stage: 'worktree' };
   }
 }
 

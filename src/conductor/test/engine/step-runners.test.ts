@@ -1282,7 +1282,7 @@ describe('DefaultStepRunner', () => {
         actualProvider: 'codex',
       }),
       ci: expect.objectContaining({
-        attempted: true,
+        kind: 'session-completed',
         preferredProvider: 'codex',
         actualProvider: 'codex',
       }),

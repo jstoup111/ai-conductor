@@ -595,7 +595,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
 
       // Verify the result
-      expect(result.kind).toBe('changed');
+      expect(result.kind).toBe('published');
 
       // Verify worktree was cleaned up
       const worktreePath = join(repoPath, '.worktrees', `ci-fix-${SLUG}`);
@@ -636,8 +636,8 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         threwError = true;
       }
 
-      // Verify it threw
-      expect(threwError).toBe(true);
+      // Resolver failures are conservative and still clean up.
+      expect(threwError).toBe(false);
 
       // Verify worktree was still cleaned up despite the throw
       const worktreePath = join(repoPath, '.worktrees', `ci-fix-${SLUG}`);
@@ -717,7 +717,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       const result = await runCiFix(entry, branch, hint, { fixRunner, verify }, logger);
       expect(verify).toHaveBeenCalledOnce();
 
-      expect(result.kind).toBe('changed');
+      expect(result.kind).toBe('published');
 
       // The push landed on origin: the bare repo's feat/fix ref carries the new commit
       const originLog = execSync(`git log --format=%s feat/fix`, { cwd: originPath }).toString();
@@ -781,8 +781,8 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         logger,
       );
 
-      // Attempt stays consumed: the outcome remains 'changed' even though nothing published
-      expect(result.kind).toBe('changed');
+      // Attempt stays consumed, but the failed verifier is explicit.
+      expect(result).toEqual({ kind: 'failed', stage: 'verification' });
 
       const afterSha = execSync(`git rev-parse feat/fix`, { cwd: originPath }).toString().trim();
       expect(afterSha).toBe(beforeSha);
@@ -821,7 +821,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
 
       const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
 
-      expect(result.kind).toBe('changed');
+      expect(result).toEqual({ kind: 'failed', stage: 'guard' });
 
       const afterSha = execSync(`git rev-parse feat/fix`, { cwd: originPath }).toString().trim();
       expect(afterSha).toBe(beforeSha);
@@ -862,7 +862,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
 
       // Verify callback ran (stale worktree was cleaned)
       expect(callbackRan).toBe(true);
-      expect(result.kind).toBe('changed');
+      expect(result.kind).toBe('noop');
 
       // Verify worktree cleaned up again
       const worktreeExists = execSync(`git worktree list --porcelain 2>/dev/null | grep -q "${worktreePath}" && echo "yes" || echo "no"`).toString().trim();
@@ -895,7 +895,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       };
 
       const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
-      expect(result.kind).toBe('changed');
+      expect(result.kind).toBe('published');
 
       // Primary checkout must be fully clean — no staged/unstaged/untracked pollution.
       const status = execSync(`git status --porcelain`, { cwd: repoPath }).toString();
@@ -939,7 +939,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
 
       const result = await runCiFix(entry, 'feat/fix', 'hint', { fixRunner, liveness: { worktreeLifecycle } }, () => {});
 
-      expect(result.kind).toBe('noop');
+      expect(result.kind).toBe('not-started');
       expect(observed).toEqual(['worktree-present']);
       expect(queueDepth).toBe(0);
       expect(existsSync(worktreePath)).toBe(false);
@@ -971,7 +971,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         liveness: { isFeatureInFlight: async () => claimed, log: (m) => logs.push(m) },
       }, () => {});
 
-      expect(result.kind).toBe('noop');
+      expect(result.kind).toBe('not-started');
       expect(existsSync(worktreePath)).toBe(true);
       expect(logs.some((line) => line.includes('worktree removal refused') && line.includes(SLUG) && line.includes('active work claim'))).toBe(true);
       execSync(`git worktree remove --force "${worktreePath}"`, { cwd: repoPath });
@@ -1097,7 +1097,7 @@ describe('ci-fix: productionCiFixRunner honors AI_CONDUCTOR_NO_REAL_EXEC against
       dispatcher: fakeDispatcher,
     });
 
-    expect(outcome).toEqual({ kind: 'noop' });
+    expect(outcome).toEqual({ kind: 'not-started' });
     expect(calls).toHaveLength(0);
   });
 });
