@@ -106,6 +106,8 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   'rebase_gate_invalidated',
   'build_review_repair_context',
   'build_review_rubric_started',
+  'build_review_policy_resolved',
+  'build_review_policy_failed',
   'build_review_rubric_prompt',
   'build_review_rubric_result',
   'build_review_rubric_skipped',
@@ -189,11 +191,15 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
   'halt_cleared',
   'operator_rewind',
   'kickback_budget_adjustment_authorized',
+  'build_review_policy_resolved',
+  'build_review_policy_failed',
 ] satisfies Array<ConductorEvent['type']>;
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'build_review_cache_discarded',
   'build_review_rubric_started',
+  'build_review_policy_resolved',
+  'build_review_policy_failed',
   'build_review_rubric_result',
   'build_review_rubric_skipped',
   'build_review_cache_hit',

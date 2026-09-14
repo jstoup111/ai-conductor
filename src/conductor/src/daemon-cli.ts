@@ -2665,6 +2665,14 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'build_review_rubric_started':
       log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} started`);
       break;
+    case 'build_review_policy_resolved': {
+      const provenance = event.pluginId === undefined ? event.source : `${event.source}/${event.pluginId}`;
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} policy resolved: ${event.provider} ${provenance}`);
+      break;
+    }
+    case 'build_review_policy_failed':
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} policy ${event.stage} failed: ${event.reason}`);
+      break;
     case 'build_review_cache_hit':
       log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} cache hit`);
       break;

@@ -1124,9 +1124,9 @@ bindings; it does not admit every declaration in a marked file. A production-onl
 rename with neither an established target nor a concrete candidate is a valid empty-scope PASS and
 dispatches neither the reviewer nor counterfactual execution. Missing markers, absent plan test paths, and
 an abstract possibility of an unknown dependency do not turn that empty scope into a coverage failure.
-Any unknown or retired rubric
-id under `build_review.rubrics` — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`,
-`wiring` — is accepted as a no-op with a one-time notice naming the retired setting; it never fails
+Under `build_review.rubrics`: Every other id ever accepted is retired: `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring`.
+Any unknown rubric id, and each retired id above, is accepted as a no-op with a one-time notice naming
+the retired setting; it never fails
 configuration loading or halts a run
 (`adr-2026-08-22-build-review-opt-in-rubric-container`).
 
