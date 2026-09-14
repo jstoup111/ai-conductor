@@ -16,7 +16,7 @@ describe('land-gate rejection classification', () => {
     expect(error.message).toBe('stories must be accepted');
   });
 
-  it.each(['plan-task-count', 'adr-filename'] as const)(
+  it.each(['plan-task-count', 'adr-filename', 'architecture-mermaid-missing'] as const)(
     'classifies the %s gate with its stable identifier',
     (gate) => {
       expect(classifyLandGateRejection(landGateError(gate, 'unchanged message'))).toEqual({

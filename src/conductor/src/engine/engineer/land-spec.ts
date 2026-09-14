@@ -119,6 +119,7 @@ export type LandGateIdentifier =
   | 'plan-stories-reference'
   | 'stories-not-approved'
   | 'tier-artifacts-missing'
+  | 'architecture-mermaid-missing'
   | 'artifact-stem-mismatch'
   | 'adr-not-approved'
   | 'adr-uncitable-decision'
@@ -410,7 +411,7 @@ export async function landSpec(
       );
     }
     if (architectureFile && extractMermaidBlocks(await readFile(architectureFile, 'utf-8')).length === 0) {
-      throw new Error(
+      throw landGateError('architecture-mermaid-missing',
         `landSpec: non-Small architecture artifact "${architectureFile}" is missing a fenced mermaid diagram. ` +
           'Regenerate the diagram through /architecture-diagram before landing.',
       );
