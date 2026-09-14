@@ -19,6 +19,7 @@ export interface GithubInvocationAuditSite {
 }
 
 const PROCESS_MODULE = /^(?:node:)?child_process$/;
+const EXECA_MODULE = /^execa(?:\/|$)/;
 const GITHUB_HTTP_MODULE = /^(?:@octokit\/|octokit(?:$|\/)|github(?:$|\/)|node-fetch$|undici$)/;
 const PROCESS_FACTORY_NAMES = new Set(['exec', 'execFile', 'spawn', 'execSync', 'execFileSync', 'spawnSync']);
 const GITHUB_MUTATIONS = new Set(['create', 'edit', 'close', 'comment', 'ready', 'merge', 'reopen', 'delete', 'add', 'remove', 'set']);
@@ -231,11 +232,43 @@ function directGhInvocation(
     && runners.properties.get(node.expression.expression.text)?.has(node.expression.name.text) === true;
 }
 
-function enclosingFunctionName(node: ts.Node): string | undefined {
+function enclosingFunction(node: ts.Node): ts.FunctionDeclaration | undefined {
   for (let current: ts.Node | undefined = node.parent; current; current = current.parent) {
-    if (ts.isFunctionDeclaration(current) && current.name) return current.name.text;
+    if (ts.isFunctionDeclaration(current)) return current;
   }
   return undefined;
+}
+
+function enclosingFunctionName(node: ts.Node): string | undefined { return enclosingFunction(node)?.name?.text; }
+
+function isPropertyAccess(node: ts.Node | undefined, object: string, property: string): boolean {
+  return !!node
+    && ts.isPropertyAccessExpression(node)
+    && ts.isIdentifier(node.expression)
+    && node.expression.text === object
+    && node.name.text === property;
+}
+
+function isCanonicalGuardedAdapterTransportCall(file: string, node: ts.CallExpression): boolean {
+  const owner = enclosingFunction(node);
+  if (normalizedFile(file) !== 'engine/tracker-client.ts'
+    || owner?.name?.text !== 'createGuardedGithubOperationRunner'
+    || owner.parameters.length !== 2) return false;
+  const [transport, options] = owner.parameters;
+  if (!ts.isIdentifier(transport.name) || transport.name.text !== 'transport'
+    || typeReferenceName(transport.type) !== 'GhRunner'
+    || !ts.isIdentifier(options.name) || options.name.text !== 'options'
+    || !ts.isIdentifier(node.expression) || node.expression.text !== 'transport'
+    || node.arguments.length !== 2) return false;
+  const [command, executionOptions] = node.arguments;
+  if (!ts.isCallExpression(command) || !ts.isIdentifier(command.expression)
+    || command.expression.text !== 'ghArgsFor' || command.arguments.length !== 1
+    || !ts.isIdentifier(command.arguments[0]) || command.arguments[0].text !== 'request'
+    || !ts.isObjectLiteralExpression(executionOptions) || executionOptions.properties.length !== 1) return false;
+  const cwd = executionOptions.properties[0];
+  return ts.isPropertyAssignment(cwd)
+    && cwd.name.getText() === 'cwd'
+    && isPropertyAccess(cwd.initializer, 'options', 'cwd');
 }
 
 /**
@@ -244,14 +277,14 @@ function enclosingFunctionName(node: ts.Node): string | undefined {
  * else: a composition helper cannot confer write authority merely by naming
  * its callback after a registered operation.
  */
-function guardedMutationRunnerCall(node: ts.CallExpression): boolean {
-  return enclosingFunctionName(node) === 'createGuardedGithubOperationRunner';
+function guardedMutationRunnerCall(file: string, node: ts.CallExpression): boolean {
+  return isCanonicalGuardedAdapterTransportCall(file, node);
 }
 
 /** Dynamic runner forwarding is safe only inside an explicitly typed read or adapter seam. */
-function guardedDynamicRunnerForwarding(node: ts.CallExpression): boolean {
+function guardedDynamicRunnerForwarding(file: string, node: ts.CallExpression): boolean {
   const owner = enclosingFunctionName(node);
-  if (owner === 'createGuardedGithubOperationRunner') return true;
+  if (isCanonicalGuardedAdapterTransportCall(file, node)) return true;
   if (owner === 'runTrackerRead' || owner === 'graphqlPage' || owner === 'runTrackerIssueOperation') return true;
   if (owner !== 'guardedPrRunner') return false;
   const declaration = node.parent.parent;
@@ -308,19 +341,63 @@ function readOnlyRunnerForwarding(node: ts.CallExpression, readOnlyFactories: Re
   return ts.isCallExpression(factory) && ts.isIdentifier(factory.expression) && readOnlyFactories.has(factory.expression.text);
 }
 
+function processFactoryReference(
+  node: ts.Expression | undefined,
+  aliases: ReadonlySet<string>,
+  namespaces: ReadonlySet<string>,
+): boolean {
+  return !!node && (
+    (ts.isIdentifier(node) && aliases.has(node.text))
+    || (ts.isPropertyAccessExpression(node)
+      && ts.isIdentifier(node.expression)
+      && namespaces.has(node.expression.text)
+      && PROCESS_FACTORY_NAMES.has(node.name.text))
+  );
+}
+
+function processFactoryCall(
+  node: ts.CallExpression,
+  aliases: ReadonlySet<string>,
+  namespaces: ReadonlySet<string>,
+): boolean { return processFactoryReference(node.expression, aliases, namespaces); }
+
+function globalFetchCall(node: ts.CallExpression): boolean {
+  if (ts.isIdentifier(node.expression)) return node.expression.text === 'fetch';
+  return ts.isPropertyAccessExpression(node.expression)
+    && ts.isIdentifier(node.expression.expression)
+    && (node.expression.expression.text === 'globalThis' || node.expression.expression.text === 'global')
+    && node.expression.name.text === 'fetch';
+}
+
+function githubHttpUrl(node: ts.Expression | undefined): boolean {
+  const url = text(node);
+  return url !== undefined && /^https?:\/\/(?:[^/]*\.)?github\.com(?:[/:]|$)/i.test(url);
+}
+
 /** Scan one executable TypeScript source file, resolving child-process aliases. */
 export function auditGithubInvocationSource(file: string, source: string): GithubInvocationAuditFinding[] {
   const parsed = sourceFile(file, source);
   const findings: GithubInvocationAuditFinding[] = [];
   const processAliases = new Set<string>();
+  const processNamespaces = new Set<string>();
   const rawGithubImports = new Set<string>();
   const readOnlyFactories = new Set<string>();
   const injectedRunners = injectedGhRunnerNames(parsed);
   for (const statement of parsed.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteralLike(statement.moduleSpecifier)) continue;
     const bindings = statement.importClause?.namedBindings;
-    if (PROCESS_MODULE.test(statement.moduleSpecifier.text) && bindings && ts.isNamedImports(bindings)) for (const item of bindings.elements) {
-      if (PROCESS_FACTORY_NAMES.has(item.propertyName?.text ?? item.name.text)) processAliases.add(item.name.text);
+    if (PROCESS_MODULE.test(statement.moduleSpecifier.text)) {
+      if (statement.importClause?.name) processNamespaces.add(statement.importClause.name.text);
+      if (bindings && ts.isNamespaceImport(bindings)) processNamespaces.add(bindings.name.text);
+      if (bindings && ts.isNamedImports(bindings)) for (const item of bindings.elements) {
+        if (PROCESS_FACTORY_NAMES.has(item.propertyName?.text ?? item.name.text)) processAliases.add(item.name.text);
+      }
+    }
+    if (EXECA_MODULE.test(statement.moduleSpecifier.text)) {
+      if (statement.importClause?.name) processAliases.add(statement.importClause.name.text);
+      if (bindings && ts.isNamedImports(bindings)) for (const item of bindings.elements) {
+        if ((item.propertyName?.text ?? item.name.text) === 'execa') processAliases.add(item.name.text);
+      }
     }
     if (GITHUB_HTTP_MODULE.test(statement.moduleSpecifier.text)) {
       if (bindings && ts.isNamespaceImport(bindings)) rawGithubImports.add(bindings.name.text);
@@ -336,7 +413,8 @@ export function auditGithubInvocationSource(file: string, source: string): Githu
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && ts.isCallExpression(node.initializer)) {
       const first = node.initializer.arguments[0];
-      if (first && ts.isIdentifier(first) && processAliases.has(first.text)) processAliases.add(node.name.text);
+      if (processFactoryReference(first, processAliases, processNamespaces)
+        || processFactoryReference(node.initializer, processAliases, processNamespaces)) processAliases.add(node.name.text);
     }
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && rawGithubImports.has(node.expression.text)) {
       findings.push(report(parsed, file, node, 'unapproved raw GitHub HTTP client invocation outside guarded adapter'));
@@ -355,16 +433,19 @@ export function auditGithubInvocationSource(file: string, source: string): Githu
       if (directGhInvocation(node, injectedRunners)) {
         const directArgs = argv(node.arguments[0]);
         const directHead = argvHead(node.arguments[0]);
-        if (directHead && ghMutation(directHead) && !guardedMutationRunnerCall(node)) {
+        if (directHead && ghMutation(directHead) && !guardedMutationRunnerCall(file, node)) {
           findings.push(report(parsed, file, node, 'direct injected GitHub mutation outside guarded adapter'));
         } else if (!directArgs && !directHead
           && !readOnlyRunnerForwarding(node, readOnlyFactories)
-          && !guardedDynamicRunnerForwarding(node)) {
+          && !guardedDynamicRunnerForwarding(file, node)) {
           findings.push(report(parsed, file, node, 'unresolvable mutable GitHub command forwarding outside guarded adapter'));
         }
       }
       if (called && rawGithubImports.has(called)) findings.push(report(parsed, file, node, 'unapproved raw GitHub HTTP client invocation outside guarded adapter'));
-      if (called && processAliases.has(called)) {
+      if (globalFetchCall(node) && githubHttpUrl(node.arguments[0])) {
+        findings.push(report(parsed, file, node, 'unapproved raw GitHub HTTP client invocation outside guarded adapter'));
+      }
+      if (processFactoryCall(node, processAliases, processNamespaces)) {
         const executable = text(node.arguments[0]);
         const args = argv(node.arguments[1]);
         const command = argvHead(node.arguments[1]);
