@@ -5,6 +5,7 @@ import type {
   AcceptedWideningDecisionAppendResult,
   AcceptedWideningDecisionInput,
   AcceptedWideningDecisionReference,
+  AcceptedWideningDecisionReadResult,
 } from './accepted-widenings.js';
 import type {
   RemediationCasePrdWideningRecord,
@@ -24,6 +25,8 @@ export interface PrdWideningCaptureOfferStore {
 
 export interface PrdWideningCaptureDecisionStore {
   append(input: AcceptedWideningDecisionInput): Promise<AcceptedWideningDecisionAppendResult>;
+  /** Optional for mocked captures; the real store uses it to preserve legacy replay semantics. */
+  read?(): Promise<AcceptedWideningDecisionReadResult>;
 }
 
 export interface CapturePrdWideningDecisionsOptions {
@@ -152,6 +155,17 @@ function legacyClearReference(kind: 'case' | 'source' | 'entry', entry: LegacyPr
   return `legacy-clear-${kind}-${digest}`;
 }
 
+function sameLegacyAuthority(
+  decision: AcceptedWideningDecision,
+  entry: LegacyPrdWideningClear,
+  operator: string,
+): boolean {
+  return decision.authority === entry.authority && decision.rationale === entry.rationale &&
+    decision.operator === operator && decision.originalCaseId === legacyClearReference('case', entry) &&
+    decision.originalSource?.id === legacyClearReference('source', entry) &&
+    decision.originalSource.snapshot === entry.summary;
+}
+
 async function materializeLegacySource(
   store: PrdWideningCaptureOfferStore,
   entry: LegacyPrdWideningClear,
@@ -256,13 +270,25 @@ export async function capturePrdWideningDecisions(
         authority: entry.authority,
         rationale: entry.rationale,
         operator: options.operator.trim(),
-        // This deterministic legacy entry is provenance, not a rendered v2
-        // offer. It gives migration and cleared-HALT recovery one replay key.
+        // This deterministic legacy-clear provenance is deliberately distinct
+        // from migrated v1-row provenance.
         originalSource: { id: legacyClearReference('source', entry), snapshot: entry.summary },
         originalCaseId: legacyClearReference('case', entry),
         offerEntryId: legacyClearReference('entry', entry),
       };
-      const appended = await options.decisionStore.append(input);
+      const existing = options.decisionStore.read === undefined ? undefined : await options.decisionStore.read();
+      const prior = existing?.kind === 'valid'
+        ? existing.state.decisions.filter((decision) => decision.originalCaseId === input.originalCaseId &&
+          decision.originalSource?.id === input.originalSource?.id && decision.originalSource.snapshot === input.originalSource?.snapshot).at(-1)
+        : undefined;
+      if (prior && sameLegacyAuthority(prior, entry, input.operator)) {
+        captured.push(prior);
+        continue;
+      }
+      const appended = await options.decisionStore.append({
+        ...input,
+        ...(prior === undefined ? {} : { supersedes: { id: prior.id, revision: prior.revision } }),
+      });
       if (!appended.ok) {
         defects.push({ kind: 'write-failed' });
         continue;

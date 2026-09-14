@@ -1,3 +1,7 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -6,7 +10,11 @@ import {
   type PrdWideningCaptureDecisionStore,
   type PrdWideningCaptureOfferStore,
 } from '../../src/engine/prd-widening-capture.js';
-import type { AcceptedWideningDecisionInput } from '../../src/engine/accepted-widenings.js';
+import {
+  AcceptedWideningDecisionStore,
+  renderOverScopeDecisionBlock,
+  type AcceptedWideningDecisionInput,
+} from '../../src/engine/accepted-widenings.js';
 import type { RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 
 const feature = { version: 'v1' as const, repository: 'example/repository', feature: 'wording-drift' };
@@ -105,6 +113,40 @@ describe('capturePrdWideningDecisions', () => {
     expect(recorded).toEqual([expect.objectContaining({
       authority: 'refuse', offerEntryId: 'case-1', supersedes: { id: 'decision-1', revision: 1 },
     })]);
+  });
+
+  it('persists a rendered refusal revision through capture against the real decision store', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'prd-widening-capture-'));
+    try {
+      const store = new AcceptedWideningDecisionStore(projectRoot, {
+        version: 1, repository: feature.repository, feature: feature.feature,
+      }, { newDecisionId: (() => {
+        const ids = ['decision-1', 'decision-2'];
+        return () => ids.shift()!;
+      })() });
+      await store.append({
+        criterion: 'NC.1', authority: 'accept', rationale: 'Initially approved.', operator: 'operator@example.test',
+        originalSource, originalCaseId: 'case-1', offerEntryId: 'case-1',
+      });
+      const rendered = renderOverScopeDecisionBlock([{
+        kind: 'revise-decision', criterion: 'NC.1', summary: 'This text is editable and is not used to bind authority.',
+        relation: 'outside-visible', offerEntryId: 'case-1', originalSource, originalCaseId: 'case-1',
+        priorDecision: { id: 'decision-1', revision: 1 },
+      }]);
+      const clearedRevision = rendered.replace('"decision": "pending"', '"decision": "refuse",\n    "rationale": "The operator reversed the original acceptance."');
+
+      await expect(capturePrdWideningDecisions(clearedRevision, {
+        operator: 'operator@example.test', offerStore: offerStore(), decisionStore: store,
+      })).resolves.toMatchObject({ kind: 'captured', defects: [], captured: [{
+        id: 'decision-2', authority: 'refuse', offerEntryId: 'case-1', supersedes: { id: 'decision-1', revision: 1 },
+      }] });
+      await expect(store.read()).resolves.toMatchObject({ kind: 'valid', state: { decisions: [
+        { id: 'decision-1', authority: 'accept' },
+        { id: 'decision-2', authority: 'refuse', offerEntryId: 'case-1' },
+      ] } });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 
   it('returns row defects without discarding a valid sibling', async () => {

@@ -233,6 +233,25 @@ describe('legacy PRD widening decision migration', () => {
     ] } });
   });
 
+  it('retains non-identical same-authority rows with their attribution in append order', async () => {
+    const projectRoot = await createProjectRoot();
+    const accepted = {
+      criterion: 'NC.1', summary: 'The export screen is a separate user-visible workflow.', decision: 'accept' as const,
+      rationale: 'Initially approved.', operator: 'operator@example.test', decidedAt: '2026-09-01T00:00:00.000Z',
+    };
+    await writeLegacy(projectRoot, [accepted, {
+      ...accepted, rationale: 'The same authority was reconfirmed by a second operator.',
+      operator: 'second-operator@example.test', decidedAt: '2026-09-02T00:00:00.000Z',
+    }]);
+
+    await expect(migrateLegacyPrdWideningDecisions(projectRoot, FEATURE)).resolves.toMatchObject({
+      kind: 'migrated', decisions: [
+        { authority: 'accept', rationale: accepted.rationale, operator: accepted.operator, revision: 1 },
+        { authority: 'accept', rationale: 'The same authority was reconfirmed by a second operator.', operator: 'second-operator@example.test', revision: 2, supersedes: { revision: 1 } },
+      ],
+    });
+  });
+
   it('retries safely after the decision-state write is interrupted, with snapshots durable before authority', async () => {
     const projectRoot = await createProjectRoot();
     await writeLegacy(projectRoot, [{
