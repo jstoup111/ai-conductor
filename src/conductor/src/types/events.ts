@@ -930,6 +930,12 @@ export type ConductorEvent =
       };
       /** Optional to preserve parsing of events emitted before verification modes existed. */
       mode?: 'aggregate' | 'scoped';
+      /** Present only for a newly executed ordered aggregate collection. */
+      executionSummary?: {
+        plannedEntryCount: number;
+        attemptedEntryCount: number;
+        entries: Array<{ index: number; result: 'passed' | 'failed'; durationMs: number }>;
+      };
       /** Present only when the inspection made a drift-budget verdict. */
       budgetVerdict?:
         | {

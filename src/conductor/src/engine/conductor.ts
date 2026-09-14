@@ -12539,6 +12539,17 @@ export class Conductor {
     const inspection = await this.fullSuiteVerifier.inspect();
     const verification = await this.fullSuiteVerifier.ensure(inspection);
     if (verification.status === 'FAILED') {
+      if (verification.evidence?.entries !== undefined) {
+        await this.events.emit({
+          type: 'test_suite_verification',
+          freshness: { status: 'STALE', reason: verification.reason },
+          executionSummary: {
+            plannedEntryCount: verification.evidence.plannedEntryCount!,
+            attemptedEntryCount: verification.evidence.entries.length,
+            entries: verification.evidence.entries,
+          },
+        });
+      }
       if (inspection.status === 'STALE') {
         await this.events.emit({ type: 'test_suite_verification', freshness: inspection });
       }
@@ -12591,6 +12602,17 @@ export class Conductor {
         mode: verification.evidence.mode ?? 'aggregate',
       });
     } else {
+      if (verification.evidence.entries !== undefined) {
+        await this.events.emit({
+          type: 'test_suite_verification',
+          freshness: { status: 'CURRENT' },
+          executionSummary: {
+            plannedEntryCount: verification.evidence.plannedEntryCount!,
+            attemptedEntryCount: verification.evidence.entries.length,
+            entries: verification.evidence.entries,
+          },
+        });
+      }
       await this.events.emit({
         type: 'build_member_evidence_recomputed',
         member: 'test_suite',
