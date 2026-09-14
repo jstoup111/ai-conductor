@@ -390,8 +390,8 @@ describe('Conductor FINISH publication routing', () => {
     const after = await readState(statePath);
     expect(after.ok && [
       after.value.prd_audit, after.value.architecture_review_as_built,
-      after.value.validation__prd_audit,
-      after.value.validation__architecture_review_as_built,
+      (after.value as Record<string, unknown>).validation__prd_audit,
+      (after.value as Record<string, unknown>).validation__architecture_review_as_built,
     ]).toEqual(['done', 'done', 'done', 'done']);
   });
 
@@ -419,7 +419,8 @@ describe('Conductor FINISH publication routing', () => {
     } as ConductState);
 
     const advance = vi.fn(async () => ({ kind: 'complete' } as const));
-    const runner: StepRunner = { run: vi.fn(async () => { throw new Error('validator remains down'); }) };
+    const runnerRun = vi.fn<StepRunner['run']>(async () => { throw new Error('validator remains down'); });
+    const runner: StepRunner = { run: runnerRun };
     await new Conductor({
       stateFilePath: statePath, stepRunner: runner, finishPublication: { advance },
       events: new ConductorEventEmitter(), projectRoot: dir, fromStep: 'finish',
@@ -428,7 +429,7 @@ describe('Conductor FINISH publication routing', () => {
       git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
     }).run();
 
-    expect(runner.run.mock.calls.filter(([step]) => step === 'prd_audit')).toHaveLength(2);
+    expect(runnerRun.mock.calls.filter(([step]) => step === 'prd_audit')).toHaveLength(2);
     expect(advance).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('validator remains down');
   });
