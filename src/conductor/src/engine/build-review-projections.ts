@@ -156,8 +156,8 @@ export {
 
 /** One current-lap reduced-coverage stamp, shared by every reader-facing surface. */
 export interface BuildReviewReducedCoverageEntry {
-  readonly rubric: BuildReviewRubricId;
-  readonly cause: BuildReviewInfrastructureFailure['reason'] | BuildReviewScopeIncompleteFault['reason'];
+  readonly rubric: string;
+  readonly cause: BuildReviewInfrastructureFailure['reason'] | BuildReviewScopeIncompleteFault['reason'] | import('./build-review-artifacts.js').BuildReviewCustomInfrastructureFailureReason;
   readonly diagnostic: string;
   readonly operator: string;
   readonly rationale: string;
@@ -169,7 +169,12 @@ export type BuildReviewReducedCoverageEvidenceInput =
   | {
       readonly state: 'known';
       readonly records: readonly BuildReviewReducedCoverageDispositionRecord[];
-      readonly currentFailures: readonly (BuildReviewInfrastructureFailure | BuildReviewScopeIncompleteFault)[];
+      readonly currentFailures: readonly (BuildReviewInfrastructureFailure | BuildReviewScopeIncompleteFault | {
+        readonly rubric: string;
+        readonly reason: import('./build-review-artifacts.js').BuildReviewCustomInfrastructureFailureReason;
+        readonly detail: string;
+        readonly declaration: import('./build-review-artifacts.js').BuildReviewCustomDeclaration;
+      })[];
     };
 
 export type BuildReviewReducedCoverageEvidenceRenderResult =
@@ -202,7 +207,10 @@ export function renderBuildReviewReducedCoverageEvidence(
   const entries: BuildReviewReducedCoverageEntry[] = [];
   for (const failure of input.currentFailures) {
     const decision = input.records.find((record) =>
-      record.identity.rubric === failure.rubric && record.identity.reason === failure.reason,
+      record.identity.reason === failure.reason &&
+      ('declaration' in failure
+        ? JSON.stringify(record.identity.declaration) === JSON.stringify(failure.declaration)
+        : record.identity.rubric === failure.rubric),
     );
     if (!decision) continue;
     if (failure.detail.trim().length === 0) {

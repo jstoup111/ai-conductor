@@ -26,6 +26,7 @@ import {
 import { findDocumentationDelivery } from './documentation-delivery.js';
 import type { BuildReviewRepairProvenance } from './build-review-inputs.js';
 import {
+  buildReviewConfidenceFloors,
   resolveEffectiveBuildReviewVerdict,
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
@@ -5570,7 +5571,10 @@ export class Conductor {
     | { readonly kind: 'settled' }
     | { readonly kind: 'invalid'; readonly reason: string }
   > {
-    if (!this.daemon || !this.buildReviewAdjudicationEnabled()) return { kind: 'absent' };
+    // A custom aggregate has the same durable case authority in attended and
+    // daemon runs. Leaving attended PASS outside settlement replays an already
+    // applied action on the next BUILD entry.
+    if (!this.buildReviewAdjudicationEnabled()) return { kind: 'absent' };
     // The lap's own aggregate is both the PASS evidence and the lap identity
     // every lifecycle occurrence is keyed by. A scalar/legacy verdict has
     // neither and keeps its historical behavior.
@@ -11972,8 +11976,7 @@ export class Conductor {
                     verdictRaw,
                     {
                       emit: async (event) => { await this.events.emit(event); },
-                      minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(this.config).rubrics)
-                        .map(([id, policy]) => [id, policy.min_confidence])),
+                      minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
                     },
                   );
                   // Old raw aggregate fixtures (and pre-adjudication callers)
@@ -12017,15 +12020,14 @@ export class Conductor {
                       verdictRaw,
                       {
                         emit: async (event) => { await this.events.emit(event); },
-                        minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(this.config).rubrics)
-                          .map(([id, policy]) => [id, policy.min_confidence])),
+                        minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
                       },
                     );
                     if (!latest.ok) throw new Error(latest.reason);
                     return new Set(latest.effective.acceptedFindingIds);
                   };
                   const trackerRepo = await this.resolveTrackerRepoSlug();
-                  const floors = resolveBuildReviewConfig(this.config).rubrics;
+                  const floors = buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config));
                   const suppressedFindingIds = effective.effective.suppressedFindingIds ?? [];
                   // One shared projection with the effective-verdict seam that
                   // already persisted these rows for this lap; the coordinator
@@ -12034,7 +12036,7 @@ export class Conductor {
                   const suppressions = projectBuildReviewSuppressionEntries({
                     aggregate,
                     suppressedFindingIds,
-                    floors: Object.fromEntries(Object.entries(floors).map(([id, policy]) => [id, policy.min_confidence])),
+                    floors,
                   });
                   const outcome = await applyBuildReviewOutcome({
                     settlement: 'settled',
@@ -12171,8 +12173,7 @@ export class Conductor {
                       this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
                     )(this.projectRoot, verdictRaw, {
                       emit: async (event) => { await this.events.emit(event); },
-                      minConfidence: Object.fromEntries(Object.entries(resolveBuildReviewConfig(this.config).rubrics)
-                        .map(([id, policy]) => [id, policy.min_confidence])),
+                      minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
                     });
                     if (!rawBuildReviewFailIsEffectivelyAccepted(resolution)) return false;
                   } catch {

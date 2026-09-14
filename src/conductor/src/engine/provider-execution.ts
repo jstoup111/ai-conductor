@@ -145,6 +145,8 @@ export interface PreparedCandidateOperationContext {
   readonly deadlineAt?: number;
   /** Candidate-local review policy may tighten prompt, cwd, or access after preparation. */
   invoke(overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>): Promise<InvokeResult>;
+  /** The model that actually answered the candidate invocation, if it ran. */
+  invokedModel(): string | undefined;
 }
 
 /** A candidate operation either reuses evidence, judges through `invoke`, or returns a classified failure. */
@@ -846,6 +848,7 @@ export async function executeProviderCandidates({
             abortSignal,
             deadlineAt,
             invoke: invokeProvider,
+            invokedModel: () => invocation?.invokedModel,
           });
           // An operation may observe cancellation while resolving a policy or
           // checking a cache. It cannot publish that stale work as a judgment

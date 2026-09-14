@@ -550,6 +550,8 @@ export function resolveScratchHome(options: ResolveScratchHomeOptions): string {
  * provider lease remains the owner and cleanup boundary for this directory.
  */
 export function resolveReviewScratchHome(options: ResolveScratchHomeOptions): string {
-  const base = resolveScratchHome(options);
-  return options.memberId === undefined ? base : join(base, `review-${options.memberId}`);
+  // Review containment protects the worktree, including its normal provider
+  // lease. Keep mutable reviewer state outside every protected root.
+  const member = options.memberId === undefined ? 'review' : `review-${options.memberId}`;
+  return join(tmpdir(), 'ai-conductor-build-review', options.runId, `${options.attempt}-${options.provider}`, member);
 }

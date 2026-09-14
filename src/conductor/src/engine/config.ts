@@ -336,6 +336,11 @@ function validateBuildReviewCustomRubrics(
     if (typeof declaration.skill !== 'string' || declaration.skill === '') {
       return { type: 'validation_error', message: `${path}.skill must be a non-empty string` };
     }
+    // Custom policy selection accepts a semantic skill reference only. Provider
+    // invocation prefixes and paths would bypass the catalog selection seam.
+    if (!/^[A-Za-z][A-Za-z0-9_-]*(?::[A-Za-z][A-Za-z0-9_-]*)?$/.test(declaration.skill)) {
+      return { type: 'validation_error', message: `${path}.skill must be a semantic skill reference` };
+    }
     if (typeof declaration.question !== 'string' || declaration.question === '') {
       return { type: 'validation_error', message: `${path}.question must be a non-empty string` };
     }
@@ -348,7 +353,8 @@ function validateBuildReviewCustomRubrics(
     if (
       declaration.resources !== undefined
       && (!Array.isArray(declaration.resources)
-        || declaration.resources.some((resource) => typeof resource !== 'string' || resource === ''))
+        || declaration.resources.some((resource) => typeof resource !== 'string' || resource === '' ||
+          isAbsolute(resource) || resource.split(/[\\/]/).includes('..')))
     ) {
       return {
         type: 'validation_error',

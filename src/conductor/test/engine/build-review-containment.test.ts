@@ -8,7 +8,7 @@ import {
 } from '../../src/engine/self-host/provider-scratch.js';
 
 describe('engine/build-review-containment', () => {
-  it('derives review bookkeeping inside the candidate private scratch lease', () => {
+  it('derives review bookkeeping outside the protected candidate checkout', () => {
     const options: {
       readonly worktreeRoot: string;
       readonly runId: string;
@@ -18,16 +18,17 @@ describe('engine/build-review-containment', () => {
       worktreeRoot: '/worktree', runId: 'run-7', attempt: 2, provider: 'codex',
     };
 
-    expect(resolveReviewScratchHome(options)).toBe('/worktree/.daemon/scratch/run-7/2-codex');
-    expect(resolveReviewScratchHome(options)).toEqual(resolveScratchHome(options));
+    expect(resolveReviewScratchHome(options)).toContain('/ai-conductor-build-review/run-7/2-codex/review');
+    expect(resolveReviewScratchHome(options)).not.toContain('/worktree/');
   });
 
-  it('shares scratch-home normalization with the provider lease', () => {
+  it('keeps review members private without nesting in the provider lease', () => {
     const options = {
       worktreeRoot: '/review/candidate/../candidate/', runId: 'run-7', attempt: 2, provider: 'codex' as const,
     };
 
-    expect(resolveReviewScratchHome(options)).toEqual(resolveScratchHome(options));
+    expect(resolveReviewScratchHome({ ...options, memberId: 'security' })).toContain('/review-security');
+    expect(resolveReviewScratchHome(options)).not.toEqual(resolveScratchHome(options));
   });
 
   it('proves read-only review access through the production process boundary', async () => {

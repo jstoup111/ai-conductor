@@ -23,6 +23,15 @@ import { resolveMainRepoRoot } from './park-marker.js';
 import type { ConductorEvent } from '../types/events.js';
 import { renderBuildReviewReducedCoverageEvidence } from './build-review-projections.js';
 import { projectBuildReviewCustomSuppressionSources } from './build-review-suppression-history.js';
+import type { ResolvedBuildReviewConfig } from './resolved-config.js';
+
+/** One resolved catalog is the authority for both built-in and custom floors. */
+export function buildReviewConfidenceFloors(config: Pick<ResolvedBuildReviewConfig, 'catalog' | 'rubrics'>): Partial<Record<string, number>> {
+  return Object.fromEntries([
+    ...Object.entries(config.rubrics).map(([id, policy]) => [id, policy.min_confidence]),
+    ...config.catalog.filter((entry) => entry.kind === 'custom').map((entry) => [entry.id, entry.policy.min_confidence]),
+  ]);
+}
 
 type DispositionStore = {
   list(feature: unknown): Promise<BuildReviewDispositionListResult>;
@@ -206,6 +215,12 @@ export async function resolveEffectiveBuildReviewVerdict(
     currentFailures: [
       ...Object.values(aggregate.results).filter((result) => result.kind === 'infrastructure-failure'),
       ...aggregate.scopeIncomplete,
+      ...(aggregate.currentCustomRubrics ?? []).flatMap((rubric) => {
+        const member = aggregate.customResults?.[rubric];
+        return member?.result.kind === 'infrastructure-failure' && member.declaration !== undefined
+          ? [{ rubric, reason: member.result.reason, detail: member.result.detail, declaration: member.declaration }]
+          : [];
+      }),
     ],
   });
   if (!renderedReducedCoverage.ok) return { ok: false, reason: renderedReducedCoverage.message };

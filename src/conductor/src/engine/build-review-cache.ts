@@ -294,7 +294,16 @@ export async function readBuildReviewCacheEntry(
     const entry = parseBuildReviewCacheEntryCandidate(JSON.parse(await fs.readFile(cacheEntryPath(projectRoot, rubric, semanticIdentity))));
     return entry && !isRetiredBuildReviewRubric(entry.rubric) ? entry : undefined;
   } catch {
-    return undefined;
+    // A candidate-keyed reader still observes the former flat location so a
+    // valid legacy record reaches the classifier as an explicit
+    // `semantic-identity-missing` miss rather than becoming invisible.
+    if (semanticIdentity === undefined) return undefined;
+    try {
+      const legacy = parseBuildReviewCacheEntryCandidate(JSON.parse(await fs.readFile(cacheEntryPath(projectRoot, rubric))));
+      return legacy && !isRetiredBuildReviewRubric(legacy.rubric) ? legacy : undefined;
+    } catch {
+      return undefined;
+    }
   }
 }
 
@@ -371,7 +380,7 @@ export function classifyBuildReviewCacheLookup(
     ? { ...entry.result, result: { ...entry.result.result, ...(entry.result.result.kind === 'judged' ? { lapId: lookup.lapId } : {}) } }
     : { ...entry.result, lapId: lookup.lapId, snapshotDigest: lookup.snapshotDigest };
   const cachedLapId = 'result' in entry.result
-    ? lookup.lapId
+    ? entry.result.result.kind === 'judged' ? entry.result.result.lapId as BuildReviewLapId : lookup.lapId
     : entry.result.lapId;
   const cachedSnapshotDigest = 'result' in entry.result
     ? entry.result.result.kind === 'judged' ? entry.result.result.reviewedInput.contentDigest : lookup.snapshotDigest

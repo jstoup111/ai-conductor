@@ -280,10 +280,15 @@ describe('build_review rubric validation', () => {
   it.each([
     ['an unknown declaration field', { skill: 'project-review', question: 'Review.', typo: true }, /Unknown key/i],
     ['a missing skill', { question: 'Review.' }, /skill.*non-empty string/i],
+    ['a provider invocation skill', { skill: '/project-review', question: 'Review.' }, /semantic skill/i],
+    ['a filesystem skill', { skill: '../project-review', question: 'Review.' }, /semantic skill/i],
+    ['a malformed plugin skill', { skill: 'plugin:', question: 'Review.' }, /semantic skill/i],
     ['a blank question', { skill: 'project-review', question: '' }, /question.*non-empty string/i],
     ['an invalid source', { skill: 'project-review', question: 'Review.', source: 'remote' }, /source.*project\|global\|plugin/i],
     ['a non-array resource list', { skill: 'project-review', question: 'Review.', resources: 'README.md' }, /resources.*array/i],
     ['a non-string resource', { skill: 'project-review', question: 'Review.', resources: ['README.md', 7] }, /resources.*non-empty strings/i],
+    ['an absolute resource', { skill: 'project-review', question: 'Review.', resources: ['/README.md'] }, /resources.*array/i],
+    ['a parent-traversing resource', { skill: 'project-review', question: 'Review.', resources: ['../README.md'] }, /resources.*array/i],
   ])('rejects custom declarations with %s before dispatch', (_name, declaration, diagnostic) => {
     const result = validateConfig({
       build_review: { custom_rubrics: { projectReview: declaration } },

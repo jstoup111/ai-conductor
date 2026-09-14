@@ -16,6 +16,7 @@ import { isRetiredBuildReviewRubric } from './build-review-dispositions.js';
 import {
   matchesBuildReviewDisposition,
   matchesBuildReviewReducedCoverageDisposition,
+  rehydrateBuildReviewAcceptedRiskFinding,
   type BuildReviewDispositionRecord,
   type BuildReviewFeatureIdentity,
   type BuildReviewReducedCoverageDispositionRecord,
@@ -550,6 +551,20 @@ export function deriveEffectiveBuildReviewVerdictWithDispositions(
       const identity = canonicalizeBuildReviewFindingIdentity({
         rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
       });
+      if (!identity) return undefined;
+      if (matchesBuildReviewDisposition(feature, identity, dispositions)) acceptedIds.add(identity.id);
+    }
+  }
+  // Dynamic members are not part of the closed built-in registry, but their
+  // engine-stamped identities use the same disposition authority.
+  for (const rubric of aggregate.currentCustomRubrics ?? []) {
+    const member = aggregate.customResults?.[rubric];
+    if (!member || member.result.kind !== 'judged') continue;
+    for (const finding of member.result.findings) {
+      const payload = typeof finding === 'object' && finding !== null && 'identity' in finding
+        ? (finding as { identity?: { canonicalPayload?: unknown } }).identity?.canonicalPayload
+        : undefined;
+      const identity = rehydrateBuildReviewAcceptedRiskFinding(payload);
       if (!identity) return undefined;
       if (matchesBuildReviewDisposition(feature, identity, dispositions)) acceptedIds.add(identity.id);
     }

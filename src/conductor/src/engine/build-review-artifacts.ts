@@ -9,6 +9,7 @@ import {
   type BuildReviewLapId,
   type BuildReviewRubricResult,
 } from './build-review-domain.js';
+import { MAX_POLICY_BUNDLE_BYTES } from './build-review-policy-bundle.js';
 
 const ARTIFACT_VERSION = 2 as const;
 const ARTIFACT_DIRECTORY = '.pipeline/build-review';
@@ -154,7 +155,7 @@ function parseCustomDescriptor(value: unknown): BuildReviewCustomEvidenceDescrip
     ? ['version', 'semanticSkill', 'declaration', 'installation', 'effectivePolicy', 'reviewedInput', 'producer']
     : ['version', 'semanticSkill', 'declaration', 'installation', 'effectivePolicy', 'criteria', 'reviewedInput', 'producer'];
   if (!source || !exactKeys(source, descriptorKeys) || source.version !== 'v1' || !isNonEmptyString(source.semanticSkill) ||
-    (source.criteria !== undefined && (!stringArray(source.criteria) || source.criteria.some((criterion) => criterion.length > 8_000)))) return undefined;
+    (source.criteria !== undefined && (!stringArray(source.criteria) || source.criteria.some((criterion) => Buffer.byteLength(criterion, 'utf8') > MAX_POLICY_BUNDLE_BYTES)))) return undefined;
   const installation = source.installation as Record<string, unknown> | undefined;
   const policy = source.effectivePolicy as Record<string, unknown> | undefined;
   const input = source.reviewedInput as Record<string, unknown> | undefined;

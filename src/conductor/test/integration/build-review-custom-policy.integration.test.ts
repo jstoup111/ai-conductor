@@ -108,6 +108,13 @@ describe('custom build-review policy runner', () => {
 
     const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
     expect(result.success, result.output).toBe(true);
+    const branchArtifact = JSON.parse(await readFile(join(root, '.pipeline', 'build-review', 'lap-head', 'portable.json'), 'utf8'));
+    expect(branchArtifact).toMatchObject({
+      rubric: 'portable',
+      provenance: { kind: 'fresh' },
+      descriptor: { semanticSkill: source === 'plugin' ? 'policy-plugin:portable-policy' : 'portable-policy' },
+      result: { kind: 'judged', rubric: 'portable' },
+    });
     expect(invoke).toHaveBeenCalledTimes(1);
     const firstInvocation = (invoke.mock.calls as unknown as Array<[Parameters<LLMProvider['invoke']>[0]]>)[0]?.[0];
     if (!firstInvocation?.model || !firstInvocation.effort) throw new Error('expected a prepared provider candidate');
