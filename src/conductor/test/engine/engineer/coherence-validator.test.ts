@@ -42,6 +42,7 @@ import { evaluateCoherenceWaiver } from '../../../src/engine/engineer/coherence-
 import { extractAuthoritativeStoryCriteria } from '../../../src/engine/artifacts.js';
 import { AuthoringGuard } from '../../../src/engine/engineer/authoring-guard.js';
 import { sanitizeInboundText } from '../../../src/engine/engineer/intake/sanitize-inbound.js';
+import { INTAKE_OUTCOMES_RELATIVE_PATH } from '../../../src/engine/engineer/outcome-staging.js';
 import { coherenceRegressionCorpus } from '../coherence-corpus.js';
 import type { GitRunner, GitResult } from '../../../src/engine/rebase.js';
 import type { RunOverlapScanArgs } from '../../../src/engine/overlap-scan.js';
@@ -2319,6 +2320,89 @@ describe('runCoherenceGate outcome quote trust boundary (Task 11)', () => {
 
     await writeCoherence(`"${rawBullet.slice(2)}"`);
     await expect(runCoherenceGate(gateArgs)).rejects.toThrow(/outcome-1[\s\S]*quote/i);
+  });
+});
+
+describe('runCoherenceGate never-staged outcome layer (Task 4)', () => {
+  async function gateError(
+    coherenceRow: string,
+    outcomeBullets: readonly string[],
+  ): Promise<Error> {
+    const canonicalPath = await mkdtemp(join(tmpdir(), 'coherence-never-staged-outcome-'));
+    temporaryRepositories.push(canonicalPath);
+    const worktreePath = join(canonicalPath, 'feature');
+    await runGit(canonicalPath, ['init', '--initial-branch=main']);
+    await runGit(canonicalPath, ['config', 'user.email', 'test@example.com']);
+    await runGit(canonicalPath, ['config', 'user.name', 'Test User']);
+    await writeFile(join(canonicalPath, 'README.md'), '# fixture\n');
+    await runGit(canonicalPath, ['add', '.']);
+    await runGit(canonicalPath, ['commit', '-m', 'seed fixture']);
+    await runGit(canonicalPath, ['worktree', 'add', '-b', 'feature', worktreePath]);
+
+    await mkdir(join(worktreePath, '.docs/coherence'), { recursive: true });
+    await writeFile(
+      join(worktreePath, '.docs/coherence/idea.md'),
+      `| Row Class | Id | Cited Ids | Verdict | Quote |
+| --- | --- | --- | --- | --- |
+${coherenceRow}
+`,
+    );
+    await runGit(worktreePath, ['add', '-A']);
+    await runGit(worktreePath, ['commit', '-m', 'add coherence artifact']);
+
+    try {
+      await runCoherenceGate({
+        worktreePath,
+        canonicalPath,
+        tier: 'M',
+        track: 'technical',
+        sourceRef: undefined,
+        planStem: 'idea',
+        storiesText: '# Stories\n\n## Story 1: Widget\n',
+        planText: null,
+        prdText: null,
+        outcomeBullets,
+        ideaFiles: new Set(['.docs/coherence/idea.md']),
+        guard: new AuthoringGuard(worktreePath),
+      });
+    } catch (error) {
+      if (error instanceof Error) return error;
+      throw error;
+    }
+    throw new Error('expected coherence gate to reject the fabricated id');
+  }
+
+  it('names the never-staged outcome layer instead of directing a coherence-record correction', async () => {
+    const error = await gateError(
+      '| outcome | outcome-1 | story-1 | covered | "Ship the widget." |',
+      [],
+    );
+
+    expect(error.message).toContain('outcome layer was never staged');
+    expect(error.message).toContain(INTAKE_OUTCOMES_RELATIVE_PATH);
+    expect(error.message).not.toContain('Fix the record via /coherence-check before landing.');
+  });
+
+  it('keeps the generic refusal byte-for-byte for an out-of-range outcome id', async () => {
+    const error = await gateError(
+      '| outcome | outcome-3 | story-1 | covered | "Ship the widget." |',
+      ['- Ship the widget.', '- Support returns.'],
+    );
+
+    expect(error.message).toBe(
+      'landSpec: coherence gate: fabricated-id "outcome-3" cited by outcome row "outcome-3" — the coherence artifact cites an id that does not resolve against any real story/task/FR/outcome. Fix the record via /coherence-check before landing.',
+    );
+  });
+
+  it('keeps the generic refusal byte-for-byte for a fabricated non-outcome id', async () => {
+    const error = await gateError(
+      '| story | story-1 | story-99 | covered | "Ship the widget." |',
+      [],
+    );
+
+    expect(error.message).toBe(
+      'landSpec: coherence gate: fabricated-id "story-99" cited by story row "story-1" — the coherence artifact cites an id that does not resolve against any real story/task/FR/outcome. Fix the record via /coherence-check before landing.',
+    );
   });
 });
 
