@@ -14,7 +14,7 @@ import {
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/state.js';
 
-// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, S2.3, S2.4, S2.5, S3.2, S3.3, S3.5, S3.6, task:1, task:2, task:3, task:4, task:5, task:6
+// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, S2.3, S2.4, S2.5, S3.2, S3.3, S3.5, S3.6, S4.1, S4.4, S4.5, task:1, task:2, task:3, task:4, task:5, task:6, task:7
 
 const temporaryDirectories: string[] = [];
 
@@ -527,6 +527,87 @@ describe('conduct-state lease', () => {
       },
       stillHeld: true,
     });
+  });
+
+  it('uses one deadline across dead successor traversal without claiming another successor', async () => {
+    const statePath = '/worktree/dead-successor-deadline/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared,
+      pid: 101,
+      newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    await shared.writeRecoveryClaim(`${statePath}.lease/recovery.json`, JSON.stringify({
+      version: 1, pid: 202, token: 'first-claim', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'dead-owner', predecessorToken: null,
+    }));
+    await shared.writeRecoveryClaim(successorClaimPath(statePath, 'dead-owner', 'first-claim'), JSON.stringify({
+      version: 1, pid: 303, token: 'second-claim', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'dead-owner', predecessorToken: 'first-claim',
+    }));
+    let now = 0;
+    let moves = 0;
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async readRecoveryClaim(path): Promise<string | null> {
+        now += 2;
+        return shared.readRecoveryClaim(path);
+      },
+      async moveDirectory(path, destination): Promise<void> {
+        moves += 1;
+        await shared.moveDirectory(path, destination);
+      },
+    };
+
+    const result = await createConductStateLease(statePath, {
+      filesystem,
+      now: () => now,
+      processIsLive: () => false,
+      waitTimeoutMs: 3,
+      newToken: () => 'contender',
+    }).acquire();
+
+    expect({
+      result,
+      moves,
+      nextClaim: await shared.readRecoveryClaim(successorClaimPath(statePath, 'dead-owner', 'second-claim')),
+    }).toEqual({
+      result: {
+        ok: false,
+        kind: 'timeout',
+        message: 'Unable to acquire conduct-state lease within 3ms',
+      },
+      moves: 0,
+      nextClaim: null,
+    });
+  });
+
+  it('returns interrupted when acquisition waiting is cancelled', async () => {
+    const statePath = '/worktree/interrupted-acquisition/.pipeline/conduct-state.json';
+    const filesystem = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 101,
+      newToken: () => 'live-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+
+    const result = await createConductStateLease(statePath, {
+      filesystem,
+      processIsLive: () => true,
+      wait: async () => { throw new Error('cancelled'); },
+    }).acquire();
+
+    expect({ result, stillHeld: filesystem.hasDirectory(`${statePath}.lease`) }).toEqual({
+      result: {
+        ok: false,
+        kind: 'interrupted',
+        message: 'Interrupted while waiting for conduct-state lease: cancelled',
+      },
+      stillHeld: true,
+    });
+    await held.handle.release();
   });
 
   it.each([

@@ -249,7 +249,7 @@ export function createConductStateLease(
     }
   }
 
-  async function recoverDeadOwner(): Promise<
+  async function recoverDeadOwner(deadline: number): Promise<
     | { status: 'recovered'; ownerPid: number }
     | { status: 'occupied'; ownerPid?: number }
     // `mkdir` succeeds before the owner metadata write. A peer that observes
@@ -257,6 +257,7 @@ export function createConductStateLease(
     // misclassify a healthy concurrent writer as an ambiguous lease.
     | { status: 'initializing' }
     | { status: 'vanished' }
+    | { status: 'timeout' }
     | { status: 'refused'; message: string }
   > {
     let serializedOwner: string;
@@ -290,6 +291,7 @@ export function createConductStateLease(
       };
     }
     if (ownerIsLive) return { status: 'occupied', ownerPid: owner.pid };
+    if (now() >= deadline) return { status: 'timeout' };
 
     const claimFor = (predecessorToken: string | null): string => `${JSON.stringify({
       version: 1,
@@ -310,6 +312,7 @@ export function createConductStateLease(
         let currentOwnerRoot = false;
         const visitedClaimTokens = new Set<string>();
         while (true) {
+          if (now() >= deadline) return { status: 'timeout' };
           let serializedClaim: string | null;
           try {
             serializedClaim = await filesystem.readRecoveryClaim(claimPath);
@@ -352,6 +355,7 @@ export function createConductStateLease(
           } catch (claimLivenessError) {
             return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claimant liveness is unverifiable (${errorMessage(claimLivenessError)})` };
           }
+          if (now() >= deadline) return { status: 'timeout' };
           predecessorToken = existingClaim.identity.token;
           claimPath = recoverySuccessorClaimPath(leasePath, owner.token, predecessorToken);
           const successorClaim = claimFor(predecessorToken);
@@ -380,6 +384,8 @@ export function createConductStateLease(
         };
       }
     }
+
+    if (now() >= deadline) return { status: 'timeout' };
 
     let confirmedOwner: string;
     let confirmedClaim: string | null;
@@ -448,6 +454,7 @@ export function createConductStateLease(
       };
       const serializedOwner = `${JSON.stringify(owner)}\n`;
       let lastLiveOwnerPid: number | undefined;
+      const deadline = startedAt + waitTimeoutMs;
 
       while (true) {
         try {
@@ -461,10 +468,17 @@ export function createConductStateLease(
             };
           }
 
-          const recovery = await recoverDeadOwner();
+          const recovery = await recoverDeadOwner(deadline);
           if (recovery.status === 'recovered') continue;
           if (recovery.status === 'refused') {
             return { ok: false, kind: 'recovery_refused', message: recovery.message };
+          }
+          if (recovery.status === 'timeout') {
+            return {
+              ok: false,
+              kind: 'timeout',
+              message: `Unable to acquire ${leaseName} lease within ${waitTimeoutMs}ms${lastLiveOwnerPid === undefined ? '' : `; owner pid ${lastLiveOwnerPid} is live`}`,
+            };
           }
           if (recovery.status === 'occupied') lastLiveOwnerPid = recovery.ownerPid;
 
