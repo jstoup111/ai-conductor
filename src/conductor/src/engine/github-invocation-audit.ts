@@ -51,8 +51,10 @@ export const SHIPPED_MUTATION_OPERATION_CALLER_PROOFS = {
   'intake.issue.close': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'intake.issue.label.add': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'intake.issue.label.remove': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
+  'intake.issue.dependency.add': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'issue.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'pull-request.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
+  'commit.status.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'label-definition.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'label-definition.update': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'remote-ref.push': { adapter: 'executeRemoteGit', owner: 'remote-git-operations.ts' },
@@ -236,54 +238,14 @@ function enclosingFunctionName(node: ts.Node): string | undefined {
   return undefined;
 }
 
-function enclosingCase(node: ts.Node): string | undefined {
-  for (let current: ts.Node | undefined = node.parent; current; current = current.parent) {
-    if (ts.isCaseClause(current)) return text(current.expression);
-  }
-  return undefined;
-}
-
-function namedProperty(node: ts.PropertyName): string | undefined {
-  return ts.isIdentifier(node) || ts.isStringLiteralLike(node) ? node.text : undefined;
-}
-
-function enclosingObjectProperty(node: ts.Node): string | undefined {
-  for (let current: ts.Node | undefined = node.parent; current; current = current.parent) {
-    if (ts.isPropertyAssignment(current) || ts.isMethodDeclaration(current)) return namedProperty(current.name);
-  }
-  return undefined;
-}
-
-function ghApiPostHead(node: ts.CallExpression): boolean {
-  const head = argvHead(node.arguments[0]);
-  return head?.[0] === 'api'
-    && (head[1] === '--method' || head[1] === '-X')
-    && /^(?:POST|PUT|PATCH|DELETE)$/i.test(head[2] ?? '');
-}
-
 /**
  * Approved calls are structural, never file-wide.  Each accepted mutation is
- * either the canonical guarded adapter or a closed operation callback whose
- * case/property fixes its one registered operation. Literal mutations remain
- * findings in read-forwarding helpers and every other callback.
+ * the canonical guarded adapter. Literal mutations remain findings everywhere
+ * else: a composition helper cannot confer write authority merely by naming
+ * its callback after a registered operation.
  */
 function guardedMutationRunnerCall(node: ts.CallExpression): boolean {
-  if (enclosingFunctionName(node) === 'createGuardedGithubOperationRunner') return true;
-  const operation = enclosingCase(node);
-  if (enclosingFunctionName(node) === 'createIntakeFilingOperations') {
-    if (operation === 'issue.create') return argvHead(node.arguments[0])?.[0] === 'issue' && argvHead(node.arguments[0])?.[1] === 'create';
-    if (operation === 'issue.label.add') return (ts.isCallExpression(node.arguments[0])
-      && ts.isIdentifier(node.arguments[0].expression)
-      && node.arguments[0].expression.text === 'restAddLabelArgs') || ghApiPostHead(node);
-    return operation === 'issue.dependency.add' && ghApiPostHead(node);
-  }
-  if (enclosingFunctionName(node) === 'createDependencyLinks') return ghApiPostHead(node);
-  if (enclosingFunctionName(node) === 'makeProductionRepairPublisher') {
-    const property = enclosingObjectProperty(node);
-    return (property === 'findOrCreateRepairPullRequest' && argvHead(node.arguments[0])?.[0] === 'pr' && argvHead(node.arguments[0])?.[1] === 'create')
-      || (property === 'postStatus' && ghApiPostHead(node));
-  }
-  return false;
+  return enclosingFunctionName(node) === 'createGuardedGithubOperationRunner';
 }
 
 /** Dynamic runner forwarding is safe only inside an explicitly typed read or adapter seam. */
