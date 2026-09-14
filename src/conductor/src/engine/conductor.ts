@@ -12282,7 +12282,7 @@ export class Conductor {
                           {
                             creation: {
                               authority: featureCreationAuthority,
-                              operations: createIntakeFilingOperations(this.gh, this.projectRoot),
+                              operations: createIntakeFilingOperations(this.gh, this.projectRoot, featureCreationAuthority),
                             },
                           },
                         );

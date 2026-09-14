@@ -97,12 +97,13 @@ function makeFakeGh(opts: { failLabelApply?: boolean; failIssueCreate?: boolean 
 }
 
 function creation(gh: ReturnType<typeof makeFakeGh>['run']) {
+  const authority = {
+    resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
+    intent: { kind: 'explicit-intake' as const, repository: 'acme/app' },
+  };
   return {
-    authority: {
-      resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
-      intent: { kind: 'explicit-intake' as const, repository: 'acme/app' },
-    },
-    operations: createIntakeFilingOperations(gh, '.'),
+    authority,
+    operations: createIntakeFilingOperations(gh, '.', authority),
   };
 }
 
