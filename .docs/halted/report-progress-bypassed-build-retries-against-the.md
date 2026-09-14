@@ -6,8 +6,8 @@ Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-report-progress-bypassed-build-retries-against-the
-Head SHA: 9fc201281848871f5697b1a19528f665d039c904
-Halted at: 2026-09-14T12:46:00.036Z
+Head SHA: a32b9364e60e0d1b729ec7795e82b2316a7b3b3f
+Halted at: 2026-09-14T19:26:08.519Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
