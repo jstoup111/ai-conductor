@@ -565,11 +565,16 @@ export function buildProviderAttemptMetadata({
     ...(unavailable && nextProvider
       ? { fallbackReason: redactSafetyText(unavailable.reason) }
       : {}),
-    ...(!invoked && unavailable && setupUnavailable
-      ? { skipReason: 'setup-unavailable' as const }
-      : {}),
+    // A cached run-wide unavailability is still a setup-only skip, but it is
+    // materially different from a capability discovered during this pass.
+    // Keep that provenance at the event boundary; otherwise an exhausted
+    // cached candidate is misleadingly reported as a newly observed setup
+    // failure.
     ...(!invoked && unavailable && cachedUnavailable
       ? { skipReason: 'cached-unavailable' as const }
+      : {}),
+    ...(!invoked && unavailable && setupUnavailable && !cachedUnavailable
+      ? { skipReason: 'setup-unavailable' as const }
       : {}),
     ...(!invoked && setupUnavailable?.capability
       ? { setupCapability: redactSafetyText(setupUnavailable.capability) }

@@ -217,6 +217,23 @@ describe('executeProviderCandidates', () => {
       skipReason: 'setup-unavailable', setupCapability: 'isolated-home', setupRecoveryAction: 'update Codex',
     });
   });
+
+  it('keeps a cached setup skip distinct from a newly observed capability failure', async () => {
+    const { buildProviderAttemptMetadata } = await import('../../src/engine/provider-execution.js');
+    expect(buildProviderAttemptMetadata({
+      providerKey: 'codex',
+      result: { success: false, output: 'cached unavailable', exitCode: 127, providerInvocationSkipped: true },
+      resolvedModel: 'gpt-5.6-sol',
+      unavailable: { scope: 'step', reason: 'cached unavailable' },
+      cachedUnavailable: true,
+      setupUnavailable: {
+        provider: 'codex',
+        capability: 'cached-provider-availability',
+        reason: 'cached unavailable',
+        recoveryAction: 'restore provider',
+      },
+    })).toMatchObject({ invoked: false, skipReason: 'cached-unavailable' });
+  });
   it('executes an auxiliary rubric through its own provider, fallback ladder, retries, and attribution label', async () => {
     const codexInvoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> =>
       options.model === 'gpt-5.6-sol'
