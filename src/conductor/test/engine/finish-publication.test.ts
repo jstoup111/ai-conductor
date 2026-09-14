@@ -7,6 +7,8 @@ import { HALT_PR_BANNER_SENTINEL, type GhRunner, type GitRunner } from '../../sr
 import { ensureShipReady, rehabilitateHaltPr } from '../../src/engine/halt-pr-rehabilitation.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 import { HUMAN_REQUIRED_REASONS } from '../../src/engine/finish-publication.js';
+import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
+import type { OpenShipDraftPrDeps } from '../../src/engine/ship-draft-pr.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { Conductor } from '../test-conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -184,14 +186,7 @@ interface AdvanceFinishPublicationInput {
     recordOutcome?: (request: FinishOutcomeRecordRequest) => Promise<void>;
     createShippedRecord?: () => Promise<void>;
     repairPresentation?: () => Promise<void>;
-    establishPr?: {
-      gh: GhRunner;
-      git: GitRunner;
-      cwd: string;
-      branch: string;
-      baseBranch: string;
-      featureDesc?: string;
-    };
+    establishPr?: OpenShipDraftPrDeps;
   };
 }
 
@@ -378,6 +373,7 @@ function observationInput(ports: PublicationObservationPorts): ObservePublicatio
 function draftPrFakes(ghHandler: (args: string[]) => { stdout: string } | Error) {
   const gitCalls: string[][] = [];
   const ghCalls: string[][] = [];
+  let createdUrl: string | undefined;
   const git: GitRunner = async (args) => {
     gitCalls.push([...args]);
     if (args[0] === 'rev-list') return { stdout: '1\n' };
@@ -385,9 +381,20 @@ function draftPrFakes(ghHandler: (args: string[]) => { stdout: string } | Error)
   };
   const gh: GhRunner = async (args) => {
     ghCalls.push([...args]);
+    if (args[0] === 'pr' && args[1] === 'view' && createdUrl) {
+      return { stdout: JSON.stringify({ state: 'OPEN', url: createdUrl }) };
+    }
     const result = ghHandler(args);
     if (result instanceof Error) throw result;
+    if (args[0] === 'pr' && args[1] === 'create') createdUrl = result.stdout.trim();
     return result;
+  };
+  const operations: GithubOperationRunner = {
+    async run(request) {
+      if (request.operation !== 'pull-request.create') throw new Error(`unexpected operation: ${request.operation}`);
+      await gh(['pr', 'create'], { cwd: '/repo' });
+      return {};
+    },
   };
   return {
     deps: {
@@ -397,9 +404,49 @@ function draftPrFakes(ghHandler: (args: string[]) => { stdout: string } | Error)
       branch: 'feat/widget',
       baseBranch: 'main',
       featureDesc: 'widget',
+      remoteGit: async () => ({
+        kind: 'executed' as const,
+        targets: [{
+          operation: 'remote-ref.push' as const,
+          repository: 'acme/widget',
+          kind: 'remote-ref' as const,
+          ref: 'refs/heads/feat/widget',
+        }],
+      }),
+      operations,
     },
     gitCalls,
     ghCalls,
+  };
+}
+
+/** Simulate the guarded operation adapter while keeping PR state in the fake GitHub boundary. */
+function guardedPresentationOperations(gh: GhRunner): GithubOperationRunner {
+  return {
+    async run(request) {
+      if (request.target.kind !== 'pull-request') throw new Error('expected pull-request operation');
+      const prUrl = `https://github.com/${request.target.repository}/pull/${request.target.number}`;
+      switch (request.operation) {
+        case 'pull-request.ready':
+          await gh(['pr', 'ready', String(request.target.number)], { cwd: '/repo' });
+          return {};
+        case 'pull-request.label.remove':
+          await gh(['api', '--method', 'DELETE'], { cwd: '/repo' });
+          return {};
+        case 'pull-request.edit': {
+          const body = request.payload && 'body' in request.payload ? request.payload.body : undefined;
+          const title = request.payload && 'title' in request.payload ? request.payload.title : undefined;
+          await gh([
+            'pr', 'edit', prUrl,
+            ...(typeof body === 'string' ? ['--body', body] : []),
+            ...(typeof title === 'string' ? ['--title', title] : []),
+          ], { cwd: '/repo' });
+          return {};
+        }
+        default:
+          throw new Error(`unexpected operation: ${request.operation}`);
+      }
+    },
   };
 }
 
@@ -2089,6 +2136,21 @@ describe('advanceFinishPublication concurrent mutation reconciliation', () => {
     switch (transition) {
       case 'establish_pr': {
         snapshot = readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' });
+        const gh: GhRunner = async (args) => {
+          if (args[1] === 'view') {
+            if (snapshot.pr.identity === 'one') {
+              return { stdout: JSON.stringify({ state: 'OPEN', url: snapshot.pr.url }) };
+            }
+            throw new Error('not found');
+          }
+          if (args[1] === 'create') {
+            await mutate(() => {
+              snapshot = readyPublicationSnapshot();
+            });
+            return { stdout: 'https://github.com/acme/widget/pull/1172\n' };
+          }
+          return { stdout: '' };
+        };
         effects.establishPr = {
           cwd: '/repo',
           branch: 'feat/widget',
@@ -2097,15 +2159,22 @@ describe('advanceFinishPublication concurrent mutation reconciliation', () => {
             if (args[0] === 'rev-list') return { stdout: '1\n' };
             return { stdout: '' };
           },
-          gh: async (args) => {
-            if (args[1] === 'view') throw new Error('not found');
-            if (args[1] === 'create') {
-              await mutate(() => {
-                snapshot = readyPublicationSnapshot();
-              });
-              return { stdout: 'https://github.com/acme/widget/pull/1172\n' };
-            }
-            return { stdout: '' };
+          gh,
+          remoteGit: async () => ({
+            kind: 'executed',
+            targets: [{
+              operation: 'remote-ref.push',
+              repository: 'acme/widget',
+              kind: 'remote-ref',
+              ref: 'refs/heads/feat/widget',
+            }],
+          }),
+          operations: {
+            async run(request) {
+              if (request.operation !== 'pull-request.create') throw new Error(`unexpected operation: ${request.operation}`);
+              await gh(['pr', 'create'], { cwd: '/repo' });
+              return {};
+            },
           },
         };
         break;
@@ -2791,6 +2860,7 @@ describe('advanceFinishPublication accepted PR presentation', () => {
         cwd: '/repo',
         prUrl: 'https://github.com/acme/widget/pull/1172',
         sourceRef: null,
+        operations: guardedPresentationOperations(github.gh),
       });
       ready = github.isReady();
     });
@@ -2815,7 +2885,14 @@ describe('advanceFinishPublication accepted PR presentation', () => {
       pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready },
     }));
     const repairPresentation = vi.fn(async () => {
-      await ensureShipReady(github.gh, '/repo', 'https://github.com/acme/widget/pull/1172', undefined, async () => {});
+      await ensureShipReady(
+        github.gh,
+        '/repo',
+        'https://github.com/acme/widget/pull/1172',
+        undefined,
+        async () => {},
+        guardedPresentationOperations(github.gh),
+      );
       ready = github.isReady();
     });
 
