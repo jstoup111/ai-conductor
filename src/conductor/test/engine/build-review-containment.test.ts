@@ -47,11 +47,14 @@ describe('engine/build-review-containment', () => {
       },
       runProcess: async (executable, args) => {
         processCalls.push({ executable, args });
+        const engineEvidenceIsReadOnly = args.some((value, index) =>
+          value === '--ro-bind' && args[index + 1] === '/review/engine-evidence' && args[index + 2] === '/review/engine-evidence',
+        );
         return {
           exitCode: 0,
           stderr: '',
           stdout: [
-            'source-write-refused', 'installation-write-refused', 'engine-state-write-refused',
+            'source-write-refused', 'installation-write-refused', engineEvidenceIsReadOnly ? 'engine-state-write-refused' : 'engine-state-write-succeeded',
             'scratch-write-succeeded', 'sibling-evidence-withheld', 'nested-sandbox-available',
           ].join('\n'),
         };
@@ -68,7 +71,7 @@ describe('engine/build-review-containment', () => {
         '--ro-bind', '/review/policy', '/review/policy',
         '--ro-bind', '/review/original', '/review/original',
         '--ro-bind', '/review/installed-policy', '/review/installed-policy',
-        '--tmpfs', '/review/engine-evidence',
+        '--ro-bind', '/review/engine-evidence', '/review/engine-evidence',
         '--tmpfs', '/review/sibling-evidence',
         '--bind', '/review/private-scratch', '/review/private-scratch',
       ]),

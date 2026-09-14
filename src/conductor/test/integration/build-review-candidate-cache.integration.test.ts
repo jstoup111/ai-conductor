@@ -108,13 +108,13 @@ describe('build-review candidate cache runner ordering', () => {
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke.mock.calls.map(([options]) => options.model)).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra']);
 
-    // A preferred-model lookup never borrows the fallback model's judgment.
-    // The later ladder re-invokes and stamps the answering model's own entry.
+    // The preferred model still proves unavailable, then the fallback rung
+    // independently reuses only its own warm judgment.
     const replay = await runner.run('build_review', { complexity_tier: 'M' } as never);
     expect(replay.success, replay.output).toBe(true);
-    expect(invoke).toHaveBeenCalledTimes(4);
+    expect(invoke).toHaveBeenCalledTimes(3);
     expect(invoke.mock.calls.map(([options]) => options.model)).toEqual([
-      'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.6-terra',
+      'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-sol',
     ]);
   });
 });

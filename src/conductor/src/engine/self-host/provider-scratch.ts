@@ -555,3 +555,26 @@ export function resolveReviewScratchHome(options: ResolveScratchHomeOptions): st
   const member = options.memberId === undefined ? 'review' : `review-${options.memberId}`;
   return join(tmpdir(), 'ai-conductor-build-review', options.runId, `${options.attempt}-${options.provider}`, member);
 }
+
+/** A candidate-owned review scratch lease; unlike provider homes it is external to the worktree. */
+export interface ReviewScratchLease {
+  readonly home: string;
+  release(): Promise<void>;
+}
+
+export async function acquireReviewScratchHome(
+  options: ResolveScratchHomeOptions & { readonly fs?: Pick<ScratchFs, 'mkdir' | 'rm'> },
+): Promise<ReviewScratchLease> {
+  const fs = options.fs ?? realScratchFs;
+  const home = resolveReviewScratchHome(options);
+  await fs.mkdir(home, { recursive: true });
+  let released = false;
+  return {
+    home,
+    async release() {
+      if (released) return;
+      released = true;
+      await fs.rm(home, { recursive: true, force: true });
+    },
+  };
+}

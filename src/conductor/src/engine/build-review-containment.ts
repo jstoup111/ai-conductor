@@ -124,7 +124,9 @@ function deriveMountArgs(paths: BuildReviewContainmentPaths): readonly string[] 
     '--ro-bind', paths.policyMaterial, paths.policyMaterial,
     '--ro-bind', paths.originalCheckout, paths.originalCheckout,
     '--ro-bind', paths.originalInstallation, paths.originalInstallation,
-    '--tmpfs', paths.engineEvidence,
+    // Engine evidence is an existing engine-owned directory. Bind it read-only
+    // so the mandatory probe proves it cannot be changed by a reviewer.
+    '--ro-bind', paths.engineEvidence, paths.engineEvidence,
     '--tmpfs', paths.siblingEvidence,
     '--bind', paths.scratch, paths.scratch,
   ];

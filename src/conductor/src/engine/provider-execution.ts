@@ -132,6 +132,9 @@ export interface ProviderCandidate {
   effort: EffortLevel;
 }
 
+/** Identity of one actual model ladder rung; step ownership remains unchanged. */
+export type ProviderCandidateRung = Omit<ProviderCandidate, 'step'>;
+
 /**
  * The only extension point that runs after a real provider candidate has
  * prepared. It intentionally exposes the existing invocation callback rather
@@ -144,7 +147,12 @@ export interface PreparedCandidateOperationContext {
   readonly abortSignal?: AbortSignal;
   readonly deadlineAt?: number;
   /** Candidate-local review policy may tighten prompt, cwd, or access after preparation. */
-  invoke(overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>): Promise<InvokeResult>;
+  invoke(
+    overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>,
+    onModelRung?: (candidate: ProviderCandidateRung, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>,
+  ): Promise<InvokeResult>;
+  /** Candidate-owned cleanup, always run from the provider execution finally. */
+  onTeardown(teardown: () => Promise<void>): void;
   /** The model that actually answered the candidate invocation, if it ran. */
   invokedModel(): string | undefined;
 }
@@ -432,6 +440,7 @@ async function invokeRuntimeResolved(
   runtime: ProviderRuntime,
   options: InvokeOptions,
   prepareFallbackOptions?: PrepareModelFallbackOptions,
+  invokeModel?: (options: InvokeOptions) => Promise<InvokeResult>,
 ): Promise<{ result: InvokeResult; model?: string }> {
   if (runtime.runWideUnavailable) {
     const reason = runtime.runWideUnavailable.reason;
@@ -453,6 +462,7 @@ async function invokeRuntimeResolved(
     runtime.provider,
     options,
     prepareFallbackOptions,
+    invokeModel,
   );
   const { result } = invocation;
   const unavailable = classifyProviderAttempt(result);
@@ -528,6 +538,9 @@ export interface InvokeProviderCandidateInput {
   resolved: ResolvedProviderNativeStepConfig;
   options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
   modelFallbackLadder?: readonly string[];
+  /** Allocate invocation-only resources after any per-model cache lookup. */
+  prepareInvocationOptions?: (options: InvokeOptions) => Promise<InvokeOptions>;
+  onModelRung?: (candidate: ProviderCandidateRung, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>;
 }
 
 interface SessionPolicySuppression {
@@ -545,6 +558,8 @@ export async function invokeProviderCandidate({
   resolved,
   options,
   modelFallbackLadder,
+  onModelRung,
+  prepareInvocationOptions,
 }: InvokeProviderCandidateInput): Promise<{
   result: InvokeResult;
   invokedModel?: string;
@@ -567,13 +582,20 @@ export async function invokeProviderCandidate({
   };
   // Each model-fallback-ladder attempt also gets its own fresh session.
   const prepareFallback = async () => ({ sessionId: randomUUID(), resume: false });
+  const invokeModel = async (rungOptions: InvokeOptions): Promise<InvokeResult> =>
+    runtime.provider.invoke(prepareInvocationOptions ? await prepareInvocationOptions(rungOptions) : rungOptions);
   const invocation = modelFallbackLadder
     ? await new ModelAvailability(modelFallbackLadder).invokeWithLadderResolved(
         runtime.provider,
         invocationOptions,
         prepareFallback,
+        (rungOptions) => onModelRung
+          ? onModelRung({ providerKey, ...resolved, model: rungOptions.model ?? resolved.model }, () => invokeModel(rungOptions))
+          : invokeModel(rungOptions),
       )
-    : await invokeRuntimeResolved(runtime, invocationOptions, prepareFallback);
+    : onModelRung
+      ? { result: await onModelRung({ providerKey, ...resolved }, () => invokeModel(invocationOptions)), model: resolved.model }
+      : await invokeRuntimeResolved(runtime, invocationOptions, prepareFallback, invokeModel);
   return {
     result: invocation.result,
     invokedModel: invocation.model,
@@ -778,7 +800,11 @@ export async function executeProviderCandidates({
     let schemaScratchHome: string | undefined;
     let schemaScratchRunId: string | undefined;
     let invocationResult: Promise<InvokeResult> | undefined;
-    const invokeProvider = (overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>): Promise<InvokeResult> => {
+    const teardownCallbacks: Array<() => Promise<void>> = [];
+    const invokeProvider = (
+      overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>,
+      onModelRung?: (candidate: ProviderCandidateRung, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>,
+    ): Promise<InvokeResult> => {
       invocationResult ??= (async () => {
         const candidateInvocationOptions = candidateObserver
           ? {
@@ -791,28 +817,29 @@ export async function executeProviderCandidates({
           : selfHost
             ? { ...candidateOptions, ...overrides, selfHost }
             : { ...candidateOptions, ...overrides };
-        if (
-          selfHost === undefined && providerKey === 'codex' &&
-          candidateInvocationOptions.nativeSchema !== undefined && nativeSchemaScratch !== undefined
-        ) {
-          schemaScratchRunId = runId ?? randomUUID();
-          schemaScratchHome = await acquireScratchHome({
-            worktreeRoot: nativeSchemaScratch.worktreeRoot,
-            repository: nativeSchemaScratch.repository,
-            featureSlug: nativeSchemaScratch.featureSlug || basename(nativeSchemaScratch.worktreeRoot),
-            runId: schemaScratchRunId, attempt, provider: 'codex',
-          });
-        }
         invocation = await invokeProviderCandidate({
           providerKey,
           runtime,
           sessions,
           resolved,
-          options: {
-            ...candidateInvocationOptions,
-            ...(schemaScratchHome ? { nativeSchemaScratchHome: schemaScratchHome } : {}),
+          options: candidateInvocationOptions,
+          prepareInvocationOptions: async (rungOptions) => {
+            if (selfHost === undefined && providerKey === 'codex' && rungOptions.nativeSchema !== undefined && nativeSchemaScratch !== undefined) {
+              if (schemaScratchHome === undefined) {
+                schemaScratchRunId = runId ?? randomUUID();
+                schemaScratchHome = await acquireScratchHome({
+                  worktreeRoot: nativeSchemaScratch.worktreeRoot,
+                  repository: nativeSchemaScratch.repository,
+                  featureSlug: nativeSchemaScratch.featureSlug || basename(nativeSchemaScratch.worktreeRoot),
+                  runId: schemaScratchRunId, attempt, provider: 'codex',
+                });
+              }
+              return { ...rungOptions, nativeSchemaScratchHome: schemaScratchHome };
+            }
+            return rungOptions;
           },
           modelFallbackLadder,
+          onModelRung,
         });
         return invocation.result;
       })();
@@ -849,6 +876,7 @@ export async function executeProviderCandidates({
             deadlineAt,
             invoke: invokeProvider,
             invokedModel: () => invocation?.invokedModel,
+            onTeardown: (teardown) => { teardownCallbacks.push(teardown); },
           });
           // An operation may observe cancellation while resolving a policy or
           // checking a cache. It cannot publish that stale work as a judgment
@@ -864,19 +892,23 @@ export async function executeProviderCandidates({
         return await invokeProvider();
       } finally {
         try {
-          await selfHost?.teardown();
+          for (const teardown of teardownCallbacks.reverse()) await teardown();
         } finally {
           try {
-            if (schemaScratchHome !== undefined) {
-              const released = await releaseScratchHome({
-                worktreeRoot: nativeSchemaScratch!.worktreeRoot,
-                runId: schemaScratchRunId!, attempt, provider: 'codex',
-              });
-              if (released.kind === 'failed') throw new Error(`native schema scratch teardown failed: ${released.error}`);
-            }
+            await selfHost?.teardown();
           } finally {
-            try { candidateObserver?.close(); } catch {
-              // Observation close/flush is best effort and cannot affect fallback.
+            try {
+              if (schemaScratchHome !== undefined) {
+                const released = await releaseScratchHome({
+                  worktreeRoot: nativeSchemaScratch!.worktreeRoot,
+                  runId: schemaScratchRunId!, attempt, provider: 'codex',
+                });
+                if (released.kind === 'failed') throw new Error(`native schema scratch teardown failed: ${released.error}`);
+              }
+            } finally {
+              try { candidateObserver?.close(); } catch {
+                // Observation close/flush is best effort and cannot affect fallback.
+              }
             }
           }
         }
@@ -896,7 +928,7 @@ export async function executeProviderCandidates({
           ? await withCandidateSafety(candidate, invoke)
           : await invoke();
     // A prepared cache hit or cancellation did not consult provider availability.
-    if (invocation || result.providerUnavailable === true) {
+    if (result.providerUnavailable === true) {
       setupUnavailable ??= skippedCandidateSetupUnavailable(providerKey, result, cachedUnavailable);
     }
     const invokedModel = invocation?.invokedModel;

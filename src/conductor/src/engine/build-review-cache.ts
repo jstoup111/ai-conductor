@@ -71,6 +71,20 @@ export interface BuildReviewCacheFilesystem {
   rename(from: string, to: string): Promise<void>;
 }
 
+/** Keep cache persistence failure classification identical for every rubric kind. */
+export async function tryWriteBuildReviewCacheEntry(
+  projectRoot: string,
+  entry: BuildReviewCacheEntry,
+  fs: BuildReviewCacheFilesystem,
+): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: unknown }> {
+  try {
+    await writeBuildReviewCacheEntry(projectRoot, entry, fs);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
 /** The complete identity that must match before a semantic cache entry is reusable. */
 export interface BuildReviewCacheLookup {
   rubric: BuildReviewRubricId | string;

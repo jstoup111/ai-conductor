@@ -19,6 +19,9 @@ export type PrepareModelFallbackOptions = (
   nextModel: string,
 ) => Promise<Pick<InvokeOptions, 'sessionId' | 'resume'>>;
 
+/** An optional caller-owned boundary around each actual ladder rung. */
+export type InvokeModelRung = (options: InvokeOptions) => Promise<InvokeResult>;
+
 const prepareFreshFallbackOptions: PrepareModelFallbackOptions = async () => ({
   sessionId: uuidv4(),
   resume: false,
@@ -95,9 +98,11 @@ export class ModelAvailability {
     provider: LLMProvider,
     options: InvokeOptions,
     prepareFallbackOptions: PrepareModelFallbackOptions = prepareFreshFallbackOptions,
+    invokeModel: InvokeModelRung = (candidateOptions) => provider.invoke(candidateOptions),
   ): Promise<ResolvedModelInvocation> {
     const requested = options.model ?? "";
-    const result = await provider.invoke({ ...options, model: requested });
+    const requestedOptions = { ...options, model: requested };
+    const result = await invokeModel(requestedOptions);
 
     // Existing recovery owns these failures, even if a provider reports
     // conflicting availability metadata.
@@ -127,7 +132,7 @@ export class ModelAvailability {
       ...options,
       ...fallbackOptions,
       model: nextModel,
-    }, prepareFallbackOptions);
+    }, prepareFallbackOptions, invokeModel);
     const observedIntervals = [
       ...(result.observedIntervals ?? []),
       ...(resolved.result.observedIntervals ?? []),

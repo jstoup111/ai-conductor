@@ -26,6 +26,8 @@ export interface InstalledReviewSkill {
   readonly installationOrigin: string;
   readonly canonicalSkillPath: string;
   readonly packageRoot: string;
+  /** Provider-declared tools are capabilities, never package-relative resources. */
+  readonly requiredTools?: readonly string[];
   readonly declaredDependencies: readonly string[];
   readonly availability: InstalledReviewSkillAvailability;
 }

@@ -73,7 +73,8 @@ describe('listCodexInstalledReviewSkills', () => {
         installationOrigin: '/candidate/.codex/skills/project-policy/SKILL.md',
         canonicalSkillPath: '/candidate/.codex/skills/project-policy/SKILL.md',
         packageRoot: '/candidate/.codex/skills/project-policy',
-        declaredDependencies: ['git'],
+        requiredTools: ['git'],
+        declaredDependencies: [],
         availability: 'available',
       },
       {
@@ -91,7 +92,7 @@ describe('listCodexInstalledReviewSkills', () => {
         plugin: { id: 'org-review', version: '1.2.3' },
         installationOrigin: '/prepared-home/plugins/org-review/skills/plugin-policy/SKILL.md',
         canonicalSkillPath: '/prepared-home/plugins/org-review/skills/plugin-policy/SKILL.md',
-        packageRoot: '/prepared-home/plugins/org-review/skills/plugin-policy',
+        packageRoot: '/prepared-home/plugins/org-review',
         declaredDependencies: [],
         availability: 'available',
       },

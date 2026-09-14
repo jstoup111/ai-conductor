@@ -9,6 +9,7 @@ import type { ConductorEvent } from '../../../src/types/events.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import {
   acquireScratchHome,
+  acquireReviewScratchHome,
   collectLegacyScratch,
   readScratchLease,
   releaseScratchHome,
@@ -20,6 +21,24 @@ import {
 const execFile = promisify(execFileCb);
 
 describe('provider scratch homes', () => {
+  it('acquires and idempotently releases external review scratch', async () => {
+    const created: string[] = [];
+    const removed: string[] = [];
+    const lease = await acquireReviewScratchHome({
+      worktreeRoot: '/worktree', runId: 'review-run', attempt: 2, provider: 'codex', memberId: 'quality',
+      fs: {
+        mkdir: async (path) => { created.push(path); },
+        rm: async (path) => { removed.push(path); },
+      },
+    });
+
+    expect(lease.home).toContain('/ai-conductor-build-review/review-run/2-codex/review-quality');
+    await lease.release();
+    await lease.release();
+    expect(created).toEqual([lease.home]);
+    expect(removed).toEqual([lease.home]);
+  });
+
   it('retains legacy entries that are not provably stale while continuing after a failed removal', async () => {
     const tempRoot = '/legacy-scratch-refusal';
     const processStartedAt = new Date('2026-08-11T12:00:00.000Z');

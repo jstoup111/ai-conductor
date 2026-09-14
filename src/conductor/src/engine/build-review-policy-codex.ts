@@ -247,8 +247,9 @@ export async function listCodexInstalledReviewSkills(
           : { plugin: { id: plugin.id, ...(plugin.localVersion === null ? {} : { version: plugin.localVersion }) } }),
         installationOrigin: skill.path,
         canonicalSkillPath: skill.path,
-        packageRoot: dirname(skill.path),
-        declaredDependencies: skill.dependencies?.tools.map((dependency) => dependency.value) ?? [],
+        packageRoot: plugin?.source.type === 'local' ? plugin.source.path : dirname(skill.path),
+        ...(skill.dependencies?.tools === undefined ? {} : { requiredTools: skill.dependencies.tools.map((dependency) => dependency.value) }),
+        declaredDependencies: [],
         availability: 'available',
       }];
     });

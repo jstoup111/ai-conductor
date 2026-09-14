@@ -130,16 +130,25 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
-  it.each(['hit', 'cancel', 'timeout'] as const)('keeps a prepared %s distinct from cached setup failure without allocating schema scratch', async (outcome) => {
+  it.each(['hit', 'rung-hit', 'cancel', 'timeout'] as const)('keeps a prepared %s distinct from cached setup failure without allocating schema scratch', async (outcome) => {
     const worktreeRoot = await mkdtemp(join(tmpdir(), 'prepared-result-'));
     const controller = new AbortController();
     const invoke = vi.fn();
     const candidate = runtime('codex', { nativeSchemaCapability: { nativeOutputSchema: true }, invoke });
     candidate.runWideUnavailable = { reason: 'previous provider failure' };
     const prepare = vi.fn(async () => undefined);
-    const operation = vi.fn(async () => {
+    const isHit = outcome === 'hit' || outcome === 'rung-hit';
+    const operation = vi.fn(async (context: import('../../src/engine/provider-execution.js').PreparedCandidateOperationContext) => {
       await expect(access(join(worktreeRoot, '.daemon', 'scratch'))).rejects.toMatchObject({ code: 'ENOENT' });
-      return { kind: 'hit' as const, result: { success: true, output: 'cached judgment', exitCode: 0 } };
+      const hit = { success: true, output: 'cached judgment', exitCode: 0, providerInvocationSkipped: true };
+      if (outcome === 'rung-hit') {
+        const result = await context.invoke(undefined, async () => {
+          await expect(access(join(worktreeRoot, '.daemon', 'scratch'))).rejects.toMatchObject({ code: 'ENOENT' });
+          return hit;
+        });
+        return { kind: 'hit' as const, result };
+      }
+      return { kind: 'hit' as const, result: hit };
     });
     if (outcome === 'cancel') controller.abort();
     try {
@@ -152,14 +161,14 @@ describe('executeProviderCandidates', () => {
         abortSignal: controller.signal, deadlineAt: outcome === 'timeout' ? 0 : undefined,
         prepareCandidateSelfHost: prepare, preparedCandidateOperation: operation,
       });
-      expect(result.success).toBe(outcome === 'hit');
+      expect(result.success).toBe(isHit);
       expect(result.providerSetupExhaustion).toBeUndefined();
       expect(result.attempts).toHaveLength(1);
-      expect(result.attempts[0]).toMatchObject({ invoked: false, outcome: outcome === 'hit' ? 'success' : 'failure' });
+      expect(result.attempts[0]).toMatchObject({ invoked: false, outcome: isHit ? 'success' : 'failure' });
       expect(result.attempts[0].skipReason).toBeUndefined();
       expect(result.attempts[0].setupCapability).toBeUndefined();
       expect(prepare).toHaveBeenCalledTimes(1);
-      expect(operation).toHaveBeenCalledTimes(outcome === 'hit' ? 1 : 0);
+      expect(operation).toHaveBeenCalledTimes(isHit ? 1 : 0);
       expect(invoke).not.toHaveBeenCalled();
       await expect(access(join(worktreeRoot, '.daemon', 'scratch'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
