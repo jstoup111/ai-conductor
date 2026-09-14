@@ -857,6 +857,71 @@ describe('conduct-state lease', () => {
     });
   });
 
+  it('bounds post-deadline blocker observation despite a growing dead successor chain', async () => {
+    const statePath = '/worktree/post-deadline-successor-chain/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared, pid: 101, newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+
+    const claim = (pid: number, token: string, predecessorToken: string | null): string => JSON.stringify({
+      version: 1, pid, token, claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'dead-owner', predecessorToken,
+    });
+    let predecessorToken: string | null = null;
+    for (let index = 0; index < 20; index += 1) {
+      const token = `dead-claim-${index}`;
+      const path = predecessorToken === null
+        ? `${statePath}.lease/recovery.json`
+        : successorClaimPath(statePath, 'dead-owner', predecessorToken);
+      await shared.writeRecoveryClaim(path, claim(200 + index, token, predecessorToken));
+      predecessorToken = token;
+    }
+
+    let recoveryClaimReads = 0;
+    let contenderClaimWrites = 0;
+    let now = 0;
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async readOwner(path): Promise<string> {
+        now = 5;
+        return shared.readOwner(path);
+      },
+      async readRecoveryClaim(path): Promise<string | null> {
+        recoveryClaimReads += 1;
+        if (recoveryClaimReads === 1) {
+          await shared.writeRecoveryClaim(
+            successorClaimPath(statePath, 'dead-owner', predecessorToken!),
+            claim(999, 'concurrently-added-dead-claim', predecessorToken),
+          );
+        }
+        return shared.readRecoveryClaim(path);
+      },
+      async writeRecoveryClaim(path, contents): Promise<void> {
+        contenderClaimWrites += 1;
+        await shared.writeRecoveryClaim(path, contents);
+      },
+    };
+
+    await expect(createConductStateLease(statePath, {
+      filesystem,
+      label: 'intake ledger',
+      now: () => now,
+      processIsLive: () => false,
+      waitTimeoutMs: 5,
+      newToken: () => 'contender',
+    }).acquire()).resolves.toEqual({
+      ok: false,
+      kind: 'timeout',
+      message: 'Unable to acquire intake ledger lease within 5ms; recovery claimant pid 200 is unresolved',
+    });
+    expect({ contenderClaimWrites, recoveryClaimReads }).toEqual({
+      contenderClaimWrites: 0,
+      recoveryClaimReads: 1,
+    });
+  });
+
   it('returns interrupted when acquisition waiting is cancelled', async () => {
     const statePath = '/worktree/interrupted-acquisition/.pipeline/conduct-state.json';
     const filesystem = sharedLeaseFilesystem();

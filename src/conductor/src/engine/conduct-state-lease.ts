@@ -305,40 +305,31 @@ export function createConductStateLease(
       | { status: 'timeout'; blocker: ConductStateLeaseRecoveryTimeoutBlocker }
       | { status: 'refused'; message: string }
     > => {
-      let lastObservedBlocker: ConductStateLeaseRecoveryTimeoutBlocker = {
-        kind: 'dead_owner', pid: owner.pid,
-      };
       let claimPath = recoveryClaimPath(leasePath);
-      let predecessorToken: string | null = null;
       let currentOwnerRoot = false;
-      const visitedClaimTokens = new Set<string>();
-
-      while (true) {
+      for (let reads = 0; reads < 2; reads += 1) {
         let serializedClaim: string | null;
         try {
           serializedClaim = await filesystem.readRecoveryClaim(claimPath);
         } catch (error) {
           return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claim read failed (${errorMessage(error)})` };
         }
-        if (serializedClaim === null) return { status: 'timeout', blocker: lastObservedBlocker };
+        if (serializedClaim === null) return { status: 'timeout', blocker: { kind: 'dead_owner', pid: owner.pid } };
 
         const existingClaim = parseRecoveryClaim(serializedClaim, leasePath);
         if (!currentOwnerRoot && existingClaim.kind === 'bound' &&
           existingClaim.identity.ownerToken !== owner.token &&
-          existingClaim.identity.predecessorToken === null && predecessorToken === null) {
+          existingClaim.identity.predecessorToken === null) {
           claimPath = recoverySuccessorClaimPath(leasePath, owner.token, null);
           currentOwnerRoot = true;
           continue;
         }
         if (existingClaim.kind === 'invalid' ||
-          (existingClaim.kind === 'legacy' && predecessorToken !== null) ||
           (existingClaim.kind === 'bound' &&
             (existingClaim.identity.ownerToken !== owner.token ||
-              existingClaim.identity.predecessorToken !== predecessorToken)) ||
-          visitedClaimTokens.has(existingClaim.identity.token)) {
+              existingClaim.identity.predecessorToken !== null))) {
           return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claim is invalid or inconsistent` };
         }
-        visitedClaimTokens.add(existingClaim.identity.token);
         try {
           if (processIsLive(existingClaim.identity.pid)) {
             return { status: 'timeout', blocker: { kind: 'claimant', pid: existingClaim.identity.pid } };
@@ -346,10 +337,10 @@ export function createConductStateLease(
         } catch (error) {
           return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claimant liveness is unverifiable (${errorMessage(error)})` };
         }
-        lastObservedBlocker = { kind: 'unresolved_recovery', pid: existingClaim.identity.pid };
-        predecessorToken = existingClaim.identity.token;
-        claimPath = recoverySuccessorClaimPath(leasePath, owner.token, predecessorToken);
+        return { status: 'timeout', blocker: { kind: 'unresolved_recovery', pid: existingClaim.identity.pid } };
       }
+
+      return { status: 'timeout', blocker: { kind: 'dead_owner', pid: owner.pid } };
     };
 
     let ownerIsLive: boolean;
