@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-14T11:12:52.428Z
 Slug: report-progress-bypassed-build-retries-against-the
 Class: needs-human
 Halting step: prd_audit
