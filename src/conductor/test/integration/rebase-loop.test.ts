@@ -168,10 +168,10 @@ describe('integration/rebase-loop', () => {
   }
 
   it.each([
-    ['.docs/stories/add-foo.md', ['coverage_binding', 'prd_audit']],
-    ['.docs/specs/add-foo.md', ['coverage_binding', 'prd_audit']],
-    ['.docs/plans/add-foo.md', ['coverage_binding']],
-    ['.docs/coherence/add-foo.md', ['coverage_binding']],
+    ['.docs/stories/add-foo.md', ['coverage_binding', 'prd_audit', 'build_review', 'test_suite', 'manual_test', 'architecture_review_as_built']],
+    ['.docs/specs/add-foo.md', ['coverage_binding', 'prd_audit', 'build_review', 'test_suite', 'manual_test', 'architecture_review_as_built']],
+    ['.docs/plans/add-foo.md', ['coverage_binding', 'build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
+    ['.docs/coherence/add-foo.md', ['coverage_binding', 'build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
     ['.docs/stories/another-feature.md', []],
   ])('rebase reviews only the active inputs changed at %s', async (path, expected) => {
     await initRepoOnFeatureBranch({ path: 'src/foo.ts', content: 'export const foo = 1;\n' });
@@ -181,12 +181,14 @@ describe('integration/rebase-loop', () => {
     events.on('rebase_gate_invalidated', (event) => {
       if (event.type !== 'rebase_gate_invalidated') return;
       invalidated.push(event.gate);
-      expect(event.matchedPaths).toEqual([path]);
+      expect(event.matchedPaths).toEqual(
+        event.gate === 'coverage_binding' || event.gate === 'prd_audit' ? [path] : [],
+      );
     });
     const outcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE, { finishMergeabilityCheck: true });
     const preVerify = vi.fn();
     const result = await applyRebaseVerdicts(dir, outcome, true, preVerify);
-    await emitGateInvalidationEvents(events, outcome, true);
+    await emitGateInvalidationEvents(events, outcome, true, result);
     expect(result.kickedBack).toEqual(expected);
     expect(invalidated).toEqual(expected);
     expect(preVerify).not.toHaveBeenCalled();
@@ -210,7 +212,14 @@ describe('integration/rebase-loop', () => {
     }, 1);
     expect(outcome.kind).toBe('changed');
     const result = await applyRebaseVerdicts(dir, outcome, true);
-    expect(result.kickedBack).toEqual(['coverage_binding', 'prd_audit']);
+    expect(result.kickedBack).toEqual([
+      'coverage_binding',
+      'prd_audit',
+      'build_review',
+      'test_suite',
+      'manual_test',
+      'architecture_review_as_built',
+    ]);
   });
 
   // Advance BASE with a NON-conflicting commit (a brand-new file). Leaves the
@@ -1339,7 +1348,6 @@ describe('integration/rebase-loop', () => {
         expect(counts.prd_audit).toBe(1);
         expect(counts.architecture_review_as_built).toBe(1);
 
-        expect(invalidated.find((i) => i.gate === 'test_suite')).toBeDefined();
         expect(invalidated.find((i) => i.gate === 'manual_test')).toBeDefined();
         expect(preserved.find((p) => p.gate === 'prd_audit')).toBeDefined();
         expect(
@@ -1393,7 +1401,6 @@ describe('integration/rebase-loop', () => {
         expect(counts.manual_test).toBe(1);
         expect(counts.prd_audit).toBe(1);
         expect(counts.architecture_review_as_built).toBe(1);
-        expect(invalidated.find((i) => i.gate === 'test_suite')).toBeDefined();
         expect(preserved.find((p) => p.gate === 'manual_test')).toBeDefined();
       });
     });
@@ -1530,7 +1537,7 @@ describe('integration/rebase-loop', () => {
         expect(outcome.featureSurface).toBeUndefined();
 
         const result = await applyRebaseVerdicts(dir, outcome, true);
-        await emitGateInvalidationEvents(events, outcome, true);
+        await emitGateInvalidationEvents(events, outcome, true, result);
 
         // Full legacy invalidation set (fail-closed fallback), no preservations.
         expect(result.kickedBack).toEqual([
