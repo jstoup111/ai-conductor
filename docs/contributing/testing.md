@@ -445,14 +445,18 @@ from `.ai-conductor/config.yml`:
 
 ```yaml
 test_suite:
-  command: npm test
+  commands:
+    - command: npm test
+      working_directory: src/conductor
+    - command: test/test_harness_integrity.sh
+      working_directory: .
   working_directory: src/conductor
   timeout_seconds: 1800
 ```
 
-The `--slowTestThreshold=1800000` in the npm script matches that 1800-second budget, suppressing
-slow-test warnings that would otherwise fire on every long run. The ordinary suite is expected to finish
-under five minutes; a healthy run is roughly two to three.
+The entries run in order, so the integrity suite runs only after the conductor suite passes. The
+`--slowTestThreshold=1800000` in the npm script matches that 1800-second budget, suppressing slow-test
+warnings that would otherwise fire on every long run.
 
 For where `test_suite` sits in the flow and what happens when it fails, see
 [steps](../reference/steps.md) and [gates](../explanation/gates.md).
