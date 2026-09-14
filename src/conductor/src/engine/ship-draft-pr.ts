@@ -28,13 +28,17 @@
  */
 
 import {
-  findOrCreatePr,
   makeProductionGh,
   makeProductionGit,
   type GhRunner,
   type GitRunner,
 } from './pr-labels.js';
 import { PR_BODY_FLOOR_MARKER, branchToFeatureDesc } from './halt-pr-rehabilitation.js';
+import { executeGithubOperation, type GithubOperationRunner } from './github-operations.js';
+import { executeRemoteGit } from './remote-git-operations.js';
+import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from './tracker-client.js';
+import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
+import { resolveDaemonOwner } from './owner-gate/identity.js';
 
 /**
  * Human-readable note stamped into the placeholder body so a reader who lands
@@ -130,7 +134,80 @@ export interface OpenShipDraftPrDeps {
    * {@link OpenShipDraftPrResult} `lease-rejected` rather than clobbering it.
    */
   pushMode?: 'plain' | 'lease';
+  /**
+   * The guarded remote-write seam. Absent provenance is deliberately passed to
+   * the guard and therefore refuses before the injected Git process boundary.
+   */
+  remoteGit?: typeof executeRemoteGit;
+  remoteMutation?: GithubMutationExecutionContext;
+  /** Guarded PR creation; an absent runner is a refusal, never a raw gh fallback. */
+  operations?: GithubOperationRunner;
   log?: (msg: string) => void;
+}
+
+/** A production composition has these exact per-feature authorization seams. */
+export interface ShipDraftPublicationDependencies {
+  readonly remoteMutation: GithubMutationExecutionContext;
+  readonly operations: GithubOperationRunner;
+}
+
+function repositoryFromOrigin(value: string): string | undefined {
+  const remote = value.trim();
+  const match = /^(?:git@github\.com:|https:\/\/github\.com\/)([^/\s]+)\/([^/\s]+?)(?:\.git)?$/i.exec(remote);
+  if (!match) return undefined;
+  return `${match[1].toLowerCase()}/${match[2].toLowerCase()}`;
+}
+
+/**
+ * Construct production-only authorization context from committed feature
+ * evidence. The caller retains a typed absence when either remote identity or
+ * feature provenance cannot be resolved; `openShipDraftPr` then refuses before
+ * it can reach a write transport.
+ */
+export async function createShipDraftPublicationDependencies(input: {
+  readonly cwd: string;
+  readonly branch: string | undefined;
+  readonly baseBranch: string | undefined;
+  readonly featureDesc: string | undefined;
+  readonly git: GitRunner;
+  readonly gh: GhRunner;
+}): Promise<ShipDraftPublicationDependencies | undefined> {
+  if (!input.branch || input.branch === 'HEAD' || !input.baseBranch || !input.featureDesc) return undefined;
+  let repository: string | undefined;
+  try {
+    repository = repositoryFromOrigin((await input.git(['config', '--get', 'remote.origin.url'], { cwd: input.cwd })).stdout);
+  } catch {
+    return undefined;
+  }
+  if (!repository) return undefined;
+  const featureMarker = `.docs/intake/${input.featureDesc}.md`;
+  const remoteMutation: GithubMutationExecutionContext = {
+    provenance: {
+      repository,
+      defaultBranch: input.baseBranch,
+      specBranch: input.branch,
+      featureMarker,
+      publication: 'initial',
+    },
+    dependencies: {
+      resolveMachineOwner: async () => resolveDaemonOwner(
+        await readMachineOwnerConfig(), input.gh, input.cwd,
+      ),
+      provenanceDiscovery: {
+        readCommittedRecords: async ({ ref }) => {
+          const { stdout } = await input.git(['show', `${ref}:${featureMarker}`], { cwd: input.cwd });
+          return [{ path: featureMarker, content: stdout }];
+        },
+      },
+    },
+  };
+  return {
+    remoteMutation,
+    operations: createGuardedGithubOperationRunner(input.gh, {
+      cwd: input.cwd,
+      mutation: remoteMutation,
+    }),
+  };
 }
 
 export type OpenShipDraftPrResult =
@@ -254,12 +331,20 @@ export async function openShipDraftPr(
     // force, so an actually-moved remote is still refused.
     const lease = deps.pushMode === 'lease';
     const pushArgs = lease
-      ? ['push', '-u', 'origin', branch, '--force-with-lease']
-      : ['push', '-u', 'origin', branch];
-    try {
-      await git(pushArgs, { cwd });
-    } catch (err) {
-      const reason = String(err);
+      ? ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`, '--force-with-lease']
+      : ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`];
+    const pushed = await (deps.remoteGit ?? executeRemoteGit)(pushArgs, {
+      cwd,
+      config: (args) => git(args, { cwd }),
+      runRemoteGit: git,
+      mutation: deps.remoteMutation,
+    });
+    if (pushed.kind !== 'executed') {
+      const reason = pushed.kind === 'failed'
+        ? pushed.error
+        : pushed.kind === 'refused'
+          ? `guarded remote publication refused: ${pushed.reason}`
+          : 'guarded remote publication did not resolve an explicit destination';
       if (lease && isLeaseRejection(reason)) {
         log(
           `[ship-draft-pr] lease push of ${branch} was REJECTED — the remote carries unseen work; ` +
@@ -277,8 +362,37 @@ export async function openShipDraftPr(
     const title = `feat: ${featureDesc}`;
     const body = shipDraftPrBody(featureDesc);
 
-    const opts = { branch, base: baseBranch, draft: true, title, body };
-    let { prUrl } = await findOrCreatePr(gh, cwd, opts, log);
+    let prUrl = await reobserveOpenPr(gh, cwd, branch, log);
+    if (!prUrl) {
+      if (!deps.operations) {
+        const reason = 'guarded pull-request creation is unavailable';
+        log(`[ship-draft-pr] ${reason}; no raw gh fallback was attempted`);
+        return { outcome: 'failed', reason };
+      }
+      const created = await executeGithubOperation({
+        operation: 'pull-request.create',
+        repository: pushed.targets[0]!.repository,
+        resource: { kind: 'repository' },
+        context: { actor: 'ship-draft-pr', feature: deps.featureDesc },
+        payload: { title, body, head: branch, base: baseBranch, draft: true },
+      }, deps.operations);
+      if (created.kind === 'refused') {
+        const reason = `guarded pull-request creation refused: ${created.reason}`;
+        log(`[ship-draft-pr] ${reason}`);
+        return { outcome: 'failed', reason };
+      }
+      if (created.kind === 'partial') {
+        const reason = 'guarded pull-request creation returned a partial result';
+        log(`[ship-draft-pr] ${reason}`);
+        return { outcome: 'failed', reason };
+      }
+      // A transport failure can happen after GitHub accepted the create. Do
+      // not repeat that create-capable request; the lookup below is the only
+      // safe recovery and distinguishes a lost response from a true failure.
+      if (created.kind === 'failed') {
+        log(`[ship-draft-pr] guarded pull-request creation response was unavailable: ${created.error}; re-observing once`);
+      }
+    }
     // GitHub can complete `pr create` and lose the response before the
     // runner receives a URL. Re-observe the branch without another
     // create-capable call: an unknown write outcome must never retry create.

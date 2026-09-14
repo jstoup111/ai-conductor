@@ -422,6 +422,7 @@ import {
   type CostRollup,
 } from './cost-rollup.js';
 import { openShipDraftPr } from './ship-draft-pr.js';
+import { createShipDraftPublicationDependencies } from './ship-draft-pr.js';
 import { mirrorIssueCriticalityLabels } from './pr-criticality-labels.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
@@ -7115,6 +7116,14 @@ export class Conductor {
         // Advisory: openShipDraftPr never throws and a failure only logs.
         if (step.phase === 'SHIP' && !this.shipDraftPrAttempted) {
           this.shipDraftPrAttempted = true;
+          const publication = await createShipDraftPublicationDependencies({
+            cwd: this.projectRoot,
+            branch: state.worktree_branch,
+            baseBranch: this.baseBranch,
+            featureDesc: state.feature_desc,
+            git: this.git,
+            gh: this.gh,
+          });
           const draftPr = await openShipDraftPr({
             gh: this.gh,
             git: this.git,
@@ -7122,6 +7131,8 @@ export class Conductor {
             branch: state.worktree_branch,
             baseBranch: this.baseBranch,
             featureDesc: state.feature_desc,
+            remoteMutation: publication?.remoteMutation,
+            operations: publication?.operations,
             log: this.log ?? console.warn,
           });
           if (draftPr.outcome === 'published') {

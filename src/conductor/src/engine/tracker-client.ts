@@ -162,7 +162,14 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
     case 'issue.create':
       return ['issue', 'create', '-R', repository, '--title', payloadField(request, 'title'), '--body', payloadField(request, 'body')];
     case 'pull-request.create':
-      return ['pr', 'create', '-R', repository, '--title', payloadField(request, 'title'), '--body', payloadField(request, 'body'), '--head', payloadField(request, 'head'), '--base', payloadField(request, 'base')];
+      return [
+        'pr', 'create', '-R', repository,
+        '--title', payloadField(request, 'title'),
+        '--body', payloadField(request, 'body'),
+        '--head', payloadField(request, 'head'),
+        '--base', payloadField(request, 'base'),
+        ...(request.payload && 'draft' in request.payload && request.payload.draft === true ? ['--draft'] : []),
+      ];
     case 'label-definition.create':
     case 'label-definition.update': {
       if (request.target.kind !== 'label-definition') throw new Error('Registered label operation has an invalid target.');

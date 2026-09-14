@@ -79,7 +79,7 @@ export type GithubOperationPayload =
   | { readonly body: string }
   | { readonly label: string }
   | { readonly title: string; readonly body: string }
-  | { readonly title: string; readonly body: string; readonly head: string; readonly base: string }
+  | { readonly title: string; readonly body: string; readonly head: string; readonly base: string; readonly draft?: boolean }
   | { readonly name: string; readonly color?: string; readonly description?: string }
   | GithubPullRequestEditPayload
   | GithubPullRequestCommentUpdatePayload
@@ -310,7 +310,13 @@ function payloadFrom(value: unknown, required: GithubOperationDefinition['payloa
     && typeof value.body === 'string'
     && typeof value.head === 'string'
     && typeof value.base === 'string') {
-    return { title: value.title, body: value.body, head: value.head, base: value.base };
+    return {
+      title: value.title,
+      body: value.body,
+      head: value.head,
+      base: value.base,
+      ...(typeof value.draft === 'boolean' ? { draft: value.draft } : {}),
+    };
   }
   if (required === 'label-definition' && typeof value.name === 'string') {
     return {
