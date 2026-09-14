@@ -896,6 +896,35 @@ describe('build-review accept', () => {
     });
   });
 
+  it('refuses a custom reduced-coverage decision when its subject disappears while the effect lease is held', async () => {
+    const declaration = {
+      version: 'v1' as const, rubricId: 'portablePolicy', semanticSkill: 'portable-policy',
+      question: 'Does this preserve the portable policy contract?', source: 'project' as const, resources: [],
+    };
+    const current = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot',
+      results: { testQuality: { kind: 'judged' as const, rubric: 'testQuality' as const, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3' as const, findings: [], verdict: 'PASS' as const } },
+      customResults: { portablePolicy: { declaration, result: { kind: 'infrastructure-failure' as const, rubric: 'portablePolicy', reason: 'policy-load-failed' as const, detail: 'policy could not be loaded' } } },
+      currentCustomRubrics: ['portablePolicy'],
+    } satisfies BuildReviewAggregateInput);
+    const noLongerCurrent = joinBuildReviewRubricOutcomes({ ...current, currentCustomRubrics: [] });
+    let reads = 0;
+    const appendReducedCoverageIfCurrent = vi.fn(async (_input, validate) => {
+      expect(await validate([])).toBe(false);
+      return { ok: false as const, kind: 'invalid' as const, message: 'the reviewed subject changed' };
+    });
+
+    await expect(dispatchBuildReviewRecordReducedCoverage({
+      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'portablePolicy', rationale: 'The loader is unavailable.',
+    }, {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(++reads === 1 ? current : noLongerCurrent), readMechanicalFaults: async () => 3,
+      createStore: () => ({ appendReducedCoverageIfCurrent }), print: vi.fn(), appendEvent: vi.fn(),
+    })).resolves.toBe(1);
+
+    expect(appendReducedCoverageIfCurrent).toHaveBeenCalledTimes(1);
+  });
+
   it('names the failed check in the refusal and in its event reason', async () => {
     const refusals: Array<{ readonly reason: string; readonly message: string }> = [];
     const collect = () => {
