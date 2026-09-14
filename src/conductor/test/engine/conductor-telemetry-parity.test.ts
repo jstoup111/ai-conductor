@@ -192,6 +192,8 @@ async function runBuiltinGroup(input: {
   throwOnAttempts?: Partial<Record<StepName, number[]>>;
   shutdownDuringRun?: boolean;
   authRecovery?: boolean;
+  /** Controlled observer fault: the runner still runs, but its admission is lost. */
+  omitAdmissionFor?: StepName;
 } = {}): Promise<BuiltinFixture> {
   const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-built-in-group-telemetry-'));
   directories.push(projectRoot);
@@ -239,6 +241,16 @@ async function runBuiltinGroup(input: {
     ).mockResolvedValue({ disposition: 'recovered' });
   }
   let conductor: Conductor | undefined;
+  if (input.omitAdmissionFor !== undefined) {
+    const prototype = Conductor.prototype as unknown as {
+      emitExecutionEvent(event: ConductorEvent): Promise<void>;
+    };
+    const emitExecutionEvent = prototype.emitExecutionEvent;
+    vi.spyOn(prototype, 'emitExecutionEvent').mockImplementation(function (event) {
+      if (event.type === 'step_started' && event.step === input.omitAdmissionFor) return Promise.resolve();
+      return emitExecutionEvent.call(this, event);
+    });
+  }
   conductor = new Conductor({
     projectRoot, stateFilePath, events, fromStep: VALIDATION_GROUP.members[0] as StepName, mode: 'auto', daemon: true,
     maxRetries: 2, verifyArtifacts: input.verifyArtifacts ?? false, featureSlug: 'built-in-group-telemetry',
@@ -297,6 +309,8 @@ async function runConfiguredGroup(input: {
   maxRetries?: number;
   skip?: boolean;
   twoGroups?: boolean;
+  /** Controlled observer fault: the runner still runs, but its admission is lost. */
+  omitAdmissionFor?: string;
 } = {}): Promise<ConfiguredFixture> {
   const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-configured-group-telemetry-'));
   directories.push(projectRoot);
@@ -333,6 +347,20 @@ async function runConfiguredGroup(input: {
   ];
   const calls: string[] = [];
   const runnerContexts: ExecutionContext[] = [];
+  if (input.omitAdmissionFor !== undefined) {
+    const prototype = Conductor.prototype as unknown as {
+      emitExecutionEvent(event: ConductorEvent): Promise<void>;
+    };
+    const emitExecutionEvent = prototype.emitExecutionEvent;
+    vi.spyOn(prototype, 'emitExecutionEvent').mockImplementation(function (event) {
+      if (
+        event.type === 'step_started'
+        && event.executionContext?.subject.kind === 'configured-member'
+        && event.executionContext.subject.member === input.omitAdmissionFor
+      ) return Promise.resolve();
+      return emitExecutionEvent.call(this, event);
+    });
+  }
   const conductor = new Conductor({
     projectRoot, stateFilePath, events, mode: 'auto',
     maxRetries: 1, verifyArtifacts: false,
@@ -378,6 +406,27 @@ async function runConfiguredGroup(input: {
 
 function configuredLabel(parentGroup: string, member: string): string {
   return `configured:${encodeURIComponent(parentGroup)}/${encodeURIComponent(member)}`;
+}
+
+/** The observable contract shared by every real-Conductor group fixture. */
+function assertOneMemberLifecycle(
+  fixture: BuiltinFixture | ConfiguredFixture,
+  member: string,
+  spanName: string,
+): void {
+  const executions = fixture.events.filter((event) => (
+    event.type === 'step_started'
+    && event.executionContext?.subject.kind !== undefined
+    && (
+      event.step === member
+      || event.executionContext.subject.kind === 'configured-member'
+        && event.executionContext.subject.member === member
+    )
+  ));
+  expect(executions).toHaveLength(1);
+  expect(fixture.spans.filter((span) => span.name === spanName)).toHaveLength(1);
+  expect(metricPoints(fixture.metrics, 'conductor.step.duration')
+    .filter((point) => point.attributes.step === spanName)).toHaveLength(1);
 }
 
 describe('serial conductor telemetry parity', () => {
@@ -687,6 +736,14 @@ describe('serial conductor telemetry parity', () => {
     expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === member)).toHaveLength(1);
   });
 
+  it('makes a lost built-in admission observable even though the fake runner dispatched', async () => {
+    const member = VALIDATION_GROUP.members[0] as StepName;
+    const fixture = await runBuiltinGroup({ omitAdmissionFor: member });
+
+    expect(fixture.calls).toContain(member);
+    expect(() => assertOneMemberLifecycle(fixture, member, member)).toThrow();
+  });
+
   it('closes the first auth scope before recovery replaces its member context', async () => {
     const member = VALIDATION_GROUP.members[0] as StepName;
     const fixture = await runBuiltinGroup({
@@ -890,6 +947,14 @@ describe('serial conductor telemetry parity', () => {
     expect(terminals).toEqual([expect.objectContaining({ type: 'step_failed', retryCount: 2 })]);
     expect(fixture.spans.filter((span) => span.name === label)).toHaveLength(1);
     expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === label)).toHaveLength(1);
+  });
+
+  it('makes a lost configured admission observable even though the fake runner dispatched', async () => {
+    const member = 'frontend-review';
+    const fixture = await runConfiguredGroup({ omitAdmissionFor: member });
+
+    expect(fixture.calls).toContain(member);
+    expect(() => assertOneMemberLifecycle(fixture, member, configuredLabel('explore', member))).toThrow();
   });
 
   it('emits no configured lifecycle for a pre-admission skipped group', async () => {
