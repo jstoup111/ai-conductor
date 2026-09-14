@@ -236,6 +236,7 @@ export async function openSpecPr(
       return { stdout: r.stdout };
     },
     prUrl: url,
+    operations: deps.publication.operations,
     cwd,
     log: deps.log,
   });
@@ -251,6 +252,7 @@ export async function openSpecPr(
         return { stdout: r.stdout };
       },
       prUrl: url,
+      operations: deps.publication.operations,
       keyword: 'Refs',
       sourceRef: deps.sourceRef,
       cwd,
@@ -262,6 +264,7 @@ export async function openSpecPr(
     //     dispatches on. Fail-open: never throws, never discards the PR.
     await mirrorIssueCriticalityLabels({
       gh: async (args, opts) => runner(args, { cwd: opts.cwd }),
+      operations: deps.publication.operations,
       cwd,
       prUrl: url,
       sourceRef: deps.sourceRef,
