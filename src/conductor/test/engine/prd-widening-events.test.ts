@@ -130,7 +130,8 @@ describe('PRD widening events', () => {
         '```json over-scope-decisions',
         JSON.stringify([{
           criterion: 'NC.1', offerEntryId: offer.offerEntryId, originalCaseId: offer.originalCaseId,
-          originalSource: offer.originalSource, decision: 'accept', rationale: 'Accepted original behavior.',
+          originalSource: offer.originalSource, summary: offer.originalSource.snapshot,
+          relation: 'outside-visible', decision: 'accept', rationale: 'Accepted original behavior.',
         }, 'malformed sibling entry']),
         '```',
       ].join('\n'));
