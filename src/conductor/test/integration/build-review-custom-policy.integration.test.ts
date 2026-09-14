@@ -1,4 +1,4 @@
-// Covers: task:16, task:26
+// Covers: task:16, task:21, task:26
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -11,6 +11,16 @@ import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import * as buildReviewProjections from '../../src/engine/build-review-projections.js';
+
+vi.mock('../../src/engine/build-review-projections.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/build-review-projections.js')>();
+  return {
+    ...actual,
+    buildReviewEffectiveResultDescriptor: vi.fn(actual.buildReviewEffectiveResultDescriptor),
+    parseBuildReviewReviewerPayload: vi.fn(actual.parseBuildReviewReviewerPayload),
+  };
+});
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -63,6 +73,8 @@ describe('custom build-review policy runner', () => {
     ['claude', 'project'], ['claude', 'global'], ['claude', 'plugin'],
     ['codex', 'project'], ['codex', 'global'], ['codex', 'plugin'],
   ] as const)('runs an installed %s %s policy through a prepared candidate', async (providerKey, source) => {
+    vi.mocked(buildReviewProjections.buildReviewEffectiveResultDescriptor).mockClear();
+    vi.mocked(buildReviewProjections.parseBuildReviewReviewerPayload).mockClear();
     const root = await fixture();
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) }));
     const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
@@ -99,6 +111,13 @@ describe('custom build-review policy runner', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
     const firstInvocation = (invoke.mock.calls as unknown as Array<[Parameters<LLMProvider['invoke']>[0]]>)[0]?.[0];
     expect(firstInvocation?.prompt).toContain('Portable policy');
+    expect(buildReviewProjections.buildReviewEffectiveResultDescriptor).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'portable', kind: 'custom', skill: source === 'plugin' ? 'policy-plugin:portable-policy' : 'portable-policy',
+    }));
+    expect(buildReviewProjections.parseBuildReviewReviewerPayload).toHaveBeenCalledWith(
+      { kind: 'custom-findings', version: 'v1', findings: [] },
+      { kind: 'custom', rubric: 'portable', parser: 'custom-findings-v1' },
+    );
     expect(resolvedEvents).toEqual([expect.objectContaining({
       source, bundleDigest: `sha256-v1:${'a'.repeat(64)}`,
       provenance: expect.objectContaining({
