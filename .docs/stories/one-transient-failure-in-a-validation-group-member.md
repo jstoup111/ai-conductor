@@ -13,7 +13,7 @@ As a daemon operator, I want a member that cannot produce a verdict after its fu
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a member throws on every attempt up to its resolved `max_retries`, when the join runs, then the loop writes a `needs-human` HALT whose reason names the failed member and its no-verdict reason, records the same `failed`/`last_step` stamping it records today, and emits `loop_halt` and `step_failed`.
+- Given a member throws on every attempt up to its resolved `max_retries`, when the join runs, then the loop writes a `needs-human` HALT whose reason names the failed member and its no-verdict reason, records the same `failed`/`last_step` stamping it records today, and emits `loop_halt` and a terminal `parallel_failure` whose `branch` names the failed member.
 - Given a member's runner is dead in this way, when its siblings are already in flight, then the siblings still run to their own outcomes before the join halts (no cancellation).
 
 #### Negative Paths
@@ -40,13 +40,13 @@ As a daemon operator, I want the passing members' completed work retained when o
 - Given `manual_test` dispatched successfully but its results file carries FAIL rows, when a sibling halts the group, then `manual_test` is NOT recorded `done`.
 - Given a member's dispatch succeeded but its verdict-run-identity handshake failed, when a sibling halts the group, then that member is NOT recorded `done`.
 - Given the member that produced `no-verdict`, when the halt commits, then that member's status is not `done` and its synthetic group-member key is not `done`.
-- Given the state commit that would retain siblings throws, when the join halts, then the HALT marker is still written, `loop_halt` and `step_failed` are still emitted, and the failure to persist is logged loudly.
+- Given the state commit that would retain siblings throws, when the join halts, then the HALT marker is still written, `loop_halt` and a terminal `parallel_failure` whose `branch` names the failed member are still emitted, and the failure to persist is logged loudly.
 - Given a process crash between the halt marker write and the state commit, when the feature is next read, then the state is either the pre-halt state or the complete post-halt state (siblings `done` and the `failed` stamping together), never siblings `done` without the `failed` stamping.
 
 ### Done When
 - [ ] A test with one always-throwing member and two passing members observes both passing members `done` and the `failed` stamping in `conduct-state.json` after the halt, written by a single state commit.
 - [ ] Negative tests observe that a member with an unsatisfied gate verdict, `manual_test` with FAIL rows, and a member with a handshake failure are each left not-`done` when a sibling halts the group.
-- [ ] A test with a state store that rejects the commit observes the HALT marker, `loop_halt`, and `step_failed` still produced.
+- [ ] A test with a state store that rejects the commit observes the HALT marker, `loop_halt`, and a terminal `parallel_failure` whose `branch` names the failed member still produced.
 
 ## Story 3: Clearing the halt re-runs only the failed member
 

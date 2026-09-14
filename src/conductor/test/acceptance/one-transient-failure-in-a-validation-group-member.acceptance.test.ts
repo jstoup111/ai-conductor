@@ -93,6 +93,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const emitted: ConductorEvent[] = [];
       const events = new ConductorEventEmitter();
       events.on('loop_halt', (event) => { emitted.push(event); });
+      events.on('parallel_failure', (event) => { emitted.push(event); });
       events.on('step_failed', (event) => { emitted.push(event); });
       events.on('kickback', (event) => { emitted.push(event); });
 
@@ -149,7 +150,10 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
       await expect(readFile(join(dir, '.pipeline/remediation.json'), 'utf8')).rejects.toThrow();
       expect(emitted.filter((event) => event.type === 'loop_halt')).toHaveLength(1);
-      expect(emitted.filter((event) => event.type === 'step_failed')).toHaveLength(1);
+      const groupTerminals = emitted.filter((event) => event.type === 'parallel_failure');
+      expect(groupTerminals).toHaveLength(1);
+      expect(groupTerminals[0]).toMatchObject({ branch: 'manual_test' });
+      expect(emitted.filter((event) => event.type === 'step_failed')).toHaveLength(0);
       expect(emitted.filter((event) => event.type === 'kickback')).toHaveLength(0);
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -164,6 +168,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const events: ConductorEvent[] = [];
       const emitter = new ConductorEventEmitter();
       emitter.on('loop_halt', event => { events.push(event); });
+      emitter.on('parallel_failure', event => { events.push(event); });
       emitter.on('step_failed', event => { events.push(event); });
       const store = createFilesystemConductStateStore(statePath);
       const applyBatch = vi.spyOn(store, 'applyBatch');
@@ -184,7 +189,8 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       });
       await expect(conductor.run()).resolves.toBeUndefined();
       await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
-      expect(events.map(event => event.type)).toEqual(expect.arrayContaining(['loop_halt', 'step_failed']));
+      expect(events.map(event => event.type)).toEqual(expect.arrayContaining(['loop_halt', 'parallel_failure']));
+      expect(events.map(event => event.type)).not.toContain('step_failed');
       expect(log).toHaveBeenCalledWith(expect.stringContaining('could not persist satisfied siblings'));
     } finally { await rm(dir, { recursive: true, force: true }); }
   });

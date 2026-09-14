@@ -3195,41 +3195,6 @@ describe('engine/conductor', () => {
     }
   });
 
-  it('delivers only the armed no-verdict step_failed after the validation group execution closed', async () => {
-    const conductor = new Conductor({
-      projectRoot: dir,
-      stateFilePath: statePath,
-      stepRunner: createMockStepRunner(),
-      events,
-    });
-    const emit = vi.spyOn(events, 'emit');
-    const executionEvents = conductor as unknown as {
-      emitExecutionEvent(event: ConductorEvent): Promise<void>;
-      emitNoVerdictTerminal(event: Extract<ConductorEvent, { type: 'step_failed' }>): Promise<void>;
-    };
-    await executionEvents.emitExecutionEvent({ type: 'parallel_started', step: 'prd_audit', branches: ['manual_test'] });
-    await executionEvents.emitExecutionEvent({
-      type: 'parallel_failure', step: 'prd_audit', branch: 'manual_test', error: 'no verdict',
-    });
-    emit.mockClear();
-
-    // The no-verdict halt's own terminal is delivered once, without an open key.
-    await executionEvents.emitNoVerdictTerminal({
-      type: 'step_failed', step: 'prd_audit', error: 'no verdict', retryCount: 0,
-    });
-    expect(emit).toHaveBeenCalledTimes(1);
-    expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'step_failed', step: 'prd_audit' }));
-
-    // Any further untracked validation terminal — of any type — stays suppressed.
-    emit.mockClear();
-    await executionEvents.emitExecutionEvent({
-      type: 'step_failed', step: 'prd_audit', error: 'second terminal', retryCount: 0,
-    });
-    await executionEvents.emitExecutionEvent({ type: 'step_completed', step: 'prd_audit', status: 'done' });
-    await executionEvents.emitExecutionEvent({ type: 'parallel_completed', step: 'prd_audit', branches: ['manual_test'] });
-    expect(emit).not.toHaveBeenCalled();
-  });
-
   it('suppresses a late normal terminal after daemon SIGTERM closed the execution', async () => {
     const conductor = new Conductor({
       projectRoot: dir,

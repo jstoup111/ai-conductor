@@ -2182,25 +2182,6 @@ export class Conductor {
     );
   }
 
-  /**
-   * The one `step:<group>` terminal key the validation no-verdict halt is about
-   * to emit after its `parallel_failure` closed the group execution. Consumed
-   * by the next matching `step_failed`; never survives past that emit.
-   */
-  private armedNoVerdictTerminal: string | undefined;
-
-  /**
-   * Deliver the validation no-verdict halt's `step_failed` even though its
-   * group execution has already closed. Only this path may arm the bypass.
-   */
-  private emitNoVerdictTerminal(
-    event: Extract<ConductorEvent, { type: 'step_failed' }>,
-  ): Promise<void> {
-    this.armedNoVerdictTerminal = `step:${event.step}`;
-    return this.emitExecutionEvent(event).finally(() => {
-      this.armedNoVerdictTerminal = undefined;
-    });
-  }
 
   /** Emit through the existing spine while retaining the conductor's open execution state. */
   private emitExecutionEvent(event: ConductorEvent): Promise<void> {
@@ -2209,7 +2190,7 @@ export class Conductor {
       : event.type === 'parallel_started'
         ? { key: `parallel:${event.step}`, execution: { kind: 'parallel' as const, step: event.step } }
         : undefined;
-    let terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
+    const terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
       ? `step:${event.step}`
       : event.type === 'step_refused'
         ? (this.openExecutions.has(`step:${event.step}`) ? `step:${event.step}` : undefined)
@@ -2228,20 +2209,7 @@ export class Conductor {
       // Daemon SIGTERM closes the lifecycle before draining a runner that may
       // still resolve. Its ordinary terminal is then an orphan: the ledger
       // listener cannot recover an interval after the shutdown terminal consumed it.
-      if (!this.openExecutions.has(terminalKey)) {
-        // The validation no-verdict halt emits its `step_failed` after its own
-        // `parallel_failure` closed the group execution (Story 1.1 requires
-        // that terminal). That single, explicitly armed emit is delivered
-        // without closing anything; every other untracked terminal — including
-        // a late validation terminal after daemon SIGTERM — stays suppressed so
-        // the ledger keeps exactly one terminal per execution.
-        if (event.type === 'step_failed' && this.armedNoVerdictTerminal === terminalKey) {
-          this.armedNoVerdictTerminal = undefined;
-          terminalKey = undefined;
-        } else {
-          return Promise.resolve();
-        }
-      }
+      if (!this.openExecutions.has(terminalKey)) return Promise.resolve();
     }
     if (event.type === 'step_refused' && !terminalKey) {
       const group = getGroupForStep(event.step);
@@ -8260,16 +8228,6 @@ export class Conductor {
                 step: step.name,
                 branch: noVerdictMember.name,
                 error: haltReason,
-              });
-              breadcrumb.lastEventType = 'step_failed';
-              await this.emitNoVerdictTerminal({
-                type: 'step_failed',
-                step: step.name,
-                error: haltReason,
-                retryCount: 0,
-                ...(noVerdictOutcome.observedIntervals
-                  ? { observedIntervals: noVerdictOutcome.observedIntervals }
-                  : {}),
               });
               process.off('SIGINT', sigintHandler);
               if (!this.daemon) {
