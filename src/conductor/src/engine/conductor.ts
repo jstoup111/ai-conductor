@@ -2182,6 +2182,26 @@ export class Conductor {
     );
   }
 
+  /**
+   * The one `step:<group>` terminal key the validation no-verdict halt is about
+   * to emit after its `parallel_failure` closed the group execution. Consumed
+   * by the next matching `step_failed`; never survives past that emit.
+   */
+  private armedNoVerdictTerminal: string | undefined;
+
+  /**
+   * Deliver the validation no-verdict halt's `step_failed` even though its
+   * group execution has already closed. Only this path may arm the bypass.
+   */
+  private emitNoVerdictTerminal(
+    event: Extract<ConductorEvent, { type: 'step_failed' }>,
+  ): Promise<void> {
+    this.armedNoVerdictTerminal = `step:${event.step}`;
+    return this.emitExecutionEvent(event).finally(() => {
+      this.armedNoVerdictTerminal = undefined;
+    });
+  }
+
   /** Emit through the existing spine while retaining the conductor's open execution state. */
   private emitExecutionEvent(event: ConductorEvent): Promise<void> {
     const start = event.type === 'step_started'
@@ -2209,18 +2229,14 @@ export class Conductor {
       // still resolve. Its ordinary terminal is then an orphan: the ledger
       // listener cannot recover an interval after the shutdown terminal consumed it.
       if (!this.openExecutions.has(terminalKey)) {
-        // A validation-group terminal is still observable after its enclosing
-        // parallel execution has closed. It must reach the event spine, but
-        // must not close an unrelated parallel execution (the ordinary
-        // untracked-terminal behavior remains suppression).
-        if (
-          (event.type === 'step_completed'
-            || event.type === 'step_failed'
-            || event.type === 'step_refused'
-            || event.type === 'parallel_completed'
-            || event.type === 'parallel_failure')
-          && getGroupForStep(event.step)?.name === 'validation'
-        ) {
+        // The validation no-verdict halt emits its `step_failed` after its own
+        // `parallel_failure` closed the group execution (Story 1.1 requires
+        // that terminal). That single, explicitly armed emit is delivered
+        // without closing anything; every other untracked terminal — including
+        // a late validation terminal after daemon SIGTERM — stays suppressed so
+        // the ledger keeps exactly one terminal per execution.
+        if (event.type === 'step_failed' && this.armedNoVerdictTerminal === terminalKey) {
+          this.armedNoVerdictTerminal = undefined;
           terminalKey = undefined;
         } else {
           return Promise.resolve();
@@ -8245,7 +8261,8 @@ export class Conductor {
                 branch: noVerdictMember.name,
                 error: haltReason,
               });
-              await emitTracked({
+              breadcrumb.lastEventType = 'step_failed';
+              await this.emitNoVerdictTerminal({
                 type: 'step_failed',
                 step: step.name,
                 error: haltReason,
