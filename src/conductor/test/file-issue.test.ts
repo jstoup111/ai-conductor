@@ -1,198 +1,91 @@
-// Unit tests for `fileIntakeIssue` (engine/engineer/intake/file-issue.ts).
-//
-// Task 8 (canonical tracker-client seam): `fileIntakeIssue` must delegate
-// issue creation to an injected `TrackerClient.createIssue`, not a local
-// `FileIssueGhRunner`/ad-hoc gh-invocation abstraction. This file drives that
-// migration and asserts cross-repo `--repo` targeting parity — a specified
-// `repo` must reach `createIssue`'s `repo` field.
-//
-// Seams faked: a `TrackerClient` fake (drives `createIssue`) and a `GhRunner`
-// fake (drives the remaining label-apply / depends-on-link gh calls that
-// `TrackerClient` does not yet cover).
+// Unit coverage for the intake creation transaction's terminal adapter.
+// GitHub is faked at the GhRunner boundary; fileIntakeIssue receives only the
+// creation-scoped authority and registered-operation runner.
 
-import { describe, it, expect } from 'vitest';
-import { fileIntakeIssue } from '../src/engine/engineer/intake/file-issue.js';
-import type { TrackerClient } from '../src/engine/tracker-client.js';
+import { describe, expect, it } from 'vitest';
 
-/** Fake TrackerClient recording createIssue calls; everything else throws if
- * called (this test suite drives createIssue only). */
-function makeFakeTracker(opts: { failIssueCreate?: boolean } = {}) {
-  const createIssueCalls: { input: { title: string; body: string; repo?: string }; cwd: string }[] =
-    [];
+import {
+  createIntakeFilingOperations,
+  fileIntakeIssue,
+} from '../src/engine/engineer/intake/file-issue.js';
+import type { GhRunner } from '../src/engine/tracker-client.js';
 
-  const tracker: TrackerClient = {
-    async getIssueLabels() {
-      throw new Error('not used in this test');
-    },
-    async viewIssue() {
-      throw new Error('not used in this test');
-    },
-    async getIssueState() {
-      throw new Error('not used in this test');
-    },
-    async viewerIdentity() {
-      throw new Error('not used in this test');
-    },
-    async getBlockedBy() {
-      throw new Error('not used in this test');
-    },
-    async listAssignedIssues() {
-      throw new Error('not used in this test');
-    },
-    async commentOnIssue() {
-      throw new Error('not used in this test');
-    },
-    async createIssue(input, cwd) {
-      createIssueCalls.push({ input, cwd });
+function makeFakeGh(opts: { failIssueCreate?: boolean; failLabelApply?: boolean } = {}) {
+  const calls: string[][] = [];
+  const run: GhRunner = async (args) => {
+    calls.push(args);
+    if (args[0] === 'issue' && args[1] === 'create') {
       if (opts.failIssueCreate) throw new Error('simulated issue-create failure');
-      return 'https://github.com/acme/app/issues/300';
-    },
-    async addIssueLabel() {
-      throw new Error('not used in this test');
-    },
-    async closeIssue() {
-      throw new Error('not used in this test');
-    },
-    async upsertIssueBody() {
-      throw new Error('not used in this test');
-    },
-    async upsertIssueComment() {
-      throw new Error('not used in this test');
-    },
-    async getIssueBody() {
-      throw new Error('not used in this test');
-    },
-    async viewPullRequest() {
-      throw new Error('not used in this test');
-    },
-    async getPullRequestHeadRef() {
-      throw new Error('not used in this test');
-    },
-    async viewWorkflowRunFailedLog() {
-      throw new Error('not used in this test');
-    },
-    async readPullRequestMergeState() {
-      throw new Error('not used in this test');
-    },
-    async createLabel() {
-      throw new Error('not used in this test');
-    },
-    async removeIssueLabel() {
-      throw new Error('not used in this test');
-    },
-  };
-
-  return { tracker, createIssueCalls };
-}
-
-/** Fake `gh` runner covering the remaining label-apply / depends-on-link
- * traffic `fileIntakeIssue` still drives directly. */
-function makeFakeGh(opts: { failLabelApply?: boolean } = {}) {
-  const calls: { args: string[] }[] = [];
-  const appliedLabels: string[] = [];
-
-  const run = async (args: string[], _opts: { cwd: string }) => {
-    calls.push({ args });
-
-    if (args.some((a) => a.endsWith('/labels')) && args.some((a) => a.startsWith('labels[]='))) {
+      const repo = args[args.indexOf('-R') + 1] ?? 'acme/app';
+      return { stdout: `https://github.com/${repo}/issues/300\n` };
+    }
+    if (args.some((arg) => arg.endsWith('/labels'))) {
       if (opts.failLabelApply) throw new Error('simulated label-apply outage');
-      const labelArg = args.find((a) => a.startsWith('labels[]='))!;
-      appliedLabels.push(labelArg.replace('labels[]=', ''));
       return { stdout: '{}' };
     }
-    const blockedByTarget = args.find((a) => a.includes('/dependencies/blocked_by'));
-    if (blockedByTarget) {
-      return { stdout: '[]' };
-    }
-    const issuePath = args.find((a) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(a));
-    if (issuePath) {
-      return { stdout: JSON.stringify({ id: 1_000_300, number: 300 }) };
+    if (args.some((arg) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(arg))) {
+      return { stdout: JSON.stringify({ id: 1_000_300 }) };
     }
     return { stdout: '{}' };
   };
-
-  return { run, calls, appliedLabels };
+  return { calls, run };
 }
 
-describe('fileIntakeIssue — TrackerClient.createIssue seam', () => {
-  it('creates the issue via the injected TrackerClient.createIssue, not a local gh runner', async () => {
-    const { tracker, createIssueCalls } = makeFakeTracker();
+function creation(gh: GhRunner, repository = 'acme/app') {
+  return {
+    authority: {
+      resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
+      intent: { kind: 'explicit-intake' as const, repository },
+    },
+    operations: createIntakeFilingOperations(gh, '.'),
+  };
+}
+
+describe('fileIntakeIssue — creation-scoped terminal adapter', () => {
+  it('creates through the registered creation operation, not a tracker fallback', async () => {
     const gh = makeFakeGh();
 
-    const result = await fileIntakeIssue(
-      {
-        title: 'Something broke',
-        body: 'Observed X, expected Y',
-        size: 'L',
-        priority: 'critical',
-        interactive: false,
-      },
-      { tracker, gh: gh.run, cwd: '.' },
-    );
+    const result = await fileIntakeIssue({
+      title: 'Something broke', body: 'Observed X, expected Y', size: 'L', priority: 'critical',
+    }, { creation: creation(gh.run) });
 
-    expect(createIssueCalls).toHaveLength(1);
-    expect(createIssueCalls[0].input).toMatchObject({
-      title: 'Something broke',
-      body: 'Observed X, expected Y',
+    expect(result).toMatchObject({ ok: true, issueUrl: 'https://github.com/acme/app/issues/300' });
+    expect(gh.calls[0]).toEqual([
+      'issue', 'create', '-R', 'acme/app', '--title', 'Something broke', '--body', 'Observed X, expected Y',
+    ]);
+  });
+
+  it('uses an explicit repository as both creation intent and terminal target', async () => {
+    const gh = makeFakeGh();
+
+    await fileIntakeIssue({
+      title: 'Cross-repo report', body: 'body', size: 'S', priority: 'low', repo: 'acme/other-repo',
+    }, { creation: creation(gh.run, 'acme/other-repo') });
+
+    expect(gh.calls[0]).toContain('acme/other-repo');
+  });
+
+  it('applies size and priority only after a successful canonical creation', async () => {
+    const gh = makeFakeGh();
+
+    await fileIntakeIssue({ title: 'Has labels', body: 'body', size: 'M', priority: 'medium' }, {
+      creation: creation(gh.run),
     });
-    expect(createIssueCalls[0].cwd).toBe('.');
-    expect(result.issueUrl).toContain('acme/app/issues/300');
+
+    expect(gh.calls.filter((args) => args.some((arg) => arg.endsWith('/labels')))).toEqual([
+      expect.arrayContaining(['repos/acme/app/issues/300/labels', 'labels[]=priority: medium']),
+      expect.arrayContaining(['repos/acme/app/issues/300/labels', 'labels[]=size: M']),
+    ]);
   });
 
-  it('forwards a specified --repo to createIssue\'s repo field (cross-repo targeting parity)', async () => {
-    const { tracker, createIssueCalls } = makeFakeTracker();
-    const gh = makeFakeGh();
+  it('reports a creation transport failure without attempting metadata', async () => {
+    const gh = makeFakeGh({ failIssueCreate: true });
 
-    await fileIntakeIssue(
-      {
-        title: 'Cross-repo report',
-        body: 'body',
-        size: 'S',
-        priority: 'low',
-        repo: 'acme/other-repo',
-        interactive: false,
-      },
-      { tracker, gh: gh.run, cwd: '.' },
-    );
+    const result = await fileIntakeIssue({ title: 'Fails', body: 'body', size: 'S', priority: 'low' }, {
+      creation: creation(gh.run),
+    });
 
-    expect(createIssueCalls).toHaveLength(1);
-    expect(createIssueCalls[0].input.repo).toBe('acme/other-repo');
-  });
-
-  it('omitting --repo leaves createIssue\'s repo field undefined', async () => {
-    const { tracker, createIssueCalls } = makeFakeTracker();
-    const gh = makeFakeGh();
-
-    await fileIntakeIssue(
-      { title: 'Same-repo report', body: 'body', size: 'S', priority: 'low', interactive: false },
-      { tracker, gh: gh.run, cwd: '.' },
-    );
-
-    expect(createIssueCalls[0].input.repo).toBeUndefined();
-  });
-
-  it('applies priority/size labels after a successful TrackerClient.createIssue', async () => {
-    const { tracker } = makeFakeTracker();
-    const gh = makeFakeGh();
-
-    const result = await fileIntakeIssue(
-      { title: 'Has labels', body: 'body', size: 'M', priority: 'medium', interactive: false },
-      { tracker, gh: gh.run, cwd: '.' },
-    );
-
-    expect(result.issueUrl).toBeDefined();
-    expect(gh.appliedLabels).toEqual(expect.arrayContaining(['priority: medium', 'size: M']));
-  });
-
-  it('a TrackerClient.createIssue rejection propagates as a hard failure', async () => {
-    const { tracker } = makeFakeTracker({ failIssueCreate: true });
-    const gh = makeFakeGh();
-
-    await expect(
-      fileIntakeIssue(
-        { title: 'Fails', body: 'body', size: 'S', priority: 'low', interactive: false },
-        { tracker, gh: gh.run, cwd: '.' },
-      ),
-    ).rejects.toThrow(/simulated issue-create failure/);
+    expect(result).toMatchObject({ ok: false, issueUrl: '', warnings: [expect.stringContaining('simulated issue-create failure')] });
+    expect(gh.calls).toHaveLength(1);
   });
 });
