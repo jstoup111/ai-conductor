@@ -166,6 +166,7 @@ import {
   resolveMainRepoRoot,
 } from './engine/daemon-park-cli.js';
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
+import { detectGithubOperationCommand, dispatchGithubOperationCommand } from './engine/github-operations-cli.js';
 import {
   detectScopeCheckCommand,
   loadScopeCheckEnforcement,
@@ -876,6 +877,12 @@ async function main(): Promise<void> {
   if (taskCmd) {
     const code = await dispatchTaskCommand(taskCmd, process.cwd());
     process.exit(code);
+  }
+
+  const githubOperationCmd = detectGithubOperationCommand(process.argv);
+  if (githubOperationCmd) {
+    process.exitCode = await dispatchGithubOperationCommand(githubOperationCmd, { cwd: process.cwd() });
+    return;
   }
 
   const scopeCheckCmd = detectScopeCheckCommand(process.argv);

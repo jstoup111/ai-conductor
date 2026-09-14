@@ -1749,6 +1749,14 @@ if [ -f "${HARNESS_DIR}/CONTRIBUTING.md" ] &&
 fi
 assert "README and CONTRIBUTING document the Apache-2.0 grant" "$license_docs_ok"
 
+# ── 27. Guarded GitHub invocation boundary ──────────────────────────────────
+github_invocation_check="${HARNESS_DIR}/test/check_github_invocation_boundary.sh"
+if [ -x "$github_invocation_check" ] && "$github_invocation_check"; then
+  assert "test/check_github_invocation_boundary.sh — guarded invocation audit passes" 0
+else
+  assert "test/check_github_invocation_boundary.sh — guarded invocation audit passes" 1
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
