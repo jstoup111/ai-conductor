@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-14T14:16:41.454Z
 Slug: restore-failing-ci-check-context-in-ci-fix-session
 Class: needs-human
 Halting step: unknown
