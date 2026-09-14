@@ -28,6 +28,8 @@ import {
   type GitRunner,
 } from './pr-labels.js';
 import { specHash } from './shipped-record.js';
+import { executeRemoteGit } from './remote-git-operations.js';
+import type { GithubMutationExecutionContext } from './tracker-client.js';
 
 export type ShipmentEvidenceCommand =
   | { kind: 'check'; pr: string; eventPath?: string }
@@ -392,7 +394,7 @@ async function evaluateAtCandidateHead(
   );
 }
 
-function makeProductionRepairPublisher(input: {
+export function makeProductionRepairPublisher(input: {
   cwd: string;
   implementationPr: string;
   slug: string;
@@ -401,6 +403,8 @@ function makeProductionRepairPublisher(input: {
   evaluateEvidence: NonNullable<ShipmentEvidenceRunners['evaluateEvidence']>;
   /** Explicit `owner/name`; defaults to the Actions-provided environment. */
   repo?: string;
+  remoteGit?: typeof executeRemoteGit;
+  remoteMutation?: GithubMutationExecutionContext;
 }): ShipmentRepairPublisher {
   const repo = input.repo ?? process.env.GITHUB_REPOSITORY;
   if (!repo) throw new Error('GITHUB_REPOSITORY is required for repair publication');
@@ -429,7 +433,16 @@ function makeProductionRepairPublisher(input: {
       }
       if (changed.length > 0) {
         await input.runGit(['commit', '-m', `docs: repair shipped record for ${branch}`], { cwd: input.cwd });
-        await input.runGit(['push', 'origin', `HEAD:refs/heads/${branch}`], { cwd: input.cwd });
+        const pushed = await (input.remoteGit ?? executeRemoteGit)(
+          ['push', 'origin', `HEAD:refs/heads/${branch}`],
+          {
+            cwd: input.cwd,
+            config: (args) => input.runGit(args, { cwd: input.cwd }),
+            runRemoteGit: input.runGit,
+            mutation: input.remoteMutation,
+          },
+        );
+        if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));
       }
       return { headSha: (await input.runGit(['rev-parse', 'HEAD'], { cwd: input.cwd })).stdout.trim() };
     },
@@ -470,6 +483,12 @@ function makeProductionRepairPublisher(input: {
       );
     },
   };
+}
+
+function remoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
+  if (result.kind === 'failed') return result.error;
+  if (result.kind === 'refused') return result.reason;
+  return 'remote Git operation did not execute';
 }
 
 async function readRepairPullRequestHead(

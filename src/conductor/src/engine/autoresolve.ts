@@ -39,6 +39,8 @@ import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { prepareWorktree as defaultPrepareWorktree } from './worktree-prepare.js';
+import { executeRemoteGit } from './remote-git-operations.js';
+import type { GithubMutationExecutionContext } from './tracker-client.js';
 
 const execFile = promisify(execFileCb);
 
@@ -657,6 +659,11 @@ export type PushRefreshedResult =
   | { pushed: true }
   | { pushed: false; reason: string };
 
+export interface PushRefreshedRemoteOptions {
+  readonly remoteGit?: typeof executeRemoteGit;
+  readonly mutation?: GithubMutationExecutionContext;
+}
+
 /**
  * Push the refreshed branch with lease protection.
  *
@@ -684,22 +691,34 @@ export async function pushRefreshedBranch(
   git: GitRunner,
   branch: string,
   logger?: (msg: string) => void,
+  remote: PushRefreshedRemoteOptions = {},
 ): Promise<PushRefreshedResult> {
   const log = logger ?? console.log;
 
   // Resolution runs in a detached worktree, so publish its rebased HEAD rather
   // than the stale named branch ref. The lease still prevents unseen overwrites.
-  const pushResult = await git(['push', 'origin', `HEAD:${branch}`, '--force-with-lease']);
+  const destination = branch.startsWith('refs/') ? branch : `refs/heads/${branch}`;
+  const pushResult = await (remote.remoteGit ?? executeRemoteGit)(
+    ['push', 'origin', `HEAD:${destination}`, '--force-with-lease'],
+    {
+      cwd: '.',
+      config: async (args) => ({ stdout: (await git(args)).stdout }),
+      runRemoteGit: async (args) => {
+        const result = await git(args);
+        if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout || 'push failed');
+        return { stdout: result.stdout };
+      },
+      mutation: remote.mutation,
+    },
+  );
 
-  // Check if the push succeeded
-  if (pushResult.exitCode === 0) {
+  if (pushResult.kind === 'executed') {
     log(`pushRefreshedBranch: refreshed (${branch} pushed with lease)`);
     return { pushed: true };
   }
 
   // Failure: lease rejected (concurrent push detected) or other error
-  const stderr = pushResult.stderr || '';
-  const stdout = pushResult.stdout || '';
+  const stderr = pushResult.kind === 'failed' ? pushResult.error : '';
   let reason = 'push failed';
 
   // Detect lease rejection (typical error message from git)
@@ -707,8 +726,6 @@ export async function pushRefreshedBranch(
     reason = `lease push rejected (stale remote ref or concurrent change): ${stderr.slice(0, 100)}`;
   } else if (stderr) {
     reason = `push error: ${stderr.slice(0, 100)}`;
-  } else if (stdout) {
-    reason = `push output: ${stdout.slice(0, 100)}`;
   }
 
   log(`pushRefreshedBranch failed: ${reason}`);
@@ -745,6 +762,9 @@ export interface PublishResolutionOptions {
    * instead of attempting the lease push.
    */
   earlierFailure?: EarlierStageFailure;
+  /** Guarded remote-write context for the lease publication. */
+  remoteGit?: typeof executeRemoteGit;
+  remoteMutation?: GithubMutationExecutionContext;
 }
 
 /**
@@ -787,6 +807,7 @@ export async function publishResolution(
     opts.git,
     opts.branch,
     log,
+    { remoteGit: opts.remoteGit, mutation: opts.remoteMutation },
   );
 
   if (!pushResult.pushed) {
