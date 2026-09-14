@@ -177,6 +177,46 @@ describe('executeProviderCandidates', () => {
     expect(codexInvoke).not.toHaveBeenCalled();
     expect(claudeInvoke).toHaveBeenCalledTimes(1);
   });
+
+  it('does not advance after cleanup or safety failure, but does preserve typed setup exhaustion for auxiliary callers', async () => {
+    const codexInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async () => ({ success: true, output: 'must not run', exitCode: 0 }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    await expect(executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      prepareCandidateSelfHost: async () => ({ executable: 'fake', env: {}, args: [], teardown: async () => { throw new Error('cleanup failed'); } }),
+      options: { prompt: 'build', cwd: '/workspace' },
+    })).rejects.toThrow('cleanup failed');
+    expect(claudeInvoke).not.toHaveBeenCalled();
+
+    const skipped = vi.fn();
+    const exhausted = await executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'scope',
+      policy: { enabled: true, llm_provider: ['codex', 'claude'], model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0 },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: skipped }), runtime('claude', { invoke: skipped })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      prepareCandidateSelfHost: async (candidate) => { throw new ProviderSetupUnavailableError({ provider: candidate.providerKey, capability: 'isolation', reason: 'missing setup', recoveryAction: 'update provider' }); },
+      options: { prompt: 'review', cwd: '/workspace' },
+    });
+    expect(exhausted.providerSetupExhaustion?.candidates).toHaveLength(2);
+    expect(skipped).not.toHaveBeenCalled();
+  });
+
+  it('attributes a setup skip as not invoked with its actionable capability details', async () => {
+    const { buildProviderAttemptMetadata } = await import('../../src/engine/provider-execution.js');
+    expect(buildProviderAttemptMetadata({
+      providerKey: 'codex',
+      result: { success: false, output: 'missing isolation', exitCode: 1, providerInvocationSkipped: true },
+      resolvedModel: 'gpt-5.6-sol',
+      unavailable: { scope: 'step', reason: 'missing isolation' },
+      setupUnavailable: { provider: 'codex', capability: 'isolated-home', reason: 'missing isolation', recoveryAction: 'update Codex' },
+    })).toMatchObject({
+      provider: 'codex', outcome: 'unavailable', invoked: false,
+      skipReason: 'setup-unavailable', setupCapability: 'isolated-home', setupRecoveryAction: 'update Codex',
+    });
+  });
   it('executes an auxiliary rubric through its own provider, fallback ladder, retries, and attribution label', async () => {
     const codexInvoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> =>
       options.model === 'gpt-5.6-sol'

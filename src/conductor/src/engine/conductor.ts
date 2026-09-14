@@ -5683,45 +5683,56 @@ export class Conductor {
             boundaryWindow?.close();
           }
         };
-        const featureSlug = this.featureSlug ?? state.feature_desc;
-        if (!featureSlug || !identity?.runId || identity.attempt === undefined) {
-          throw new Error('Candidate self-host provisioning requires repository, featureSlug, runId, and attempt.');
+        // Until a context is returned its setup owns this window.  If any
+        // allocation or verification precondition fails, there is no executor
+        // teardown to close it on the candidate's behalf.
+        let ownershipTransferred = false;
+        try {
+          const featureSlug = this.featureSlug ?? state.feature_desc;
+          if (!featureSlug || !identity?.runId || identity.attempt === undefined) {
+            throw new Error('Candidate self-host provisioning requires repository, featureSlug, runId, and attempt.');
+          }
+          if (codex) {
+            const prepareAuth = runtime.provider.prepareSelfHostAuth;
+            const resolveExecutable = runtime.provider.resolveSelfHostExecutable;
+            const provisionHome = this.guardrails.provisionProviderHome;
+            // The capability check above establishes these values before any
+            // resource acquisition; retain the guard for type narrowing only.
+            if (!prepareAuth || !resolveExecutable || !provisionHome) throw new Error('Self-host capability changed during preparation.');
+            const executable = await resolveExecutable.call(runtime.provider);
+            const home = await provisionHome({
+              provider: { id: 'codex', prepareSelfHostAuth: (context) => prepareAuth.call(runtime.provider, { provider: 'codex', homeDir: context.homeDir }) },
+              worktreeRoot: this.projectRoot,
+              repository: this.projectRoot,
+              featureSlug,
+              runId: identity.runId,
+              attempt: identity.attempt,
+            });
+            ownershipTransferred = true;
+            return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), teardown: async () => { try { await verify(); } finally { await home.teardown(); } } });
+          }
+          if (candidate.providerKey === 'claude') {
+            const sandbox = await this.guardrails.provisionSandbox({
+              worktreeRoot: this.projectRoot,
+              harnessRoot: liveCheckout,
+              repository: this.projectRoot,
+              featureSlug,
+              runId: identity.runId,
+              attempt: identity.attempt,
+            });
+            ownershipTransferred = true;
+            return prepareInvocation({
+              executable: 'claude',
+              env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
+              args: [],
+              teardown: async () => { try { await verify(); } finally { await sandbox.teardown(); } },
+            });
+          }
+          ownershipTransferred = true;
+          return priorPreparation?.(candidate, runtime, identity);
+        } finally {
+          if (!ownershipTransferred) boundaryWindow?.close();
         }
-        if (codex) {
-          const prepareAuth = runtime.provider.prepareSelfHostAuth;
-          const resolveExecutable = runtime.provider.resolveSelfHostExecutable;
-          const provisionHome = this.guardrails.provisionProviderHome;
-          // The capability check above establishes these values before any
-          // resource acquisition; retain the guard for type narrowing only.
-          if (!prepareAuth || !resolveExecutable || !provisionHome) throw new Error('Self-host capability changed during preparation.');
-          const executable = await resolveExecutable.call(runtime.provider);
-          const home = await provisionHome({
-            provider: { id: 'codex', prepareSelfHostAuth: (context) => prepareAuth.call(runtime.provider, { provider: 'codex', homeDir: context.homeDir }) },
-            worktreeRoot: this.projectRoot,
-            repository: this.projectRoot,
-            featureSlug,
-            runId: identity.runId,
-            attempt: identity.attempt,
-          });
-          return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), teardown: async () => { try { await verify(); } finally { await home.teardown(); } } });
-        }
-        if (candidate.providerKey === 'claude') {
-          const sandbox = await this.guardrails.provisionSandbox({
-            worktreeRoot: this.projectRoot,
-            harnessRoot: liveCheckout,
-            repository: this.projectRoot,
-            featureSlug,
-            runId: identity.runId,
-            attempt: identity.attempt,
-          });
-          return prepareInvocation({
-            executable: 'claude',
-            env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
-            args: [],
-            teardown: async () => { try { await verify(); } finally { await sandbox.teardown(); } },
-          });
-        }
-        return priorPreparation?.(candidate, runtime, identity);
       };
     }
     try {

@@ -2276,12 +2276,14 @@ export class DefaultStepRunner implements StepRunner {
       output?: string;
       commandUnresolved?: boolean;
       commandUnresolvedName?: string;
+      providerSetupExhaustion?: ProviderExecutionResult['providerSetupExhaustion'];
     }> => {
       const preserveInvocationFailure = (result: {
         success: boolean;
         output?: string;
         commandUnresolved?: boolean;
         commandUnresolvedName?: string;
+        providerSetupExhaustion?: ProviderExecutionResult['providerSetupExhaustion'];
       }) => ({
         success: result.success,
         ...(typeof result.output === 'string' ? { output: result.output } : {}),
@@ -2289,6 +2291,9 @@ export class DefaultStepRunner implements StepRunner {
           commandUnresolved: true,
           ...(result.commandUnresolvedName ? { commandUnresolvedName: result.commandUnresolvedName } : {}),
         } : {}),
+        ...(result.providerSetupExhaustion
+          ? { providerSetupExhaustion: result.providerSetupExhaustion }
+          : {}),
       });
       if (this.providerRuntimes && this.sessionStore) {
         const safety = this.candidateSafetyFor('build_review');
@@ -2346,6 +2351,13 @@ export class DefaultStepRunner implements StepRunner {
     // infrastructure failure. Provider-agnostic by construction: both the
     // runtime-candidates path and the legacy provider path share invokeOnce.
     const initial = await invokeOnce(rubricPrompt);
+    if (initial.providerSetupExhaustion) {
+      return makeBuildReviewDispatchFailure(
+        `All configured providers were unavailable during setup: ${initial.providerSetupExhaustion.candidates.map(
+          ({ provider, reason, recoveryAction }) => `${provider}: ${reason} Recovery: ${recoveryAction}`,
+        ).join('; ')}`,
+      );
+    }
     if (initial.commandUnresolved) {
       return makeBuildReviewDispatchFailure(renderBuildReviewUnresolvedSkillRemedy(
         branch.skillName,

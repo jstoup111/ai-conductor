@@ -74,6 +74,9 @@ export interface ProviderAttemptMetadata {
   fallbackReason?: string;
   /** Why an uninvoked unavailable candidate was skipped. */
   skipReason?: 'setup-unavailable' | 'cached-unavailable';
+  /** Structured, redacted setup diagnostic for an explicitly skipped candidate. */
+  setupCapability?: string;
+  setupRecoveryAction?: string;
   /** Visible diagnostic-only boundary notices; never controls fallback. */
   safetyDiagnostics?: readonly string[];
   invoked: boolean;
@@ -546,6 +549,12 @@ export function buildProviderAttemptMetadata({
       : {}),
     ...(!invoked && unavailable && setupUnavailable
       ? { skipReason: 'setup-unavailable' as const }
+      : {}),
+    ...(!invoked && setupUnavailable?.capability
+      ? { setupCapability: redactSafetyText(setupUnavailable.capability) }
+      : {}),
+    ...(!invoked && setupUnavailable
+      ? { setupRecoveryAction: redactSafetyText(setupUnavailable.recoveryAction) }
       : {}),
     ...(result.safetyDiagnostics ? { safetyDiagnostics: result.safetyDiagnostics } : {}),
     invoked,
