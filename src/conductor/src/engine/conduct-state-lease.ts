@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -121,6 +121,17 @@ function recoveryClaimPath(leasePath: string): string {
   return `${leasePath}/${LEASE_RECOVERY_CLAIM_FILE}`;
 }
 
+function recoverySuccessorClaimPath(
+  leasePath: string,
+  ownerToken: string,
+  predecessorToken: string | null,
+): string {
+  const slot = createHash('sha256')
+    .update(JSON.stringify([ownerToken, predecessorToken]))
+    .digest('hex');
+  return `${leasePath}/recovery.${slot}.json`;
+}
+
 function isLeaseOwner(value: unknown): value is ConductStateLeaseOwner {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -140,6 +151,72 @@ function parseLeaseOwner(serialized: string): ConductStateLeaseOwner | null {
   } catch {
     return null;
   }
+}
+
+interface RecoveryClaimIdentity {
+  version: 1;
+  pid: number;
+  token: string;
+  claimedAt: string;
+}
+
+type ParsedRecoveryClaim =
+  | { kind: 'invalid' }
+  | { kind: 'legacy'; identity: RecoveryClaimIdentity }
+  | {
+    kind: 'bound';
+    identity: RecoveryClaimIdentity & { ownerToken: string; predecessorToken: string | null };
+    successorPath: string;
+  };
+
+function parseRecoveryClaim(
+  serialized: string,
+  leasePath: string,
+): ParsedRecoveryClaim {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    return { kind: 'invalid' };
+  }
+  if (typeof parsed !== 'object' || parsed === null) return { kind: 'invalid' };
+  const record = parsed as Record<string, unknown>;
+  if (record.version !== 1 ||
+    !Number.isInteger(record.pid) || (record.pid as number) <= 0 ||
+    typeof record.token !== 'string' || record.token.length === 0 ||
+    typeof record.claimedAt !== 'string' || Number.isNaN(Date.parse(record.claimedAt))) {
+    return { kind: 'invalid' };
+  }
+
+  const identity: RecoveryClaimIdentity = {
+    version: 1,
+    pid: record.pid as number,
+    token: record.token as string,
+    claimedAt: record.claimedAt as string,
+  };
+  const hasOwnerToken = Object.hasOwn(record, 'ownerToken');
+  const hasPredecessorToken = Object.hasOwn(record, 'predecessorToken');
+  if (hasOwnerToken !== hasPredecessorToken) return { kind: 'invalid' };
+  if (!hasOwnerToken) return { kind: 'legacy', identity };
+  if (typeof record.ownerToken !== 'string' || record.ownerToken.length === 0 ||
+    (record.predecessorToken !== null &&
+      (typeof record.predecessorToken !== 'string' || record.predecessorToken.length === 0))) {
+    return { kind: 'invalid' };
+  }
+  const boundIdentity = {
+    ...identity,
+    ownerToken: record.ownerToken as string,
+    predecessorToken: record.predecessorToken as string | null,
+  };
+  return {
+    kind: 'bound',
+    identity: boundIdentity,
+    successorPath: recoverySuccessorClaimPath(
+      leasePath,
+      boundIdentity.ownerToken,
+      boundIdentity.predecessorToken,
+    ),
+  };
 }
 
 function defaultProcessIsLive(pid: number): boolean {
@@ -230,7 +307,30 @@ export function createConductStateLease(
     try {
       await filesystem.writeRecoveryClaim(recoveryClaimPath(leasePath), claim);
     } catch (error) {
-      if (isAlreadyHeld(error)) return { status: 'occupied', ownerPid: owner.pid };
+      if (isAlreadyHeld(error)) {
+        let serializedClaim: string | null;
+        try {
+          serializedClaim = await filesystem.readRecoveryClaim(recoveryClaimPath(leasePath));
+        } catch (claimReadError) {
+          return {
+            status: 'refused',
+            message: `Unable to recover ${leaseName} lease: recovery claim is unavailable (${errorMessage(claimReadError)})`,
+          };
+        }
+        const existingClaim = serializedClaim === null
+          ? { kind: 'invalid' as const }
+          : parseRecoveryClaim(serializedClaim, leasePath);
+        if (existingClaim.kind === 'invalid' ||
+          (existingClaim.kind === 'bound' &&
+            (existingClaim.identity.ownerToken !== owner.token ||
+              existingClaim.identity.predecessorToken !== null))) {
+          return {
+            status: 'refused',
+            message: `Unable to recover ${leaseName} lease: recovery claim is invalid or inconsistent`,
+          };
+        }
+        return { status: 'occupied', ownerPid: owner.pid };
+      }
       // The lease directory disappeared between reading its owner and claiming
       // recovery: the owner released it (or a peer recovered it first) while this
       // process was probing liveness. Nothing was stolen and nothing is ambiguous
