@@ -1068,6 +1068,33 @@ If REKICK encounters this refusal before starting git, the HALT begins
 resolver or run `git rebase --continue`; review and rotate the seal as above, then clear the HALT
 and re-queue.
 
+### A rebase never started after an untracked-file collision
+
+**Symptom:** `.pipeline/HALT` begins `rebase did not start — parked for human recovery`. It may
+list `Quarantined files:` and a `Quarantine directory:` under
+`.pipeline/rebase-untracked-quarantine`. No rebase is active; do not run `git rebase --continue`.
+
+**Diagnosis:** Git refused to begin because an untracked worktree path would be overwritten. For
+that exact refusal, the daemon confirms that each named path is still untracked, moves the confirmed
+files into the quarantine directory without overwriting an earlier entry, and retries once. The HALT
+means the retry or another pre-start check still could not proceed.
+
+**Recovery:** Park the feature before changing its worktree, then inspect the halted marker and any
+quarantined content. Preserve or restore only content that is still needed; do not put a colliding
+file back at its original path before the next rebase can succeed.
+
+```bash
+ai-conductor daemon park <slug>
+cd .worktrees/<slug>
+cat .pipeline/HALT
+find .pipeline/rebase-untracked-quarantine -type f -print
+git status
+```
+
+After resolving the stated refusal, return to the main checkout, clear both halt files, and unpark
+using [the resume procedure](#clear-a-halt-and-let-the-feature-resume). The next daemon dispatch
+re-queues the feature; it does not continue a rebase.
+
 ### The completed rebase halted for missing feature content
 
 **Symptom:** `.pipeline/HALT` is `needs-human` and begins `rebase completed — parked for human
