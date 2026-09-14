@@ -57,7 +57,9 @@ export function dispatchDimensionsFrom(
   const eventModel = 'model' in event ? event.model : undefined;
   const eventProvider = event.type === 'step_completed'
     ? event.actualProvider
-    : 'provider' in event ? event.provider : undefined;
+    : 'actualProvider' in event && event.actualProvider !== undefined
+      ? event.actualProvider
+      : 'provider' in event ? event.provider : undefined;
   const provider = eventProvider ?? observation?.provider;
   const preferredProvider = 'preferredProvider' in event
     ? event.preferredProvider ?? observation?.preferredProvider

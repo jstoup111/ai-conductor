@@ -541,6 +541,7 @@ export type ConductorEvent =
       step: StepName;
       kind: 'seal' | 'needs-human' | 'validation-verdict';
       reason: string;
+      provider?: string;
       executionContext?: ExecutionContext;
     }
   | {
@@ -661,6 +662,9 @@ export type ConductorEvent =
       model?: string;
       effort?: EffortLevel;
       provider?: string;
+      /** Resolved provider facts from the failed attempt. */
+      actualProvider?: string;
+      preferredProvider?: string;
       tier?: ComplexityTier;
       resolvedBefore?: number;
       resolvedAfter?: number;

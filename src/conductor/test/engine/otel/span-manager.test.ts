@@ -963,24 +963,49 @@ describe('Task 9: execution-correlated spans', () => {
     });
   });
 
-  it('closes a configured member at its observed settlement boundary', async () => {
+  it('uses member settlement, not provider intervals, as a member boundary', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
-    const settledAtMs = Date.now() + 1_000;
+    vi.spyOn(Date, 'now').mockReturnValue(1_000);
     const execution = {
       executionId: 'settled-member',
       subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'settled' },
     };
     await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
+    vi.spyOn(Date, 'now').mockReturnValue(1_500);
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', executionContext: execution,
+      provider: 'codex', invoked: true, outcome: 'success',
+      observedIntervals: [{ startedAtMs: 1_100, durationMs: 100 }],
+    });
+    await emitter.emit({ type: 'group_member_step', member: 'settled', skill: 'settled', phase: 'result', outcome: 'verdict:pass', executionContext: execution });
+    vi.spyOn(Date, 'now').mockReturnValue(2_000);
     await emitter.emit({
       type: 'step_completed', step: 'build', status: 'done', executionContext: execution,
-      observedIntervals: [{ startedAtMs: settledAtMs - 100, durationMs: 100 }],
+      observedIntervals: [{ startedAtMs: 1_100, durationMs: 100 }],
     });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
     const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'configured:validation/settled')!;
-    expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(settledAtMs);
+    expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(1_500);
+  });
+
+  it('keeps a serial span open through terminal delivery after provider work ends', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const execution = { executionId: 'serial-terminal', subject: { kind: 'lifecycle-step' as const, step: 'build' as StepName } };
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
+    vi.spyOn(Date, 'now').mockReturnValue(1_500);
+    await emitter.emit({ type: 'provider_attempt', step: 'build', executionContext: execution, provider: 'codex', invoked: true, outcome: 'success', observedIntervals: [{ startedAtMs: 1_100, durationMs: 100 }] });
+    vi.spyOn(Date, 'now').mockReturnValue(2_000);
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: execution, observedIntervals: [{ startedAtMs: 1_100, durationMs: 100 }] });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'build')!;
+    expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(2_000);
   });
 });
 

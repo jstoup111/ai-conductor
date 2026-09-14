@@ -309,8 +309,11 @@ async function runConfiguredGroup(input: {
   maxRetries?: number;
   skip?: boolean;
   twoGroups?: boolean;
+  shutdownDuringRun?: boolean;
   /** Controlled observer fault: the runner still runs, but its admission is lost. */
   omitAdmissionFor?: string;
+  /** Controlled observer fault: settlement delivery is lost after admission. */
+  omitSettlementFor?: string;
 } = {}): Promise<ConfiguredFixture> {
   const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-configured-group-telemetry-'));
   directories.push(projectRoot);
@@ -318,13 +321,14 @@ async function runConfiguredGroup(input: {
   const parentGroups: StepName[] = input.twoGroups ? ['memory', 'explore'] : ['explore'];
   const state: ConductState = {
     ...Object.fromEntries(ALL_STEPS.filter(({ name }) => !parentGroups.includes(name)).map(({ name }) => [name, 'done'])),
+    complexity_tier: 'M',
   } as ConductState;
   await writeState(stateFilePath, state);
   let now = 1_000;
   vi.spyOn(Date, 'now').mockImplementation(() => now);
   const events = new ConductorEventEmitter();
   const observed: ConductorEvent[] = [];
-  for (const type of ['step_started', 'step_completed', 'step_failed', 'step_retry', 'provider_attempt', 'group_member_step', 'parallel_failure', 'parallel_completed'] as const) {
+  for (const type of ['step_started', 'step_completed', 'step_failed', 'step_interrupted', 'step_refused', 'step_retry', 'provider_attempt', 'group_member_step', 'parallel_failure', 'parallel_completed'] as const) {
     events.on(type, (event) => { observed.push(event); });
   }
   const ledgerPath = join(projectRoot, '.pipeline', 'events.jsonl');
@@ -347,7 +351,7 @@ async function runConfiguredGroup(input: {
   ];
   const calls: string[] = [];
   const runnerContexts: ExecutionContext[] = [];
-  if (input.omitAdmissionFor !== undefined) {
+  if (input.omitAdmissionFor !== undefined || input.omitSettlementFor !== undefined) {
     const prototype = Conductor.prototype as unknown as {
       emitExecutionEvent(event: ConductorEvent): Promise<void>;
     };
@@ -358,10 +362,16 @@ async function runConfiguredGroup(input: {
         && event.executionContext?.subject.kind === 'configured-member'
         && event.executionContext.subject.member === input.omitAdmissionFor
       ) return Promise.resolve();
+      if (
+        event.type === 'group_member_step'
+        && event.executionContext?.subject.kind === 'configured-member'
+        && event.executionContext.subject.member === input.omitSettlementFor
+      ) return Promise.resolve();
       return emitExecutionEvent.call(this, event);
     });
   }
-  const conductor = new Conductor({
+  let conductor: Conductor | undefined;
+  conductor = new Conductor({
     projectRoot, stateFilePath, events, mode: 'auto',
     maxRetries: 1, verifyArtifacts: false,
     config: {
@@ -385,6 +395,9 @@ async function runConfiguredGroup(input: {
           provider: 'claude', preferredProvider: 'codex', model: 'gpt-5.6-luna', effort: 'high',
           fallbackReason: 'controlled configured fallback', invoked: true, outcome: outcome.success ? 'success' : 'failure',
         });
+        if (input.shutdownDuringRun && calls.length === 1) {
+          await conductor!.closeOpenExecutionsForShutdown();
+        }
         return outcome;
       },
     },
@@ -424,6 +437,12 @@ function assertOneMemberLifecycle(
     )
   ));
   expect(executions).toHaveLength(1);
+  expect(fixture.events.filter((event) => (
+    event.type === 'group_member_step'
+    && event.phase === 'result'
+    && event.executionContext?.subject.kind !== undefined
+    && event.executionContext.subject.member === member
+  ))).toHaveLength(1);
   expect(fixture.spans.filter((span) => span.name === spanName)).toHaveLength(1);
   expect(metricPoints(fixture.metrics, 'conductor.step.duration')
     .filter((point) => point.attributes.step === spanName)).toHaveLength(1);
@@ -671,7 +690,7 @@ describe('serial conductor telemetry parity', () => {
     const retryMember = VALIDATION_GROUP.members[0] as StepName;
     const retried = await runBuiltinGroup({
       outcomes: {
-        [retryMember]: [{ success: false, output: 'controlled retry' }, { success: true }],
+        [retryMember]: [{ success: false, output: 'controlled retry', model: 'gpt-5.6-luna', effort: 'high', actualProvider: 'claude', preferredProvider: 'codex' }, { success: true }],
       },
     });
     const exhausted = await runBuiltinGroup({
@@ -683,13 +702,18 @@ describe('serial conductor telemetry parity', () => {
     const retry = retried.events.find((event): event is Extract<ConductorEvent, { type: 'step_retry' }> => event.type === 'step_retry' && event.step === retryMember);
     const retriedTerminal = retried.events.find((event): event is Extract<ConductorEvent, { type: 'step_completed' }> => event.type === 'step_completed' && event.step === retryMember);
 
-    expect(retry).toMatchObject({ attempt: 2, maxAttempts: 2, executionContext: retriedStart?.executionContext });
+    expect(retry).toMatchObject({
+      attempt: 2, maxAttempts: 2, model: 'gpt-5.6-luna', effort: 'high',
+      actualProvider: 'claude', preferredProvider: 'codex', tier: 'M',
+      executionContext: retriedStart?.executionContext,
+    });
     expect(retriedTerminal?.executionContext).toEqual(retriedStart?.executionContext);
     expect(metricPoints(retried.metrics, 'conductor.step.retries').filter((point) => point.attributes.step === retryMember)).toHaveLength(1);
     expect(exhausted.events.filter((event) => event.type === 'step_failed' && event.step === retryMember)).toHaveLength(1);
     expect(exhausted.events.filter((event) => event.type === 'step_completed' && event.step === retryMember)).toHaveLength(0);
     expect(exhausted.spans.filter((span) => span.name === retryMember)).toHaveLength(1);
     expect(metricPoints(exhausted.metrics, 'conductor.step.outcomes').find((point) => point.attributes.step === retryMember)?.attributes.outcome).toBe('failure');
+    expect(exhausted.events.find((event) => event.type === 'step_failed' && event.step === retryMember)).toMatchObject({ retryCount: 1 });
     for (const member of VALIDATION_GROUP.members) {
       expect(exhausted.events.filter((event) => (event.type === 'step_completed' || event.type === 'step_failed') && event.step === member)).toHaveLength(1);
       expect(metricPoints(exhausted.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === member)).toHaveLength(1);
@@ -732,6 +756,19 @@ describe('serial conductor telemetry parity', () => {
       activeInterval: { startedAtMs: 1_000, durationMs: expect.any(Number) },
     });
     expect(terminal).not.toHaveProperty('observedIntervals');
+    expect(fixture.spans.filter((span) => span.name === member)).toHaveLength(1);
+    expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === member)).toHaveLength(1);
+  });
+
+  it('recovers a built-in rate limit without manufacturing a policy retry', async () => {
+    const member = VALIDATION_GROUP.members[0] as StepName;
+    const fixture = await runBuiltinGroup({
+      outcomes: { [member]: [{ success: false, rateLimited: true, deadline: 1_000 }, { success: true }] },
+    });
+
+    expect(fixture.calls.filter((call) => call === member)).toHaveLength(2);
+    expect(fixture.events.filter((event) => event.type === 'step_retry' && event.step === member)).toHaveLength(0);
+    expect(metricPoints(fixture.metrics, 'conductor.step.retries').filter((point) => point.attributes.step === member)).toHaveLength(0);
     expect(fixture.spans.filter((span) => span.name === member)).toHaveLength(1);
     expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === member)).toHaveLength(1);
   });
@@ -893,7 +930,7 @@ describe('serial conductor telemetry parity', () => {
     expect(fixture.state.explore).toBe('done');
     expect((fixture.state as Record<string, unknown>)['explore__advisory-review']).toBe('failed');
     expect(fixture.events.find((event) => event.type === 'parallel_failure')).toMatchObject({ branch: 'advisory-review', terminal: false });
-    expect(fixture.events.filter((event) => event.type === 'step_failed' && event.executionContext?.subject.kind === 'configured-member' && event.executionContext.subject.member === 'advisory-review')).toHaveLength(1);
+    expect(fixture.events.find((event) => event.type === 'step_failed' && event.executionContext?.subject.kind === 'configured-member' && event.executionContext.subject.member === 'advisory-review')).toMatchObject({ retryCount: 0 });
     expect(fixture.spans.filter((span) => span.name === label)).toHaveLength(1);
     expect(metricPoints(fixture.metrics, 'conductor.step.outcomes').find((point) => point.attributes.step === label)?.attributes.outcome).toBe('failure');
   });
@@ -901,7 +938,7 @@ describe('serial conductor telemetry parity', () => {
   it('keeps configured retry-success under one logical scope with one policy retry', async () => {
     const member = 'frontend-review';
     const fixture = await runConfiguredGroup({
-      outcomes: { [member]: [{ success: false, output: 'controlled retry' }, { success: true }] },
+      outcomes: { [member]: [{ success: false, output: 'controlled retry', model: 'gpt-5.6-luna', effort: 'high', actualProvider: 'claude', preferredProvider: 'codex' }, { success: true }] },
       maxRetries: 2,
     });
     const label = configuredLabel('explore', member);
@@ -921,7 +958,9 @@ describe('serial conductor telemetry parity', () => {
 
     expect(fixture.calls.filter((call) => call === member)).toHaveLength(2);
     expect(retries).toEqual([expect.objectContaining({
-      attempt: 2, maxAttempts: 2, executionContext: started?.executionContext,
+      attempt: 2, maxAttempts: 2, model: 'gpt-5.6-luna', effort: 'high',
+      actualProvider: 'claude', preferredProvider: 'codex', tier: 'M',
+      executionContext: started?.executionContext,
     })]);
     expect(fixture.spans.filter((span) => span.name === label)).toHaveLength(1);
     expect(terminal?.activeInterval).toEqual({ startedAtMs: 1_000, durationMs: 30 });
@@ -944,7 +983,7 @@ describe('serial conductor telemetry parity', () => {
     );
 
     expect(fixture.calls.filter((call) => call === member)).toHaveLength(2);
-    expect(terminals).toEqual([expect.objectContaining({ type: 'step_failed', retryCount: 2 })]);
+    expect(terminals).toEqual([expect.objectContaining({ type: 'step_failed', retryCount: 1 })]);
     expect(fixture.spans.filter((span) => span.name === label)).toHaveLength(1);
     expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === label)).toHaveLength(1);
   });
@@ -955,6 +994,41 @@ describe('serial conductor telemetry parity', () => {
 
     expect(fixture.calls).toContain(member);
     expect(() => assertOneMemberLifecycle(fixture, member, configuredLabel('explore', member))).toThrow();
+  });
+
+  it('requires one settlement observer delivery for each configured member', async () => {
+    const member = 'frontend-review';
+    const fixture = await runConfiguredGroup({ omitSettlementFor: member });
+
+    expect(fixture.calls).toContain(member);
+    expect(() => assertOneMemberLifecycle(fixture, member, configuredLabel('explore', member))).toThrow();
+  });
+
+  it('reports configured permission denial as one refusal without changing group policy', async () => {
+    const member = 'frontend-review';
+    const fixture = await runConfiguredGroup({
+      branches: [{ name: member, advisory: true }],
+      outcomes: { [member]: [{ success: false, permissionDenied: true, actualProvider: 'codex', output: 'permission denied' }] },
+    });
+    const label = configuredLabel('explore', member);
+
+    expect(fixture.events.filter((event) => event.type === 'step_refused')).toHaveLength(1);
+    expect(fixture.events.filter((event) => event.type === 'step_failed')).toHaveLength(0);
+    expect(fixture.spans.find((span) => span.name === label)?.attributes['conductor.step.status']).toBe('refused');
+    expect(metricPoints(fixture.metrics, 'conductor.step.outcomes').find((point) => point.attributes.step === label)?.attributes.outcome).toBe('refusal');
+    expect(fixture.state.explore).toBe('done');
+    expect((fixture.state as Record<string, unknown>)['explore__frontend-review']).toBe('failed');
+  });
+
+  it('does not admit queued configured members after shutdown', async () => {
+    const [running, queued] = ['frontend-review', 'backend-review'];
+    const fixture = await runConfiguredGroup({ validationConcurrency: 1, shutdownDuringRun: true });
+
+    expect(fixture.calls).toEqual([running]);
+    expect(fixture.events.filter((event) => event.type === 'step_started' && event.executionContext?.subject.kind === 'configured-member' && event.executionContext.subject.member === queued)).toHaveLength(0);
+    expect(fixture.spans.filter((span) => span.name === configuredLabel('explore', queued))).toHaveLength(0);
+    expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === configuredLabel('explore', queued))).toHaveLength(0);
+    expect(fixture.events.filter((event) => event.type === 'step_interrupted' && event.executionContext?.subject.kind === 'configured-member' && event.executionContext.subject.member === running)).toHaveLength(1);
   });
 
   it('emits no configured lifecycle for a pre-admission skipped group', async () => {

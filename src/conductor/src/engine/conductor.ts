@@ -101,6 +101,7 @@ import type { ParallelBranch } from '../types/config.js';
 import {
   runGroupBranch,
   runWithConcurrency,
+  classifyOutcome,
   makeSkippedOutcome,
   makeNoVerdictOutcome,
   makeVerdictOutcome,
@@ -118,7 +119,7 @@ import {
 } from './provider-model-policy.js';
 import { normalizeProviderSelection } from './provider-selection.js';
 import { ConductorEventEmitter } from '../ui/events.js';
-import { ExecutionLifecycle, type OpenExecution } from './execution-lifecycle.js';
+import { ExecutionLifecycle } from './execution-lifecycle.js';
 import { BuildProgressWatcher } from './build-progress-watcher.js';
 import { CloseoutEventTail } from './closeout-tail.js';
 import {
@@ -2163,13 +2164,6 @@ export class Conductor {
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
   private readonly executionLifecycle: ExecutionLifecycle;
-  /** Compatibility seam for existing conductor tests; lifecycle state remains engine-owned. */
-  private get openExecutions(): Map<string, OpenExecution> {
-    return this.executionLifecycle.openExecutions;
-  }
-  private set openExecutions(executions: Map<string, OpenExecution>) {
-    this.executionLifecycle.replaceOpenExecutions(executions);
-  }
   /** Route every conductor-owned marker failure through the existing event spine. */
   private async writeHaltMarker(
     body: string,
@@ -7815,6 +7809,7 @@ export class Conductor {
             const branchHandshakeFailures = new Map<string, CompletionResult>();
             const memberExecutionContexts = new Map<string, ExecutionContext>();
             const memberAttemptResults = new Map<string, StepRunResult>();
+            const memberRetryCounts = new Map<string, number>();
             const closeSuccessfulMember = async (member: typeof membership.dispatchable[number]) => {
               const executionContext = memberExecutionContexts.get(member.name);
               if (executionContext === undefined) return;
@@ -7844,7 +7839,7 @@ export class Conductor {
                 type: 'step_failed',
                 step: member.name as StepName,
                 error,
-                retryCount: memberAttemptBudgets.get(member.name) ?? 0,
+                retryCount: memberRetryCounts.get(member.name) ?? 0,
                 ...(result?.effort !== undefined ? { effort: result.effort } : {}),
                 ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
                 ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),
@@ -7966,19 +7961,37 @@ export class Conductor {
                           }
                         },
                         onRetry: async (observation) => {
+                          memberRetryCounts.set(
+                            observation.member,
+                            (memberRetryCounts.get(observation.member) ?? 0) + 1,
+                          );
+                          const failedAttempt = memberAttemptResults.get(observation.member);
                           await emitTracked({
                             type: 'step_retry',
                             step: observation.member as StepName,
                             attempt: observation.attempt,
                             maxAttempts: memberAttemptBudgets.get(observation.member) ?? observation.attempt,
                             reason: `group member ${observation.member} retry`,
+                            ...(failedAttempt?.model !== undefined ? { model: failedAttempt.model } : {}),
+                            ...(failedAttempt?.effort !== undefined ? { effort: failedAttempt.effort } : {}),
+                            ...(failedAttempt?.actualProvider !== undefined ? { actualProvider: failedAttempt.actualProvider, provider: failedAttempt.actualProvider } : {}),
+                            ...(failedAttempt?.preferredProvider !== undefined ? { preferredProvider: failedAttempt.preferredProvider } : {}),
+                            ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
                             executionContext,
                           });
                         },
-                        // The group-core result callback below retains the
-                        // pre-existing handshake ordering and emits the shared
-                        // settlement event before the join can classify it.
-                        onSettled: async () => undefined,
+                        onSettled: async (observation) => {
+                          await emitTracked({
+                            type: 'group_member_step',
+                            member: observation.member,
+                            skill: observation.skill,
+                            phase: 'result',
+                            outcome: classifyOutcome(observation.outcome),
+                            ...(observation.executionContext === undefined
+                              ? {}
+                              : { executionContext: observation.executionContext }),
+                          });
+                        },
                       },
                       ...(isVerdictRunIdentityStep(member.name as StepName)
                         ? { runId: branchRunIds.get(member.name) }
@@ -8006,7 +8019,6 @@ export class Conductor {
                           branchDispatchStartedAt.set(event.member, Date.now());
                         }
                         if (event.phase === 'result') {
-                          await emitTracked(event);
                           // This settles before runGroupBranch returns to the join.
                           await this.stampVerdictRunIdentity(
                             event.member as StepName,
@@ -9154,7 +9166,7 @@ export class Conductor {
               // every exit from the fan-out has exactly one lifecycle end.
               const groupExecutionKey = `parallel:${step.name}`;
               if (
-                this.openExecutions.has(groupExecutionKey) &&
+                this.executionLifecycle.openExecutions.has(groupExecutionKey) &&
                 !this.executionLifecycle.isClosing(groupExecutionKey)
               ) {
                 await emitTracked({
@@ -14027,9 +14039,11 @@ export class Conductor {
     const memberExecutionContexts = new Map<string, ExecutionContext>();
     const memberAttemptResults = new Map<string, StepRunResult>();
     const memberAttemptBudgets = new Map<string, number>();
+    const memberRetryCounts = new Map<string, number>();
 
     const outcomes: BranchOutcome[] = await runWithConcurrency(
       members.map((member) => async () => {
+        if (this.shutdownRequested) return makeSkippedOutcome();
         const groupModelPolicy = this.modelPolicyForStep(groupName);
         const resolved = resolveStepConfig(
           // A DSL branch has its own dispatch identity, but is not itself a
@@ -14069,21 +14083,37 @@ export class Conductor {
               }
             },
             onRetry: async (observation) => {
+              memberRetryCounts.set(
+                observation.member,
+                (memberRetryCounts.get(observation.member) ?? 0) + 1,
+              );
+              const failedAttempt = memberAttemptResults.get(observation.member);
               await this.emitExecutionEvent({
                 type: 'step_retry',
                 step: groupName,
                 attempt: observation.attempt,
                 maxAttempts: memberAttemptBudgets.get(observation.member) ?? observation.attempt,
                 reason: 'configured group member retry',
+                ...(failedAttempt?.model !== undefined ? { model: failedAttempt.model } : {}),
+                ...(failedAttempt?.effort !== undefined ? { effort: failedAttempt.effort } : {}),
+                ...(failedAttempt?.actualProvider !== undefined ? { actualProvider: failedAttempt.actualProvider, provider: failedAttempt.actualProvider } : {}),
+                ...(failedAttempt?.preferredProvider !== undefined ? { preferredProvider: failedAttempt.preferredProvider } : {}),
+                ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
                 executionContext,
               });
             },
-            // The common group-core result event freezes this member's timing
-            // before the join below classifies the group policy outcome.
-            onSettled: async () => undefined,
-          },
-          onMemberEvent: async (event) => {
-            if (event.phase === 'result') await this.emitExecutionEvent(event);
+            onSettled: async (observation) => {
+              await this.emitExecutionEvent({
+                type: 'group_member_step',
+                member: observation.member,
+                skill: observation.skill,
+                phase: 'result',
+                outcome: classifyOutcome(observation.outcome),
+                ...(observation.executionContext === undefined
+                  ? {}
+                  : { executionContext: observation.executionContext }),
+              });
+            },
           },
         }, resolved.max_retries);
       }),
@@ -14150,11 +14180,22 @@ export class Conductor {
         });
         continue;
       }
+      if (outcome.kind === 'permission-denied') {
+        await this.emitExecutionEvent({
+          type: 'step_refused',
+          step: groupName,
+          kind: 'validation-verdict',
+          reason: outcome.reason,
+          provider: outcome.provider,
+          executionContext,
+        });
+        continue;
+      }
       await this.emitExecutionEvent({
         type: 'step_failed',
         step: groupName,
         error: outcome.kind === 'no-verdict' ? outcome.reason : 'configured group member failed',
-        retryCount: memberAttemptBudgets.get(branch.name) ?? 0,
+        retryCount: memberRetryCounts.get(branch.name) ?? 0,
         ...(result?.effort !== undefined ? { effort: result.effort } : {}),
         ...(state.complexity_tier !== undefined ? { tier: state.complexity_tier } : {}),
         ...(result?.observedIntervals !== undefined ? { observedIntervals: result.observedIntervals } : {}),

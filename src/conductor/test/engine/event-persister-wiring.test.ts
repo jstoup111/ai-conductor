@@ -1,5 +1,5 @@
 // Covers: task:16, task:8
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -11,14 +11,18 @@ import {
 import { renderDaemonEvent } from '../../src/daemon-cli.js';
 import { renderReport } from '../../src/engine/report-renderer.js';
 import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
+import { MetricsRecorder } from '../../src/engine/otel/metrics.js';
+import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
+import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import { TerminalRenderer } from '../../src/ui/terminal-renderer.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../test-conductor.js';
 import type { ConductorEvent, ConductState } from '../../src/types/index.js';
-import type { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import type { LiveRegion } from '../../src/ui/live-region.js';
+import { AggregationTemporality, InMemoryMetricExporter, MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+import { CapturingSpanExporter } from '../fixtures/capturing-span-exporter.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const srcRoot = join(__dirname, '..', '..', 'src');
@@ -49,19 +53,21 @@ describe('EventPersister wiring constraints', () => {
     const daemonPersistence = startDaemonEventPersistence(root, daemonEvents);
     const alpha = startFeatureEventPersistence(join(root, 'alpha'), daemonEvents, 'alpha');
     const beta = startFeatureEventPersistence(join(root, 'beta'), daemonEvents, 'beta');
-    const recorded = new Map<string, { onStepClose: ReturnType<typeof vi.fn>; onStepTerminal: ReturnType<typeof vi.fn> }>();
-    const recorder = {
-      forFeature: (feature: string) => {
-        let metric = recorded.get(feature);
-        if (!metric) {
-          metric = { onStepClose: vi.fn(), onStepTerminal: vi.fn() };
-          recorded.set(feature, metric);
-        }
-        return metric;
-      },
-    } as unknown as MetricsRecorder;
-    const metrics = new MetricsListener(recorder, () => 1_000);
+    const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const meterProvider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter: metricExporter, exportIntervalMillis: 60_000 })],
+    });
+    const metrics = new MetricsListener(
+      new MetricsRecorder(meterProvider.getMeter('task-16-forwarding'), { project: 'project', worker: 'worker' }),
+      () => 1_000,
+    );
+    const spanExporter = new CapturingSpanExporter();
+    const visualizer = new OtelVisualizer(
+      resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, join(root, '.pipeline')),
+      { spanExporter, exportTimeoutMillis: 50 },
+    );
     metrics.start(daemonEvents);
+    visualizer.start(daemonEvents, { runId: 'daemon-run', feature: 'daemon', project: root });
     const runFeature = async (feature: 'alpha' | 'beta', scope: typeof alpha) => {
       const featureRoot = join(root, feature);
       const stateFilePath = join(featureRoot, 'conduct-state.json');
@@ -111,12 +117,15 @@ describe('EventPersister wiring constraints', () => {
       expect(alphaContext).toMatchObject({ subject: { kind: 'configured-member', parentGroup: 'explore', member: 'audit' } });
       expect(betaContext).toMatchObject({ subject: { kind: 'configured-member', parentGroup: 'explore', member: 'audit' } });
       expect(alphaContext.executionId).not.toBe(betaContext.executionId);
-      expect(recorded.get('alpha')?.onStepTerminal).toHaveBeenCalledWith(
-        'configured:explore/audit', 'success', expect.any(Object),
-      );
-      expect(recorded.get('beta')?.onStepTerminal).toHaveBeenCalledWith(
-        'configured:explore/audit', 'success', expect.any(Object),
-      );
+      await meterProvider.forceFlush();
+      await visualizer.stop();
+      const durationPoints = metricExporter.getMetrics().flatMap((batch) => batch.scopeMetrics)
+        .flatMap((scope) => scope.metrics)
+        .filter((metric) => metric.descriptor.name === 'conductor.step.duration')
+        .flatMap((metric) => metric.dataPoints);
+      expect(durationPoints.filter((point) => point.attributes.feature === 'alpha' && point.attributes.step === 'configured:explore/audit')).toHaveLength(1);
+      expect(durationPoints.filter((point) => point.attributes.feature === 'beta' && point.attributes.step === 'configured:explore/audit')).toHaveLength(1);
+      expect(spanExporter.getFinishedSpans().filter((span) => span.name === 'configured:explore/audit')).toHaveLength(2);
 
       const [alphaLedger, betaLedger] = await Promise.all([
         readFile(join(root, 'alpha', '.pipeline', 'events.jsonl'), 'utf8'),
@@ -155,6 +164,8 @@ describe('EventPersister wiring constraints', () => {
       expect(report).toMatch(/configured:explore\/audit\s+\d+/);
     } finally {
       metrics.stop();
+      await visualizer.stop();
+      await meterProvider.shutdown();
       alpha.stop();
       beta.stop();
       daemonPersistence.stop();

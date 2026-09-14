@@ -29,7 +29,6 @@ import {
 import type { ConductorEvent } from '../../types/events.js';
 import type { DispatchMeteringObservation } from '../dispatch-metering.js';
 import { resolveExecutionIdentity, type ExecutionScope } from '../execution-identity.js';
-import type { ObservedInterval } from '../../execution/observed-interval.js';
 
 interface StepState {
   span: Span;
@@ -151,7 +150,6 @@ export class SpanManager {
       provider: event.actualProvider,
       preferredProvider: event.preferredProvider,
     });
-    this.recordSettlement(state, event.observedIntervals);
     this.setTokenUsageAttributes(state.span, event.tokenUsage);
     state.span.setAttribute('conductor.step.status', event.status);
     state.span.setAttribute('conductor.retry.count', state.retryCount);
@@ -177,7 +175,6 @@ export class SpanManager {
       effort: event.effort,
       tier: event.tier,
     });
-    this.recordSettlement(state, event.observedIntervals);
     state.span.setAttribute('conductor.step.status', 'failed');
     // Use event.retryCount for failed steps (authoritative source on failure).
     state.span.setAttribute('conductor.retry.count', event.retryCount);
@@ -267,7 +264,6 @@ export class SpanManager {
           ? { fallbackReason: state.dispatch.fallbackReason }
           : {}),
     };
-    this.recordSettlement(state, event.observedIntervals);
   }
 
   private setDispatchAttributes(
@@ -330,16 +326,6 @@ export class SpanManager {
   private stateFor(step: string, executionContext?: unknown): StepState | undefined {
     const identity = this.resolve(step, executionContext);
     return identity ? this.openSteps.get(identity.correlationKey) : undefined;
-  }
-
-  private recordSettlement(state: StepState, intervals: readonly ObservedInterval[] | undefined): void {
-    if (!intervals) return;
-    for (const interval of intervals) {
-      const endedAtMs = interval.startedAtMs + interval.durationMs;
-      if (Number.isFinite(endedAtMs) && endedAtMs >= state.startTimeMs) {
-        state.settlementEndTimeMs = Math.max(state.settlementEndTimeMs ?? endedAtMs, endedAtMs);
-      }
-    }
   }
 
   private endSpan(state: StepState): void {

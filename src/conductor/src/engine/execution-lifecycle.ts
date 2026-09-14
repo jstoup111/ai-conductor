@@ -172,17 +172,6 @@ export class ExecutionLifecycle {
     return this.closingExecutions.has(key);
   }
 
-  /** Preserves the private conductor test seam while keeping ownership here. */
-  replaceOpenExecutions(executions: Map<string, OpenExecution>): void {
-    this.openExecutions.clear();
-    for (const [key, execution] of executions) {
-      this.openExecutions.set(key, {
-        ...execution,
-        boundary: execution.boundary ?? { startedAtMs: this.clock.nowMs() },
-      });
-    }
-  }
-
   private deliver(event: ConductorEvent): Promise<void> {
     const delivery = this.executionEventTail.then(() => this.deliverNow(event));
     this.executionEventTail = delivery.catch(() => {});

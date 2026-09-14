@@ -3097,17 +3097,14 @@ describe('engine/conductor', () => {
 
     try {
       const executionEvents = conductor as unknown as {
-        openExecutions: Map<string, { kind: 'step'; step: StepName }>;
+        emitExecutionEvent(event: ConductorEvent): Promise<void>;
         closeOpenExecutions(): Promise<void>;
       };
-      await events.emit({
+      await executionEvents.emitExecutionEvent({
         type: 'step_started',
         step: 'build',
         index: 0,
       });
-      executionEvents.openExecutions = new Map([
-        ['step:build', { kind: 'step', step: 'build' }],
-      ]);
 
       await executionEvents.closeOpenExecutions();
 
