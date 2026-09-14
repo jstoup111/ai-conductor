@@ -975,7 +975,7 @@ export async function performRebase(
           quarantine = { paths: confirmed, directory };
           const retry = await git(rebaseArgs);
           if (retry.exitCode === 0) {
-            const outcome = await classifyClean(git, preTree, mergeBase);
+            const outcome = await classifyClean(git, preTree, mergeBase, projectRoot);
             await translateCompletedRebase();
             return { ...outcome, quarantine };
           }

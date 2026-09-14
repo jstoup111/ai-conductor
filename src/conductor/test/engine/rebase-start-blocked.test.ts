@@ -10,11 +10,13 @@ import {
   moveRebaseUntrackedPathsToQuarantine,
   parseUntrackedOverwriteRefusal,
   REBASE_UNTRACKED_QUARANTINE_DIR,
+  applyRebaseVerdicts,
   makeGitRunner,
   performRebase,
   runGatedRebaseResolution,
   type GitRunner,
 } from '../../src/engine/rebase.js';
+import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 
 const execFile = promisify(execFileCb);
 
@@ -108,6 +110,58 @@ describe('engine/rebase — refusal before rebase starts', () => {
       await expect(
         readFile(join(root, REBASE_UNTRACKED_QUARANTINE_DIR, 'generated.txt'), 'utf8'),
       ).resolves.toBe('untracked version\n');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('treats a healed active review-input document delta as changed without invalidating BUILD or aggregate tests', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-start-blocked-git-'));
+    const g = (args: string[]) => execFile('git', args, { cwd: root });
+    const planPath = '.docs/plans/document-only-rebase.md';
+    try {
+      await g(['init', '-q', '-b', 'main']);
+      await g(['config', 'user.email', 't@example.test']);
+      await g(['config', 'user.name', 'Test']);
+      await writeFile(join(root, 'initial.txt'), 'initial\n');
+      await g(['add', '.']);
+      await g(['commit', '-q', '-m', 'initial']);
+
+      await g(['checkout', '-q', '-b', 'feature']);
+      await mkdir(join(root, 'src'), { recursive: true });
+      await writeFile(join(root, 'src', 'feature.ts'), 'export const feature = true;\n');
+      await g(['add', 'src/feature.ts']);
+      await g(['commit', '-q', '-m', 'feature']);
+
+      await g(['checkout', '-q', 'main']);
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(root, planPath), '# Active plan\n');
+      await g(['add', planPath]);
+      await g(['commit', '-q', '-m', 'base review input']);
+
+      await g(['checkout', '-q', 'feature']);
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'document-only-rebase' }));
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await writeFile(join(root, planPath), '# Untracked collision\n');
+      await writeVerdict(root, 'build', { satisfied: true, reason: 'prior BUILD', checkedAt: 1 });
+      await writeVerdict(root, 'test_suite', { satisfied: true, reason: 'prior aggregate tests', checkedAt: 1 });
+      await writeVerdict(root, 'build_review', { satisfied: true, reason: 'prior judged review', checkedAt: 1 });
+
+      const outcome = await performRebase(makeGitRunner(root), root, 'main');
+
+      expect(outcome).toMatchObject({
+        kind: 'changed',
+        changedCodePaths: [],
+        allChangedPaths: [planPath],
+        documentInputs: expect.arrayContaining([planPath]),
+      });
+      const verdicts = await applyRebaseVerdicts(root, outcome, false);
+      expect(verdicts.kickedBack).toEqual(['coverage_binding']);
+      expect(await readVerdict(root, 'coverage_binding')).toMatchObject({ satisfied: false });
+      await expect(readVerdict(root, 'build')).resolves.toMatchObject({ satisfied: true, reason: 'prior BUILD' });
+      await expect(readVerdict(root, 'test_suite')).resolves.toMatchObject({ satisfied: true, reason: 'prior aggregate tests' });
+      await expect(readVerdict(root, 'build_review')).resolves.toMatchObject({ satisfied: true, reason: 'prior judged review' });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
