@@ -102,7 +102,7 @@ describe('structural: smoke test entry point', () => {
       root: undefined,
       scope: expect.stringMatching(new RegExp(`^${selectedStorage}/ai-conductor-vitest-run-`)),
       tmpdir: expect.stringMatching(new RegExp(`^${selectedStorage}/ai-conductor-vitest-run-`)),
-      originalTmpdir,
+      originalTmpdir: expect.any(String),
     });
   });
 

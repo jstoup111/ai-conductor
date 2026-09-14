@@ -10,7 +10,6 @@ import {
   type ParkedMarkersSnapshot,
 } from './park-leak-guard.js';
 import {
-  createRunTmpRoot,
   diffTmpdirEntries,
   removeRunTmpRoot,
   snapshotTmpdirEntries,
@@ -36,6 +35,11 @@ import {
   type EngineerSignalsDiff,
 } from './signals-leak-guard.js';
 import { ensureEngineDist } from './engine-dist-guard.js';
+import {
+  installVitestTmpRoot,
+  restoreVitestTmpEnvironment,
+  snapshotVitestTmpEnvironment,
+} from '../scripts/vitest-temp.mjs';
 
 /**
  * REAL engineer signals dir (the operator's actual store) — deliberately NOT
@@ -242,14 +246,15 @@ function installInterruptReap(
   getSnapshot: () => ReturnType<typeof snapshotDaemonSessions>,
   logger: (message: string) => void,
   runTmpRoot: string,
-  stopHeartbeat: () => void
+  stopHeartbeat: () => void,
+  tmuxRoots?: readonly string[],
 ): () => void {
   let handled = false;
   const onSignal = (signal: NodeJS.Signals) => {
     if (handled) return;
     handled = true;
     try {
-      const result = reapLeakedDaemonSessions(getSnapshot());
+      const result = reapLeakedDaemonSessions(getSnapshot(), undefined, tmuxRoots);
       if (result.killed.length > 0) {
         logger(`tmux-leak-guard: reaped on ${signal} before exit: ${result.killed.join('; ')}`);
       }
@@ -285,10 +290,17 @@ export default async function setup() {
   // the operator's REAL tmpdir from it — every guard below is defined against
   // the real one, and the fallback keeps this file runnable as a globalSetup
   // even if the config-level install is ever missing.
-  const runTmpRoot = process.env[RUN_TMP_ROOT_ENV] ?? (await createRunTmpRoot(tmpdir()));
+  const callerEnvironment = snapshotVitestTmpEnvironment();
+  const inheritedRoot = process.env[RUN_TMP_ROOT_ENV];
+  const installation = installVitestTmpRoot();
+  const runTmpRoot = installation.root;
+  const originalTmpdir = installation.originalTmpdir ?? tmpdir();
+  const selectedParent = installation.parent ?? dirname(runTmpRoot);
+  const nestedParent = dirname(runTmpRoot);
+  const sweepParents = [...new Set([originalTmpdir, selectedParent, nestedParent])];
+  const tmuxRoots = [originalTmpdir, runTmpRoot];
   process.env[RUN_TMP_ROOT_ENV] = runTmpRoot;
   process.env.TMPDIR = runTmpRoot;
-  const realTmpdir = dirname(runTmpRoot);
   writeRunRootOwnerMarker(runTmpRoot, {
     pid: process.pid,
     hostname: hostname(),
@@ -333,30 +345,32 @@ export default async function setup() {
   // sweep to debris left under a PREVIOUS run's root. Nothing in the window
   // writes temp files, so nothing escapes containment; teardown restores the
   // real tmpdir before the reap for exactly the same reason.
-  process.env.TMPDIR = realTmpdir;
+  process.env.TMPDIR = originalTmpdir;
   const staleAfterOverride = Number(process.env.AI_CONDUCTOR_TEST_TMP_ROOT_STALE_AFTER_MS);
   const staleAfterOverridden = Number.isFinite(staleAfterOverride) && staleAfterOverride >= 0;
   const staleAfterMs = staleAfterOverridden ? staleAfterOverride : RUN_TMP_ROOT_STALE_AFTER_MS;
-  const runRootSweep = await sweepStaleRunTmpRoots(realTmpdir, {
-    ownRoot: runTmpRoot,
-    now: Date.now(),
-    staleAfterMs,
-    legacyStaleAfterMs: RUN_TMP_ROOT_LEGACY_STALE_AFTER_MS,
-    // The sweep's own diagnostics (an unreadable owner marker, for one) reach
-    // the operator; its per-failure lines are dropped here because
-    // `applyRunRootSweepDecision` below is the sole failure reporter.
-    logger: (message) => {
-      if (!message.startsWith(RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX)) console.error(message);
-    },
-  });
-  applyRunRootSweepDecision(runRootSweep, realTmpdir, console.error, { reportRetained: staleAfterOverridden });
+  const reapedRoots: string[] = [];
+  for (const parent of sweepParents) {
+    const runRootSweep = await sweepStaleRunTmpRoots(parent, {
+      ownRoot: runTmpRoot,
+      now: Date.now(),
+      staleAfterMs,
+      legacyStaleAfterMs: RUN_TMP_ROOT_LEGACY_STALE_AFTER_MS,
+      logger: (message) => {
+        if (!message.startsWith(RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX)) console.error(message);
+      },
+    });
+    reapedRoots.push(...runRootSweep.reaped.map(name => join(parent, name)));
+    applyRunRootSweepDecision(runRootSweep, parent, console.error, { reportRetained: staleAfterOverridden });
+  }
+  tmuxRoots.push(...reapedRoots);
 
   // Tmpdir leak guard (#1112), part 2 of 2 — the GUARD. Baseline the REAL
   // tmpdir's top-level entries AFTER the stale-root sweep above and still
   // inside the real-tmpdir window, so a root the sweep reaped is not
   // baselined as pre-existing and a root it retained is.
-  const tmpdirBefore = await snapshotTmpdirEntries(realTmpdir);
-  const sweep = sweepStaleDaemonSessions();
+  const tmpdirBefore = await snapshotTmpdirEntries(originalTmpdir);
+  const sweep = sweepStaleDaemonSessions(undefined, tmuxRoots);
   if (sweep.killed.length > 0) {
     console.error(
       `tmux-leak-guard: swept ${sweep.killed.length} stale tmpdir-rooted daemon ` +
@@ -379,7 +393,8 @@ export default async function setup() {
     () => globalThis.__tmuxSnapshot ?? daemonSnapshot,
     console.error,
     runTmpRoot,
-    heartbeat.stop
+    heartbeat.stop,
+    tmuxRoots,
   );
 
   // Return the async teardown function
@@ -391,8 +406,7 @@ export default async function setup() {
     // `os.tmpdir()` it observed before this redirect existed — in particular
     // the tmux reap's `isTmpdirRooted` corroboration, which must still match a
     // pane cwd anywhere under the real tmpdir, not only under the run root.
-    process.env.TMPDIR = realTmpdir;
-    delete process.env[RUN_TMP_ROOT_ENV];
+    process.env.TMPDIR = originalTmpdir;
 
     try {
       await runTeardownGuards();
@@ -401,12 +415,14 @@ export default async function setup() {
       // guard failure still frees the disk, and self-contained try/catch so a
       // removal failure can never mask the guard error being propagated.
       try {
-        await removeRunTmpRoot(runTmpRoot);
+        if (!inheritedRoot && installation.ownsRoot) await removeRunTmpRoot(runTmpRoot);
       } catch (err) {
         console.error(
           `tmpdir-leak-guard: could not remove the run temp root ${runTmpRoot} — remove it ` +
-            `manually to reclaim the space: ${err}`
+          `manually to reclaim the space: ${err}`
         );
+      } finally {
+        restoreVitestTmpEnvironment(callerEnvironment);
       }
     }
   };
@@ -426,7 +442,7 @@ export default async function setup() {
     // is a kill-switch escape — a REAL daemon idle-polling a (likely deleted)
     // fixture repo. Kill it, then fail the run naming it; the pane cwd's
     // fixture prefix (loop-test-, intake-life-, …) attributes the leaking file.
-    const result = reapLeakedDaemonSessions(globalThis.__tmuxSnapshot ?? daemonSnapshot);
+    const result = reapLeakedDaemonSessions(globalThis.__tmuxSnapshot ?? daemonSnapshot, undefined, tmuxRoots);
     applyTeardownDecision(result);
 
     // Signals leak guard (#861): re-snapshot the REAL engineer signals store
@@ -453,8 +469,8 @@ export default async function setup() {
     // entry that appeared outside the run root. Runs LAST so it can never
     // pre-empt an existing guard's verdict — a .pipeline, tmux, or signals
     // failure is the more specific diagnosis and still throws first.
-    const tmpdirAfter = await snapshotTmpdirEntries(realTmpdir);
-    applyTmpdirTeardownDecision(diffTmpdirEntries(tmpdirBefore, tmpdirAfter), realTmpdir);
+    const tmpdirAfter = await snapshotTmpdirEntries(originalTmpdir);
+    applyTmpdirTeardownDecision(diffTmpdirEntries(tmpdirBefore, tmpdirAfter), originalTmpdir);
 
     // Parked-marker leak guard (#1251): runs last, after every established
     // teardown guard. It observes the actual repository ledger, not any

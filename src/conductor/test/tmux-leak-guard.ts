@@ -64,12 +64,14 @@ export const DAEMON_SESSION_PREFIX = 'cc-daemon-';
  * resolve only — no realpath, so a deleted /tmp fixture dir still matches.
  * Exact-or-prefix (with trailing separator) check, so
  * `${tmpdir}-evil/x` does NOT falsely match `tmpdir`. */
-export function isTmpdirRooted(cwd: string): boolean {
+export function isTmpdirRooted(cwd: string, roots: readonly string[] = [os.tmpdir()]): boolean {
   if (cwd === '(unknown)') return false;
 
-  const tmp = path.resolve(os.tmpdir());
   const resolved = path.resolve(cwd);
-  return resolved === tmp || resolved.startsWith(tmp + path.sep);
+  return roots.some((root) => {
+    const resolvedRoot = path.resolve(root);
+    return resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep);
+  });
 }
 
 /** Result of a single tmux invocation. `spawnError` means the process never
@@ -220,7 +222,8 @@ export type ReapResult = {
  */
 export function reapLeakedDaemonSessions(
   snapshot: SnapshotResult,
-  runner: TmuxRunner = realTmuxRunner
+  runner: TmuxRunner = realTmuxRunner,
+  roots?: readonly string[],
 ): ReapResult {
   const killed: string[] = [];
   const indeterminate: string[] = [];
@@ -230,7 +233,7 @@ export function reapLeakedDaemonSessions(
     if (before.has(name)) continue;
 
     const cwd = sessionPaneCwd(name, runner);
-    const canKill = !snapshot.failed && cwd !== '(unknown)' && isTmpdirRooted(cwd);
+    const canKill = !snapshot.failed && cwd !== '(unknown)' && isTmpdirRooted(cwd, roots);
 
     if (canKill) {
       killDaemonSession(name, runner);
@@ -269,12 +272,15 @@ export type SweepResult = {
  * `reapLeakedDaemonSessions`) — an unresolvable signal is never treated as a
  * "yes".
  */
-export function sweepStaleDaemonSessions(runner: TmuxRunner = realTmuxRunner): SweepResult {
+export function sweepStaleDaemonSessions(
+  runner: TmuxRunner = realTmuxRunner,
+  roots?: readonly string[],
+): SweepResult {
   const killed: string[] = [];
 
   for (const name of listDaemonSessions(runner)) {
     const cwd = sessionPaneCwd(name, runner);
-    if (cwd !== '(unknown)' && isTmpdirRooted(cwd)) {
+    if (cwd !== '(unknown)' && isTmpdirRooted(cwd, roots)) {
       killDaemonSession(name, runner);
       killed.push(`${name} (pane cwd: ${cwd})`);
     }

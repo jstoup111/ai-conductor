@@ -176,7 +176,9 @@ export function installVitestTmpRoot({
       ownsRoot: false,
       ownsScope: false,
     }
-    : allocateNestedRoot({ env, packageDir, fs });
+    : fresh
+      ? allocateVitestTmpScope({ env, packageDir, fs })
+      : allocateNestedRoot({ env, packageDir, fs });
 
   const originalTmpdir = env[VITEST_ORIGINAL_TMPDIR_ENV] ?? env.TMPDIR;
   env[VITEST_TMP_ROOT_ENV] = allocation.root;
