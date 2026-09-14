@@ -11,6 +11,12 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-09-14
+
+### Fixed
+
+- Makes installer and session hooks treat runtime values as literal data. ([implementation PR #2376](https://github.com/jstoup111/ai-conductor/pull/2376)).
+
 ## [1.2.0] - 2026-09-14
 
 ### Added
