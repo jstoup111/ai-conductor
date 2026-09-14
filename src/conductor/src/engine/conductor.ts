@@ -31,7 +31,7 @@ import {
 } from './build-review-effective.js';
 import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 import { projectBuildReviewSuppressionEntries } from './build-review-suppression-history.js';
-import { coordinateBuildReviewAdjudication } from './build-review-adjudication-coordinator.js';
+import { applyBuildReviewOutcome } from './build-review-outcome.js';
 import { isBuildEligibleActionCase, isBuildReviewSettlementObligationCase } from './remediation-case-effects.js';
 import {
   appendBuildReviewWorkOrderContext,
@@ -5538,6 +5538,14 @@ export class Conductor {
   /** Keep every adjudication gate on the same resolved configuration accessor. */
   private buildReviewAdjudicationEnabled(): boolean {
     return resolveBuildReviewConfig(this.config).adjudication.enabled;
+  }
+
+  /**
+   * Custom policies have one aggregate outcome authority in every execution
+   * mode. Built-in-only attended runs retain their established raw routing.
+   */
+  private hasEnabledCustomBuildReviewPolicy(): boolean {
+    return resolveBuildReviewConfig(this.config).catalog.some((entry) => entry.kind === 'custom');
   }
 
   /**
@@ -11787,7 +11795,7 @@ export class Conductor {
           // step's failure auto-skips so it can't block the run; a gating or
           // structural failure (e.g. plan, build) stops the run for a human to
           // inspect. This must come before the interactive recovery menu below.
-          if (this.mode === 'auto') {
+          if (this.mode === 'auto' || (step.name === 'build_review' && this.hasEnabledCustomBuildReviewPolicy())) {
             if (step.enforcement === 'advisory') {
               // Advisory means "does not block the pipeline" — it must NOT mean
               // "reports success having produced nothing". Record the skip AND,
@@ -11904,7 +11912,7 @@ export class Conductor {
             // keyed by 'build_review' (the same anti-ping-pong mechanism the
             // gate-driven tail uses for other gates), bounded by
             // MAX_KICKBACKS_PER_GATE like the other self-heal loops.
-            if (step.name === 'build_review' && (this.daemon || this.mode === 'auto')) {
+            if (step.name === 'build_review' && (this.daemon || this.mode === 'auto' || this.hasEnabledCustomBuildReviewPolicy())) {
               let verdictRaw: unknown = null;
               try {
                 verdictRaw = JSON.parse(
@@ -12028,10 +12036,12 @@ export class Conductor {
                     suppressedFindingIds,
                     floors: Object.fromEntries(Object.entries(floors).map(([id, policy]) => [id, policy.min_confidence])),
                   });
-                  const adjudication = await coordinateBuildReviewAdjudication({
+                  const outcome = await applyBuildReviewOutcome({
+                    settlement: 'settled',
+                    recordedAggregate: verdictRaw,
+                    adjudication: {
                     projectRoot: this.projectRoot,
                     feature: effective.feature,
-                    aggregate,
                     operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
                     suppressedFindingIds: new Set(suppressedFindingIds),
                     suppressions,
@@ -12069,27 +12079,27 @@ export class Conductor {
                       },
                     }),
                     emit: async (event) => { await this.events.emit(event); },
+                    },
                   });
-                  if (!adjudication.ok || adjudication.route === 'halt') {
-                    const reason = `build_review adjudication halted: ${adjudication.detail}` +
-                      (adjudication.ok ? `\n${adjudication.trace}` : '');
+                  if (outcome.kind === 'decision-stop' || (outcome.kind === 'infrastructure' && outcome.status === 'halt')) {
+                    const detail = outcome.kind === 'decision-stop' ? outcome.detail : outcome.reason;
+                    const trace = outcome.trace;
+                    const reason = `build_review adjudication halted: ${detail}` +
+                      (trace ? `\n${trace}` : '');
                     await this.writeHaltMarker(reason + '\n', 'needs-human');
                     await this.persistPendingStateChanges(state, 'persist conductor transition');
                     await this.emitLoopHalt(reason);
                     return;
                   }
-                  if (adjudication.route === 'pass') {
+                  if (outcome.kind === 'settled') {
                     await this.saveConductorStepStatus(state, step.name, 'done');
-                    // Story 7: the per-case trace explains a skipped dispatch. An
-                    // operator-resolved shortcut or a post-judge PASS was silent
-                    // before this feature and stays silent (prd-audit NC.3).
-                    if (adjudication.dispatchSkipped) this.log?.(adjudication.trace);
+                    this.log?.(outcome.trace);
                     continue;
                   }
-                  if (adjudication.route === 'build') {
+                  if (outcome.kind === 'repair') {
                     const ledger = await readKickbackLedger(this.projectRoot);
                     const count = ledger.gates.build_review?.count ?? 1;
-                    const evidence = `${adjudication.detail}\n${adjudication.trace}`;
+                    const evidence = `build-review admitted repair ${outcome.caseIds.join(', ')}\n${outcome.trace}`;
                     await emitTracked({ type: 'kickback', from: 'build_review', to: 'build', evidence, count });
                     pendingRetryHints.set('build', `build_review adjudication: ${evidence}`);
                     if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
