@@ -111,12 +111,23 @@ describe('compareReplayTree', () => {
   });
 
   it.each([
-    ['missing identity', { ...identity, target: '' }, []],
-    ['unsupported merge-tree', identity, [{ exitCode: 129 }]],
-    ['conflicting reconstruction', identity, [{ exitCode: 1 }]],
-    ['malformed tree', identity, [{ exitCode: 0, stdout: 'not-an-object\n' }, { exitCode: 0, stdout: 'e'.repeat(40) }]],
-  ] as const)('fails closed for %s', async (_name, replay, results) => {
-    await expect(compareReplayTree(scripted(results), replay)).resolves.toMatchObject({ kind: 'unproved' });
+    ['missing pre-rebase object', { ...identity, preRebaseHead: '' }, []],
+    ['missing merge-base object', { ...identity, mergeBase: '' }, []],
+    ['missing target object', { ...identity, target: '' }, []],
+    ['missing completed object', { ...identity, completedHead: '' }, []],
+    ['unavailable merge-tree option', identity, [{ exitCode: 129, stderr: 'unknown option --merge-base' }]],
+    ['missing Git object', identity, [{ exitCode: 128, stderr: 'fatal: Not a valid object name' }]],
+    ['conflicting reconstruction', identity, [{ exitCode: 1, stdout: 'CONFLICT (content): Merge conflict\n' }]],
+    ['completed-tree command error', identity, [{ exitCode: 0, stdout: `${'e'.repeat(40)}\n` }, { exitCode: 128 }]],
+    ['malformed expected tree', identity, [{ exitCode: 0, stdout: 'not-an-object\n' }, { exitCode: 0, stdout: 'e'.repeat(40) }]],
+    ['malformed completed tree', identity, [{ exitCode: 0, stdout: `${'e'.repeat(40)}\n` }, { exitCode: 0, stdout: 'not-an-object\n' }]],
+  ] as const)('fails closed for %s without fabricating preservation evidence', async (_name, replay, results) => {
+    const result = await compareReplayTree(scripted(results), replay);
+    expect(result).toMatchObject({ kind: 'unproved' });
+    // `unproved` is the classifier's conservative branch: it carries a
+    // reason only, never a tree comparison that could authorize preservation.
+    expect(result).not.toHaveProperty('expectedTree');
+    expect(result).not.toHaveProperty('completedTree');
   });
 });
 
