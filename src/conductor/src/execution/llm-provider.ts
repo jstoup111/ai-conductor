@@ -237,6 +237,8 @@ export interface InvokeResult {
   commandUnresolvedName?: string;
   /** Set by the execution layer when a cached unavailable provider is skipped. */
   providerInvocationSkipped?: boolean;
+  /** Affirmative evidence that this invocation never reached provider execution. */
+  executionDisposition?: 'not-started';
   /** Provider-owned, safe authentication source/readiness metadata. */
   authentication?: AuthenticationReadiness;
   /** Sanitized diagnostic-only safety notices; never an authorization input. */
