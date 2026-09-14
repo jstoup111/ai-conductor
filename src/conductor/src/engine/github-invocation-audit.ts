@@ -133,6 +133,9 @@ function typeReferenceName(node: ts.TypeNode | undefined): string | undefined {
 function injectedGhRunnerNames(parsed: ts.SourceFile): Set<string> {
   const runnerTypes = new Set(['GhRunner']);
   const runners = new Set<string>();
+  const runnerProperties = new Map<string, Set<string>>();
+  const typeAliases = new Map<string, ts.TypeNode>();
+  const interfaces = new Map<string, ts.InterfaceDeclaration>();
   const collect = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
       const bindings = node.importClause?.namedBindings;
@@ -142,14 +145,85 @@ function injectedGhRunnerNames(parsed: ts.SourceFile): Set<string> {
         }
       }
     }
+    if (ts.isTypeAliasDeclaration(node)) typeAliases.set(node.name.text, node.type);
+    if (ts.isInterfaceDeclaration(node)) interfaces.set(node.name.text, node);
     ts.forEachChild(node, collect);
   };
   collect(parsed);
-  const mark = (name: ts.Node, type: ts.TypeNode | undefined): void => {
-    if (ts.isIdentifier(name) && runnerTypes.has(typeReferenceName(type) ?? '')) runners.add(name.text);
+
+  const isRunnerType = (type: ts.TypeNode | undefined, seen = new Set<string>()): boolean => {
+    if (!type) return false;
+    if (ts.isParenthesizedTypeNode(type)) return isRunnerType(type.type, seen);
+    if (ts.isUnionTypeNode(type) || ts.isIntersectionTypeNode(type)) return type.types.some((part) => isRunnerType(part, seen));
+    const name = typeReferenceName(type);
+    if (!name) return false;
+    if (runnerTypes.has(name)) return true;
+    if (seen.has(name)) return false;
+    seen.add(name);
+    return isRunnerType(typeAliases.get(name), seen);
   };
+  const propertyName = (name: ts.PropertyName): string | undefined => ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : undefined;
+  const propertiesWithRunner = (type: ts.TypeNode | undefined, seen = new Set<string>()): Set<string> => {
+    const properties = new Set<string>();
+    if (!type) return properties;
+    if (ts.isParenthesizedTypeNode(type)) return propertiesWithRunner(type.type, seen);
+    const addProperties = (members: ts.NodeArray<ts.TypeElement | ts.ClassElement>): void => {
+      for (const member of members) {
+        if ((ts.isPropertySignature(member) || ts.isPropertyDeclaration(member)) && isRunnerType(member.type)) {
+          const name = propertyName(member.name);
+          if (name) properties.add(name);
+        }
+      }
+    };
+    if (ts.isTypeLiteralNode(type)) addProperties(type.members);
+    const name = typeReferenceName(type);
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      const alias = typeAliases.get(name);
+      const declaration = interfaces.get(name);
+      if (alias) for (const property of propertiesWithRunner(alias, seen)) properties.add(property);
+      if (declaration) addProperties(declaration.members);
+    }
+    return properties;
+  };
+  const mark = (name: ts.BindingName, type: ts.TypeNode | undefined): void => {
+    if (ts.isIdentifier(name)) {
+      if (isRunnerType(type)) runners.add(name.text);
+      const properties = propertiesWithRunner(type);
+      if (properties.size > 0) runnerProperties.set(name.text, properties);
+      return;
+    }
+    for (const element of name.elements) {
+      if (!ts.isBindingElement(element) || !ts.isIdentifier(element.name)) continue;
+      const sourceName = element.propertyName && ts.isIdentifier(element.propertyName)
+        ? element.propertyName.text
+        : element.name.text;
+      if (propertiesWithRunner(type).has(sourceName)) runners.add(element.name.text);
+    }
+  };
+  const propertyAlias = (initializer: ts.Expression | undefined): boolean =>
+    !!initializer
+    && ts.isPropertyAccessExpression(initializer)
+    && ts.isIdentifier(initializer.expression)
+    && runnerProperties.get(initializer.expression.text)?.has(initializer.name.text) === true;
+  const destructuredAlias = (initializer: ts.Expression | undefined, property: string): boolean =>
+    !!initializer && ts.isIdentifier(initializer) && runnerProperties.get(initializer.text)?.has(property) === true;
   const classify = (node: ts.Node): void => {
-    if (ts.isParameter(node) || ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node)) mark(node.name, node.type);
+    if (ts.isParameter(node) || ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node)) {
+      mark(node.name, node.type);
+      if (ts.isVariableDeclaration(node)) {
+        if (ts.isIdentifier(node.name) && propertyAlias(node.initializer)) runners.add(node.name.text);
+        if (ts.isObjectBindingPattern(node.name)) {
+          for (const element of node.name.elements) {
+            if (!ts.isIdentifier(element.name)) continue;
+            const sourceName = element.propertyName && ts.isIdentifier(element.propertyName)
+              ? element.propertyName.text
+              : element.name.text;
+            if (destructuredAlias(node.initializer, sourceName)) runners.add(element.name.text);
+          }
+        }
+      }
+    }
     ts.forEachChild(node, classify);
   };
   classify(parsed);
@@ -166,12 +240,30 @@ function directGhInvocation(
     && runnerNames.has(node.expression.name.text);
 }
 
+/**
+ * `createBlockerResolver` is an import-bound read composition: its `run`
+ * callback queries GitHub's dependency graph and does not own a mutation.
+ * Preserve this narrowly proven dynamic argv path without exempting arbitrary
+ * aliases or callbacks that could forward a write.
+ */
+function readOnlyRunnerForwarding(node: ts.CallExpression, readOnlyFactories: ReadonlySet<string>): boolean {
+  const callback = node.parent;
+  if (!ts.isArrowFunction(callback) || callback.body !== node) return false;
+  const property = callback.parent;
+  if (!ts.isPropertyAssignment(property) || property.name.getText() !== 'run') return false;
+  const options = property.parent;
+  if (!ts.isObjectLiteralExpression(options)) return false;
+  const factory = options.parent;
+  return ts.isCallExpression(factory) && ts.isIdentifier(factory.expression) && readOnlyFactories.has(factory.expression.text);
+}
+
 /** Scan one executable TypeScript source file, resolving child-process aliases. */
 export function auditGithubInvocationSource(file: string, source: string): GithubInvocationAuditFinding[] {
   const parsed = sourceFile(file, source);
   const findings: GithubInvocationAuditFinding[] = [];
   const processAliases = new Set<string>();
   const rawGithubImports = new Set<string>();
+  const readOnlyFactories = new Set<string>();
   const injectedRunners = injectedGhRunnerNames(parsed);
   for (const statement of parsed.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteralLike(statement.moduleSpecifier)) continue;
@@ -183,6 +275,11 @@ export function auditGithubInvocationSource(file: string, source: string): Githu
       if (bindings && ts.isNamespaceImport(bindings)) rawGithubImports.add(bindings.name.text);
       if (bindings && ts.isNamedImports(bindings)) for (const item of bindings.elements) rawGithubImports.add(item.name.text);
       if (statement.importClause?.name) rawGithubImports.add(statement.importClause.name.text);
+    }
+    if (statement.moduleSpecifier.text.endsWith('/blocker-resolver.js') && bindings && ts.isNamedImports(bindings)) {
+      for (const item of bindings.elements) {
+        if ((item.propertyName?.text ?? item.name.text) === 'createBlockerResolver') readOnlyFactories.add(item.name.text);
+      }
     }
   }
   const visit = (node: ts.Node): void => {
@@ -198,7 +295,7 @@ export function auditGithubInvocationSource(file: string, source: string): Githu
       if (directGhInvocation(node, injectedRunners) && !approvedInjectedRunnerBoundary(file)) {
         const directArgs = argv(node.arguments[0]);
         const directHead = argvHead(node.arguments[0]);
-        if (!directArgs && !directHead) {
+        if (!directArgs && !directHead && !readOnlyRunnerForwarding(node, readOnlyFactories)) {
           findings.push(report(parsed, file, node, 'unresolvable mutable GitHub command forwarding outside guarded adapter'));
         } else if (directHead && ghMutation(directHead)) {
           findings.push(report(parsed, file, node, 'direct injected GitHub mutation outside guarded adapter'));
