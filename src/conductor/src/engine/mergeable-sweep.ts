@@ -28,7 +28,6 @@ import {
   prMergeState,
   isMergeable,
   upsertComment,
-  type PrRunner,
   type PrMergeState,
 } from './pr-labels.js';
 import type { ConductorEvent } from '../types/events.js';
@@ -299,13 +298,12 @@ function runnerForEntry(
   gh: GhRunner,
   entry: WatchEntry,
   operations: SweepOpts['operations'],
-): PrRunner {
+): GhRunner | (GhRunner & GithubOperationRunner) {
   const operationRunner = typeof operations === 'function' ? operations(entry) : operations;
   if (!operationRunner) return gh;
-  return Object.assign(
-    (args: string[], opts: { cwd: string }) => gh(args, opts),
-    operationRunner,
-  );
+  // Bind a fresh read wrapper for this entry so its target-bound mutation
+  // runner cannot be reused by a later entry in the same sweep.
+  return Object.assign(gh.bind(undefined), operationRunner);
 }
 
 /**

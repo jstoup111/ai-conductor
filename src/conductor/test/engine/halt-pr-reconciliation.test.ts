@@ -10,6 +10,11 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { reconcileHaltPrs } from '../../src/engine/halt-pr-reconciliation.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type {
+  GithubOperationRequest,
+  GithubOperationRunner,
+  GithubOperationRunnerResponse,
+} from '../../src/engine/github-operations.js';
 
 const NEEDS_REMEDIATION_BODY_MARKER = '<!-- conductor:needs-remediation -->';
 const PR_URL_BROKEN = 'https://github.com/owner/repo/pull/301';
@@ -28,6 +33,48 @@ interface FakePr {
   isDraft: boolean;
   labels: string[];
   body: string;
+}
+
+function guardedFakePrRunner(gh: GhRunner): GithubOperationRunner {
+  return {
+    async run(request: GithubOperationRequest): Promise<GithubOperationRunnerResponse> {
+      if (request.target.kind !== 'pull-request') {
+        throw new Error(`unexpected target: ${request.target.kind}`);
+      }
+      const prUrl = `https://github.com/${request.target.repository}/pull/${request.target.number}`;
+      const payload = request.payload;
+      switch (request.operation) {
+        case 'pull-request.edit': {
+          const body = payload && 'body' in payload && typeof payload.body === 'string' ? payload.body : '';
+          await gh(['pr', 'edit', prUrl, '--body', body], { cwd: '/fake/repo' });
+          return {};
+        }
+        case 'pull-request.draft':
+          await gh(['pr', 'ready', '--undo', prUrl], { cwd: '/fake/repo' });
+          return {};
+        case 'pull-request.ready':
+          await gh(['pr', 'ready', prUrl], { cwd: '/fake/repo' });
+          return {};
+        case 'pull-request.label.add': {
+          const label = payload && 'label' in payload && typeof payload.label === 'string' ? payload.label : '';
+          await gh(['api', '--method', 'POST', `repos/${request.target.repository}/issues/${request.target.number}/labels`, '-f', `labels[]=${label}`], { cwd: '/fake/repo' });
+          return {};
+        }
+        case 'pull-request.label.remove': {
+          const label = payload && 'label' in payload && typeof payload.label === 'string' ? payload.label : '';
+          await gh(['api', '--method', 'DELETE', `repos/${request.target.repository}/issues/${request.target.number}/labels/${label}`], { cwd: '/fake/repo' });
+          return {};
+        }
+        case 'pull-request.comment.create': {
+          const body = payload && 'body' in payload && typeof payload.body === 'string' ? payload.body : '';
+          await gh(['pr', 'comment', prUrl, '--body', body], { cwd: '/fake/repo' });
+          return {};
+        }
+        default:
+          throw new Error(`unexpected operation: ${request.operation}`);
+      }
+    },
+  };
 }
 
 function makeFakeGhForReconciliation(prs: FakePr[]) {
@@ -104,7 +151,7 @@ function makeFakeGhForReconciliation(prs: FakePr[]) {
     return { stdout: '' };
   };
 
-  return { gh, calls, prs, byUrl, get: (url: string) => find(url) };
+  return { gh: Object.assign(gh, guardedFakePrRunner(gh)), calls, prs, byUrl, get: (url: string) => find(url) };
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -479,7 +526,7 @@ describe('reconcileHaltPrs (Task 15)', () => {
       body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
     };
 
-    const throwingGh: GhRunner = async (args: string[]) => {
+    const throwingGhBase: GhRunner = async (args: string[]) => {
       if (args[0] === 'pr' && args[1] === 'list') {
         return {
           stdout: JSON.stringify([
@@ -516,6 +563,7 @@ describe('reconcileHaltPrs (Task 15)', () => {
       }
       return { stdout: '' };
     };
+    const throwingGh = Object.assign(throwingGhBase, guardedFakePrRunner(throwingGhBase));
 
     const cache = new Map<string, 'conforming' | 'healed' | 'unconfirmed'>();
     const logs: string[] = [];
@@ -756,7 +804,7 @@ function makeFakeGhForClearing(prs: FakeHeadPr[]) {
     return { stdout: '' };
   };
 
-  return { gh, calls, commentsFor: (url: string) => comments.get(url) ?? [] };
+  return { gh: Object.assign(gh, guardedFakePrRunner(gh)), calls, commentsFor: (url: string) => comments.get(url) ?? [] };
 }
 
 /** Fake git reporting a shipped record only for the listed `<ref>:<path>` pairs. */

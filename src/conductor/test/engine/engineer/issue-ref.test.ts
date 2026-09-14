@@ -39,6 +39,14 @@ function makeGh(body: string | null): { gh: GhRunner; calls: Call[] } {
   return { gh, calls };
 }
 
+function editedBody(request: GithubOperationRequest | undefined): string | undefined {
+  return request?.operation === 'pull-request.edit'
+    && request.payload !== undefined
+    && 'body' in request.payload
+    ? request.payload.body
+    : undefined;
+}
+
 describe('parseSourceRef', () => {
   it('parses owner/repo#N', () => {
     expect(parseSourceRef('acme/app#49')).toEqual({ repo: 'acme/app', number: '49' });
@@ -146,7 +154,7 @@ describe('injectIssueRef', () => {
     expect(changed).toBe(true);
     expect(calls.some((call) => call.args[1] === 'edit')).toBe(false);
     expect(requests).toHaveLength(1);
-    const body = requests[0].payload?.body;
+    const body = editedBody(requests[0]);
     expect(body).toBe('## Why\nstuff\n\nCloses acme/app#49');
     expect(requests[0]).toMatchObject({
       operation: 'pull-request.edit',
@@ -159,7 +167,7 @@ describe('injectIssueRef', () => {
     const { operations, requests } = makeOperations();
     await injectIssueRef({ gh, operations, prUrl, keyword: 'Refs', sourceRef: 'acme/app#49', cwd });
     expect(calls.some((call) => call.args[1] === 'edit')).toBe(false);
-    expect(requests[0].payload?.body).toBe('Refs acme/app#49');
+    expect(editedBody(requests[0])).toBe('Refs acme/app#49');
   });
 
   it('is idempotent — does not duplicate an existing reference', async () => {
@@ -183,7 +191,7 @@ describe('injectIssueRef', () => {
     const { operations, requests } = makeOperations();
     await injectIssueRef({ gh, operations, prUrl, keyword: 'Refs', sourceRef: 'acme/app#49', cwd });
     expect(calls.some((call) => call.args[1] === 'edit')).toBe(false);
-    const body = requests[0].payload?.body;
+    const body = editedBody(requests[0]);
     expect(body).not.toMatch(/\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b/i);
     expect(body).toContain('Refs acme/app#49');
   });
@@ -200,7 +208,7 @@ describe('injectIssueRef', () => {
     const { operations, requests } = makeOperations();
     await injectIssueRef({ gh, operations, prUrl, keyword: 'Refs', sourceRef: 'acme/app#49', cwd });
     expect(calls.some((call) => call.args[1] === 'edit')).toBe(false);
-    const body = requests[0].payload?.body!;
+    const body = editedBody(requests[0])!;
 
     expect(body).toContain('Refs acme/app#49');
     expect(parseReleaseDisposition(body)).toEqual({ disposition: 'no-note' });
@@ -237,7 +245,7 @@ describe('closeIssueOnImplementationMerge (FR-4, FR-5, FR-7)', () => {
     });
     expect(outcome).toBe('attempted');
     expect(calls.some((call) => call.args[1] === 'edit')).toBe(false);
-    expect(requests[0].payload?.body).toContain('Closes acme/app#49');
+    expect(editedBody(requests[0])).toContain('Closes acme/app#49');
   });
 
   it('no-ops for a hand-authored spec (no sourceRef) — never calls gh', async () => {

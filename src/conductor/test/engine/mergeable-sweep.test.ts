@@ -25,6 +25,7 @@ import type { GhRunner } from '../../src/engine/pr-labels.js';
 import type {
   GithubOperationRequest,
   GithubOperationRunner,
+  GithubOperationRunnerRefusal,
   GithubOperationRunnerResponse,
 } from '../../src/engine/github-operations.js';
 
@@ -1762,7 +1763,7 @@ describe('sweepMergeableLabels — Task 22: exhaustion failure and race negative
     const throwingGh = Object.assign(
       async (args: string[], opts: { cwd: string }) => gh(args, opts),
       {
-        run: async (request: GithubOperationRequest): Promise<GithubOperationRunnerResponse> => {
+        run: async (request: GithubOperationRequest): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> => {
           if (request.operation === 'pull-request.comment.create') {
             throw new Error('gh: connection reset');
           }
