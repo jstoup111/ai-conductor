@@ -18,6 +18,8 @@ import type { ConductorEventEmitter } from '../ui/events.js';
 import { prepareWorktree, runProjectTeardown } from './worktree-prepare.js';
 import { observeMemorySetup } from './memory-cli.js';
 import { makeProductionGh } from './pr-labels.js';
+import { createDaemonHaltPrOperations } from './daemon-halt-pr-operations.js';
+import { makeMachineOwnerResolver } from './owner-gate/machine-identity.js';
 import { ensureWorktree } from './worktree-shared.js';
 import { WorktreeLifecycleQueue } from './worktree.js';
 import { FINISH_CHOICE_MARKER, FINISH_CHOICE_VALUES } from './artifacts.js';
@@ -130,6 +132,14 @@ const REKICKED_SUBDIR = '.daemon/rekicked';
 /** Concrete (git/fs) implementation of the feature-runner primitives. */
 export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerDeps {
   const processedDir = join(cfg.projectRoot, PROCESSED_SUBDIR);
+  const gh = makeProductionGh();
+  const haltPrOperations = createDaemonHaltPrOperations({
+    projectRoot: cfg.projectRoot,
+    baseBranch: cfg.baseBranch,
+    gh,
+    git: makeGitRunner(cfg.projectRoot),
+    resolveMachineOwner: makeMachineOwnerResolver(gh, cfg.projectRoot),
+  });
   // The dispatcher owns this queue for its lifetime. All linked worktree
   // add/remove operations share cfg.projectRoot's `.git` bookkeeping.
   const worktreeLifecycle = cfg.worktreeLifecycle ?? new WorktreeLifecycleQueue();
@@ -151,7 +161,12 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
     // are issued from here after the worktree is torn down on ship.
     projectRoot: cfg.projectRoot,
     // FR-16: production gh runner for clear-on-success label ops.
-    runGh: makeProductionGh(),
+    runGh: gh,
+    haltPrOperations: ({ prUrl, branch }) => haltPrOperations({
+      number: Number.parseInt(prUrl.split('/').at(-1) ?? '', 10),
+      url: prUrl,
+      headRefName: branch,
+    }),
 
     createWorktree: async (slug, order?: WorkOrder) => worktreeLifecycle.run(async () => {
       const branch = `feat/daemon-${slug}`;

@@ -61,6 +61,7 @@ vi.mock('../../src/engine/conductor.js', () => ({
     }
   },
   createFinishPresentationRepair: vi.fn(),
+  createProvenanceGuardedFinishPresentationRepair: vi.fn(),
 }));
 
 vi.mock('../../src/engine/daemon-runner.js', () => ({

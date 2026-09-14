@@ -17,6 +17,7 @@ import {
 } from '../../src/engine/daemon-runner.js';
 import { runDaemon, type DaemonDeps, type BacklogItem } from '../../src/engine/daemon.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
 
 // ── Shared constants ──────────────────────────────────────────────────────────
 
@@ -80,6 +81,24 @@ function makeGhFake(opts: { labels?: string[]; throws?: boolean } = {}): {
     return { stdout: '' };
   };
   return { runGh, calls };
+}
+
+function cleanupOperations(runGh: GhRunner): GithubOperationRunner {
+  return {
+    run: async (request) => {
+      const target = request.target as { repository: string; number: number };
+      if (request.operation === 'pull-request.label.remove') {
+        await runGh([
+          'api', '--method', 'DELETE',
+          `repos/${target.repository}/issues/${target.number}/labels/needs-remediation`,
+        ], { cwd: '/project' });
+      }
+      if (request.operation === 'pull-request.ready') {
+        await runGh(['pr', 'ready', String(target.number), '-R', target.repository], { cwd: '/project' });
+      }
+      return {};
+    },
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -219,6 +238,7 @@ describe('FR-16: clear-on-success', () => {
         }),
         projectRoot: '/project',
         runGh,
+        haltPrOperations: () => cleanupOperations(runGh),
         enrollWatch: async () => {}, // no-op to avoid disk I/O
       }),
     );
