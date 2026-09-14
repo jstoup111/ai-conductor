@@ -64,6 +64,18 @@ the stamp file, so the commit-msg hook abstains from attribution rather than gue
 never a wrong stamp. A symmetric PostToolUse hook removes `.pipeline/current-task` on
 subagent return iff its content still matches that dispatch's id. Other supported hosts use their
 native task-attribution mechanism to preserve the same marker, state, and recovery contract.
+
+**Hosts without a session hook (Codex today) stamp through the CLI.** Codex has no PreToolUse
+hook, so nothing writes `.pipeline/current-task` or flips the row to `in_progress` when a task is
+dispatched. `conduct task done <id>` then finds no stamp and, by design, exits 0 as an idempotent
+legacy no-op: the row stays `pending`, nothing is recorded, and the engine's forward-progress
+check stalls the build after three attempts with `no_task_progress`. There is no "daemon-session
+guard" refusing the close — the close never happened. On such a host the orchestrator MUST run
+`conduct task start <id>` immediately before each dispatch (that writes the stamp the hook would
+have written) and, after `conduct task done`, MUST read `.pipeline/task-status.json` and confirm
+the row now reads `completed` before reporting that task as done. Never report a task as
+"marked completed" on the strength of a `task done` exit code alone.
+
 The selected host agent orchestrates
 the task through these steps:
 
@@ -78,8 +90,11 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
 
 0. DISPATCH MARKER — Before dispatching, ensure the implementer prompt's FIRST LINE will be
                    `Task: <id>` (bare plan header id, e.g. `Task: 9`, never `task-9`). This is
-                   the contract the session hook enforces mechanically (see above) — you do not
-                   run any CLI command for this step. If the hook blocks the dispatch (exit 2,
+                   the contract the session hook enforces mechanically (see above) — in Claude
+                   Code you do not run any CLI command for this step. On a host without the
+                   session hook (Codex), run `conduct task start <id>` before the dispatch so the
+                   stamp exists; skipping it makes the later `task done` a silent no-op.
+                   If the hook blocks the dispatch (exit 2,
                    stderr names the fix), correct the prompt's line 1 and redispatch; if
                    `.pipeline/current-task` doesn't show the expected id after a successful
                    dispatch, treat it as a configuration issue (forward-progress check will halt).
@@ -113,6 +128,9 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   check cannot be satisfied within the approved plan, use `conduct task done <id> --plan-gap <n> --reason <text>`
                   instead and report the resulting HALT — do not clear the task or append off-plan work.
                   For a legacy task with no `Done when:` block, close with `conduct task done <id>`.
+                  Then read `.pipeline/task-status.json` and confirm the row reads `completed`; a
+                  `task done` that finds no stamp exits 0 without recording anything (see the
+                  hook-less host note above), so the exit code alone is not proof of closure.
                   The host-native attribution mechanism (the Claude Code PostToolUse hook uses the same matcher as
                   step 0/2) remains the idempotent cleanup fallback after the implementer returns.
                   Task close records task-level proof only; `build_review` remains the BUILD completion authority.
