@@ -42,12 +42,14 @@ export type GitRunner = (
  * Keeping the union at this boundary lets the remaining read callers migrate
  * independently without reintroducing a raw mutation escape hatch.
  */
-export type PrRunner = GhRunner | GithubOperationRunner;
+export type PrRunner = GhRunner | GithubOperationRunner | (GhRunner & GithubOperationRunner);
 
 export type PrMutationResult = GithubOperationResult;
 
 function isGuardedRunner(runner: PrRunner): runner is GithubOperationRunner {
-  return typeof runner === 'object' && runner !== null && typeof runner.run === 'function';
+  return runner !== null
+    && (typeof runner === 'object' || typeof runner === 'function')
+    && typeof runner.run === 'function';
 }
 
 function prTarget(url: string): { repository: string; kind: 'pull-request'; number: number } | null {
@@ -643,7 +645,7 @@ interface GhCommentJson {
  * Best-effort / non-throwing, consistent with the rest of this seam.
  */
 export async function upsertComment(
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   prUrl: string,
   marker: string,
@@ -651,6 +653,11 @@ export async function upsertComment(
   log?: (msg: string) => void,
 ): Promise<void> {
   const taggedBody = `${marker}\n${body}`;
+
+  if (typeof runGh !== 'function') {
+    log?.(`[pr-labels] upsertComment(${prUrl}) requires a read-capable guarded runner`);
+    return;
+  }
 
   let matchedUrl: string | undefined;
   try {
@@ -671,21 +678,21 @@ export async function upsertComment(
     if (ref) {
       // Edit the existing comment in place. A failure here is terminal (no fallback
       // create) so a repeated HALT never piles up a second comment.
-      try {
-        await runGh(
-          [
-            'api',
-            '--method',
-            'PATCH',
-            `repos/${ref.owner}/${ref.repo}/issues/comments/${ref.commentId}`,
-            '-f',
-            `body=${taggedBody}`,
-          ],
-          { cwd },
-        );
-      } catch (err) {
+      const target = prTarget(prUrl);
+      if (!target) {
+        log?.(`[pr-labels] upsertComment(${prUrl}) invalid PR target`);
+        return;
+      }
+      const result = await runMutation(
+        runGh,
+        'pull-request.comment.update',
+        target.repository,
+        target,
+        { commentId: ref.commentId, body: taggedBody },
+      );
+      if (result.kind !== 'executed') {
         log?.(
-          `[pr-labels] upsertComment(${prUrl}) PATCH failed: ${err} — leaving existing comment as-is`,
+          `[pr-labels] upsertComment(${prUrl}) update failed — leaving existing comment as-is`,
         );
       }
       return;
@@ -928,13 +935,17 @@ export async function defaultSleep(ms: number): Promise<void> {
  * @returns 'confirmed' if all three markers verified, 'unconfirmed' otherwise
  */
 export async function ensureHaltPresentation(
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   prUrl: string,
   log?: (msg: string) => void,
   sleep: (ms: number) => Promise<void> = defaultSleep,
 ): Promise<'confirmed' | 'unconfirmed'> {
   try {
+    if (typeof runGh !== 'function') {
+      log?.('[pr-labels] ensureHaltPresentation: guarded runner has no read adapter');
+      return 'unconfirmed';
+    }
     // ── Step 1: ensure body marker ────────────────────────────────────────
     await ensureBodyMarker(runGh, cwd, prUrl, undefined, log);
 
@@ -1067,7 +1078,7 @@ export async function removeBodyMarker(
  * @returns 'confirmed' if all three markers verified removed, 'partial' otherwise
  */
 export async function cleanupHaltPresentation(
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   prUrl: string,
   log?: (msg: string) => void,
@@ -1076,6 +1087,10 @@ export async function cleanupHaltPresentation(
 ): Promise<'confirmed' | 'partial'> {
   const preserveDraft = opts.preserveDraft === true;
   try {
+    if (typeof runGh !== 'function') {
+      log?.('[pr-labels] cleanupHaltPresentation: guarded runner has no read adapter');
+      return 'partial';
+    }
     // ── Step 1: read current state ────────────────────────────────────────
     const beforeCleanup = await readHaltPresentation(runGh, cwd, prUrl, log);
     if (!beforeCleanup) {

@@ -116,6 +116,13 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
     }
     case 'pull-request.comment.create':
       return ['pr', 'comment', issueNumber(request), '-R', repository, '--body', payloadField(request, 'body')];
+    case 'pull-request.comment.update': {
+      const payload = request.payload;
+      if (!payload || !('commentId' in payload) || typeof payload.commentId !== 'string') {
+        throw new Error("Registered comment update is missing its 'commentId' payload.");
+      }
+      return ['api', '--method', 'PATCH', `repos/${repository}/issues/comments/${payload.commentId}`, '-f', `body=${payloadField(request, 'body')}`];
+    }
     case 'pull-request.edit': {
       const args = ['pr', 'edit', issueNumber(request), '-R', repository];
       if (request.payload && 'title' in request.payload && typeof request.payload.title === 'string') args.push('--title', request.payload.title);
