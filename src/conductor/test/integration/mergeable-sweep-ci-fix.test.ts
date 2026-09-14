@@ -23,6 +23,11 @@ import { tmpdir } from 'os';
 import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type {
+  GithubOperationRequest,
+  GithubOperationRunner,
+  GithubOperationRunnerResponse,
+} from '../../src/engine/github-operations.js';
 import { isEligibleForCiFix } from '../../src/engine/ci-fix.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
 
@@ -80,8 +85,8 @@ function makeGh(
   prStates: Record<string, { mergeable?: string; checks?: Check[]; labels?: string[] }>,
   calls: GhCall[],
   failOn?: (args: string[]) => boolean,
-): GhRunner {
-  return async (args) => {
+): GhRunner & GithubOperationRunner {
+  const gh: GhRunner = async (args) => {
     calls.push({ args: [...args] });
     if (failOn?.(args)) {
       throw new Error('simulated gh failure');
@@ -94,6 +99,24 @@ function makeGh(
     if (args[0] === 'api') return { stdout: '' };
     return { stdout: '' };
   };
+  const operations: GithubOperationRunner = {
+    async run(request: GithubOperationRequest): Promise<GithubOperationRunnerResponse> {
+      if (request.target.kind !== 'pull-request') {
+        throw new Error(`unexpected target: ${request.target.kind}`);
+      }
+      if (request.operation !== 'pull-request.label.remove') {
+        throw new Error(`unexpected operation: ${request.operation}`);
+      }
+      const label = request.payload && 'label' in request.payload ? request.payload.label : undefined;
+      if (typeof label !== 'string') throw new Error('missing label payload');
+      await gh([
+        'api', '--method', 'DELETE',
+        `repos/${request.target.repository}/issues/${request.target.number}/labels/${encodeURIComponent(label)}`,
+      ], { cwd: '/fixture' });
+      return {};
+    },
+  };
+  return Object.assign(gh, operations);
 }
 
 async function readEntries(projectRoot: string): Promise<WatchEntry[]> {

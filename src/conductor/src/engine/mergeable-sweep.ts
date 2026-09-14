@@ -23,15 +23,16 @@ import {
   GhRunner,
   makeProductionGh,
   makeProductionGit,
-  ensureLabel,
   addLabel,
   removeLabel,
   prMergeState,
   isMergeable,
   upsertComment,
+  type PrRunner,
   type PrMergeState,
 } from './pr-labels.js';
 import type { ConductorEvent } from '../types/events.js';
+import type { GithubOperationRunner } from './github-operations.js';
 import type { FeatureWorktree } from './daemon-runner.js';
 import { shippedRecordOnMain } from './shipped-record-on-main.js';
 
@@ -269,6 +270,8 @@ export interface SweepOpts {
   projectRoot: string;
   log?: (msg: string) => void;
   runGh?: GhRunner;
+  /** Reads use `runGh`; writes require this fresh, feature-scoped runner. */
+  operations?: GithubOperationRunner | ((entry: WatchEntry) => GithubOperationRunner | undefined);
   /** Task 17: optional autoresolve dispatch, run once per tick after the label pass. */
   autoresolve?: AutoresolveDispatchOpts;
   /** Task 10: optional CI fix dispatch, run once per tick after the label pass. */
@@ -292,6 +295,19 @@ export interface SweepOpts {
   onEvent?: (event: ConductorEvent) => void;
 }
 
+function runnerForEntry(
+  gh: GhRunner,
+  entry: WatchEntry,
+  operations: SweepOpts['operations'],
+): PrRunner {
+  const operationRunner = typeof operations === 'function' ? operations(entry) : operations;
+  if (!operationRunner) return gh;
+  return Object.assign(
+    (args: string[], opts: { cwd: string }) => gh(args, opts),
+    operationRunner,
+  );
+}
+
 /**
  * For each tracked PR: evaluate merge state then update the `mergeable` label
  * according to the decision tree; prune closed/merged PRs. Never throws (FR-15).
@@ -300,6 +316,7 @@ export async function sweepMergeableLabels({
   projectRoot,
   log,
   runGh,
+  operations,
   autoresolve,
   ciFix,
   teardownWorktree,
@@ -330,12 +347,13 @@ export async function sweepMergeableLabels({
 
     for (const entry of entries) {
       try {
-        const state = await prMergeState(gh, entry.repoCwd, entry.prUrl, log);
+        const entryGh = runnerForEntry(gh, entry, operations);
+        const state = await prMergeState(entryGh, entry.repoCwd, entry.prUrl, log);
 
         // GitHub checks are authoritative for CI state. Retire the redundant
         // custom label whenever a reconciliation read finds it on a PR.
         if (state.labels.includes('ci-failed')) {
-          await removeLabel(gh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
+          await removeLabel(entryGh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
         }
 
         // MERGED and CLOSED may both represent a completed merge: only a
@@ -454,7 +472,7 @@ export async function sweepMergeableLabels({
           // detection read above and this point in the sweep. Racing an
           // escalation comment onto an already-resolved PR is pure noise, so
           // prune the entry and skip the label/comment/event work entirely.
-          const freshState = await prMergeState(gh, entry.repoCwd, entry.prUrl, log);
+          const freshState = await prMergeState(entryGh, entry.repoCwd, entry.prUrl, log);
           if (
             freshState.state === 'MERGED' ||
             freshState.state === 'CLOSED' ||
@@ -473,14 +491,13 @@ export async function sweepMergeableLabels({
           // escalation comment call throws — a hard failure here must never
           // leave the PR silently unlabeled, and must never crash the sweep.
           try {
-            await ensureLabel(gh, entry.repoCwd, 'needs-remediation', 'B60205', log);
-            await addLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+            await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
           } catch (err) {
             log?.(`[mergeable-sweep] needs-remediation label error for ${entry.prUrl}: ${err}`);
           }
           try {
             await upsertComment(
-              gh,
+              entryGh,
               entry.repoCwd,
               entry.prUrl,
               CI_EXHAUSTION_MARKER,
@@ -503,7 +520,7 @@ export async function sweepMergeableLabels({
 
         if (hasRemediation) {
           if (state.labels.includes('mergeable')) {
-            await removeLabel(gh, entry.repoCwd, entry.prUrl, 'mergeable', log);
+            await removeLabel(entryGh, entry.repoCwd, entry.prUrl, 'mergeable', log);
           }
         } else {
           // Task 10 (AC1): track failed PRs for the post-label-pass
@@ -558,13 +575,12 @@ export async function sweepMergeableLabels({
         if (!hasRemediation) {
           if (isMergeable(state)) {
             if (!state.labels.includes('mergeable')) {
-              await ensureLabel(gh, entry.repoCwd, 'mergeable', '0E8A16', log);
-              await addLabel(gh, entry.repoCwd, entry.prUrl, 'mergeable', log);
+              await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'mergeable', log);
             }
           } else {
             // FR-11 / C2: remove `mergeable` only when currently present.
             if (state.labels.includes('mergeable')) {
-              await removeLabel(gh, entry.repoCwd, entry.prUrl, 'mergeable', log);
+              await removeLabel(entryGh, entry.repoCwd, entry.prUrl, 'mergeable', log);
             }
           }
         }

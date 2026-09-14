@@ -123,7 +123,7 @@ import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
 import { buildWorkOrder, type WorkOrder, type WorkOrderGitRunner } from './engine/work-order.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createGhBlockerRunner } from './engine/gh-blocker-runner.js';
-import { cleanupHaltPresentation, resolveSpecPrUrl } from './engine/pr-labels.js';
+import { cleanupHaltPresentation, parseIssueRef, resolveSpecPrUrl } from './engine/pr-labels.js';
 import { captureEngineIdentity, createStaleEngineChecker } from './engine/engine-identity.js';
 import { initStaleEngineState } from './engine/stale-engine-init.js';
 import {
@@ -2328,6 +2328,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         await sweepMergeableLabels({
           projectRoot,
           log,
+          operations: (entry) => {
+            const target = parseIssueRef(entry.prUrl);
+            if (!target) return undefined;
+            return haltPrOperations({
+              number: Number(target.number),
+              url: entry.prUrl,
+              headRefName: `feat/daemon-${entry.slug}`,
+            });
+          },
           teardownWorktree: deps.teardownWorktree,
           canRemoveWorktree,
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING

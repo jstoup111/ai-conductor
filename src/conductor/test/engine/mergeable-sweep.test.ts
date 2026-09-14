@@ -22,6 +22,11 @@ import {
 import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type {
+  GithubOperationRequest,
+  GithubOperationRunner,
+  GithubOperationRunnerResponse,
+} from '../../src/engine/github-operations.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -73,7 +78,7 @@ function makeFakeGh(
   prStates: Record<string, { stdout: string } | Error> = {},
   opts: { trackLabelMutations?: boolean } = {},
 ): {
-  gh: GhRunner;
+  gh: GhRunner & GithubOperationRunner;
   addLabelCalls: Array<{ prUrl: string; label: string }>;
   removeLabelCalls: Array<{ prUrl: string; label: string }>;
   ensureLabelCalls: Array<{ name: string; color: string }>;
@@ -151,7 +156,35 @@ function makeFakeGh(
     return { stdout: '' };
   };
 
-  return { gh, addLabelCalls, removeLabelCalls, ensureLabelCalls, allArgs };
+  const operations: GithubOperationRunner = {
+    async run(request: GithubOperationRequest): Promise<GithubOperationRunnerResponse> {
+      if (request.target.kind !== 'pull-request') {
+        throw new Error(`unexpected target: ${request.target.kind}`);
+      }
+      const prUrl = `https://github.com/${request.target.repository}/pull/${request.target.number}`;
+      const label = request.payload && 'label' in request.payload ? request.payload.label : undefined;
+      switch (request.operation) {
+        case 'pull-request.label.add':
+          if (typeof label !== 'string') throw new Error('missing label payload');
+          await gh(['api', '--method', 'POST', `repos/${request.target.repository}/issues/${request.target.number}/labels`, '-f', `labels[]=${label}`], { cwd: '/fake/repo' });
+          return {};
+        case 'pull-request.label.remove':
+          if (typeof label !== 'string') throw new Error('missing label payload');
+          await gh(['api', '--method', 'DELETE', `repos/${request.target.repository}/issues/${request.target.number}/labels/${encodeURIComponent(label)}`], { cwd: '/fake/repo' });
+          return {};
+        case 'pull-request.comment.create': {
+          const body = request.payload && 'body' in request.payload ? request.payload.body : undefined;
+          if (typeof body !== 'string') throw new Error('missing comment body');
+          await gh(['pr', 'comment', prUrl, '--body', body], { cwd: '/fake/repo' });
+          return {};
+        }
+        default:
+          throw new Error(`unexpected operation: ${request.operation}`);
+      }
+    },
+  };
+
+  return { gh: Object.assign(gh, operations), addLabelCalls, removeLabelCalls, ensureLabelCalls, allArgs };
 }
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -983,13 +1016,29 @@ describe('sweepMergeableLabels — FR-12: needs-remediation → mergeable must b
 });
 
 describe('sweepMergeableLabels — FR-10: green open PR → add mergeable label', () => {
+  it('uses the entry-scoped guarded runner for a label write while preserving raw reads', async () => {
+    const { gh, addLabelCalls } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [], []),
+    });
+    const rawGh: GhRunner = (args, opts) => gh(args, opts);
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: rawGh,
+      operations: () => ({ run: gh.run }),
+    });
+
+    expect(addLabelCalls).toContainEqual({ prUrl: PR_URL, label: 'mergeable' });
+  });
+
   it('adds mergeable label to an open, conflict-free PR with passing checks', async () => {
     const { gh, addLabelCalls, ensureLabelCalls } = makeFakeGh({
       [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'SUCCESS' }], []),
     });
     await enrollWatch(tmpDir, entry());
     await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
-    expect(ensureLabelCalls).toContainEqual({ name: 'mergeable', color: '0E8A16' });
+    expect(ensureLabelCalls).toHaveLength(0);
     expect(addLabelCalls).toContainEqual({ prUrl: PR_URL, label: 'mergeable' });
   });
 
@@ -1215,6 +1264,21 @@ describe('sweepMergeableLabels — Task 9: label gh-error resilience', () => {
       // Return empty for label operations that don't throw
       return { stdout: '' };
     };
+    const operations: GithubOperationRunner = {
+      async run(request): Promise<GithubOperationRunnerResponse> {
+        if (request.target.kind !== 'pull-request' || request.operation !== 'pull-request.label.add') {
+          throw new Error(`unexpected operation: ${request.operation}`);
+        }
+        const label = request.payload && 'label' in request.payload ? request.payload.label : undefined;
+        if (typeof label !== 'string') throw new Error('missing label payload');
+        await gh([
+          'api', '--method', 'POST',
+          `repos/${request.target.repository}/issues/${request.target.number}/labels`,
+          '-f', `labels[]=${label}`,
+        ], { cwd: '/fake/repo' });
+        return {};
+      },
+    };
 
     const logs: string[] = [];
     await enrollWatch(tmpDir, entry(PR_URL));
@@ -1222,7 +1286,7 @@ describe('sweepMergeableLabels — Task 9: label gh-error resilience', () => {
 
     // Sweep should not throw even though GhRunner throws on labels for A
     await expect(
-      sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, log: (m) => logs.push(m) }),
+      sweepMergeableLabels({ projectRoot: tmpDir, runGh: Object.assign(gh, operations), log: (m) => logs.push(m) }),
     ).resolves.toBeUndefined();
 
     // Both entries should remain in survivors
@@ -1611,7 +1675,7 @@ describe('sweepMergeableLabels — Task 8: pending no-op and failure event emiss
 // ── Task 21: exhaustion — escalation exactly once ──────────────────────────
 
 describe('sweepMergeableLabels — Task 21: exhaustion escalation exactly once', () => {
-  it('failed entry with ciFixAttempts:2 → ensures+adds needs-remediation, upserts escalation comment, emits ci_failed(exhausted); repeat sweep is a no-op', async () => {
+  it('failed entry with ciFixAttempts:2 → adds existing needs-remediation, upserts escalation comment, emits ci_failed(exhausted); repeat sweep is a no-op', async () => {
     const events: Array<{ type: string; phase?: string; attempts?: number }> = [];
     const { gh, addLabelCalls, ensureLabelCalls, allArgs } = makeFakeGh(
       {
@@ -1633,8 +1697,8 @@ describe('sweepMergeableLabels — Task 21: exhaustion escalation exactly once',
       onEvent: (e) => events.push(e as any),
     });
 
-    // AC1: needs-remediation label ensured + added.
-    expect(ensureLabelCalls.some((c) => c.name === 'needs-remediation')).toBe(true);
+    // AC1: applies the existing needs-remediation label without mutating its shared definition.
+    expect(ensureLabelCalls).toHaveLength(0);
     expect(
       addLabelCalls.some((c) => c.prUrl === PR_URL && c.label === 'needs-remediation'),
     ).toBe(true);
@@ -1695,12 +1759,17 @@ describe('sweepMergeableLabels — Task 22: exhaustion failure and race negative
     // simulating a hard gh CLI failure that bypasses upsertComment's own
     // internal try/catch (e.g. an unexpected crash rather than a normal
     // gh-exit-code failure).
-    const throwingGh: GhRunner = async (args, opts) => {
-      if (args[0] === 'pr' && args[1] === 'comment') {
-        throw new Error('gh: connection reset');
-      }
-      return gh(args, opts);
-    };
+    const throwingGh = Object.assign(
+      async (args: string[], opts: { cwd: string }) => gh(args, opts),
+      {
+        run: async (request: GithubOperationRequest): Promise<GithubOperationRunnerResponse> => {
+          if (request.operation === 'pull-request.comment.create') {
+            throw new Error('gh: connection reset');
+          }
+          return gh.run(request);
+        },
+      },
+    );
 
     await enrollWatch(tmpDir, { ...entry(), ciFixAttempts: 2 });
 
@@ -1712,7 +1781,7 @@ describe('sweepMergeableLabels — Task 22: exhaustion failure and race negative
       }),
     ).resolves.toBeUndefined();
 
-    expect(ensureLabelCalls.some((c) => c.name === 'needs-remediation')).toBe(true);
+    expect(ensureLabelCalls).toHaveLength(0);
     expect(
       addLabelCalls.some((c) => c.prUrl === PR_URL && c.label === 'needs-remediation'),
     ).toBe(true);
