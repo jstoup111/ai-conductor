@@ -144,6 +144,13 @@ describe('capturePrdWideningDecisions', () => {
         { id: 'decision-1', authority: 'accept' },
         { id: 'decision-2', authority: 'refuse', offerEntryId: 'case-1' },
       ] } });
+      // A repeat capture of the same persisted revision replays it: no defect,
+      // no third decision.
+      await expect(capturePrdWideningDecisions(clearedRevision, {
+        operator: 'operator@example.test', offerStore: offerStore(), decisionStore: store,
+      })).resolves.toMatchObject({ kind: 'captured', defects: [], captured: [{ id: 'decision-2', authority: 'refuse' }] });
+      const reread = await store.read();
+      expect(reread.kind === 'valid' && reread.state.decisions.length).toBe(2);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
