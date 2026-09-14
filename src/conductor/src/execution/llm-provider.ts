@@ -1,4 +1,5 @@
 import type { ObservedInterval } from './observed-interval.js';
+import type { ProviderSetupExhaustion } from '../engine/provider-setup-failure.js';
 
 export interface TokenUsage {
   /**
@@ -237,6 +238,12 @@ export interface InvokeResult {
   commandUnresolvedName?: string;
   /** Set by the execution layer when a cached unavailable provider is skipped. */
   providerInvocationSkipped?: boolean;
+  /**
+   * Engine-owned terminal classification for an ordered pass where every
+   * candidate was unavailable during setup before provider invocation.
+   * Provider adapters never construct this result.
+   */
+  providerSetupExhaustion?: ProviderSetupExhaustion;
   /** Provider-owned, safe authentication source/readiness metadata. */
   authentication?: AuthenticationReadiness;
   /** Sanitized diagnostic-only safety notices; never an authorization input. */
