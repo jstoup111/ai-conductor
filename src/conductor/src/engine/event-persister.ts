@@ -8,6 +8,33 @@ import type { ConductorEvent } from '../types/index.js';
 import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
 import { persistedEventTypes } from './event-sinks.js';
 
+const MAX_CI_REPAIR_DIAGNOSTIC_BYTES = 8_192;
+
+/** Bound untrusted attribution; raw output and hints are not event fields. */
+export function boundCiRepairDiagnostic(event: ConductorEvent): ConductorEvent {
+  if (event.type !== 'ci_repair_diagnostic') return event;
+  const truncate = (value: string, max: number) => {
+    if (Buffer.byteLength(value, 'utf8') <= max) return value;
+    const marker = '[truncated]';
+    let result = '';
+    for (const char of value) {
+      if (Buffer.byteLength(result + char + marker, 'utf8') > max) break;
+      result += char;
+    }
+    return result + marker;
+  };
+  let bounded: ConductorEvent = {
+    ...event,
+    slug: truncate(event.slug, 512),
+    prUrl: truncate(event.prUrl, 2_048),
+    ...(event.provider === undefined ? {} : { provider: /^[A-Za-z0-9._-]+$/.test(event.provider) ? truncate(event.provider, 256) : 'unknown' }),
+  };
+  if (Buffer.byteLength(JSON.stringify(bounded), 'utf8') > MAX_CI_REPAIR_DIAGNOSTIC_BYTES) {
+    bounded = { ...bounded, provider: '[truncated]' };
+  }
+  return bounded;
+}
+
 /**
  * Thrown when EventPersister cannot append to the event log file.
  */
@@ -122,7 +149,7 @@ export class EventPersister {
             durationMs: Math.max(0, lifecycleNow - lifecycleStartedAt),
           };
       const record = JSON.stringify({
-        ...event,
+        ...boundCiRepairDiagnostic(event),
         ...(lifecycleInterval
           ? { observedIntervals: [...(lifecycleEvent?.observedIntervals ?? []), lifecycleInterval] }
           : {}),

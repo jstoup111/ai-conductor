@@ -4,9 +4,22 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import { EventPersister } from '../src/engine/event-persister.js';
+import { boundCiRepairDiagnostic } from '../src/engine/event-persister.js';
 import type { ConductorEvent } from '../src/types/index.js';
 
 describe('EventPersister: build progress/stall events', () => {
+  it('bounds CI repair attribution without retaining credential-bearing text', () => {
+    const event = boundCiRepairDiagnostic({
+      type: 'ci_repair_diagnostic', prUrl: `https://example.test/${'x'.repeat(10_000)}`,
+      slug: 's'.repeat(10_000), provider: `token=secret-${'p'.repeat(10_000)}`,
+      stage: 'execution', reason: 'auth', disposition: 'failed',
+    });
+    expect(event.type).toBe('ci_repair_diagnostic');
+    if (event.type !== 'ci_repair_diagnostic') throw new Error('expected diagnostic');
+    expect(Buffer.byteLength(JSON.stringify(event), 'utf8')).toBeLessThanOrEqual(8_192);
+    expect(event.provider).toBe('unknown');
+    expect(JSON.stringify(event)).not.toContain('secret');
+  });
   let tempDir: string;
   let eventsPath: string;
   let emitter: ConductorEventEmitter;

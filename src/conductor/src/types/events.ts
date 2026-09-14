@@ -1256,9 +1256,9 @@ export type ConductorEvent =
       type: 'ci_repair_diagnostic';
       prUrl: string;
       slug: string;
-      stage: 'context' | 'branch' | 'execution' | 'guard' | 'verification' | 'publication';
-      reason: 'read-failure' | 'malformed-context' | 'missing-context' | 'missing-branch' | 'provider-failure' | 'guard-refused' | 'verification-failed' | 'publication-refused' | 'unknown';
-      disposition: 'deferred' | 'failed' | 'published';
+      stage: 'context' | 'log-enrichment' | 'branch' | 'readiness' | 'execution' | 'guard' | 'verification' | 'publication';
+      reason: 'read-failure' | 'auth' | 'permission' | 'timeout' | 'api' | 'capability' | 'malformed-context' | 'missing-context' | 'missing-branch' | 'log-unavailable' | 'context-truncated' | 'provider-unavailable' | 'readiness-degraded' | 'flag-invalid' | 'spawn-env' | 'provider-failure' | 'guard-refused' | 'verification-failed' | 'publication-refused' | 'verified-publication' | 'unknown';
+      disposition: 'deferred' | 'degraded' | 'failed' | 'published';
       provider?: string;
     }
   // ── Semantic attribution verification (Task 17) ──

@@ -1456,6 +1456,37 @@ describe('sweepMergeableLabels — Task 11: bump-before-dispatch crash safety', 
   });
 });
 
+describe('sweepMergeableLabels — selected-state diagnostic and refund', () => {
+  it('reports malformed selected context without dispatching or consuming the reservation', async () => {
+    const { gh } = makeFakeGh({
+      [PR_URL]: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: { bad: true }, labels: [] }),
+    });
+    const original = { ...entry(), ciFixAttempts: 1, lastCiFixAt: '2026-07-01T00:00:00.000Z', ciFailureDetected: true };
+    await enrollWatch(tmpDir, original);
+    const diagnostic = vi.fn();
+    const dispatch = vi.fn();
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, ciFix: {
+      enabled: true, isEligible: async () => ({ eligible: true }), dispatch, diagnostic,
+    } });
+    expect(diagnostic).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(await readWatch(tmpDir)).toEqual([original]);
+  });
+
+  it('restores exact attempts and cooldown after an affirmative no-start', async () => {
+    const { gh } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
+    });
+    const original = { ...entry(), ciFixAttempts: 1, lastCiFixAt: '2026-07-01T00:00:00.000Z', ciFailureDetected: true };
+    await enrollWatch(tmpDir, original);
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, ciFix: {
+      enabled: true, isEligible: async () => ({ eligible: true }), dispatch: async () => ({ kind: 'not-started' }),
+      now: () => new Date('2026-07-08T12:00:00.000Z'),
+    } });
+    expect(await readWatch(tmpDir)).toEqual([original]);
+  });
+});
+
 // ── Task 12: one dispatch per tick ───────────────────────────────────────
 
 describe('sweepMergeableLabels — Task 12: one dispatch per tick', () => {

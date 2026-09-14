@@ -23,6 +23,23 @@ import { makeGitRunner } from './rebase.js';
 import { execa } from 'execa';
 import { dispatchTestSuiteCommand } from './test-suite-cli.js';
 
+export const CI_FIX_HINT_MAX_BYTES = 24_576;
+export const CI_FIX_METADATA_MAX_BYTES = 12_288;
+export const CI_FIX_MAX_FAILED_ENTRIES = 64;
+export const CI_FIX_LOG_TIMEOUT_MS = 10_000;
+export const CI_FIX_LOG_MAX_BUFFER = 65_536;
+
+function truncateUtf8(value: string, maxBytes: number, marker = '[truncated]'): string {
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value;
+  const limit = Math.max(0, maxBytes - Buffer.byteLength(marker, 'utf8'));
+  let result = '';
+  for (const char of value) {
+    if (Buffer.byteLength(result + char, 'utf8') > limit) break;
+    result += char;
+  }
+  return result + marker;
+}
+
 /**
  * Classify a ci-fix resolver error into a coarse category so logs and
  * escalation paths can distinguish "the CLI flag is wrong" from "we're
@@ -120,12 +137,64 @@ export function buildCiFixHint(
   }
 
   const lines = ['CI checks failed:'];
-  for (const { check, index } of failedChecks) {
-    lines.push(`\n• ${checkDisplayName(check, index)}`);
+  let omitted = 0;
+  for (const { check, index } of failedChecks.slice(0, CI_FIX_MAX_FAILED_ENTRIES)) {
+    const name = checkDisplayName(check, index);
+    const boundedName = truncateUtf8(name, 256);
+    lines.push(`\n• ${boundedName}`);
     const link = check.kind === 'status-context' ? check.targetUrl : check.detailsUrl;
-    if (link) lines.push(`  ${link}`);
+    if (link && Buffer.byteLength(link, 'utf8') <= 2048) lines.push(`  ${link}`);
+    else if (link) lines.push('  [link omitted: too long]');
+    if (Buffer.byteLength(lines.join('\n'), 'utf8') > CI_FIX_METADATA_MAX_BYTES) {
+      lines.pop();
+      omitted += 1;
+      break;
+    }
   }
+  omitted += Math.max(0, failedChecks.length - CI_FIX_MAX_FAILED_ENTRIES);
+  if (omitted) lines.push(`\n[${omitted} failed check entries omitted]`);
   return { kind: 'ready', hint: lines.join('\n') };
+}
+
+export interface CiFixHintEnrichment {
+  hint: string;
+  degradations: Array<'log-unavailable' | 'context-truncated'>;
+}
+
+/** Optional workflow-log enrichment. Required check context is prepared first,
+ * so any log failure is degradable rather than a reason to start blindly. */
+export async function enrichCiFixHint(
+  hint: string,
+  state: PrMergeState,
+  runGh: GhRunner,
+  cwd: string,
+): Promise<CiFixHintEnrichment> {
+  const runKeys = new Set<string>();
+  for (const check of state.statusCheckRollup ?? []) {
+    const url = check.kind === 'status-context' ? check.targetUrl : check.detailsUrl;
+    const match = url?.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/actions\/runs\/(\d+)(?:\/|$)/);
+    if (match) runKeys.add(`${match[1]}#${match[2]}`);
+  }
+  const excerpts: string[] = [];
+  const degradations: CiFixHintEnrichment['degradations'] = [];
+  for (const key of [...runKeys].slice(0, 3)) {
+    const [repo, run] = key.split('#');
+    try {
+      const { stdout } = await runGh(['run', 'view', run, '--repo', repo, '--log-failed'], {
+        cwd, timeout: CI_FIX_LOG_TIMEOUT_MS, maxBuffer: CI_FIX_LOG_MAX_BUFFER,
+      });
+      const excerpt = Buffer.from(stdout, 'utf8').subarray(0, 12_288).toString('utf8');
+      if (excerpt) excerpts.push(`\nWorkflow run ${run} log excerpt:\n${excerpt}`);
+    } catch {
+      degradations.push('log-unavailable');
+    }
+  }
+  let combined = `${hint}${excerpts.join('')}`;
+  if (Buffer.byteLength(combined, 'utf8') > CI_FIX_HINT_MAX_BYTES) {
+    combined = `${truncateUtf8(combined, CI_FIX_HINT_MAX_BYTES - 28, '')}\n[context truncated]`;
+    degradations.push('context-truncated');
+  }
+  return { hint: combined, degradations: [...new Set(degradations)] };
 }
 
 /**

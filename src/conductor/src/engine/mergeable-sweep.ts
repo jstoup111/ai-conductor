@@ -262,6 +262,8 @@ export interface CiFixDispatchOpts {
    * Returns the outcome kind so the sweep can reset the counter on success.
    */
   dispatch: (entry: WatchEntry, state: PrMergeState) => Promise<CiFixOutcome | { kind: 'green-verified' } | void>;
+  /** Best-effort observation for selected-state failures before dispatch. */
+  diagnostic?: (entry: WatchEntry, state: PrMergeState) => void | Promise<void>;
   /** Clock override for tests; defaults to `new Date()`. */
   now?: () => Date;
 }
@@ -406,6 +408,9 @@ export async function sweepMergeableLabels({
         // FR-15: UNKNOWN state (transient read/fetch error) → log + skip this
         // iteration; keep the entry so it is retried on the next sweep cycle.
         if (state.state === 'UNKNOWN') {
+          if ((state.readFailure || state.contextFailure) && ciFix?.enabled) {
+            try { await ciFix.diagnostic?.(entry, state); } catch { /* observational */ }
+          }
           log?.(`[mergeable-sweep] skipping ${entry.prUrl} (could not read state)`);
           logDisposition(
             log,

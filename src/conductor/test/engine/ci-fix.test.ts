@@ -8,6 +8,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   buildCiFixHint,
+  enrichCiFixHint,
+  CI_FIX_HINT_MAX_BYTES,
   isEligibleForCiFix,
   nonTerminalCheckNames,
   runCiFix,
@@ -107,6 +109,43 @@ describe('ci-fix: buildCiFixHint', () => {
       { kind: 'check-run', name: 'green', conclusion: 'SUCCESS' },
       { kind: 'status-context', context: 'neutral', state: 'SUCCESS' },
     ]))).toEqual({ kind: 'context-error', reason: 'empty-failure-context' });
+  });
+});
+
+describe('ci-fix: optional bounded log enrichment', () => {
+  const state: PrMergeState = {
+    state: 'OPEN', mergeable: 'MERGEABLE', hasFailingOrPendingChecks: true,
+    labels: [], checksOutcome: 'failed', statusCheckRollup: [
+      { kind: 'check-run', name: 'one', conclusion: 'FAILURE', detailsUrl: 'https://github.com/acme/repo/actions/runs/7/jobs/1' },
+      { kind: 'check-run', name: 'two', conclusion: 'FAILURE', detailsUrl: 'https://github.com/acme/repo/actions/runs/7/jobs/2' },
+      { kind: 'check-run', name: 'three', conclusion: 'FAILURE', detailsUrl: 'https://github.com/acme/repo/actions/runs/8/jobs/3' },
+    ],
+  };
+
+  it('deduplicates workflow runs, forwards bounded runner options, and degrades without dropping required context', async () => {
+    const calls: Array<{ args: string[]; opts: any }> = [];
+    const gh = vi.fn(async (args: string[], opts: any) => {
+      calls.push({ args, opts });
+      if (args.includes('8')) throw new Error('denied');
+      return { stdout: 'useful failure excerpt' };
+    });
+    const required = buildCiFixHint(state);
+    if (required.kind !== 'ready') throw new Error('expected required hint');
+    const result = await enrichCiFixHint(required.hint, state, gh, '/repo');
+    expect(calls).toHaveLength(2);
+    expect(calls[0].opts).toMatchObject({ timeout: 10_000, maxBuffer: 65_536 });
+    expect(result.hint).toContain('one');
+    expect(result.hint).toContain('https://github.com/acme/repo/actions/runs/7/jobs/1');
+    expect(result.degradations).toContain('log-unavailable');
+  });
+
+  it('never splits UTF-8 or exceeds the total hint budget', async () => {
+    const required = buildCiFixHint(state);
+    if (required.kind !== 'ready') throw new Error('expected required hint');
+    const result = await enrichCiFixHint(required.hint, state, async () => ({ stdout: '😀'.repeat(20_000) }), '/repo');
+    expect(Buffer.byteLength(result.hint, 'utf8')).toBeLessThanOrEqual(CI_FIX_HINT_MAX_BYTES);
+    expect(result.hint).toContain('[context truncated]');
+    expect(result.hint).not.toContain('�');
   });
 });
 
