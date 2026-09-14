@@ -503,4 +503,34 @@ describe('daemon feature provider-event persistence', () => {
     ]);
     expect(rendered.join('\n')).toContain('verification/verification-failed (failed)');
   });
+
+  it('bounds oversized CI-repair attribution and excludes credential-bearing URL text', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'daemon-ci-repair-bound-'));
+    roots.push(root);
+    const events = new ConductorEventEmitter();
+    const persistence = startDaemonEventPersistence(root, events);
+    const secret = 'credential-that-must-not-persist';
+
+    await events.emit({
+      type: 'ci_repair_diagnostic',
+      prUrl: `https://github.com/acme/widget/pull/7?access_token=${secret}`,
+      slug: 'a'.repeat(20_000),
+      stage: 'execution',
+      reason: 'unknown',
+      disposition: 'failed',
+      provider: secret.repeat(50),
+    });
+    persistence.stop();
+
+    const line = (await readFile(join(root, '.daemon', 'events.jsonl'), 'utf-8')).trim();
+    expect(Buffer.byteLength(line, 'utf8')).toBeLessThanOrEqual(8_192);
+    expect(line).not.toContain(secret);
+    expect(line).toContain('[truncated]');
+    const persisted = JSON.parse(line) as ConductorEvent;
+    expect(persisted).toMatchObject({
+      type: 'ci_repair_diagnostic',
+      prUrl: '[invalid]',
+      provider: '[truncated]',
+    });
+  });
 });
