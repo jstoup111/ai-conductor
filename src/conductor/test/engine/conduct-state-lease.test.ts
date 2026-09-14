@@ -353,6 +353,90 @@ describe('conduct-state lease', () => {
     if (acquired.ok) await expect(acquired.handle.release()).resolves.toEqual({ ok: true });
   });
 
+  it('retries a successor claim that vanishes after EEXIST before recovery uses it', async () => {
+    const statePath = '/worktree/vanished-successor/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared, pid: 101, newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    await shared.writeRecoveryClaim(`${statePath}.lease/recovery.json`, JSON.stringify({
+      version: 1, pid: 202, token: 'dead-claim', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'dead-owner', predecessorToken: null,
+    }));
+    const successor = successorClaimPath(statePath, 'dead-owner', 'dead-claim');
+    await shared.writeRecoveryClaim(successor, JSON.stringify({
+      version: 1, pid: 303, token: 'vanishing-claim', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'dead-owner', predecessorToken: 'dead-claim',
+    }));
+    let vanishOnRead = true;
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async readRecoveryClaim(path): Promise<string | null> {
+        if (path === successor && vanishOnRead) {
+          vanishOnRead = false;
+          await shared.releaseDirectory(`${statePath}.lease`);
+          return null;
+        }
+        return shared.readRecoveryClaim(path);
+      },
+    };
+
+    const result = await createConductStateLease(statePath, {
+      filesystem, pid: 404, newToken: () => 'reacquired', processIsLive: () => false,
+    }).acquire();
+
+    expect(result).toMatchObject({ ok: true });
+    if (result.ok) await expect(result.handle.release()).resolves.toEqual({ ok: true });
+  });
+
+  it('lets a losing recoverer acquire after the elected successor releases', async () => {
+    const statePath = '/worktree/dead-root-contenders/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared, pid: 101, newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    await shared.writeRecoveryClaim(`${statePath}.lease/recovery.json`, JSON.stringify({
+      version: 1, pid: 102, token: 'dead-root', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'dead-owner', predecessorToken: null,
+    }));
+    let successorWritten: (() => void) | undefined;
+    const successorHasWritten = new Promise<void>((resolve) => { successorWritten = resolve; });
+    let allowQuarantine: (() => void) | undefined;
+    const quarantineAllowed = new Promise<void>((resolve) => { allowQuarantine = resolve; });
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async writeRecoveryClaim(path, contents): Promise<void> {
+        await shared.writeRecoveryClaim(path, contents);
+        if (!path.endsWith('/recovery.json')) successorWritten?.();
+      },
+      async moveDirectory(path, destination): Promise<void> {
+        await quarantineAllowed;
+        await shared.moveDirectory(path, destination);
+      },
+    };
+    const winner = createConductStateLease(statePath, {
+      filesystem, pid: 202, newToken: () => 'winner', processIsLive: () => false,
+    }).acquire();
+    await successorHasWritten;
+    const loser = createConductStateLease(statePath, {
+      filesystem,
+      pid: 303,
+      newToken: () => 'loser',
+      processIsLive: (candidatePid) => candidatePid === 202,
+      wait: async () => {
+        allowQuarantine?.();
+        const acquired = await winner;
+        if (acquired.ok) await acquired.handle.release();
+      },
+    }).acquire();
+
+    await expect(loser).resolves.toMatchObject({ ok: true });
+    const acquired = await loser;
+    if (acquired.ok) await expect(acquired.handle.release()).resolves.toEqual({ ok: true });
+  });
+
   it('retains a delayed foreign claim and recovers a replacement through its bound authority path', async () => {
     const statePath = '/worktree/replaced-owner/.pipeline/conduct-state.json';
     const shared = sharedLeaseFilesystem();
@@ -492,6 +576,24 @@ describe('conduct-state lease', () => {
     if (laterOwner.ok) await laterOwner.handle.release();
   });
 
+  it('refuses release when a foreign bound root has a non-root predecessor', async () => {
+    const statePath = '/worktree/foreign-non-root-release/.pipeline/conduct-state.json';
+    const filesystem = sharedLeaseFilesystem();
+    const acquired = await createConductStateLease(statePath, {
+      filesystem, pid: 101, newToken: () => 'current-owner',
+    }).acquire();
+    if (!acquired.ok) throw new Error(acquired.message);
+    await filesystem.writeRecoveryClaim(`${statePath}.lease/recovery.json`, JSON.stringify({
+      version: 1, pid: 202, token: 'foreign-claim', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'previous-owner', predecessorToken: 'not-a-root',
+    }));
+
+    await expect(acquired.handle.release()).resolves.toEqual({
+      ok: false, message: 'Conduct-state lease recovery is in progress',
+    });
+    expect(filesystem.hasDirectory(`${statePath}.lease`)).toBe(true);
+  });
+
   it.each([
     ['an unbound legacy claim', (statePath: string) => [[`${statePath}.lease/recovery.json`, {
       version: 1, pid: 202, token: 'legacy-claim', claimedAt: '1970-01-01T00:00:00.000Z',
@@ -619,6 +721,28 @@ describe('conduct-state lease', () => {
     });
   });
 
+  it('refuses a foreign-owner canonical claim that is not a root', async () => {
+    const statePath = '/worktree/foreign-non-root-acquire/.pipeline/conduct-state.json';
+    const filesystem = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem, pid: 101, newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    await filesystem.writeRecoveryClaim(`${statePath}.lease/recovery.json`, JSON.stringify({
+      version: 1, pid: 202, token: 'foreign-claim', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'previous-owner', predecessorToken: 'not-a-root',
+    }));
+
+    await expect(createConductStateLease(statePath, {
+      filesystem, pid: 303, newToken: () => 'contender', processIsLive: () => false,
+    }).acquire()).resolves.toEqual({
+      ok: false,
+      kind: 'recovery_refused',
+      message: 'Unable to recover conduct-state lease: recovery claim is invalid or inconsistent',
+    });
+    expect(filesystem.hasDirectory(`${statePath}.lease`)).toBe(true);
+  });
+
   it('refuses recovery when claimant liveness is unverifiable', async () => {
     const statePath = '/worktree/unverifiable-claimant/.pipeline/conduct-state.json';
     const filesystem = sharedLeaseFilesystem();
@@ -698,7 +822,7 @@ describe('conduct-state lease', () => {
       result: {
         ok: false,
         kind: 'timeout',
-        message: 'Unable to acquire conduct-state lease within 3ms',
+        message: 'Unable to acquire conduct-state lease within 3ms; recovery claimant pid 303 is unresolved',
       },
       moves: 0,
       nextClaim: null,
@@ -732,7 +856,7 @@ describe('conduct-state lease', () => {
     await held.handle.release();
   });
 
-  it('reports a live recovery claimant instead of the dead owner on timeout', async () => {
+  it('does not reuse a live recovery claimant after the next observation proves the owner dead', async () => {
     const statePath = '/worktree/recovery-claimant-timeout/.pipeline/conduct-state.json';
     const filesystem = sharedLeaseFilesystem();
     const held = await createConductStateLease(statePath, {
@@ -760,8 +884,38 @@ describe('conduct-state lease', () => {
     expect(result).toEqual({
       ok: false,
       kind: 'timeout',
-      message: 'Unable to acquire intake ledger lease within 5ms; recovery claimant pid 202 is live',
+      message: 'Unable to acquire intake ledger lease within 5ms; dead owner pid 101 could not be recovered',
     });
+  });
+
+  it('does not retain a prior live-owner blocker after that owner is proved dead at the deadline', async () => {
+    const statePath = '/worktree/live-then-dead-timeout/.pipeline/conduct-state.json';
+    const filesystem = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem, pid: 101, newToken: () => 'owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    let now = 0;
+    let ownerIsLive = true;
+
+    const result = await createConductStateLease(statePath, {
+      filesystem,
+      label: 'intake ledger',
+      pid: 202,
+      newToken: () => 'contender',
+      now: () => now,
+      wait: async (milliseconds) => { ownerIsLive = false; now += milliseconds; },
+      waitTimeoutMs: 5,
+      retryDelayMs: 5,
+      processIsLive: () => ownerIsLive,
+    }).acquire();
+
+    expect(result).toEqual({
+      ok: false,
+      kind: 'timeout',
+      message: 'Unable to acquire intake ledger lease within 5ms; dead owner pid 101 could not be recovered',
+    });
+    await held.handle.release();
   });
 
   it.each([
@@ -1449,5 +1603,87 @@ describe('conduct-state lease', () => {
       pr_url: 'https://example.test/pr/2',
     }]);
     await expect(readFile(statePath, 'utf8')).resolves.toContain('"complexity_tier": "M"');
+  });
+
+  it('preserves disjoint store mutations when both writers contend through interrupted recovery', async () => {
+    const statePath = await createStatePath();
+    await writeState(statePath, { complexity_tier: 'S', pr_url: 'https://example.test/pr/1' });
+    const shared = sharedLeaseFilesystem();
+    const deadLease = await createConductStateLease(statePath, {
+      filesystem: shared, pid: 900, newToken: () => 'dead-owner',
+    }).acquire();
+    if (!deadLease.ok) throw new Error(deadLease.message);
+    await shared.writeRecoveryClaim(`${statePath}.lease/recovery.json`, JSON.stringify({
+      version: 1, pid: 901, token: 'dead-root', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'dead-owner', predecessorToken: null,
+    }));
+    let successorWritten: (() => void) | undefined;
+    const successorHasWritten = new Promise<void>((resolve) => { successorWritten = resolve; });
+    let allowFirstMove: (() => void) | undefined;
+    const firstMoveAllowed = new Promise<void>((resolve) => { allowFirstMove = resolve; });
+    let activeWrites = 0;
+    let maximumWrites = 0;
+    let firstWriteMayFinish: (() => void) | undefined;
+    const firstWriteFinished = new Promise<void>((resolve) => { firstWriteMayFinish = resolve; });
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async writeRecoveryClaim(path, contents): Promise<void> {
+        await shared.writeRecoveryClaim(path, contents);
+        if (contents.includes('"pid":101') && !path.endsWith('/recovery.json')) successorWritten?.();
+      },
+      async moveDirectory(path, destination): Promise<void> {
+        await firstMoveAllowed;
+        await shared.moveDirectory(path, destination);
+      },
+    };
+    let now = 0;
+    let firstApply: Promise<unknown> | undefined;
+    const leaseFor = (pid: number) => createConductStateLease(statePath, {
+      filesystem,
+      pid,
+      now: () => now,
+      newToken: () => `writer-${pid}`,
+      processIsLive: (candidatePid) => candidatePid === 101,
+      waitTimeoutMs: 20,
+      retryDelayMs: 1,
+      wait: async (milliseconds) => {
+        allowFirstMove?.();
+        firstWriteMayFinish?.();
+        await firstApply;
+        now += milliseconds;
+      },
+    });
+    const firstPersistence: ConductStatePersistence = {
+      async write(path, state): Promise<void> {
+        activeWrites += 1;
+        maximumWrites = Math.max(maximumWrites, activeWrites);
+        await writeState(path, state);
+        await firstWriteFinished;
+        activeWrites -= 1;
+      },
+    };
+    const secondPersistence: ConductStatePersistence = {
+      async write(path, state): Promise<void> {
+        activeWrites += 1;
+        maximumWrites = Math.max(maximumWrites, activeWrites);
+        await writeState(path, state);
+        activeWrites -= 1;
+      },
+    };
+    const first = createFilesystemConductStateStore(statePath, firstPersistence, undefined, undefined, leaseFor(101));
+    const second = createFilesystemConductStateStore(statePath, secondPersistence, undefined, undefined, leaseFor(202));
+
+    firstApply = first.apply({
+      field: 'complexity_tier', expected: 'S', intent: 'record assessed complexity', next: 'M',
+    });
+    await successorHasWritten;
+    const secondApply = second.apply({
+      field: 'pr_url', expected: 'https://example.test/pr/1', intent: 'record pull request URL', next: 'https://example.test/pr/2',
+    });
+
+    await expect(Promise.all([firstApply, secondApply])).resolves.toEqual([{ kind: 'applied' }, { kind: 'applied' }]);
+    expect(maximumWrites).toBe(1);
+    await expect(readFile(statePath, 'utf8')).resolves.toContain('"complexity_tier": "M"');
+    await expect(readFile(statePath, 'utf8')).resolves.toContain('"pr_url": "https://example.test/pr/2"');
   });
 });

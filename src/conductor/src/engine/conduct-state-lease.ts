@@ -269,7 +269,7 @@ export function createConductStateLease(
     // misclassify a healthy concurrent writer as an ambiguous lease.
     | { status: 'initializing' }
     | { status: 'vanished' }
-    | { status: 'timeout' }
+    | { status: 'timeout'; blocker: { kind: 'dead_owner' | 'unresolved_recovery'; pid: number } }
     | { status: 'refused'; message: string }
   > {
     let serializedOwner: string;
@@ -303,7 +303,7 @@ export function createConductStateLease(
       };
     }
     if (ownerIsLive) return { status: 'occupied', blocker: { kind: 'owner', pid: owner.pid } };
-    if (now() >= deadline) return { status: 'timeout' };
+    if (now() >= deadline) return { status: 'timeout', blocker: { kind: 'dead_owner', pid: owner.pid } };
 
     const claimFor = (predecessorToken: string | null): string => `${JSON.stringify({
       version: 1,
@@ -324,18 +324,22 @@ export function createConductStateLease(
         let currentOwnerRoot = false;
         const visitedClaimTokens = new Set<string>();
         while (true) {
-          if (now() >= deadline) return { status: 'timeout' };
+          if (now() >= deadline) return { status: 'timeout', blocker: { kind: 'unresolved_recovery', pid: owner.pid } };
           let serializedClaim: string | null;
           try {
             serializedClaim = await filesystem.readRecoveryClaim(claimPath);
           } catch (claimReadError) {
             return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claim read failed (${errorMessage(claimReadError)})` };
           }
-          const existingClaim = serializedClaim === null
-            ? { kind: 'invalid' as const }
-            : parseRecoveryClaim(serializedClaim, leasePath);
+          // A claim can disappear after a competing successor creation fails
+          // with EEXIST but before this contender reads it. No authority has
+          // been used by this caller yet, so retry acquisition within the
+          // original deadline instead of treating that race as malformed data.
+          if (serializedClaim === null) return { status: 'vanished' };
+          const existingClaim = parseRecoveryClaim(serializedClaim, leasePath);
           if (!currentOwnerRoot && existingClaim.kind === 'bound' &&
-            existingClaim.identity.ownerToken !== owner.token && predecessorToken === null) {
+            existingClaim.identity.ownerToken !== owner.token &&
+            existingClaim.identity.predecessorToken === null && predecessorToken === null) {
             claimPath = recoverySuccessorClaimPath(leasePath, owner.token, null);
             predecessorToken = null;
             currentOwnerRoot = true;
@@ -369,7 +373,9 @@ export function createConductStateLease(
           } catch (claimLivenessError) {
             return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claimant liveness is unverifiable (${errorMessage(claimLivenessError)})` };
           }
-          if (now() >= deadline) return { status: 'timeout' };
+          if (now() >= deadline) {
+            return { status: 'timeout', blocker: { kind: 'unresolved_recovery', pid: existingClaim.identity.pid } };
+          }
           predecessorToken = existingClaim.identity.token;
           claimPath = recoverySuccessorClaimPath(leasePath, owner.token, predecessorToken);
           const successorClaim = claimFor(predecessorToken);
@@ -399,7 +405,7 @@ export function createConductStateLease(
       }
     }
 
-    if (now() >= deadline) return { status: 'timeout' };
+    if (now() >= deadline) return { status: 'timeout', blocker: { kind: 'unresolved_recovery', pid } };
 
     let confirmedOwner: string;
     let confirmedClaim: string | null;
@@ -477,7 +483,10 @@ export function createConductStateLease(
         acquiredAt: new Date(startedAt).toISOString(),
       };
       const serializedOwner = `${JSON.stringify(owner)}\n`;
-      let blocker: { kind: 'owner' | 'claimant' | 'initializing' | 'changed'; pid?: number } | undefined;
+      let blocker: {
+        kind: 'owner' | 'claimant' | 'initializing' | 'changed' | 'dead_owner' | 'unresolved_recovery';
+        pid?: number;
+      } | undefined;
       const deadline = startedAt + waitTimeoutMs;
 
       const timeoutMessage = (): string => {
@@ -492,6 +501,12 @@ export function createConductStateLease(
         }
         if (blocker?.kind === 'changed') {
           return `Unable to acquire ${leaseName} lease within ${waitTimeoutMs}ms; lease ownership changed during acquisition`;
+        }
+        if (blocker?.kind === 'dead_owner') {
+          return `Unable to acquire ${leaseName} lease within ${waitTimeoutMs}ms; dead owner pid ${blocker.pid} could not be recovered`;
+        }
+        if (blocker?.kind === 'unresolved_recovery') {
+          return `Unable to acquire ${leaseName} lease within ${waitTimeoutMs}ms; recovery claimant pid ${blocker.pid} is unresolved`;
         }
         return `Unable to acquire ${leaseName} lease within ${waitTimeoutMs}ms`;
       };
@@ -514,6 +529,7 @@ export function createConductStateLease(
             return { ok: false, kind: 'recovery_refused', message: recovery.message };
           }
           if (recovery.status === 'timeout') {
+            blocker = recovery.blocker;
             return {
               ok: false,
               kind: 'timeout',
@@ -582,16 +598,17 @@ export function createConductStateLease(
                 const rootClaim = serializedRootClaim === null
                   ? null
                   : parseRecoveryClaim(serializedRootClaim, leasePath);
+                const foreignRoot = rootClaim?.kind === 'bound' &&
+                  rootClaim.identity.ownerToken !== owner.token &&
+                  rootClaim.identity.predecessorToken === null;
                 const currentOwnerAuthorityPath = recoverySuccessorClaimPath(leasePath, owner.token, null);
-                const serializedCurrentOwnerClaim = rootClaim?.kind === 'bound' &&
-                  rootClaim.identity.ownerToken !== owner.token
+                const serializedCurrentOwnerClaim = foreignRoot
                   ? await filesystem.readRecoveryClaim(currentOwnerAuthorityPath)
                   : null;
                 const currentOwnerClaim = serializedCurrentOwnerClaim === null
                   ? null
                   : parseRecoveryClaim(serializedCurrentOwnerClaim, leasePath);
-                if (rootClaim?.kind === 'legacy' || rootClaim?.kind === 'invalid' ||
-                  (rootClaim?.kind === 'bound' && rootClaim.identity.ownerToken === owner.token) ||
+                if ((rootClaim !== null && !foreignRoot) ||
                   currentOwnerClaim !== null) {
                   return { ok: false, message: `${leaseTitle} lease recovery is in progress` };
                 }
