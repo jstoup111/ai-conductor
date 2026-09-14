@@ -82,6 +82,8 @@ export interface GithubTrackerClientOptions {
   readonly mutation?: GithubMutationExecutionContext;
   /** Independent current-assignment or exact-approval authority for intake writes. */
   readonly intake?: GithubIntakeMutationExecutionContext;
+  /** Exact interactive authority for a single shared label-definition write. */
+  readonly shared?: GithubSharedMutationExecutionContext;
   /** Canonical repository for operations whose legacy call shape omits one. */
   readonly repository?: string;
 }
@@ -515,6 +517,7 @@ async function runTrackerIssueOperation(
     cwd,
     mutation: options.mutation,
     intake: options.intake,
+    shared: options.shared,
   }));
 
   if (result.kind === 'refused') {
@@ -837,7 +840,15 @@ export function createGithubTrackerClient(
     },
 
     async createLabel(repo, name, cwd) {
-      await runOrThrow(runner, ['label', 'create', name, '-R', repo], { cwd });
+      await runTrackerIssueOperation(
+        runner,
+        options,
+        cwd,
+        'label-definition.create',
+        repo,
+        { kind: 'label-definition', name },
+        { name },
+      );
     },
 
     async removeIssueLabel(repo, number, label, cwd) {
