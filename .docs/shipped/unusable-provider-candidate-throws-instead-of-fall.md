@@ -4,6 +4,37 @@ spec_hash: f8488dea3ee94581bbd6c6ff803df823518b17ee636923ab611fa2ea3fdcc56c
 pr: https://github.com/jstoup111/ai-conductor/pull/2538
 shipped: 2026-09-14
 engine_version: 20260914T134752Z-60233f3ba6d3
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-08-24-refused-step-status decision 1"
+    outcome: remediated
+    summary: "Rebase setup_stop writes a needs-human HALT but returns success without recording the environmental refusal as refused."
+  - gate: architecture_review_as_built
+    finding: AB-2
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-10-shared-step-lifecycle-telemetry decision 4"
+    outcome: remediated
+    summary: "The generic serial success path reports rebase setup_stop as step_completed done before the tail emits its halt."
+  - gate: architecture_review_as_built
+    finding: AB-3
+    class: REMEDIABLE
+    governing_clause: "Task 6"
+    outcome: remediated
+    summary: "One-shot attribution, complexity, and rebase consumers collapse or ignore setup-only exhaustion instead of preserving it to the owning step."
+  - gate: architecture_review_as_built
+    finding: AB-4
+    class: REMEDIABLE
+    governing_clause: "adr-2026-08-05-every-dispatch-outcome-leaves-an-operator-lever decision 4"
+    outcome: remediated
+    summary: "CI-fix persists an internal needs-human bit with no operator-clearable marker or supported resume path."
+  - gate: architecture_review_as_built
+    finding: AB-5
+    class: REMEDIABLE
+    governing_clause: "adr-2026-08-24-refused-step-status D1"
+    outcome: remediated
+    summary: "Setup-only environmental exhaustion closes the open step as `step_failed` instead of recording a typed refusal."
 ---
 
 ## Cost
