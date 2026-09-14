@@ -1,8 +1,9 @@
-// Covers: task:2
+// Covers: task:2, task:3
 import type {
   mkdirSync as nodeMkdirSync,
   mkdtempSync as nodeMkdtempSync,
   realpathSync as nodeRealpathSync,
+  rmSync as nodeRmSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -16,6 +17,7 @@ type VitestTempFilesystem = {
   mkdirSync: typeof nodeMkdirSync;
   mkdtempSync: typeof nodeMkdtempSync;
   realpathSync: typeof nodeRealpathSync;
+  rmSync: typeof nodeRmSync;
 };
 
 function fakeFilesystem(): VitestTempFilesystem {
@@ -27,6 +29,7 @@ function fakeFilesystem(): VitestTempFilesystem {
       ((path: string) => path.replace('/fixture/package/.vitest-tmp', '/canonical/storage')) as typeof nodeRealpathSync,
       { native: ((path: string) => path.replace('/fixture/package/.vitest-tmp', '/canonical/storage')) as typeof nodeRealpathSync.native },
     ),
+    rmSync: (() => undefined) as typeof nodeRmSync,
   };
 }
 
@@ -87,6 +90,7 @@ describe('Vitest temporary storage selection', () => {
           ((path: string) => path) as typeof nodeRealpathSync,
           { native: ((path: string) => path) as typeof nodeRealpathSync.native },
         ),
+        rmSync: (() => undefined) as typeof nodeRmSync,
       };
 
       expect(() => installVitestTmpRoot({ env, packageDir: '/fixture/package', fs })).toThrow(error);
@@ -96,6 +100,127 @@ describe('Vitest temporary storage selection', () => {
         mkdtempCalls: 0,
       });
     }
+  });
+
+  it.each([
+    {
+      name: 'a parent mkdir permission failure',
+      failure: Object.assign(new Error('permission denied'), { code: 'EACCES' }),
+      fail: 'mkdir' as const,
+    },
+    {
+      name: 'a full-device allocation failure',
+      failure: Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }),
+      fail: 'mkdtemp' as const,
+    },
+    {
+      name: 'a quota-exhausted allocation failure',
+      failure: Object.assign(new Error('disk quota exceeded'), { code: 'EDQUOT' }),
+      fail: 'mkdtemp' as const,
+    },
+    {
+      name: 'a non-directory parent',
+      failure: Object.assign(new Error('not a directory'), { code: 'ENOTDIR' }),
+      fail: 'mkdir' as const,
+    },
+  ])('reports the selected storage and preserves caller state for $name', ({ failure, fail }) => {
+    const env = {
+      AI_CONDUCTOR_TEST_TMP_BASE: '/fixture/selected-storage',
+      TMPDIR: '/fixture/original-tmpdir',
+      GIT_CEILING_DIRECTORIES: '/fixture/existing-ceiling',
+    };
+    const originalEnvironment = { ...env };
+    const calls: string[] = [];
+    const fs: VitestTempFilesystem = {
+      mkdirSync: ((path: string) => {
+        calls.push(`mkdir:${path}`);
+        if (fail === 'mkdir') throw failure;
+      }) as typeof nodeMkdirSync,
+      mkdtempSync: ((prefix: string) => {
+        calls.push(`mkdtemp:${prefix}`);
+        if (fail === 'mkdtemp') throw failure;
+        return `${prefix}unexpected-root`;
+      }) as typeof nodeMkdtempSync,
+      realpathSync: Object.assign(
+        ((path: string) => {
+          calls.push(`realpath:${path}`);
+          return path;
+        }) as typeof nodeRealpathSync,
+        { native: ((path: string) => path) as typeof nodeRealpathSync.native },
+      ),
+      rmSync: ((path: string) => { calls.push(`rm:${path}`); }) as typeof nodeRmSync,
+    };
+
+    let thrown: unknown;
+    try {
+      installVitestTmpRoot({ env, packageDir: '/fixture/package', fs });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/fixture\/selected-storage/);
+    expect((thrown as Error).message).toContain(failure.message);
+    expect(env).toEqual(originalEnvironment);
+    expect(calls).toEqual(
+      fail === 'mkdir'
+        ? ['/fixture/selected-storage'].map(path => `mkdir:${path}`)
+        : [
+          'mkdir:/fixture/selected-storage',
+          'realpath:/fixture/selected-storage',
+          'mkdtemp:/fixture/selected-storage/ai-conductor-vitest-run-',
+        ],
+    );
+  });
+
+  it.each([
+    { name: 'cleanup succeeds', cleanupFailure: undefined },
+    { name: 'cleanup fails', cleanupFailure: Object.assign(new Error('cleanup also failed'), { code: 'EACCES' }) },
+  ])('reports root canonicalization failure and removes only that partial root when $name', ({ cleanupFailure }) => {
+    const env = {
+      AI_CONDUCTOR_TEST_TMP_BASE: '/fixture/selected-storage',
+      TMPDIR: '/fixture/original-tmpdir',
+    };
+    const originalEnvironment = { ...env };
+    const root = '/fixture/selected-storage/ai-conductor-vitest-run-partial';
+    const canonicalizationFailure = Object.assign(new Error('root cannot be resolved'), { code: 'EIO' });
+    const calls: string[] = [];
+    const fs: VitestTempFilesystem = {
+      mkdirSync: ((path: string) => { calls.push(`mkdir:${path}`); }) as typeof nodeMkdirSync,
+      mkdtempSync: ((prefix: string) => { calls.push(`mkdtemp:${prefix}`); return root; }) as typeof nodeMkdtempSync,
+      realpathSync: Object.assign(
+        ((path: string) => {
+          calls.push(`realpath:${path}`);
+          if (path === root) throw canonicalizationFailure;
+          return path;
+        }) as typeof nodeRealpathSync,
+        { native: ((path: string) => path) as typeof nodeRealpathSync.native },
+      ),
+      rmSync: ((path: string) => {
+        calls.push(`rm:${path}`);
+        if (cleanupFailure) throw cleanupFailure;
+      }) as typeof nodeRmSync,
+    };
+
+    let thrown: unknown;
+    try {
+      installVitestTmpRoot({ env, packageDir: '/fixture/package', fs });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain('/fixture/selected-storage');
+    expect((thrown as Error).message).toContain(canonicalizationFailure.message);
+    expect((thrown as Error).cause).toBe(canonicalizationFailure);
+    expect(env).toEqual(originalEnvironment);
+    expect(calls).toEqual([
+      'mkdir:/fixture/selected-storage',
+      'realpath:/fixture/selected-storage',
+      'mkdtemp:/fixture/selected-storage/ai-conductor-vitest-run-',
+      `realpath:${root}`,
+      `rm:${root}`,
+    ]);
   });
 
   it('allocates distinct canonical roots and installs the owned context without duplicating Git ceilings', () => {

@@ -2,6 +2,7 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  rmSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,6 +64,34 @@ function canonicalize(fs, path) {
   return fs.realpathSync(path);
 }
 
+function allocationError(location, cause) {
+  return new Error(
+    `Unable to allocate Vitest temporary storage at ${location}: ${cause.message}`,
+    { cause },
+  );
+}
+
+function allocate(fs, location, operation) {
+  try {
+    return operation();
+  } catch (cause) {
+    throw allocationError(location, cause);
+  }
+}
+
+function canonicalizeCreatedRoot(fs, createdRoot) {
+  try {
+    return canonicalize(fs, createdRoot);
+  } catch (cause) {
+    try {
+      fs.rmSync(createdRoot, { recursive: true, force: true });
+    } catch {
+      // The allocation failure is more useful than a best-effort cleanup error.
+    }
+    throw allocationError(createdRoot, cause);
+  }
+}
+
 function isWithin(path, parent) {
   const remainder = relative(parent, path);
   return remainder === '' || (!remainder.startsWith('..') && !isAbsolute(remainder));
@@ -81,18 +110,19 @@ function appendGitCeiling(env, root) {
  * Allocate one fresh, caller-owned run scope.  The scope is the run root so a
  * nested invocation can retain it after clearing only its installed root.
  *
- * @param {{ env?: NodeJS.ProcessEnv, packageDir?: string, fs?: Pick<typeof import('node:fs'), 'mkdirSync'|'mkdtempSync'|'realpathSync'> }} options
+ * @param {{ env?: NodeJS.ProcessEnv, packageDir?: string, fs?: Pick<typeof import('node:fs'), 'mkdirSync'|'mkdtempSync'|'realpathSync'|'rmSync'> }} options
  */
 export function allocateVitestTmpScope({
   env = process.env,
   packageDir = packageLocalDir,
-  fs = { mkdirSync, mkdtempSync, realpathSync },
+  fs = { mkdirSync, mkdtempSync, realpathSync, rmSync },
 } = {}) {
   const parent = selectVitestTmpParent({ env, packageDir });
-  fs.mkdirSync(parent, { recursive: true });
-  const canonicalParent = canonicalize(fs, parent);
-  const createdRoot = fs.mkdtempSync(join(canonicalParent, VITEST_RUN_ROOT_PREFIX));
-  const root = canonicalize(fs, createdRoot);
+  allocate(fs, parent, () => fs.mkdirSync(parent, { recursive: true }));
+  const canonicalParent = allocate(fs, parent, () => canonicalize(fs, parent));
+  const rootPrefix = join(canonicalParent, VITEST_RUN_ROOT_PREFIX);
+  const createdRoot = allocate(fs, rootPrefix, () => fs.mkdtempSync(rootPrefix));
+  const root = canonicalizeCreatedRoot(fs, createdRoot);
 
   return {
     parent: canonicalParent,
@@ -110,8 +140,9 @@ function allocateNestedRoot({ env, packageDir, fs }) {
     const scope = canonicalize(fs, declaredScope);
     const current = canonicalize(fs, currentTmpdir);
     if (isWithin(current, scope)) {
-      const createdRoot = fs.mkdtempSync(join(current, VITEST_RUN_ROOT_PREFIX));
-      return { parent: current, root: canonicalize(fs, createdRoot), scope, ownsRoot: true, ownsScope: false };
+      const rootPrefix = join(current, VITEST_RUN_ROOT_PREFIX);
+      const createdRoot = allocate(fs, rootPrefix, () => fs.mkdtempSync(rootPrefix));
+      return { parent: current, root: canonicalizeCreatedRoot(fs, createdRoot), scope, ownsRoot: true, ownsScope: false };
     }
   }
   return allocateVitestTmpScope({ env, packageDir, fs });
@@ -122,12 +153,12 @@ function allocateNestedRoot({ env, packageDir, fs }) {
  * installed root; launchers may pass `fresh: true` to get an owned scope.
  * Environment mutation is deliberately deferred until allocation succeeds.
  *
- * @param {{ env?: NodeJS.ProcessEnv, packageDir?: string, fs?: Pick<typeof import('node:fs'), 'mkdirSync'|'mkdtempSync'|'realpathSync'>, fresh?: boolean }} options
+ * @param {{ env?: NodeJS.ProcessEnv, packageDir?: string, fs?: Pick<typeof import('node:fs'), 'mkdirSync'|'mkdtempSync'|'realpathSync'|'rmSync'>, fresh?: boolean }} options
  */
 export function installVitestTmpRoot({
   env = process.env,
   packageDir = packageLocalDir,
-  fs = { mkdirSync, mkdtempSync, realpathSync },
+  fs = { mkdirSync, mkdtempSync, realpathSync, rmSync },
   fresh = false,
 } = {}) {
   const environment = snapshotVitestTmpEnvironment(env);
