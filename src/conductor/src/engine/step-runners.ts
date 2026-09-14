@@ -2084,6 +2084,25 @@ export class DefaultStepRunner implements StepRunner {
     config: ReturnType<typeof resolveBuildReviewConfig>,
     tier: ConductState['complexity_tier'],
   ): Promise<StepRunResult> {
+    try {
+      return await this.runRubricBuildReviewInner(inputs, config, tier);
+    } finally {
+      // A custom lap owns one source view for every catalog member. Some
+      // built-in paths settle before dispatch (for example a deterministic
+      // preflight refusal), so its own candidate callback never runs. Close
+      // every member here after the complete lap outcome is known; repeated
+      // member settlement is deliberately idempotent in the materialization.
+      await Promise.all(config.catalog.map(async (entry) => {
+        await inputs.sourceMaterialization?.settle(entry.id);
+      }));
+    }
+  }
+
+  private async runRubricBuildReviewInner(
+    inputs: BuildReviewFrozenInputs,
+    config: ReturnType<typeof resolveBuildReviewConfig>,
+    tier: ConductState['complexity_tier'],
+  ): Promise<StepRunResult> {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
 
