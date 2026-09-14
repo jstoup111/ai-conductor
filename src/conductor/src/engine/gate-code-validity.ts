@@ -14,6 +14,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { StepName } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
+import type { GateVerdict, ReplayEvidence } from './gate-verdicts.js';
 import {
   ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   MANUAL_TEST_CODE_STAMP,
@@ -35,6 +36,89 @@ export interface GateCodeValidityContext {
 }
 
 export type GateVerdictValidity = 'preserve' | 'rerun';
+
+/** A replay preservation is deliberately a bounded exception to the older
+ * path-only comparison. Keep its validation beside the normal re-dispatch
+ * decision so every reader gets the same fail-closed authority. */
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function sameReplay(left: ReplayEvidence, right: ReplayEvidence): boolean {
+  return left.preRebaseHead === right.preRebaseHead &&
+    left.mergeBase === right.mergeBase &&
+    left.target === right.target &&
+    left.completedHead === right.completedHead &&
+    left.expectedTree === right.expectedTree;
+}
+
+function relevantInputPath(identity: unknown): string | null {
+  if (!nonEmptyString(identity)) return null;
+  const separator = identity.lastIndexOf('@');
+  const path = separator > 0 ? identity.slice(0, separator) : '';
+  return path && !path.startsWith('/') && !path.split('/').includes('..') ? path : null;
+}
+
+function parsedGateVerdict(value: unknown): GateVerdict | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  return typeof (value as { satisfied?: unknown }).satisfied === 'boolean'
+    ? value as GateVerdict
+    : null;
+}
+
+async function persistedVerdict(projectRoot: string, gate: StepName): Promise<GateVerdict | null> {
+  try {
+    return parsedGateVerdict(JSON.parse(await readFile(join(projectRoot, '.pipeline', 'gates', `${gate}.json`), 'utf-8')));
+  } catch {
+    return null;
+  }
+}
+
+async function replayBoundAuthorityStillValid(
+  ctx: GateCodeValidityContext,
+  gate: string,
+  codeStamp: string,
+): Promise<boolean> {
+  try {
+    const preserved = await persistedVerdict(ctx.projectRoot, gate as StepName);
+    if (!preserved?.satisfied || preserved.kickback || !preserved.preservation) return false;
+
+    const authority = preserved.preservation;
+    if (authority.gate !== gate || authority.original.codeStamp !== codeStamp ||
+      !nonEmptyString(authority.original.artifactDigest) ||
+      !nonEmptyString(authority.original.attemptId) ||
+      !nonEmptyString(authority.original.runId) ||
+      !nonEmptyString(authority.operationId) ||
+      !Array.isArray(authority.relevantInputIdentities)) return false;
+
+    const replay = authority.replay;
+    if (!nonEmptyString(replay.preRebaseHead) || !nonEmptyString(replay.mergeBase) ||
+      !nonEmptyString(replay.target) || !nonEmptyString(replay.completedHead) ||
+      !nonEmptyString(replay.expectedTree)) return false;
+
+    const rebase = await persistedVerdict(ctx.projectRoot, 'rebase');
+    const operation = rebase?.rebaseOperation;
+    if (!operation || operation.status !== 'applied' || operation.id !== authority.operationId ||
+      !operation.transition.preserved.includes(gate as StepName) || !sameReplay(operation.replay, replay)) return false;
+
+    for (const object of [replay.preRebaseHead, replay.mergeBase, replay.target, replay.completedHead]) {
+      if ((await ctx.git(['cat-file', '-e', `${object}^{commit}`])).exitCode !== 0) return false;
+    }
+    if ((await ctx.git(['cat-file', '-e', `${replay.expectedTree}^{tree}`])).exitCode !== 0) return false;
+    const actualTree = await ctx.git(['rev-parse', `${replay.completedHead}^{tree}`]);
+    if (actualTree.exitCode !== 0 || actualTree.stdout.trim() !== replay.expectedTree) return false;
+    if ((await ctx.git(['merge-base', '--is-ancestor', replay.completedHead, 'HEAD'])).exitCode !== 0) return false;
+
+    const inputs = authority.relevantInputIdentities.map(relevantInputPath);
+    if (inputs.some((path) => path === null)) return false;
+    const changed = await ctx.git(['diff', '--name-only', replay.completedHead, 'HEAD']);
+    if (changed.exitCode !== 0) return false;
+    const changedPaths = new Set(changed.stdout.split('\n').map((path) => path.trim()).filter(Boolean));
+    return !inputs.some((path) => changedPaths.has(path!));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * A satisfied gate record is not automatically a judged PASS: skip records
@@ -183,6 +267,12 @@ export async function gateVerdictStillValid(
 
   const surface = GATE_SURFACE[gate];
   if (!surface) return 'rerun';
+
+  // A valid replay record proves that the original review's feature
+  // contribution was reproduced byte-for-byte. It precedes the old path
+  // comparison, which cannot distinguish an upstream edit in the same file
+  // from a changed replay contribution.
+  if (await replayBoundAuthorityStillValid(ctx, gate, codeStamp)) return 'preserve';
 
   const ancestry = await ctx.git(['merge-base', '--is-ancestor', codeStamp, 'HEAD']);
   let diffRange = `${codeStamp}..HEAD`;
