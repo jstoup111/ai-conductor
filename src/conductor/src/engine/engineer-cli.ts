@@ -945,11 +945,16 @@ export async function dispatchEngineer(
           const parsedRef = parseSourceRef(sourceRef);
           if (parsedRef) {
             const tracker = createGithubTrackerClient(gh);
-            resolvedBody = await tracker.getIssueBody(
-              parsedRef.repo,
-              parsedRef.issue,
-              target.canonicalPath,
-            ) ?? undefined;
+            try {
+              resolvedBody = await tracker.getIssueBody(
+                parsedRef.repo,
+                parsedRef.issue,
+                target.canonicalPath,
+              ) ?? undefined;
+            } catch {
+              // Tracker reachability must not prevent offline worktree creation.
+              // Leave the body unresolved so staging remains a no-op.
+            }
           }
         }
       }

@@ -4,7 +4,7 @@
 // passing --body itself. Drives dispatchEngineer end-to-end for both commands.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
@@ -154,6 +154,99 @@ describe('FR-13: claim → worktree Desired-outcome body threading', () => {
         '',
       ].join('\n'),
     );
+  });
+
+  it('degrades to no staging when the injected issue-body read rejects', async () => {
+    const issueViewCalls: string[][] = [];
+    const { out, opts } = captureOpts({
+      gh: async (args) => {
+        if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
+          issueViewCalls.push(args);
+          throw new Error('tracker unavailable');
+        }
+        return fakeGh(args);
+      },
+    });
+
+    const code = await dispatchEngineer(
+      { kind: 'worktree', project: 'alpha', idea: 'issue lookup rejection', sourceRef: SOURCE_REF },
+      opts,
+    );
+
+    expect(code).toBe(0);
+    expect(issueViewCalls).toHaveLength(1);
+    const { worktreePath } = JSON.parse(out[0]);
+    expect((await stat(worktreePath)).isDirectory()).toBe(true);
+    await expect(readFile(join(worktreePath, '.pipeline', 'intake-outcomes.md'), 'utf8')).rejects.toThrow();
+  });
+
+  it('degrades to no staging when the injected issue-body read has the not-found shape', async () => {
+    const issueViewCalls: string[][] = [];
+    const { out, opts } = captureOpts({
+      gh: async (args) => {
+        if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
+          issueViewCalls.push(args);
+          const err = new Error('issue not found') as Error & { code?: number; stderr?: string };
+          err.code = 1;
+          err.stderr = 'HTTP 404: Not Found';
+          throw err;
+        }
+        return fakeGh(args);
+      },
+    });
+
+    const code = await dispatchEngineer(
+      { kind: 'worktree', project: 'alpha', idea: 'missing issue', sourceRef: SOURCE_REF },
+      opts,
+    );
+
+    expect(code).toBe(0);
+    expect(issueViewCalls).toHaveLength(1);
+    const { worktreePath } = JSON.parse(out[0]);
+    expect((await stat(worktreePath)).isDirectory()).toBe(true);
+    await expect(readFile(join(worktreePath, '.pipeline', 'intake-outcomes.md'), 'utf8')).rejects.toThrow();
+  });
+
+  it('skips issue lookup for an unparseable source ref and still creates the worktree', async () => {
+    const issueViewCalls: string[][] = [];
+    const { out, opts } = captureOpts({
+      gh: async (args) => {
+        if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
+          issueViewCalls.push(args);
+        }
+        return fakeGh(args);
+      },
+    });
+
+    const code = await dispatchEngineer(
+      { kind: 'worktree', project: 'alpha', idea: 'unparseable ref', sourceRef: 'PROJ-123' },
+      opts,
+    );
+
+    expect(code).toBe(0);
+    expect(issueViewCalls).toEqual([]);
+    const { worktreePath } = JSON.parse(out[0]);
+    expect((await stat(worktreePath)).isDirectory()).toBe(true);
+    await expect(readFile(join(worktreePath, '.pipeline', 'intake-outcomes.md'), 'utf8')).rejects.toThrow();
+  });
+
+  it('keeps worktree-creation failures strict aborts after a lookup failure', async () => {
+    await writeFile(join(repoPath, '.worktrees'), 'not a directory');
+    const { opts } = captureOpts({
+      gh: async (args) => {
+        if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
+          throw new Error('tracker unavailable');
+        }
+        return fakeGh(args);
+      },
+    });
+
+    const code = await dispatchEngineer(
+      { kind: 'worktree', project: 'alpha', idea: 'worktree failure', sourceRef: SOURCE_REF },
+      opts,
+    );
+
+    expect(code).toBe(1);
   });
 
   it('claim persists a claim record, and a later worktree call with --source-ref (no --body) resolves the body', async () => {
