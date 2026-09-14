@@ -90,16 +90,59 @@ describe('GitHub invocation audit', () => {
     ]);
   });
 
-  it('permits dynamic forwarding only at the canonical guarded adapter', () => {
-    const source = [
+  it('permits only the exact canonical adapter transport call', () => {
+    const canonical = [
       "import type { GhRunner } from './tracker-client.js';",
-      'function createGuardedGithubOperationRunner(transport: GhRunner) {',
-      '  return { async run(request: { argv: string[] }) {',
-      "    await transport(request.argv, { cwd: '/tmp' });",
+      'interface Options { cwd: string }',
+      'function createGuardedGithubOperationRunner(transport: GhRunner, options: Options) {',
+      '  return { async run(request: unknown) {',
+      '    await transport(ghArgsFor(request), { cwd: options.cwd });',
       '  } };',
       '}',
     ].join('\n');
-    expect(auditGithubInvocationSource('engine/adapter.ts', source)).toEqual([]);
+    const nameOnlyBypass = [
+      "import type { GhRunner } from './tracker-client.js';",
+      'function createGuardedGithubOperationRunner(transport: GhRunner) {',
+      "  return transport(['pr', 'create'], { cwd: '/tmp' });",
+      '}',
+    ].join('\n');
+    const trackerBypass = [
+      "import type { GhRunner } from './tracker-client.js';",
+      'interface Options { cwd: string }',
+      'function createGuardedGithubOperationRunner(transport: GhRunner, options: Options) {',
+      "  return transport(['pr', 'create'], { cwd: options.cwd });",
+      '}',
+    ].join('\n');
+    expect(auditGithubInvocationSource('engine/tracker-client.ts', canonical)).toEqual([]);
+    expect(auditGithubInvocationSource('engine/adapter.ts', nameOnlyBypass)).toEqual([
+      expect.objectContaining({ line: 3, message: 'direct injected GitHub mutation outside guarded adapter' }),
+    ]);
+    expect(auditGithubInvocationSource('engine/tracker-client.ts', trackerBypass)).toEqual([
+      expect.objectContaining({ line: 4, message: 'direct injected GitHub mutation outside guarded adapter' }),
+    ]);
+  });
+
+  it('detects execa, default child-process, and global fetch GitHub writes', () => {
+    const execaWrite = "import { execa } from 'execa'; await execa('gh', ['pr', 'create']);";
+    const defaultChildProcessWrite = [
+      "import childProcess from 'node:child_process';",
+      "await childProcess.execFile('gh', ['issue', 'close', 'https://github.com/acme/app/issues/1']);",
+    ].join('\n');
+    const globalFetchWrite = "await fetch('https://api.github.com/repos/acme/app/issues/1', { method: 'PATCH' });";
+    const globalThisFetchWrite = "await globalThis.fetch('https://api.github.com/repos/acme/app/issues/1', { method: 'PATCH' });";
+
+    expect(auditGithubInvocationSource('engine/bypass.ts', execaWrite)).toEqual([
+      expect.objectContaining({ line: 1, message: 'direct GitHub mutation outside guarded adapter' }),
+    ]);
+    expect(auditGithubInvocationSource('engine/bypass.ts', defaultChildProcessWrite)).toEqual([
+      expect.objectContaining({ line: 2, message: 'direct GitHub mutation outside guarded adapter' }),
+    ]);
+    expect(auditGithubInvocationSource('engine/bypass.ts', globalFetchWrite)).toEqual([
+      expect.objectContaining({ line: 1, message: 'unapproved raw GitHub HTTP client invocation outside guarded adapter' }),
+    ]);
+    expect(auditGithubInvocationSource('engine/bypass.ts', globalThisFetchWrite)).toEqual([
+      expect.objectContaining({ line: 1, message: 'unapproved raw GitHub HTTP client invocation outside guarded adapter' }),
+    ]);
   });
 
   it('does not exempt pr-labels: mutable aliases fail while literal reads remain admissible', () => {
