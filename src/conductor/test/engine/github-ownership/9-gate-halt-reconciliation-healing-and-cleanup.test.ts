@@ -9,6 +9,8 @@ import type {
   GithubOperationRequest,
   GithubOperationRefusalReason,
   GithubOperationRunner,
+  GithubOperationRunnerRefusal,
+  GithubOperationRunnerResponse,
 } from '../../../src/engine/github-operations.js';
 import type { GhRunner } from '../../../src/engine/tracker-client.js';
 
@@ -87,7 +89,7 @@ function reconciliationFixture(prs: FakePr[]): Fixture {
   });
 
   const operations: GithubOperationRunner = {
-    run: vi.fn(async (request) => {
+    run: vi.fn(async (request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> => {
       attempts.push(request);
       if (request.target.kind !== 'pull-request') throw new Error('expected PR mutation');
       const refusal = refused.get(request.target.number);

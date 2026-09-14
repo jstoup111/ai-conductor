@@ -107,6 +107,7 @@ import { resolveHarnessVersion } from './engine/version-report.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
 import { createGithubTrackerClient, makeProductionGh } from './engine/tracker-client.js';
+import { createDaemonHaltPrOperations } from './engine/daemon-halt-pr-operations.js';
 import { GH_VERSION_FLOOR, probeGhVersion } from './engine/gh-version-floor.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 import { readSpecOwnerStamp } from './engine/owner-gate/provenance.js';
@@ -1668,6 +1669,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const ownerGh: GhRunner = makeProductionGh();
   const tracker = createGithubTrackerClient(ownerGh);
   const ownerGit = makeGitRunner(projectRoot);
+  // Halt presentation is feature state, never daemon-global state.  Preserve
+  // the read-only sweep transport while deriving a fresh guarded runner from
+  // each PR's committed feature marker for every mutation attempt.
+  const haltPrOperations = createDaemonHaltPrOperations({
+    projectRoot,
+    baseBranch,
+    gh: ownerGh,
+    git: ownerGit,
+    resolveMachineOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
+  });
+  const haltPrGit = makeFinishPublicationGit();
 
   // Task 13: Construct ONE priority resolver per daemon run (process-local state,
   // never persisted to disk). The resolver backs the REAL gh CLI runner so cross-repo
@@ -2263,7 +2275,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // silently no-ops the "ultimate safety net" for halt-PR presentation
       // (daemon.ts guards with ?.()), same failure mode as sweepMergeableLabels below.
       reconcileHaltPrs: async () => {
-        await reconcileHaltPrs({ projectRoot, log, cache: haltPrSweepCache });
+        await reconcileHaltPrs({
+          projectRoot,
+          log,
+          runGh: ownerGh,
+          runGit: haltPrGit,
+          operations: haltPrOperations,
+          cache: haltPrSweepCache,
+        });
       },
       // adr-2026-07-27 Decisions 4 + 6: the sweep only converges if BOTH
       // hand-off seams are supplied here. `requestRecordRepair` is the ST-916
