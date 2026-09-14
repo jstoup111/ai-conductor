@@ -1,6 +1,7 @@
 // Covers: task:24
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -29,6 +30,20 @@ describe('GitHub invocation audit', () => {
     expect(auditGithubInvocationSource('engine/bypass.ts', source)).toEqual([
       expect.objectContaining({ file: 'engine/bypass.ts', line: 4, message: 'direct GitHub mutation outside guarded adapter' }),
     ]);
+  });
+
+  it('rejects injected GhRunner writes and mutable command forwarding outside guarded adapters', () => {
+    const direct = [
+      "import type { GhRunner } from './tracker-client.js';",
+      'async function write(gh: GhRunner) { await gh([\'pr\', \'edit\', \'https://github.com/acme/app/pull/1\']); }',
+    ].join('\n');
+    const forwarding = [
+      "import type { GhRunner } from './tracker-client.js';",
+      'async function write(gh: GhRunner, argv: string[]) { await gh(argv, { cwd: \'/tmp\' }); }',
+    ].join('\n');
+    expect(auditGithubInvocationSource('engine/bypass.ts', direct)[0]).toMatchObject({ message: 'direct injected GitHub mutation outside guarded adapter' });
+    expect(auditGithubInvocationSource('engine/bypass.ts', forwarding)[0]).toMatchObject({ message: 'unresolvable mutable GitHub command forwarding outside guarded adapter' });
+    expect(auditGithubInvocationSource('engine/tracker-client.ts', direct)).toEqual([]);
   });
 
   it('preserves local Git but rejects remote mutation and mutable forwarding', () => {
@@ -62,5 +77,9 @@ describe('GitHub invocation audit', () => {
   it('requires an explicit caller proof for every registered mutation', () => {
     const writes = Object.entries(GITHUB_OPERATION_REGISTRY).filter(([, definition]) => definition.access !== 'read').map(([operation]) => operation).sort();
     expect(Object.keys(SHIPPED_MUTATION_OPERATION_CALLER_PROOFS).sort()).toEqual(writes);
+  });
+
+  it('accepts only the classified shipped invocation inventory', () => {
+    expect(auditShippedGithubInvocationBoundary(resolve(__dirname, '../../..'))).toEqual([]);
   });
 });

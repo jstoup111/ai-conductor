@@ -62,6 +62,7 @@ import { classifyPrdWidening, classifyPrdWideningProjection } from './prd-wideni
 import type { RemediationCasePrdWideningRecord } from './remediation-case-store.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { createGithubTrackerClient } from './tracker-client.js';
+import { executeGithubOperation, type GithubOperationRunner } from './github-operations.js';
 import { fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
@@ -480,6 +481,7 @@ export interface OperatorParkedTermination {
 export function createFinishPresentationRepair(input: {
   projectRoot: string;
   gh: GhRunner;
+  operations?: GithubOperationRunner;
   log?: (message: string) => void;
   restoreReleaseMetadata?: (prUrl: string) => Promise<void>;
 }): (request: { prUrl: string; state: ConductState; mode?: 'capture-only' | 'full' }) => Promise<void> {
@@ -505,13 +507,13 @@ export function createFinishPresentationRepair(input: {
     } catch (error) { repairLog(`[conductor-repair] postHaltHistoryComment failed: ${error}`); }
     if (mode === 'capture-only') return;
     try {
-      await rehabilitateHaltPr({ gh, cwd, prUrl, sourceRef, log: repairLog });
+      await rehabilitateHaltPr({ gh, cwd, prUrl, sourceRef, operations: input.operations, log: repairLog });
     } catch (error) { repairLog(`[conductor-repair] rehabilitateHaltPr failed: ${error}`); throw error; }
     try {
-      await retitleFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, branch: state.worktree_branch }, repairLog);
+      await retitleFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, branch: state.worktree_branch, operations: input.operations }, repairLog);
     } catch (error) { repairLog(`[conductor-repair] retitleFloor failed: ${error}`); throw error; }
     try {
-      await bodyFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, sourceRef, testEvidenceLine }, repairLog);
+      await bodyFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, sourceRef, testEvidenceLine, operations: input.operations }, repairLog);
     } catch (error) { repairLog(`[conductor-repair] bodyFloor failed: ${error}`); throw error; }
     await input.restoreReleaseMetadata?.(prUrl);
     try {
@@ -2796,9 +2798,18 @@ export class Conductor {
 
     // Every production path uses this one sequence. The conductor alone adds
     // its retained release-metadata restore between the body floor and ready.
+    const publication = await createShipDraftPublicationDependencies({
+      cwd: this.projectRoot,
+      branch: state.worktree_branch ?? this.worktreeBranch,
+      baseBranch: this.baseBranch,
+      featureDesc: state.feature_desc ?? this.featureDesc,
+      git: this.git,
+      gh: this.gh,
+    });
     const presentationRepair = createFinishPresentationRepair({
       projectRoot: this.projectRoot,
       gh: this.gh,
+      operations: publication?.operations,
       log: this.log,
       restoreReleaseMetadata: (prUrl) => this.restoreFinishReleaseMetadata(prUrl),
     });
@@ -6675,7 +6686,24 @@ export class Conductor {
       if (snapshotReleaseMetadataBlock(before) === snapshot.block) return;
       const merged = mergeReleaseMetadataBlock(before, snapshot.block);
       if (merged === null) throw new Error('captured release metadata is no longer valid');
-      await this.gh(['pr', 'edit', prUrl, '--body', merged], { cwd: this.projectRoot });
+      const publication = await createShipDraftPublicationDependencies({
+        cwd: this.projectRoot,
+        branch: this.worktreeBranch,
+        baseBranch: this.baseBranch,
+        featureDesc: this.featureDesc,
+        git: this.git,
+        gh: this.gh,
+      });
+      const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/([1-9]\d*)$/.exec(prUrl);
+      if (!publication || !match) throw new Error('guarded release metadata restore is unavailable at this composition boundary');
+      const result = await executeGithubOperation({
+        operation: 'pull-request.edit',
+        repository: match[1],
+        resource: { kind: 'pull-request', number: Number(match[2]) },
+        context: { actor: 'finish-release-metadata-restore' },
+        payload: { body: merged },
+      }, publication.operations);
+      if (result.kind !== 'executed') throw new Error('guarded release metadata restore was refused or failed');
       const after = await readBody();
       if (snapshotReleaseMetadataBlock(after) !== snapshot.block) {
         throw new Error('release metadata restore could not be verified');

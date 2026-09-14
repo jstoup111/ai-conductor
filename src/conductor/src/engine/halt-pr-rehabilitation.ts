@@ -159,10 +159,10 @@ export async function rehabilitateHaltPr(
 
   if (!hasHaltSignal(view)) return 'not-halt-pr';
 
-  // New guarded callers use the typed operation runner for every write. The
-  // legacy raw path stays only for older callers until their composition is
-  // migrated; it cannot accidentally be selected after a typed refusal.
-  if (deps.operations) {
+  // Every write uses the typed operation runner. Missing composition is a
+  // refusal, never permission to revive the legacy raw-gh path.
+  if (!deps.operations) return 'refused';
+  {
     const mutations: Array<() => Promise<GithubOperationResult | { kind: 'refused'; reason: string }>> = [];
     if (view.labels.includes(NEEDS_REMEDIATION_LABEL)) {
       mutations.push(() => rehabilitateMutation(deps.operations, prUrl, 'pull-request.label.remove', { label: NEEDS_REMEDIATION_LABEL }));
@@ -182,20 +182,6 @@ export async function rehabilitateHaltPr(
     return 'rehabilitated';
   }
 
-  // Label/draft/body-marker removal is delegated to cleanupHaltPresentation,
-  // which retries each mutation (bounded, with backoff) and re-reads to
-  // confirm — the same verify-after-write guarantee ADR
-  // adr-2026-07-05-halt-pr-presentation-reliability (D5) requires here.
-  const cleanupResult = await cleanupHaltPresentation(gh, cwd, prUrl, log, defaultSleep, {
-    preserveDraft: deps.preserveDraft === true,
-  });
-  const anyFailed = cleanupResult === 'partial';
-
-  // Idempotent Closes injection — injectIssueRef swallows gh failures internally
-  // (warn-only) and no-ops when the ref is already present or sourceRef is unusable.
-  await injectIssueRef({ gh, prUrl, keyword: 'Closes', sourceRef, cwd, log });
-
-  return anyFailed ? 'partial' : 'rehabilitated';
 }
 
 export type ClearHaltStateForResumeOutcome = 'cleared' | 'not-halted' | 'partial' | 'refused' | 'gh-unavailable';
@@ -336,14 +322,8 @@ export async function retitleFloor(
       : { outcome: 'resolved', title: currentTitle };
   }
 
-  try {
-    await gh(['pr', 'edit', prUrl, '--title', newTitle], { cwd });
-  } catch (err) {
-    log(`[halt-pr-rehab] retitle-floor gh pr edit failed for ${prUrl} — warn-only: ${err}`);
-    return { outcome: 'resolved', title: newTitle };
-  }
-
-  return { outcome: 'resolved', title: newTitle };
+  log(`[halt-pr-rehab] retitle-floor refused for ${prUrl}; guarded operation boundary is unavailable`);
+  return { outcome: 'refused', title: currentTitle };
 }
 
 /**
@@ -951,7 +931,8 @@ export async function bodyFloor(
         }
         if (result.kind !== 'executed') return 'partial';
       } else {
-        await gh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+        logFn(`[halt-pr-rehab] bodyFloor(${prUrl}) refused; guarded operation boundary is unavailable`);
+        return 'refused';
       }
 
       const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
