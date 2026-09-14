@@ -30,12 +30,10 @@ import {
 } from './protected-artifact-seal.js';
 import {
   captureReplayIdentity,
-  compareReplayTree,
   type ReplayIdentity,
   type ReplayIdentitySeed,
 } from './rebase-replay.js';
 import { isApplicableOriginalPass } from './gate-code-validity.js';
-import { classifyReplayGateInvalidation } from './gate-invalidation.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -1805,16 +1803,8 @@ export async function applyRebaseVerdicts(
   // — or a gate whose surface can't be proven to miss the delta would be
   // silently left un-re-verified (prd_audit/architecture_review_as_built
   // included).
-  // A clean replay is stronger evidence than path overlap: preserve only the
-  // feature-scoped reviews that the replay proof and their active inputs allow.
-  // Reconstruction failure remains deliberately conservative.
-  const replayComparison = outcome.replay
-    ? await compareReplayTree(makeGitRunner(projectRoot), outcome.replay)
-    : undefined;
   const partition = outcome.featureSurface !== undefined
-    ? (replayComparison
-        ? classifyReplayGateInvalidation(delta, outcome.featureSurface, ranManualTest, replayComparison, outcome.documentInputs)
-        : classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs))
+    ? classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
     : undefined;
   const applicablePreservations = new Set<StepName>();
   if (partition !== undefined) {

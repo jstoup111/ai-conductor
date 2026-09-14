@@ -1337,7 +1337,9 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     // graded is unchanged and its verdict is preserved. Fail-closed still
     // governs the gates whose surface the delta actually hits (build,
     // manual_test below).
-    expect(await readVerdict(dir, 'build_review')).toBeNull();
+    // A surface miss is only a preservation candidate. Without a durable
+    // original PASS it must reopen rather than manufacture review authority.
+    expect((await readVerdict(dir, 'build_review'))?.satisfied).toBe(false);
 
     const manualTest = await readVerdict(dir, 'manual_test');
     expect(manualTest?.satisfied).toBe(false);
@@ -2610,7 +2612,7 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     // which is outside the feature's surface and so cannot change the diff
     // build_review graded. Its verdict survives rather than paying for another
     // LLM re-grade.
-    expect(await readVerdict(dir, 'build_review')).toBeNull();
+    expect((await readVerdict(dir, 'build_review'))?.satisfied).toBe(false);
   });
 
   it('kicks the build gate back when a plan task has no Task: trailer (fail-closed)', async () => {
