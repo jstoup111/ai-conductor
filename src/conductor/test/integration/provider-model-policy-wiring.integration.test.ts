@@ -279,8 +279,8 @@ it('composes isolated provider execution state for every daemon feature after on
     daemonSource.indexOf('// Run the full resolution pipeline'),
   );
   const ciBody = daemonSource.slice(
-    daemonSource.indexOf('const ciFixDispatcher'),
-    daemonSource.indexOf('const outcome = await runCiFix'),
+    daemonSource.indexOf('const dispatchCiFix = createDaemonCiFixDispatch'),
+    daemonSource.indexOf('const outcome = await dispatchCiFix'),
   );
 
   expect({
