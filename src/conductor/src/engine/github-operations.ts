@@ -79,6 +79,14 @@ export interface GithubDependencyPayload {
   readonly dependency: GithubIssueTarget;
 }
 
+/** A commit-status publication remains bound to its exact commit in the payload. */
+export interface GithubCommitStatusPayload {
+  readonly sha: string;
+  readonly state: 'success' | 'failure';
+  readonly context: string;
+  readonly description: string;
+}
+
 export type GithubOperationPayload =
   | { readonly body: string }
   | { readonly label: string }
@@ -87,12 +95,13 @@ export type GithubOperationPayload =
   | { readonly name: string; readonly color?: string; readonly description?: string }
   | GithubPullRequestEditPayload
   | GithubCommentUpdatePayload
-  | GithubDependencyPayload;
+  | GithubDependencyPayload
+  | GithubCommitStatusPayload;
 
 interface GithubOperationDefinition {
   readonly access: GithubOperationAccess;
   readonly targetKinds: readonly GithubResourceKind[];
-  readonly payload?: 'body' | 'label' | 'issue-create' | 'pull-request-create' | 'label-definition' | 'pull-request-edit' | 'comment-update' | 'dependency';
+  readonly payload?: 'body' | 'label' | 'issue-create' | 'pull-request-create' | 'label-definition' | 'pull-request-edit' | 'comment-update' | 'dependency' | 'commit-status';
 }
 
 /** Every operation admitted by this boundary is named here. */
@@ -121,6 +130,7 @@ export const GITHUB_OPERATION_REGISTRY = {
   'intake.issue.label.remove': { access: 'intake-write', targetKinds: ['issue'], payload: 'label' },
   'issue.create': { access: 'create', targetKinds: ['repository'], payload: 'issue-create' },
   'pull-request.create': { access: 'create', targetKinds: ['repository'], payload: 'pull-request-create' },
+  'commit.status.create': { access: 'feature-write', targetKinds: ['repository'], payload: 'commit-status' },
   'label-definition.create': { access: 'shared-write', targetKinds: ['label-definition'], payload: 'label-definition' },
   'label-definition.update': { access: 'shared-write', targetKinds: ['label-definition'], payload: 'label-definition' },
   'remote-ref.push': { access: 'remote-ref-write', targetKinds: ['remote-ref'] },
@@ -346,6 +356,18 @@ function payloadFrom(value: unknown, required: GithubOperationDefinition['payloa
   if (required === 'dependency' && record(value.dependency)) {
     const dependency = targetFrom(value.dependency.resource, value.dependency.repository);
     if (dependency?.kind === 'issue') return { dependency };
+  }
+  if (required === 'commit-status'
+    && typeof value.sha === 'string' && value.sha !== ''
+    && (value.state === 'success' || value.state === 'failure')
+    && typeof value.context === 'string' && value.context !== ''
+    && typeof value.description === 'string' && value.description !== '') {
+    return {
+      sha: value.sha,
+      state: value.state,
+      context: value.context,
+      description: value.description,
+    };
   }
   return undefined;
 }

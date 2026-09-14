@@ -55,15 +55,15 @@ function registeredMutation(operation: GithubOperationName): Record<string, unkn
   const pullRequest = operation.startsWith('pull-request.');
   const sharedLabel = operation.startsWith('label-definition.');
   const remoteRef = operation.startsWith('remote-ref.');
-  const createsRepositoryResource = operation === 'issue.create' || operation === 'pull-request.create';
+  const repositoryResource = operation === 'issue.create' || operation === 'pull-request.create' || operation === 'commit.status.create';
   const resource = sharedLabel
     ? { kind: 'label-definition', name: 'owned-label' }
     : remoteRef
       ? { kind: 'remote-ref', ref: 'refs/heads/owned' }
-      : createsRepositoryResource
+      : repositoryResource
         ? { kind: 'repository' }
         : { kind: pullRequest ? 'pull-request' : 'issue', number: 17 };
-  const payload = operation === 'pull-request.comment.update'
+  const payload = operation.endsWith('.comment.update')
     ? { commentId: '123', body: 'guarded write' }
     : operation.includes('.comment.') || operation === 'issue.edit'
       ? { body: 'guarded write' }
@@ -73,8 +73,10 @@ function registeredMutation(operation: GithubOperationName): Record<string, unkn
         ? { dependency: { repository: 'acme/owned', resource: { kind: 'issue', number: 18 } } }
         : operation === 'issue.create'
           ? { title: 'Owned issue', body: 'created in scope' }
-          : operation === 'pull-request.create'
-            ? { title: 'Owned PR', body: 'created in scope', head: 'feature/owned', base: 'main' }
+        : operation === 'pull-request.create'
+          ? { title: 'Owned PR', body: 'created in scope', head: 'feature/owned', base: 'main' }
+          : operation === 'commit.status.create'
+            ? { sha: 'owned-head', state: 'success', context: 'owned-check', description: 'guarded status' }
             : sharedLabel
               ? { name: 'owned-label', color: '0e8a16' }
               : operation === 'pull-request.edit'
@@ -193,7 +195,9 @@ describe('engine/tracker-client — guarded canonical GitHub execution', () => {
       await expect(executeGithubOperation(registeredMutation(operation), guarded)).resolves.toMatchObject({
         kind: 'refused',
         operation,
-        reason: 'other-owner',
+        reason: GITHUB_OPERATION_REGISTRY[operation].access === 'intake-write' || GITHUB_OPERATION_REGISTRY[operation].access === 'shared-write'
+          ? 'explicit-authorization-required'
+          : 'other-owner',
       });
     }
 

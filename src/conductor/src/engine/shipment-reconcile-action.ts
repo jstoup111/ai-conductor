@@ -223,10 +223,16 @@ export function createShipmentReconcileGhRunner(input: {
       }
     }
 
-    if (command === 'pr' && action === 'create' && args.length === 10 && args[2] === '--base' &&
-        args[4] === '--head' && args[6] === '--title' && args[8] === '--body') {
+    const legacyRepairCreate = args.length === 10 && args[2] === '--base' && args[4] === '--head' &&
+      args[6] === '--title' && args[8] === '--body';
+    const guardedRepairCreate = args.length === 12 && args[2] === '-R' && args[3] === input.repository &&
+      args[4] === '--title' && args[6] === '--body' && args[8] === '--head' && args[10] === '--base';
+    if (command === 'pr' && action === 'create' && (legacyRepairCreate || guardedRepairCreate)) {
       const pullRequest = await input.adapter.createRepairPullRequest({
-        base: args[3]!, branch: args[5]!, title: args[7]!, body: args[9]!,
+        base: legacyRepairCreate ? args[3]! : args[11]!,
+        branch: legacyRepairCreate ? args[5]! : args[9]!,
+        title: legacyRepairCreate ? args[7]! : args[5]!,
+        body: legacyRepairCreate ? args[9]! : args[7]!,
       });
       pullNumbersByUrl.set(pullRequest.url, pullRequest.number);
       return { stdout: pullRequest.url };

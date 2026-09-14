@@ -137,4 +137,79 @@ describe('engine remote Git publication callers', () => {
     expect(mutation.dependencies.resolveMachineOwner).toHaveBeenCalledOnce();
     expect(pushes).toEqual([['push', 'origin', 'HEAD:refs/heads/repair/feature']]);
   });
+
+  it('routes repair PR creation and commit status through fresh guarded GitHub operations', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'shipment-repair-operations-'));
+    scratch.push(cwd);
+    const mutation = mutationContext();
+    const calls: string[][] = [];
+    let repairPrListed = false;
+    const runGh = vi.fn(async (args: string[]) => {
+      calls.push([...args]);
+      if (args[0] === 'pr' && args[1] === 'list') {
+        if (!repairPrListed) {
+          repairPrListed = true;
+          return { stdout: '[]' };
+        }
+        return { stdout: JSON.stringify([{ url: 'https://github.com/acme/rocket/pull/99' }]) };
+      }
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ url: 'https://github.com/acme/rocket/pull/99', headRefOid: 'repair-head' }) };
+      }
+      return { stdout: '' };
+    });
+    const publisher = makeProductionRepairPublisher({
+      cwd,
+      implementationPr: 'https://github.com/acme/rocket/pull/42',
+      slug: 'feature',
+      runGh,
+      runGit: guardedGit([]),
+      evaluateEvidence: vi.fn(),
+      repo: 'acme/rocket',
+      remoteMutation: mutation,
+    });
+
+    await expect(publisher.findOrCreateRepairPullRequest({
+      branch: 'shipment-repair/42/feature', base: 'main', identity: '42/feature', expectedHeadSha: 'repair-head',
+    })).resolves.toEqual({ url: 'https://github.com/acme/rocket/pull/99', headSha: 'repair-head' });
+    await expect(publisher.postStatus({
+      sha: 'repair-head', context: 'shipped-record', state: 'success', description: 'evidence valid',
+    })).resolves.toBeUndefined();
+
+    expect(mutation.dependencies.resolveMachineOwner).toHaveBeenCalledTimes(2);
+    expect(calls).toEqual(expect.arrayContaining([
+      ['pr', 'create', '-R', 'acme/rocket', '--title', 'Repair durable shipment record for 42/feature', '--body', 'Record-only repair for implementation PR https://github.com/acme/rocket/pull/42. Human review and merge required.', '--head', 'shipment-repair/42/feature', '--base', 'main'],
+      ['api', '--method', 'POST', 'repos/acme/rocket/statuses/repair-head', '-f', 'state=success', '-f', 'context=shipped-record', '-f', 'description=evidence valid'],
+    ]));
+  });
+
+  it('refuses repair PR creation and status before either mutating transport can run', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'shipment-repair-refused-'));
+    scratch.push(cwd);
+    const mutation = mutationContext();
+    mutation.dependencies.resolveMachineOwner.mockResolvedValue({ resolved: true as const, id: 'bob' });
+    const calls: string[][] = [];
+    const publisher = makeProductionRepairPublisher({
+      cwd,
+      implementationPr: 'https://github.com/acme/rocket/pull/42',
+      slug: 'feature',
+      runGh: vi.fn(async (args: string[]) => {
+        calls.push([...args]);
+        return { stdout: '[]' };
+      }),
+      runGit: guardedGit([]),
+      evaluateEvidence: vi.fn(),
+      repo: 'acme/rocket',
+      remoteMutation: mutation,
+    });
+
+    await expect(publisher.findOrCreateRepairPullRequest({
+      branch: 'shipment-repair/42/feature', base: 'main', identity: '42/feature', expectedHeadSha: 'repair-head',
+    })).rejects.toThrow("GitHub operation 'pull-request.create' refused: other-owner");
+    await expect(publisher.postStatus({
+      sha: 'repair-head', context: 'shipped-record', state: 'failure', description: 'evidence invalid',
+    })).rejects.toThrow("GitHub operation 'commit.status.create' refused: other-owner");
+
+    expect(calls).toEqual([['pr', 'list', '--head', 'shipment-repair/42/feature', '--base', 'main', '--state', 'open', '--json', 'url', '--limit', '1']]);
+  });
 });
