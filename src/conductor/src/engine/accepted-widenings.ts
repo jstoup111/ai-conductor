@@ -420,6 +420,13 @@ export class AcceptedWideningDecisionStore {
       if (replay !== undefined) return { ok: true, decision: replay };
       const prior = state.decisions.filter((decision) => sameDecisionCase(decision, parsedInput)).at(-1);
       if (parsedInput.supersedes !== undefined) {
+        // Re-capturing the same persisted revision (an unchanged HALT.cleared
+        // read again) is a replay of the recorded supersession, not a new one.
+        if (prior !== undefined && prior.supersedes !== undefined &&
+          prior.supersedes.id === parsedInput.supersedes.id &&
+          prior.supersedes.revision === parsedInput.supersedes.revision &&
+          prior.offerEntryId === parsedInput.offerEntryId &&
+          prior.authority === parsedInput.authority) return { ok: true, decision: prior };
         if (!prior || parsedInput.supersedes.id !== prior.id || parsedInput.supersedes.revision !== prior.revision ||
           parsedInput.authority === prior.authority) return { ok: false, reason: 'invalid-decision' };
       } else if (prior !== undefined) {
