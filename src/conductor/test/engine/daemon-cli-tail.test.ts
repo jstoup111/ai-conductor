@@ -60,4 +60,14 @@ describe('daemon-cli post-run tail (Task 10 — no rehabilitateHaltPr call)', ()
     // Should NOT contain rehabilitateHaltPr call
     expect(content).not.toMatch(/await\s+rehabilitateHaltPr\s*\(/);
   });
+
+  it('gives each mergeable-sweep entry a feature-scoped guarded runner', () => {
+    const daemonCliPath = join(__dirname, '../../src/daemon-cli.ts');
+    const content = readFileSync(daemonCliPath, 'utf-8');
+    const sweepStart = content.indexOf('sweepMergeableLabels: async () =>');
+    const sweepEnd = content.indexOf('// Task 17: dispatch autoresolve', sweepStart);
+    const sweep = content.slice(sweepStart, sweepEnd);
+
+    expect(sweep).toMatch(/operations:\s*\(entry\)\s*=>\s*{[\s\S]*?parseIssueRef\(entry\.prUrl\)[\s\S]*?haltPrOperations\(/);
+  });
 });
