@@ -2,20 +2,32 @@
 import { describe, expect, it } from 'vitest';
 
 import { prepareBuildReviewContainment } from '../../src/engine/build-review-containment.js';
-import * as providerScratch from '../../src/engine/self-host/provider-scratch.js';
+import {
+  resolveReviewScratchHome,
+  resolveScratchHome,
+} from '../../src/engine/self-host/provider-scratch.js';
 
 describe('engine/build-review-containment', () => {
   it('derives review bookkeeping inside the candidate private scratch lease', () => {
-    const resolve = Reflect.get(providerScratch, 'resolveReviewScratchHome') as (options: {
+    const options: {
       readonly worktreeRoot: string;
       readonly runId: string;
       readonly attempt: number;
       readonly provider: 'codex';
-    }) => string;
-
-    expect(resolve({
+    } = {
       worktreeRoot: '/worktree', runId: 'run-7', attempt: 2, provider: 'codex',
-    })).toBe('/worktree/.daemon/scratch/run-7/2-codex');
+    };
+
+    expect(resolveReviewScratchHome(options)).toBe('/worktree/.daemon/scratch/run-7/2-codex');
+    expect(resolveReviewScratchHome(options)).toEqual(resolveScratchHome(options));
+  });
+
+  it('shares scratch-home normalization with the provider lease', () => {
+    const options = {
+      worktreeRoot: '/review/candidate/../candidate/', runId: 'run-7', attempt: 2, provider: 'codex' as const,
+    };
+
+    expect(resolveReviewScratchHome(options)).toEqual(resolveScratchHome(options));
   });
 
   it('proves read-only review access through the production process boundary', async () => {
