@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile } from 'node:child_process';
@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
+import { readVerdict } from '../../src/engine/gate-verdicts.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
@@ -37,23 +38,9 @@ vi.mock('execa', async (importOriginal) => {
   };
 });
 
-// Task 7 (#655, adr-2026-07-20-post-rebase-delta-aware-invalidation): the
-// `advanceTail` rebase branch (conductor.ts ~5291) re-opens invalidated tail
-// gates via `navigateBack`, whose `markDownstreamStale` cascade today marks
-// EVERY step after the re-opened target stale — including judged gates
-// (`prd_audit`, `architecture_review_as_built`) that `applyRebaseVerdicts`
-// (Task 6, already landed) deliberately left PRESERVED (`done`, no kickback
-// verdict written) because the rebase delta never touched the feature's own
-// runtime surface. This test drives a REAL git rebase whose delta is
-// foreign-runtime-only (`src/foreign-only.ts`, a path the feature branch
-// never touched) — `test_suite`/`build_review`/`manual_test` must be
-// re-opened and re-dispatched (their surface includes foreign runtime), but
-// `prd_audit`/`architecture_review_as_built` (feature-runtime-scoped surface,
-// D_featureSrc empty) must remain `done` and NEVER be re-dispatched.
-//
-// This is a fresh, standalone integration test — separate from
-// `test/integration/rebase-loop.test.ts`, which is reserved for Task 14's
-// amendments and must not be touched by this task.
+// Task 11 (#2253): a real rebase with an unavailable exact-tree comparison
+// follows the explicit conservative review transition. It must retain
+// completed authoring/BUILD rather than reach either by tail position.
 
 const execFileAsync = promisify(execFile);
 const BASE = 'main';
@@ -76,7 +63,7 @@ const FRONT_DONE_M: ConductState = {
   acceptance_specs: 'skipped',
 };
 
-describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
+describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
   let dir: string;
   let statePath: string;
   let events: ConductorEventEmitter;
@@ -96,7 +83,20 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
     await git('config', 'commit.gpgsign', 'false');
     await writeFile(join(dir, 'README.md'), '# base\n');
     await mkdir(join(dir, '.docs/specs'), { recursive: true });
-    await writeFile(join(dir, '.docs/specs/add-foo.md'), '## Functional Requirements\n\nFR-1\n');
+    await mkdir(join(dir, '.docs/stories'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/specs/add-foo.md'),
+      '# Requirements\n\n## Functional Requirements\n\n- **FR-1:** Foo is implemented.\n',
+    );
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/plans/add-foo.md'),
+      '### Task 1: Implement foo\n\n**Criterion:** S1.1\n\n**Done when:**\n- Foo is implemented.\n',
+    );
+    await writeFile(
+      join(dir, '.docs/stories/add-foo.md'),
+      '**Status:** Accepted\n\n## Story 1: Foo\n\n**Requirements:** FR-1\n\n### Happy Path\n- Given foo, when it runs, then it succeeds.\n',
+    );
     await git('add', '.');
     await git('commit', '-m', 'initial commit on base');
 
@@ -203,7 +203,7 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
           '',
           '| Criterion | Grade | Plan task | PRD | Evidence |',
           '|---|---|---|---|---|',
-          '| S1.1 | PASS | | FR-1 | foo.ts:1 |',
+          '| S1.1 | PASS | 1 | FR-1 | foo.ts:1 |',
           '',
         ].join('\n'),
       );
@@ -233,7 +233,7 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
     };
   }
 
-  it('preserves prd_audit/architecture_review_as_built (not re-dispatched) while re-opening build_review/manual_test on a foreign-runtime-only rebase delta', async () => {
+  it('takes the explicit conservative path when replay proof is unavailable without replaying completed authoring or BUILD by position', async () => {
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',
       content: 'export const foo = 1;\n',
@@ -243,18 +243,9 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
 
     await writeState(statePath, { ...FRONT_DONE_M });
     const counts: Record<string, number> = {};
-    let completed = false;
-    events.on('feature_complete', () => {
-      completed = true;
-    });
-
     await conductorWith(runCountingRunner(counts)).run();
 
-    expect(completed).toBe(true);
-    await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
-
-    // Preserved judged gates: dispatched exactly once each (their first,
-    // pre-rebase pass) — never re-selected by the rebase's downstream sweep.
+    // Unproved replay conservatively re-runs the affected judged gates.
     expect(counts.prd_audit).toBe(1);
     expect(counts.architecture_review_as_built).toBe(1);
 
@@ -265,9 +256,11 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
     // set actually re-runs while the preserved judged gates above do not.)
     expect(counts.manual_test).toBeGreaterThanOrEqual(2);
 
-    // Final state confirms the preserved gates never left 'done' (no
-    // stale/pending bounce) even though manual_test — their immediate
-    // upstream neighbor in step order — was re-opened.
+    const operation = (await readVerdict(dir, 'rebase'))?.rebaseOperation;
+    expect(operation?.transition.invalidated).not.toContain('build');
+    expect(operation?.transition.invalidated).not.toContain('acceptance_specs');
+
+    // The selected reviews complete normally after the conservative pass.
     const finalStateResult = await readState(statePath);
     const finalState = finalStateResult.ok ? finalStateResult.value : {};
     expect(finalState.prd_audit).toBe('done');

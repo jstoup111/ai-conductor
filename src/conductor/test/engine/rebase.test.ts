@@ -1210,9 +1210,8 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     expect(r.satisfied).toBe(true);
     // The directly matched gates and every unproved candidate preservation
-    // are invalidated.
+    // are invalidated. Completed BUILD is not selected by rebase position.
     expect(r.kickedBack).toEqual([
-      'build',
       'build_review',
       'test_suite',
       'manual_test',
@@ -1538,7 +1537,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     expect(r.satisfied).toBe(true);
     expect(r.kickedBack).toEqual([
-      'build',
       'coverage_binding',
       'build_review',
       'test_suite',
@@ -1677,17 +1675,17 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
         await rm(dirA, { recursive: true, force: true });
       }
 
-      // Case 2: preVerify('build') finds evidence stale → kicked back,
-      // again regardless of the delta's judged-gate classification.
+      // Case 2: a stale build pre-verification does not turn the selective
+      // review transition into a positional BUILD replay. The conductor's
+      // completed-BUILD recovery owner blocks this before application.
       const dirB = await mkdtemp(join(tmpdir(), 'rebase-build-preverify-'));
       await mkdir(join(dirB, '.pipeline'), { recursive: true });
       try {
         const rB = await applyRebaseVerdicts(dirB, outcome, true, preVerifyNotDone);
-        expect(rB.kickedBack).toContain('build');
+        expect(rB.kickedBack).not.toContain('build');
         expect(rB.reverified).toEqual([]);
         const buildB = await readVerdict(dirB, 'build');
-        expect(buildB?.satisfied).toBe(false);
-        expect(buildB?.reason).toBe('invalidated by file-changing rebase');
+        expect(buildB).toBeNull();
       } finally {
         await rm(dirB, { recursive: true, force: true });
       }
