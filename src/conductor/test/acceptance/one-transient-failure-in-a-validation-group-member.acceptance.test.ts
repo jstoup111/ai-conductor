@@ -453,6 +453,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
       expect(halt).toContain('manual_test');
       expect(halt).not.toContain('prd_audit');
+      expect(halt).not.toContain('architecture_review_as_built');
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });
