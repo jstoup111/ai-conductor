@@ -24,6 +24,15 @@ const SOURCE = 'github-issues';
 const SOURCE_REF = 'o/a#500';
 
 const INTAKE_BODY = ['## Desired outcome', '', '- Widgets load in under 200ms.', ''].join('\n');
+const ISSUE_BODY = [
+  '# Improve the widget dashboard',
+  '',
+  '## Desired outcome',
+  '',
+  '- Dashboard widgets render without layout shift.',
+  '- Widget data remains visible while refreshing.',
+  '',
+].join('\n');
 
 function makeEnvelope(overrides: Partial<Envelope> = {}): Envelope {
   return {
@@ -109,6 +118,44 @@ afterEach(async () => {
 });
 
 describe('FR-13: claim → worktree Desired-outcome body threading', () => {
+  it('reads an unclaimed GitHub issue through the injected tracker seam and stages its Desired-outcome bullets', async () => {
+    const issueViewCalls: Array<{ args: string[]; cwd: string }> = [];
+    const { out, opts } = captureOpts({
+      gh: async (args, { cwd }) => {
+        if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
+          issueViewCalls.push({ args, cwd });
+          return { stdout: JSON.stringify({ body: ISSUE_BODY }) };
+        }
+        return fakeGh(args);
+      },
+    });
+
+    const code = await dispatchEngineer(
+      { kind: 'worktree', project: 'alpha', idea: 'issue fallback', sourceRef: SOURCE_REF },
+      opts,
+    );
+
+    expect(code).toBe(0);
+    expect(issueViewCalls).toEqual([
+      {
+        args: ['issue', 'view', '500', '--json', 'body', '-R', 'o/a'],
+        cwd: repoPath,
+      },
+    ]);
+    const { worktreePath } = JSON.parse(out[0]);
+    expect(await readFile(join(worktreePath, '.pipeline', 'intake-outcomes.md'), 'utf8')).toBe(
+      [
+        `Source-Ref: ${SOURCE_REF}`,
+        '',
+        '## Desired outcome',
+        '',
+        '- Dashboard widgets render without layout shift.',
+        '- Widget data remains visible while refreshing.',
+        '',
+      ].join('\n'),
+    );
+  });
+
   it('claim persists a claim record, and a later worktree call with --source-ref (no --body) resolves the body', async () => {
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     const queue = createFileQueue(join(engineerDir, 'inbox'));
@@ -132,7 +179,15 @@ describe('FR-13: claim → worktree Desired-outcome body threading', () => {
     expect(record).toEqual({ sourceRef: SOURCE_REF, body: INTAKE_BODY });
 
     // A later worktree call with --source-ref but no --body resolves the body.
-    const { out: wtOut, opts: wtOpts } = captureOpts();
+    const issueViewCalls: string[][] = [];
+    const { out: wtOut, opts: wtOpts } = captureOpts({
+      gh: async (args) => {
+        if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
+          issueViewCalls.push(args);
+        }
+        return fakeGh(args);
+      },
+    });
     const wtCode = await dispatchEngineer(
       { kind: 'worktree', project: 'alpha', idea: 'widget speed', sourceRef: SOURCE_REF },
       wtOpts,
@@ -147,6 +202,7 @@ describe('FR-13: claim → worktree Desired-outcome body threading', () => {
     expect(staged).not.toBeNull();
     expect(staged).toContain('Widgets load in under 200ms.');
     expect(staged).toContain(`Source-Ref: ${SOURCE_REF}`);
+    expect(issueViewCalls).toEqual([]);
   });
 
   it('an explicit --body always wins over the persisted claim record', async () => {
@@ -159,14 +215,22 @@ describe('FR-13: claim → worktree Desired-outcome body threading', () => {
     const claimCode = await dispatchEngineer({ kind: 'claim' }, captureOpts().opts);
     expect(claimCode).toBe(0);
 
-    const { out, opts } = captureOpts();
+    const issueViewCalls: string[][] = [];
+    const { out, opts } = captureOpts({
+      gh: async (args) => {
+        if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
+          issueViewCalls.push(args);
+        }
+        return fakeGh(args);
+      },
+    });
     const code = await dispatchEngineer(
       {
         kind: 'worktree',
         project: 'alpha',
         idea: 'explicit body wins',
         sourceRef: SOURCE_REF,
-        body: 'Explicit override body.',
+        body: '## Desired outcome\n\n- Explicit override body.\n',
       },
       opts,
     );
@@ -176,6 +240,8 @@ describe('FR-13: claim → worktree Desired-outcome body threading', () => {
     const staged = await readFile(stagedPath, 'utf8').catch(() => null);
     expect(staged).not.toBeNull();
     expect(staged).toContain(`Source-Ref: ${SOURCE_REF}`);
+    expect(staged).toContain('- Explicit override body.');
+    expect(issueViewCalls).toEqual([]);
   });
 
   it('a missing/corrupt claim record degrades to no body — no throw, no staging', async () => {

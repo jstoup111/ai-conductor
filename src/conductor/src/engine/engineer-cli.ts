@@ -937,6 +937,21 @@ export async function dispatchEngineer(
         const record = await loadClaimRecord(engDir, sourceRef);
         if (resolvedBody == null) resolvedBody = record?.body ?? undefined;
         inbound = record?.inbound;
+
+        // An unclaimed GitHub issue has no local record yet. Resolve its body through
+        // the canonical tracker seam so the injected runner remains the sole external
+        // boundary for this deterministic command.
+        if (resolvedBody == null) {
+          const parsedRef = parseSourceRef(sourceRef);
+          if (parsedRef) {
+            const tracker = createGithubTrackerClient(gh);
+            resolvedBody = await tracker.getIssueBody(
+              parsedRef.repo,
+              parsedRef.issue,
+              target.canonicalPath,
+            ) ?? undefined;
+          }
+        }
       }
 
       try {
