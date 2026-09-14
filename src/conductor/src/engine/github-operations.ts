@@ -1,3 +1,8 @@
+import type {
+  ConductorEvent,
+  GithubOperationRefusalRemedy,
+} from '../types/events.js';
+
 /**
  * Closed request vocabulary for the GitHub and remote-Git guards.
  *
@@ -185,10 +190,73 @@ export interface GithubOperationRunner {
   run(request: GithubOperationRequest): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal>;
 }
 
+/** The existing event spine boundary needed to report a denied mutation. */
+export interface GithubOperationEventEmitter {
+  emit(event: Extract<ConductorEvent, { type: 'github_operation_refused' }>): Promise<void>;
+}
+
+export interface GithubOperationExecutionOptions {
+  readonly events?: GithubOperationEventEmitter;
+}
+
 function isRunnerRefusal(
   response: GithubOperationRunnerResponse | GithubOperationRunnerRefusal,
 ): response is GithubOperationRunnerRefusal {
   return 'kind' in response && response.kind === 'refused';
+}
+
+export function githubOperationRefusalRemedy(
+  reason: GithubOperationRefusalReason,
+): GithubOperationRefusalRemedy {
+  switch (reason) {
+    case 'other-owner': return 'ask-resource-owner';
+    case 'unresolved-actor': return 'configure-operator-identity';
+    case 'missing-provenance': return 'record-feature-ownership';
+    case 'conflicting-provenance': return 'repair-ownership-provenance';
+    case 'provenance-unreadable':
+    case 'provenance-timeout': return 'retry-provenance-read';
+    case 'invalid-target': return 'correct-operation-target';
+    case 'invalid-payload': return 'correct-operation-payload';
+    case 'unsupported-operation': return 'use-supported-operation';
+    case 'explicit-authorization-required': return 'request-explicit-authorization';
+  }
+}
+
+export function formatGithubOperationTarget(target: GithubOperationTarget): string {
+  switch (target.kind) {
+    case 'issue': return `${target.repository}#${target.number}`;
+    case 'pull-request': return `${target.repository}#${target.number}`;
+    case 'label-definition': return `${target.repository} label:${target.name}`;
+    case 'remote-ref': return `${target.repository} ${target.ref}`;
+    case 'repository': return target.repository;
+  }
+}
+
+/** One secret-safe rendering shared by terminal and standalone result consumers. */
+export function formatGithubOperationRefusal(
+  event: Extract<ConductorEvent, { type: 'github_operation_refused' }>,
+): string {
+  return `GitHub operation refused: ${event.operation} on ${formatGithubOperationTarget(event.target)} (${event.reason}); remedy: ${event.remedy}`;
+}
+
+async function emitGithubOperationRefusal(
+  request: GithubOperationRequest,
+  reason: GithubOperationRefusalReason,
+  events: GithubOperationEventEmitter | undefined,
+): Promise<void> {
+  if (events === undefined) return;
+  try {
+    await events.emit({
+      type: 'github_operation_refused',
+      operator: request.context.actor,
+      target: request.target,
+      operation: request.operation,
+      reason,
+      remedy: githubOperationRefusalRemedy(reason),
+    });
+  } catch {
+    // A refusal is authoritative even when its best-effort telemetry cannot be delivered.
+  }
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -313,17 +381,22 @@ export function decodeGithubOperationRequest(value: unknown): GithubOperationDec
 export async function executeGithubOperation(
   value: unknown,
   runner: GithubOperationRunner,
+  options: GithubOperationExecutionOptions = {},
 ): Promise<GithubOperationResult | Extract<GithubOperationDecodeResult, { kind: 'refused' }>> {
   const decoded = decodeGithubOperationRequest(value);
   if (decoded.kind === 'refused') return decoded;
   try {
     const response = await runner.run(decoded.request);
     if (isRunnerRefusal(response)) {
-      return {
+      const result = {
         kind: 'refused',
         operation: decoded.request.operation,
         reason: response.reason,
-      };
+      } as const;
+      if (decoded.request.access !== 'read') {
+        await emitGithubOperationRefusal(decoded.request, response.reason, options.events);
+      }
+      return result;
     }
     if (response.created && response.metadataFailures && response.metadataFailures.length > 0) {
       return {

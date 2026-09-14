@@ -67,6 +67,7 @@ import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-label
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { isForwardedFromFeature, startDaemonEventPersistence, startFeatureEventPersistence } from './engine/event-persister.js';
 import { renderedEventTypes } from './engine/event-sinks.js';
+import { formatGithubOperationRefusal } from './engine/github-operations.js';
 import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
 import { resolveOtelConfig, resolveWorkerName } from './engine/otel/otel-config.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
@@ -2746,6 +2747,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(
         `${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.field} status write refused: ${event.expected} → ${event.requested} (${event.intent})`)}`,
       );
+      break;
+    case 'github_operation_refused':
+      log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatGithubOperationRefusal(event))}`);
       break;
     case 'step_retry': {
       const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);

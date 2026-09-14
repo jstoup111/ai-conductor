@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:6, task:8, task:15, task:17
+// Covers: task:1, task:3, task:6, task:8, task:15, task:17, task:23
 import { describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -25,6 +25,7 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'step_failed',
   'step_refused',
   'step_status_write_refused',
+  'github_operation_refused',
   'provider_attempt',
   'scratch_cleanup_reclaimed',
   'scratch_cleanup_retained',
@@ -213,6 +214,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'step_failed',
   'step_refused',
   'step_status_write_refused',
+  'github_operation_refused',
   'step_retry',
   'rate_limit',
   'session_reset',
