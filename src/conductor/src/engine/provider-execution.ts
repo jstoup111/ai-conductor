@@ -579,6 +579,7 @@ export async function executeProviderCandidates({
   });
   const preferredProvider = candidates[0];
   const attempts: ProviderAttemptMetadata[] = [];
+  let everyUnavailableCandidateWasNotStarted = true;
   const attribution = attributionInput
     ? validateTaskAttribution(attributionInput)
     : undefined;
@@ -709,6 +710,8 @@ export async function executeProviderCandidates({
     const safeResult = result.output === undefined
       ? result
       : { ...result, output: redactSafetyText(result.output) };
+    everyUnavailableCandidateWasNotStarted &&=
+      !safeResult.success && safeResult.executionDisposition === 'not-started';
     const nextProvider = candidates[index + 1];
     const attemptMetadata = buildProviderAttemptMetadata({
       providerKey,
@@ -763,12 +766,13 @@ export async function executeProviderCandidates({
           `${provider} (${reason}${invoked ? '' : ', cached skip'})`,
         )
         .join('; ');
+      const { executionDisposition: _executionDisposition, ...lastResult } = result;
       return {
         success: false,
         output: `All configured providers are unavailable for step ${step}: ${diagnostic}.`,
-        exitCode: result.exitCode,
-        ...(result.executionDisposition
-          ? { executionDisposition: result.executionDisposition }
+        exitCode: lastResult.exitCode,
+        ...(everyUnavailableCandidateWasNotStarted
+          ? { executionDisposition: 'not-started' as const }
           : {}),
         preferredProvider,
         attempts,

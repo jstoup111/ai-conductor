@@ -132,12 +132,22 @@ export class ModelAvailability {
       ...(result.observedIntervals ?? []),
       ...(resolved.result.observedIntervals ?? []),
     ];
+    const { executionDisposition: _resolvedExecutionDisposition, ...resolvedResult } = resolved.result;
+    const executionDisposition =
+      !result.success &&
+      !resolved.result.success &&
+      result.executionDisposition === 'not-started' &&
+      resolved.result.executionDisposition === 'not-started'
+        ? 'not-started'
+        : undefined;
 
-    return observedIntervals.length === 0
-      ? resolved
-      : {
-          ...resolved,
-          result: { ...resolved.result, observedIntervals },
-        };
+    return {
+      ...resolved,
+      result: {
+        ...resolvedResult,
+        ...(observedIntervals.length ? { observedIntervals } : {}),
+        ...(executionDisposition ? { executionDisposition } : {}),
+      },
+    };
   }
 }

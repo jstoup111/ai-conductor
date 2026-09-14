@@ -1,4 +1,4 @@
-// Covers: task:2, task:4
+// Covers: task:2, task:4, task:5
 import { describe, expect, it, vi } from 'vitest';
 import type {
   InvokeOptions,
@@ -1938,6 +1938,111 @@ describe('executeProviderCandidates', () => {
         ],
       },
     });
+  });
+
+  it('retains no-start proof only when every unavailable provider and model result is affirmative', async () => {
+    const unavailable = (executionDisposition?: 'not-started'): InvokeResult => ({
+      success: false,
+      output: 'unavailable',
+      exitCode: 1,
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+      providerUnavailableReason: 'unavailable',
+      ...(executionDisposition ? { executionDisposition } : {}),
+    });
+    const refused = (): InvokeResult => unavailable('not-started');
+    const run = async (first: InvokeResult, second: InvokeResult, refuseFirst = false) => {
+      const firstInvoke = vi.fn(async (): Promise<InvokeResult> => first);
+      const secondInvoke = vi.fn(async (): Promise<InvokeResult> => second);
+      const telemetryError = vi.fn(async (): Promise<void> => {
+        throw new Error('telemetry is observational');
+      });
+      const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+      const result = await executeProviderCandidates({
+        step: 'build',
+        configuredProviders: ['codex', 'claude'],
+        preferredProvider: 'codex',
+        runtimes: new ProviderRuntimeSet([
+          runtime('codex', { invoke: firstInvoke }),
+          runtime('claude', { invoke: secondInvoke }),
+        ]),
+        sessions: new ProviderSessionScope(vi.fn().mockReturnValue('fallback-session')),
+        options: { prompt: 'Build.', cwd: '/workspace' },
+        onAttempt: async () => {
+          throw new Error('attempt telemetry is observational');
+        },
+        onTelemetryError: telemetryError,
+        withCandidateSafety: async ({ providerKey }, invoke) =>
+          refuseFirst || providerKey === 'claude' ? refused() : invoke(),
+      });
+
+      return { result, firstInvoke, secondInvoke, telemetryError };
+    };
+
+    const allRefused = await run(unavailable(), unavailable(), true);
+    const unknownThenRefused = await run(unavailable(), unavailable());
+
+    expect({
+      allRefused: {
+        calls: [allRefused.firstInvoke, allRefused.secondInvoke].map((invoke) => invoke.mock.calls.length),
+        executionDisposition: allRefused.result.executionDisposition,
+        attempts: allRefused.result.attempts?.map(({ provider }) => provider),
+      },
+      unknownThenRefused: {
+        calls: [unknownThenRefused.firstInvoke, unknownThenRefused.secondInvoke].map((invoke) => invoke.mock.calls.length),
+        executionDisposition: unknownThenRefused.result.executionDisposition,
+        attempts: unknownThenRefused.result.attempts?.map(({ provider }) => provider),
+      },
+      telemetryErrors: [allRefused.telemetryError, unknownThenRefused.telemetryError]
+        .map((handler) => handler.mock.calls.length),
+    }).toEqual({
+      allRefused: {
+        calls: [0, 0],
+        executionDisposition: 'not-started',
+        attempts: ['codex', 'claude'],
+      },
+      unknownThenRefused: {
+        calls: [1, 0],
+        executionDisposition: undefined,
+        attempts: ['codex', 'claude'],
+      },
+      telemetryErrors: [2, 2],
+    });
+  });
+
+  it('retains no-start proof across native model fallback only when every unavailable model is affirmative', async () => {
+    const unavailableModel = (executionDisposition?: 'not-started'): InvokeResult => ({
+      success: false,
+      output: 'model unavailable',
+      exitCode: 1,
+      modelUnavailable: true,
+      ...(executionDisposition ? { executionDisposition } : {}),
+    });
+    const run = async (first: InvokeResult, second: InvokeResult) => {
+      const invoke = vi.fn()
+        .mockResolvedValueOnce(first)
+        .mockResolvedValueOnce(second);
+      const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+      const result = await executeProviderCandidates({
+        step: 'build',
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+        sessions: new ProviderSessionScope(vi.fn().mockReturnValue('model-fallback-session')),
+        modelOverride: 'primary',
+        modelFallbackLadder: ['primary', 'fallback'],
+        options: { prompt: 'Build.', cwd: '/workspace' },
+      });
+      return { result, models: invoke.mock.calls.map(([options]) => options.model) };
+    };
+
+    const allRefused = await run(unavailableModel('not-started'), unavailableModel('not-started'));
+    const attemptedThenRefused = await run(unavailableModel(), unavailableModel('not-started'));
+
+    expect(allRefused.models).toEqual(['primary', 'fallback']);
+    expect(allRefused.result).toMatchObject({ executionDisposition: 'not-started' });
+    expect(attemptedThenRefused.models).toEqual(['primary', 'fallback']);
+    expect(attemptedThenRefused.result).not.toHaveProperty('executionDisposition');
   });
 
   it('advances only after complete native model exhaustion and retries that provider on a later step', async () => {
