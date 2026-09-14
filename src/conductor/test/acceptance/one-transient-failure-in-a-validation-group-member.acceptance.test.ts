@@ -341,7 +341,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
-  it('restages a retained done member through the skip-preserving kickback helper and dispatches it again', async () => {
+  it('restages a retained done member through a build kickback and dispatches it in the next group round', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'validation-retained-kickback-'));
     const statePath = join(dir, 'conduct-state.json');
     try {
@@ -375,7 +375,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
-  it('restages and re-dispatches a retained member after post-rebase invalidation touches its gate surface', async () => {
+  it('restages and re-dispatches a retained member after a file-changing rebase invalidates its gate', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'validation-retained-rebase-'));
     const statePath = join(dir, 'conduct-state.json');
     try {
