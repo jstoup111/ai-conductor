@@ -289,6 +289,12 @@ export type ConductorEvent =
       source: 'project' | 'global' | 'plugin';
       pluginId?: string;
       bundleDigest: string;
+      /** Bounded identity only; captured policy bytes never enter telemetry. */
+      provenance?: {
+        readonly inputDigest: string;
+        readonly candidate: { readonly provider: string; readonly model: string; readonly effort: string };
+        readonly plugin?: { readonly id: string; readonly version?: string };
+      };
     }
   /** Policy discovery, compatibility, containment, or runtime refusal. */
   | {
@@ -296,8 +302,13 @@ export type ConductorEvent =
       rubric: string;
       lapId: string;
       provider: string;
-      stage: 'catalog' | 'preflight' | 'containment' | 'runtime';
+      stage: 'catalog' | 'capture' | 'preflight' | 'containment' | 'runtime';
       reason: string;
+      /** The candidate/input are known even when policy content never loaded. */
+      provenance?: {
+        readonly inputDigest: string;
+        readonly candidate: { readonly provider: string; readonly model: string; readonly effort: string };
+      };
     }
   | {
       /** The self-host dispatch was proven contained, so this concurrent drift is not a dispatch leak. */
@@ -322,7 +333,21 @@ export type ConductorEvent =
   | { type: 'build_review_rubric_prompt'; rubric: string; lapId: string; promptBytes: number }
   | { type: 'build_review_rubric_result'; rubric: string; lapId: string; verdict: 'PASS' | 'FAIL' }
   | { type: 'build_review_rubric_skipped'; rubric: string; lapId: string; reason: string }
-  | { type: 'build_review_cache_hit'; rubric: string; lapId: string }
+  | {
+      type: 'build_review_cache_hit';
+      rubric: string;
+      lapId: string;
+      /** Present only for a custom policy reused from prior judged evidence. */
+      customReuse?: {
+        readonly source: 'project' | 'global' | 'plugin';
+        readonly plugin?: { readonly id: string; readonly version?: string };
+        readonly bundleDigest: string;
+        readonly inputDigest: string;
+        readonly candidate: { readonly provider: string; readonly model: string; readonly effort: string };
+        readonly originalLapId: string;
+        readonly originalSnapshotDigest: string;
+      };
+    }
   /** Frozen scope assessment for one rubric lap; routine detail stays in the shared ledger. */
   | {
       type: 'build_review_scope_summary';

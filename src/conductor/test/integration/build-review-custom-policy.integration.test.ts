@@ -10,6 +10,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
@@ -65,6 +66,9 @@ describe('custom build-review policy runner', () => {
     const root = await fixture();
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) }));
     const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const events = new ConductorEventEmitter();
+    const resolvedEvents: unknown[] = [];
+    events.on('build_review_policy_resolved', (event) => { resolvedEvents.push(event); });
     const policy = providerKey === 'claude' ? CLAUDE_MODEL_POLICY : CODEX_MODEL_POLICY;
     const runner = new DefaultStepRunner(provider, 'custom-policy', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
@@ -77,6 +81,7 @@ describe('custom build-review policy runner', () => {
       providerRuntimes: new ProviderRuntimeSet([{ key: providerKey, provider, policy, builtIn: true, availability: new ModelAvailability(policy.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(),
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      events,
       buildReviewEffectiveResolver: passingEffectiveResolver,
       buildReviewPolicyCatalog: async () => [{
         semanticName: 'portable-policy', source, ...(source === 'plugin' ? { plugin: { id: 'policy-plugin', version: '1.0.0' } } : {}), installationOrigin: `/fixture/${source}`, canonicalSkillPath: `/fixture/${source}/SKILL.md`, packageRoot: `/fixture/${source}`, declaredDependencies: [], availability: 'available',
@@ -94,6 +99,14 @@ describe('custom build-review policy runner', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
     const firstInvocation = (invoke.mock.calls as unknown as Array<[Parameters<LLMProvider['invoke']>[0]]>)[0]?.[0];
     expect(firstInvocation?.prompt).toContain('Portable policy');
+    expect(resolvedEvents).toEqual([expect.objectContaining({
+      source, bundleDigest: `sha256-v1:${'a'.repeat(64)}`,
+      provenance: expect.objectContaining({
+        inputDigest: expect.any(String),
+        candidate: expect.objectContaining({ provider: providerKey }),
+        ...(source === 'plugin' ? { plugin: { id: 'policy-plugin', version: '1.0.0' } } : {}),
+      }),
+    })]);
   });
 
   it('refuses an ambiguous installed selection without invoking a provider', async () => {
