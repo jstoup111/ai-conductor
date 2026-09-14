@@ -1,9 +1,7 @@
 import {
   chmodSync,
   lstatSync,
-  mkdtempSync,
   readdirSync,
-  realpathSync,
   readFileSync,
   statSync,
   utimesSync,
@@ -12,6 +10,7 @@ import {
 import type { Dirent } from 'fs';
 import { mkdtemp, readdir, rm } from 'fs/promises';
 import { basename, join } from 'path';
+import { installVitestTmpRoot, VITEST_TMP_BASE_ENV } from '../scripts/vitest-temp.mjs';
 
 /**
  * Temp-directory leak containment for the vitest suite (two mechanisms).
@@ -312,39 +311,16 @@ export async function createRunTmpRoot(realTmpdir: string): Promise<string> {
  * @returns The run root path, newly created or already installed
  */
 export function ensureRunTmpRootSync(
-  realTmpdir: string,
+  realTmpdir?: string,
   env: NodeJS.ProcessEnv = process.env
 ): string {
-  const existing = env[RUN_TMP_ROOT_ENV];
-  const createdRunRoot = existing ?? mkdtempSync(join(realTmpdir, RUN_TMP_ROOT_PREFIX));
-  let runRoot: string;
-
+  const temporaryBase = realTmpdir !== undefined && env[VITEST_TMP_BASE_ENV] === undefined;
+  if (temporaryBase) env[VITEST_TMP_BASE_ENV] = realTmpdir;
   try {
-    // A symlinked real tmpdir makes mkdtemp return a non-canonical path. Git
-    // compares ceiling paths against its canonical traversal path, so install
-    // the resolved root rather than relying on equivalent-looking strings.
-    runRoot = realpathSync(createdRunRoot);
-  } catch (error) {
-    throw new Error(
-      `tmpdir-leak-guard: unable to resolve realpath for run root ${createdRunRoot}`,
-      { cause: error }
-    );
+    return installVitestTmpRoot({ env }).root;
+  } finally {
+    if (temporaryBase) delete env[VITEST_TMP_BASE_ENV];
   }
-
-  env[RUN_TMP_ROOT_ENV] = runRoot;
-  env.TMPDIR = runRoot;
-
-  const ceilings = env.GIT_CEILING_DIRECTORIES;
-  if (!ceilings) {
-    env.GIT_CEILING_DIRECTORIES = runRoot;
-  } else if (!ceilings.split(':').includes(runRoot)) {
-    // Config modules are re-evaluated in watch mode, while forked workers
-    // inherit this environment. Preserve any caller-installed ceilings and
-    // append ours exactly once so either path gets the same Git boundary.
-    env.GIT_CEILING_DIRECTORIES = `${ceilings}:${runRoot}`;
-  }
-
-  return runRoot;
 }
 
 /**

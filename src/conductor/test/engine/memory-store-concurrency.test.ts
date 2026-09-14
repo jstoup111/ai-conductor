@@ -266,12 +266,14 @@ describe('A16-XP: cross-process concurrent index writes — O_APPEND atomicity p
       const testDir = fileURLToPath(new URL('.', import.meta.url));
       const conductorDir = fileURLToPath(new URL('../../', import.meta.url));
       const helperPath = join(testDir, 'memory-writer-helper.ts');
-      const tsxPath = join(conductorDir, 'node_modules', '.bin', 'tsx');
 
       const N = 4;
       const children = Array.from({ length: N }, (_, i) =>
         new Promise<void>((resolve, reject) => {
-          const child = spawn(tsxPath, [helperPath], {
+          // `tsx`'s CLI creates an IPC socket under TMPDIR.  The run-scoped
+          // test TMPDIR can legitimately exceed the Unix socket-path limit,
+          // while Node's tsx loader runs this helper without that CLI socket.
+          const child = spawn(process.execPath, ['--import', 'tsx', helperPath], {
             cwd: conductorDir,
             env: {
               ...process.env,

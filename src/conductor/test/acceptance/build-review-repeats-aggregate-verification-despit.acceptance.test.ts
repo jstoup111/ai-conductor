@@ -1,3 +1,4 @@
+// Covers: task:4
 /**
  * Acceptance specs for Story 7 in
  * .docs/stories/build-review-repeats-aggregate-verification-despit.md.
@@ -23,8 +24,9 @@ let fixtureRoot: string;
 let runnerArgvPath: string;
 
 async function invokeScript(script: 'test' | 'test:changed', selectors: string[]) {
-  return execa('npm', ['run', '--silent', script, '--', ...selectors], {
+  const result = await execa('npm', ['run', '--silent', script, '--', ...selectors], {
     cwd: fixtureRoot,
+    extendEnv: false,
     env: {
       ...process.env,
       PATH: `${join(fixtureRoot, 'bin')}${delimiter}${process.env.PATH ?? ''}`,
@@ -32,6 +34,7 @@ async function invokeScript(script: 'test' | 'test:changed', selectors: string[]
     },
     reject: false,
   });
+  return result;
 }
 
 beforeEach(async () => {
@@ -43,10 +46,15 @@ beforeEach(async () => {
   ) as { scripts: Record<string, string> };
 
   await mkdir(join(fixtureRoot, 'bin'), { recursive: true });
+  await mkdir(join(fixtureRoot, 'node_modules', '.bin'), { recursive: true });
   await mkdir(join(fixtureRoot, 'scripts'), { recursive: true });
   await copyFile(
     join(CONDUCTOR_ROOT, 'scripts', 'run-vitest.mjs'),
     join(fixtureRoot, 'scripts', 'run-vitest.mjs'),
+  );
+  await copyFile(
+    join(CONDUCTOR_ROOT, 'scripts', 'vitest-temp.mjs'),
+    join(fixtureRoot, 'scripts', 'vitest-temp.mjs'),
   );
   await writeFile(
     join(fixtureRoot, 'package.json'),
@@ -54,7 +62,7 @@ beforeEach(async () => {
     'utf8',
   );
 
-  const fakeVitest = join(fixtureRoot, 'bin', 'vitest');
+  const fakeVitest = join(fixtureRoot, 'node_modules', '.bin', 'vitest');
   await writeFile(
     fakeVitest,
     [

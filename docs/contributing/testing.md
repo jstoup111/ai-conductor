@@ -249,8 +249,18 @@ Four files run automatically and exist because each one prevented a real inciden
 
 ### vitest.config.ts — the run-scoped `TMPDIR`
 
-`scripts/run-vitest.mjs` creates one `ai-conductor-vitest-run-*` root inside the real tmpdir and points
-`TMPDIR` at it before loading Vitest. The config module then idempotently reuses that root.
+`scripts/run-vitest.mjs` creates one `ai-conductor-vitest-run-*` root beneath the ignored,
+checkout-local `src/conductor/.vitest-tmp/` directory and points `TMPDIR` at it before loading
+Vitest. The config module then idempotently reuses that root. To select another writable filesystem,
+set `AI_CONDUCTOR_TEST_TMP_BASE` to an absolute path before running the suite:
+
+```bash
+cd src/conductor
+AI_CONDUCTOR_TEST_TMP_BASE=/var/tmp/ai-conductor-tests npm test
+```
+
+An explicitly blank, relative, or NUL-containing override stops startup; the runner does not fall
+back to the system temporary directory.
 
 `os.tmpdir()` reads `TMPDIR` on every call, so all ~1,426 `mkdtemp(join(tmpdir(), '<prefix>-'))` call
 sites across the suite — including ones written later — land inside that root with no test-file changes,
@@ -266,13 +276,14 @@ all depends on is proven rather than assumed.
 
 None of this excuses a fixture from cleaning up after itself — it bounds the damage when one does not.
 
-Before it takes the real-tmpdir baseline, `global-setup.ts` also reaps stale
-`ai-conductor-vitest-run-*` roots left by an interrupted earlier run. Each live root has an owner
-marker refreshed every minute; marked roots are eligible after three hours, while legacy unmarked
-roots wait 24 hours. The sweep retains its own root, live roots, unreadable markers, and every
-non-directory prefixed entry (including symlinks), and reports but does not fail the new run when it
-cannot remove a candidate. This keeps abandoned test artifacts from accumulating without risking a
-live run or a symlink target.
+Before it takes the original-temporary-directory baseline, `global-setup.ts` also reaps stale
+`ai-conductor-vitest-run-*` roots left by an interrupted earlier run from both the original
+temporary directory and the selected storage location. Each live root has an owner marker refreshed
+every minute; marked roots are eligible after three hours, while legacy unmarked roots wait 24
+hours. The sweep retains its own root, live roots, unreadable markers, and every non-directory
+prefixed entry (including symlinks), and reports but does not fail the new run when it cannot remove
+a candidate. This keeps abandoned test artifacts from accumulating without risking a live run or a
+symlink target.
 
 ### setup.ts
 
@@ -295,12 +306,12 @@ kill-switches:
 - Daemon tmux sessions — leaked `cc-daemon-*` sessions are reaped; a killed session fails the run, an
   `indeterminate` one is logged non-fatally.
 - The real engineer signals store — a `test-project`-tagged line that leaked into it throws.
-- The real tmpdir's top-level entries — anything that appeared during the run and is neither the run root
-  nor known concurrent-tooling noise (`self-host-*`, `claude-*`, …) throws `tmpdir-leak-guard: N temp
-  entry/entries leaked into the REAL tmpdir …`. That is a temp dir the `TMPDIR` redirect did not
-  contain: a hardcoded `/tmp`, an `os.tmpdir()` value cached before the redirect, or a subprocess spawned
-  without the inherited env. Fix the call site; widening `IGNORED_TMPDIR_PREFIXES` is only for a genuine
-  false positive from a new concurrent tool.
+- The original temporary directory's top-level entries — anything that appeared during the run
+  and is neither known concurrent-tooling noise (`self-host-*`, `claude-*`, …) throws
+  `tmpdir-leak-guard: N temp entry/entries leaked into the REAL tmpdir …`. That is a temp dir the
+  `TMPDIR` redirect did not contain: a hardcoded `/tmp`, an `os.tmpdir()` value cached before the
+  redirect, or a subprocess spawned without the inherited env. Fix the call site; widening
+  `IGNORED_TMPDIR_PREFIXES` is only for a genuine false positive from a new concurrent tool.
 
 The parked-marker leak guard (#1251) runs last of all, after the tmpdir check, so any more specific
 guard failure still throws first. It resolves the real repository's `.daemon/parked` directory (via

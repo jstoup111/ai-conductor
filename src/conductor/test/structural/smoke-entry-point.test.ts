@@ -1,3 +1,5 @@
+// Covers: task:5
+import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -34,6 +36,82 @@ const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
 };
 
 describe('structural: smoke test entry point', () => {
+  it('installs an owned temporary scope before loading and running the smoke command', async () => {
+    const originalEnvironment = {
+      TMPDIR: process.env.TMPDIR,
+      AI_CONDUCTOR_TEST_TMP_ROOT: process.env.AI_CONDUCTOR_TEST_TMP_ROOT,
+      AI_CONDUCTOR_TEST_TMP_SCOPE: process.env.AI_CONDUCTOR_TEST_TMP_SCOPE,
+      AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR: process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR,
+      GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES,
+      AI_CONDUCTOR_TEST_TMP_BASE: process.env.AI_CONDUCTOR_TEST_TMP_BASE,
+      PATH: process.env.PATH,
+    };
+    const originalTmpdir = await mkdtemp(join(tmpdir(), 'smoke-entry-original-'));
+    const selectedStorage = await mkdtemp(join(tmpdir(), 'smoke-entry-storage-'));
+    const observed: Record<string, string | undefined> = {};
+    let ownedRoot: string | undefined;
+    process.env.TMPDIR = originalTmpdir;
+    process.env.AI_CONDUCTOR_TEST_TMP_BASE = selectedStorage;
+    const callerEnvironment = {
+      ...originalEnvironment,
+      TMPDIR: originalTmpdir,
+      AI_CONDUCTOR_TEST_TMP_BASE: selectedStorage,
+      PATH: originalEnvironment.PATH,
+    };
+
+    try {
+      await runSmokeEntryPoint(
+        ['vitest.smoke.config.ts', 'test/selected.smoke.test.ts'],
+        async () => ({
+          runSmokeCommand: async (arguments_) => {
+            observed.arguments = JSON.stringify(arguments_);
+            observed.root = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+            observed.scope = process.env.AI_CONDUCTOR_TEST_TMP_SCOPE;
+            observed.tmpdir = process.env.TMPDIR;
+            observed.originalTmpdir = process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR;
+            ownedRoot = observed.scope;
+            observed.path = process.env.PATH;
+          },
+        }),
+      );
+      expect({
+        environment: {
+          TMPDIR: process.env.TMPDIR,
+          AI_CONDUCTOR_TEST_TMP_ROOT: process.env.AI_CONDUCTOR_TEST_TMP_ROOT,
+          AI_CONDUCTOR_TEST_TMP_SCOPE: process.env.AI_CONDUCTOR_TEST_TMP_SCOPE,
+          AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR: process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR,
+          GIT_CEILING_DIRECTORIES: process.env.GIT_CEILING_DIRECTORIES,
+          AI_CONDUCTOR_TEST_TMP_BASE: process.env.AI_CONDUCTOR_TEST_TMP_BASE,
+          PATH: process.env.PATH,
+        },
+        existsAfterFinally: ownedRoot === undefined ? undefined : existsSync(ownedRoot),
+      }).toEqual({ environment: callerEnvironment, existsAfterFinally: false });
+    } finally {
+      for (const [key, value] of Object.entries(originalEnvironment)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      await rm(originalTmpdir, { recursive: true, force: true });
+      await rm(selectedStorage, { recursive: true, force: true });
+    }
+
+    expect({
+      arguments: observed.arguments,
+      root: observed.root,
+      scope: observed.scope,
+      tmpdir: observed.tmpdir,
+      originalTmpdir: observed.originalTmpdir,
+      path: observed.path,
+    }).toEqual({
+      arguments: JSON.stringify(['vitest.smoke.config.ts', 'test/selected.smoke.test.ts']),
+      root: undefined,
+      scope: expect.stringMatching(new RegExp(`^${selectedStorage}/ai-conductor-vitest-run-`)),
+      tmpdir: expect.stringMatching(new RegExp(`^${selectedStorage}/ai-conductor-vitest-run-`)),
+      originalTmpdir: expect.any(String),
+      path: expect.stringContaining(join(conductorRoot, 'node_modules', '.bin')),
+    });
+  });
+
   it('forwards both the smoke config and matrix-selected file to the smoke command', async () => {
     const runSmokeCommand = vi.fn();
     const originalArgv = process.argv;
@@ -45,7 +123,7 @@ describe('structural: smoke test entry point', () => {
       'test/engine/daemon-e2e-live-claude.smoke.test.ts',
     ];
     try {
-      await runSmokeEntryPoint(undefined, runSmokeCommand);
+      await runSmokeEntryPoint(undefined, async () => ({ runSmokeCommand }));
     } finally {
       process.argv = originalArgv;
     }
@@ -54,6 +132,101 @@ describe('structural: smoke test entry point', () => {
       'vitest.smoke.config.ts',
       'test/engine/daemon-e2e-live-claude.smoke.test.ts',
     ]);
+  });
+
+  it('keeps an outer sentinel through a failing nested smoke run and gives independent runs distinct scopes', async () => {
+    const originalTmpdir = await mkdtemp(join(tmpdir(), 'smoke-entry-sentinel-original-'));
+    const selectedStorage = await mkdtemp(join(tmpdir(), 'smoke-entry-sentinel-storage-'));
+    const saved = { TMPDIR: process.env.TMPDIR, AI_CONDUCTOR_TEST_TMP_BASE: process.env.AI_CONDUCTOR_TEST_TMP_BASE };
+    const roots: string[] = [];
+    process.env.TMPDIR = originalTmpdir;
+    process.env.AI_CONDUCTOR_TEST_TMP_BASE = selectedStorage;
+    try {
+      await runSmokeEntryPoint([], async () => ({
+        runSmokeCommand: async () => {
+          const outerScope = process.env.AI_CONDUCTOR_TEST_TMP_SCOPE!;
+          const sentinel = join(outerScope, 'outer-sentinel');
+          await writeFile(sentinel, 'keep');
+          roots.push(outerScope);
+          await expect(runSmokeEntryPoint([], async () => ({
+            runSmokeCommand: async () => { throw new Error('nested failure'); },
+          }))).rejects.toThrow('nested failure');
+          expect(existsSync(sentinel)).toBe(true);
+        },
+      }));
+      await runSmokeEntryPoint([], async () => ({
+        runSmokeCommand: async () => { roots.push(process.env.AI_CONDUCTOR_TEST_TMP_SCOPE!); },
+      }));
+      await runSmokeEntryPoint([], async () => ({
+        runSmokeCommand: async () => { roots.push(process.env.AI_CONDUCTOR_TEST_TMP_SCOPE!); },
+      }));
+      expect(new Set(roots).size).toBe(3);
+      const inheritedScope = await mkdtemp(join(selectedStorage, 'inherited-scope-'));
+      const inheritedSentinel = join(inheritedScope, 'inherited-sentinel');
+      await writeFile(inheritedSentinel, 'keep');
+      await runSmokeEntryPoint([], async () => ({ runSmokeCommand: async () => {} }));
+      expect(existsSync(inheritedSentinel)).toBe(true);
+    } finally {
+      if (saved.TMPDIR === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = saved.TMPDIR;
+      if (saved.AI_CONDUCTOR_TEST_TMP_BASE === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_BASE;
+      else process.env.AI_CONDUCTOR_TEST_TMP_BASE = saved.AI_CONDUCTOR_TEST_TMP_BASE;
+      await rm(originalTmpdir, { recursive: true, force: true });
+      await rm(selectedStorage, { recursive: true, force: true });
+    }
+  });
+
+  it('selects the default checkout-local storage before loading the smoke command', async () => {
+    const previousBase = process.env.AI_CONDUCTOR_TEST_TMP_BASE;
+    const previousTmpdir = process.env.TMPDIR;
+    const originalTmpdir = await mkdtemp(join(tmpdir(), 'smoke-entry-default-original-'));
+    let scope: string | undefined;
+    delete process.env.AI_CONDUCTOR_TEST_TMP_BASE;
+    process.env.TMPDIR = originalTmpdir;
+
+    try {
+      await runSmokeEntryPoint([], async () => ({
+        runSmokeCommand: async () => { scope = process.env.AI_CONDUCTOR_TEST_TMP_SCOPE; },
+      }));
+      expect(scope).toMatch(new RegExp(`^${join(conductorRoot, '.vitest-tmp', 'ai-conductor-vitest-run-')}`));
+    } finally {
+      if (previousBase === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_BASE;
+      else process.env.AI_CONDUCTOR_TEST_TMP_BASE = previousBase;
+      if (previousTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previousTmpdir;
+      await rm(originalTmpdir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['relative-storage', ''])('rejects invalid storage before loading the smoke command', async (base) => {
+    const previousBase = process.env.AI_CONDUCTOR_TEST_TMP_BASE;
+    const loader = vi.fn();
+    process.env.AI_CONDUCTOR_TEST_TMP_BASE = base;
+
+    try {
+      await expect(runSmokeEntryPoint([], loader)).rejects.toThrow(/AI_CONDUCTOR_TEST_TMP_BASE/i);
+      expect(loader).not.toHaveBeenCalled();
+    } finally {
+      if (previousBase === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_BASE;
+      else process.env.AI_CONDUCTOR_TEST_TMP_BASE = previousBase;
+    }
+  });
+
+  it('rejects unavailable storage before loading the smoke command', async () => {
+    const previousBase = process.env.AI_CONDUCTOR_TEST_TMP_BASE;
+    const unavailable = join(await mkdtemp(join(tmpdir(), 'smoke-entry-unavailable-')), 'not-a-directory');
+    const loader = vi.fn();
+    await writeFile(unavailable, 'fixture file');
+    process.env.AI_CONDUCTOR_TEST_TMP_BASE = unavailable;
+
+    try {
+      await expect(runSmokeEntryPoint([], loader)).rejects.toThrow(/Unable to allocate Vitest temporary storage|not a directory/i);
+      expect(loader).not.toHaveBeenCalled();
+    } finally {
+      if (previousBase === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_BASE;
+      else process.env.AI_CONDUCTOR_TEST_TMP_BASE = previousBase;
+      await rm(dirname(unavailable), { recursive: true, force: true });
+    }
   });
 
   it('fails before running Vitest when smoke discovery is empty', async () => {

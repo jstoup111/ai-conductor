@@ -1,4 +1,3 @@
-import { tmpdir } from 'node:os';
 import { defineConfig } from 'vitest/config';
 import { ensureRunTmpRootSync } from './test/tmpdir-leak-guard.js';
 
@@ -11,7 +10,7 @@ import { ensureRunTmpRootSync } from './test/tmpdir-leak-guard.js';
 // ensureRunTmpRootSync). Package scripts install the redirect before Vitest 4
 // itself loads; this idempotent call covers programmatic project creation.
 // Forked workers inherit the env, proven by tmpdir-redirect-propagation.test.ts.
-ensureRunTmpRootSync(tmpdir());
+ensureRunTmpRootSync();
 
 export default defineConfig({
   test: {

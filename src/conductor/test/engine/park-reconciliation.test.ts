@@ -816,6 +816,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       await writeFile(join(worktree, 'leftover.txt'), 'not a git worktree');
       const teardown = join(worktree, TEARDOWN_SCRIPT);
       await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(join(worktree, 'package.json'), '{"type":"commonjs"}\n', 'utf-8');
       await writeFile(teardown, `#!/usr/bin/env node\nrequire('node:fs').appendFileSync(${JSON.stringify(observation)}, 'ran\\n');\n`);
       await chmod(teardown, 0o755);
       await writeOperatorPark(projectRoot, slug);
@@ -857,6 +858,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     try {
       const teardown = join(worktree, TEARDOWN_SCRIPT);
       await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(join(worktree, 'package.json'), '{"type":"commonjs"}\n', 'utf-8');
       await writeFile(teardown, `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(observation)}, 'ran');\n`);
       await chmod(teardown, 0o755);
       await writeOperatorPark(projectRoot, slug);

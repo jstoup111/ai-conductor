@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:4
 // Unit tests for the tmpdir leak guard (#1112) — the redirect helpers, the
 // pure stray/ignored classification, and the throw-vs-warn teardown decision.
 // No vitest wiring involved: each seam is exercised directly, the same split
@@ -18,7 +18,7 @@ import {
   writeFile,
 } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { tmpdir } from 'os';
 import {
   createRunTmpRoot,
@@ -36,6 +36,7 @@ import {
   RUN_TMP_ROOT_PREFIX,
   type TmpdirSnapshot,
 } from './tmpdir-leak-guard.js';
+import { VITEST_TMP_BASE_ENV } from '../scripts/vitest-temp.mjs';
 import { applyTmpdirTeardownDecision } from './global-setup.js';
 
 const snap = (entries: string[]): TmpdirSnapshot => ({ exists: true, entries });
@@ -61,9 +62,12 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
   });
 
   it('installs the run root and the TMPDIR redirect into the given env', () => {
-    const env: NodeJS.ProcessEnv = {};
+    const env: NodeJS.ProcessEnv = {
+      [VITEST_TMP_BASE_ENV]: fakeRealTmpdir,
+      TMPDIR: fakeRealTmpdir,
+    };
 
-    const runRoot = ensureRunTmpRootSync(fakeRealTmpdir, env);
+    const runRoot = ensureRunTmpRootSync(undefined, env);
 
     expect(existsSync(runRoot)).toBe(true);
     expect(env.TMPDIR).toBe(runRoot);
@@ -71,10 +75,13 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
   });
 
   it('is idempotent — a config reload reuses the root instead of leaking another', async () => {
-    const env: NodeJS.ProcessEnv = {};
+    const env: NodeJS.ProcessEnv = {
+      [VITEST_TMP_BASE_ENV]: fakeRealTmpdir,
+      TMPDIR: fakeRealTmpdir,
+    };
 
-    const first = ensureRunTmpRootSync(fakeRealTmpdir, env);
-    const second = ensureRunTmpRootSync(fakeRealTmpdir, env);
+    const first = ensureRunTmpRootSync(undefined, env);
+    const second = ensureRunTmpRootSync(undefined, env);
 
     expect(second).toBe(first);
     expect(await readdir(fakeRealTmpdir)).toHaveLength(1);
@@ -83,9 +90,12 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
   it('canonicalizes the run root and appends it to the Git ceiling directories', async () => {
     const aliasedTmpdir = join(fakeRealTmpdir, 'symlink-to-real-tmpdir');
     await symlink(fakeRealTmpdir, aliasedTmpdir, 'dir');
-    const env: NodeJS.ProcessEnv = { GIT_CEILING_DIRECTORIES: '/already/a/ceiling' };
+    const env: NodeJS.ProcessEnv = {
+      [VITEST_TMP_BASE_ENV]: aliasedTmpdir,
+      GIT_CEILING_DIRECTORIES: '/already/a/ceiling',
+    };
 
-    const runRoot = ensureRunTmpRootSync(aliasedTmpdir, env);
+    const runRoot = ensureRunTmpRootSync(undefined, env);
     const canonicalRoot = await realpath(runRoot);
 
     expect(runRoot).toBe(canonicalRoot);
@@ -95,20 +105,24 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
   });
 
   it('sets the Git ceiling directories to the canonical run root when no ceiling exists', async () => {
-    const env: NodeJS.ProcessEnv = {};
+    const env: NodeJS.ProcessEnv = { [VITEST_TMP_BASE_ENV]: fakeRealTmpdir };
 
-    const runRoot = ensureRunTmpRootSync(fakeRealTmpdir, env);
+    const runRoot = ensureRunTmpRootSync(undefined, env);
     const canonicalRoot = await realpath(runRoot);
 
     expect(env.GIT_CEILING_DIRECTORIES).toBe(canonicalRoot);
   });
 
   it('does not add a second root or duplicate ceiling entry after a config reload', async () => {
-    const env: NodeJS.ProcessEnv = { GIT_CEILING_DIRECTORIES: '/already/a/ceiling' };
+    const env: NodeJS.ProcessEnv = {
+      [VITEST_TMP_BASE_ENV]: fakeRealTmpdir,
+      TMPDIR: fakeRealTmpdir,
+      GIT_CEILING_DIRECTORIES: '/already/a/ceiling',
+    };
 
-    const first = ensureRunTmpRootSync(fakeRealTmpdir, env);
+    const first = ensureRunTmpRootSync(undefined, env);
     const canonicalRoot = await realpath(first);
-    const second = ensureRunTmpRootSync(fakeRealTmpdir, env);
+    const second = ensureRunTmpRootSync(undefined, env);
 
     expect(second).toBe(canonicalRoot);
     expect(env.GIT_CEILING_DIRECTORIES).toBe(`/already/a/ceiling:${canonicalRoot}`);
@@ -120,29 +134,42 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
       .toHaveLength(1);
   });
 
-  it('throws a named error when the run root cannot be canonicalized', async () => {
-    const env: NodeJS.ProcessEnv = {};
+  it('keeps the installed root and Git ceiling stable across ordinary and smoke config reloads', async () => {
+    const saved = Object.fromEntries([
+      VITEST_TMP_BASE_ENV,
+      RUN_TMP_ROOT_ENV,
+      'AI_CONDUCTOR_TEST_TMP_SCOPE',
+      'AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR',
+      'TMPDIR',
+      'GIT_CEILING_DIRECTORIES',
+    ].map(key => [key, process.env[key]]));
+    process.env[VITEST_TMP_BASE_ENV] = fakeRealTmpdir;
+    delete process.env[RUN_TMP_ROOT_ENV];
+    delete process.env.AI_CONDUCTOR_TEST_TMP_SCOPE;
+    delete process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR;
+    delete process.env.GIT_CEILING_DIRECTORIES;
     vi.resetModules();
-    vi.doMock('fs', async importOriginal => {
-      const original = await importOriginal<typeof import('fs')>();
-      return {
-        ...original,
-        realpathSync: () => {
-          throw new Error('simulated realpath failure');
-        },
-      };
-    });
+    vi.doMock('vitest/config', () => ({ defineConfig: <T>(config: T) => config }));
 
     try {
-      const { ensureRunTmpRootSync: ensureWithFailingRealpath } = await import(
-        './tmpdir-leak-guard.js'
-      );
-      expect(() => ensureWithFailingRealpath(fakeRealTmpdir, env)).toThrow(
-        /^tmpdir-leak-guard:.*realpath.*run root/i
-      );
-    } finally {
-      vi.doUnmock('fs');
+      await import('../vitest.config.ts');
+      const first = process.env[RUN_TMP_ROOT_ENV];
+      await import('../vitest.smoke.config.ts');
       vi.resetModules();
+      await import('../vitest.config.ts');
+
+      expect({
+        root: process.env[RUN_TMP_ROOT_ENV],
+        ceiling: process.env.GIT_CEILING_DIRECTORIES,
+        roots: (await readdir(fakeRealTmpdir)).filter(entry => entry.startsWith(RUN_TMP_ROOT_PREFIX)),
+      }).toEqual({ root: first, ceiling: first, roots: [basename(first as string)] });
+    } finally {
+      vi.doUnmock('vitest/config');
+      vi.resetModules();
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 
