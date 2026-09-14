@@ -1924,9 +1924,18 @@ export async function emitGateInvalidationEvents(
   events: ConductorEventEmitter,
   outcome: RebaseOutcome,
   ranManualTest: boolean,
-  preverifiedPreserved: ReadonlyArray<{ gate: StepName; basis: 'test_suite_drift_budget' }> = [],
+  applied?: {
+    kickedBack: readonly StepName[];
+    reverified: readonly StepName[];
+    preserved?: ReadonlyArray<{ gate: StepName; basis: 'test_suite_drift_budget' }>;
+  } | ReadonlyArray<{ gate: StepName; basis: 'test_suite_drift_budget' }>,
 ): Promise<void> {
   if (outcome.kind !== 'changed') return;
+
+  // A candidate preservation without valid prior evidence is a kickback after
+  // application. Report that actual effect, never the pre-application guess.
+  const application = Array.isArray(applied) ? undefined : applied;
+  const preverifiedPreserved = Array.isArray(applied) ? applied : application?.preserved ?? [];
 
   if (outcome.featureSurface === undefined) {
     // F is uncomputable: no declared surface and no delta partition exist, so
@@ -1944,7 +1953,7 @@ export async function emitGateInvalidationEvents(
     return;
   }
 
-  const { invalidated, preserved } = classifyGateInvalidation(
+  const { invalidated: classifiedInvalidated, preserved: classifiedPreserved } = classifyGateInvalidation(
     reviewDelta(outcome),
     outcome.featureSurface,
     ranManualTest,
@@ -1952,6 +1961,10 @@ export async function emitGateInvalidationEvents(
   );
   const projections = projectGateSurfaces(reviewDelta(outcome), outcome.featureSurface, outcome.documentInputs);
   const preservationBases = new Map(preverifiedPreserved.map(({ gate, basis }) => [gate, basis]));
+  const invalidated = application ? application.kickedBack : classifiedInvalidated;
+  const preserved = application
+    ? classifiedPreserved.filter((gate) => !invalidated.includes(gate as StepName))
+    : classifiedPreserved;
 
   for (const gate of invalidated) {
     if (preservationBases.has(gate as StepName)) continue;
