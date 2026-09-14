@@ -1,4 +1,4 @@
-// Covers: task:26
+// Covers: task:25, task:26, task:27
 import { describe, expect, it } from 'vitest';
 
 import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
@@ -7,7 +7,7 @@ import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedRes
 import { resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
 import { projectBuildReviewSuppressionEntries } from '../../src/engine/build-review-suppression-history.js';
 import type { BuildReviewCustomDeclaration } from '../../src/engine/build-review-artifacts.js';
-import type { BuildReviewReducedCoverageDispositionRecord } from '../../src/engine/build-review-dispositions.js';
+import { rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewReducedCoverageDispositionRecord } from '../../src/engine/build-review-dispositions.js';
 
 const lapId = parseBuildReviewLapId('lap-current')!;
 const root = '/repo';
@@ -315,6 +315,40 @@ describe('live build-review effective resolver', () => {
     });
 
     expect(result).toMatchObject({ ok: true, effective: { rawVerdict: 'FAIL', verdict: 'PASS', unresolvedFindingIds: [] } });
+  });
+
+  it('honors only the exact recorded custom accepted risk in the live effective verdict', async () => {
+    const { aggregate: raw, findingId } = customAggregate(undefined);
+    const member = raw.customResults?.portablePolicy;
+    if (!member || member.result.kind !== 'judged') throw new Error('expected a judged custom policy result');
+    const current = rehydrateBuildReviewAcceptedRiskFinding(
+      (member.result.findings[0] as { identity?: { canonicalPayload?: unknown } } | undefined)?.identity?.canonicalPayload,
+    );
+    if (!current || !('policy' in current.canonicalPayload)) throw new Error('expected a valid current custom policy identity');
+    const changedPolicy = rehydrateBuildReviewAcceptedRiskFinding({
+      ...current.canonicalPayload,
+      policy: { ...current.canonicalPayload.policy, bundleDigest: `sha256:${'d'.repeat(64)}` },
+    });
+    if (!changedPolicy) throw new Error('expected a valid changed custom policy identity');
+    const decision = (finding: typeof current) => ({
+      version: 'v1' as const, feature, finding, sourceLapId: lapId,
+      summary: 'The operator accepted this exact current custom policy finding.',
+      rationale: 'The documented risk is intentional.', operator: 'operator', acceptedAt: '2026-09-14T00:00:00.000Z',
+    });
+    const resolve = (records: readonly ReturnType<typeof decision>[]) => resolveEffectiveBuildReviewVerdict(worktree, raw, {
+      ...identityDeps,
+      createStore: () => ({
+        list: async () => ({ ok: true as const, records }),
+        listReducedCoverage: async () => ({ ok: true as const, records: [] }),
+      }),
+    });
+
+    await expect(resolve([decision(current)])).resolves.toMatchObject({ ok: true, effective: {
+      rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [findingId], unresolvedFindingIds: [],
+    } });
+    await expect(resolve([decision(changedPolicy)])).resolves.toMatchObject({ ok: true, effective: {
+      rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [findingId],
+    } });
   });
 
   it('keeps changed custom declarations and reasons uncovered', async () => {
