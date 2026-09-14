@@ -64,7 +64,7 @@ import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { executeGithubOperation, type GithubOperationRunner } from './github-operations.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
-import { makeMachineOwnerResolver } from './owner-gate/machine-identity.js';
+import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import type { BuildReviewFinding } from './build-review-domain.js';
@@ -1803,6 +1803,8 @@ export interface ConductorOptions {
   buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   /** Test seam for an adjudicated action-effect charge failure. */
   buildReviewChargeEffect?: typeof chargeBuildReviewEffectInLedger;
+  /** Test seam; production resolves fresh committed feature evidence. */
+  resolveFeatureCreationMutation?: typeof resolveFeatureRemoteMutation;
   /** Feature description — used by the engine-run worktree step to name the
    *  worktree/branch when state.feature_desc isn't set yet. */
   featureDesc?: string;
@@ -2475,6 +2477,7 @@ export class Conductor {
     Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
   private readonly buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   private readonly buildReviewChargeEffect?: typeof chargeBuildReviewEffectInLedger;
+  private readonly resolveFeatureCreationMutation: typeof resolveFeatureRemoteMutation;
   private retainedFullSuiteInspection:
     | Awaited<ReturnType<FullSuiteVerifier['inspect']>>
     | undefined;
@@ -3513,6 +3516,7 @@ export class Conductor {
       opts.fullSuiteVerifier ?? new FullSuiteVerifier({ projectRoot: this.projectRoot });
     this.buildReviewEffectiveResolver = opts.buildReviewEffectiveResolver;
     this.buildReviewChargeEffect = opts.buildReviewChargeEffect;
+    this.resolveFeatureCreationMutation = opts.resolveFeatureCreationMutation ?? resolveFeatureRemoteMutation;
     this.featureDesc = opts.featureDesc;
     this.worktreeBranch = opts.worktreeBranch;
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
@@ -12198,6 +12202,29 @@ export class Conductor {
                     return new Set(latest.effective.acceptedFindingIds);
                   };
                   const trackerRepo = await this.resolveTrackerRepoSlug();
+                  // A deferred issue is creation, not an existing-resource
+                  // mutation. Obtain fresh feature provenance now and mint the
+                  // opaque, one-shot capability before exposing a filing path
+                  // to the coordinator. Missing state/evidence deliberately
+                  // leaves `fileIssue` absent, so the coordinator can read for
+                  // an existing marker but cannot create a new remote issue.
+                  const featureCreationAuthority = trackerRepo === undefined
+                    ? undefined
+                    : await (async () => {
+                      const slug = this.featureSlug ?? state.feature_desc;
+                      const branch = state.worktree_branch ?? this.worktreeBranch;
+                      if (!slug || !branch) return undefined;
+                      const mutation = await this.resolveFeatureCreationMutation({
+                        cwd: this.projectRoot,
+                        slug,
+                        branch,
+                        git: (args) => this.git(args, { cwd: this.projectRoot }),
+                        gh: this.gh,
+                      });
+                      return mutation
+                        ? authorizeGithubFeatureIssueCreation({ repository: trackerRepo, mutation })
+                        : undefined;
+                    })();
                   const floors = buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config));
                   const suppressedFindingIds = effective.effective.suppressedFindingIds ?? [];
                   // One shared projection with the effective-verdict seam that
@@ -12249,21 +12276,18 @@ export class Conductor {
                     ...(trackerRepo === undefined ? {} : {
                       repo: trackerRepo,
                       tracker: createGithubTrackerClient(this.gh),
-                      fileIssue: async (issue: { title: string; body: string; priority: 'critical' | 'high' | 'medium' | 'low' }) => {
+                      ...(featureCreationAuthority === undefined ? {} : { fileIssue: async (issue: { title: string; body: string; priority: 'critical' | 'high' | 'medium' | 'low' }) => {
                         const filed = await fileIntakeIssue(
                           { title: issue.title, body: issue.body, priority: issue.priority, repo: trackerRepo },
                           {
                             creation: {
-                              authority: {
-                                resolveActor: makeMachineOwnerResolver(this.gh, this.projectRoot),
-                                intent: { kind: 'authorized-feature', repository: trackerRepo },
-                              },
+                              authority: featureCreationAuthority,
                               operations: createIntakeFilingOperations(this.gh, this.projectRoot),
                             },
                           },
                         );
                         return { issueUrl: filed.issueUrl };
-                      },
+                      } }),
                     }),
                     emit: async (event) => { await this.events.emit(event); },
                     },

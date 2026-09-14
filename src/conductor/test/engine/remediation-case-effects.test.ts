@@ -280,7 +280,7 @@ describe('remediation case effects', () => {
           creation: {
             authority: {
               resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
-              intent: { kind: 'authorized-feature' as const, repository: 'acme/repo' },
+              intent: { kind: 'explicit-intake' as const, repository: 'acme/repo' },
             },
             operations: {
               run: async (request) => {

@@ -17,19 +17,83 @@ import type {
   GithubOperationRunnerResponse,
 } from './github-operations.js';
 import { normalizeOwnerId, type OwnerResolution } from './owner-gate/identity.js';
+import { authorizeGithubMutation } from './owner-gate/mutation-policy.js';
+import type { GithubMutationExecutionContext } from './tracker-client.js';
 
-/** The two pre-provenance paths approved by ADR D3; no generic bypass exists. */
-export type GithubIssueCreationIntent =
-  | { readonly kind: 'explicit-intake'; readonly repository: string }
-  | { readonly kind: 'authorized-feature'; readonly repository: string };
-
-/** Current machine identity and the destination-specific reason for creation. */
-export interface GithubIssueCreationAuthority {
-  /** Resolved for each transaction; a prior run's identity is never reused. */
-  resolveActor(): Promise<OwnerResolution>;
-  readonly intent: GithubIssueCreationIntent;
+/** Explicit operator intake is the one pre-provenance creation path. */
+export interface GithubExplicitIntakeCreationAuthority {
+  readonly resolveActor: () => Promise<OwnerResolution>;
+  readonly intent: { readonly kind: 'explicit-intake'; readonly repository: string };
 }
 
+// The symbol and slot map deliberately stay module-private. An object that
+// merely looks like `{ kind: 'authorized-feature', repository }` cannot enter
+// this boundary: only the factory below installs its private slot after current
+// committed provenance has authorized this exact issue creation.
+const featureCreationAuthorityBrand: unique symbol = Symbol('feature-creation-authority');
+const featureCreationAuthoritySlots = new WeakMap<object, {
+  readonly actor: string;
+  readonly repository: string;
+  consumed: boolean;
+}>();
+
+/** Opaque, one-shot authority for creation from an already-owned feature. */
+export type GithubFeatureIssueCreationAuthority = {
+  readonly [featureCreationAuthorityBrand]: never;
+};
+
+/** The two ADR D3 paths; feature authority is capability, not caller data. */
+export type GithubIssueCreationAuthority =
+  | GithubExplicitIntakeCreationAuthority
+  | GithubFeatureIssueCreationAuthority;
+
+/**
+ * Mint the only feature-creation capability after the normal mutation policy
+ * reads current machine identity and committed feature provenance.
+ */
+export async function authorizeGithubFeatureIssueCreation(input: {
+  readonly repository: string;
+  readonly mutation: GithubMutationExecutionContext;
+}): Promise<GithubFeatureIssueCreationAuthority | undefined> {
+  if (!input?.mutation || typeof input.repository !== 'string' || input.repository === '') return undefined;
+  const decision = await authorizeGithubMutation({
+    operation: 'issue.create',
+    target: { repository: input.repository, kind: 'repository' },
+    provenance: input.mutation.provenance,
+  }, input.mutation.dependencies).catch(() => undefined);
+  if (!decision || decision.kind !== 'authorized') return undefined;
+
+  const authority = Object.freeze({}) as GithubFeatureIssueCreationAuthority;
+  featureCreationAuthoritySlots.set(authority, {
+    actor: decision.actor,
+    repository: input.repository,
+    consumed: false,
+  });
+  return authority;
+}
+
+/** Resolve actor/repository without exposing a feature capability's binding. */
+export async function resolveGithubIssueCreationAuthority(
+  authority: GithubIssueCreationAuthority,
+): Promise<{ readonly actor: string; readonly repository: string } | undefined> {
+  const feature = authority && typeof authority === 'object'
+    ? featureCreationAuthoritySlots.get(authority)
+    : undefined;
+  if (feature && !feature.consumed) return { actor: feature.actor, repository: feature.repository };
+  if (!authority || typeof authority !== 'object' || !('intent' in authority)
+    || authority.intent?.kind !== 'explicit-intake'
+    || typeof authority.intent.repository !== 'string'
+    || typeof authority.resolveActor !== 'function') return undefined;
+  try {
+    const resolution = await authority.resolveActor();
+    const actor = resolution.resolved ? normalizeOwnerId(resolution.id) : null;
+    return actor === null ? undefined : { actor, repository: authority.intent.repository };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Current machine identity and the destination-specific reason for creation. */
 /** All writes covered by a context are supplied together and cannot escape it. */
 export interface GithubIssueCreationTransaction {
   readonly authority: GithubIssueCreationAuthority;
@@ -93,22 +157,22 @@ async function bindContext(
   authority: GithubIssueCreationAuthority,
   creation: GithubCreateOperationRequest,
 ): Promise<BoundCreationContext | GithubIssueCreationTransactionResult> {
-  let resolution: OwnerResolution;
-  try {
-    resolution = await authority.resolveActor();
-  } catch {
-    return refusal('unresolved-actor');
-  }
-  const actor = resolution.resolved ? normalizeOwnerId(resolution.id) : null;
-  if (actor === null) return refusal('unresolved-actor');
+  const feature = authority && typeof authority === 'object'
+    ? featureCreationAuthoritySlots.get(authority)
+    : undefined;
+  const claimedFeature = authority && typeof authority === 'object'
+    && (authority as unknown as { intent?: { kind?: unknown } }).intent?.kind === 'authorized-feature';
+  const bound = await resolveGithubIssueCreationAuthority(authority);
+  if (!bound) return refusal(feature || claimedFeature ? 'explicit-authorization-required' : 'unresolved-actor');
   if (creation.operation !== 'issue.create' || creation.target.kind !== 'repository') {
     return refusal('invalid-target');
   }
-  if (authority.intent.repository !== creation.target.repository) {
+  if (bound.repository !== creation.target.repository) {
     return refusal('explicit-authorization-required');
   }
-  if (normalizeOwnerId(creation.context.actor) !== actor) return refusal('explicit-authorization-required');
-  return Object.freeze({ actor, repository: creation.target.repository });
+  if (normalizeOwnerId(creation.context.actor) !== bound.actor) return refusal('explicit-authorization-required');
+  if (feature) feature.consumed = true;
+  return Object.freeze({ actor: bound.actor, repository: creation.target.repository });
 }
 
 function metadataIsPreauthorized(

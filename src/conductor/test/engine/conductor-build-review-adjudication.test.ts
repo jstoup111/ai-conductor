@@ -204,6 +204,8 @@ interface FixtureOptions {
   readonly onLifecycleEvent?: (event: ConductorEvent) => void;
   /** A real custom aggregate must route through the case-v2 production branch. */
   readonly custom?: boolean;
+  /** A feature-owned creation capability is available unless this fake denies it. */
+  readonly featureCreationAuthorized?: boolean;
 }
 
 async function fixture(options: FixtureOptions = {}) {
@@ -218,7 +220,10 @@ async function fixture(options: FixtureOptions = {}) {
   await options.seedPipeline?.(projectRoot);
 
   const statePath = join(projectRoot, '.pipeline', 'state.json');
-  const state: Record<string, unknown> = { complexity_tier: 'M', run_started_at: 1 };
+  const state: Record<string, unknown> = {
+    complexity_tier: 'M', run_started_at: 1,
+    feature_desc: 'adjudicated-feature', worktree_branch: 'feature/adjudicated-feature',
+  };
   for (const step of ALL_STEPS) if (step.name !== 'build_review') state[step.name] = 'done';
   if (options.startFrom === 'build') state.build_review = 'done';
   if (options.buildPending) state.build = 'pending';
@@ -325,6 +330,18 @@ async function fixture(options: FixtureOptions = {}) {
     },
     buildReviewEffectiveResolver: resolver,
     buildReviewChargeEffect: options.chargeEffect,
+    resolveFeatureCreationMutation: async () => options.featureCreationAuthorized === false ? undefined : ({
+      provenance: {
+        repository: 'acme/conductor', defaultBranch: 'origin/main', specBranch: 'feature/adjudicated-feature',
+        featureMarker: '.docs/intake/adjudicated-feature.md', publication: 'initial',
+      },
+      dependencies: {
+        resolveMachineOwner: async () => ({ resolved: true as const, id: 'alice' }),
+        provenanceDiscovery: {
+          readCommittedRecords: async () => [{ path: '.docs/intake/adjudicated-feature.md', content: 'Owner: alice\n' }],
+        },
+      },
+    }),
     gh,
   } as never);
 
@@ -590,6 +607,13 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     // A finalized non-action outcome performs no BUILD navigation.
     expect(run.dispatched).not.toContain('build');
     expect(run.kickbacks).toEqual([]);
+  });
+
+  it('does not file a deferred issue when current feature provenance cannot authorize creation', async () => {
+    const run = await fixture({ judgement: deferralJudgement(), featureCreationAuthorized: false });
+
+    expect(run.ghCalls.some((args) => args[0] === 'issue' && args[1] === 'create')).toBe(false);
+    expect(await run.haltMarker()).toContain('build_review adjudication halted:');
   });
 
   it('lets an exactly covered infrastructure branch settle instead of pinning the mechanical lane', async () => {
