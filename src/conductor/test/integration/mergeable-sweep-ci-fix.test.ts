@@ -16,7 +16,7 @@
  * own tests once that seam is fixed.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -24,6 +24,7 @@ import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sw
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import { isEligibleForCiFix } from '../../src/engine/ci-fix.js';
+import { classifyCiContextFailure } from '../../src/engine/daemon-ci-fix.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
 
 type Check = {
@@ -113,6 +114,46 @@ describe('mergeable-sweep native CI state + bounded CI-fix dispatch', () => {
 
   afterEach(async () => {
     await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['auth', { readFailure: { kind: 'runner', error: new Error('401 unauthorized') } }, 'auth'],
+    ['permission', { readFailure: { kind: 'runner', error: new Error('403 forbidden') } }, 'permission'],
+    ['timeout', { readFailure: { kind: 'runner', error: new Error('timed out') } }, 'timeout'],
+    ['api', { readFailure: { kind: 'runner', error: new Error('upstream unavailable') } }, 'api'],
+    ['malformed context', { contextFailure: { kind: 'invalid-rollup' } }, 'malformed-context'],
+    ['empty failed context', { readFailure: { kind: 'runner', error: new Error() } }, 'api'],
+  ] as const)('emits %s context diagnostics without provider dispatch or reserving an attempt', async (_label, failure, reason) => {
+    const prUrl = 'https://github.com/acme/widget/pull/1';
+    const priorTimestamp = '2026-07-01T00:00:00.000Z';
+    await enrollWatch(projectRoot, {
+      prUrl, slug: 'widget', repoCwd: projectRoot, ciFixAttempts: 1, lastCiFixAt: priorTimestamp,
+    });
+    const state: PrMergeState = {
+      state: 'UNKNOWN', mergeable: 'UNKNOWN', hasFailingOrPendingChecks: false,
+      labels: [], checksOutcome: 'failed', statusCheckRollup: [], ...failure,
+    };
+    const diagnostics: string[] = [];
+    const dispatch = vi.fn();
+
+    await sweepMergeableLabels({
+      projectRoot,
+      tracker: { readPullRequestMergeState: async () => state },
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch,
+        diagnostic: async (_entry, selectedState) => {
+          diagnostics.push(classifyCiContextFailure(selectedState));
+        },
+      },
+    });
+
+    expect(diagnostics).toEqual([reason]);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(await readEntries(projectRoot)).toMatchObject([{
+      ciFixAttempts: 1, lastCiFixAt: priorTimestamp,
+    }]);
   });
 
   it('TR-2 happy: relies on failed native checks and removes a legacy ci-failed label', async () => {
