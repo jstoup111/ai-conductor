@@ -272,6 +272,7 @@ export async function capturePrdWideningDecisions(
         defects.push({ kind: 'write-failed' });
         continue;
       }
+      const originalSource = { id: legacyClearReference('source', entry), snapshot: entry.summary };
       const input: AcceptedWideningDecisionInput = {
         criterion: entry.criterion,
         authority: entry.authority,
@@ -279,12 +280,11 @@ export async function capturePrdWideningDecisions(
         operator: options.operator.trim(),
         // This deterministic legacy-clear provenance is deliberately distinct
         // from migrated v1-row provenance.
-        originalSource: { id: legacyClearReference('source', entry), snapshot: entry.summary },
+        originalSource,
         originalCaseId: legacyClearReference('case', entry),
         offerEntryId: legacyClearReference('entry', entry),
       };
       const existing = options.decisionStore.read === undefined ? undefined : await options.decisionStore.read();
-      const originalSource = input.originalSource;
       const prior = existing?.kind === 'valid'
         ? existing.state.decisions.filter((decision) => decision.originalCaseId === input.originalCaseId &&
           decision.originalSource?.id === originalSource.id && decision.originalSource?.snapshot === originalSource.snapshot).at(-1)
