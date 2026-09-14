@@ -4,6 +4,13 @@ spec_hash: fdc55b343e956ab5b3a41e2cf0084ae95c18ae73e92ee4494b58aecee9969b74
 pr: https://github.com/jstoup111/ai-conductor/pull/2430
 shipped: 2026-09-14
 engine_version: 20260912T002443Z-24ab600a1a43
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-07-22-canonical-tracker-client-seam decision 1"
+    outcome: remediated
+    summary: "The modified intake adapter still declares its own `GhRunner` instead of using the ADR-required single canonical declaration."
 ---
 
 ## Cost
