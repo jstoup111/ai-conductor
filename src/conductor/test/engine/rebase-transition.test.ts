@@ -51,4 +51,40 @@ describe('applyRebaseTransition', () => {
     expect((await applyRebaseTransition(input)).stateResult).toBe('applied');
     expect((await applyRebaseTransition(input)).stateResult).toBe('already-applied');
   });
+
+  it('does not attach an older replay preservation record to a newer ordinary verdict', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ build_review: 'done' }));
+    await writeVerdict(dir, 'build_review', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
+    });
+    await writeVerdict(dir, 'prd_audit', { satisfied: true, checkedAt: 1, reason: 'original judgement' });
+
+    const stateStore = createFilesystemConductStateStore(join(dir, '.pipeline/conduct-state.json'));
+    const originalApplyBatch = stateStore.applyBatch.bind(stateStore);
+    stateStore.applyBatch = async (batch) => {
+      await writeVerdict(dir, 'prd_audit', { satisfied: true, checkedAt: 2, reason: 'newer ordinary judgement' });
+      return originalApplyBatch(batch);
+    };
+
+    const result = await applyRebaseTransition({
+      projectRoot: dir,
+      stateStore,
+      operationId: 'operation-2',
+      replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      invalidated: ['build_review'],
+      preserved: ['prd_audit'],
+    });
+
+    expect(result.stateResult).toBe('applied');
+    expect(await readVerdict(dir, 'prd_audit')).toEqual({
+      satisfied: true,
+      checkedAt: 2,
+      reason: 'newer ordinary judgement',
+    });
+  });
 });
