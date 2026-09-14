@@ -54,6 +54,13 @@ describe('GitHub invocation audit', () => {
       "  const run = deps.gh; await run(['pr', 'edit', 'https://github.com/acme/app/pull/1']);",
       '}',
     ].join('\n');
+    const propertyCall = [
+      "import type { GhRunner } from './tracker-client.js';",
+      'interface Dependencies { gh: GhRunner }',
+      'async function write(deps: Dependencies) {',
+      "  await deps.gh(['pr', 'edit', 'https://github.com/acme/app/pull/1']);",
+      '}',
+    ].join('\n');
     const readOnlyForwarding = [
       "import { createBlockerResolver } from './blocker-resolver.js';",
       "import type { GhRunner } from './tracker-client.js';",
@@ -65,8 +72,34 @@ describe('GitHub invocation audit', () => {
     expect(auditGithubInvocationSource('engine/bypass.ts', forwarding)[0]).toMatchObject({ message: 'unresolvable mutable GitHub command forwarding outside guarded adapter' });
     expect(auditGithubInvocationSource('engine/bypass.ts', destructured)[0]).toMatchObject({ line: 3, message: 'direct injected GitHub mutation outside guarded adapter' });
     expect(auditGithubInvocationSource('engine/bypass.ts', propertyAlias)[0]).toMatchObject({ line: 4, message: 'direct injected GitHub mutation outside guarded adapter' });
+    expect(auditGithubInvocationSource('engine/bypass.ts', propertyCall)[0]).toMatchObject({ line: 4, message: 'direct injected GitHub mutation outside guarded adapter' });
     expect(auditGithubInvocationSource('engine/bypass.ts', readOnlyForwarding)).toEqual([]);
-    expect(auditGithubInvocationSource('engine/tracker-client.ts', direct)).toEqual([]);
+    expect(auditGithubInvocationSource('engine/tracker-client.ts', direct)[0]).toMatchObject({ message: 'direct injected GitHub mutation outside guarded adapter' });
+  });
+
+  it('does not exempt a daemon composition file from injected runner mutations', () => {
+    const source = [
+      "import type { GhRunner } from './engine/tracker-client.js';",
+      'interface Dependencies { gh: GhRunner }',
+      'async function write(deps: Dependencies) {',
+      "  await deps.gh(['issue', 'close', 'https://github.com/acme/app/issues/1']);",
+      '}',
+    ].join('\n');
+    expect(auditGithubInvocationSource('daemon-cli.ts', source)).toEqual([
+      expect.objectContaining({ line: 4, message: 'direct injected GitHub mutation outside guarded adapter' }),
+    ]);
+  });
+
+  it('permits dynamic forwarding only at the canonical guarded adapter', () => {
+    const source = [
+      "import type { GhRunner } from './tracker-client.js';",
+      'function createGuardedGithubOperationRunner(transport: GhRunner) {',
+      '  return { async run(request: { argv: string[] }) {',
+      "    await transport(request.argv, { cwd: '/tmp' });",
+      '  } };',
+      '}',
+    ].join('\n');
+    expect(auditGithubInvocationSource('engine/adapter.ts', source)).toEqual([]);
   });
 
   it('does not exempt pr-labels: mutable aliases fail while literal reads remain admissible', () => {

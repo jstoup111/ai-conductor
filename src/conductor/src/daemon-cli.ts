@@ -1687,9 +1687,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // issue refs are fetched from GitHub (ghIssueLabelReader wraps the runner in
   // parseIssueRef → gh argv → JSON label extraction). Passed to localWorkSource for
   // post-gate ordering and to the dashboard for fallback-mode display.
-  // Wrap ownerGh (GhRunner) to match ExecRunner signature (args only, cwd implicit).
-  const execRunnerWrapper = (args: string[]) => ownerGh(args, { cwd: projectRoot });
-  const priorityResolver = createPriorityResolver(ghIssueLabelReader(execRunnerWrapper), log);
+  const priorityResolver = createPriorityResolver(ghIssueLabelReader(ownerGh, projectRoot), log);
 
   // Task 12 (adr-2026-07-03-gated-snapshot-status-read-model): the daemon
   // directory backing `.daemon/gated.json` — every discovery pass rewrites
