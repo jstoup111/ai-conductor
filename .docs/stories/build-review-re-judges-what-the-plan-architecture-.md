@@ -14,7 +14,7 @@ As an operator, I want the scope, completeness, and rootCause rubrics gone so th
 
 #### Happy Path
 - Given a config that still turns on every old rubric, when build_review runs, then no reviewer session is started for scope, completeness, or rootCause
-- Given the updated repository, when I list the rubrics that can actually run, then the only one is `test-quality` (old rubric names are still accepted in config, but as no-ops — see Story 15)
+- Given the updated repository, when I list the rubrics that can actually run, then none of `scope`, `completeness`, or `rootCause` is among them and every runnable rubric is a registry member that is off by default (old rubric names are still accepted in config, but as no-ops — see Story 15)
 - Given the updated repository, when I look for the old rubric skills, then `build-review-scope`, `build-review-completeness`, `build-review-root-cause`, and `build-review-tautology` and their tests and fixtures are gone
 
 #### Negative Paths
@@ -22,7 +22,7 @@ As an operator, I want the scope, completeness, and rootCause rubrics gone so th
 - Given an old saved exemption record that only the removed rubrics ever produced, when the engine computes the review verdict, then it skips the record and does not crash
 
 ### Done When
-- [ ] The runnable-rubric list contains only `test-quality`; the four old skill folders and their tests no longer exist
+- [ ] The runnable-rubric list contains no retired rubric and only registry members; the four old skill folders and their tests no longer exist
 - [ ] A result naming a removed rubric is rejected with a message that names the rubric
 
 ## Story 2: build_review passes when nothing is turned on
