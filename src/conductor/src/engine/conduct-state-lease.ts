@@ -319,6 +319,7 @@ export function createConductStateLease(
       if (isAlreadyHeld(error)) {
         let claimPath = recoveryClaimPath(leasePath);
         let predecessorToken: string | null = null;
+        let currentOwnerRoot = false;
         while (true) {
           let serializedClaim: string | null;
           try {
@@ -329,6 +330,23 @@ export function createConductStateLease(
           const existingClaim = serializedClaim === null
             ? { kind: 'invalid' as const }
             : parseRecoveryClaim(serializedClaim, leasePath);
+          if (!currentOwnerRoot && existingClaim.kind === 'bound' &&
+            existingClaim.identity.ownerToken !== owner.token && predecessorToken === null) {
+            claimPath = recoverySuccessorClaimPath(leasePath, owner.token, null);
+            predecessorToken = null;
+            currentOwnerRoot = true;
+            const currentOwnerClaim = claimFor(null);
+            try {
+              await filesystem.writeRecoveryClaim(claimPath, currentOwnerClaim);
+              terminalClaimPath = claimPath;
+              terminalClaim = currentOwnerClaim;
+              break;
+            } catch (currentOwnerRootError) {
+              if (isAlreadyHeld(currentOwnerRootError)) continue;
+              if (isMissing(currentOwnerRootError)) return { status: 'vanished' };
+              return { status: 'refused', message: `Unable to recover ${leaseName} lease: could not claim recovery (${errorMessage(currentOwnerRootError)})` };
+            }
+          }
           if (existingClaim.kind === 'invalid' ||
             (existingClaim.kind === 'legacy' && predecessorToken !== null) ||
             (existingClaim.kind === 'bound' &&
@@ -386,10 +404,7 @@ export function createConductStateLease(
     }
     if (confirmedOwner !== serializedOwner || confirmedClaim !== terminalClaim) {
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
-      return {
-        status: 'refused',
-        message: `Unable to recover ${leaseName} lease: ownership changed during recovery`,
-      };
+      return { status: 'vanished' };
     }
 
     const quarantinedLeasePath = `${leasePath}.stale.${pid}.${newToken()}`;
