@@ -812,6 +812,60 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
     }
   }, REAL_GIT_TIMEOUT_MS);
 
+  it('reports publication failure when a concurrent remote update refuses the lease, preserving that update', async () => {
+    const { repoPath, originPath, cleanup } = await createFixtureRepo();
+    const outsiderPath = join(tmpdir(), `ci-fix-outsider-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    try {
+      // This independent clone owns the competing update.  It is deliberately
+      // pushed from the configured verifier: runCiFix has already fetched the
+      // old remote ref and completed guards, but its lease push has not run.
+      execSync(`git clone -q "${originPath}" "${outsiderPath}"`);
+      execSync('git checkout -q feat/fix', { cwd: outsiderPath });
+      execSync('git config user.email "outsider@example.com"', { cwd: outsiderPath });
+      execSync('git config user.name "Concurrent Operator"', { cwd: outsiderPath });
+
+      const order: string[] = [];
+      const competingFile = join(outsiderPath, 'operator-repair.txt');
+      const fixRunner = {
+        run: async ({ worktreePath }: { worktreePath: string }) => {
+          order.push('provider');
+          execSync('git commit --allow-empty -m "ci fix commit"', { cwd: worktreePath });
+          return { kind: 'session-completed' as const };
+        },
+      };
+      const verify = vi.fn(async () => {
+        order.push('verifier');
+        await writeFile(competingFile, 'preserve this competing repair\n');
+        execSync('git add operator-repair.txt', { cwd: outsiderPath });
+        execSync('git commit -m "operator repair"', { cwd: outsiderPath });
+        execSync('git push origin feat/fix', { cwd: outsiderPath });
+        order.push('competing-push');
+        return 0;
+      });
+
+      const result = await runCiFix(
+        { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 },
+        'feat/fix', 'hint', { fixRunner, verify }, () => {},
+      );
+
+      expect(result).toEqual({ kind: 'failed', stage: 'publication' });
+      expect(verify).toHaveBeenCalledOnce();
+      expect(order).toEqual(['provider', 'verifier', 'competing-push']);
+
+      // The refused lease must leave the competing remote commit untouched.
+      const remoteHead = execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim();
+      const competingHead = execSync('git rev-parse HEAD', { cwd: outsiderPath }).toString().trim();
+      expect(remoteHead).toBe(competingHead);
+      expect(execSync('git log -1 --format=%s feat/fix', { cwd: originPath }).toString().trim())
+        .toBe('operator repair');
+      expect(execSync('git show feat/fix:operator-repair.txt', { cwd: originPath }).toString())
+        .toBe('preserve this competing repair\n');
+    } finally {
+      await rm(outsiderPath, { recursive: true, force: true });
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
   it('session completion without a committed HEAD change is a noop and never verifies or publishes', async () => {
     const { repoPath, originPath, cleanup } = await createFixtureRepo();
     try {
