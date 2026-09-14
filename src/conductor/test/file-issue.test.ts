@@ -32,12 +32,13 @@ function makeFakeGh(opts: { failIssueCreate?: boolean; failLabelApply?: boolean 
 }
 
 function creation(gh: GhRunner, repository = 'acme/app') {
+  const authority = {
+    resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
+    intent: { kind: 'explicit-intake' as const, repository },
+  };
   return {
-    authority: {
-      resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
-      intent: { kind: 'explicit-intake' as const, repository },
-    },
-    operations: createIntakeFilingOperations(gh, '.'),
+    authority,
+    operations: createIntakeFilingOperations(gh, '.', authority),
   };
 }
 
@@ -87,5 +88,23 @@ describe('fileIntakeIssue — creation-scoped terminal adapter', () => {
 
     expect(result).toMatchObject({ ok: false, issueUrl: '', warnings: [expect.stringContaining('simulated issue-create failure')] });
     expect(gh.calls).toHaveLength(1);
+  });
+
+  it('closes its creation-scoped guarded runner after filing, so it cannot mutate the created issue later', async () => {
+    const gh = makeFakeGh();
+    const scoped = creation(gh.run);
+
+    await fileIntakeIssue({ title: 'One transaction', body: 'body', size: 'S', priority: 'low' }, {
+      creation: scoped,
+    });
+    const before = gh.calls.length;
+
+    await expect(scoped.operations.run({
+      operation: 'issue.label.add', access: 'feature-write',
+      target: { repository: 'acme/app', kind: 'issue', number: 300 },
+      context: { actor: 'alice' }, payload: { label: 'later-write' },
+    })).resolves.toEqual({ kind: 'refused', reason: 'explicit-authorization-required' });
+
+    expect(gh.calls).toHaveLength(before);
   });
 });

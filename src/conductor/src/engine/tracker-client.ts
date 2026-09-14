@@ -58,6 +58,23 @@ export interface GithubIntakeMutationExecutionContext {
   ): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal>;
 }
 
+/**
+ * One short-lived issue-creation scope.  Unlike normal feature provenance,
+ * this authorizes the creation request and only the immediate metadata that
+ * the creation transaction binds to its returned issue.
+ */
+export interface GithubCreationMutationExecutionContext {
+  authorize(
+    request: GithubOperationRequest,
+    cwd: string,
+  ): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal>;
+  /** Parse a terminal response without exposing raw argv to a caller. */
+  complete?(
+    request: GithubOperationRequest,
+    response: { stdout: string },
+  ): GithubOperationRunnerResponse;
+}
+
 /** Opaque interactive approval for exactly one shared repository mutation. */
 export interface GithubSharedMutationExecutionContext {
   /** Structural lookalikes are rejected at the guarded execution boundary. */
@@ -71,6 +88,8 @@ export interface GuardedGithubOperationRunnerOptions {
   readonly mutation?: GithubMutationExecutionContext;
   /** Absent context refuses every existing pre-spec intake mutation. */
   readonly intake?: GithubIntakeMutationExecutionContext;
+  /** Transaction-scoped authority for a newly created issue and its metadata. */
+  readonly creation?: GithubCreationMutationExecutionContext;
   /** Absent or mismatched approval refuses every shared-resource mutation. */
   readonly shared?: GithubSharedMutationExecutionContext;
 }
@@ -229,7 +248,12 @@ export function createGuardedGithubOperationRunner(
 ): GithubOperationRunner {
   return {
     async run(request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> {
-      if (request.access === 'intake-write') {
+      if (request.access === 'read') {
+        // Discovery reads need no ownership grant.
+      } else if (options.creation) {
+        const decision = await options.creation.authorize(request, options.cwd);
+        if ('kind' in decision && decision.kind === 'refused') return decision;
+      } else if (request.access === 'intake-write') {
         if (!options.intake) return { kind: 'refused', reason: 'explicit-authorization-required' };
         const decision = await options.intake.authorize(request, options.cwd);
         if ('kind' in decision && decision.kind === 'refused') return decision;
@@ -237,7 +261,7 @@ export function createGuardedGithubOperationRunner(
         if (!options.shared || !hasExplicitGithubOperationApproval(options.shared.approval, request)) {
           return { kind: 'refused', reason: 'explicit-authorization-required' };
         }
-      } else if (request.access !== 'read') {
+      } else {
         if (!options.mutation) return { kind: 'refused', reason: 'missing-provenance' };
         const decision = await authorizeGithubMutation({
           operation: request.operation,
@@ -246,8 +270,8 @@ export function createGuardedGithubOperationRunner(
         }, options.mutation.dependencies);
         if (decision.kind === 'refused') return decision;
       }
-      await transport(ghArgsFor(request), { cwd: options.cwd });
-      return {};
+      const response = await transport(ghArgsFor(request), { cwd: options.cwd });
+      return options.creation?.complete?.(request, response) ?? {};
     },
   };
 }

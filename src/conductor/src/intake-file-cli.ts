@@ -103,7 +103,10 @@ async function main(): Promise<void> {
       prompt: rl ? (question: string) => rl.question(`${question} `) : undefined,
       creation: {
         authority: { resolveActor, intent: { kind: 'explicit-intake', repository } },
-        operations: createIntakeFilingOperations(gh, cwd),
+        operations: createIntakeFilingOperations(gh, cwd, {
+          resolveActor,
+          intent: { kind: 'explicit-intake', repository },
+        }),
       },
     });
 
