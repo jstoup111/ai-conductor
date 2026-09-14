@@ -641,13 +641,17 @@ export async function sweepMergeableLabels({
 
         dispatched = true;
         const now = ciFix.now ? ciFix.now() : new Date();
+        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
+        // The label pass may have set ciFailureDetected since this candidate
+        // was collected. Reserve from that current survivor so a later refund
+        // cannot discard the observed failure transition.
+        const current = idx >= 0 ? survivors[idx] : entry;
         const updated: WatchEntry = {
-          ...entry,
-          ciFixAttempts: (entry.ciFixAttempts ?? 0) + 1,
+          ...current,
+          ciFixAttempts: (current.ciFixAttempts ?? 0) + 1,
           lastCiFixAt: now.toISOString(),
           ciFailureDetected: true,
         };
-        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
         if (idx >= 0) survivors[idx] = updated;
 
         try {
@@ -657,8 +661,14 @@ export async function sweepMergeableLabels({
           // is reconciled by the normal state transition on a later sweep.
           if (dispatchResult?.kind === 'not-started' || dispatchResult?.kind === 'branch-gone') {
             survivors[idx] = {
-              ...entry,
-              ciFailureDetected: true,
+              // Preserve the state transition from the label pass (notably a
+              // newly detected CI failure), while refunding only the fields
+              // this reservation changed.
+              ...current,
+              ciFixAttempts: entry.ciFixAttempts,
+              ...(entry.lastCiFixAt === undefined
+                ? { lastCiFixAt: undefined }
+                : { lastCiFixAt: entry.lastCiFixAt }),
             };
           }
         } catch (err) {
