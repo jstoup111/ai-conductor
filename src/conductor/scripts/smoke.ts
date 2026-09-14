@@ -1,5 +1,5 @@
 import { rmSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   installVitestTmpRoot,
@@ -18,8 +18,13 @@ export async function runSmokeEntryPoint(
   loadCommand: SmokeCommandLoader = loadSmokeCommand,
 ): Promise<void> {
   const installation = installVitestTmpRoot({ fresh: true });
+  const callerPath = process.env.PATH;
   try {
     delete process.env[VITEST_TMP_ROOT_ENV];
+    process.env.PATH = [
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'node_modules', '.bin'),
+      callerPath,
+    ].filter((value): value is string => value !== undefined && value !== '').join(delimiter);
     const { runSmokeCommand } = await loadCommand();
     await runSmokeCommand(arguments_);
   } finally {
@@ -28,6 +33,8 @@ export async function runSmokeEntryPoint(
         rmSync(installation.scope, { recursive: true, force: true });
       }
     } finally {
+      if (callerPath === undefined) delete process.env.PATH;
+      else process.env.PATH = callerPath;
       restoreVitestTmpEnvironment(installation.environment);
     }
   }

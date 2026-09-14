@@ -145,7 +145,6 @@ async function runVitestWithReport(file: string, config: string): Promise<SmokeV
   const reportDirectory = await mkdtemp(join(tmpdir(), 'ai-conductor-smoke-report-'));
   const childTmpDirectory = await mkdtemp(join(tmpdir(), 'ai-conductor-smoke-child-'));
   const reportPath = join(reportDirectory, 'vitest.json');
-  const vitestCommand = resolve(process.cwd(), 'node_modules/.bin/vitest');
   // A smoke command can itself be invoked by the ordinary Vitest suite. Give
   // that nested child a fresh disposable temp parent rather than inheriting
   // the parent's run root (which the child's global teardown would otherwise
@@ -154,7 +153,7 @@ async function runVitestWithReport(file: string, config: string): Promise<SmokeV
   delete childEnvironment.AI_CONDUCTOR_TEST_TMP_ROOT;
   try {
     const result = await execa(
-      vitestCommand,
+      'vitest',
       ['run', '--config', config, '--reporter=json', '--outputFile', reportPath, file],
       { all: true, reject: false, env: childEnvironment, extendEnv: false },
     );

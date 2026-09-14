@@ -247,6 +247,7 @@ function installInterruptReap(
   logger: (message: string) => void,
   runTmpRoot: string,
   stopHeartbeat: () => void,
+  callerEnvironment: ReturnType<typeof snapshotVitestTmpEnvironment>,
   tmuxRoots?: readonly string[],
 ): () => void {
   let handled = false;
@@ -271,6 +272,7 @@ function installInterruptReap(
     } catch {
       // Best-effort only — never let cleanup failure block shutdown.
     } finally {
+      restoreVitestTmpEnvironment(callerEnvironment);
       process.exit(1);
     }
   };
@@ -394,6 +396,7 @@ export default async function setup() {
     console.error,
     runTmpRoot,
     heartbeat.stop,
+    callerEnvironment,
     tmuxRoots,
   );
 

@@ -166,6 +166,51 @@ describe('snapshotDaemonSessions (#437) — success vs genuine-empty classificat
 });
 
 describe('reapLeakedDaemonSessions (#437) — two-signal kill decision', () => {
+  it('uses only explicit relocated own and reaped roots as kill authority', () => {
+    const calls: string[][] = [];
+    const ownRoot = '/fixture/storage/ai-conductor-vitest-run-own';
+    const reapedRoot = '/fixture/original/ai-conductor-vitest-run-reaped';
+    const cwdBySession: Record<string, string | undefined> = {
+      '=cc-daemon-own:': `${ownRoot}/repo`,
+      '=cc-daemon-reaped:': `${reapedRoot}/repo`,
+      '=cc-daemon-checkout:': '/fixture/checkout',
+      '=cc-daemon-storage:': '/fixture/storage',
+      '=cc-daemon-prefix:': `${ownRoot}-lookalike/repo`,
+      '=cc-daemon-unknown:': undefined,
+    };
+    const runner: TmuxRunner = (args) => {
+      calls.push(args);
+      if (args[0] === 'list-sessions') {
+        return { code: 0, stdout: Object.keys(cwdBySession).map(target => target.slice(1, -1)).join('\n'), stderr: '' };
+      }
+      if (args[0] === 'display-message') {
+        const cwd = cwdBySession[args[3]];
+        return cwd === undefined
+          ? { code: 1, stdout: '', stderr: "can't find pane" }
+          : { code: 0, stdout: cwd, stderr: '' };
+      }
+      if (args[0] === 'kill-session') return { code: 0, stdout: '', stderr: '' };
+      throw new Error(`unexpected tmux invocation: ${args.join(' ')}`);
+    };
+
+    // Prove the injected process boundary is active before exercising kills.
+    expect(listDaemonSessions(runner)).toHaveLength(6);
+    const result = reapLeakedDaemonSessions(
+      { sessions: [], failed: false }, runner, [ownRoot, reapedRoot],
+    );
+
+    expect(result.killed).toEqual(expect.arrayContaining([
+      expect.stringContaining('cc-daemon-own'),
+      expect.stringContaining('cc-daemon-reaped'),
+    ]));
+    expect(result.indeterminate).toHaveLength(4);
+    expect(calls.filter(args => args[0] === 'kill-session')).toEqual([
+      ['kill-session', '-t', '=cc-daemon-own'],
+      ['kill-session', '-t', '=cc-daemon-reaped'],
+    ]);
+    expect(reapLeakedDaemonSessions({ sessions: [], failed: true }, runner, [ownRoot, reapedRoot]).killed).toEqual([]);
+  });
+
   it('leaves pre-existing tmpdir and operator daemon sessions untouched', () => {
     const calls: string[][] = [];
     const runner: TmuxRunner = (args: string[]) => {

@@ -6,6 +6,7 @@ import type {
   rmSync as nodeRmSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import {
   allocateVitestTmpScope,
@@ -259,6 +260,14 @@ describe('Vitest temporary storage selection', () => {
     });
   });
 
+  it('preserves the system temporary directory when the caller has no TMPDIR', () => {
+    const env: NodeJS.ProcessEnv = {};
+    const installed = installVitestTmpRoot({ env, packageDir: '/fixture/package', fs: fakeFilesystem(), fresh: true });
+
+    expect(installed.originalTmpdir).toBe(tmpdir());
+    expect(env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR).toBe(tmpdir());
+  });
+
   it('allocates a cleared nested root beneath its declared enclosing scope', () => {
     const env = {
       AI_CONDUCTOR_TEST_TMP_BASE: '/fixture/top-level-storage',
@@ -275,5 +284,25 @@ describe('Vitest temporary storage selection', () => {
       ownsRoot: true,
       ownsScope: false,
     });
+  });
+
+  it('keeps independent and nested scopes isolated when one owner cleans up', () => {
+    const fs = fakeFilesystem();
+    const first = installVitestTmpRoot({ env: { TMPDIR: '/fixture/original-one' }, packageDir: '/fixture/package', fs, fresh: true });
+    const second = installVitestTmpRoot({ env: { TMPDIR: '/fixture/original-two' }, packageDir: '/fixture/package', fs, fresh: true });
+    const nested = installVitestTmpRoot({
+      env: {
+        AI_CONDUCTOR_TEST_TMP_SCOPE: first.scope,
+        AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR: '/fixture/original-one',
+        TMPDIR: `${first.scope}/child`,
+      },
+      packageDir: '/fixture/package',
+      fs,
+    });
+
+    expect(first.root).not.toBe(second.root);
+    expect(nested.root).toMatch(new RegExp(`^${first.scope}/child/`));
+    expect(nested.scope).toBe(first.scope);
+    expect(second.scope).not.toBe(first.scope);
   });
 });

@@ -22,7 +22,8 @@ async function launch(env: NodeJS.ProcessEnv = {}) {
     'AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR',
     'GIT_CEILING_DIRECTORIES',
   ]) {
-    if (!(key in env)) delete childEnv[key];
+    if (key in env && env[key] === undefined) delete childEnv[key];
+    else if (!(key in env)) delete childEnv[key];
   }
   return execa(process.execPath, [join(fixtureRoot, 'scripts', 'run-vitest.mjs'), 'run', 'selected.test.ts'], {
     cwd: fixtureRoot,
@@ -101,6 +102,16 @@ describe('run-vitest startup', () => {
     expect(observation.originalTmpdir).toBe(originalTmpdir);
     expect(observation.root).toMatch(new RegExp(`^${join(override, 'ai-conductor-vitest-run-')}`));
     expect(existsSync(observation.root)).toBe(false);
+  });
+
+  it('installs system temporary-directory context before launching when TMPDIR is unset', async () => {
+    const result = await launch({ TMPDIR: undefined });
+    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
+
+    expect(result.exitCode).toBe(0);
+    expect(observation.originalTmpdir).toBeTruthy();
+    expect(observation.originalTmpdir).not.toBe(observation.root);
+    expect(observation.tmpdir).toBe(observation.root);
   });
 
   it('rejects invalid storage before it can launch Vitest', async () => {

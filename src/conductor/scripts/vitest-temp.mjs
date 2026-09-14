@@ -4,6 +4,7 @@ import {
   realpathSync,
   rmSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -162,8 +163,11 @@ export function installVitestTmpRoot({
   fresh = false,
 } = {}) {
   const environment = snapshotVitestTmpEnvironment(env);
+  // Read this before installing any redirect. A launcher with no TMPDIR still
+  // needs stable original-directory context for its config's idempotent reuse.
+  const callerTmpdir = env.TMPDIR ?? tmpdir();
   const existingRoot = !fresh && env[VITEST_TMP_ROOT_ENV];
-  selectVitestTmpParent({ env, packageDir });
+  const selectedParent = selectVitestTmpParent({ env, packageDir });
   if (existingRoot && env[VITEST_ORIGINAL_TMPDIR_ENV] === undefined) {
     throw new Error(
       `Cannot reuse ${VITEST_TMP_ROOT_ENV} without ${VITEST_ORIGINAL_TMPDIR_ENV}`,
@@ -171,6 +175,7 @@ export function installVitestTmpRoot({
   }
   const allocation = existingRoot
     ? {
+      parent: canonicalize(fs, selectedParent),
       root: canonicalize(fs, existingRoot),
       scope: env[VITEST_TMP_SCOPE_ENV] ? canonicalize(fs, env[VITEST_TMP_SCOPE_ENV]) : canonicalize(fs, existingRoot),
       ownsRoot: false,
@@ -180,10 +185,10 @@ export function installVitestTmpRoot({
       ? allocateVitestTmpScope({ env, packageDir, fs })
       : allocateNestedRoot({ env, packageDir, fs });
 
-  const originalTmpdir = env[VITEST_ORIGINAL_TMPDIR_ENV] ?? env.TMPDIR;
+  const originalTmpdir = env[VITEST_ORIGINAL_TMPDIR_ENV] ?? callerTmpdir;
   env[VITEST_TMP_ROOT_ENV] = allocation.root;
   env[VITEST_TMP_SCOPE_ENV] = allocation.scope;
-  if (originalTmpdir !== undefined) env[VITEST_ORIGINAL_TMPDIR_ENV] = originalTmpdir;
+  env[VITEST_ORIGINAL_TMPDIR_ENV] = originalTmpdir;
   env.TMPDIR = allocation.root;
   appendGitCeiling(env, allocation.root);
 
