@@ -2009,7 +2009,9 @@ describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase
 
     let calls = 0;
     const refusals: ConductorEvent[] = [];
-    events.on('step_refused', (event) => refusals.push(event));
+    events.on('step_refused', (event) => {
+      refusals.push(event);
+    });
     const result = await resumeRebaseFirst({
       worktreePath: dir,
       localBase: 'main',
@@ -2028,7 +2030,9 @@ describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase
 
     expect(result).toBe('halted');
     expect(calls).toBe(1);
-    expect((await readState(join(dir, STATE_PATH_REL))).value.rebase).toBe('refused');
+    const stateResult = await readState(join(dir, STATE_PATH_REL));
+    expect(stateResult.ok).toBe(true);
+    expect(stateResult.ok && stateResult.value.rebase).toBe('refused');
     expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(false);
     await expect(readFile(join(dir, HALT_MARKER), 'utf8')).resolves.toContain('git rebase --continue');
     expect(refusals).toHaveLength(1);

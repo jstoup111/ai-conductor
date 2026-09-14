@@ -19,7 +19,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
-import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type { GhRunner, PrMergeState } from '../../src/engine/pr-labels.js';
 import { makeAutoresolveEligibility } from '../../src/engine/autoresolve.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
@@ -379,7 +379,7 @@ describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
     let dispatches = 0;
     const autoresolve = {
       enabled: true,
-      isEligible: async (_entry: WatchEntry, state) => ({ eligible: !state.labels.includes('needs-remediation') }),
+      isEligible: async (_entry: WatchEntry, state: PrMergeState) => ({ eligible: !state.labels.includes('needs-remediation') }),
       dispatch: async () => {
         dispatches += 1;
         return { kind: 'setup-stop' as const };

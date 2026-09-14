@@ -857,7 +857,9 @@ describe('integration/rebase-loop', () => {
     });
 
     expect(resolverCalls).toBe(1);
-    expect((await readState(statePath)).value.rebase).toBe('refused');
+    const stateResult = await readState(statePath);
+    expect(stateResult.ok).toBe(true);
+    expect(stateResult.ok && stateResult.value.rebase).toBe('refused');
     expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(false);
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain('git rebase --continue');
   });
