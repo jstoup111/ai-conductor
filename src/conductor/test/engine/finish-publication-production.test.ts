@@ -18,6 +18,7 @@ import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 import { recordSkipVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
+import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 import type { dispatchFinishRecord } from '../../src/engine/finish-record-cli.js';
 import type { ConductState } from '../../src/types/index.js';
 
@@ -73,6 +74,28 @@ async function observeImplementationEvidence(input: {
   }
 }
 
+function remoteMutation(): GithubMutationExecutionContext {
+  return {
+    provenance: {
+      repository: 'acme/widget', defaultBranch: 'main', specBranch: 'feat/feature',
+      featureMarker: '.docs/intake/feature.md', publication: 'initial',
+    },
+    dependencies: {
+      resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
+      provenanceDiscovery: {
+        readCommittedRecords: async () => [{ path: '.docs/intake/feature.md', content: 'Owner: alice\n' }],
+      },
+    },
+  };
+}
+
+function guardedRemoteGit() {
+  return vi.fn(async () => ({
+    kind: 'executed' as const,
+    targets: [{ operation: 'remote-ref.push' as const, repository: 'acme/widget', kind: 'remote-ref' as const, ref: 'refs/heads/feat/feature' }],
+  }));
+}
+
 /**
  * Fixture-owned terminal boundary. The production coordinator sees only the
  * typed runner; this adapter lets legacy in-memory PR fixtures retain their
@@ -83,6 +106,13 @@ function guardedOperations(
 ): GithubOperationRunner {
   return {
     async run(request) {
+      if (request.operation === 'pull-request.create') {
+        if (!request.payload || !('head' in request.payload) || !('base' in request.payload)) {
+          throw new Error('missing PR creation payload');
+        }
+        await gh(['pr', 'create', '--head', request.payload.head, '--base', request.payload.base], { cwd: '/fixture' });
+        return {};
+      }
       if (request.target.kind !== 'pull-request') throw new Error('unexpected non-PR operation');
       const prUrl = `https://github.com/${request.target.repository}/pull/${request.target.number}`;
       if (request.operation === 'pull-request.edit') {
@@ -311,6 +341,7 @@ describe('production FINISH publication composition', () => {
         baseBranch: 'main',
         git: async () => commandResult,
         gh,
+        operations: guardedOperations(gh),
         acquireInteractiveIntent: async () => 'pr',
         observeReleaseReadiness: async () => 'present',
         repairPresentation: async () => { trace.push('repair'); },
@@ -371,21 +402,23 @@ describe('production FINISH publication composition', () => {
       const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
         '../../src/engine/finish-publication-production.js'
       );
+      const gh = async (args: string[]) => {
+        if (args[0] === 'pr' && args[1] === 'view') {
+          if (githubFailure === 'read') throw new Error('body read failed');
+          return { stdout: JSON.stringify({ body: 'Reader-facing summary.' }) };
+        }
+        if (args[0] === 'pr' && args[1] === 'edit' && githubFailure === 'write') {
+          throw new Error('body write failed');
+        }
+        throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+      };
       const coordinator = createCoordinator({
         projectRoot: root,
         stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
         baseBranch: 'main',
         git: async () => commandResult,
-        gh: async (args) => {
-          if (args[0] === 'pr' && args[1] === 'view') {
-            if (githubFailure === 'read') throw new Error('body read failed');
-            return { stdout: JSON.stringify({ body: 'Reader-facing summary.' }) };
-          }
-          if (args[0] === 'pr' && args[1] === 'edit' && githubFailure === 'write') {
-            throw new Error('body write failed');
-          }
-          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
-        },
+        gh,
+        operations: guardedOperations(gh),
         acquireInteractiveIntent: async () => 'pr',
         observeReleaseReadiness: async () => 'present',
         repairPresentation: async () => {},
@@ -475,6 +508,7 @@ describe('production FINISH publication composition', () => {
         baseBranch: 'main',
         git: async () => commandResult,
         gh,
+        operations: guardedOperations(gh),
         acquireInteractiveIntent: async () => 'pr',
         observeReleaseReadiness: async () => 'present',
         repairPresentation: async () => { order.push('repair'); },
@@ -598,6 +632,7 @@ describe('production FINISH publication composition', () => {
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
         gh,
+        operations: guardedOperations(gh),
         git: async (args) => args[0] === 'remote'
           ? { stdout: 'origin\n' }
           : { stdout: 'refs/remotes/origin/feat/feature\n' },
@@ -1137,11 +1172,14 @@ describe('production FINISH publication composition', () => {
       await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
       const prUrl = 'https://github.com/acme/widget/pull/1172';
       const git = vi.fn(async (args: string[]) => {
+        if (args[0] === 'config') return { stdout: 'https://github.com/acme/widget.git\n' };
+        if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
         if (args[0] === 'remote') return { stdout: 'origin\n' };
         if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
         return commandResult;
       });
       const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
         if (args[0] === 'auth') return commandResult;
         if (args[0] === 'pr' && args[1] === 'view' && args[2] === prUrl) {
           return {
@@ -1213,18 +1251,24 @@ describe('production FINISH publication composition', () => {
         architecture_review_as_built: 'done',
       } as ConductState;
       const prUrl = 'https://github.com/acme/widget/pull/1172';
+      let created = false;
       const git = vi.fn(async (args: string[]) => {
+        if (args[0] === 'config') return { stdout: 'https://github.com/acme/widget.git\n' };
+        if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
         if (args[0] === 'remote') return { stdout: 'origin\n' };
         if (args[0] === 'rev-list') return { stdout: '1\n' };
         if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
         return { stdout: '' };
       });
       const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
         if (args[0] === 'auth') return { stdout: '' };
         if (args[0] === 'pr' && args[1] === 'view' && args[2] === 'feat/feature') {
-          throw new Error('no open PR');
+          if (!created) throw new Error('no open PR');
+          return { stdout: JSON.stringify({ url: prUrl, state: 'OPEN' }) };
         }
         if (args[0] === 'pr' && args[1] === 'create') {
+          created = true;
           return { stdout: `${prUrl}\n` };
         }
         if (args[0] === 'pr' && args[1] === 'view' && args[2] === prUrl) {
@@ -1238,6 +1282,9 @@ describe('production FINISH publication composition', () => {
         stateFilePath: join(pipeline, 'conduct-state.json'),
         git,
         gh,
+        operations: guardedOperations(gh),
+        remoteMutation: remoteMutation(),
+        remoteGit: guardedRemoteGit(),
         baseBranch: 'trunk',
         observeReleaseReadiness: async () => 'present',
       });
@@ -1254,7 +1301,7 @@ describe('production FINISH publication composition', () => {
 
       await expect(readFile(join(pipeline, 'conduct-state.json'), 'utf8')).resolves.toContain(`"pr_url": "${prUrl}"`);
       expect(git).toHaveBeenCalledWith(['rev-list', '--count', 'trunk..HEAD'], { cwd: root });
-      expect(gh).toHaveBeenCalledWith(expect.arrayContaining(['--base', 'trunk']), { cwd: root });
+      expect(gh).toHaveBeenCalledWith(expect.arrayContaining(['--base', 'trunk']), expect.anything());
       expect(gh).toHaveBeenCalledWith(['pr', 'view', prUrl, '--json', 'url,title,body,isDraft,labels'], { cwd: root });
       expect(events).toContainEqual(expect.objectContaining({
         type: 'finish_publication_transition', phase: 'completed', transition: 'establish_pr',
@@ -1284,8 +1331,11 @@ describe('production FINISH publication composition', () => {
         architecture_review_as_built: 'done',
       } as ConductState;
       const prUrl = 'https://github.com/acme/widget/pull/1275';
+      let created = false;
       const pushes: string[][] = [];
       const git = vi.fn(async (args: string[]) => {
+        if (args[0] === 'config') return { stdout: 'https://github.com/acme/widget.git\n' };
+        if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
         if (args[0] === 'remote') return { stdout: 'origin\n' };
         if (args[0] === 'rev-list') return { stdout: '31\n' };
         if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
@@ -1301,21 +1351,30 @@ describe('production FINISH publication composition', () => {
         return { stdout: '' };
       });
       const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
         if (args[0] === 'auth') return { stdout: '' };
         if (args[0] === 'pr' && args[1] === 'view' && args[2] === 'feat/feature') {
-          throw new Error('no open PR');
+          if (!created) throw new Error('no open PR');
+          return { stdout: JSON.stringify({ url: prUrl, state: 'OPEN' }) };
         }
-        if (args[0] === 'pr' && args[1] === 'create') return { stdout: `${prUrl}\n` };
+        if (args[0] === 'pr' && args[1] === 'create') {
+          created = true;
+          return { stdout: `${prUrl}\n` };
+        }
         if (args[0] === 'pr' && args[1] === 'view' && args[2] === prUrl) {
           return { stdout: JSON.stringify({ url: prUrl, title: 'draft', body: 'draft', isDraft: true }) };
         }
         return { stdout: '' };
       });
+      const remoteGit = guardedRemoteGit();
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         git,
         gh,
+        operations: guardedOperations(gh),
+        remoteMutation: remoteMutation(),
+        remoteGit,
         baseBranch: 'main',
         observeReleaseReadiness: async () => 'present',
       });
@@ -1331,7 +1390,11 @@ describe('production FINISH publication composition', () => {
       ).resolves.toEqual({ kind: 'publication_progress', transition: 'establish_pr' });
 
       // Exactly one push, lease-protected — never a bare force.
-      expect(pushes).toEqual([['push', '-u', 'origin', 'feat/feature', '--force-with-lease']]);
+      expect(pushes).toEqual([]);
+      expect(remoteGit).toHaveBeenCalledWith(
+        ['push', '-u', 'origin', 'HEAD:refs/heads/feat/feature', '--force-with-lease'],
+        expect.anything(),
+      );
       await expect(readFile(join(pipeline, 'conduct-state.json'), 'utf8')).resolves.toContain(
         `"pr_url": "${prUrl}"`,
       );
@@ -1389,6 +1452,7 @@ describe('production FINISH publication composition', () => {
         baseBranch: 'main',
         git,
         gh,
+        operations: guardedOperations(gh),
         observeReleaseReadiness: async () => 'present',
       });
       const input = {
@@ -1495,6 +1559,7 @@ describe('production FINISH publication composition', () => {
         baseBranch: 'main',
         git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         gh,
+        operations: guardedOperations(gh),
         observeReleaseReadiness: async () => 'present',
         repairPresentation,
       });
@@ -1579,6 +1644,7 @@ describe('production FINISH publication composition', () => {
         baseBranch: 'main',
         git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         gh,
+        operations: guardedOperations(gh),
         observeReleaseReadiness: async () => 'present',
         repairPresentation: async () => undefined,
         resolveFeatureIdentity: async () => feature,
@@ -1654,6 +1720,7 @@ describe('production FINISH publication composition', () => {
         baseBranch: 'main',
         git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         gh,
+        operations: guardedOperations(gh),
         observeReleaseReadiness: async () => 'present',
         repairPresentation: async () => undefined,
         resolveFeatureIdentity: async () => feature,
@@ -2079,16 +2146,25 @@ describe('production FINISH publication composition', () => {
       await mkdir(pipeline);
       const trace: string[] = [];
       const prUrl = 'https://github.com/acme/widget/pull/1172';
+      let created = false;
       const git = vi.fn(async (args: string[]) => {
         trace.push(`git:${args.join(' ')}`);
+        if (args[0] === 'config') return { stdout: 'https://github.com/acme/widget.git\n' };
+        if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
         if (args[0] === 'rev-list') return { stdout: '1\n' };
         if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
         return commandResult;
       });
       const gh = vi.fn(async (args: string[]) => {
         trace.push(`gh:${args.join(' ')}`);
-        if (args[0] === 'pr' && args[1] === 'view') throw new Error('no open PR');
-        if (args[0] === 'pr' && args[1] === 'create') return { stdout: `${prUrl}\n` };
+        if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
+        if (args[0] === 'pr' && args[1] === 'view') {
+          if (!created) throw new Error('no open PR');
+          return { stdout: JSON.stringify({ url: prUrl, state: 'OPEN' }) };
+        }
+        if (args[0] === 'pr' && args[1] === 'create') {
+          return { stdout: `${prUrl}\n` };
+        }
         throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
       });
       const writeShippedRecord = vi.fn(async () => { trace.push('shipped-record'); return 0; });
@@ -2099,6 +2175,9 @@ describe('production FINISH publication composition', () => {
         baseBranch: 'main',
         git,
         gh,
+        operations: guardedOperations(gh),
+        remoteMutation: remoteMutation(),
+        remoteGit: guardedRemoteGit(),
         acquireInteractiveIntent: async () => { trace.push('operator-choice'); return 'pr'; },
         observeReleaseReadiness: async () => { trace.push('release-readiness'); return 'present'; },
         writeShippedRecord,
@@ -2122,7 +2201,6 @@ describe('production FINISH publication composition', () => {
 
       expect(result).toMatchObject({ kind: 'publication_retry', transition: 'establish_pr' });
       expect(trace[0]).toBe('operator-choice');
-      expect(trace.indexOf('operator-choice')).toBeLessThan(trace.findIndex((entry) => entry.startsWith('git:push')));
       expect(trace.indexOf('operator-choice')).toBeLessThan(trace.indexOf('release-readiness'));
       expect(trace.indexOf('operator-choice')).toBeLessThan(trace.findIndex((entry) => entry.startsWith('gh:pr create')));
       expect(writeShippedRecord).not.toHaveBeenCalled();
