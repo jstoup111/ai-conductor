@@ -1,4 +1,4 @@
-// self-host/release-gate.ts — ReleaseArtifactGate (TR-8/10).
+// self-host/release-gate.ts — ReleaseArtifactGate (TR-10).
 //
 // One fail-closed sub-gate a harness self-build must clear at finish before a
 // PR opens (adr-2026-06-30-halt-based-release-gates):
