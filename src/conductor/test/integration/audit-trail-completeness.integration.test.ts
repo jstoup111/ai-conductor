@@ -107,6 +107,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // must agree.
   step_refused: 'friction-mapped',
   step_status_write_refused: 'friction-mapped',
+  // Ownership refusals remain durable in the event ledger and terminal, but
+  // are deliberately outside the audit-trail friction vocabulary.
+  github_operation_refused: 'not-audited-by-design',
   provider_attempt: 'not-audited-by-design',
   provider_stream_progress: 'not-audited-by-design',
   scratch_cleanup_reclaimed: 'not-audited-by-design',
@@ -327,6 +330,14 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     expected: 'skipped',
     requested: 'stale',
     intent: 'restage ship tail after build kickback',
+  },
+  github_operation_refused: {
+    type: 'github_operation_refused',
+    operator: 'operator',
+    target: { repository: 'acme/repo', kind: 'issue', number: 1 },
+    operation: 'issue.comment.create',
+    reason: 'other-owner',
+    remedy: 'ask-resource-owner',
   },
   provider_attempt: {
     type: 'provider_attempt',

@@ -11,6 +11,7 @@ import { createGuardedGithubOperationRunner, type GhRunner } from '../../../src/
 import { createLiveRegion } from '../../../src/ui/live-region.js';
 import { TerminalRenderer } from '../../../src/ui/terminal-renderer.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
+import type { ConductorEvent } from '../../../src/types/events.js';
 
 class CaptureStream extends Writable {
   chunks: string[] = [];
@@ -76,11 +77,11 @@ describe('canonical GitHub ownership refusal event', () => {
       liveRegion: createLiveRegion({ stream, forceTTY: false }),
     });
     const terminal = vi.fn<GhRunner>(async () => ({ stdout: '' }));
-    const seen: unknown[] = [];
+    const seen: Array<Extract<ConductorEvent, { type: 'github_operation_refused' }>> = [];
 
     persister.start();
     events.on('github_operation_refused', async (event) => {
-      seen.push(event);
+      if (event.type === 'github_operation_refused') seen.push(event);
       await renderer.handle(event);
     });
 
