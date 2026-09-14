@@ -19,7 +19,12 @@ const execFileP = promisify(execFileCb);
 
 // ── Runner types ──────────────────────────────────────────────────────────────
 
-import { makeProductionGh, assertRealExecAllowed, type GhRunner } from './tracker-client.js';
+import {
+  GhCapabilityError,
+  makeProductionGh,
+  assertRealExecAllowed,
+  type GhRunner,
+} from './tracker-client.js';
 export { makeProductionGh, assertRealExecAllowed, type GhRunner };
 
 /**
@@ -160,19 +165,42 @@ export async function removeLabel(
 
 // ── PR merge state ────────────────────────────────────────────────────────────
 
+export interface PrCheckRollupEntry {
+  /** Present on validated GitHub entries; omitted by legacy in-memory fixtures. */
+  kind?: 'check-run' | 'status-context';
+  status?: string | null;
+  conclusion?: string | null;
+  state?: string | null;
+  name?: string;
+  context?: string;
+  detailsUrl?: string;
+  targetUrl?: string;
+}
+
+/** A failed `gh pr view` read, preserved so callers do not mistake it for no checks. */
+export type PrMergeStateReadFailure =
+  | { kind: 'not-found'; error: unknown }
+  | { kind: 'capability'; error: GhCapabilityError }
+  | { kind: 'runner'; error: unknown }
+  | { kind: 'invalid-json'; error: unknown }
+  | { kind: 'invalid-response' };
+
+/** A response was read, but its check context cannot safely be consumed. */
+export type PrCheckContextFailure =
+  | { kind: 'invalid-rollup' }
+  | { kind: 'invalid-rollup-entry'; index: number };
+
 export interface PrMergeState {
   state: string;
   mergeable: string;
   hasFailingOrPendingChecks: boolean;
   labels: string[];
   checksOutcome: 'failed' | 'pending' | 'green' | 'none';
-  statusCheckRollup?: Array<{
-    status?: string | null;
-    conclusion?: string | null;
-    state?: string | null;
-    name?: string;
-    context?: string;
-  }>;
+  statusCheckRollup?: PrCheckRollupEntry[];
+  /** Present only when reading the PR itself failed. */
+  readFailure?: PrMergeStateReadFailure;
+  /** Present only when the PR response carried unusable check context. */
+  contextFailure?: PrCheckContextFailure;
   /**
    * True when the PR is still a draft (not ready for review). Optional so
    * existing constructors/fixtures stay valid; absent is read as "not draft".
@@ -257,18 +285,17 @@ const FAILING_OR_PENDING = new Set([
   'CANCELLED',
 ]);
 
-function isCheckFailingOrPending(c: {
-  status?: string | null;
-  conclusion?: string | null;
-}): boolean {
-  const status = (c.status ?? '').toUpperCase();
-  const conclusion = (c.conclusion ?? '').toUpperCase();
+function isCheckFailingOrPending(c: PrCheckRollupEntry): boolean {
+  const status = (c.kind === 'status-context' ? c.state : c.status) ?? '';
+  const conclusion = c.kind === 'status-context' ? '' : c.conclusion ?? '';
+  const normalizedStatus = status.toUpperCase();
+  const normalizedConclusion = conclusion.toUpperCase();
   // Explicit failure / error / pending status
-  if (FAILING_OR_PENDING.has(status)) return true;
+  if (FAILING_OR_PENDING.has(normalizedStatus)) return true;
   // Explicit failure / error / pending conclusion
-  if (FAILING_OR_PENDING.has(conclusion)) return true;
+  if (FAILING_OR_PENDING.has(normalizedConclusion)) return true;
   // Null/empty conclusion = check is still running (not yet completed)
-  if (!c.conclusion) return true;
+  if (c.kind !== 'status-context' && !c.conclusion) return true;
   return false;
 }
 
@@ -295,9 +322,10 @@ export function classifyChecksOutcome(
 
   for (const check of checks) {
     const conclusion = (check.conclusion ?? '').toUpperCase();
+    const status = (check.status ?? '').toUpperCase();
 
     // Check if this entry has a failed conclusion
-    if (FAILING_OR_PENDING.has(conclusion)) {
+    if (FAILING_OR_PENDING.has(conclusion) || (status !== 'PENDING' && FAILING_OR_PENDING.has(status))) {
       hasFailed = true;
       break; // Failed wins, no need to check further
     }
@@ -334,6 +362,75 @@ interface GhPrViewJson {
   isDraft?: boolean | null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isNullableString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === 'string';
+}
+
+function parseRollupEntry(value: unknown): PrCheckRollupEntry | undefined {
+  if (!isRecord(value)) return undefined;
+
+  // Older gh fixtures omitted __typename for CheckRun entries. Keep accepting
+  // that flat shape while normalizing every returned entry to a discriminator.
+  const typename = value.__typename;
+  if (typename !== undefined && typeof typename !== 'string') return undefined;
+  if (typename === undefined || typename === 'CheckRun') {
+    if (
+      !isNullableString(value.status) ||
+      !isNullableString(value.conclusion) ||
+      !isNullableString(value.name) ||
+      !isNullableString(value.detailsUrl)
+    ) {
+      return undefined;
+    }
+    return {
+      kind: 'check-run',
+      status: value.status as string | null | undefined,
+      conclusion: value.conclusion as string | null | undefined,
+      ...(typeof value.name === 'string' ? { name: value.name } : {}),
+      ...(typeof value.detailsUrl === 'string' ? { detailsUrl: value.detailsUrl } : {}),
+    };
+  }
+
+  if (typename === 'StatusContext') {
+    if (
+      !isNullableString(value.state) ||
+      !isNullableString(value.context) ||
+      !isNullableString(value.targetUrl)
+    ) {
+      return undefined;
+    }
+    return {
+      kind: 'status-context',
+      state: value.state as string | null | undefined,
+      ...(typeof value.context === 'string' ? { context: value.context } : {}),
+      ...(typeof value.targetUrl === 'string' ? { targetUrl: value.targetUrl } : {}),
+    };
+  }
+
+  return undefined;
+}
+
+function parseCheckRollup(
+  value: unknown,
+): { checks: PrCheckRollupEntry[] } | { failure: PrCheckContextFailure } {
+  // GitHub represents an unavailable rollup as null; that is the established
+  // successful-empty-read contract. Any other non-array value is malformed.
+  if (value === undefined || value === null) return { checks: [] };
+  if (!Array.isArray(value)) return { failure: { kind: 'invalid-rollup' } };
+
+  const checks: PrCheckRollupEntry[] = [];
+  for (const [index, entry] of value.entries()) {
+    const parsed = parseRollupEntry(entry);
+    if (!parsed) return { failure: { kind: 'invalid-rollup-entry', index } };
+    checks.push(parsed);
+  }
+  return { checks };
+}
+
 /**
  * Fetch the merge state of a PR (state, mergeable, check rollup, labels).
  * On any runner error returns a safe sentinel so callers can treat it as
@@ -350,14 +447,33 @@ export async function prMergeState(
       ['pr', 'view', prUrl, '--json', 'state,mergeable,statusCheckRollup,labels,isDraft'],
       { cwd },
     );
-    const data: GhPrViewJson = JSON.parse(stdout);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stdout);
+    } catch (err) {
+      return { ...ERROR_SENTINEL, readFailure: { kind: 'invalid-json', error: err } };
+    }
+    if (!isRecord(parsed)) {
+      return { ...ERROR_SENTINEL, readFailure: { kind: 'invalid-response' } };
+    }
+    const data = parsed as GhPrViewJson;
     const state = data.state ?? 'UNKNOWN';
     const mergeable = data.mergeable ?? 'UNKNOWN';
-    const checks = data.statusCheckRollup ?? [];
+    const rollup = parseCheckRollup(data.statusCheckRollup);
+    if ('failure' in rollup) {
+      return { ...ERROR_SENTINEL, contextFailure: rollup.failure };
+    }
+    const checks = rollup.checks;
     const hasFailingOrPendingChecks =
       checks.length > 0 && checks.some(isCheckFailingOrPending);
-    const labels = (data.labels ?? []).map((l) => l.name ?? '').filter(Boolean);
-    const checksOutcome = classifyChecksOutcome(checks);
+    const labels = Array.isArray(data.labels)
+      ? data.labels.map((l) => l?.name ?? '').filter((name): name is string => typeof name === 'string' && Boolean(name))
+      : [];
+    const checksOutcome = classifyChecksOutcome(
+      checks.map((check) => check.kind === 'check-run'
+        ? { status: check.status, conclusion: check.conclusion }
+        : { status: check.state, conclusion: check.state === 'SUCCESS' ? 'SUCCESS' : undefined }),
+    );
     return {
       state,
       mergeable,
@@ -373,9 +489,12 @@ export async function prMergeState(
     // prune it (FR-13). A transient/unknown error returns UNKNOWN so the sweep
     // keeps the entry and retries next cycle (FR-15).
     if (isNotFoundError(err)) {
-      return { ...NOTFOUND_SENTINEL, checksOutcome: 'none' };
+      return { ...NOTFOUND_SENTINEL, readFailure: { kind: 'not-found', error: err } };
     }
-    return { ...ERROR_SENTINEL, checksOutcome: 'none' };
+    if (err instanceof GhCapabilityError) {
+      return { ...ERROR_SENTINEL, readFailure: { kind: 'capability', error: err } };
+    }
+    return { ...ERROR_SENTINEL, readFailure: { kind: 'runner', error: err } };
   }
 }
 
