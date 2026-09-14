@@ -16,7 +16,16 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'node_modules/**', 'scripts/**', '*.config.ts', '*.mjs'],
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      'scripts/**',
+      '*.config.ts',
+      '*.mjs',
+      // These intentional type-error fixtures are compiled independently by
+      // compileTypeFixture, and are excluded from tsconfig.test.json.
+      'test/types/fixtures/test-suite-commands-*-negative.fixture.ts',
+    ],
   },
   tseslint.configs.base,
   {
