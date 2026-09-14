@@ -20,6 +20,24 @@ describe('EventPersister: build progress/stall events', () => {
     expect(event.provider).toBe('unknown');
     expect(JSON.stringify(event)).not.toContain('secret');
   });
+  it('allowlists diagnostic facts and replaces unsafe attribution rather than serializing it', () => {
+    const event = boundCiRepairDiagnostic({
+      type: 'ci_repair_diagnostic',
+      prUrl: 'https://token:secret@example.test/pull/7?hint=secret',
+      slug: 'unsafe slug',
+      provider: 'bad/provider',
+      stage: 'raw-stack-trace',
+      reason: 'raw-provider-output',
+      disposition: 'remote-green',
+    } as unknown as ConductorEvent);
+    expect(event).toMatchObject({
+      type: 'ci_repair_diagnostic',
+      prUrl: '[invalid]', slug: '[invalid]', provider: 'unknown',
+      stage: 'execution', reason: 'unknown', disposition: 'failed',
+    });
+    expect(Buffer.byteLength(JSON.stringify(event), 'utf8')).toBeLessThanOrEqual(8_192);
+    expect(JSON.stringify(event)).not.toContain('secret');
+  });
   let tempDir: string;
   let eventsPath: string;
   let emitter: ConductorEventEmitter;

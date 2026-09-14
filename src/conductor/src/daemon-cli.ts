@@ -83,7 +83,7 @@ import {
   withDaemonLogFeatureOwnership,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
-import type { ConductState, ConductorEvent, StepName, StepStatus } from './types/index.js';
+import type { CiRepairDiagnosticReason, ConductState, ConductorEvent, StepName, StepStatus } from './types/index.js';
 import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
 import {
   createDaemonTeardown,
@@ -801,6 +801,21 @@ export function createForcedSetupPrepare(
  * the worktree down on success. Unattended; ceilings + supervision live in
  * runDaemon / makeRunFeature.
  */
+/** Convert producer-local failure labels into the closed, payload-free event vocabulary. */
+function ciRepairReason(reason: string): CiRepairDiagnosticReason {
+  const known: readonly CiRepairDiagnosticReason[] = [
+    'auth', 'permission', 'timeout', 'api', 'capability', 'malformed-context',
+    'missing-context', 'missing-branch', 'log-unavailable', 'context-truncated',
+    'provider-unavailable', 'readiness-degraded', 'flag-invalid', 'spawn-env',
+    'unknown', 'guard-refused', 'verification-failed', 'publication-refused',
+    'verified-publication',
+  ];
+  if ((known as readonly string[]).includes(reason)) return reason as CiRepairDiagnosticReason;
+  if (reason === 'empty-failure-context') return 'missing-context';
+  if (reason === 'read-failure' || reason === 'branch-lookup-failed') return 'api';
+  return 'unknown';
+}
+
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
   const configResult = await loadMergedConfig(projectRoot);
@@ -2422,13 +2437,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             dispatch: async (entry, state) => {
               if (!ciFixEnabled) return;
               let repairProvider: string | undefined;
-              return createDaemonCiFixDispatch({
+              const dispatchCiFix = createDaemonCiFixDispatch({
                 gh: makeProductionGh(),
                 liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
                 log,
                 diagnostic: async ({ stage, reason }) => {
                   void events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
-                    stage, reason: reason === 'empty-failure-context' ? 'missing-context' : reason,
+                    stage, reason: ciRepairReason(reason),
                     disposition: stage === 'log-enrichment' ? 'degraded' : 'deferred' });
                 },
                 createDispatcher: () => ({
@@ -2469,18 +2484,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     });
                   },
                 }),
-              }).then(async (outcome) => {
-                if (outcome.kind === 'needs-human') {
-                  log(`[ci-fix] setup-only provider exhaustion for ${entry.prUrl}; parking for human recovery`);
-                }
-                if (outcome.kind === 'failed' || outcome.kind === 'published') {
-                  await events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
-                    stage: outcome.kind === 'published' ? 'publication' : outcome.stage === 'guard' ? 'guard' : outcome.stage === 'verification' ? 'verification' : outcome.stage === 'publication' ? 'publication' : 'execution',
-                    reason: outcome.kind === 'published' ? 'verified-publication' : outcome.stage === 'guard' ? 'guard-refused' : outcome.stage === 'verification' ? 'verification-failed' : outcome.stage === 'publication' ? 'publication-refused' : 'provider-failure',
-                    disposition: outcome.kind === 'published' ? 'published' : 'failed', provider: repairProvider });
-                }
-                return outcome;
               });
+              const outcome = await dispatchCiFix(entry, state);
+              if (outcome.kind === 'needs-human') {
+                log(`[ci-fix] setup-only provider exhaustion for ${entry.prUrl}; parking for human recovery`);
+              }
+              if (outcome.kind === 'failed' || outcome.kind === 'published') {
+                await events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
+                  stage: outcome.kind === 'published' ? 'publication' : outcome.stage === 'guard' ? 'guard' : outcome.stage === 'verification' ? 'verification' : outcome.stage === 'publication' ? 'publication' : 'execution',
+                  reason: outcome.kind === 'published' ? 'verified-publication' : outcome.stage === 'guard' ? 'guard-refused' : outcome.stage === 'verification' ? 'verification-failed' : outcome.stage === 'publication' ? 'publication-refused' : 'unknown',
+                  disposition: outcome.kind === 'published' ? 'published' : 'failed', provider: repairProvider });
+              }
+              return outcome;
             },
           },
         });

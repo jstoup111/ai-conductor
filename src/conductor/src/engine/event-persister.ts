@@ -4,11 +4,19 @@ import {
   epochAnchoredMonotonicClock,
   type IntervalClock,
 } from '../execution/observed-interval.js';
-import type { ConductorEvent } from '../types/index.js';
+import type {
+  CiRepairDiagnosticDisposition,
+  CiRepairDiagnosticReason,
+  CiRepairDiagnosticStage,
+  ConductorEvent,
+} from '../types/index.js';
 import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
 import { persistedEventTypes } from './event-sinks.js';
 
 const MAX_CI_REPAIR_DIAGNOSTIC_BYTES = 8_192;
+const CI_REPAIR_STAGES = new Set<CiRepairDiagnosticStage>(['context', 'log-enrichment', 'branch', 'readiness', 'execution', 'guard', 'verification', 'publication']);
+const CI_REPAIR_REASONS = new Set<CiRepairDiagnosticReason>(['auth', 'permission', 'timeout', 'api', 'capability', 'malformed-context', 'missing-context', 'missing-branch', 'log-unavailable', 'context-truncated', 'provider-unavailable', 'readiness-degraded', 'flag-invalid', 'spawn-env', 'unknown', 'guard-refused', 'verification-failed', 'publication-refused', 'verified-publication']);
+const CI_REPAIR_DISPOSITIONS = new Set<CiRepairDiagnosticDisposition>(['deferred', 'degraded', 'failed', 'published']);
 
 /** Bound untrusted attribution; raw output and hints are not event fields. */
 export function boundCiRepairDiagnostic(event: ConductorEvent): ConductorEvent {
@@ -23,10 +31,21 @@ export function boundCiRepairDiagnostic(event: ConductorEvent): ConductorEvent {
     }
     return result + marker;
   };
+  const safePrUrl = (value: string): string => {
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash
+        ? truncate(url.toString(), 2_048)
+        : '[invalid]';
+    } catch { return '[invalid]'; }
+  };
   let bounded: ConductorEvent = {
     ...event,
-    slug: truncate(event.slug, 512),
-    prUrl: truncate(event.prUrl, 2_048),
+    slug: /^[A-Za-z0-9._-]+$/.test(event.slug) ? truncate(event.slug, 512) : '[invalid]',
+    prUrl: safePrUrl(event.prUrl),
+    stage: CI_REPAIR_STAGES.has(event.stage) ? event.stage : 'execution',
+    reason: CI_REPAIR_REASONS.has(event.reason) ? event.reason : 'unknown',
+    disposition: CI_REPAIR_DISPOSITIONS.has(event.disposition) ? event.disposition : 'failed',
     ...(event.provider === undefined ? {} : { provider: /^[A-Za-z0-9._-]+$/.test(event.provider) ? truncate(event.provider, 256) : 'unknown' }),
   };
   if (Buffer.byteLength(JSON.stringify(bounded), 'utf8') > MAX_CI_REPAIR_DIAGNOSTIC_BYTES) {

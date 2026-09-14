@@ -171,6 +171,11 @@ export interface ProviderLifecycleEventMetadata {
   outcome?: 'completed' | 'failed';
 }
 
+/** Closed, non-textual facts permitted on the CI repair diagnostic bus event. */
+export type CiRepairDiagnosticStage = 'context' | 'log-enrichment' | 'branch' | 'readiness' | 'execution' | 'guard' | 'verification' | 'publication';
+export type CiRepairDiagnosticReason = 'auth' | 'permission' | 'timeout' | 'api' | 'capability' | 'malformed-context' | 'missing-context' | 'missing-branch' | 'log-unavailable' | 'context-truncated' | 'provider-unavailable' | 'readiness-degraded' | 'flag-invalid' | 'spawn-env' | 'unknown' | 'guard-refused' | 'verification-failed' | 'publication-refused' | 'verified-publication';
+export type CiRepairDiagnosticDisposition = 'deferred' | 'degraded' | 'failed' | 'published';
+
 /** One provider candidate result or lifecycle transition within a step attempt. */
 export interface ProviderAttemptEvent {
   type: 'provider_attempt';
@@ -1274,9 +1279,9 @@ export type ConductorEvent =
       type: 'ci_repair_diagnostic';
       prUrl: string;
       slug: string;
-      stage: 'context' | 'log-enrichment' | 'branch' | 'readiness' | 'execution' | 'guard' | 'verification' | 'publication';
-      reason: 'read-failure' | 'auth' | 'permission' | 'timeout' | 'api' | 'capability' | 'malformed-context' | 'missing-context' | 'missing-branch' | 'log-unavailable' | 'context-truncated' | 'provider-unavailable' | 'readiness-degraded' | 'flag-invalid' | 'spawn-env' | 'provider-failure' | 'guard-refused' | 'verification-failed' | 'publication-refused' | 'verified-publication' | 'unknown';
-      disposition: 'deferred' | 'degraded' | 'failed' | 'published';
+      stage: CiRepairDiagnosticStage;
+      reason: CiRepairDiagnosticReason;
+      disposition: CiRepairDiagnosticDisposition;
       provider?: string;
     }
   // ── Semantic attribution verification (Task 17) ──

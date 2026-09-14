@@ -15,6 +15,8 @@ import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import * as eventPersisterModule from '../../src/engine/event-persister.js';
+import { startDaemonEventPersistence } from '../../src/engine/event-persister.js';
+import { renderDaemonEvent } from '../../src/daemon-cli.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { InvokeOptions, LLMProvider } from '../../src/execution/llm-provider.js';
 import type {
@@ -457,5 +459,48 @@ describe('daemon feature provider-event persistence', () => {
       depsForwardsScope: true,
       depsForwardsFeatureBus: true,
     });
+  });
+
+  it('persists and renders bounded CI repair diagnostics on the root bus after a reader restart', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'daemon-ci-repair-events-'));
+    roots.push(root);
+    const events = new ConductorEventEmitter();
+    const persistence = startDaemonEventPersistence(root, events);
+    const rendered: string[] = [];
+    events.on('ci_repair_diagnostic', (event) => renderDaemonEvent(event, (line) => rendered.push(line)));
+
+    await events.emit({
+      type: 'ci_repair_diagnostic',
+      prUrl: 'https://github.com/acme/widget/pull/7',
+      slug: 'widget',
+      stage: 'verification',
+      reason: 'verification-failed',
+      disposition: 'failed',
+      provider: 'codex',
+    });
+    // A failing renderer is an observational subscriber and cannot make emit
+    // reject or prevent the persisted event from being available to a reader.
+    events.on('ci_repair_diagnostic', () => { throw new Error('renderer unavailable'); });
+    await expect(events.emit({
+      type: 'ci_repair_diagnostic',
+      prUrl: 'https://github.com/acme/widget/pull/7',
+      slug: 'widget',
+      stage: 'publication',
+      reason: 'verified-publication',
+      disposition: 'published',
+      provider: 'claude',
+    })).resolves.toBeUndefined();
+    persistence.stop();
+
+    const read = async () => (await readFile(join(root, '.daemon', 'events.jsonl'), 'utf-8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as ConductorEvent);
+    const firstReader = await read();
+    const restartedReader = await read();
+    expect(firstReader).toEqual(restartedReader);
+    expect(firstReader.map((event) => [event.type, event.slug, event.stage, event.reason, event.provider])).toEqual([
+      ['ci_repair_diagnostic', 'widget', 'verification', 'verification-failed', 'codex'],
+      ['ci_repair_diagnostic', 'widget', 'publication', 'verified-publication', 'claude'],
+    ]);
+    expect(rendered.join('\n')).toContain('verification/verification-failed (failed)');
   });
 });
