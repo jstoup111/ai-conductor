@@ -36,7 +36,15 @@ Conflict-check surfaced three accepted contracts this design must reconcile with
    The single-slug scope, point-of-deletion re-verification, record-as-precondition, and no-force
    requirements remain unchanged.*
 
+   *Amended 2026-09-14 by jstoup111/ai-conductor#1510 (`adr-2026-08-01` Decisions 6–8): the sweep's candidate set is the
+   operator-parked slugs unioned with every git-registered worktree directly under `.worktrees/`,
+   so the same guarded helper reclaims merged work whether or not it was ever parked.*
+
 4. **Records are never invented; record-on-main is a deletion precondition.** The helper deletes worktree/branch/marker only when `.docs/shipped/<slug>.md` already exists on the base branch. When missing, it resolves the actual merged implementation PR (e.g. `gh pr list --state merged --head feature/<slug>`); if resolvable it hands record creation to the ST-916 record-only repair-PR seam (real `pr` URL, canonical hash derivation) and defers cleanup to a later pass ("not reconcilable until the record lands"); if no merged PR is resolvable it reports and makes zero record writes (ST-916-5 NP2). Nothing here commits to main or merges anything.
+
+   *Amended 2026-09-14 by jstoup111/ai-conductor#1510 (`adr-2026-08-01` Decision 8): the record precondition applies to a
+   candidate on a `feat/daemon-*` branch; a candidate on any other branch is reclaimable on the
+   proof set alone.*
 
 5. **In-flight guard.** The helper refuses to remove a worktree whose `.pipeline/` belongs to an in-progress run (park-over-live-run is legal), satisfying the mid-loop-pipeline-wipe audit.
 

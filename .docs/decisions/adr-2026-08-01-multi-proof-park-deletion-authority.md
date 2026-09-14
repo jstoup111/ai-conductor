@@ -91,6 +91,29 @@ branches. Rejected on cost/benefit, not on correctness.
    deleted; every branch refused is still refused. This is a naming, counting, and record-keeping
    change only. No branch becomes newly deletable.
 
+> **Amended 2026-09-14 by jstoup111/ai-conductor#1510 (spec `reclaim-merged-feature-worktrees-without-depending`):** the candidate set, the branch the
+> proofs key on, and the scope of the record precondition change; the proof set and its strength
+> do not.
+>
+> 6. **The guarded helper's candidate set is the worktree listing, not only the park markers.**
+>    `reconcileParkedFeatures` enumerates every git-registered worktree directly under
+>    `.worktrees/` from `git worktree list --porcelain` and unions it with the operator-parked
+>    slugs. Enumeration produces candidates only: each candidate still enters
+>    `reconcileMergedPark` as exactly one explicit slug, and the helper still re-derives every
+>    proof immediately before the destructive step. A flat directory read is not an enumeration
+>    source — it cannot supply the branch and it misreads nested paths as slugs.
+>
+> 7. **The helper keys its proofs on the worktree's listed branch.** Evidence is gathered for the
+>    branch the listing reports for that worktree, not for a branch whose final path segment
+>    happens to equal the slug. The two deletion proofs — ancestry and merged-PR head identity —
+>    and their equal strength are unchanged.
+>
+> 8. **The shipped-record precondition is scoped by branch kind.** A candidate on a
+>    `feat/daemon-*` branch keeps the record-on-main precondition, because the daemon backlog
+>    dedups dispatch on that record. A candidate on any other branch is reclaimable on the proof
+>    set alone; no record is required or consulted for it, because no dispatch depends on one.
+>    This adds no proof to the set: nothing becomes deletable that both proofs would refuse.
+
 ## Consequences
 
 - The governing record matches the code again, and the "one authority" sentence stops being a trap
