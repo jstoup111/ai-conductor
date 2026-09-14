@@ -1129,6 +1129,36 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     expect(halt).toContain('No git rebase is in progress; do not run git rebase --continue.');
   });
 
+  it('a re-conflict whose resolver reports setup-only exhaustion → halted, rebase left paused, never stamped done', async () => {
+    await initConflictRepo();
+
+    await writeSentinel();
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      resolveAttempts: 2,
+      resolveConflict: async () => ({
+        resolved: false,
+        reason: 'no provider',
+        providerSetupExhaustion: true,
+      } as unknown as Awaited<ReturnType<NonNullable<Parameters<typeof resumeRebaseFirst>[0]['resolveConflict']>>>),
+    });
+    expect(res).toBe('halted');
+    expect(await fileExists(join(dir, HALT_MARKER))).toBe(true);
+    expect(await readFile(join(dir, HALT_MARKER), 'utf8')).toContain('provider setup unavailable');
+    const inProgress =
+      (await fileExists(join(dir, '.git/rebase-merge'))) ||
+      (await fileExists(join(dir, '.git/rebase-apply')));
+    expect(inProgress).toBe(true);
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    const state = (await fileExists(statePath))
+      ? (JSON.parse(await readFile(statePath, 'utf8')) as { rebase?: string })
+      : {};
+    expect(state.rebase).not.toBe('done');
+  });
+
   it('a stale seal before rebase halts as a seal error without claiming a rebase conflict', async () => {
     await initFeatureRepo();
     await mkdir(join(dir, '.docs/plans'), { recursive: true });

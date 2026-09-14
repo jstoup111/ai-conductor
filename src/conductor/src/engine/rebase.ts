@@ -1636,10 +1636,14 @@ export async function applyRebaseVerdicts(
   reverified: StepName[];
   preserved?: Array<{ gate: StepName; basis: 'test_suite_drift_budget' }>;
 }> {
-  if (outcome.kind === 'conflict_halt') {
+  if (outcome.kind === 'conflict_halt' || outcome.kind === 'setup_stop') {
+    // A setup-only resolver exhaustion leaves the rebase paused exactly like an
+    // unresolved conflict: the gate stays unsatisfied and the run parks.
     await writeVerdict(projectRoot, 'rebase', {
       satisfied: false,
-      reason: `rebase conflict: ${outcome.reason}`,
+      reason: outcome.kind === 'setup_stop'
+        ? `rebase resolution paused — provider setup unavailable: ${outcome.reason}`
+        : `rebase conflict: ${outcome.reason}`,
       checkedAt: Date.now(),
     });
     return { satisfied: false, kickedBack: [], reverified: [] };
@@ -1775,7 +1779,7 @@ export async function recordRebaseStepCompletion(
   stateFilePath: string,
   outcome: RebaseOutcome,
 ): Promise<void> {
-  if (outcome.kind === 'conflict_halt') return;
+  if (outcome.kind === 'conflict_halt' || outcome.kind === 'setup_stop') return;
   await saveStepStatus(stateFilePath, 'rebase', 'done');
 }
 
@@ -1921,6 +1925,16 @@ export async function emitRebaseEvent(
           type: 'rebase_conflict_halt',
           step: 'rebase',
           reason: outcome.reason,
+          conflicts: outcome.conflicts,
+        });
+        break;
+      case 'setup_stop':
+        // Same parked terminal as a conflict halt; the reason names setup so the
+        // observation stays distinguishable from resolver exhaustion.
+        await events.emit({
+          type: 'rebase_conflict_halt',
+          step: 'rebase',
+          reason: `provider setup unavailable: ${outcome.reason}`,
           conflicts: outcome.conflicts,
         });
         break;

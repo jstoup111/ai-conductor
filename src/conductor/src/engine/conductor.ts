@@ -12819,6 +12819,12 @@ export class Conductor {
         await this.emitLoopHalt(this.lastRebaseSealError);
         return 'halt';
       }
+      if (this.lastRebaseOutcome?.kind === 'setup_stop') {
+        const reason = `rebase resolution paused — provider setup unavailable: ${this.lastRebaseOutcome.reason}`;
+        // writeHalt already wrote .pipeline/HALT in runRebaseStep.
+        await this.emitLoopHalt(reason);
+        return 'halt';
+      }
       if (this.lastRebaseOutcome?.kind === 'conflict_halt') {
         const reason = `rebase conflict — parked for human resolution: ${this.lastRebaseOutcome.reason}`;
         // writeHalt already wrote .pipeline/HALT in runRebaseStep.
@@ -13508,6 +13514,15 @@ export class Conductor {
 
     if (outcome.kind === 'conflict_halt' && !sealRejectionReason) {
       await writeRebaseOutcomeHalt(this.projectRoot, outcome, this.events);
+    } else if (outcome.kind === 'setup_stop') {
+      // Setup-only resolver exhaustion leaves the rebase paused: park it for the
+      // provider recovery action instead of stamping the gate satisfied.
+      await writeHalt(
+        this.projectRoot,
+        outcome.conflicts,
+        `provider setup unavailable: ${outcome.reason}`,
+        this.events,
+      );
     }
 
     await recordRebaseStepCompletion(this.stateFilePath, outcome);
