@@ -16,9 +16,21 @@ import type { Envelope, EnvelopeStatus, IntakePort, ReportMeta, ReportOutcome } 
 import type { IntakeSource } from './source.js';
 import type { Ledger } from './ledger.js';
 import { parseSourceRef } from '../issue-ref.js';
-import { createGithubTrackerClient, type TrackerClient } from '../../tracker-client.js';
+import {
+  createGithubTrackerClient,
+  type GithubIntakeMutationExecutionContext,
+  type IntakeTrackerClient,
+} from '../../tracker-client.js';
 import { formatWorkRef, type WorkRef } from '../source-ref.js';
 import { sanitizeInboundText, type InboundSanitizeResult } from './sanitize-inbound.js';
+import type { GithubIntakeWriteOperationRequest, GithubOperationRunnerRefusal } from '../../github-operations.js';
+import {
+  hasExplicitGithubOperationApproval,
+  requestExplicitGithubOperationApproval,
+  type InteractiveGithubOperationConfirmation,
+} from '../../github-operation-approval.js';
+import { readMachineOwnerConfig } from '../../owner-gate/machine-identity.js';
+import { resolveDaemonOwner, type OwnerResolution } from '../../owner-gate/identity.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -41,6 +53,12 @@ export interface GithubIssuesDeps {
   newId?: () => string;
   /** Log sink; defaults to a no-op. */
   log?: (msg: string) => void;
+  /** Fresh machine identity resolver; injected to keep authorization deterministic in tests. */
+  resolveActor?: () => Promise<OwnerResolution>;
+  /** Optional interactive, exact-request approval for an otherwise unauthorized intake write. */
+  confirmation?: InteractiveGithubOperationConfirmation;
+  /** Existing guarded intake seam; callers normally use the assignment-backed default below. */
+  intakeAuthorization?: GithubIntakeMutationExecutionContext;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
@@ -58,6 +76,69 @@ export const HANDLED_LABEL = 'engineer:handled';
  * Exported for use by delivery-guard.ts (closed-unmerged reopen semantics).
  */
 export const REOPEN_ATTEMPTS_CAP = 2;
+
+/**
+ * Build the independent pre-spec authorization seam. It re-resolves identity
+ * and reads the target issue's current assignments on every attempted write;
+ * neither a source reference nor an earlier successful write is authority.
+ */
+export function createGithubIntakeAuthorization(deps: {
+  gh: GhRunner;
+  resolveActor?: () => Promise<OwnerResolution>;
+  confirmation?: InteractiveGithubOperationConfirmation;
+  cwd?: string;
+}): GithubIntakeMutationExecutionContext {
+  const resolveActor = deps.resolveActor ?? (async () =>
+    resolveDaemonOwner(await readMachineOwnerConfig(), deps.gh, deps.cwd ?? homedir()));
+
+  async function currentAssignees(
+    request: GithubIntakeWriteOperationRequest,
+    cwd: string,
+  ): Promise<Set<string> | null> {
+    if (request.target.kind !== 'issue') return null;
+    try {
+      const { stdout } = await deps.gh([
+        'issue', 'view', String(request.target.number), '-R', request.target.repository,
+        '--json', 'assignees',
+      ], { cwd });
+      const parsed = JSON.parse(stdout) as { assignees?: unknown };
+      if (!Array.isArray(parsed.assignees)) return null;
+      const normalized = parsed.assignees.map((value) => {
+        const login = value !== null && typeof value === 'object'
+          ? (value as { login?: unknown }).login
+          : undefined;
+        return typeof login === 'string' ? login.trim().toLowerCase() : '';
+      });
+      if (normalized.some((login) => login === '')) return null;
+      return new Set(normalized);
+    } catch {
+      return null;
+    }
+  }
+
+  return {
+    async authorize(request, cwd): Promise<{} | GithubOperationRunnerRefusal> {
+      const identity = await resolveActor();
+      if (!identity.resolved) return { kind: 'refused', reason: 'unresolved-actor' };
+
+      const assignees = await currentAssignees(request, cwd);
+      if (assignees?.size === 1 && assignees.has(identity.id)) return {};
+
+      // An assignment failure/ambiguity never reuses a prior decision. Exact
+      // interactive approval is the sole alternate authority for THIS request.
+      const approvalRequest: GithubIntakeWriteOperationRequest = {
+        ...request,
+        context: { ...request.context, actor: identity.id },
+      };
+      const approval = await requestExplicitGithubOperationApproval(approvalRequest, deps.confirmation);
+      if (approval.kind === 'approved'
+        && hasExplicitGithubOperationApproval(approval.capability, approvalRequest)) {
+        return {};
+      }
+      return { kind: 'refused', reason: 'explicit-authorization-required' };
+    },
+  };
+}
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -115,7 +196,12 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
   const now = deps.now ?? (() => new Date().toISOString());
   const newId = deps.newId ?? (() => randomUUID());
   const log = deps.log ?? (() => {});
-  const tracker: TrackerClient = createGithubTrackerClient(gh);
+  const intakeAuthorization = deps.intakeAuthorization ?? createGithubIntakeAuthorization({
+    gh,
+    resolveActor: deps.resolveActor,
+    confirmation: deps.confirmation,
+  });
+  const tracker: IntakeTrackerClient = createGithubTrackerClient(gh, { intake: intakeAuthorization });
 
   // Per-instance write-back de-dup: a (sourceRef\0status) that has been posted
   // once in this process is not posted again. Cross-process duplicates cannot
@@ -189,7 +275,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
     // Strip the handled label so a human sees it is back in flight; non-fatal.
     try {
       const ghRepo = repo.ghRepo ?? repo.name;
-      await tracker.removeIssueLabel(ghRepo, issue.number, HANDLED_LABEL, repo.path);
+      await tracker.removeIntakeIssueLabel(ghRepo, issue.number, HANDLED_LABEL, repo.path);
     } catch {
       // best-effort — a stuck label must not block re-routing.
     }
@@ -311,7 +397,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
         const body = `Routed to ${meta?.repo ?? '(unresolved)'}`;
         const commentCmd = `gh issue comment ${number} --repo ${repo} --body "${body}"`;
         try {
-          await tracker.commentOnIssue(repo, Number(number), body, repoPath);
+          await tracker.commentOnIntakeIssue(repo, Number(number), body, repoPath);
         } catch (err) {
           return fail(err, [commentCmd]);
         }
@@ -319,21 +405,14 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
         const body = `Spec PR opened: ${meta?.prUrl ?? '(unknown)'}`;
         const commentCmd = `gh issue comment ${number} --repo ${repo} --body "${body}"`;
         try {
-          await tracker.commentOnIssue(repo, Number(number), body, repoPath);
+          await tracker.commentOnIntakeIssue(repo, Number(number), body, repoPath);
         } catch (err) {
           return fail(err, [commentCmd]);
         }
 
-        // Ensure the label exists before applying it (auto-create; ignore "already exists").
-        try {
-          await tracker.createLabel(repo, HANDLED_LABEL, repoPath);
-        } catch {
-          // label already present — not an error.
-        }
-
         const labelCmd = `gh api repos/${repo}/issues/${number}/labels -f "labels[]=${HANDLED_LABEL}"`;
         try {
-          await tracker.addIssueLabel(repo, Number(number), HANDLED_LABEL, repoPath);
+          await tracker.addIntakeIssueLabel(repo, Number(number), HANDLED_LABEL, repoPath);
         } catch (err) {
           return fail(err, [labelCmd]);
         }
