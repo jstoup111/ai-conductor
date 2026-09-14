@@ -1,4 +1,4 @@
-// Covers: task:2, task:3
+// Covers: task:2, task:3, task:5
 import type {
   mkdirSync as nodeMkdirSync,
   mkdtempSync as nodeMkdtempSync,
@@ -256,6 +256,24 @@ describe('Vitest temporary storage selection', () => {
         TMPDIR: '/canonical/storage/ai-conductor-vitest-run-3',
         GIT_CEILING_DIRECTORIES: '/existing/ceiling:/canonical/storage/ai-conductor-vitest-run-3',
       },
+    });
+  });
+
+  it('allocates a cleared nested root beneath its declared enclosing scope', () => {
+    const env = {
+      AI_CONDUCTOR_TEST_TMP_BASE: '/fixture/top-level-storage',
+      AI_CONDUCTOR_TEST_TMP_SCOPE: '/fixture/outer-scope',
+      AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR: '/fixture/original-tmpdir',
+      TMPDIR: '/fixture/outer-scope/discovery-child',
+    };
+    const installed = installVitestTmpRoot({ env, packageDir: '/fixture/package', fs: fakeFilesystem() });
+
+    expect(installed).toMatchObject({
+      parent: '/fixture/outer-scope/discovery-child',
+      root: '/fixture/outer-scope/discovery-child/ai-conductor-vitest-run-1',
+      scope: '/fixture/outer-scope',
+      ownsRoot: true,
+      ownsScope: false,
     });
   });
 });
