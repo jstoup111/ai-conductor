@@ -1,14 +1,13 @@
 /**
  * Cross-process memory-write helper.
  *
- * Spawned as a child process via `vite-node` by the cross-process concurrency
+ * Spawned as a child process through Node's `tsx` loader by the cross-process concurrency
  * test (`memory-store-concurrency.test.ts`).  Reads repository path, home, and
  * entry details from environment variables, calls `recordMemoryEntry` once, and
  * exits cleanly.
  *
- * The import uses the `.ts` extension because `vite-node` (invoked directly,
- * outside the vitest transform chain) resolves TypeScript sources via the `.ts`
- * path rather than the `.js`→`.ts` remapping that vitest's plugin provides.
+ * The import uses the `.ts` extension because the standalone loader runs
+ * outside Vitest's `.js`→`.ts` remapping.
  * This file is excluded from `tsconfig.json` (test/ is excluded), so the
  * non-standard `.ts` extension import does not affect `tsc --noEmit`.
  *
@@ -21,7 +20,7 @@
  *   INDEX_LINE   — line to append to index.md
  */
 
-// vite-node resolves .ts imports directly; this file is excluded from tsc.
+// The tsx loader resolves .ts imports directly; this file is excluded from tsc.
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore
 import { recordMemoryEntry } from '../../src/engine/memory-store.ts';
