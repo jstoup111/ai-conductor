@@ -758,6 +758,34 @@ describe('engine/rebase — HALT (FR-8)', () => {
     }
   });
 
+  it('keeps the existing halt note byte-identical for the actual already-in-progress refusal', async () => {
+    await mkdir(join(dir, '.git/rebase-merge'), { recursive: true });
+    const git: GitRunner = async (args) => {
+      if (args.join(' ') === 'rev-parse --is-inside-work-tree') {
+        return { exitCode: 0, stdout: 'true\n', stderr: '' };
+      }
+      if (args.join(' ') === 'diff --name-only --diff-filter=U') {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      if (args.join(' ') === 'rev-parse --git-path rebase-merge') {
+        return { exitCode: 0, stdout: '.git/rebase-merge\n', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+
+    const outcome = await performRebase(git, dir, 'main');
+    expect(outcome.kind).toBe('conflict_halt');
+    if (outcome.kind !== 'conflict_halt') throw new Error('expected already-in-progress refusal');
+
+    await writeHalt(dir, outcome.conflicts, outcome.reason);
+    const expected = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+    await rm(join(dir, '.pipeline/HALT'), { force: true });
+    await rm(join(dir, '.pipeline/HALT.class'), { force: true });
+
+    await writeRebaseOutcomeHalt(dir, outcome);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(expected);
+  });
+
   it('returns the marker write result for seal HALTs without an emitter', async () => {
     expect(await writeSealHalt(dir, 'protected artifact changed')).toEqual({ status: 'written' });
   });
