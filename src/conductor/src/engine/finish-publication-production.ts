@@ -34,6 +34,8 @@ import {
   type PrProseJudgmentResult,
 } from './finish-publication.js';
 import { createShipDraftPublicationDependencies } from './ship-draft-pr.js';
+import type { GithubMutationExecutionContext } from './tracker-client.js';
+import { executeRemoteGit } from './remote-git-operations.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
 import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
 import { BuildReviewDispositionStore, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity } from './build-review-dispositions.js';
@@ -92,6 +94,10 @@ export interface ProductionFinishPublicationDeps {
    * refusal, never permission to fall back to raw `gh` writes.
    */
   operations?: GithubOperationRunner;
+  /** Test-only remote boundary authority; production derives this from committed provenance. */
+  remoteMutation?: GithubMutationExecutionContext;
+  /** Test-only terminal remote-Git seam; production uses executeRemoteGit. */
+  remoteGit?: typeof executeRemoteGit;
   /**
    * Production composition owns the ordered presentation repair.  Callers
    * inject the existing halt-rehabilitation/floor/ready composition so this
@@ -423,15 +429,6 @@ export function createProductionFinishPublicationCoordinator(
 
   return {
     async advance({ state, mode, daemon, dispatchJudgment, dispatchAuthoring, emit }) {
-      const publication = await createShipDraftPublicationDependencies({
-        cwd: deps.projectRoot,
-        branch: state.worktree_branch,
-        baseBranch: deps.baseBranch,
-        featureDesc: state.feature_desc,
-        git: deps.git,
-        gh: deps.gh,
-      });
-      const operations = deps.operations ?? publication?.operations;
       const attended = !daemon && (mode === 'default' || mode === 'interactive');
       const requestedOutcome = attended
         ? await (attendedRequestedOutcome ??= Promise.resolve().then(
@@ -467,6 +464,19 @@ export function createProductionFinishPublicationCoordinator(
             })();
 
       if ('kind' in intent) return intent;
+
+      // Intent is the first publication fence. Resolving provenance can read
+      // local Git and GitHub identity, but it must not happen before an
+      // attended operator has chosen a publishable outcome.
+      const publication = await createShipDraftPublicationDependencies({
+        cwd: deps.projectRoot,
+        branch: state.worktree_branch,
+        baseBranch: deps.baseBranch,
+        featureDesc: state.feature_desc,
+        git: deps.git,
+        gh: deps.gh,
+      });
+      const operations = deps.operations ?? publication?.operations;
 
       const observationInput = {
         mode: intent.authority.kind === 'operator_confirmed' ? 'interactive' : intent.authority.mode,
@@ -650,8 +660,9 @@ export function createProductionFinishPublicationCoordinator(
             branch: state.worktree_branch,
             baseBranch: deps.baseBranch,
             featureDesc: state.feature_desc,
-            remoteMutation: publication?.remoteMutation,
-            operations: publication?.operations,
+            remoteMutation: deps.remoteMutation ?? publication?.remoteMutation,
+            remoteGit: deps.remoteGit,
+            operations,
             // FINISH runs AFTER the finish-time `rebase` step, which rewrites
             // the feature branch's history — same work, new SHAs. The branch
             // therefore diverges from its own remote by construction, and a
