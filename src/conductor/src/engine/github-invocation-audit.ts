@@ -18,8 +18,6 @@ export interface GithubInvocationAuditSite {
   readonly classification: 'approved-adapter' | 'local-git' | 'remote-write';
 }
 
-/** Raw remote transports live only behind these guarded seams. */
-const APPROVED_TRANSPORT_ADAPTERS = new Set(['engine/tracker-client.ts', 'engine/remote-git-operations.ts']);
 const PROCESS_MODULE = /^(?:node:)?child_process$/;
 const GITHUB_HTTP_MODULE = /^(?:@octokit\/|octokit(?:$|\/)|github(?:$|\/)|node-fetch$|undici$)/;
 const PROCESS_FACTORY_NAMES = new Set(['exec', 'execFile', 'spawn', 'execSync', 'execFileSync', 'spawnSync']);
@@ -62,7 +60,6 @@ export const SHIPPED_MUTATION_OPERATION_CALLER_PROOFS = {
 } as const satisfies Record<MutationOperation, OperationCallerProof>;
 
 function normalizedFile(file: string): string { return file.split(sep).join('/').replace(/^.*?\/src\//, ''); }
-function approved(file: string): boolean { return APPROVED_TRANSPORT_ADAPTERS.has(normalizedFile(file)); }
 function location(sourceFile: ts.SourceFile, node: ts.Node): { line: number; column: number } {
   const value = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
   return { line: value.line + 1, column: value.character + 1 };
@@ -303,6 +300,36 @@ function guardedDynamicRunnerForwarding(node: ts.CallExpression): boolean {
 }
 
 /**
+ * The production `gh` transport may forward its caller-provided argv only from
+ * its one real shell boundary.  This deliberately does not exempt the file:
+ * a second literal `gh` write in tracker-client.ts remains a finding.
+ */
+function productionGhTransportCall(file: string, node: ts.CallExpression): boolean {
+  return normalizedFile(file) === 'engine/tracker-client.ts'
+    && enclosingFunctionName(node) === 'makeProductionGh'
+    && text(node.arguments[0]) === 'gh'
+    && ts.isIdentifier(node.arguments[1])
+    && node.arguments[1].text === 'args';
+}
+
+function remoteGitRunnerInvocation(node: ts.CallExpression): boolean {
+  return ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'runRemoteGit';
+}
+
+/** The remote adapter's transport call must forward precisely its guarded argv. */
+function guardedRemoteGitRunnerCall(file: string, node: ts.CallExpression): boolean {
+  const args = node.arguments[0];
+  return normalizedFile(file) === 'engine/remote-git-operations.ts'
+    && enclosingFunctionName(node) === 'executeRemoteGit'
+    && remoteGitRunnerInvocation(node)
+    && ts.isArrayLiteralExpression(args)
+    && args.elements.length === 1
+    && ts.isSpreadElement(args.elements[0])
+    && ts.isIdentifier(args.elements[0].expression)
+    && args.elements[0].expression.text === 'args';
+}
+
+/**
  * `createBlockerResolver` is an import-bound read composition: its `run`
  * callback queries GitHub's dependency graph and does not own a mutation.
  * Preserve this narrowly proven dynamic argv path without exempting arbitrary
@@ -349,11 +376,20 @@ export function auditGithubInvocationSource(file: string, source: string): Githu
       const first = node.initializer.arguments[0];
       if (first && ts.isIdentifier(first) && processAliases.has(first.text)) processAliases.add(node.name.text);
     }
-    if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && rawGithubImports.has(node.expression.text) && !approved(file)) {
+    if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && rawGithubImports.has(node.expression.text)) {
       findings.push(report(parsed, file, node, 'unapproved raw GitHub HTTP client invocation outside guarded adapter'));
     }
     if (ts.isCallExpression(node)) {
       const called = ts.isIdentifier(node.expression) ? node.expression.text : undefined;
+      if (remoteGitRunnerInvocation(node)) {
+        const remoteArgs = argv(node.arguments[0]);
+        const remoteHead = argvHead(node.arguments[0]);
+        if (remoteHead?.[0] === 'push' && !guardedRemoteGitRunnerCall(file, node)) {
+          findings.push(report(parsed, file, node, 'direct remote Git mutation outside executeRemoteGit'));
+        } else if (!remoteArgs && !remoteHead && !guardedRemoteGitRunnerCall(file, node)) {
+          findings.push(report(parsed, file, node, 'unresolvable mutable remote Git command forwarding outside executeRemoteGit'));
+        }
+      }
       if (directGhInvocation(node, injectedRunners)) {
         const directArgs = argv(node.arguments[0]);
         const directHead = argvHead(node.arguments[0]);
@@ -365,18 +401,18 @@ export function auditGithubInvocationSource(file: string, source: string): Githu
           findings.push(report(parsed, file, node, 'unresolvable mutable GitHub command forwarding outside guarded adapter'));
         }
       }
-      if (called && rawGithubImports.has(called) && !approved(file)) findings.push(report(parsed, file, node, 'unapproved raw GitHub HTTP client invocation outside guarded adapter'));
+      if (called && rawGithubImports.has(called)) findings.push(report(parsed, file, node, 'unapproved raw GitHub HTTP client invocation outside guarded adapter'));
       if (called && processAliases.has(called)) {
         const executable = text(node.arguments[0]);
         const args = argv(node.arguments[1]);
         const command = argvHead(node.arguments[1]);
         if (executable === 'gh') {
-          if (!args && !command && !approved(file)) findings.push(report(parsed, file, node, 'unresolvable executable command construction for gh'));
-          else if (command && ghMutation(command) && !approved(file)) findings.push(report(parsed, file, node, 'direct GitHub mutation outside guarded adapter'));
+          if (!args && !command && !productionGhTransportCall(file, node)) findings.push(report(parsed, file, node, 'unresolvable executable command construction for gh'));
+          else if (command && ghMutation(command) && !productionGhTransportCall(file, node)) findings.push(report(parsed, file, node, 'direct GitHub mutation outside guarded adapter'));
         } else if (executable === 'git') {
           // A generic local-Git runner is not itself a remote invocation site.
           // Literal remote pushes are, and cannot be hidden behind that runner.
-          if (command?.[0] === 'push' && !approved(file)) findings.push(report(parsed, file, node, 'direct remote Git mutation outside executeRemoteGit'));
+          if (command?.[0] === 'push') findings.push(report(parsed, file, node, 'direct remote Git mutation outside executeRemoteGit'));
         } else if (executable === 'sh' && args?.[0] === '-c') {
           const block = args[1] ?? '';
           if (/\bgh\s+(?:pr|issue|api|label)\s+(?:create|edit|close|comment|ready|merge|delete)/.test(block) || /\bgit\s+push\b/.test(block)) {
@@ -439,7 +475,7 @@ export function findGithubInvocationSites(file: string, source: string): GithubI
       const command = text(node.arguments[0]); const args = argv(node.arguments[1]);
       if (command === 'gh' || command === 'git') {
         const remote = command === 'gh' ? !!args && ghMutation(args) : !!args && REMOTE_GIT_COMMANDS.has(args[0] ?? '');
-        sites.push({ file, line: location(parsed, node).line, command, classification: remote ? (approved(file) ? 'approved-adapter' : 'remote-write') : 'local-git' });
+        sites.push({ file, line: location(parsed, node).line, command, classification: remote && productionGhTransportCall(file, node) ? 'approved-adapter' : remote ? 'remote-write' : 'local-git' });
       }
     }
     ts.forEachChild(node, visit);
