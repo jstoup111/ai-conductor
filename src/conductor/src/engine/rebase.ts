@@ -2,7 +2,13 @@ import { execa } from 'execa';
 import { writeFile, readFile, access, mkdir, rename } from 'node:fs/promises';
 import { join, isAbsolute, relative, basename, resolve, dirname } from 'node:path';
 import type { StepName } from '../types/index.js';
-import { writeVerdict, type GateVerdict } from './gate-verdicts.js';
+import {
+  checkGateCompletion,
+  isSkipVerdict,
+  readVerdict,
+  writeVerdict,
+  type GateVerdict,
+} from './gate-verdicts.js';
 import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
@@ -27,6 +33,7 @@ import {
   type ReplayIdentity,
   type ReplayIdentitySeed,
 } from './rebase-replay.js';
+import { isApplicableOriginalPass } from './gate-code-validity.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -1640,6 +1647,25 @@ export async function runGatedRebaseResolution(opts: {
 // ── Verdict + event wiring (consumed by the conductor) ───────────────────────
 
 /**
+ * A classifier can say that a gate's inputs were untouched, but that is not
+ * evidence that the gate ever passed.  Preserve only a durable, non-skip PASS
+ * whose underlying completion predicate still accepts the original artifact.
+ *
+ */
+async function applicableOriginalPass(
+  projectRoot: string,
+  gate: StepName,
+): Promise<boolean> {
+  const verdict = await readVerdict(projectRoot, gate);
+  if (!isApplicableOriginalPass(verdict)) return false;
+
+  const completion = await checkGateCompletion(projectRoot, gate);
+  if (!completion.done) return false;
+
+  return true;
+}
+
+/**
  * Write the gate verdicts implied by a rebase outcome and return whether the
  * rebase gate itself is satisfied (→ proceed to finish) or the loop must HALT.
  *
@@ -1757,8 +1783,18 @@ export async function applyRebaseVerdicts(
   const partition = outcome.featureSurface !== undefined
     ? classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
     : undefined;
+  const applicablePreservations = new Set<StepName>();
+  if (partition !== undefined) {
+    for (const candidate of partition.preserved as StepName[]) {
+      const original = await applicableOriginalPass(projectRoot, candidate);
+      if (original) applicablePreservations.add(candidate);
+    }
+  }
+  const unprovedPreservations = partition === undefined
+    ? []
+    : (partition.preserved as StepName[]).filter((gate) => !applicablePreservations.has(gate));
   const targets: StepName[] = partition !== undefined
-    ? ([...(documentOnly ? [] : ['build']), ...partition.invalidated] as StepName[])
+    ? ([...(documentOnly ? [] : ['build']), ...partition.invalidated, ...unprovedPreservations] as StepName[])
     : ([
         'build',
         ...Object.keys(GATE_SURFACE).filter((gate) => ranManualTest || gate !== 'manual_test'),
@@ -1768,6 +1804,16 @@ export async function applyRebaseVerdicts(
     // fresh satisfied verdict, so it is not kicked back.
     if (reverifiedGates.has(target)) {
       continue;
+    }
+    // An ordinary failure/kickback is newer authority than this rebase's
+    // failed preservation candidate.  It already keeps the gate open; do not
+    // replace its evidence with a generic rebase invalidation.
+    if (unprovedPreservations.includes(target)) {
+      const current = await readVerdict(projectRoot, target);
+      if (current && (!current.satisfied || current.kickback || isSkipVerdict(current))) {
+        kickedBack.push(target);
+        continue;
+      }
     }
     await writeVerdict(projectRoot, target, {
       satisfied: false,
