@@ -16,6 +16,7 @@ describe('applyRebaseTransition', () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ build_review: 'done', manual_test: 'skipped', acceptance_specs: 'done' }));
     await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
+    await writeVerdict(dir, 'prd_audit', { satisfied: true, checkedAt: 2, reason: 'approved' });
     const result = await applyRebaseTransition({
       projectRoot: dir,
       stateStore: createFilesystemConductStateStore(join(dir, '.pipeline/conduct-state.json')),
@@ -27,6 +28,11 @@ describe('applyRebaseTransition', () => {
     expect(result.stateResult).toBe('applied');
     expect(JSON.parse(await (await import('node:fs/promises')).readFile(join(dir, '.pipeline/conduct-state.json'), 'utf8'))).toMatchObject({ build_review: 'pending', manual_test: 'skipped', acceptance_specs: 'done' });
     expect((await readVerdict(dir, 'rebase'))?.rebaseOperation).toMatchObject({ id: 'operation-1', status: 'applied' });
+    expect((await readVerdict(dir, 'prd_audit'))?.preservation).toMatchObject({
+      gate: 'prd_audit',
+      operationId: 'operation-1',
+      replay: { expectedTree: 'e' },
+    });
   });
 
   it('recognizes the same replay operation on a restart', async () => {

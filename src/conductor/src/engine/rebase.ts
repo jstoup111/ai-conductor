@@ -1693,6 +1693,8 @@ export async function applyRebaseVerdicts(
   kickedBack: StepName[];
   reverified: StepName[];
   preserved?: Array<{ gate: StepName; basis: 'test_suite_drift_budget' }>;
+  /** The replay-aware decision actually applied to gate records. */
+  preservedGates?: StepName[];
   replay?: ReplayEvidence;
 }> {
   if (outcome.kind === 'conflict_halt') {
@@ -1841,19 +1843,15 @@ export async function applyRebaseVerdicts(
     satisfied: true,
     kickedBack,
     reverified,
+    ...([...applicablePreservations].length === 0 ? {} : { preservedGates: [...applicablePreservations] }),
     ...(preserved.length === 0 ? {} : { preserved }),
-    ...(replayComparison
-      ? { replay: {
+    ...(replayComparison ? { replay: {
           preRebaseHead: replayComparison.identity.preRebaseHead,
           mergeBase: replayComparison.identity.mergeBase,
           target: replayComparison.identity.target,
           completedHead: replayComparison.identity.completedHead,
-          // Empty is deliberately non-authoritative: it lets the transition
-          // record the conservative unproved decision while the shared
-          // preservation reader rejects it as replay authority.
           expectedTree: replayComparison.kind === 'unproved' ? '' : replayComparison.expectedTree,
-        } }
-      : {}),
+        } } : {}),
   };
 }
 
@@ -1927,6 +1925,8 @@ type RebaseGatePreservation = {
 type AppliedRebaseGateDecision = {
   kickedBack: readonly StepName[];
   reverified: readonly StepName[];
+  /** Replay-aware candidate gates that survived original-PASS validation. */
+  preservedGates?: readonly StepName[];
   preserved?: readonly RebaseGatePreservation[];
 };
 
@@ -1970,18 +1970,17 @@ export async function emitGateInvalidationEvents(
     return;
   }
 
-  const { invalidated: classifiedInvalidated, preserved: classifiedPreserved } = classifyGateInvalidation(
-    reviewDelta(outcome),
-    outcome.featureSurface,
-    ranManualTest,
-    outcome.documentInputs,
-  );
   const projections = projectGateSurfaces(reviewDelta(outcome), outcome.featureSurface, outcome.documentInputs);
   const preservationBases = new Map(preverifiedPreserved.map(({ gate, basis }) => [gate, basis]));
-  const invalidated = application ? application.kickedBack : classifiedInvalidated;
+  // The state transition and events must describe the same applied decision.
+  // Only the legacy optional call shape computes a path-only fallback.
+  const legacy = application === undefined
+    ? classifyGateInvalidation(reviewDelta(outcome), outcome.featureSurface, ranManualTest, outcome.documentInputs)
+    : undefined;
+  const invalidated = application ? application.kickedBack : legacy!.invalidated;
   const preserved = application
-    ? classifiedPreserved.filter((gate) => !invalidated.includes(gate as StepName))
-    : classifiedPreserved;
+    ? (application.preservedGates ?? []).filter((gate) => !invalidated.includes(gate))
+    : legacy!.preserved;
 
   // `applyRebaseVerdicts` also reports the mechanical BUILD gate in its
   // applied kickbacks. BUILD deliberately has no declared review surface and

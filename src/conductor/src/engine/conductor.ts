@@ -13441,13 +13441,18 @@ export class Conductor {
     // sees pending gates without a positional rewind through completed BUILD
     // or acceptance authoring. Unproved replay intentionally has no replay
     // authority and follows the conservative verdict path below.
-    if (verdict.replay && verdict.kickedBack.length > 0) {
+    // Missing replay identity is an explicit unproved transition, never a
+    // reason to resume the old positional rebase rewind.
+    const transitionReplay = verdict.replay ?? (outcome.kind === 'changed'
+      ? { preRebaseHead: '', mergeBase: '', target: '', completedHead: '', expectedTree: '' }
+      : undefined);
+    if (transitionReplay) {
       const transition = await applyRebaseTransition({
         projectRoot: this.projectRoot,
         stateStore: this.stateStore,
-        replay: verdict.replay,
+        replay: transitionReplay,
         invalidated: verdict.kickedBack,
-        preserved: [],
+        preserved: verdict.preservedGates ?? [],
         reverified: verdict.reverified,
       });
       if (transition.stateResult === 'refused') {
