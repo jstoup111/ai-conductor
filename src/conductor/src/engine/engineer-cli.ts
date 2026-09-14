@@ -46,13 +46,14 @@ import { brainLoopAlive } from './engineer/brain-liveness.js';
 import { CorruptLedgerError, createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
 import {
+  createGithubIntakeAuthorization,
   createGithubIssuesAdapter,
   fetchSanitizedIssueBody,
   GITHUB_ISSUES_SOURCE,
   HANDLED_LABEL,
 } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
-import { makeProductionGit, restRemoveLabelArgs, type GitRunner } from './pr-labels.js';
+import { makeProductionGit, type GitRunner } from './pr-labels.js';
 import {
   claimUnblocked,
   resolveClaimBands,
@@ -67,6 +68,7 @@ import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 import { createGithubTrackerClient, makeProductionGh } from './tracker-client.js';
+import type { OwnerResolution } from './owner-gate/identity.js';
 import {
   GH_VERSION_FLOOR,
   probeGhVersion,
@@ -462,6 +464,8 @@ export interface DispatchEngineerOpts {
   printErr?: (s: string) => void;
   /** Injected gh runner (for tests). */
   gh?: (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
+  /** Test seam for fresh machine identity used by independently authorized intake writes. */
+  intakeResolveActor?: () => Promise<OwnerResolution>;
   /** Machine-level gh capability probe; injectable so entry refusal is testable. */
   probeGhVersion?: () => Promise<GhVersionFloorVerdict>;
   /** Injected git runner (for tests). */
@@ -692,6 +696,7 @@ export function buildIntake(deps: {
   gh: NonNullable<DispatchEngineerOpts['gh']>;
   printErr: (s: string) => void;
   missingRegistrationEpisodes?: Set<string>;
+  resolveActor?: () => Promise<OwnerResolution>;
 }): {
   reader: ReturnType<typeof createRegistryReader>;
   ledger: ReturnType<typeof createLedger>;
@@ -714,6 +719,7 @@ export function buildIntake(deps: {
     ledger,
     log: (m: string) => deps.printErr(m),
     missingRegistrationEpisodes: deps.missingRegistrationEpisodes,
+    resolveActor: deps.resolveActor,
   });
   return { reader, ledger, queue, adapter };
 }
@@ -1110,7 +1116,9 @@ export async function dispatchEngineer(
       // a gh failure never fails a successful land.
       if (sourceRef) {
         const engDir = engineerDir ?? resolveEngineerDir({});
-        const { ledger, adapter } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
+        const { ledger, adapter } = buildIntake({
+          engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor,
+        });
         await reportRouted(
           { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
           target.name,
@@ -1213,7 +1221,9 @@ export async function dispatchEngineer(
         // which has no URL to report).
         if (sourceRef) {
           const engDir = engineerDir ?? resolveEngineerDir({});
-          const { ledger, adapter } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
+          const { ledger, adapter } = buildIntake({
+            engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor,
+          });
           await reportDone(
             { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
             handoffResult.url,
@@ -1423,9 +1433,11 @@ export async function dispatchEngineer(
         return 1;
       }
       if (dispatch.resolvedBy && parsedForget) {
-        const tracker = createGithubTrackerClient(gh);
+        const tracker = createGithubTrackerClient(gh, {
+          intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor }),
+        });
         try {
-          await tracker.commentOnIssue(
+          await tracker.commentOnIntakeIssue(
             parsedForget.repo,
             Number(parsedForget.issue),
             `Resolved by ${dispatch.resolvedBy}`,
@@ -1439,7 +1451,7 @@ export async function dispatchEngineer(
           return 1;
         }
         try {
-          await tracker.closeIssue(parsedForget.repo, String(parsedForget.issue), process.cwd());
+          await tracker.closeIntakeIssue(parsedForget.repo, String(parsedForget.issue), process.cwd());
         } catch (err: unknown) {
           printErr(
             `engineer forget: failed to close ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
@@ -1455,7 +1467,15 @@ export async function dispatchEngineer(
       // entry is already gone, which is the authoritative dedup state).
       if (parsedForget) {
         try {
-          await gh(restRemoveLabelArgs(parsedForget.repo, parsedForget.issue, HANDLED_LABEL), { cwd: process.cwd() });
+          const tracker = createGithubTrackerClient(gh, {
+            intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor }),
+          });
+          await tracker.removeIntakeIssueLabel(
+            parsedForget.repo,
+            Number(parsedForget.issue),
+            HANDLED_LABEL,
+            process.cwd(),
+          );
         } catch (err: unknown) {
           printErr(`engineer forget: label strip failed for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}`);
         }

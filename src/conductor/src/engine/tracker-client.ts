@@ -17,7 +17,9 @@ import type {
   GithubOperationRequest,
   GithubOperationRefusalReason,
   GithubOperationRunner,
+  GithubOperationRunnerRefusal,
   GithubOperationRunnerResponse,
+  GithubIntakeWriteOperationRequest,
 } from './github-operations.js';
 import { executeGithubOperation } from './github-operations.js';
 import { authorizeGithubMutation } from './owner-gate/mutation-policy.js';
@@ -47,17 +49,29 @@ export interface GithubMutationExecutionContext {
   readonly dependencies: GithubMutationAuthorizationDependencies;
 }
 
+/** Fresh, independently authorized pre-spec intake write context. */
+export interface GithubIntakeMutationExecutionContext {
+  authorize(
+    request: GithubIntakeWriteOperationRequest,
+    cwd: string,
+  ): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal>;
+}
+
 /** Factory inputs for the sole guarded adapter from typed operations to `gh`. */
 export interface GuardedGithubOperationRunnerOptions {
   readonly cwd: string;
   /** Absent context refuses every mutation while retaining discovery reads. */
   readonly mutation?: GithubMutationExecutionContext;
+  /** Absent context refuses every existing pre-spec intake mutation. */
+  readonly intake?: GithubIntakeMutationExecutionContext;
 }
 
 /** Ownership context used by the GitHub TrackerClient's structured requests. */
 export interface GithubTrackerClientOptions {
   /** Absent context refuses issue mutations while preserving tracker reads. */
   readonly mutation?: GithubMutationExecutionContext;
+  /** Independent current-assignment or exact-approval authority for intake writes. */
+  readonly intake?: GithubIntakeMutationExecutionContext;
   /** Canonical repository for operations whose legacy call shape omits one. */
   readonly repository?: string;
 }
@@ -100,9 +114,11 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
     case 'intake.issue.close':
       return ['issue', 'close', issueNumber(request), '-R', repository];
     case 'issue.label.add':
+    case 'intake.issue.label.add':
     case 'pull-request.label.add':
       return ['api', '--method', 'POST', `repos/${repository}/issues/${issueNumber(request)}/labels`, '-f', `labels[]=${payloadField(request, 'label')}`];
     case 'issue.label.remove':
+    case 'intake.issue.label.remove':
     case 'pull-request.label.remove':
       return ['api', '--method', 'DELETE', `repos/${repository}/issues/${issueNumber(request)}/labels/${encodeURIComponent(payloadField(request, 'label'))}`];
     case 'issue.dependency.add': {
@@ -162,8 +178,12 @@ export function createGuardedGithubOperationRunner(
   options: GuardedGithubOperationRunnerOptions,
 ): GithubOperationRunner {
   return {
-    async run(request): Promise<GithubOperationRunnerResponse | { readonly kind: 'refused'; readonly reason: 'missing-provenance' | 'other-owner' | 'unresolved-actor' | 'conflicting-provenance' | 'provenance-unreadable' | 'provenance-timeout' | 'invalid-target' }> {
-      if (request.access !== 'read') {
+    async run(request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> {
+      if (request.access === 'intake-write') {
+        if (!options.intake) return { kind: 'refused', reason: 'explicit-authorization-required' };
+        const decision = await options.intake.authorize(request, options.cwd);
+        if ('kind' in decision && decision.kind === 'refused') return decision;
+      } else if (request.access !== 'read') {
         if (!options.mutation) return { kind: 'refused', reason: 'missing-provenance' };
         const decision = await authorizeGithubMutation({
           operation: request.operation,
@@ -331,6 +351,14 @@ export interface EffectMarkerTrackerClient extends TrackerClient {
   findIssueByEffectMarker(marker: string, repo: string, cwd: string): Promise<string | null>;
 }
 
+/** Intake-only mutation methods avoid widening the backend-neutral core contract. */
+export interface IntakeTrackerClient extends TrackerClient {
+  commentOnIntakeIssue(repo: string, number: number, body: string, cwd: string): Promise<void>;
+  addIntakeIssueLabel(repo: string, number: number, label: string, cwd: string): Promise<void>;
+  closeIntakeIssue(repo: string, issueRef: string, cwd: string): Promise<void>;
+  removeIntakeIssueLabel(repo: string, number: number, label: string, cwd: string): Promise<void>;
+}
+
 /** Error thrown when a `GhRunner` invocation rejects; carries argv/stderr/exit-code and, if
  * the failure is 404-shaped, a `status: 404` marker so callers (e.g. the engineer-forget
  * advisory-label-strip flow) can detect "issue not found" specifically. */
@@ -462,7 +490,11 @@ async function runTrackerIssueOperation(
     resource,
     context: { actor: 'tracker-client' },
     ...(payload === undefined ? {} : { payload }),
-  }, createGuardedGithubOperationRunner(transport, { cwd, mutation: options.mutation }));
+  }, createGuardedGithubOperationRunner(transport, {
+    cwd,
+    mutation: options.mutation,
+    intake: options.intake,
+  }));
 
   if (result.kind === 'refused') {
     throw new GithubTrackerOperationRefusalError(operation, result.reason);
@@ -508,7 +540,7 @@ async function runTrackerRead(
 export function createGithubTrackerClient(
   runner: GhRunner,
   options: GithubTrackerClientOptions = {},
-): EffectMarkerTrackerClient {
+): EffectMarkerTrackerClient & IntakeTrackerClient {
   return {
     async findIssueByEffectMarker(marker, repo, cwd) {
       const args = [
@@ -659,6 +691,12 @@ export function createGithubTrackerClient(
       );
     },
 
+    async commentOnIntakeIssue(repo, number, body, cwd) {
+      await runTrackerIssueOperation(
+        runner, options, cwd, 'intake.issue.comment.create', repo, { kind: 'issue', number }, { body },
+      );
+    },
+
     async createIssue(input, cwd) {
       const repository = input.repo ?? options.repository;
       if (!repository) throw new GithubTrackerOperationRefusalError('issue.create', 'invalid-target');
@@ -680,11 +718,25 @@ export function createGithubTrackerClient(
       );
     },
 
+    async addIntakeIssueLabel(repo, number, label, cwd) {
+      await runTrackerIssueOperation(
+        runner, options, cwd, 'intake.issue.label.add', repo, { kind: 'issue', number }, { label },
+      );
+    },
+
     async closeIssue(repo, issueRef, cwd) {
       const number = issueNumberFromRef(issueRef);
       if (number === undefined) throw new GithubTrackerOperationRefusalError('issue.close', 'invalid-target');
       await runTrackerIssueOperation(
         runner, options, cwd, 'issue.close', repo, { kind: 'issue', number },
+      );
+    },
+
+    async closeIntakeIssue(repo, issueRef, cwd) {
+      const number = issueNumberFromRef(issueRef);
+      if (number === undefined) throw new GithubTrackerOperationRefusalError('intake.issue.close', 'invalid-target');
+      await runTrackerIssueOperation(
+        runner, options, cwd, 'intake.issue.close', repo, { kind: 'issue', number },
       );
     },
 
@@ -770,6 +822,12 @@ export function createGithubTrackerClient(
     async removeIssueLabel(repo, number, label, cwd) {
       await runTrackerIssueOperation(
         runner, options, cwd, 'issue.label.remove', repo, { kind: 'issue', number }, { label },
+      );
+    },
+
+    async removeIntakeIssueLabel(repo, number, label, cwd) {
+      await runTrackerIssueOperation(
+        runner, options, cwd, 'intake.issue.label.remove', repo, { kind: 'issue', number }, { label },
       );
     },
   };
