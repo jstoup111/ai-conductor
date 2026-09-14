@@ -68,10 +68,12 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   contained_live_checkout_drift: 'not-audited-by-design',
   self_host_containment_verdict: 'not-audited-by-design',
   build_review_rubric_started: 'not-audited-by-design',
+  build_review_policy_resolved: 'friction-mapped',
+  build_review_policy_failed: 'friction-mapped',
   build_review_rubric_prompt: 'not-audited-by-design',
   build_review_rubric_result: 'not-audited-by-design',
   build_review_rubric_skipped: 'not-audited-by-design',
-  build_review_cache_hit: 'not-audited-by-design',
+  build_review_cache_hit: 'friction-mapped',
   build_review_scope_summary: 'not-audited-by-design',
   build_review_cache_discarded: 'friction-mapped',
   build_review_rubric_infrastructure_failure: 'not-audited-by-design',
@@ -253,6 +255,15 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     ts: 1755300000000,
   },
   build_review_rubric_started: { type: 'build_review_rubric_started', rubric: 'scope', lapId: 'lap-1' },
+  build_review_policy_resolved: {
+    type: 'build_review_policy_resolved', rubric: 'portable', lapId: 'lap-1', provider: 'codex', source: 'plugin',
+    pluginId: 'portable-suite', bundleDigest: `sha256:${'a'.repeat(64)}`,
+    provenance: { inputDigest: `sha256:${'b'.repeat(64)}`, candidate: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' }, plugin: { id: 'portable-suite', version: '1.0.0' } },
+  },
+  build_review_policy_failed: {
+    type: 'build_review_policy_failed', rubric: 'portable', lapId: 'lap-1', provider: 'codex', stage: 'capture', reason: 'criteria bundle unavailable',
+    provenance: { inputDigest: `sha256:${'b'.repeat(64)}`, candidate: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' } },
+  },
   build_review_rubric_prompt: { type: 'build_review_rubric_prompt', rubric: 'scope', lapId: 'lap-1', promptBytes: 4096 },
   build_review_rubric_result: { type: 'build_review_rubric_result', rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL' },
   build_review_rubric_skipped: { type: 'build_review_rubric_skipped', rubric: 'scope', lapId: 'lap-1', reason: 'disabled' },
@@ -824,9 +835,11 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
     // re-enter events.jsonl when the closeout tail re-emits them.
     const buildReviewSinkExpectations = {
       build_review_rubric_started: { render: true, persist: true, audit: false, otel: false },
+      build_review_policy_resolved: { render: true, persist: true, audit: true, otel: false },
+      build_review_policy_failed: { render: true, persist: true, audit: true, otel: false },
       build_review_rubric_result: { render: true, persist: true, audit: false, otel: false },
       build_review_rubric_skipped: { render: true, persist: true, audit: false, otel: false },
-      build_review_cache_hit: { render: true, persist: true, audit: false, otel: false },
+      build_review_cache_hit: { render: true, persist: true, audit: true, otel: false },
       build_review_scope_summary: { render: false, persist: true, audit: false, otel: false },
       build_review_rubric_infrastructure_failure: { render: true, persist: true, audit: false, otel: false },
       build_review_scope_incomplete: { render: true, persist: true, audit: false, otel: false },
@@ -873,7 +886,16 @@ describe('Acceptance: audit-trail completeness — executed steps leave positive
       'build_review_reduced_coverage_accepted',
       'build_review_disposition_refused',
     ]));
-    expect(auditedEventTypes()).not.toEqual(expect.arrayContaining(Object.keys(buildReviewSinkExpectations)));
+    expect(auditedEventTypes()).toEqual(expect.arrayContaining([
+      'build_review_policy_resolved',
+      'build_review_policy_failed',
+      'build_review_cache_hit',
+    ]));
+    expect(auditedEventTypes()).not.toEqual(expect.arrayContaining(
+      Object.entries(buildReviewSinkExpectations)
+        .filter(([, sinks]) => !sinks.audit)
+        .map(([type]) => type),
+    ));
   });
 
   it('a UI-only event with no writer mapping produces no record and no error (allowlist, not a catch-all)', async () => {
