@@ -16,6 +16,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Fixed
 
 - Makes installer and session hooks treat runtime values as literal data. ([implementation PR #2376](https://github.com/jstoup111/ai-conductor/pull/2376)).
+- Background intake captures up to 1,000 assigned GitHub issues per repository and warns when results may be incomplete. ([implementation PR #2430](https://github.com/jstoup111/ai-conductor/pull/2430)).
+- Rebase safely quarantines conflicting untracked files, retries once, and records recovery guidance when it cannot proceed. ([implementation PR #2495](https://github.com/jstoup111/ai-conductor/pull/2495)).
 
 ## [1.2.0] - 2026-09-14
 
