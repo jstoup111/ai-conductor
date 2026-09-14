@@ -1784,6 +1784,18 @@ function validateTestSuiteBlock(
         };
       }
 
+      if (
+        entry.timeout_seconds !== undefined &&
+        (typeof entry.timeout_seconds !== 'number' ||
+          !Number.isFinite(entry.timeout_seconds) ||
+          entry.timeout_seconds <= 0)
+      ) {
+        return {
+          type: 'validation_error',
+          message: `test_suite.commands[${index}].timeout_seconds must be a finite positive number`,
+        };
+      }
+
       const workingDirectoryError = validateTestSuiteWorkingDirectory(
         entry.working_directory,
         projectRoot,

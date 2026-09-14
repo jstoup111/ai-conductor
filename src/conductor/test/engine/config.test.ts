@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:2.1, task:3, task:4, task:9
+// Covers: task:1, task:2, task:2.1, task:3, task:4, task:5, task:9
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -1211,6 +1211,34 @@ steps:
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.config.test_suite?.commands).toEqual(commands);
+    });
+
+    it.each([
+      [
+        'accepts omitted and finite positive entry timeouts',
+        'test_suite:\n  commands:\n    - command: npm run test:unit\n    - command: npm run test:integration\n      timeout_seconds: 45\n',
+        [
+          { command: 'npm run test:unit' },
+          { command: 'npm run test:integration', timeout_seconds: 45 },
+        ],
+      ],
+      ['rejects a zero entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: 0\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+      ['rejects a negative entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: -1\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+      ['rejects a YAML NaN entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: .nan\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+      ['rejects a YAML positive infinity entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: .inf\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+      ['rejects a YAML negative infinity entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: -.inf\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+      ['rejects a string entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: slow\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+      ['rejects a null entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: null\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+    ])('%s', async (_name, yaml, expected) => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), yaml);
+
+      const result = await loadConfig(tmpDir);
+
+      if (expected instanceof RegExp) {
+        expect(result.ok ? '' : result.error.message).toMatch(expected);
+        return;
+      }
+      expect(result.ok && result.config.test_suite?.commands).toEqual(expected);
     });
 
     it('rejects an absolute working directory in a command entry with its index', () => {
