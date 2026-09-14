@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -323,6 +323,34 @@ describe('conduct-state lease', () => {
 
     expect(acquired).toMatchObject({ ok: true });
     if (acquired.ok) await expect(acquired.handle.release()).resolves.toEqual({ ok: true });
+  });
+
+  it('recovers and releases a legacy stale recovery claim through the production filesystem', async () => {
+    const statePath = await createStatePath();
+    const leasePath = `${statePath}.lease`;
+    await mkdir(leasePath);
+    await writeFile(`${leasePath}/owner.json`, JSON.stringify({
+      version: 1, pid: 101, token: 'dead-owner', acquiredAt: '1970-01-01T00:00:00.000Z',
+    }));
+    await writeFile(`${leasePath}/recovery.json`, JSON.stringify({
+      version: 1, pid: 202, token: 'dead-legacy-claimant', claimedAt: '1970-01-01T00:00:00.000Z',
+    }));
+
+    const recovered = await createConductStateLease(statePath, {
+      pid: 303,
+      newToken: () => 'recovered-owner',
+      processIsLive: () => false,
+    }).acquire();
+
+    expect(recovered).toMatchObject({ ok: true });
+    if (!recovered.ok) return;
+    await expect(recovered.handle.release()).resolves.toEqual({ ok: true });
+    const later = await createConductStateLease(statePath, {
+      pid: 404,
+      newToken: () => 'later-owner',
+    }).acquire();
+    expect(later).toMatchObject({ ok: true });
+    if (later.ok) await expect(later.handle.release()).resolves.toEqual({ ok: true });
   });
 
   it('keeps one live recovery claimant authoritative until it releases the recovered lease', async () => {
@@ -1029,6 +1057,45 @@ describe('conduct-state lease', () => {
       },
       writes: [],
     });
+  });
+
+  it.each([
+    ['a live recovery claimant', JSON.stringify({
+      version: 1, pid: 202, token: 'live-claimant', claimedAt: '1970-01-01T00:00:00.000Z',
+    }), (pid: number) => pid === 202],
+    ['invalid recovery metadata', '{"version": 1, "pid":', () => false],
+  ])('does not persist a state mutation through the store for %s', async (_case, claim, processIsLive) => {
+    const statePath = await createStatePath();
+    await writeState(statePath, { complexity_tier: 'S' });
+    const filesystem = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem, pid: 101, newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    await filesystem.writeRecoveryClaim(`${statePath}.lease/recovery.json`, claim);
+    const writes: ConductState[] = [];
+    const store = createFilesystemConductStateStore(
+      statePath,
+      { async write(_path, state): Promise<void> { writes.push(state); } },
+      undefined,
+      undefined,
+      createConductStateLease(statePath, {
+        filesystem,
+        pid: 303,
+        newToken: () => 'would-be-owner',
+        processIsLive,
+        now: () => 0,
+        wait: async () => {},
+        waitTimeoutMs: 0,
+      }),
+    );
+
+    const result = await store.apply({
+      field: 'complexity_tier', expected: 'S', intent: 'record assessed complexity', next: 'M',
+    });
+
+    expect(result.kind).toBe('lease');
+    expect(writes).toEqual([]);
   });
 
   it('cleans only the verified quarantine while a replacement lease remains live', async () => {
