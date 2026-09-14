@@ -1,5 +1,7 @@
 import type { InstalledReviewSkill } from './build-review-policy.js';
 import { dirname } from 'node:path';
+import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import {
   ReviewPolicyCatalogError,
   type ReviewPolicyCatalogFailureCode,
@@ -53,6 +55,73 @@ export interface CodexAppServerSession {
 /** Injected process boundary for the local, metadata-only Codex app server. */
 export interface CodexAppServerTransport {
   open(environment: CodexPreparedCatalogEnvironment): Promise<CodexAppServerSession>;
+}
+
+/**
+ * Production metadata transport for the locally installed Codex app server.
+ * The catalog adapter remains the owner of validation; this transport only
+ * provides request/response framing and closes the child with its candidate.
+ */
+export function createCodexAppServerTransport(executable = 'codex'): CodexAppServerTransport {
+  return {
+    async open(environment) {
+      const child = spawn(executable, ['app-server'], {
+        cwd: environment.cwd,
+        env: { ...process.env, CODEX_HOME: environment.home },
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      if (!child.stdin || !child.stdout) throw new Error('Codex app server did not provide stdio');
+      const pending = new Map<string, { resolve(value: unknown): void; reject(reason: unknown): void }>();
+      let buffered = '';
+      const rejectAll = (reason: unknown) => {
+        for (const request of pending.values()) request.reject(reason);
+        pending.clear();
+      };
+      child.stdout.on('data', (chunk: Buffer | string) => {
+        buffered += String(chunk);
+        let newline: number;
+        while ((newline = buffered.indexOf('\n')) >= 0) {
+          const line = buffered.slice(0, newline).trim();
+          buffered = buffered.slice(newline + 1);
+          if (!line) continue;
+          try {
+            const message = JSON.parse(line) as { id?: unknown; result?: unknown; error?: unknown };
+            const id = typeof message.id === 'string' ? message.id : undefined;
+            if (!id) continue;
+            const request = pending.get(id);
+            if (!request) continue;
+            pending.delete(id);
+            if (message.error !== undefined) request.reject(new Error(`Codex app server request failed: ${JSON.stringify(message.error)}`));
+            else request.resolve(message.result);
+          } catch {
+            // The next well-formed response remains independently usable.
+          }
+        }
+      });
+      child.once('error', rejectAll);
+      child.once('exit', (code) => rejectAll(new Error(`Codex app server exited${code === null ? '' : ` ${code}`}`)));
+      const abort = () => child.kill();
+      environment.signal?.addEventListener('abort', abort, { once: true });
+      return {
+        request(method, params) {
+          return new Promise((resolve, reject) => {
+            const id = randomUUID();
+            pending.set(id, { resolve, reject });
+            child.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`, (error) => {
+              if (!error) return;
+              pending.delete(id);
+              reject(error);
+            });
+          });
+        },
+        async close() {
+          environment.signal?.removeEventListener('abort', abort);
+          rejectAll(new Error('Codex app server closed'));
+          child.kill();
+        },
+      };
+    },
+  };
 }
 
 function catalogError(

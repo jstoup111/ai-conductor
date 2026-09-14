@@ -1,6 +1,8 @@
 import { writeFile, access, readFile, mkdir, rename, rm, symlink } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, join, relative } from 'node:path';
+import { homedir } from 'node:os';
+import { execa } from 'execa';
 import { fileURLToPath } from 'node:url';
 import type {
   InvokeOptions,
@@ -81,8 +83,21 @@ import type { ResolvedBuildReviewCustomCatalogEntry } from './resolved-config.js
 import type { InstalledReviewSkill } from './build-review-policy.js';
 import { resolveInstalledReviewPolicy } from './build-review-policy-resolver.js';
 import { captureInstalledReviewPolicyBundle, type CapturedReviewPolicyBundle } from './build-review-policy-bundle.js';
-import { renderBuildReviewPolicyContract } from './build-review-policy-contract.js';
-import { parseBuildReviewCustomReviewerPayload, type BuildReviewLapId } from './build-review-domain.js';
+import {
+  evaluateBuildReviewPolicyPreflight,
+  parseBuildReviewPolicyRuntimeUnsupportedResponse,
+  renderBuildReviewPolicyContract,
+  renderBuildReviewPolicyUnsupportedDiagnostic,
+} from './build-review-policy-contract.js';
+import {
+  classifyBuildReviewPolicyIncompatibility,
+  parseBuildReviewCustomReviewerPayload,
+  type BuildReviewLapId,
+} from './build-review-domain.js';
+import { discoverClaudeReviewPolicies } from './build-review-policy-claude.js';
+import { createCodexAppServerTransport, listCodexInstalledReviewSkills } from './build-review-policy-codex.js';
+import { prepareBuildReviewContainment } from './build-review-containment.js';
+import { resolveReviewScratchHome } from './self-host/provider-scratch.js';
 import { stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
 import {
   coordinateBuildReviewRubrics,
@@ -145,6 +160,7 @@ import {
   type ProviderExecutionContext,
   type WithCandidateSafety,
 } from './provider-execution.js';
+import { runAuxiliaryGroupBranches } from './group-core.js';
 import {
   ProviderRuntimeSet,
 } from './provider-runtime.js';
@@ -588,6 +604,36 @@ export interface StepRunnerOptions {
   heartbeatWatchdog?: { pollIntervalMs?: number; now?: () => number };
 }
 
+/**
+ * Production catalog composition intentionally lives at the runner boundary:
+ * discovery occurs in the selected candidate's prepared environment, never in
+ * the parent process that happens to start the conductor.
+ */
+function productionBuildReviewPolicyCatalog(projectDir: string): NonNullable<StepRunnerOptions['buildReviewPolicyCatalog']> {
+  const codexTransport = createCodexAppServerTransport();
+  return async ({ provider, preparedEnv }) => {
+    const env = preparedEnv ?? process.env;
+    if (provider === 'claude') {
+      const claudeHome = env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+      return discoverClaudeReviewPolicies({
+        candidate: {
+          cwd: projectDir,
+          env,
+          projectSkillRoots: [join(projectDir, '.claude', 'skills'), join(projectDir, '.agents', 'skills')],
+          userSkillRoots: [join(claudeHome, 'skills')],
+        },
+      });
+    }
+    if (provider === 'codex') {
+      return listCodexInstalledReviewSkills(codexTransport, {
+        cwd: projectDir,
+        home: env.CODEX_HOME ?? join(homedir(), '.codex'),
+      });
+    }
+    throw new Error(`Build-review custom policies are unsupported for provider ${provider}`);
+  };
+}
+
 type ProviderAwareSkillOneShotStep = 'complexity' | 'remediate' | 'rebase';
 type ProviderAwareFreeFormOneShotStep =
   | 'worktree'
@@ -662,6 +708,8 @@ export class DefaultStepRunner implements StepRunner {
   private gitRunner: GitRunner;
   private planPathOverride?: string;
   private buildReviewInputOptions?: BuildReviewInputOptions;
+  /** Fixtures with a synthetic Git runner cannot create detached worktrees. */
+  private readonly usesInjectedBuildReviewGit: boolean;
   private buildReviewScopedLauncher: BuildReviewScopedLauncher;
   private buildReviewCoordinator?: StepRunnerOptions['buildReviewCoordinator'];
   private buildReviewEffectiveResolver: typeof resolveEffectiveBuildReviewVerdict;
@@ -724,6 +772,7 @@ export class DefaultStepRunner implements StepRunner {
       this.log,
     );
     this.gitRunner = options?.gitRunner ?? makeGitRunner(this.projectDir);
+    this.usesInjectedBuildReviewGit = options?.gitRunner !== undefined;
     this.worktreeLifecycle = options?.worktreeLifecycle;
     this.planPathOverride = options?.planPath;
     this.buildReviewInputOptions = options?.buildReviewInputOptions;
@@ -731,7 +780,8 @@ export class DefaultStepRunner implements StepRunner {
     this.buildReviewCoordinator = options?.buildReviewCoordinator;
     this.buildReviewEffectiveResolver = options?.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict;
     this.buildReviewArtifactReader = options?.buildReviewArtifactReader ?? readBuildReviewBranchArtifact;
-    this.buildReviewPolicyCatalog = options?.buildReviewPolicyCatalog;
+    this.buildReviewPolicyCatalog = options?.buildReviewPolicyCatalog
+      ?? productionBuildReviewPolicyCatalog(this.projectDir);
     this.buildReviewPolicyCapture = options?.buildReviewPolicyCapture ?? captureInstalledReviewPolicyBundle;
     this.events = options?.events;
     this.coverageBindingFilesystem = options?.coverageBindingFilesystem;
@@ -2181,9 +2231,11 @@ export class DefaultStepRunner implements StepRunner {
     );
     let customResults: Readonly<Record<string, BuildReviewCustomArtifactMember>> | undefined;
     if (customEntries.length > 0) {
-      const outcomes = await Promise.all(customEntries.map((entry) =>
-        this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier),
-      ));
+      const outcomes = await runAuxiliaryGroupBranches(
+        customEntries.map((entry) => ({ memberId: entry.id, policy: entry })),
+        config.maxParallel,
+        async (_id, entry) => this.dispatchInstalledBuildReviewPolicy(entry, inputs, lapId, tier),
+      );
       if (outcomes.some((outcome) => !outcome.success)) {
         return {
           success: false,
@@ -2474,10 +2526,14 @@ export class DefaultStepRunner implements StepRunner {
       const output = `build_review custom policy ${entry.id} requires a candidate policy catalog adapter`;
       return { id: entry.id, success: true, output, member: failedMember('policy-load-failed', output) };
     }
+    const source = inputs.sourceMaterialization?.contextFor(entry.id).source;
+    if (!source && !this.usesInjectedBuildReviewGit) {
+      const output = `build_review custom policy ${entry.id} has no frozen source materialization`;
+      return { id: entry.id, success: true, output, member: failedMember('preflight-failed', output) };
+    }
     const options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'> = {
       prompt: `Build-review custom policy ${entry.id}: the candidate will supply the selected immutable policy contract before judgment. Return only the custom findings payload.`,
-      cwd: this.projectDir,
-      dangerouslySkipPermissions: true,
+      cwd: source?.headPath ?? this.projectDir,
     };
     let failure: { reason: import('./build-review-artifacts.js').BuildReviewCustomInfrastructureFailureReason; detail: string } = {
       reason: 'provider-error', detail: `custom policy ${entry.id} did not produce a judgment`,
@@ -2525,21 +2581,96 @@ export class DefaultStepRunner implements StepRunner {
             output: failure.detail,
           } };
         }
-        // `invoke` is intentionally the candidate-owned callback. Mutating
-        // this caller-owned options object before it is consumed binds the
-        // actual captured policy to that invocation without opening a second
-        // provider path or bypassing fresh-session/accounting semantics.
-        options.prompt = renderBuildReviewPolicyContract({
-          bundle, question: entry.question,
-          scope: `Frozen build-review input ${inputs.sourceSnapshot.contentDigest}.`,
+        await this.events?.emit({
+          type: 'build_review_policy_resolved', rubric: entry.id, lapId,
+          provider: context.candidate.providerKey, source: policy.source,
+          ...(policy.plugin === undefined ? {} : { pluginId: policy.plugin.id }),
+          bundleDigest: bundle.digest,
         });
-        const invoked = await context.invoke();
+        const provider = context.candidate.providerKey === 'claude' || context.candidate.providerKey === 'codex'
+          ? context.candidate.providerKey
+          : undefined;
+        if (!provider) {
+          coverageFailure = true;
+          failure = { reason: 'preflight-failed', detail: `Installed build-review policy ${entry.skill} has no read-only profile for provider ${context.candidate.providerKey}` };
+          return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
+        }
+        const preflight = evaluateBuildReviewPolicyPreflight({
+          profile: {
+            provider,
+            admittedActions: ['read-frozen-input', 'read-policy-material'],
+            admittedCapabilities: ['frozen-input', 'policy-material'],
+            admittedTools: ['git'],
+            admittedDependencies: policy.declaredDependencies,
+          },
+          requirements: [
+            { kind: 'action', action: 'read-frozen-input' },
+            { kind: 'action', action: 'read-policy-material' },
+            ...policy.declaredDependencies.map((dependency) => ({ kind: 'dependency' as const, dependency, source: 'host' as const })),
+          ],
+        });
+        if (preflight.kind !== 'admitted') {
+          coverageFailure = true;
+          const classification = classifyBuildReviewPolicyIncompatibility(preflight);
+          failure = { reason: classification.reason, detail: renderBuildReviewPolicyUnsupportedDiagnostic(preflight) };
+          await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider, stage: 'preflight', reason: failure.detail });
+          return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
+        }
+        // The prepared-candidate callback is the only route that can bind a
+        // frozen cwd and proved access profile to this actual provider.
+        let reviewAccess: InvokeOptions['reviewAccess'];
+        if (source) {
+          const scratch = resolveReviewScratchHome({ worktreeRoot: this.projectDir, runId: this.runId, attempt: 0, provider });
+          const engineEvidence = join(this.projectDir, '.pipeline', 'build-review', 'engine-evidence');
+          const siblingEvidence = join(this.projectDir, '.pipeline', 'build-review', 'sibling-evidence');
+          await Promise.all([mkdir(scratch, { recursive: true }), mkdir(engineEvidence, { recursive: true }), mkdir(siblingEvidence, { recursive: true })]);
+          const containment = await prepareBuildReviewContainment({
+            provider,
+            paths: {
+              frozenSource: source.headPath, policyMaterial: bundle.materialPath,
+              originalCheckout: this.projectDir, originalInstallation: policy.packageRoot,
+              engineEvidence, siblingEvidence, scratch,
+              sourceWriteProbe: join(source.headPath, '.build-review-write-probe'),
+              installationWriteProbe: join(policy.packageRoot, '.build-review-write-probe'),
+              engineStateWriteProbe: join(engineEvidence, '.build-review-write-probe'),
+              scratchWriteProbe: join(scratch, '.build-review-write-probe'),
+              siblingEvidenceProbe: join(siblingEvidence, '.build-review-read-probe'),
+            },
+            runProcess: async (executable, args) => {
+              const result = await execa(executable, args, { reject: false });
+              return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
+            },
+          });
+          if (containment.kind === 'unsupported') {
+            coverageFailure = true;
+            failure = { reason: 'preflight-failed', detail: `Installed build-review policy ${entry.skill} cannot establish read-only containment: ${containment.reason}. Recovery: ${containment.recovery}.` };
+            await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider, stage: 'containment', reason: containment.reason });
+            return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
+          }
+          reviewAccess = containment;
+        }
+        const invoked = await context.invoke({
+          prompt: renderBuildReviewPolicyContract({
+            bundle, question: entry.question,
+            scope: `Frozen build-review input ${inputs.sourceSnapshot.contentDigest}.`,
+          }),
+          cwd: source?.headPath ?? this.projectDir,
+          ...(reviewAccess === undefined ? {} : { reviewAccess }),
+        });
         if (!invoked.success) {
           coverageFailure = true;
           failure = { reason: 'provider-error', detail: invoked.output ?? `Installed build-review policy ${entry.skill} provider failed` };
           return { kind: 'failure' as const, result: invoked };
         }
         const raw = extractJudgedResultCandidate(invoked.output);
+        const runtimeUnsupported = parseBuildReviewPolicyRuntimeUnsupportedResponse(raw, provider);
+        if (runtimeUnsupported) {
+          coverageFailure = true;
+          const classification = classifyBuildReviewPolicyIncompatibility(runtimeUnsupported);
+          failure = { reason: classification.reason, detail: renderBuildReviewPolicyUnsupportedDiagnostic(runtimeUnsupported) };
+          await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider, stage: 'runtime', reason: failure.detail });
+          return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
+        }
         const parsed = parseBuildReviewCustomReviewerPayload(raw);
         if (!parsed || parsed.kind === 'unsupported-policy') {
           coverageFailure = true;
@@ -2612,6 +2743,7 @@ export class DefaultStepRunner implements StepRunner {
         } };
       },
     });
+    await inputs.sourceMaterialization?.settle(entry.id);
     this.callCount++;
     const member = result.success ? (() => {
       try { return parseBuildReviewCustomArtifactMember(JSON.parse(result.output)); } catch { return undefined; }
@@ -3159,8 +3291,20 @@ export class DefaultStepRunner implements StepRunner {
     let containmentReport: ContainmentFloorReport | undefined;
     let inputs;
     try {
+      // A custom member changes the lap's source authority from by-reference
+      // to a detached, immutable view shared by every member in the lap.
+      const lapMembers = this.usesInjectedBuildReviewGit && this.buildReviewInputOptions?.materialization === undefined
+        ? undefined
+        : buildReviewConfig.catalog.map((entry) => ({
+        id: entry.id,
+        kind: entry.kind,
+      })) as BuildReviewInputOptions['lapMembers'];
       inputs = {
-        ...await assembleBuildReviewInputs(this.gitRunner, planPath, this.buildReviewInputOptions),
+        ...await assembleBuildReviewInputs(this.gitRunner, planPath, {
+          ...this.buildReviewInputOptions,
+          lapMembers,
+          materialization: this.buildReviewInputOptions?.materialization ?? { projectRoot: this.projectDir },
+        }),
       };
     } catch (err) {
       return {

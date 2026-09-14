@@ -331,6 +331,25 @@ export type ConductorEvent =
     }
   | { type: 'build_review_rubric_started'; rubric: string; lapId: string }
   | { type: 'self_host_dispatch_admission'; step: StepName; state: 'queued' | 'admitted' | 'cancelled' }
+  /** Candidate-local installed custom policy selected for a frozen review lap. */
+  | {
+      type: 'build_review_policy_resolved';
+      rubric: string;
+      lapId: string;
+      provider: string;
+      source: 'project' | 'global' | 'plugin';
+      pluginId?: string;
+      bundleDigest: string;
+    }
+  /** Policy discovery, compatibility, containment, or runtime refusal. */
+  | {
+      type: 'build_review_policy_failed';
+      rubric: string;
+      lapId: string;
+      provider: string;
+      stage: 'catalog' | 'preflight' | 'containment' | 'runtime';
+      reason: string;
+    }
   | {
       /** The self-host dispatch was proven contained, so this concurrent drift is not a dispatch leak. */
       type: 'contained_live_checkout_drift';
