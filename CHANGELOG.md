@@ -22,6 +22,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Makes installer and session hooks treat runtime values as literal data. ([implementation PR #2376](https://github.com/jstoup111/ai-conductor/pull/2376)).
 - Background intake captures up to 1,000 assigned GitHub issues per repository and warns when results may be incomplete. ([implementation PR #2430](https://github.com/jstoup111/ai-conductor/pull/2430)).
 - Rebase safely quarantines conflicting untracked files, retries once, and records recovery guidance when it cannot proceed. ([implementation PR #2495](https://github.com/jstoup111/ai-conductor/pull/2495)).
+- Vitest runs now keep their temporary storage in a reliable checkout-local location with a configurable override. ([implementation PR #2537](https://github.com/jstoup111/ai-conductor/pull/2537)).
+- Provider fallbacks now skip candidates that cannot complete required setup and retain clear recovery guidance. ([implementation PR #2538](https://github.com/jstoup111/ai-conductor/pull/2538)).
 
 ## [1.2.0] - 2026-09-14
 
