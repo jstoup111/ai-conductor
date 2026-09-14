@@ -115,6 +115,8 @@ export type GithubOperationRefusalReason =
   | 'unresolved-actor'
   | 'missing-provenance'
   | 'conflicting-provenance'
+  | 'provenance-unreadable'
+  | 'provenance-timeout'
   | 'invalid-target'
   | 'invalid-payload'
   | 'unsupported-operation'
@@ -158,12 +160,26 @@ export type GithubOperationResult =
     readonly metadataFailures: readonly { readonly operation: GithubOperationName; readonly error: string }[];
   };
 
-/** Injectable terminal seam. Task 6 adapts it to the canonical GhRunner. */
+export interface GithubOperationRunnerResponse {
+  readonly created?: GithubOperationTarget;
+  readonly metadataFailures?: readonly { readonly operation: GithubOperationName; readonly error: string }[];
+}
+
+/** A policy refusal is a normal outcome, never an exception or a fallback trigger. */
+export interface GithubOperationRunnerRefusal {
+  readonly kind: 'refused';
+  readonly reason: GithubOperationRefusalReason;
+}
+
+/** Injectable guarded-operation seam. Task 6 adapts it to the canonical GhRunner. */
 export interface GithubOperationRunner {
-  run(request: GithubOperationRequest): Promise<{
-    readonly created?: GithubOperationTarget;
-    readonly metadataFailures?: readonly { readonly operation: GithubOperationName; readonly error: string }[];
-  }>;
+  run(request: GithubOperationRequest): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal>;
+}
+
+function isRunnerRefusal(
+  response: GithubOperationRunnerResponse | GithubOperationRunnerRefusal,
+): response is GithubOperationRunnerRefusal {
+  return 'kind' in response && response.kind === 'refused';
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -287,6 +303,13 @@ export async function executeGithubOperation(
   if (decoded.kind === 'refused') return decoded;
   try {
     const response = await runner.run(decoded.request);
+    if (isRunnerRefusal(response)) {
+      return {
+        kind: 'refused',
+        operation: decoded.request.operation,
+        reason: response.reason,
+      };
+    }
     if (response.created && response.metadataFailures && response.metadataFailures.length > 0) {
       return {
         kind: 'partial',
