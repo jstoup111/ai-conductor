@@ -77,7 +77,7 @@ describe('TerminalSubscriber', () => {
     expect(target.handle).toHaveBeenCalledOnce();
   });
 
-  it('delivers an allowance-bearing retry once to TerminalRenderer instead of the foreground callback', async () => {
+  it('fans an allowance-bearing retry to every renderer exactly once', async () => {
     const events = new ConductorEventEmitter();
     const callback = renderer();
     const stream = new CaptureStream();
@@ -101,26 +101,37 @@ describe('TerminalSubscriber', () => {
       progressAttemptCeiling: 30,
     });
 
-    expect(callback.handle).not.toHaveBeenCalled();
+    expect(callback.handle).toHaveBeenCalledOnce();
+    expect(callback.handle).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'step_retry',
+      progressAttempt: 2,
+      progressAttemptCeiling: 30,
+    }));
     expect(stream.output()).toContain('2/3 (progress allowance: attempt 2 of 30)');
     expect(stream.output().match(/progress allowance: attempt 2 of 30/g)).toHaveLength(1);
   });
 
-  it('delivers a retry to the foreground callback when TerminalRenderer is absent', async () => {
+  it('emits renderer_error for a failed retry renderer while delivering to the others', async () => {
     const events = new ConductorEventEmitter();
-    const callback = renderer();
+    const bad = renderer(vi.fn(async () => { throw new Error('broken retry renderer'); }));
+    bad.name = 'terminal';
+    const good = renderer();
+    const errors: ConductorEvent[] = [];
+    events.on('renderer_error', async (event) => { errors.push(event); });
     const subscriber = new TerminalSubscriber(events);
     subscribers.push(subscriber);
-    subscriber.start([callback]);
+    subscriber.start([bad, good]);
     const event: ConductorEvent = { type: 'step_retry', step: 'build', attempt: 2, maxAttempts: 3, reason: 'retry' };
 
     await events.emit(event);
 
-    expect(callback.handle).toHaveBeenCalledOnce();
-    expect(callback.handle).toHaveBeenCalledWith(event);
+    expect(good.handle.mock.calls.filter(([seen]) => seen === event)).toHaveLength(1);
+    expect(errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rendererName: 'terminal', error: 'Error: broken retry renderer' }),
+    ]));
   });
 
-  it('delivers a feature-forwarded retry only to the foreground callback', async () => {
+  it('does not deliver a feature-forwarded retry to registered renderers', async () => {
     const globalEvents = new ConductorEventEmitter();
     const callback = renderer();
     const terminal = renderer();
@@ -135,8 +146,7 @@ describe('TerminalSubscriber', () => {
 
     try {
       await scope.events.emit(event);
-      expect(callback.handle).toHaveBeenCalledOnce();
-      expect(callback.handle).toHaveBeenCalledWith(expect.objectContaining(event));
+      expect(callback.handle).not.toHaveBeenCalled();
       expect(terminal.handle).not.toHaveBeenCalled();
     } finally {
       scope.stop();

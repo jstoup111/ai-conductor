@@ -29,10 +29,6 @@ export class TerminalSubscriber implements UISubscriber {
 
   start(renderers: UIRenderer[]): void {
     this.renderers = renderers;
-    const terminalRenderer = renderers.find((renderer) => renderer.name === 'terminal');
-    const foregroundRenderers = terminalRenderer
-      ? renderers.filter((renderer) => renderer !== terminalRenderer)
-      : renderers;
     // Dashboard renders are event-driven. No periodic refresh — the sticky
     // live region is updated when conductor state changes. A polling refresh
     // would accumulate stale frames in the scrollback.
@@ -59,22 +55,6 @@ export class TerminalSubscriber implements UISubscriber {
             }
           }));
         };
-
-        if (event.type === 'step_retry') {
-          // Feature-scoped listeners already rendered this retry. Preserve the
-          // foreground callback path for its tagged copy, but never replay it
-          // through the daemon-wide terminal renderer.
-          if (isForwardedFromFeature(event)) {
-            await render(foregroundRenderers);
-            return;
-          }
-
-          // TerminalRenderer owns the foreground retry line when installed.
-          // Sending the same event to the callback renderer would print its
-          // fixed counter and allowance fragment a second time.
-          await render(terminalRenderer ? [terminalRenderer] : foregroundRenderers);
-          return;
-        }
 
         // A forwarded event has ALREADY been rendered, tagged, by its
         // feature-scoped listeners (see beginFeatureRun in daemon-cli.ts).
