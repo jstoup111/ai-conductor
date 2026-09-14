@@ -2,7 +2,7 @@
  * CI fix eligibility, hint builder, and resolver for failed check remediation.
  *
  * Provides:
- * - `buildCiFixHint`: Fetches failing check names and log excerpts
+ * - `buildCiFixHint`: Prepares required failure context from a selected PR snapshot
  * - `isEligibleForCiFix`: Eligibility gates for ci-fix dispatch
  * - `runCiFix`: Resolver orchestration (Tasks 17–20)
  */
@@ -57,93 +57,75 @@ export function classifyFixError(err: unknown): 'flag-invalid' | 'auth' | 'spawn
 }
 
 /**
- * Build a RETRY hint from failing checks and their logs.
- *
- * Story: TR-4 happy (hint names failing checks + includes log excerpt)
- *
- * Fetches `gh pr checks --json` to get the list of checks, identifies failed ones,
- * then calls `gh run view --log-failed` for each to get log excerpts.
- * Returns a bounded-length hint string suitable for injecting into a fix session.
- *
- * @param gh The GhRunner to execute commands
- * @param cwd Working directory for gh commands
- * @param prUrl The PR URL to fetch checks for
- * @returns A hint string containing check names and log excerpts
+ * Required CI failure context prepared from the same snapshot that selected a
+ * PR for repair. Optional log enrichment is deliberately owned by Task 3.
  */
-export async function buildCiFixHint(
-  gh: GhRunner,
-  cwd: string,
-  prUrl: string,
-): Promise<string> {
-  try {
-    // Fetch the list of checks for this PR
-    const checksResult = await gh(['pr', 'checks', prUrl, '--json'], { cwd });
-    const checksData = JSON.parse(checksResult.stdout);
+export type CiFixHintResult =
+  | { kind: 'ready'; hint: string }
+  | {
+    kind: 'context-error';
+    reason: 'read-failure' | 'malformed-context' | 'empty-failure-context';
+  };
 
-    // Extract failed checks with their run links
-    const failedChecks: Array<{ name: string; url?: string }> = [];
+const FAILED_CHECK_RUN_CONCLUSIONS = new Set([
+  'FAILURE',
+  'TIMED_OUT',
+  'CANCELLED',
+  'ACTION_REQUIRED',
+  'STARTUP_FAILURE',
+  'STALE',
+]);
+const FAILED_EXTERNAL_STATUS_STATES = new Set(['FAILURE', 'ERROR']);
 
-    if (checksData.checkSuites && Array.isArray(checksData.checkSuites)) {
-      for (const suite of checksData.checkSuites) {
-        if (suite.checkRuns && Array.isArray(suite.checkRuns)) {
-          for (const run of suite.checkRuns) {
-            if (run.conclusion === 'FAILURE') {
-              failedChecks.push({
-                name: run.name,
-                url: run.detailsUrl,
-              });
-            }
-          }
-        }
-      }
-    }
+function checkDisplayName(check: NonNullable<PrMergeState['statusCheckRollup']>[number], index: number): string {
+  return check.name?.trim() || check.context?.trim() || `(unnamed check #${index + 1})`;
+}
 
-    // Build the hint from failed checks
-    const lines: string[] = ['CI checks failed:'];
-
-    for (const check of failedChecks) {
-      lines.push(`\n• ${check.name}`);
-
-      // Add the link if available
-      if (check.url) {
-        lines.push(`  ${check.url}`);
-      }
-
-      // Try to fetch logs for this check
-      if (check.url) {
-        try {
-          // Extract run ID from the details URL (GitHub Actions run URL format)
-          const runIdMatch = check.url.match(/\/runs\/(\d+)/);
-          if (runIdMatch) {
-            const runId = runIdMatch[1];
-            const logsResult = await gh(['run', 'view', runId, '--log-failed'], { cwd });
-            const logLines = logsResult.stdout.split('\n');
-
-            // Include first few log lines (bounded length)
-            const maxLogLines = 10;
-            const excerpt = logLines.slice(0, maxLogLines).join('\n');
-            if (excerpt.trim()) {
-              lines.push('  Log excerpt:');
-              lines.push('  ' + excerpt.split('\n').join('\n  '));
-            }
-          }
-        } catch (err) {
-          // Degrade gracefully: log fetch failed, continue with just the check name and link
-          // (Task 16: negative path)
-        }
-      }
-    }
-
-    // Return non-empty hint even if all checks were added without logs
-    if (failedChecks.length > 0) {
-      return lines.join('\n');
-    }
-
-    return '';
-  } catch (err) {
-    // If gh call fails, return empty hint
-    return '';
+function isFailedCheck(check: NonNullable<PrMergeState['statusCheckRollup']>[number]): boolean {
+  if (check.kind === 'status-context') {
+    return FAILED_EXTERNAL_STATUS_STATES.has((check.state ?? '').toUpperCase());
   }
+  return FAILED_CHECK_RUN_CONCLUSIONS.has((check.conclusion ?? '').toUpperCase());
+}
+
+/**
+ * Prepare a hint from a selected PR state. The legacy overload exists only so
+ * Task 11 can replace the old daemon callback without changing this task's
+ * file scope; it performs no independent GitHub listing.
+ */
+export function buildCiFixHint(prState: PrMergeState): CiFixHintResult;
+export function buildCiFixHint(legacyGh: GhRunner, cwd: string, prUrl: string): string;
+export function buildCiFixHint(
+  prStateOrLegacyGh: PrMergeState | GhRunner,
+  _cwd?: string,
+  _prUrl?: string,
+): CiFixHintResult | string {
+  if (typeof prStateOrLegacyGh === 'function') {
+    return 'CI repair context unavailable: selected PR state is required.';
+  }
+
+  const prState = prStateOrLegacyGh;
+  if (prState.readFailure) {
+    return { kind: 'context-error', reason: 'read-failure' };
+  }
+  if (prState.contextFailure) {
+    return { kind: 'context-error', reason: 'malformed-context' };
+  }
+
+  const failedChecks = (prState.statusCheckRollup ?? [])
+    .map((check, index) => ({ check, index }))
+    .filter(({ check }) => isFailedCheck(check));
+  if (failedChecks.length === 0) {
+    return { kind: 'context-error', reason: 'empty-failure-context' };
+  }
+
+  const lines = ['CI checks failed:'];
+  for (const { check, index } of failedChecks) {
+    lines.push(`\n• ${checkDisplayName(check, index)}`);
+    const link = check.kind === 'status-context' ? check.targetUrl : check.detailsUrl;
+    if (link) lines.push(`  ${link}`);
+  }
+  return { kind: 'ready', hint: lines.join('\n') };
 }
 
 /**
