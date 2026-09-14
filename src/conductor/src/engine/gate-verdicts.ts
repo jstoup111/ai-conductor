@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import type { StepName } from '../types/index.js';
 import {
   checkStepCompletion,
@@ -35,6 +35,54 @@ export async function checkGateCompletion(
  * self-report. The only agent-authored writes are kickback invalidations, which
  * must carry evidence (enforced at the write boundary — see Phase 3).
  */
+/** Immutable identity tuple for the exact replay whose result is being retained. */
+export interface ReplayEvidence {
+  preRebaseHead: string;
+  mergeBase: string;
+  target: string;
+  completedHead: string;
+  expectedTree: string;
+}
+
+/** The exact original passing evidence a replay preservation continues to use. */
+export interface PreservedJudgeIdentity {
+  artifactDigest: string;
+  attemptId: string;
+  runId: string;
+  codeStamp: string;
+}
+
+/**
+ * Bounded authority attached to the preserved gate's existing verdict record.
+ * It deliberately names the original judge rather than manufacturing a new one.
+ */
+export interface ReplayPreservationRecord {
+  gate: StepName;
+  original: PreservedJudgeIdentity;
+  replay: ReplayEvidence;
+  relevantInputIdentities: readonly string[];
+  operationId: string;
+}
+
+/** Explicit rebase effects, retained on the rebase gate while they are applied. */
+export interface RebaseTransitionDescriptor {
+  preserved: readonly StepName[];
+  invalidated: readonly StepName[];
+  reverified: readonly StepName[];
+}
+
+/**
+ * The cross-file rebase transition is not transactional. Readers therefore
+ * treat `applying` as non-publishable until its same-id operation is applied
+ * and reconciled by the transition owner.
+ */
+export interface RebaseOperationRecord {
+  id: string;
+  status: 'applying' | 'applied';
+  transition: RebaseTransitionDescriptor;
+  replay: ReplayEvidence;
+}
+
 export interface GateVerdict {
   satisfied: boolean;
   /** Why — for an unsatisfied verdict, what's missing. */
@@ -46,6 +94,10 @@ export interface GateVerdict {
     from: StepName;
     evidence: string;
   };
+  /** Optional additive authority for a previously judged pass after one replay. */
+  preservation?: ReplayPreservationRecord;
+  /** Present only on the existing `rebase` gate record while its effects apply. */
+  rebaseOperation?: RebaseOperationRecord;
 }
 
 export const GATES_DIR = '.pipeline/gates';
@@ -81,11 +133,17 @@ export async function writeVerdict(
   verdict: GateVerdict,
 ): Promise<void> {
   await mkdir(join(dir, GATES_DIR), { recursive: true });
+  const path = verdictPath(dir, step);
+  // A transition spans gate records and state, so it cannot be one transaction.
+  // Replacing each individual record atomically prevents a reader from seeing
+  // truncated evidence and mistaking it for a legacy record.
+  const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`;
   await writeFile(
-    verdictPath(dir, step),
+    temporaryPath,
     JSON.stringify(verdict, null, 2) + '\n',
     'utf-8',
   );
+  await rename(temporaryPath, path);
 }
 
 /**
