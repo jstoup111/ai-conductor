@@ -139,6 +139,18 @@ describe('remediation case artifact', () => {
     expect(result).toEqual({ ok: true, judgement: CASE_V2 });
   });
 
+  it('refuses a case-v2 action that omits the admitted-plan-task provenance', async () => {
+    const judgement = {
+      ...CASE_V2,
+      cases: [{
+        ...CASE_V2.cases[0],
+        effect: { kind: 'action', route: 'build', tasks: [{ title: 'src/widget.ts:20 — cover the changed branch.' }] },
+      }],
+    };
+
+    await expect(read(judgement)).resolves.toEqual({ ok: false, reason: 'invalid-action-effect' });
+  });
+
   it.each(['product', 'plan', 'architecture'] as const)(
     'round-trips a case-v2 %s escalation without an action effect',
     async (owner) => {
