@@ -14,6 +14,7 @@ import {
   type BuildReviewCoordinationInput,
   validateBuildReviewDispatchedResult,
 } from "../../src/engine/build-review-coordinator.js";
+import { makeBuildReviewDispatchFailure } from '../../src/engine/build-review-domain.js';
 import {
   deriveBuildReviewScopeIncompleteFault,
   mapBuildReviewCoordinatorFailureReason,
@@ -100,6 +101,26 @@ function coordinationInput(
 }
 
 describe("build-review coordinator: registered dispatch", () => {
+  it('keeps setup-only provider exhaustion as infrastructure without accepting findings or retrying', async () => {
+    const dispatchModel = vi.fn(async () => makeBuildReviewDispatchFailure('redacted setup diagnostic', {
+      candidates: [{ provider: 'codex', reason: 'redacted', recoveryAction: 'recover' }],
+    }));
+    const input = coordinationInput(true, { dispatchModel });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(dispatchModel).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      kind: 'ready',
+      branches: [{
+        kind: 'infrastructure-failure',
+        reason: 'invalid-provider-result',
+        providerSetupExhaustion: { candidates: [{ provider: 'codex' }] },
+      }],
+    });
+    expect(JSON.stringify(result)).not.toContain('findings');
+  });
+
   it("keeps a disabled whole gate distinct from an empty enabled container", () => {
     expect(classifyBuildReviewRubricBranches({ ...config(false), enabled: false }, [])).toEqual({
       kind: "gate-disabled",

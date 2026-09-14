@@ -2091,6 +2091,7 @@ export class DefaultStepRunner implements StepRunner {
             rubric: branch.rubric,
             reason: deriveBuildReviewInfrastructureFailureReason({ reason: branch.reason }),
             detail: branch.detail === undefined ? branch.reason : `${branch.reason}: ${branch.detail}`,
+            ...(branch.providerSetupExhaustion ? { providerSetupExhaustion: branch.providerSetupExhaustion } : {}),
           }];
     }))) as Record<BuildReviewRubricResult['rubric'], BuildReviewRubricResult | {
       readonly kind: 'malformed';
@@ -2145,6 +2146,13 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
     if (infrastructureFailure) {
+      if (infrastructureFailure.providerSetupExhaustion) {
+        return {
+          success: false,
+          output: `build_review infrastructure failure in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
+          providerSetupExhaustion: infrastructureFailure.providerSetupExhaustion,
+        };
+      }
       const hasJudgedFinding = Object.values(validResults).some(
         (result) => result.kind === 'judged' && result.findings.length > 0,
       );
@@ -2360,6 +2368,7 @@ export class DefaultStepRunner implements StepRunner {
         `All configured providers were unavailable during setup: ${initial.providerSetupExhaustion.candidates.map(
           ({ provider, reason, recoveryAction }) => `${provider}: ${redactSafetyText(reason)} Recovery: ${redactSafetyText(recoveryAction)}`,
         ).join('; ')}`,
+        initial.providerSetupExhaustion,
       );
     }
     if (initial.commandUnresolved) {
@@ -2378,6 +2387,14 @@ export class DefaultStepRunner implements StepRunner {
       `Your previous response (bounded excerpt):\n${boundedHeadTailExcerpt(initial.output, RUBRIC_REPAIR_PROMPT_EXCERPT_CAP_BYTES)}`,
     ].join('\n\n');
     const repair = await invokeOnce(repairPrompt);
+    if (repair.providerSetupExhaustion) {
+      return makeBuildReviewDispatchFailure(
+        `All configured providers were unavailable during setup: ${repair.providerSetupExhaustion.candidates.map(
+          ({ provider, reason, recoveryAction }) => `${provider}: ${redactSafetyText(reason)} Recovery: ${redactSafetyText(recoveryAction)}`,
+        ).join('; ')}`,
+        repair.providerSetupExhaustion,
+      );
+    }
     if (repair.success && repair.output !== undefined) {
       if (repair.output === initial.output) {
         return makeBuildReviewDispatchFailure(

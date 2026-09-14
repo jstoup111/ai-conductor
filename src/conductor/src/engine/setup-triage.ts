@@ -19,6 +19,7 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ConductorEventEmitter } from '../ui/events.js';
+import type { SetupFailureAttempt } from './rebase.js';
 import type { SetupRepairRejectionReason } from '../types/events.js';
 
 /** Minimal git runner — injected so the helpers are unit-testable without a repo. */
@@ -647,7 +648,7 @@ export async function fixSession(
   git: GitRunner,
   worktreePath: string,
   slug: string,
-  dispatchFixSession: () => Promise<void>,
+  dispatchFixSession: () => Promise<SetupFailureAttempt>,
   runPrepare: (worktreePath: string) => Promise<void>,
   events?: ConductorEventEmitter,
 ): Promise<TriageOutcome> {
@@ -689,7 +690,15 @@ export async function fixSession(
   };
 
   try {
-    await dispatchFixSession();
+    const attempt = await dispatchFixSession();
+    if (attempt.providerSetupExhaustion) {
+      return {
+        kind: 'park',
+        outputTail: 'Setup repair could not dispatch: every configured provider is unavailable during setup. Complete the provider recovery action, then re-queue this feature.',
+        contractOutcome: 'provider-failure',
+        preservedPaths: [],
+      };
+    }
   } catch (err) {
     const afterFailure = await repairSnapshot(git);
     if (!afterFailure.ok) return reject('snapshot-failed', afterFailure.outputTail, true);
@@ -750,7 +759,7 @@ export async function runSetupFailureTriage(
   slug: string,
   setupError: any,
   runPrepare: (worktreePath: string) => Promise<void>,
-  dispatchFixSession: () => Promise<void>,
+  dispatchFixSession: () => Promise<SetupFailureAttempt>,
   logger?: Logger,
   events?: ConductorEventEmitter,
 ): Promise<TriageOutcome> {

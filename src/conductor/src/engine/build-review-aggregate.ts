@@ -121,7 +121,7 @@ function strictResult(value: unknown): BuildReviewRubricResult | undefined {
     : candidate.kind === 'skipped'
       ? ['kind', 'rubric', 'reason']
       : candidate.kind === 'infrastructure-failure'
-        ? ['kind', 'rubric', 'reason', 'detail']
+        ? ['kind', 'rubric', 'reason', 'detail', ...(candidate.providerSetupExhaustion === undefined ? [] : ['providerSetupExhaustion'])]
         : [];
   return exactKeys(candidate, keys) ? parseBuildReviewRubricResult(candidate) : undefined;
 }

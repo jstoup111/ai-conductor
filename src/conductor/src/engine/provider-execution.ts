@@ -41,6 +41,7 @@ import type { HaltMarkerWriteResult } from './halt-marker.js';
 import {
   normalizeProviderSetupUnavailable,
   type ProviderSetupUnavailable,
+  type ProviderSetupExhaustion,
 } from './provider-setup-failure.js';
 
 export interface ProviderUnavailableClassification {
@@ -86,6 +87,8 @@ export interface ProviderAttributionMetadata {
   preferredProvider?: string;
   actualProvider?: string;
   attempts?: ProviderAttemptMetadata[];
+  /** Every candidate was unavailable during setup before an invocation began. */
+  providerSetupExhaustion?: ProviderSetupExhaustion;
 }
 
 export interface ProviderExecutionResult extends InvokeResult, ProviderAttributionMetadata {
@@ -817,7 +820,14 @@ export async function executeProviderCandidates({
       };
     }
 
-    if (setupUnavailable) setupUnavailableCandidates.push(setupUnavailable);
+    if (setupUnavailable) {
+      setupUnavailableCandidates.push({
+        ...setupUnavailable,
+        reason: redactSafetyText(setupUnavailable.reason),
+        recoveryAction: redactSafetyText(setupUnavailable.recoveryAction),
+        ...(setupUnavailable.capability ? { capability: redactSafetyText(setupUnavailable.capability) } : {}),
+      });
+    }
     if (attemptMetadata.invoked) anyCandidateInvoked = true;
 
     // Setup has not created a process. Preserve the enclosing lifecycle

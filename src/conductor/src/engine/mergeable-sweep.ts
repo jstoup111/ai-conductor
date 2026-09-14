@@ -73,6 +73,8 @@ export interface WatchEntry {
   ciFixAttempts?: number;
   lastCiFixAt?: string;
   ciFailureDetected?: boolean;
+  /** A setup-only fix dispatch cannot improve with an ordinary retry. */
+  ciFixNeedsHuman?: boolean;
 }
 
 const WATCH_FILE = '.daemon/mergeable-watch.jsonl';
@@ -172,6 +174,7 @@ export async function readWatch(projectRoot: string): Promise<WatchEntry[]> {
               ...(typeof raw.ciFailureDetected === 'boolean' && {
                 ciFailureDetected: raw.ciFailureDetected,
               }),
+              ...(raw.ciFixNeedsHuman === true && { ciFixNeedsHuman: true }),
             };
             return [entry];
           }
@@ -260,7 +263,7 @@ export interface CiFixDispatchOpts {
    * (AC3) — the git work itself happens inside this callback.
    * Returns the outcome kind so the sweep can reset the counter on success.
    */
-  dispatch: (entry: WatchEntry) => Promise<{ kind: 'green-verified' } | void>;
+  dispatch: (entry: WatchEntry) => Promise<{ kind: 'green-verified' | 'needs-human' } | void>;
   /** Clock override for tests; defaults to `new Date()`. */
   now?: () => Date;
 }
@@ -648,6 +651,8 @@ export async function sweepMergeableLabels({
           const dispatchResult = await ciFix.dispatch(updated);
           if (dispatchResult?.kind === 'green-verified') {
             survivors[idx] = { ...updated, ciFixAttempts: 0 };
+          } else if (dispatchResult?.kind === 'needs-human') {
+            survivors[idx] = { ...updated, ciFixNeedsHuman: true };
           }
         } catch (err) {
           // Task 11: dispatch error is logged but not propagated (AC1b)
