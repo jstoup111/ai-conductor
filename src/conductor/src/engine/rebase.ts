@@ -22,7 +22,11 @@ import {
   PROTECTED_ARTIFACT_SEAL_PATH,
   verifyProtectedArtifactSeal,
 } from './protected-artifact-seal.js';
-import { captureReplayIdentity, type ReplayIdentity } from './rebase-replay.js';
+import {
+  captureReplayIdentity,
+  type ReplayIdentity,
+  type ReplayIdentitySeed,
+} from './rebase-replay.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -659,6 +663,8 @@ type RebaseOutcomeKind =
       kind: 'conflict_halt';
       conflicts: string[];
       reason: string;
+      /** Immutable P/B/O captured before replay; not completed replay authority. */
+      replaySeed?: ReplayIdentitySeed;
       /** A completed rebase failed a post-resolution acceptance guard. */
       resumeShape?: RebaseResumeShape;
       /** Git refused before creating rebase state; `--continue` is invalid. */
@@ -940,14 +946,21 @@ export async function performRebase(
 
   // Snapshot the pre-rebase tree before the rebase moves HEAD so clean replay
   // classification and evidence translation can use the original commit.
-  const preTree = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-  const mergeBase = (await git(['merge-base', 'HEAD', base.ref])).stdout.trim();
-  const target = (await git(['rev-parse', base.ref])).stdout.trim();
+  const replaySeed: ReplayIdentitySeed = {
+    preRebaseHead: (await git(['rev-parse', 'HEAD'])).stdout.trim(),
+    mergeBase: (await git(['merge-base', 'HEAD', base.ref])).stdout.trim(),
+    target: (await git(['rev-parse', base.ref])).stdout.trim(),
+  };
+  const { preRebaseHead: preTree, mergeBase, target } = replaySeed;
   const attachReplayIdentity = async (outcome: RebaseOutcome): Promise<RebaseOutcome> => {
     if (outcome.kind !== 'changed' && outcome.kind !== 'noop') return outcome;
     const replay = await captureReplayIdentity(git, preTree, mergeBase, target);
     return replay === undefined ? outcome : { ...outcome, replay };
   };
+  const attachReplaySeed = (outcome: Extract<RebaseOutcome, { kind: 'conflict_halt' }>): RebaseOutcome => ({
+    ...outcome,
+    replaySeed,
+  });
   const translateCompletedRebase = async (): Promise<void> => {
     if (!opts?.translateAfterRebase) return;
     const ontoSha = (await git(['rev-parse', base.ref])).stdout.trim();
@@ -997,47 +1010,47 @@ export async function performRebase(
           }
           const retryConflicts = await conflictedFiles(git);
           if (retryConflicts.length > 0) {
-            return {
+            return attachReplaySeed({
               kind: 'conflict_halt',
               conflicts: retryConflicts,
               reason: 'rebase conflict requires human resolution',
               quarantine,
-            };
+            });
           }
-          return {
+          return attachReplaySeed({
             kind: 'conflict_halt',
             conflicts: [],
             reason: retry.stderr.trim() || 'rebase failed without reported conflicts',
             startFailure: !(await rebaseStateActive(git, projectRoot)),
             quarantine,
-          };
+          });
         } catch (error) {
-          return {
+          return attachReplaySeed({
             kind: 'conflict_halt',
             conflicts: [],
             reason: `${rebase.stderr.trim() || 'rebase failed without reported conflicts'}\n${(error as Error).message}`,
             startFailure: true,
             ...(quarantine === undefined ? {} : { quarantine }),
-          };
+          });
         }
       }
     }
     // No unmerged files but rebase failed — treat as a HALT-worthy error,
     // leaving the rebase in whatever state git left it.
-    return {
+    return attachReplaySeed({
       kind: 'conflict_halt',
       conflicts: [],
       reason: rebase.stderr.trim() || 'rebase failed without reported conflicts',
       startFailure: !(await rebaseStateActive(git, projectRoot)),
-    };
+    });
   }
 
   // Any conflict remains paused for the generic resolver or a human.
-  return {
+  return attachReplaySeed({
     kind: 'conflict_halt',
     conflicts,
     reason: 'rebase conflict requires human resolution',
-  };
+  });
 }
 
 /** Classify a clean rebase by whether it touched any code/test path. */
@@ -1415,11 +1428,21 @@ async function resolveRebaseConflictsInner(
     preAdvanceBaseResult.exitCode === 0 && preAdvanceBaseResult.stdout.trim()
       ? preAdvanceBaseResult.stdout.trim()
       : undefined;
-  const preRebaseHeadResult = await git(['rev-parse', 'ORIG_HEAD']);
-  const preRebaseHead = preRebaseHeadResult.exitCode === 0 ? preRebaseHeadResult.stdout.trim() : '';
+  const replaySeed = conflictOutcome.kind === 'conflict_halt'
+    ? conflictOutcome.replaySeed
+    : undefined;
   const attachResolvedReplay = async (outcome: RebaseOutcome): Promise<RebaseOutcome> => {
     if (outcome.kind !== 'changed' && outcome.kind !== 'noop') return outcome;
-    const replay = await captureReplayIdentity(git, preRebaseHead, preAdvanceBase ?? '', onto);
+    // Recovery never reconstructs P/B/O from mutable ORIG_HEAD or rebase
+    // state. If the driver did not capture a seed before replay, no completed
+    // replay authority may escape this continuation.
+    if (!replaySeed) return outcome;
+    const replay = await captureReplayIdentity(
+      git,
+      replaySeed.preRebaseHead,
+      replaySeed.mergeBase,
+      replaySeed.target,
+    );
     return replay === undefined ? outcome : { ...outcome, replay };
   };
 

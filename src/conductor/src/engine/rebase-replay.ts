@@ -12,6 +12,17 @@ export interface ReplayIdentity {
   completedHead: string;
 }
 
+/**
+ * Immutable replay inputs captured before `git rebase` moves HEAD. This is
+ * deliberately not completed replay authority: only {@link ReplayIdentity}
+ * adds a completed HEAD after the rebase and its acceptance guards succeed.
+ */
+export interface ReplayIdentitySeed {
+  preRebaseHead: string;
+  mergeBase: string;
+  target: string;
+}
+
 export type ReplayComparison =
   | { kind: 'unchanged'; identity: ReplayIdentity; expectedTree: string; completedTree: string }
   | { kind: 'changed'; identity: ReplayIdentity; expectedTree: string; completedTree: string }
