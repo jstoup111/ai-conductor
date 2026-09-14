@@ -20,6 +20,23 @@ export interface GithubInvocationAuditSite {
 
 /** Raw remote transports live only behind these guarded seams. */
 const APPROVED_TRANSPORT_ADAPTERS = new Set(['engine/tracker-client.ts', 'engine/remote-git-operations.ts']);
+/**
+ * Runtime GhRunner boundaries already classified by their owning operation
+ * composition.  This deliberately lists files, never globs: a new runner
+ * invocation is an audit finding until its owner is added with a caller proof.
+ * `tracker-client.ts` is the only raw feature-mutation transport; the remaining
+ * entries are legacy registered-operation/read compositions retained while
+ * their owning migrations route their requests through that transport.
+ */
+const APPROVED_INJECTED_GH_BOUNDARIES = new Set([
+  'daemon-cli.ts',
+  'engine/backlog-priority.ts',
+  'engine/engineer/issue-dep-migration.ts',
+  'engine/gate-writeback.ts',
+  'engine/pr-labels.ts',
+  'intake-file-cli.ts',
+  'engine/tracker-client.ts',
+]);
 const PROCESS_MODULE = /^(?:node:)?child_process$/;
 const GITHUB_HTTP_MODULE = /^(?:@octokit\/|octokit(?:$|\/)|github(?:$|\/)|node-fetch$|undici$)/;
 const PROCESS_FACTORY_NAMES = new Set(['exec', 'execFile', 'spawn', 'execSync', 'execFileSync', 'spawnSync']);
@@ -62,6 +79,9 @@ export const SHIPPED_MUTATION_OPERATION_CALLER_PROOFS = {
 
 function normalizedFile(file: string): string { return file.split(sep).join('/').replace(/^.*?\/src\//, ''); }
 function approved(file: string): boolean { return APPROVED_TRANSPORT_ADAPTERS.has(normalizedFile(file)); }
+function approvedInjectedRunnerBoundary(file: string): boolean {
+  return APPROVED_INJECTED_GH_BOUNDARIES.has(normalizedFile(file));
+}
 function location(sourceFile: ts.SourceFile, node: ts.Node): { line: number; column: number } {
   const value = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
   return { line: value.line + 1, column: value.character + 1 };
@@ -100,12 +120,59 @@ function ghMutation(args: readonly string[]): boolean {
 }
 function sourceFile(file: string, source: string): ts.SourceFile { return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS); }
 
+function typeReferenceName(node: ts.TypeNode | undefined): string | undefined {
+  return node && ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) ? node.typeName.text : undefined;
+}
+
+/**
+ * Find locally injected GhRunner values before inspecting their calls.  A
+ * runner is a transport capability, not an authorization capability: allowing
+ * a helper to invoke it with mutable argv would bypass the typed operation
+ * boundary even though no child-process import appears in that helper.
+ */
+function injectedGhRunnerNames(parsed: ts.SourceFile): Set<string> {
+  const runnerTypes = new Set(['GhRunner']);
+  const runners = new Set<string>();
+  const collect = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      const bindings = node.importClause?.namedBindings;
+      if (bindings && ts.isNamedImports(bindings)) {
+        for (const item of bindings.elements) {
+          if ((item.propertyName?.text ?? item.name.text) === 'GhRunner') runnerTypes.add(item.name.text);
+        }
+      }
+    }
+    ts.forEachChild(node, collect);
+  };
+  collect(parsed);
+  const mark = (name: ts.Node, type: ts.TypeNode | undefined): void => {
+    if (ts.isIdentifier(name) && runnerTypes.has(typeReferenceName(type) ?? '')) runners.add(name.text);
+  };
+  const classify = (node: ts.Node): void => {
+    if (ts.isParameter(node) || ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node)) mark(node.name, node.type);
+    ts.forEachChild(node, classify);
+  };
+  classify(parsed);
+  return runners;
+}
+
+function directGhInvocation(
+  node: ts.CallExpression,
+  runnerNames: ReadonlySet<string>,
+): boolean {
+  if (ts.isIdentifier(node.expression)) return runnerNames.has(node.expression.text);
+  return ts.isPropertyAccessExpression(node.expression)
+    && node.expression.expression.kind === ts.SyntaxKind.ThisKeyword
+    && runnerNames.has(node.expression.name.text);
+}
+
 /** Scan one executable TypeScript source file, resolving child-process aliases. */
 export function auditGithubInvocationSource(file: string, source: string): GithubInvocationAuditFinding[] {
   const parsed = sourceFile(file, source);
   const findings: GithubInvocationAuditFinding[] = [];
   const processAliases = new Set<string>();
   const rawGithubImports = new Set<string>();
+  const injectedRunners = injectedGhRunnerNames(parsed);
   for (const statement of parsed.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteralLike(statement.moduleSpecifier)) continue;
     const bindings = statement.importClause?.namedBindings;
@@ -128,6 +195,15 @@ export function auditGithubInvocationSource(file: string, source: string): Githu
     }
     if (ts.isCallExpression(node)) {
       const called = ts.isIdentifier(node.expression) ? node.expression.text : undefined;
+      if (directGhInvocation(node, injectedRunners) && !approvedInjectedRunnerBoundary(file)) {
+        const directArgs = argv(node.arguments[0]);
+        const directHead = argvHead(node.arguments[0]);
+        if (!directArgs && !directHead) {
+          findings.push(report(parsed, file, node, 'unresolvable mutable GitHub command forwarding outside guarded adapter'));
+        } else if (directHead && ghMutation(directHead)) {
+          findings.push(report(parsed, file, node, 'direct injected GitHub mutation outside guarded adapter'));
+        }
+      }
       if (called && rawGithubImports.has(called) && !approved(file)) findings.push(report(parsed, file, node, 'unapproved raw GitHub HTTP client invocation outside guarded adapter'));
       if (called && processAliases.has(called)) {
         const executable = text(node.arguments[0]);

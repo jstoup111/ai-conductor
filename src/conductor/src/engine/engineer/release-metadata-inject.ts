@@ -34,7 +34,7 @@ export interface EnsureReleaseMetadataOpts {
   gh: GhRunner;
   /**
    * Guarded mutation boundary for the body edit. When supplied, no raw `gh pr
-   * edit` fallback is permitted; a refusal leaves the delivered PR unchanged.
+   * edit is permitted; absence or refusal leaves the delivered PR unchanged.
    */
   operations?: GithubOperationRunner;
   prUrl: string;
@@ -153,25 +153,21 @@ export async function ensureReleaseMetadata(opts: EnsureReleaseMetadataOpts): Pr
 
     const newBody = composeSpecPrBody(body);
     if (newBody === body) return false; // already declared — never overwrite the author.
-    if (opts.operations) {
-      const target = parseIssueRef(prUrl);
-      if (!target) {
-        log(`ensureReleaseMetadata: unparseable PR URL for guarded write-back: ${prUrl}`);
-        return false;
-      }
-      const result = await executeGithubOperation({
+    const target = parseIssueRef(prUrl);
+    if (!opts.operations || !target) {
+      log(`ensureReleaseMetadata: guarded write-back unavailable for ${prUrl}`);
+      return false;
+    }
+    const result = await executeGithubOperation({
         operation: 'pull-request.edit',
         repository: target.repo,
         resource: { kind: 'pull-request', number: Number(target.number) },
         context: { actor: 'engineer-handoff' },
         payload: { body: newBody },
       }, opts.operations);
-      if (result.kind !== 'executed') {
-        log(`ensureReleaseMetadata: guarded write-back refused or failed for ${prUrl}`);
-        return false;
-      }
-    } else {
-      await gh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+    if (result.kind !== 'executed') {
+      log(`ensureReleaseMetadata: guarded write-back refused or failed for ${prUrl}`);
+      return false;
     }
     return true;
   } catch (err: unknown) {
