@@ -256,6 +256,10 @@ describe("build-review semantic cache", () => {
     const featureBRoot = "/features/b";
     const foreignEntry = { ...entry("snapshot-feature-a"), projectionDigest: "sha256:feature-a-content" };
     const freshEntry = { ...entry("snapshot-feature-b"), projectionDigest: "sha256:feature-b-content" };
+    // `BuildReviewCacheEntry` can also carry a custom artifact member, whose
+    // reviewed-input identity is nested. This fixture deliberately exercises
+    // the built-in cache contract, where the snapshot belongs to the result.
+    if ('result' in freshEntry.result) throw new Error('expected a built-in cache result');
     const legacyPath = cacheEntryPath(featureBRoot, "testQuality");
     const path = cacheEntryPath(featureBRoot, "testQuality", freshEntry.semanticIdentity);
     const fs = memoryFilesystem({ [legacyPath]: JSON.stringify(foreignEntry) });
