@@ -344,6 +344,7 @@ import {
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
+import { rebaseOperationPublicationBlocker } from './gate-code-validity.js';
 import {
   computeAndWriteVerdict,
   readAllVerdicts,
@@ -6206,6 +6207,14 @@ export class Conductor {
     if (this.fromStep) {
       startIndex = indexOf(this.fromStep);
     } else if (this.resume) {
+      // A restarted process has no `lastRebaseOutcome`, so the durable
+      // operation descriptor is the only authority that can prevent it from
+      // selecting finish across an interrupted/inconsistent rebase write.
+      const rebaseBlocker = await rebaseOperationPublicationBlocker(this.projectRoot);
+      if (rebaseBlocker) {
+        await this.writeHaltMarker(`${rebaseBlocker}\n`, 'needs-human');
+        return;
+      }
       startIndex = this.findResumeIndex(state, steps);
       const stateDerivedIndex = startIndex;
 

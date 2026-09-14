@@ -75,6 +75,42 @@ async function persistedVerdict(projectRoot: string, gate: StepName): Promise<Ga
 }
 
 /**
+ * A rebase transition spans the gate records and conduct-state, so an
+ * interrupted descriptor must be a publication fence even for consumers that
+ * do not happen to read a preserved review.  This deliberately checks only
+ * the durable rebase operation and its outstanding effects; individual
+ * preserved-review provenance remains the responsibility of
+ * `replayBoundAuthorityStillValid` above.
+ */
+export async function rebaseOperationPublicationBlocker(projectRoot: string): Promise<string | null> {
+  const rebase = await persistedVerdict(projectRoot, 'rebase');
+  const operation = rebase?.rebaseOperation;
+  if (!operation) return null;
+  if (operation.status !== 'applied') {
+    return 'rebase transition is still applying; reconcile the persisted rebase operation before publication';
+  }
+  const { transition, replay } = operation;
+  if (!nonEmptyString(operation.id) || !transition || !replay ||
+    !Array.isArray(transition.preserved) || !Array.isArray(transition.invalidated) ||
+    !Array.isArray(transition.reverified) ||
+    ![replay.preRebaseHead, replay.mergeBase, replay.target, replay.completedHead, replay.expectedTree]
+      .every(nonEmptyString)) {
+    return 'rebase transition record is malformed or inconsistent; reconcile it before publication';
+  }
+  const named = [...transition.preserved, ...transition.invalidated, ...transition.reverified];
+  if (new Set(named).size !== named.length) {
+    return 'rebase transition record has overlapping gate effects; reconcile it before publication';
+  }
+  for (const gate of named) {
+    const verdict = await persistedVerdict(projectRoot, gate);
+    if (!verdict?.satisfied) {
+      return `rebase transition still has an outstanding ${gate} repair or re-verification`;
+    }
+  }
+  return null;
+}
+
+/**
  * Replay authority explains one prior judge result; it cannot outrank an
  * outstanding repair elsewhere in the verification tail.  In particular a
  * failed or kicked-back aggregate suite is newer authority for every review
