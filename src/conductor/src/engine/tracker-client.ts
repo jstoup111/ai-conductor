@@ -583,6 +583,7 @@ async function runTrackerRead(
   args: string[],
 ): Promise<string> {
   let stdout = '';
+  let runnerError: GhRunnerError | undefined;
   const result = await executeGithubOperation({
     operation,
     repository,
@@ -594,7 +595,8 @@ async function runTrackerRead(
       try {
         response = await runner(args, { cwd });
       } catch (err) {
-        throw new GhRunnerError(args, err);
+        runnerError = new GhRunnerError(args, err);
+        throw runnerError;
       }
       stdout = response.stdout;
       return {};
@@ -604,6 +606,7 @@ async function runTrackerRead(
     throw new GithubTrackerOperationRefusalError(operation, result.reason);
   }
   if (result.kind === 'failed') {
+    if (runnerError) throw runnerError;
     throw new Error(`GitHub tracker operation '${operation}' failed: ${result.error}`);
   }
   return stdout;
