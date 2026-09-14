@@ -1784,8 +1784,25 @@ export async function dispatchEngineer(
         body: issue.body ?? '',
       }));
 
+      // Each source issue is authorized independently through the intake
+      // assignment seam; reading a dependency conveys no write authority.
+      const resolveActor = opts.intakeResolveActor ?? (async () =>
+        resolveDaemonOwner(await readMachineOwnerConfig(), gh, cwd));
+      let actor = 'unresolved';
+      try {
+        const identity = await resolveActor();
+        if (identity.resolved) actor = identity.id;
+      } catch {
+        // The guarded seam remains authoritative and will refuse the write.
+      }
+      const operations = createGuardedGithubOperationRunner(gh, {
+        cwd,
+        intake: createGithubIntakeAuthorization({ gh, cwd, resolveActor }),
+      });
       const result = await runMigration({
         gh,
+        operations,
+        actor,
         issues: formattedIssues,
         confirm: async () => Promise.resolve(dispatch.confirm),
       });

@@ -58,6 +58,9 @@ describe('engineer migrate-issue-deps (Task 25 wiring)', () => {
       if (args[0] === 'issue' && args[1] === 'list') {
         return { stdout: JSON.stringify(issues.map((i) => ({ number: i.number, body: i.body }))) };
       }
+      if (args[0] === 'issue' && args[1] === 'view' && args.includes('--json') && args.includes('assignees')) {
+        return { stdout: JSON.stringify({ assignees: [{ login: 'alice' }] }) };
+      }
       const depPath = args.find((a) => a.includes('/dependencies/blocked_by'));
       const isPost = args.includes('POST');
       if (depPath && !isPost) {
@@ -93,7 +96,10 @@ describe('engineer migrate-issue-deps (Task 25 wiring)', () => {
     const { gh, calls } = makeGh('acme/app', [{ number: 230, body: 'Gated on #217 landing first.' }]);
     const { out, opts } = captureOut();
 
-    const code = await dispatchEngineer({ kind: 'migrate-issue-deps', confirm: false }, opts({ gh }));
+    const code = await dispatchEngineer({ kind: 'migrate-issue-deps', confirm: false }, opts({
+      gh,
+      intakeResolveActor: async () => ({ resolved: true, id: 'alice' }),
+    }));
 
     expect(code).toBe(0);
     expect(calls.some((c) => c.includes('POST'))).toBe(false);
@@ -105,7 +111,10 @@ describe('engineer migrate-issue-deps (Task 25 wiring)', () => {
     const { gh, calls } = makeGh('acme/app', [{ number: 230, body: 'Gated on #217 landing first.' }]);
     const { opts } = captureOut();
 
-    const code = await dispatchEngineer({ kind: 'migrate-issue-deps', confirm: true }, opts({ gh }));
+    const code = await dispatchEngineer({ kind: 'migrate-issue-deps', confirm: true }, opts({
+      gh,
+      intakeResolveActor: async () => ({ resolved: true, id: 'alice' }),
+    }));
 
     expect(code).toBe(0);
     const posts = calls.filter((c) => c.includes('POST'));
@@ -119,9 +128,15 @@ describe('engineer migrate-issue-deps (Task 25 wiring)', () => {
     const { gh, calls } = makeGh('acme/app', [{ number: 230, body: 'Gated on #217 landing first.' }]);
     const { opts } = captureOut();
 
-    await dispatchEngineer({ kind: 'migrate-issue-deps', confirm: true }, opts({ gh }));
+    await dispatchEngineer({ kind: 'migrate-issue-deps', confirm: true }, opts({
+      gh,
+      intakeResolveActor: async () => ({ resolved: true, id: 'alice' }),
+    }));
     calls.length = 0;
-    const code = await dispatchEngineer({ kind: 'migrate-issue-deps', confirm: true }, opts({ gh }));
+    const code = await dispatchEngineer({ kind: 'migrate-issue-deps', confirm: true }, opts({
+      gh,
+      intakeResolveActor: async () => ({ resolved: true, id: 'alice' }),
+    }));
 
     expect(code).toBe(0);
     expect(calls.some((c) => c.includes('POST'))).toBe(false);

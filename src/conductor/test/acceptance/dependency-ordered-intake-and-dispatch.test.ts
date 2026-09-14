@@ -1030,7 +1030,34 @@ function makeFakePlatform(opts: { failing?: Set<string> } = {}) {
     }
     return { stdout: '{}' };
   };
-  return { gh, calls, links, failing };
+  const operations = {
+    async run(request: any) {
+      if (request.operation !== 'intake.issue.dependency.add') {
+        return { kind: 'refused' as const, reason: 'unsupported-operation' as const };
+      }
+      const source = `${request.target.repository}#${request.target.number}`;
+      if (failing.has(source)) throw new Error('simulated guarded write failure');
+      const dependency = request.payload?.dependency;
+      if (!dependency || dependency.kind !== 'issue') {
+        return { kind: 'refused' as const, reason: 'invalid-payload' as const };
+      }
+      const targets = links.get(source) ?? new Set<string>();
+      targets.add(`${dependency.repository}#${dependency.number}`);
+      links.set(source, targets);
+      return {};
+    },
+  };
+  return { gh, operations, calls, links, failing };
+}
+
+function migrationInput(platform: ReturnType<typeof makeFakePlatform>, confirm: boolean) {
+  return {
+    gh: platform.gh,
+    operations: platform.operations,
+    actor: 'alice',
+    issues: FIXTURE_ISSUES,
+    confirm: async () => confirm,
+  };
 }
 
 /**
@@ -1050,11 +1077,7 @@ describe('Flow D — prose-to-link migration end-to-end', () => {
   it('dry-run lists deterministic edges from real-shaped prose before anything is written', async () => {
     const runMigration = requireMigrationFn(await loadMigrationModule());
     const platform = makeFakePlatform();
-    const summary = await runMigration({
-      gh: platform.gh,
-      issues: FIXTURE_ISSUES,
-      confirm: async () => false,
-    });
+    const summary = await runMigration(migrationInput(platform, false));
 
     const proposedPairs = summary.proposed.map((e: any) => `${e.issue}->${e.blockedBy}`);
     expect(proposedPairs).toEqual(
@@ -1070,11 +1093,7 @@ describe('Flow D — prose-to-link migration end-to-end', () => {
   it('operator confirms → the proposed links are written and the summary reports each created link', async () => {
     const runMigration = requireMigrationFn(await loadMigrationModule());
     const platform = makeFakePlatform();
-    const summary = await runMigration({
-      gh: platform.gh,
-      issues: FIXTURE_ISSUES,
-      confirm: async () => true,
-    });
+    const summary = await runMigration(migrationInput(platform, true));
 
     expect(summary.created.map((e: any) => `${e.issue}->${e.blockedBy}`)).toEqual(
       expect.arrayContaining(['acme/app#230->acme/app#217']),
@@ -1085,11 +1104,7 @@ describe('Flow D — prose-to-link migration end-to-end', () => {
   it('umbrella task-list phase prose lands in manual-review, never auto-derived as an edge', async () => {
     const runMigration = requireMigrationFn(await loadMigrationModule());
     const platform = makeFakePlatform();
-    const summary = await runMigration({
-      gh: platform.gh,
-      issues: FIXTURE_ISSUES,
-      confirm: async () => false,
-    });
+    const summary = await runMigration(migrationInput(platform, false));
 
     expect(summary.manualReview.map((m: any) => m.issue)).toContain('acme/app#228');
     expect(summary.proposed.map((e: any) => e.issue)).not.toContain('acme/app#228');
@@ -1098,11 +1113,7 @@ describe('Flow D — prose-to-link migration end-to-end', () => {
   it('reverse-direction prose ("Blocker for #N") lands in manual-review, not auto-converted', async () => {
     const runMigration = requireMigrationFn(await loadMigrationModule());
     const platform = makeFakePlatform();
-    const summary = await runMigration({
-      gh: platform.gh,
-      issues: FIXTURE_ISSUES,
-      confirm: async () => false,
-    });
+    const summary = await runMigration(migrationInput(platform, false));
 
     expect(summary.manualReview.map((m: any) => m.issue)).toContain('acme/app#233');
     expect(
@@ -1113,11 +1124,7 @@ describe('Flow D — prose-to-link migration end-to-end', () => {
   it('cross-repository prose lands in manual-review and is never auto-written', async () => {
     const runMigration = requireMigrationFn(await loadMigrationModule());
     const platform = makeFakePlatform();
-    const summary = await runMigration({
-      gh: platform.gh,
-      issues: FIXTURE_ISSUES,
-      confirm: async () => true, // even on confirm, cross-repo must not be written
-    });
+    const summary = await runMigration(migrationInput(platform, true)); // cross-repo is manual review
 
     expect(summary.manualReview.map((m: any) => m.issue)).toContain('acme/app#234');
     expect(platform.links.get('acme/app#234')?.has('owner/other#5')).not.toBe(true);
@@ -1126,11 +1133,7 @@ describe('Flow D — prose-to-link migration end-to-end', () => {
   it('declining confirmation writes ZERO links (counting fake)', async () => {
     const runMigration = requireMigrationFn(await loadMigrationModule());
     const platform = makeFakePlatform();
-    await runMigration({
-      gh: platform.gh,
-      issues: FIXTURE_ISSUES,
-      confirm: async () => false,
-    });
+    await runMigration(migrationInput(platform, false));
 
     const writeCalls = platform.calls.filter(
       (c) => c.args.includes('-X') && c.args[c.args.indexOf('-X') + 1] !== 'GET',
@@ -1142,11 +1145,7 @@ describe('Flow D — prose-to-link migration end-to-end', () => {
   it('prose referencing a closed issue still proposes the edge (graph completeness; satisfaction checked at gate time)', async () => {
     const runMigration = requireMigrationFn(await loadMigrationModule());
     const platform = makeFakePlatform();
-    const summary = await runMigration({
-      gh: platform.gh,
-      issues: FIXTURE_ISSUES,
-      confirm: async () => false,
-    });
+    const summary = await runMigration(migrationInput(platform, false));
 
     expect(
       summary.proposed.some((e: any) => e.issue === 'acme/app#236' && e.blockedBy === 'acme/app#999'),
@@ -1156,9 +1155,9 @@ describe('Flow D — prose-to-link migration end-to-end', () => {
   it('a completed migration re-run performs ZERO new writes; previously-created links are reported already-present', async () => {
     const runMigration = requireMigrationFn(await loadMigrationModule());
     const platform = makeFakePlatform();
-    await runMigration({ gh: platform.gh, issues: FIXTURE_ISSUES, confirm: async () => true });
+    await runMigration(migrationInput(platform, true));
 
-    const rerun = await runMigration({ gh: platform.gh, issues: FIXTURE_ISSUES, confirm: async () => true });
+    const rerun = await runMigration(migrationInput(platform, true));
     expect(rerun.created).toHaveLength(0);
     expect(rerun.alreadyPresent.map((e: any) => `${e.issue}->${e.blockedBy}`)).toEqual(
       expect.arrayContaining(['acme/app#230->acme/app#217']),
@@ -1170,7 +1169,7 @@ describe('Flow D — prose-to-link migration end-to-end', () => {
     const platform = makeFakePlatform();
     platform.links.set('acme/app#230', new Set(['acme/app#217'])); // pre-existing, created manually
 
-    const summary = await runMigration({ gh: platform.gh, issues: FIXTURE_ISSUES, confirm: async () => true });
+    const summary = await runMigration(migrationInput(platform, true));
     expect(summary.alreadyPresent.map((e: any) => `${e.issue}->${e.blockedBy}`)).toContain(
       'acme/app#230->acme/app#217',
     );
@@ -1183,12 +1182,12 @@ describe('Flow D — prose-to-link migration end-to-end', () => {
     const runMigration = requireMigrationFn(await loadMigrationModule());
     const platform = makeFakePlatform({ failing: new Set(['acme/app#231']) });
 
-    const firstRun = await runMigration({ gh: platform.gh, issues: FIXTURE_ISSUES, confirm: async () => true });
+    const firstRun = await runMigration(migrationInput(platform, true));
     expect(firstRun.failed.length).toBeGreaterThan(0);
     expect(platform.links.get('acme/app#230')?.has('acme/app#217')).toBe(true); // unaffected edge landed
 
     platform.failing.delete('acme/app#231');
-    const secondRun = await runMigration({ gh: platform.gh, issues: FIXTURE_ISSUES, confirm: async () => true });
+    const secondRun = await runMigration(migrationInput(platform, true));
     const secondRunPairs = secondRun.created.map((e: any) => `${e.issue}->${e.blockedBy}`);
     expect(secondRunPairs).toEqual(
       expect.arrayContaining(['acme/app#231->acme/app#189', 'acme/app#231->acme/app#190']),
@@ -1200,7 +1199,7 @@ describe('Flow D — prose-to-link migration end-to-end', () => {
   it('across a full confirmed run, only link-creation traffic is ever issued — no edit/close/label/delete calls', async () => {
     const runMigration = requireMigrationFn(await loadMigrationModule());
     const platform = makeFakePlatform();
-    await runMigration({ gh: platform.gh, issues: FIXTURE_ISSUES, confirm: async () => true });
+    await runMigration(migrationInput(platform, true));
 
     expect(platform.calls.length).toBeGreaterThan(0);
     expect(isOnlyLinkTraffic(platform.calls), 'every gh call must target the blocked_by link endpoint').toBe(

@@ -150,10 +150,17 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
     case 'intake.issue.label.remove':
     case 'pull-request.label.remove':
       return ['api', '--method', 'DELETE', `repos/${repository}/issues/${issueNumber(request)}/labels/${encodeURIComponent(payloadField(request, 'label'))}`];
-    case 'issue.dependency.add': {
+    case 'issue.dependency.add':
+    case 'intake.issue.dependency.add': {
       const dependency = request.payload && 'dependency' in request.payload ? request.payload.dependency : undefined;
       if (!dependency || dependency.kind !== 'issue') throw new Error('Registered dependency payload is missing its issue target.');
-      return ['api', '--method', 'POST', `repos/${repository}/issues/${issueNumber(request)}/dependencies/blocked_by`, '-f', `issue_number=${dependency.number}`];
+      const databaseId = request.payload && 'dependencyDatabaseId' in request.payload
+        ? request.payload.dependencyDatabaseId
+        : undefined;
+      return [
+        'api', '--method', 'POST', `repos/${repository}/issues/${issueNumber(request)}/dependencies/blocked_by`, '-f',
+        databaseId === undefined ? `issue_number=${dependency.number}` : `issue_id=${databaseId}`,
+      ];
     }
     case 'issue.dependency.remove': {
       const dependency = request.payload && 'dependency' in request.payload ? request.payload.dependency : undefined;

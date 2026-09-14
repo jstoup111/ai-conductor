@@ -77,6 +77,13 @@ export type GithubPullRequestCommentUpdatePayload = GithubCommentUpdatePayload;
 
 export interface GithubDependencyPayload {
   readonly dependency: GithubIssueTarget;
+  /**
+   * GitHub's dependency endpoint accepts the blocking issue's database id.
+   * Most existing callers only know an issue number, so it remains optional;
+   * callers that performed the documented id lookup must retain that exact
+   * value through the typed request instead of rebuilding raw argv.
+   */
+  readonly dependencyDatabaseId?: number;
 }
 
 /** A commit-status publication remains bound to its exact commit in the payload. */
@@ -128,6 +135,7 @@ export const GITHUB_OPERATION_REGISTRY = {
   'intake.issue.close': { access: 'intake-write', targetKinds: ['issue'] },
   'intake.issue.label.add': { access: 'intake-write', targetKinds: ['issue'], payload: 'label' },
   'intake.issue.label.remove': { access: 'intake-write', targetKinds: ['issue'], payload: 'label' },
+  'intake.issue.dependency.add': { access: 'intake-write', targetKinds: ['issue'], payload: 'dependency' },
   'issue.create': { access: 'create', targetKinds: ['repository'], payload: 'issue-create' },
   'pull-request.create': { access: 'create', targetKinds: ['repository'], payload: 'pull-request-create' },
   'commit.status.create': { access: 'feature-write', targetKinds: ['repository'], payload: 'commit-status' },
@@ -355,7 +363,17 @@ function payloadFrom(value: unknown, required: GithubOperationDefinition['payloa
   }
   if (required === 'dependency' && record(value.dependency)) {
     const dependency = targetFrom(value.dependency.resource, value.dependency.repository);
-    if (dependency?.kind === 'issue') return { dependency };
+    if (dependency?.kind === 'issue') {
+      const dependencyDatabaseId = value.dependencyDatabaseId;
+      if (dependencyDatabaseId !== undefined
+        && (typeof dependencyDatabaseId !== 'number' || !Number.isSafeInteger(dependencyDatabaseId) || dependencyDatabaseId <= 0)) {
+        return undefined;
+      }
+      return {
+        dependency,
+        ...(dependencyDatabaseId === undefined ? {} : { dependencyDatabaseId }),
+      };
+    }
   }
   if (required === 'commit-status'
     && typeof value.sha === 'string' && value.sha !== ''

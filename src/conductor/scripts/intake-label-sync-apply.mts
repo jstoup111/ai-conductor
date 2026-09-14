@@ -16,6 +16,8 @@
 // from ci.yml per the task spec).
 import { readFileSync } from 'node:fs';
 import { makeProductionGh } from '../src/engine/pr-labels.js';
+import { createGuardedGithubOperationRunner } from '../src/engine/tracker-client.js';
+import { createGithubIntakeAuthorization } from '../src/engine/engineer/intake/github-issues.js';
 import {
   syncIssueLabels,
   isIssueFormSubmission,
@@ -102,11 +104,19 @@ async function main(): Promise<void> {
   const dependsOn = parseDependsOnField(body, repoSlug);
 
   const issueRef = `${repoSlug}#${issue.number}`;
+  const gh = makeProductionGh();
+  const actor = typeof event.sender?.login === 'string' && event.sender.login.trim() !== ''
+    ? event.sender.login.trim().toLowerCase()
+    : 'github-actions';
+  const dependencyOperations = createGuardedGithubOperationRunner(gh, {
+    cwd: process.cwd(),
+    intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd() }),
+  });
 
   const result = await syncIssueLabels(
     { priority, size, dependsOn },
     issueRef,
-    { gh: makeProductionGh(), cwd: process.cwd(), log: (msg) => console.error(msg) },
+    { gh, dependencyOperations, actor, cwd: process.cwd(), log: (msg) => console.error(msg) },
   );
 
   console.log(

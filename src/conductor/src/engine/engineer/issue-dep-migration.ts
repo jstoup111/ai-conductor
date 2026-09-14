@@ -21,6 +21,10 @@
 // platform and does not classify non-matches (that belongs to Task 23/24).
 
 import { parseSourceRef } from './issue-ref.js';
+import {
+  executeGithubOperation,
+  type GithubOperationRunner,
+} from '../github-operations.js';
 
 /** One deterministically-parsed dependency edge. */
 export interface DependencyEdge {
@@ -227,6 +231,10 @@ export interface DependencyLinkResult {
 /** Dependencies for {@link createDependencyLinks}. */
 export interface CreateDependencyLinksDeps {
   gh: GhRunner;
+  /** The only mutation seam. Reads use `gh`; writes never do. */
+  operations: GithubOperationRunner;
+  /** Actor rendered in the typed operation and bound by its authorization. */
+  actor: string;
   cwd: string;
   /**
    * When true, GET-checks existing links and reports what WOULD be created,
@@ -353,17 +361,25 @@ export async function createDependencyLinks(
       continue;
     }
 
-    await gh(
-      [
-        'api',
-        '-X',
-        'POST',
-        `repos/${source.repo}/issues/${source.number}/dependencies/blocked_by`,
-        '-F',
-        `issue_id=${targetId}`,
-      ],
-      { cwd },
-    );
+    const operation = await executeGithubOperation({
+      operation: 'intake.issue.dependency.add',
+      access: 'intake-write',
+      resource: { kind: 'issue', number: Number(source.number) },
+      repository: source.repo,
+      context: { actor: deps.actor },
+      payload: {
+        dependency: { resource: { kind: 'issue', number: Number(target.number) }, repository: target.repo },
+        dependencyDatabaseId: targetId,
+      },
+    }, deps.operations);
+    if (operation.kind !== 'executed') {
+      const detail = operation.kind === 'refused'
+        ? operation.reason
+        : operation.kind === 'failed'
+          ? operation.error
+          : 'partial operation result';
+      throw new Error(`dependency link ${source.repo}#${source.number} -> ${target.repo}#${target.number} was not written: ${detail}`);
+    }
     existing.add(edge.target);
     results.push({ edge, status: 'created' });
   }
@@ -389,6 +405,8 @@ export async function createDependencyLinks(
  */
 export async function runMigration(deps: {
   gh: GhRunner;
+  operations: GithubOperationRunner;
+  actor: string;
   issues: Array<{ ref: string; body: string }>;
   confirm: () => Promise<boolean>;
 }): Promise<{
@@ -438,7 +456,12 @@ export async function runMigration(deps: {
   const cwd = '.'; // Use current directory as default
   for (const edge of edges) {
     try {
-      const results = await createDependencyLinks([edge], { gh: deps.gh, cwd });
+      const results = await createDependencyLinks([edge], {
+        gh: deps.gh,
+        operations: deps.operations,
+        actor: deps.actor,
+        cwd,
+      });
       for (const result of results) {
         if (result.status === 'created') {
           created.push({ issue: result.edge.source, blockedBy: result.edge.target });
