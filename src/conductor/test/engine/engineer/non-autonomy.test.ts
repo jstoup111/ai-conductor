@@ -472,16 +472,16 @@ describe('engineer self-edit: propose-only PR invariant (FR-10 negative path)', 
     ).toHaveLength(0);
   });
 
-  it('handoff.ts uses only pr create — never pr merge — for ANY target including self', () => {
+  it('handoff.ts creates PRs through the guarded operation — never pr merge — for ANY target including self', () => {
     // Load handoff.ts directly (it is the ONLY sanctioned spec-PR-opening module).
-    // Assert that the ONLY gh subcommand token present is 'create', not 'merge'.
-    // This is the most targeted assertion: even if a self-edit code path were
-    // added to handoff.ts that called 'pr merge', this test fails.
+    // Assert the guarded create operation is present and a merge token is not.
+    // This fails if a self-edit path adds a direct merge or raw-create bypass.
     const handoffTs = join(CONDUCTOR_SRC, 'engine/engineer/handoff.ts');
     const handoffSrc = readFileSync(handoffTs, 'utf-8');
 
-    // 'create' must appear as a runner arg token — it is the sanctioned operation.
-    expect(handoffSrc).toMatch(/['"]create['"]/);
+    // The guarded operation is the sanctioned creation boundary.  A raw
+    // `gh pr create` argv token would bypass ownership authorization.
+    expect(handoffSrc).toMatch(/['"]pull-request\.create['"]/);
 
     // 'merge' must NOT appear as a runner arg token in handoff.ts.
     // We use the same pattern as FORBIDDEN_TOKEN_PATTERNS[0] applied to this file.

@@ -240,13 +240,22 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     const draftUrl = 'https://github.com/acme/harness/pull/7';
     const gh = opts.gh ?? (async (args: string[]) => {
       if (args[0] === 'pr' && args[1] === 'view') {
-        return { stdout: JSON.stringify({ url: draftUrl, state: 'OPEN' }) };
+        return {
+          stdout: JSON.stringify({
+            url: draftUrl,
+            state: 'OPEN',
+            body: 'Release-Disposition: no-note',
+          }),
+        };
       }
       return { stdout: '' };
     });
-    const runGh = opts.runGh ?? (async () => ({
-      stdout: JSON.stringify({ body: 'Release-Disposition: no-note' }),
-    }));
+    const runGh = opts.runGh ?? (async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'list') {
+        return { stdout: JSON.stringify([{ url: draftUrl, state: 'OPEN' }]) };
+      }
+      return { stdout: JSON.stringify({ body: 'Release-Disposition: no-note' }) };
+    });
     const git = opts.git ?? (async (args: string[]) => ({
       stdout: args[0] === 'rev-list' ? '1\n' : '',
     }));
@@ -378,19 +387,23 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
       './bin/install --update',
       '```',
     ].join('\n');
-    const gh: GhRunner = async (args) => {
-      if (args[0] === 'pr' && args[1] === 'view') {
-        return { stdout: JSON.stringify({ url: prUrl, state: 'OPEN' }) };
-      }
-      return { stdout: '' };
-    };
     const runGh: GhRunner = async (args) => {
+      if (args[0] === 'pr' && args[1] === 'list') {
+        expect(args).toEqual([
+          'pr', 'list',
+          '--head', 'feat/self-build-feat',
+          '--base', 'main',
+          '--state', 'open',
+          '--json', 'url,state',
+          '--limit', '10',
+        ]);
+        return { stdout: JSON.stringify([{ url: prUrl, state: 'OPEN' }]) };
+      }
       expect(args).toEqual(['pr', 'view', prUrl, '--json', 'body']);
       return { stdout: JSON.stringify({ body: metadataBody }) };
     };
 
     await selfBuildConductor(guardrails, runner, {
-      gh,
       runGh,
       config: releaseDispositionConfig(),
     }).run();
@@ -406,24 +419,22 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
   });
 
   it.each([
-    ['unreachable GitHub', async () => { throw new Error('offline'); }, /unreachable/i],
-    ['unresolved draft identity', undefined, /draft PR identity/i],
-    ['absent disposition', async () => ({ stdout: JSON.stringify({ body: 'ordinary draft text' }) }), /Disposition/],
-    ['malformed disposition', async () => ({ stdout: JSON.stringify({ body: 'Release-Disposition: note' }) }), /Category/],
+    ['unreachable GitHub', async (args: string[]) => {
+      if (args[1] === 'list') return { stdout: JSON.stringify([{ url: 'https://github.com/acme/harness/pull/42', state: 'OPEN' }]) };
+      throw new Error('offline');
+    }, /unreachable/i],
+    ['unresolved draft identity', async () => ({ stdout: '[]' }), /draft PR identity/i],
+    ['absent disposition', async (args: string[]) => args[1] === 'list'
+      ? { stdout: JSON.stringify([{ url: 'https://github.com/acme/harness/pull/42', state: 'OPEN' }]) }
+      : { stdout: JSON.stringify({ body: 'ordinary draft text' }) }, /Disposition/],
+    ['malformed disposition', async (args: string[]) => args[1] === 'list'
+      ? { stdout: JSON.stringify([{ url: 'https://github.com/acme/harness/pull/42', state: 'OPEN' }]) }
+      : { stdout: JSON.stringify({ body: 'Release-Disposition: note' }) }, /Category/],
   ] as const)('HALTs before finish when release metadata has %s', async (_caseName, runGh, reason) => {
     await writeState(statePath, preBuildDoneState());
     const { guardrails } = makeGuardrails();
     const { runner, seen } = releaseDispositionRunner(dir);
-    const gh: GhRunner = async (args) => {
-      if (args[0] === 'pr' && args[1] === 'view') {
-        if (_caseName === 'unresolved draft identity') throw new Error('no PR');
-        return { stdout: JSON.stringify({ url: 'https://github.com/acme/harness/pull/42', state: 'OPEN' }) };
-      }
-      return { stdout: '' };
-    };
-
     await selfBuildConductor(guardrails, runner, {
-      gh,
       runGh,
       config: releaseDispositionConfig(),
     }).run();
