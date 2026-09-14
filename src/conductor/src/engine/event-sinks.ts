@@ -30,6 +30,8 @@ export const EVENT_SINKS = {
   contained_live_checkout_drift: { render: true, persist: true, audit: false, otel: false },
   self_host_containment_verdict: { render: true, persist: true, audit: false, otel: false },
   build_review_rubric_started: { render: true, persist: true, audit: false, otel: false },
+  build_review_policy_resolved: { render: true, persist: true, audit: true, otel: false },
+  build_review_policy_failed: { render: true, persist: true, audit: true, otel: false },
   build_review_rubric_prompt: { render: false, persist: true, audit: false, otel: false },
   build_review_rubric_result: { render: true, persist: true, audit: false, otel: false },
   build_review_rubric_skipped: { render: true, persist: true, audit: false, otel: false },

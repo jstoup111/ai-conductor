@@ -126,7 +126,8 @@ export interface PreparedCandidateOperationContext {
   readonly prepared: SelfHostInvocation | undefined;
   readonly abortSignal?: AbortSignal;
   readonly deadlineAt?: number;
-  invoke(): Promise<InvokeResult>;
+  /** Candidate-local review policy may tighten prompt, cwd, or access after preparation. */
+  invoke(overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>): Promise<InvokeResult>;
 }
 
 /** A candidate operation either reuses evidence, judges through `invoke`, or returns a classified failure. */
@@ -682,18 +683,19 @@ export async function executeProviderCandidates({
     let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
     let selfHost: SelfHostInvocation | undefined;
     let invocationResult: Promise<InvokeResult> | undefined;
-    const invokeProvider = (): Promise<InvokeResult> => {
+    const invokeProvider = (overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>): Promise<InvokeResult> => {
       invocationResult ??= (async () => {
         const candidateInvocationOptions = candidateObserver
           ? {
               ...candidateOptions,
+              ...overrides,
               streamConsumer: candidateObserver,
               onProviderStream: candidateObserver.onProviderStream,
               ...(selfHost ? { selfHost } : {}),
             }
           : selfHost
-            ? { ...candidateOptions, selfHost }
-            : candidateOptions;
+            ? { ...candidateOptions, ...overrides, selfHost }
+            : { ...candidateOptions, ...overrides };
         invocation = await invokeProviderCandidate({
           providerKey,
           runtime,
