@@ -14,7 +14,7 @@ import {
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/state.js';
 
-// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, S2.3, S2.4, S2.5, S3.2, S3.3, S3.5, S3.6, S4.1, S4.2, S4.3, S4.4, S4.5, task:1, task:2, task:3, task:4, task:5, task:6, task:7, task:8
+// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, S2.3, S2.4, S2.5, S2.6, S3.2, S3.3, S3.5, S3.6, S4.1, S4.2, S4.3, S4.4, S4.5, task:1, task:2, task:3, task:4, task:5, task:6, task:7, task:8, task:9
 
 const temporaryDirectories: string[] = [];
 
@@ -639,6 +639,119 @@ describe('conduct-state lease', () => {
       ok: false,
       kind: 'timeout',
       message: 'Unable to acquire intake ledger lease within 5ms; recovery claimant pid 202 is live',
+    });
+  });
+
+  it.each([
+    ['EACCES', Object.assign(new Error('permission denied'), { code: 'EACCES' })],
+    ['ENOSPC', Object.assign(new Error('no space left'), { code: 'ENOSPC' })],
+  ])('names %s recovery claim creation failure without releasing its owner', async (_code, claimError) => {
+    const statePath = '/worktree/recovery-claim-write-failure/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared,
+      pid: 101,
+      newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async writeRecoveryClaim(): Promise<void> { throw claimError; },
+    };
+
+    const result = await createConductStateLease(statePath, {
+      filesystem,
+      label: 'intake ledger',
+      processIsLive: () => false,
+    }).acquire();
+
+    expect({ result, stillHeld: shared.hasDirectory(`${statePath}.lease`) }).toEqual({
+      result: {
+        ok: false,
+        kind: 'recovery_refused',
+        message: `Unable to recover intake ledger lease: recovery claim creation failed (${claimError.message})`,
+      },
+      stillHeld: true,
+    });
+  });
+
+  it('names an EACCES recovery claim read failure without releasing its owner', async () => {
+    const statePath = '/worktree/recovery-claim-read-failure/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared,
+      pid: 101,
+      newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    await shared.writeRecoveryClaim(`${statePath}.lease/recovery.json`, JSON.stringify({
+      version: 1, pid: 202, token: 'existing-claim', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'dead-owner', predecessorToken: null,
+    }));
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async readRecoveryClaim(): Promise<string | null> {
+        throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      },
+    };
+
+    const result = await createConductStateLease(statePath, {
+      filesystem,
+      label: 'intake ledger',
+      processIsLive: () => false,
+    }).acquire();
+
+    expect({ result, stillHeld: shared.hasDirectory(`${statePath}.lease`) }).toEqual({
+      result: {
+        ok: false,
+        kind: 'recovery_refused',
+        message: 'Unable to recover intake ledger lease: recovery claim read failed (permission denied)',
+      },
+      stillHeld: true,
+    });
+  });
+
+  it('does not persist a state mutation when recovery claim creation fails', async () => {
+    const statePath = await createStatePath();
+    await writeState(statePath, { complexity_tier: 'S' });
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared,
+      pid: 101,
+      newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async writeRecoveryClaim(): Promise<void> {
+        throw Object.assign(new Error('no space left'), { code: 'ENOSPC' });
+      },
+    };
+    const writes: ConductState[] = [];
+    const persistence: ConductStatePersistence = {
+      async write(_path, state): Promise<void> { writes.push(state); },
+    };
+    const store = createFilesystemConductStateStore(
+      statePath,
+      persistence,
+      undefined,
+      undefined,
+      createConductStateLease(statePath, { filesystem, processIsLive: () => false }),
+    );
+
+    const result = await store.apply({
+      field: 'complexity_tier',
+      expected: 'S',
+      intent: 'record assessed complexity',
+      next: 'M',
+    });
+
+    expect({ result, writes }).toEqual({
+      result: {
+        kind: 'lease',
+        message: 'Unable to recover conduct-state lease: recovery claim creation failed (no space left)',
+      },
+      writes: [],
     });
   });
 

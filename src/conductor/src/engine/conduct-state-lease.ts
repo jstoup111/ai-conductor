@@ -317,7 +317,7 @@ export function createConductStateLease(
           try {
             serializedClaim = await filesystem.readRecoveryClaim(claimPath);
           } catch (claimReadError) {
-            return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claim is unavailable (${errorMessage(claimReadError)})` };
+            return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claim read failed (${errorMessage(claimReadError)})` };
           }
           const existingClaim = serializedClaim === null
             ? { kind: 'invalid' as const }
@@ -336,7 +336,7 @@ export function createConductStateLease(
             } catch (currentOwnerRootError) {
               if (isAlreadyHeld(currentOwnerRootError)) continue;
               if (isMissing(currentOwnerRootError)) return { status: 'vanished' };
-              return { status: 'refused', message: `Unable to recover ${leaseName} lease: could not claim recovery (${errorMessage(currentOwnerRootError)})` };
+              return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claim creation failed (${errorMessage(currentOwnerRootError)})` };
             }
           }
           if (existingClaim.kind === 'invalid' ||
@@ -369,7 +369,7 @@ export function createConductStateLease(
           } catch (successorError) {
             if (isAlreadyHeld(successorError)) continue;
             if (isMissing(successorError)) return { status: 'vanished' };
-            return { status: 'refused', message: `Unable to recover ${leaseName} lease: could not claim recovery (${errorMessage(successorError)})` };
+            return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claim creation failed (${errorMessage(successorError)})` };
           }
         }
       } else {
@@ -382,7 +382,7 @@ export function createConductStateLease(
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
         return {
           status: 'refused',
-          message: `Unable to recover ${leaseName} lease: could not claim recovery (${errorMessage(error)})`,
+          message: `Unable to recover ${leaseName} lease: recovery claim creation failed (${errorMessage(error)})`,
         };
       }
     }
