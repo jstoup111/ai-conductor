@@ -15,6 +15,10 @@ export const VITEST_ORIGINAL_TMPDIR_ENV = 'AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR';
 export const VITEST_RUN_ROOT_PREFIX = 'ai-conductor-vitest-run-';
 
 const packageLocalDir = dirname(dirname(fileURLToPath(import.meta.url)));
+// Environment is inherited by child processes, but ownership is not. Keep this
+// process-local so global setup can distinguish a root its config allocated
+// from one supplied by run-vitest.mjs or an outer smoke invocation.
+const rootsAllocatedByThisProcess = new Set();
 const contextKeys = [
   VITEST_TMP_ROOT_ENV,
   VITEST_TMP_SCOPE_ENV,
@@ -107,6 +111,11 @@ function appendGitCeiling(env, root) {
   }
 }
 
+/** Whether this process, rather than an ancestor, allocated {@link root}. */
+export function isVitestTmpRootAllocatedByThisProcess(root) {
+  return rootsAllocatedByThisProcess.has(root);
+}
+
 /**
  * Allocate one fresh, caller-owned run scope.  The scope is the run root so a
  * nested invocation can retain it after clearing only its installed root.
@@ -184,6 +193,8 @@ export function installVitestTmpRoot({
     : fresh
       ? allocateVitestTmpScope({ env, packageDir, fs })
       : allocateNestedRoot({ env, packageDir, fs });
+
+  if (!existingRoot) rootsAllocatedByThisProcess.add(allocation.root);
 
   const originalTmpdir = env[VITEST_ORIGINAL_TMPDIR_ENV] ?? callerTmpdir;
   env[VITEST_TMP_ROOT_ENV] = allocation.root;

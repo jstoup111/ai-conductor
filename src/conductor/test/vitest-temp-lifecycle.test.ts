@@ -35,7 +35,7 @@ afterEach(async () => {
 
 describe('relocated Vitest temporary lifecycle', () => {
   it('sweeps the original, selected, and nested parents and restores the caller environment on SIGINT', async () => {
-    const fixture = await mkdtemp(join(tmpdir(), 'vitest-temp-lifecycle-'));
+    const fixture = await mkdtemp(join(process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? tmpdir(), 'vitest-temp-lifecycle-'));
     temporaryDirectories.push(fixture);
     const original = join(fixture, 'original');
     const selected = join(fixture, 'selected');
@@ -86,4 +86,52 @@ describe('relocated Vitest temporary lifecycle', () => {
     expect(process.env).toMatchObject(callerEnvironment);
     expect(removed).toEqual([]);
   });
+
+  for (const [name, pipelineLeak] of [
+    ['on successful teardown', false],
+    ['when a teardown guard fails', true],
+  ] as const) {
+    it(`reclaims a root allocated by this process's config ${name}`, async () => {
+      const fixture = await mkdtemp(join(process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? tmpdir(), 'vitest-temp-lifecycle-'));
+      temporaryDirectories.push(fixture);
+      const original = join(fixture, 'original');
+      const selected = join(fixture, 'selected');
+      const removed: string[] = [];
+      await Promise.all([mkdir(original, { recursive: true }), mkdir(selected, { recursive: true })]);
+      vi.doMock('./pipeline-leak-guard.js', () => ({
+        snapshotPipeline: async () => ({ exists: false, entries: new Map() }),
+        diffPipeline: () => ({ added: pipelineLeak ? ['guard-failure'] : [], modified: [] }),
+      }));
+      vi.doMock('./park-leak-guard.js', () => ({ resolveRealParkedDir: async () => null, snapshotParkedMarkers: async () => ({ exists: false, markers: {} }), diffParkedMarkers: () => ({ added: [], removed: [], modified: [] }) }));
+      vi.doMock('./tmpdir-leak-guard.js', () => ({
+        RUN_TMP_ROOT_ENV: 'AI_CONDUCTOR_TEST_TMP_ROOT', RUN_TMP_ROOT_STALE_AFTER_MS: 1, RUN_TMP_ROOT_LEGACY_STALE_AFTER_MS: 1, RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX: 'failure',
+        writeRunRootOwnerMarker: () => {}, startRunRootHeartbeat: () => ({ stop: () => {} }),
+        sweepStaleRunTmpRoots: async () => ({ reaped: [], retained: [], failures: [] }),
+        removeRunTmpRoot: async (path: string) => { removed.push(path); },
+        snapshotTmpdirEntries: async () => ({ exists: true, entries: new Set<string>() }),
+        diffTmpdirEntries: () => ({ stray: [], ignored: [] }),
+      }));
+      vi.doMock('./tmux-leak-guard.js', () => ({ snapshotDaemonSessions: () => ({ sessions: [], failed: false }), sweepStaleDaemonSessions: () => ({ killed: [] }), reapLeakedDaemonSessions: () => ({ killed: [], indeterminate: [] }) }));
+      vi.doMock('./signals-leak-guard.js', () => ({ snapshotEngineerSignals: async () => ({ exists: false, lines: [] }), diffEngineerSignals: () => ({ addedTestProjectLines: 0 }) }));
+      vi.doMock('./engine-dist-guard.js', () => ({ ensureEngineDist: async () => false }));
+      delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      delete process.env.AI_CONDUCTOR_TEST_TMP_SCOPE;
+      delete process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR;
+      Object.assign(process.env, { TMPDIR: original, AI_CONDUCTOR_TEST_TMP_BASE: selected });
+      const { installVitestTmpRoot } = await import('../scripts/vitest-temp.mjs');
+      const configInstallation = installVitestTmpRoot();
+      const callerEnvironment = Object.fromEntries(environmentKeys.map(key => [key, process.env[key]]));
+      const { default: setup } = await import('./global-setup.js');
+      const teardown = await setup();
+
+      if (pipelineLeak) {
+        await expect(teardown()).rejects.toThrow(/guard-failure/);
+      } else {
+        await expect(teardown()).resolves.toBeUndefined();
+      }
+      expect(removed).toEqual([configInstallation.root]);
+      expect(existsSync(selected)).toBe(true);
+      expect(process.env).toMatchObject(callerEnvironment);
+    });
+  }
 });

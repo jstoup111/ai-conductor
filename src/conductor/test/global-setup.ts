@@ -37,6 +37,7 @@ import {
 import { ensureEngineDist } from './engine-dist-guard.js';
 import {
   installVitestTmpRoot,
+  isVitestTmpRootAllocatedByThisProcess,
   restoreVitestTmpEnvironment,
   snapshotVitestTmpEnvironment,
 } from '../scripts/vitest-temp.mjs';
@@ -248,6 +249,7 @@ function installInterruptReap(
   runTmpRoot: string,
   stopHeartbeat: () => void,
   callerEnvironment: ReturnType<typeof snapshotVitestTmpEnvironment>,
+  ownsRunTmpRoot: boolean,
   tmuxRoots?: readonly string[],
 ): () => void {
   let handled = false;
@@ -268,7 +270,7 @@ function installInterruptReap(
       // would otherwise strand this run's whole temp root, and an operator who
       // interrupts often is exactly the operator whose tmpfs fills up. Sync
       // removal because the process exits on the next line.
-      rmSync(runTmpRoot, { recursive: true, force: true });
+      if (ownsRunTmpRoot) rmSync(runTmpRoot, { recursive: true, force: true });
     } catch {
       // Best-effort only — never let cleanup failure block shutdown.
     } finally {
@@ -293,9 +295,9 @@ export default async function setup() {
   // the real one, and the fallback keeps this file runnable as a globalSetup
   // even if the config-level install is ever missing.
   const callerEnvironment = snapshotVitestTmpEnvironment();
-  const inheritedRoot = process.env[RUN_TMP_ROOT_ENV];
   const installation = installVitestTmpRoot();
   const runTmpRoot = installation.root;
+  const ownsRunTmpRoot = isVitestTmpRootAllocatedByThisProcess(runTmpRoot);
   const originalTmpdir = installation.originalTmpdir ?? tmpdir();
   const selectedParent = installation.parent ?? dirname(runTmpRoot);
   const nestedParent = dirname(runTmpRoot);
@@ -397,6 +399,7 @@ export default async function setup() {
     runTmpRoot,
     heartbeat.stop,
     callerEnvironment,
+    ownsRunTmpRoot,
     tmuxRoots,
   );
 
@@ -418,7 +421,7 @@ export default async function setup() {
       // guard failure still frees the disk, and self-contained try/catch so a
       // removal failure can never mask the guard error being propagated.
       try {
-        if (!inheritedRoot && installation.ownsRoot) await removeRunTmpRoot(runTmpRoot);
+        if (ownsRunTmpRoot) await removeRunTmpRoot(runTmpRoot);
       } catch (err) {
         console.error(
           `tmpdir-leak-guard: could not remove the run temp root ${runTmpRoot} — remove it ` +
