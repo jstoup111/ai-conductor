@@ -1,11 +1,11 @@
 import { execa } from 'execa';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { HaltClass } from './halt-marker.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { resolveMainRepoRoot } from './park-marker.js';
-import { executeRemoteGit } from './remote-git-operations.js';
-import { makeProductionGit } from './pr-labels.js';
+import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
+import { makeProductionGh, makeProductionGit, type GhRunner, type GitRunner } from './pr-labels.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 
 /** Git-tracked records that let an operator inspect a feature halt from its branch. */
@@ -39,6 +39,8 @@ export type HaltRecordResult =
 export interface HaltRecordRemoteOptions {
   readonly remoteGit?: typeof executeRemoteGit;
   readonly mutation?: GithubMutationExecutionContext;
+  readonly git?: GitRunner;
+  readonly gh?: GhRunner;
 }
 
 /** Resolve a halt record's repository-relative path. */
@@ -126,7 +128,7 @@ export async function recordHalt(
     if (commitResult.kind !== 'written') return commitResult;
 
     try {
-      const result = await publishHaltRecord(root, input.branch, remote);
+      const result = await publishHaltRecord(root, input.branch, remote, input.slug);
       if (result.kind !== 'executed') return { kind: 'pushFailed', reason: remoteFailure(result) };
     } catch (error) {
       return { kind: 'pushFailed', reason: errorMessage(error) };
@@ -158,7 +160,7 @@ export async function supersedeHaltRecord(
 
     try {
       const branch = await currentBranch(root);
-      const result = await publishHaltRecord(root, branch, remote);
+      const result = await publishHaltRecord(root, branch, remote, slug);
       if (result.kind !== 'executed') return { kind: 'pushFailed', reason: remoteFailure(result) };
     } catch (error) {
       return { kind: 'pushFailed', reason: errorMessage(error) };
@@ -174,15 +176,23 @@ export async function publishHaltRecord(
   root: string,
   branch: string,
   remote: HaltRecordRemoteOptions,
+  slug = basename(root),
 ) {
-  const git = makeProductionGit();
+  const git = remote.git ?? makeProductionGit();
+  const mutation = remote.mutation ?? await resolveFeatureRemoteMutation({
+    cwd: root,
+    slug,
+    branch,
+    git: (args) => git(args, { cwd: root }),
+    gh: remote.gh ?? makeProductionGh(),
+  });
   return (remote.remoteGit ?? executeRemoteGit)(
     ['push', 'origin', `HEAD:refs/heads/${branch}`],
     {
       cwd: root,
       config: (args) => git(args, { cwd: root }),
       runRemoteGit: git,
-      mutation: remote.mutation,
+      mutation,
     },
   );
 }

@@ -27,7 +27,8 @@ import {
   HALT_PR_BANNER_SENTINEL,
   HALT_PR_BANNER_LINES,
 } from './pr-labels.js';
-import { executeRemoteGit } from './remote-git-operations.js';
+import { basename } from 'node:path';
+import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -144,13 +145,20 @@ export async function escalateBuildFailure(
 
   // ── Step 3: push the branch ───────────────────────────────────────────────
   try {
+    const mutation = opts.remoteMutation ?? await resolveFeatureRemoteMutation({
+      cwd,
+      slug: basename(cwd),
+      branch,
+      git: (args) => runGit(args, { cwd }),
+      gh: runGh,
+    });
     const pushed = await (opts.remoteGit ?? executeRemoteGit)(
       ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`],
       {
         cwd,
         config: (args) => runGit(args, { cwd }),
         runRemoteGit: runGit,
-        mutation: opts.remoteMutation,
+        mutation,
       },
     );
     if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));

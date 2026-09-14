@@ -39,7 +39,7 @@ import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { prepareWorktree as defaultPrepareWorktree } from './worktree-prepare.js';
-import { executeRemoteGit } from './remote-git-operations.js';
+import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 
 const execFile = promisify(execFileCb);
@@ -1040,6 +1040,17 @@ export async function resolveConflictingPr(
     }
 
     // All stages pass — publish the resolution with lease protection
+    const remoteMutation = await resolveFeatureRemoteMutation({
+      cwd: worktreePath,
+      slug,
+      branch,
+      git: async (args) => {
+        const result = await git(args);
+        if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout || 'git read failed');
+        return { stdout: result.stdout };
+      },
+      gh: deps.runGh,
+    });
     const publishResult = await publishResolution({
       git,
       branch,
@@ -1049,6 +1060,7 @@ export async function resolveConflictingPr(
         cwd: repoCwd,
         log,
       },
+      remoteMutation,
       // No earlierFailure → attempt the lease push
     });
 

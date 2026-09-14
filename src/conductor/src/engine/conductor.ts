@@ -457,7 +457,7 @@ import {
 import { openShipDraftPr } from './ship-draft-pr.js';
 import { mirrorIssueCriticalityLabels } from './pr-criticality-labels.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
-import { executeRemoteGit } from './remote-git-operations.js';
+import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 
@@ -2028,6 +2028,7 @@ interface PostFinishShippedRecordRefreshOptions {
   requestedSlug: string;
   pr: string;
   log: (message: string) => void;
+  gh: GhRunner;
   remoteGit?: typeof executeRemoteGit;
   remoteMutation?: GithubMutationExecutionContext;
 }
@@ -2039,6 +2040,7 @@ async function refreshPostFinishShippedRecord({
   requestedSlug,
   pr,
   log,
+  gh,
   remoteGit,
   remoteMutation,
 }: PostFinishShippedRecordRefreshOptions): Promise<void> {
@@ -2091,12 +2093,19 @@ async function refreshPostFinishShippedRecord({
 
     try {
       const { stdout: branchOut } = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
+      const resolvedMutation = remoteMutation ?? await resolveFeatureRemoteMutation({
+        cwd,
+        slug: requestedSlug,
+        branch: branchOut.trim(),
+        git: (args) => runGit(args, { cwd }),
+        gh,
+      });
       await pushPostFinishShippedRecord({
         runGit,
         cwd,
         branch: branchOut.trim(),
         remoteGit,
-        remoteMutation,
+        remoteMutation: resolvedMutation,
       });
     } catch (pushError) {
       let recoveryHead = preRefreshHead;
@@ -13512,6 +13521,7 @@ export class Conductor {
           requestedSlug: state.feature_desc,
           pr: state.pr_url,
           log: this.log ?? console.warn,
+          gh: this.gh,
         });
       }
     } catch (err) {
