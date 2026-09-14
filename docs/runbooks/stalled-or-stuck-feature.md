@@ -1180,6 +1180,23 @@ If `HALT.class` is `over-scope`, do not clear the body unchanged. Edit the fence
 deciding as `pending`. An accept clears that criterion; a refusal records the decision but keeps
 the halt active as “refused — rework required.”
 
+For a durable PRD-widening recovery, keep every unaffected decision and refusal in place. The
+halt body names the affected source, case, decision, or artifact and one of these actions:
+
+- `malformed-history`: restore the original widening history from a known-good copy, then resume.
+- `unsupported-history`: preserve the history and upgrade to a conductor version that supports it.
+- `missing-operator`: configure the machine owner and resubmit the explicit decision.
+- `persistence-failed`: resolve the store or lease failure and verify the durable records.
+- `invalid-provider-result`: retry only once the selected provider supports the required native schema.
+- `stale-relation`: retain the decision and rerun reconciliation against the current report.
+- `context-overflow`: reduce the cited source input; no history was pruned.
+- `projection-failed`: repair the named stored evidence or verdict renderer without re-deciding valid authority.
+- `uncertain-relation`: review the preserved original and current evidence, then submit a new explicit decision if desired.
+
+Version-2 `accepted-widenings.json` preserves valid legacy attributed evidence in its original
+order. A refusal is also preserved: revise it only through its offered explicit revision entry,
+never by reusing an old accepted clear or deleting history.
+
 Then clear by **renaming** the edited body to `.pipeline/HALT.cleared` — never `rm -f` it. The
 next prd_audit lap harvests your decisions from `HALT.cleared` and from nowhere else, so deleting
 the body silently discards every decision you just authored and the feature re-halts with the

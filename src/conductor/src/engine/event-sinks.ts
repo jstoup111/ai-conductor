@@ -57,6 +57,7 @@ export const EVENT_SINKS = {
   remediation_adjudication_failed: { render: false, persist: true, audit: false, otel: false },
   remediation_case_reconciled: { render: false, persist: true, audit: false, otel: false },
   remediation_case_refuted: { render: true, persist: true, audit: true, otel: false },
+  prd_widening_reconciled: { render: false, persist: true, audit: false, otel: false },
   remediation_effect_reserved: { render: false, persist: true, audit: false, otel: false },
   remediation_effect_applied: { render: false, persist: true, audit: false, otel: false },
   remediation_effect_failed: { render: false, persist: true, audit: false, otel: false },

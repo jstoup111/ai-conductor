@@ -21,10 +21,19 @@ import { makeGitRunner } from './rebase.js';
 import { gateVerdictStillValid, verdictProducedByRun } from './gate-code-validity.js';
 import type { VerdictRunIdentity } from './gate-code-validity.js';
 import {
-  classifyOverScopeCriterion,
   overScopeRelations,
   readOverScopeDecisions,
 } from './accepted-widenings.js';
+import { AcceptedWideningDecisionStore } from './accepted-widenings.js';
+import {
+  classifyPrdWidening,
+  classifyPrdWideningProjection,
+  type PrdWideningClassification,
+} from './prd-widening-classification.js';
+import {
+  readRemediationCaseStoreFeature,
+  RemediationCaseStore,
+} from './remediation-case-store.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import { resolveTaskIdsWithDiagnostics } from './task-progress.js';
@@ -3230,8 +3239,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
               for (const f of preCheckFiles) {
                 const report = await readFile(f, 'utf-8');
                 const parsed = parsePrdAuditReport(report, preActivePlan);
-                const preRelations = overScopeRelations(report);
-                const preDecisions = (await readOverScopeDecisions(dir)).decisions;
+                const classifications = parsed.ok
+                  ? await classifyPrdAuditWideningProjection(dir, report, parsed.value.findings)
+                  : new Map<string, PrdWideningClassification>();
                 if (
                   (parsed.ok
                     ? parsed.value.rejectedRows.length > 0 || parsed.value.findings.some(
@@ -3239,7 +3249,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
                           finding.grade !== 'PASS' &&
                           !(
                             finding.grade === 'OVER_SCOPE' &&
-                            ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, finding.evidence, preRelations, preDecisions))
+                            ['accepted', 'not-blocking'].includes(classifications.get(finding.criterion)?.kind ?? 'unresolved')
                           ),
                       )
                     : findUnalignedFrRows(report, preActivePlan).length > 0) ||
@@ -3322,18 +3332,21 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       // ship: the gate re-selected prd_audit forever because acceptance was
       // invisible here (#1854).
       const reportText = await readFile(f, 'utf-8');
-      const relations = overScopeRelations(reportText);
-      const decisions = (await readOverScopeDecisions(dir)).decisions;
+      const classifications = await classifyPrdAuditWideningProjection(dir, reportText, parsed.value.findings);
       const blocking = parsed.value.findings.filter(
         (finding) =>
           finding.grade !== 'PASS' &&
           !(
             finding.grade === 'OVER_SCOPE' &&
-            ['accepted', 'not-blocking'].includes(classifyOverScopeCriterion(finding.criterion, finding.evidence, relations, decisions))
+            ['accepted', 'not-blocking'].includes(classifications.get(finding.criterion)?.kind ?? 'unresolved')
           ),
       );
       if (blocking.length > 0) {
-        const shown = blocking.slice(0, 3).map((finding) => `${finding.criterion} (${finding.grade})`).join('; ');
+        const shown = blocking.slice(0, 3).map((finding) => {
+          const classification = classifications.get(finding.criterion);
+          const suffix = classification?.kind === 'unresolved' ? ` [${classification.reason}]` : '';
+          return `${finding.criterion} (${finding.grade})${suffix}`;
+        }).join('; ');
         const more = blocking.length > 3 ? ` (+${blocking.length - 3} more)` : '';
         blockingReason = `prd-audit found blocking criterion grades: ${shown}${more} — close the gap (BUILD) or amend the PRD (DECIDE), then re-audit`;
         break;
@@ -5008,6 +5021,102 @@ export interface PrdGapClassification {
 }
 
 /**
+ * Shared projection used by routing and artifact renderers.  It deliberately
+ * accepts only engine-published relation freshness plus stored decisions; a
+ * reviewer summary cannot independently turn an OVER_SCOPE row into accepted.
+ */
+export function classifyPrdWideningFindings(
+  findings: readonly PrdAuditFinding[],
+  decisions: readonly import('./accepted-widenings.js').AcceptedWideningDecision[],
+  relations: ReadonlyMap<string, { readonly kind: 'same-case' | 'different' | 'uncertain'; readonly caseId?: string; readonly fresh: boolean }>,
+): ReadonlyMap<string, PrdWideningClassification> {
+  return new Map(findings.map((finding) => [finding.criterion, classifyPrdWidening({
+    grade: finding.grade,
+    criterion: finding.criterion,
+    relation: relations.get(finding.criterion),
+    decisions,
+  })]));
+}
+
+/**
+ * Read the two durable PRD-widening stores once, then project every current
+ * report finding through the same freshness-aware authority resolver used by
+ * routing and completion.  A broken store is evidence of a broken store, not
+ * an empty history that could accidentally make a report clean.
+ */
+export async function classifyPrdAuditWideningProjection(
+  dir: string,
+  reportText: string,
+  findings: readonly PrdAuditFinding[],
+): Promise<ReadonlyMap<string, PrdWideningClassification>> {
+  const relations = overScopeRelations(reportText);
+  const visible = findings.filter((finding) =>
+    finding.grade === 'OVER_SCOPE' && relations.get(finding.criterion) === 'outside-visible',
+  );
+  let decisions: readonly import('./accepted-widenings.js').AcceptedWideningDecision[] = [];
+  let cases: readonly import('./remediation-case-store.js').RemediationCasePrdWideningRecord[] = [];
+  let evidenceFault: Extract<PrdWideningClassification, { readonly kind: 'unresolved' }>['reason'] | undefined;
+
+  // Internal/non-visible scope observations require no reconciliation. Avoid
+  // treating an absent historical store as a fault for those rows alone.
+  if (visible.length > 0) {
+    const featureRead = await readRemediationCaseStoreFeature(dir);
+    if (!featureRead.ok) {
+      evidenceFault = 'corrupt-case-store';
+    } else if (featureRead.feature === undefined) {
+      // Criterion-owned legacy authority never used a summary as identity.
+      // Keep it readable during the v1→v2 migration, but deliberately do not
+      // manufacture NC authority from it.
+      decisions = (await readOverScopeDecisions(dir)).decisions
+        .filter((decision) => !/^NC\.\d+$/i.test(decision.criterion))
+        .map((decision, index) => ({
+          id: `legacy-criterion-${index + 1}`,
+          criterion: decision.criterion,
+          authority: decision.decision,
+          rationale: decision.rationale,
+          operator: decision.operator,
+          revision: index + 1,
+        }));
+    } else {
+      const caseStore = new RemediationCaseStore(dir, featureRead.feature);
+      const caseRead = await caseStore.read();
+      if (!caseRead.ok) {
+        evidenceFault = 'corrupt-case-store';
+      } else {
+        cases = caseRead.state.version === 'v2' ? caseRead.state.prdWideningCases : [];
+        const decisionStore = new AcceptedWideningDecisionStore(dir, {
+          version: 1,
+          repository: featureRead.feature.repository,
+          feature: featureRead.feature.feature,
+        });
+        const decisionRead = await decisionStore.read();
+        if (decisionRead.kind === 'valid') {
+          decisions = decisionRead.state.decisions;
+        } else if (decisionRead.kind !== 'absent') {
+          evidenceFault = 'corrupt-decision-store';
+        }
+      }
+    }
+  }
+
+  const projected = new Map(classifyPrdWideningProjection({
+    findings,
+    decisions,
+    cases,
+    ...(evidenceFault ? { evidenceFault } : {}),
+  }));
+  // Intent relation is raw reviewer classification, not authority. A row the
+  // reviewer explicitly marked non-visible stays non-blocking, while every
+  // visible row above must have durable freshness evidence.
+  for (const finding of findings) {
+    if (finding.grade === 'OVER_SCOPE' && relations.get(finding.criterion) !== 'outside-visible') {
+      projected.set(finding.criterion, { kind: 'not-blocking', reason: 'non-over-scope' });
+    }
+  }
+  return projected;
+}
+
+/**
  * Classify the blocking rows of the fresh PRD-audit report(s) for this session
  * so the daemon can decide whether to self-heal (impl-only → BUILD) or halt
  * (any product/plan gap → human DECIDE). Only reports written this session are
@@ -5021,7 +5130,6 @@ export async function classifyPrdAuditGaps(
   featureDesc?: string,
 ): Promise<PrdGapClassification> {
   const files = await findArtifactFiles(dir, 'prd_audit');
-  const decisions = (await readOverScopeDecisions(dir)).decisions;
   const identity = await verdictProducedByRun(dir, 'prd_audit', expectedRunId, config);
   // Routing decides self-heal vs HALT off these rows, so it reads them under
   // the same citation authority the gate scored them with (adr-2026-08-30 D1).
@@ -5048,15 +5156,29 @@ export async function classifyPrdAuditGaps(
     // intent relation never made it blocking, is not a gap this routing should
     // act on. Reading only the fresh rows made an accepted widening re-route
     // the next lap exactly as it did before the operator decided (ADR D8).
-    const relations = overScopeRelations(content);
-    const findingSummaries = new Map(
-      parsed.ok ? parsed.value.findings.map((finding) => [finding.criterion, finding.evidence]) : [],
-    );
+    const classifications = parsed.ok
+      ? await classifyPrdAuditWideningProjection(dir, content, parsed.value.findings)
+      : new Map<string, PrdWideningClassification>();
+    if (parsed.ok) {
+      const unresolvedWidenings = parsed.value.findings.filter((finding) => {
+        if (finding.grade !== 'OVER_SCOPE') return false;
+        const classification = classifications.get(finding.criterion);
+        return classification?.kind === 'refused' || classification?.kind === 'unresolved';
+      });
+      if (unresolvedWidenings.length > 0) {
+        const summary = unresolvedWidenings.slice(0, 5).map((finding) => {
+          const classification = classifications.get(finding.criterion)!;
+          return `${finding.criterion} (${classification.kind === 'unresolved' ? classification.reason : 'refused'})`;
+        }).join('; ');
+        return { kind: 'needs-decide', summary: `PRD widening evidence blocks routing: ${summary}` };
+      }
+    }
     const settled = new Set(
-      [...relations.keys()].filter((criterion) =>
-        ['accepted', 'not-blocking'].includes(
-          classifyOverScopeCriterion(criterion, findingSummaries.get(criterion) ?? '', relations, decisions),
-        )),
+      parsed.ok
+        ? parsed.value.findings
+          .filter((finding) => ['accepted', 'not-blocking'].includes(classifications.get(finding.criterion)?.kind ?? 'unresolved'))
+          .map((finding) => finding.criterion)
+        : [],
     );
     blocking.push(...findUnalignedFrRowsWithClass(content, settled, activePlan));
   }

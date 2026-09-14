@@ -226,6 +226,169 @@ describe('CodexProvider', () => {
     );
   });
 
+  it('writes a requested native schema inside the owned Codex scratch home and reads only the final agent response', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'codex-native-schema-worktree-'));
+    const home = join(worktree, '.daemon', 'scratch', 'run-16', '1-codex', 'self-host-codex-home');
+    const nativeSchema = { type: 'object', required: ['relationship'] };
+    let schemaPath: string | undefined;
+    let schemaContents: string | undefined;
+    const teardown = async () => { await rm(join(worktree, '.daemon'), { recursive: true, force: true }); };
+    await mkdir(home, { recursive: true });
+    mockExeca.mockImplementation(async (_file, args) => {
+      const index = args.indexOf('--output-schema');
+      schemaPath = index === -1 ? undefined : args[index + 1];
+      schemaContents = schemaPath === undefined ? undefined : await readFile(schemaPath, 'utf8');
+      return {
+        stdout: [
+          JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ordinary progress' }, structured_output: { poisoned: true } }),
+          JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: '{"relationship":"same-case"}' } }),
+          JSON.stringify({ type: 'turn.completed' }),
+        ].join('\n'),
+        stderr: '',
+        exitCode: 0,
+      } as any;
+    });
+
+    try {
+      const result = await provider.invoke({
+        ...baseOptions,
+        interactive: false,
+        cwd: worktree,
+        nativeSchema,
+        selfHost: {
+          executable: '/isolated/bin/codex',
+          env: { CODEX_HOME: home },
+          args: [],
+          teardown,
+        },
+      });
+
+      expect(schemaPath).toBe(join(home, 'output-schema.json'));
+      expect(JSON.parse(schemaContents!)).toEqual(nativeSchema);
+      expect(result).toMatchObject({
+        success: true,
+        output: '{"relationship":"same-case"}',
+        finalStructuredResult: { relationship: 'same-case' },
+      });
+      await teardown();
+      await expect(readFile(schemaPath!, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: 'a timeout',
+      response: { stdout: '', stderr: 'child process timed out', exitCode: 1, timedOut: true },
+      expectedOutput: 'child process timed out',
+    },
+    {
+      name: 'a spawn failure',
+      response: { stdout: '', stderr: '', code: 'ENOENT', exitCode: undefined },
+      expectedOutput: "LLM provider 'codex' not found",
+    },
+    {
+      name: 'an invalid final structured response',
+      response: {
+        stdout: [
+          JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'not JSON' } }),
+          JSON.stringify({ type: 'turn.completed' }),
+        ].join('\n'),
+        stderr: '',
+        exitCode: 0,
+      },
+      expectedOutput: 'terminal result record is missing its structured result',
+    },
+    {
+      name: 'absent terminal output',
+      response: {
+        stdout: JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: '{"relationship":"same-case"}' } }),
+        stderr: '',
+        exitCode: 0,
+      },
+      expectedOutput: 'missing terminal result record',
+    },
+  ])('returns the named failure and lets owned scratch cleanup run after $name', async ({ response, expectedOutput }) => {
+    const worktree = await mkdtemp(join(tmpdir(), 'codex-native-schema-cleanup-worktree-'));
+    const home = join(worktree, '.daemon', 'scratch', 'run-16', '1-codex', 'self-host-codex-home');
+    const nativeSchema = { type: 'object' };
+    let schemaPath: string | undefined;
+    const teardown = async () => { await rm(join(worktree, '.daemon'), { recursive: true, force: true }); };
+    await mkdir(home, { recursive: true });
+    mockExeca.mockImplementation(async (_file, args) => {
+      const index = args.indexOf('--output-schema');
+      schemaPath = index === -1 ? undefined : args[index + 1];
+      return response as any;
+    });
+
+    try {
+      const result = await provider.invoke({
+        ...baseOptions,
+        interactive: false,
+        cwd: worktree,
+        nativeSchema,
+        selfHost: { executable: '/isolated/bin/codex', env: { CODEX_HOME: home }, args: [], teardown },
+      });
+
+      expect(result).toMatchObject({ success: false, output: expect.stringContaining(expectedOutput) });
+      expect(schemaPath).toBe(join(home, 'output-schema.json'));
+      expect(JSON.parse(await readFile(schemaPath!, 'utf8'))).toEqual(nativeSchema);
+      await teardown();
+      await expect(readFile(schemaPath!, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('does not materialize a schema file for a no-schema Codex invocation', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'codex-no-native-schema-worktree-'));
+    const home = join(worktree, '.daemon', 'scratch', 'run-16', '1-codex', 'self-host-codex-home');
+    await mkdir(home, { recursive: true });
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('No schema requested.'), stderr: '', exitCode: 0 } as any);
+
+    try {
+      await provider.invoke({
+        ...baseOptions,
+        interactive: false,
+        cwd: worktree,
+        selfHost: { executable: '/isolated/bin/codex', env: { CODEX_HOME: home }, args: [], teardown: async () => {} },
+      });
+
+      expect(mockExeca.mock.calls[0]?.[1]).not.toContain('--output-schema');
+      await expect(readFile(join(home, 'output-schema.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('fails before spawn when a purported self-host schema home escapes worktree scratch', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'codex-native-schema-confinement-worktree-'));
+    const outsideHome = await mkdtemp(join(tmpdir(), 'codex-native-schema-outside-home-'));
+
+    try {
+      const result = await provider.invoke({
+        ...baseOptions,
+        interactive: false,
+        cwd: worktree,
+        nativeSchema: { type: 'object' },
+        selfHost: { executable: '/isolated/bin/codex', env: { CODEX_HOME: outsideHome }, args: [], teardown: async () => {} },
+      });
+
+      expect(result).toMatchObject({
+        success: false,
+        output: expect.stringContaining('outside the worktree scratch root'),
+      });
+      expect(mockExeca).not.toHaveBeenCalled();
+      await expect(readFile(join(outsideHome, 'output-schema.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await Promise.all([
+        rm(worktree, { recursive: true, force: true }),
+        rm(outsideHome, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
   it('keeps tokens from an unpriceable terminal envelope cost-unmetered', async () => {
     const emptyRateCard: RateCard = {
       as_of: '2026-08-25T00:00:00.000Z',

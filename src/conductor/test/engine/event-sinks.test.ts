@@ -160,6 +160,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'over_scope_decision',
   ...REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES,
   'remediation_case_refuted',
+  'prd_widening_reconciled',
   'build_review_scope_summary',
   'build_review_scope_incomplete',
 ] satisfies Array<ConductorEvent['type']>;

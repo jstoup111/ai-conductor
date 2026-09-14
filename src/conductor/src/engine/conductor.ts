@@ -41,6 +41,20 @@ import {
   readBuildReviewWorkOrderAttemptedCaseIds,
 } from './build-review-work-order.js';
 import { readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
+import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
+import { AcceptedWideningDecisionStore, type AcceptedWideningDecision } from './accepted-widenings.js';
+import { preparePrdWideningEntry } from './prd-widening-entry.js';
+import { persistPrdWideningOffers } from './prd-widening-offers.js';
+import { buildPrdWideningContext, prdWideningSourceId } from './prd-widening-context.js';
+import { coordinatePrdWidening } from './prd-widening-coordinator.js';
+import { PRD_WIDENING_RECONCILIATION_SCHEMA } from './prd-widening-contract.js';
+import {
+  renderPrdAuditProjectionHalt,
+  renderPrdAuditScopeHalt,
+  renderPrdWideningRecovery,
+} from './prd-widening-recovery.js';
+import { classifyPrdWidening, classifyPrdWideningProjection } from './prd-widening-classification.js';
+import type { RemediationCasePrdWideningRecord } from './remediation-case-store.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { fileIntakeIssue } from './engineer/intake/file-issue.js';
@@ -205,6 +219,7 @@ import {
   type RemediationDispositionRejection,
   type CompletionContext,
   type CompletionResult,
+  type PrdAuditReport,
   discardStaleLapBuildReviewFail,
   removeBuildReviewVerdict,
   uncommittedPathsOrNull,
@@ -1008,6 +1023,91 @@ export function routePrdAuditOverScope(
   return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings: recorded };
 }
 
+/**
+ * The v2 route consumes only criterion keys, published relations, and durable
+ * operator decisions.  In particular, no reviewer summary is ever used to
+ * find authority for an NC row.
+ */
+export function routePrdAuditOverScopeV2(
+  reportText: string,
+  decisions: readonly AcceptedWideningDecision[],
+  cases: readonly RemediationCasePrdWideningRecord[],
+  activePlanText?: string,
+): PrdAuditOverScopeRoute {
+  const parsed = parsePrdAuditReport(reportText, activePlanText);
+  if (!parsed.ok || parsed.value.rejectedRows.length > 0) return { kind: 'none' };
+  const relations = overScopeRelations(reportText);
+  const overScope = parsed.value.findings.filter((finding) => finding.grade === 'OVER_SCOPE');
+  if (overScope.some((finding) => !relations.has(finding.criterion))) return { kind: 'none' };
+  // Keep routing on the exact same freshness-aware projection as artifact
+  // completion and rendered records.  This must not reconstruct freshness
+  // from a source link here: that would let a stale relation pass one reader
+  // while the other readers correctly reject it.
+  const classifications = classifyPrdWideningProjection({
+    findings: parsed.value.findings,
+    decisions,
+    cases,
+  });
+  const findings = overScope.map((finding) => {
+    const relation = relations.get(finding.criterion) as IntentRelation;
+    const summary = finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`;
+    if (relation !== 'outside-visible') {
+      return { gate: 'prd_audit' as const, grade: 'OVER_SCOPE' as const, criterion: finding.criterion, summary, relation, accepted: true, classification: 'not-blocking' as const };
+    }
+    if (!/^NC\.\d+$/i.test(finding.criterion)) {
+      const decision = decisions.filter((candidate) => candidate.criterion === finding.criterion).at(-1);
+      return {
+        gate: 'prd_audit' as const, grade: 'OVER_SCOPE' as const, criterion: finding.criterion, summary, relation,
+        accepted: decision?.authority === 'accept', classification: decision?.authority === 'accept' ? 'accepted' as const : decision?.authority === 'refuse' ? 'blocking-refused' as const : 'blocking-undecided' as const,
+        ...(decision ? { decision: decision.authority, rationale: decision.rationale } : {}),
+      };
+    }
+    const sourceId = prdWideningSourceId(finding);
+    const record = cases.find((candidate) => candidate.relationships.some((item) => item.currentSourceId === sourceId));
+    const published = record?.relationships.filter((item) => item.currentSourceId === sourceId).at(-1);
+    // A validated renamed/reworded same-case relation must render the
+    // original editable offer as well.  Otherwise a stored refusal becomes
+    // an anonymous pending item and an operator cannot explicitly revise it.
+    const relationCase = published?.kind === 'same-case'
+      ? cases.find((candidate) => candidate.id === published.caseId)
+      : undefined;
+    const offer = cases.find((candidate) => candidate.originalSources.some((source) => source.sourceId === sourceId)) ?? relationCase;
+    const original = offer?.originalSources.find((source) => source.sourceId === sourceId) ?? offer?.originalSources[0];
+    const projected = classifications.get(finding.criterion)!;
+    const classification = projected;
+    const decision = classification.kind === 'accepted' || classification.kind === 'refused'
+      ? decisions.find((candidate) => candidate.id === classification.decisionId)
+      : undefined;
+    return {
+      gate: 'prd_audit' as const, grade: 'OVER_SCOPE' as const, criterion: finding.criterion, summary, relation,
+      accepted: classification.kind === 'accepted',
+      classification: classification.kind === 'refused' ? 'blocking-refused' as const : classification.kind === 'accepted' || classification.kind === 'not-blocking' ? 'accepted' as const : 'blocking-undecided' as const,
+      ...(decision ? { decision: decision.authority, rationale: decision.rationale } : {}),
+      ...(offer && original ? {
+        offerEntryId: offer.id,
+        originalSource: { id: original.sourceId, snapshot: original.snapshot },
+        originalCaseId: offer.id,
+        ...(classification.kind === 'refused' && decision ? { kind: 'revise-decision' as const, priorDecision: { id: decision.id, revision: decision.revision } } : { kind: 'pending' as const }),
+      } : {}),
+    };
+  });
+  if (!findings.length) return { kind: 'none' };
+  const undecided = findings.filter((finding) => finding.classification === 'blocking-undecided');
+  const refused = findings.filter((finding) => finding.classification === 'blocking-refused');
+  const recorded = findings.map(({ relation: _relation, classification: _classification, ...finding }) => finding);
+  if (undecided.length || refused.length) {
+    return {
+      kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS,
+      detail: `OVER_SCOPE visible behavior on ${[...undecided, ...refused].map((finding) => finding.criterion).join(', ')}.`,
+      findings: recorded,
+      undecided: undecided.map(({ classification: _classification, ...finding }) => finding),
+      refused: refused.map(({ classification: _classification, ...finding }) => finding),
+    };
+  }
+  const hasOtherBlockingGrade = parsed.value.findings.some((finding) => finding.grade !== 'PASS' && finding.grade !== 'OVER_SCOPE');
+  return hasOtherBlockingGrade ? { kind: 'none' } : { kind: 'record', findings: recorded };
+}
+
 /** Direct, immutable scope evidence passed to the PRD-audit reviewer. */
 export function prdAuditScopeProjection(input: {
   resealEvidence: readonly { path: string; reason: string }[];
@@ -1177,6 +1277,8 @@ export function getNavigableSteps(
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /** Native-schema terminal value, retained verbatim for engine validation. */
+  finalStructuredResult?: unknown;
   /** A typed refusal is an entry/environment outcome, never provider text. */
   refusal?: {
     kind: 'seal' | 'needs-human' | 'validation-verdict';
@@ -1355,6 +1457,21 @@ export interface ComplexityAssessment extends ProviderAttributionMetadata {
 }
 
 export interface StepRunOptions {
+  /**
+   * Durable PRD widening authority rendered by the engine for an audit
+   * reviewer. It is history for judgement only: the reviewer cannot use it to
+   * accept a current finding or copy it into a replacement report.
+   */
+  prdWideningReviewContext?: {
+    readonly version: 'v1';
+    readonly decisions: readonly AcceptedWideningDecision[];
+  };
+  /** Engine-owned constrained reconciliation through the existing remediate step. */
+  remediationRequest?: {
+    readonly mode: 'prd-widening-reconciliation';
+    readonly projection: string;
+    readonly nativeSchema: Readonly<Record<string, unknown>>;
+  };
   /**
    * This dispatch's engine-owned run identity, passed INTO the provider
    * lifecycle so its `attempt.id` is this exact value
@@ -2387,6 +2504,9 @@ export class Conductor {
    * turns it into a named blocking route.
    */
   private prdAuditProjectionRefusal: string | undefined;
+
+  /** Freshly loaded at the pre-audit boundary for both serial and group paths. */
+  private prdWideningReviewContext: StepRunOptions['prdWideningReviewContext'];
 
   /**
    * BLOCKED rows that authorized as-built remediation laps. They become
@@ -3803,7 +3923,332 @@ export class Conductor {
     );
   }
 
-  private async routeCurrentPrdAuditOverScope(featureDesc?: string): Promise<PrdAuditOverScopeRoute> {
+  /** Record bounded PRD entry failures without replacing durable authority. */
+  private async emitPrdWideningRejections(
+    reason: string,
+    sourceIds: readonly string[] = ['prd-audit:entry'],
+  ): Promise<void> {
+    for (const sourceId of [...new Set(sourceIds)].slice(0, 5)) {
+      await this.events.emit({
+        type: 'prd_widening_reconciled', sourceId, outcome: 'rejected', reason,
+      });
+    }
+  }
+
+  /**
+   * The audit provider must never see an editable clear before its immutable
+   * offer and any prior v1 authority have been recovered.  This is shared by
+   * the serial dispatcher and the validation-group member because both use
+   * the same StepRunner dispatch boundary below.
+   */
+  private async preparePrdWideningBeforeAudit(): Promise<string | undefined> {
+    this.prdWideningReviewContext = undefined;
+    const entryPaths = [
+      join(this.projectRoot, '.pipeline', 'HALT.cleared'),
+      join(this.projectRoot, '.pipeline', 'accepted-widenings.json'),
+      join(this.projectRoot, '.pipeline', 'remediation-cases.json'),
+    ];
+    let entryState: readonly boolean[];
+    try {
+      entryState = await Promise.all(entryPaths.map(async (path) => {
+        try {
+          await accessFile(path);
+          return true;
+        } catch (error) {
+          const code = typeof error === 'object' && error !== null && 'code' in error
+            ? (error as { code?: unknown }).code
+            : undefined;
+          if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+          throw error;
+        }
+      }));
+    } catch {
+      await this.emitPrdWideningRejections('persistence-failed');
+      return renderPrdWideningRecovery('persistence-failed', entryPaths.map((path) => relative(this.projectRoot, path)));
+    }
+    // A clean first audit has no authority to capture or recover. Defer
+    // worktree identity until a clear or durable widening state actually
+    // needs to be bound; otherwise ordinary audit completion must not become
+    // a foreign-history halt merely because it has no widening to reconcile.
+    if (!entryState.some(Boolean)) return undefined;
+    let priorHalt = '';
+    if (entryState[0]) {
+      try {
+        priorHalt = await readFile(entryPaths[0]!, 'utf8');
+      } catch {
+        await this.emitPrdWideningRejections('persistence-failed');
+        return renderPrdWideningRecovery('persistence-failed', ['.pipeline/HALT.cleared']);
+      }
+    }
+    const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
+    if (!feature) {
+      await this.emitPrdWideningRejections('foreign-feature');
+      return renderPrdWideningRecovery('foreign-feature', []);
+    }
+    const wideningFeature = { version: 1 as const, repository: feature.repository, feature: feature.feature };
+    const caseFeature = { version: 'v1' as const, repository: feature.repository, feature: feature.feature };
+    let operator: string | undefined;
+    try {
+      const identity = await resolveDaemonOwner(await readMachineOwnerConfig(), this.gh, this.projectRoot);
+      operator = identity.resolved ? identity.id : undefined;
+    } catch { /* capture reports missing attribution without granting authority */ }
+    const caseStore = new RemediationCaseStore(this.projectRoot, caseFeature);
+    const decisionStore = new AcceptedWideningDecisionStore(this.projectRoot, wideningFeature);
+    const prepared = await preparePrdWideningEntry({
+      projectRoot: this.projectRoot,
+      feature: wideningFeature,
+      priorHalt,
+      capture: { operator, offerStore: caseStore, decisionStore },
+    });
+    if (prepared.migration.kind === 'failed') {
+      const recoveryReason = prepared.migration.reason.includes('unsupported')
+        ? 'unsupported-history'
+        : 'malformed-history';
+      await this.emitPrdWideningRejections(prepared.migration.reason);
+      return renderPrdWideningRecovery(
+        recoveryReason,
+        ['.pipeline/accepted-widenings.json', '.pipeline/remediation-cases.json'],
+      );
+    }
+    if (prepared.migration.kind === 'migrated') {
+      for (const decision of prepared.migration.decisions) {
+        await this.events.emit({
+          type: 'prd_widening_reconciled',
+          sourceId: decision.originalSource?.id ?? decision.criterion,
+          caseId: decision.originalCaseId,
+          decisionId: decision.id,
+          outcome: 'recovered',
+        });
+      }
+    }
+    // Persisted sibling decisions remain observable even when another entry
+    // is rejected below; the failure never erases already-valid authority.
+    for (const decision of prepared.capture.captured) {
+      await this.events.emit({
+        type: 'prd_widening_reconciled',
+        sourceId: decision.originalSource?.id ?? decision.criterion,
+        caseId: decision.originalCaseId,
+        decisionId: decision.id,
+        outcome: 'imported',
+      });
+    }
+    if (prepared.capture.defects.length > 0) {
+      for (const defect of prepared.capture.defects) {
+        await this.emitPrdWideningRejections(defect.kind, [defect.offerEntryId ?? 'prd-audit:entry']);
+      }
+      const reason = prepared.capture.defects.some((defect) => defect.kind === 'missing-operator')
+        ? 'missing-operator'
+        : prepared.capture.defects.some((defect) => defect.kind === 'write-failed' || defect.kind === 'offer-read-failed')
+          ? 'persistence-failed'
+          : 'malformed-history';
+      return renderPrdWideningRecovery(reason, prepared.capture.defects.flatMap((defect) => defect.offerEntryId ? [defect.offerEntryId] : []));
+    }
+    const decisions = await decisionStore.read();
+    if (decisions.kind !== 'absent' && decisions.kind !== 'valid') {
+      await this.emitPrdWideningRejections(`decision-read-${decisions.kind}`);
+      return renderPrdWideningRecovery('persistence-failed', ['.pipeline/accepted-widenings.json']);
+    }
+    // The audit receives immutable original authority as judgment context.
+    // Routing still requires a typed, fresh relation after its report exists.
+    this.prdWideningReviewContext = {
+      version: 'v1',
+      decisions: decisions.kind === 'valid'
+        ? decisions.state.decisions.filter((decision) => decision.originalSource !== undefined)
+        : [],
+    };
+    return undefined;
+  }
+
+  /**
+   * Reconcile a replacement NC report through the only provider dispatch that
+   * accepts a native result.  The call is deliberately after capture and
+   * outside both stores' leases; publication rechecks the snapshot under its
+   * mutation boundary.
+   */
+  private async reconcileCurrentPrdWidening(
+    report: PrdAuditReport,
+    relations: ReadonlyMap<string, IntentRelation>,
+    reportText: string,
+    state: ConductState | undefined,
+  ): Promise<string | undefined> {
+    const visible = report.findings.filter((finding) =>
+      finding.grade === 'OVER_SCOPE' && /^NC\.\d+$/i.test(finding.criterion) && relations.get(finding.criterion) === 'outside-visible',
+    );
+    if (!visible.length) return undefined;
+    const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
+    if (!feature) {
+      await this.emitPrdWideningRejections('foreign-feature');
+      return renderPrdWideningRecovery('foreign-feature', []);
+    }
+    const caseFeature = { version: 'v1' as const, repository: feature.repository, feature: feature.feature };
+    const decisionFeature = { version: 1 as const, repository: feature.repository, feature: feature.feature };
+    const caseStore = new RemediationCaseStore(this.projectRoot, caseFeature);
+    const decisionStore = new AcceptedWideningDecisionStore(this.projectRoot, decisionFeature);
+    const [storedCases, storedDecisions] = await Promise.all([caseStore.read(), decisionStore.read()]);
+    if (!storedCases.ok || (storedDecisions.kind !== 'absent' && storedDecisions.kind !== 'valid')) {
+      await this.emitPrdWideningRejections('persistence-failed', visible.map(prdWideningSourceId));
+      return renderPrdWideningRecovery('persistence-failed', visible.map((finding) => finding.criterion));
+    }
+    let prdCases = storedCases.state.version === 'v2' ? storedCases.state.prdWideningCases : [];
+    // Only the first observed source opens an authority offer. Once this
+    // feature has history, every unmatched source (including a renumbered NC)
+    // enters the semantic coordinator instead of minting report-local authority.
+    const newFindings = prdCases.length === 0 ? visible : [];
+    if (newFindings.length > 0) {
+      const offers = await persistPrdWideningOffers(this.projectRoot, caseFeature, newFindings.map((finding) => ({
+        criterion: finding.criterion,
+        sourceId: prdWideningSourceId(finding),
+        evidence: finding.evidence.trim() || `Unplanned behavior for ${finding.criterion}.`,
+        reportSnapshot: reportText,
+        relation: 'outside-visible' as const,
+      })));
+      if (!offers.ok) {
+        await this.emitPrdWideningRejections('persistence-failed', newFindings.map(prdWideningSourceId));
+        return renderPrdWideningRecovery('persistence-failed', newFindings.map((finding) => finding.criterion));
+      }
+      for (const offer of offers.offers) {
+        await this.events.emit({ type: 'prd_widening_reconciled', sourceId: offer.originalSource.id, caseId: offer.originalCaseId, outcome: 'offer' });
+      }
+      const refreshedCases = await caseStore.read();
+      if (!refreshedCases.ok) {
+        await this.emitPrdWideningRejections('persistence-failed', newFindings.map(prdWideningSourceId));
+        return renderPrdWideningRecovery('persistence-failed', newFindings.map((finding) => finding.criterion));
+      }
+      prdCases = refreshedCases.state.version === 'v2' ? refreshedCases.state.prdWideningCases : [];
+    }
+    const context = buildPrdWideningContext(report, prdCases,
+      storedDecisions.kind === 'valid' ? storedDecisions.state.decisions : [], relations);
+    if (!context.ok) {
+      await this.emitPrdWideningRejections(`context-overflow:${context.dimension}`, visible.map(prdWideningSourceId));
+      return renderPrdWideningRecovery(
+        'context-overflow',
+        [`context:${context.dimension}`, ...visible.map(prdWideningSourceId)],
+      );
+    }
+    // An exact original offer waits for an explicit operator decision. Once
+    // that decision exists, it must still receive a published fresh relation:
+    // source equality is provenance, not the current code/report validation
+    // that completion requires. The coordinator reuses a current relation
+    // without a provider call and rejudges stale evidence when necessary.
+    const currentDecisions = storedDecisions.kind === 'valid' ? storedDecisions.state.decisions : [];
+    const needsReconciliation = context.value.currentSources.some((source) => {
+      const originalCase = prdCases.find((record) =>
+        record.originalSources.some((original) => original.sourceId === source.id && original.snapshot === source.evidence));
+      return originalCase === undefined || currentDecisions.some((decision) => decision.originalCaseId === originalCase.id);
+    });
+    if (!needsReconciliation || !state) return undefined;
+    const readCodeDigest = async (): Promise<string> => {
+      const [head, diff] = await Promise.all([
+        currentCommitSha(this.projectRoot),
+        this.git(['diff', '--no-ext-diff', '--binary', 'HEAD'], { cwd: this.projectRoot }).then((result) => result.stdout).catch(() => ''),
+      ]);
+      return createHash('sha256').update(head ?? '').update(diff).digest('hex');
+    };
+    const freshness = {
+      sample: async () => {
+        const [currentReportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
+        let currentReport = reportText;
+        if (currentReportPath) {
+          try { currentReport = await readFile(currentReportPath, 'utf8'); } catch { /* compare supplied snapshot */ }
+        }
+        const parsedCurrent = parsePrdAuditReport(currentReport, await this.activePlanText(state.feature_desc));
+        const currentRelations = overScopeRelations(currentReport);
+        const currentSources = parsedCurrent.ok
+          ? parsedCurrent.value.findings
+            .filter((finding) => finding.grade === 'OVER_SCOPE' && /^NC\.\d+$/i.test(finding.criterion) && currentRelations.get(finding.criterion) === 'outside-visible')
+            .map((finding) => ({ id: prdWideningSourceId(finding), evidence: finding.evidence, prdIds: finding.prdIds }))
+          : [];
+        const currentDecision = await decisionStore.read();
+        return {
+          // Persisted decision projection is engine-owned output, not reviewer
+          // input. Hash the parser's source-bearing result so recording a
+          // relation cannot invalidate its own exact replay.
+          reportDigest: createHash('sha256').update(JSON.stringify(parsedCurrent.ok
+            ? { findings: parsedCurrent.value.findings, rejectedRows: parsedCurrent.value.rejectedRows }
+            : { malformed: true })).digest('hex'),
+          sourceDigest: createHash('sha256').update(JSON.stringify(currentSources)).digest('hex'),
+          codeDigest: await readCodeDigest(),
+          feature: `${caseFeature.repository}\u0000${caseFeature.feature}`,
+          decisionRevision: currentDecision.kind === 'valid' ? currentDecision.state.decisions.at(-1)?.revision ?? 0 : currentDecision.kind === 'absent' ? 0 : -1,
+          contractVersion: 'v1',
+        };
+      },
+    };
+    const codeDigest = await readCodeDigest();
+    const publication = await coordinatePrdWidening({
+      store: caseStore,
+      context: context.value,
+      freshness,
+      decisionStore,
+      codeDigest,
+      readCodeDigest,
+      // The coordinator performs its exact-replay read before calling this
+      // judge. A restart consequently reuses committed relations without a
+      // second semantic remediate dispatch.
+      judge: async () => {
+        const judgement = await this.stepRunner.run('remediate', state, {
+          remediationRequest: {
+            mode: 'prd-widening-reconciliation',
+            projection: JSON.stringify(context.value),
+            nativeSchema: PRD_WIDENING_RECONCILIATION_SCHEMA,
+          },
+        });
+        if (!judgement.success) throw new Error(judgement.output ?? 'reconciliation provider failed');
+        if (judgement.finalStructuredResult === undefined) throw new Error('missing native reconciliation result');
+        return judgement.finalStructuredResult;
+      },
+      mechanicalFailure: {
+        // The coordinator consumes this bounded remediate allowance only for
+        // mechanical failures; it never charges BUILD or plan-growth counters.
+        remainingAttempts: this.config.steps?.remediate?.max_retries ?? this.config.defaults?.max_retries ?? 1,
+        classify: (error) => {
+          const detail = error instanceof Error ? error.message : String(error);
+          if (/timeout|timed out/i.test(detail)) return 'timeout';
+          if (/unavailable|unsupported|not available/i.test(detail)) return 'unavailable';
+          return 'invalid';
+        },
+      },
+      now: new Date().toISOString(),
+    });
+    if (publication.kind === 'failed') {
+      const recoveryReason = publication.reason === 'stale-context'
+        ? 'stale-relation'
+        : publication.reason === 'timeout'
+          ? 'provider-timeout'
+          : publication.reason === 'unavailable'
+            ? 'provider-unavailable'
+            : publication.reason === 'attempts-exhausted'
+              ? 'attempts-exhausted'
+              : 'invalid-provider-result';
+      await this.emitPrdWideningRejections(
+        publication.reason === 'attempts-exhausted' && publication.lastMechanicalFailure !== undefined
+          ? `${recoveryReason}:${publication.lastMechanicalFailure}`
+          : recoveryReason,
+        visible.map(prdWideningSourceId),
+      );
+      return renderPrdWideningRecovery(
+        recoveryReason,
+        visible.map(prdWideningSourceId),
+      );
+    }
+    for (const result of publication.result.results) {
+      await this.events.emit({
+        type: 'prd_widening_reconciled',
+        sourceId: result.sourceId,
+        caseId: result.kind === 'same-case' ? result.caseId : undefined,
+        outcome: publication.reused ? 'reused' : result.kind,
+        reason: result.reason,
+      });
+    }
+    const uncertain = publication.result.results.filter((result) => result.kind === 'uncertain');
+    if (uncertain.length > 0) {
+      await this.emitPrdWideningRejections('uncertain-relation', uncertain.map((result) => result.sourceId));
+      return renderPrdWideningRecovery('uncertain-relation', uncertain.map((result) => result.sourceId));
+    }
+    return undefined;
+  }
+
+  private async routeCurrentPrdAuditOverScope(featureDesc?: string, state?: ConductState): Promise<PrdAuditOverScopeRoute> {
     const [reportPath] = await findArtifactFilesForStep(this.projectRoot, 'prd_audit');
     if (!reportPath) return { kind: 'none' };
     let reportText: string;
@@ -3815,6 +4260,12 @@ export class Conductor {
     const relations = overScopeRelations(reportText);
     const activePlanText = await this.activePlanText(featureDesc);
     const parsedReport = parsePrdAuditReport(reportText, activePlanText);
+    if (parsedReport.ok) {
+      const recovery = await this.reconcileCurrentPrdWidening(parsedReport.value, relations, reportText, state);
+      if (recovery) {
+        return { kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS, detail: recovery, findings: [], undecided: [], refused: [] };
+      }
+    }
     const blockingFindings = new Map(
       parsedReport.ok
         ? parsedReport.value.findings
@@ -3825,25 +4276,25 @@ export class Conductor {
           ])
         : [],
     );
-    const cleared = await readFile(join(this.projectRoot, '.pipeline', 'HALT.cleared'), 'utf8').catch(() => '');
-    const parsed = parseClearedOverScopeDecisions(cleared, blockingFindings);
-    // D7: a defect the operator's edit produced must reach the next halt body,
-    // not only the spine. Emitting it and dropping it made the re-halt look
-    // identical to a halt where the operator had never touched the block.
-    let harvestDefects: Array<{ kind: string; criterion?: string; message?: string }> = [];
-    if (parsed.kind === 'parsed') {
-      let operator: string | undefined;
-      try {
-        const identity = await resolveDaemonOwner(await readMachineOwnerConfig(), this.gh, this.projectRoot);
-        operator = identity.resolved ? identity.id : undefined;
-      } catch { /* emitted as a defect below */ }
-      const result = operator ? await recordOverScopeDecisions(this.projectRoot, parsed.decisions.map((decision) => ({ ...decision, operator }))) : { recorded: [], failure: 'missing-operator' as const };
-      const defects = [...parsed.defects, ...(result.failure ? [{ kind: result.failure === 'missing-operator' ? 'missing-operator' as const : 'write-failed' as const }] : [])];
-      harvestDefects = defects;
-      if (parsed.decisions.length || defects.length) await this.events.emit({ type: 'over_scope_decision', criteria: [...blockingFindings.keys()], decisions: result.recorded.map((decision) => ({ criterion: decision.criterion, decision: decision.decision })), defects });
+    if (!parsedReport.ok || !parsedReport.value.findings.some((finding) => finding.grade === 'OVER_SCOPE')) {
+      return { kind: 'none' };
     }
-    const decisions = await readOverScopeDecisions(this.projectRoot);
-    const route = routePrdAuditOverScope(reportText, decisions.decisions, activePlanText);
+    const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
+    if (!feature) {
+      return { kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS, detail: renderPrdWideningRecovery('foreign-feature', []), findings: [], undecided: [], refused: [] };
+    }
+    const caseStore = new RemediationCaseStore(this.projectRoot, { version: 'v1', repository: feature.repository, feature: feature.feature });
+    const decisionStore = new AcceptedWideningDecisionStore(this.projectRoot, { version: 1, repository: feature.repository, feature: feature.feature });
+    const [cases, decisions] = await Promise.all([caseStore.read(), decisionStore.read()]);
+    if (!cases.ok || (decisions.kind !== 'absent' && decisions.kind !== 'valid')) {
+      return { kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS, detail: renderPrdWideningRecovery('persistence-failed', [...blockingFindings.keys()]), findings: [], undecided: [], refused: [] };
+    }
+    const route = routePrdAuditOverScopeV2(
+      reportText,
+      decisions.kind === 'valid' ? decisions.state.decisions : [],
+      cases.state.version === 'v2' ? cases.state.prdWideningCases : [],
+      activePlanText,
+    );
     // D8: recorded decisions project into the verdict artifact whichever way
     // the route went. A halted route carries the same findings — including the
     // refusal that caused the halt — and previously persisted none of them.
@@ -3854,24 +4305,32 @@ export class Conductor {
         // operator-facing over-scope route, never a generic side channel.
         // A record route must become a halt so completion cannot pass while
         // the decision is absent from the verdict artifact.
-        const defects = [...harvestDefects, { kind: 'unrenderable-decision', message: projected.message }];
+        const defects = [{ kind: 'unrenderable-decision', message: projected.message }];
         if (route.kind === 'record') {
           return {
             kind: 'halt',
             haltClass: OVER_SCOPE_HALT_CLASS,
-            detail: 'OVER_SCOPE recorded decision could not be rendered.',
+            detail: renderPrdWideningRecovery(
+              'projection-failed',
+              route.findings.map((finding) => `prd-audit:${finding.criterion}`),
+            ),
             findings: route.findings,
             undecided: [],
             refused: [],
             defects,
           };
         }
-        return { ...route, defects };
+        return {
+          ...route,
+          detail: renderPrdWideningRecovery(
+            'projection-failed',
+            route.findings.map((finding) => `prd-audit:${finding.criterion}`),
+          ),
+          defects,
+        };
       }
     }
-    return route.kind === 'halt' && harvestDefects.length > 0
-      ? { ...route, defects: harvestDefects }
-      : route;
+    return route;
   }
 
   /**
@@ -3886,7 +4345,7 @@ export class Conductor {
     const overScopeRoute =
       planGapRoute.kind === 'halt'
         ? undefined
-        : await this.routeCurrentPrdAuditOverScope(state.feature_desc);
+        : await this.routeCurrentPrdAuditOverScope(state.feature_desc, state);
 
     // D8 first: a decision that could not be projected blocks with its own
     // named reason, whatever the content route would otherwise have done.
@@ -3946,7 +4405,7 @@ export class Conductor {
     // /remediate, so an accepted-only report neither consumes a repair lap nor
     // creates a synthetic repair obligation from stale routing state.
     if (hintSource.evidence?.some((provenance) => provenance.gate === 'prd_audit')) {
-      const overScopeRoute = await this.routeCurrentPrdAuditOverScope(state.feature_desc);
+      const overScopeRoute = await this.routeCurrentPrdAuditOverScope(state.feature_desc, state);
       // Accepted-only scope closes the round. The scope router inspects only
       // OVER_SCOPE rows, so a recorded acceptance may coexist with FIXABLE or
       // PLAN_GAP findings, or with a sibling gate's findings on a validation-
@@ -3965,7 +4424,7 @@ export class Conductor {
           detail:
             `prd-audit scope acceptance remains blocking — ${overScopeRoute.detail}` +
             `\n\n${renderOverScopeDecisionBlock(
-              overScopeRoute.undecided,
+              [...overScopeRoute.undecided, ...overScopeRoute.refused],
               overScopeRoute.refused,
               overScopeRoute.defects ?? [],
             )}`,
@@ -7278,6 +7737,23 @@ export class Conductor {
             const branchDispatchStartedAt = new Map<string, number>();
             const branchHandshakeFailures = new Map<string, CompletionResult>();
             const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
+              // The validation join normally dispatches each member directly
+              // through group-core, bypassing the serial `prd_audit` branch
+              // below.  Capture must therefore happen before that fan-out,
+              // while no sibling reviewer has started: a malformed clear is a
+              // PRD gate failure, not permission to run a stale audit or an
+              // unrelated lifecycle step.  The same idempotent entry is used
+              // by serial dispatch, so a replay sees one decision inventory.
+              if (members.some((member) => member.name === 'prd_audit')) {
+                const recovery = await this.preparePrdWideningBeforeAudit();
+                if (recovery) {
+                  return members.map((member) =>
+                    member.name === 'prd_audit'
+                      ? makeNoVerdictOutcome(recovery)
+                      : makeSkippedOutcome(),
+                  );
+                }
+              }
               // D1: one identity per branch dispatch, minted here and passed
               // into the branch below so the provider-lifecycle `attempt.id`
               // is this exact value.
@@ -7300,6 +7776,9 @@ export class Conductor {
                     state,
                     {
                       stepRunner: this.stepRunner,
+                      ...(member.name === 'prd_audit' && this.prdWideningReviewContext
+                        ? { prdWideningReviewContext: this.prdWideningReviewContext }
+                        : {}),
                       ...(isVerdictRunIdentityStep(member.name as StepName)
                         ? { runId: branchRunIds.get(member.name) }
                         : {}),
@@ -7642,9 +8121,7 @@ export class Conductor {
             }
 
             if (prdAuditRoute?.kind === 'projection-halt') {
-              const reason =
-                `prd-audit halted: a recorded finding could not be projected into the verdict ` +
-                `artifact — ${prdAuditRoute.reason}`;
+              const reason = renderPrdAuditProjectionHalt(prdAuditRoute.reason);
               await this.writeHaltMarker(reason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
@@ -7666,10 +8143,14 @@ export class Conductor {
             }
 
             if (prdAuditRoute?.kind === 'over-scope-halt') {
-              const reason =
-                `prd-audit halted: user-visible scope requires operator acceptance — ` +
-                `${prdAuditRoute.route.detail}` +
-                `\n\n${renderOverScopeDecisionBlock(prdAuditRoute.route.undecided, prdAuditRoute.route.refused, prdAuditRoute.route.defects ?? [])}`;
+              const reason = renderPrdAuditScopeHalt(
+                prdAuditRoute.route.detail,
+                renderOverScopeDecisionBlock(
+                  [...prdAuditRoute.route.undecided, ...prdAuditRoute.route.refused],
+                  prdAuditRoute.route.refused,
+                  prdAuditRoute.route.defects ?? [],
+                ),
+              );
               await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
@@ -9073,6 +9554,26 @@ export class Conductor {
                                 ? this.currentRunId
                                 : undefined,
                             )
+                          : step.name === 'prd_audit'
+                            ? await (async () => {
+                                const recovery = await this.preparePrdWideningBeforeAudit();
+                                if (recovery) return { success: false, output: recovery };
+                                return this.stepRunner.run(step.name, state, {
+                                  ...(this.prdWideningReviewContext
+                                    ? { prdWideningReviewContext: this.prdWideningReviewContext }
+                                    : {}),
+                                  retryReason: retryHint,
+                                  attempt,
+                                  escalate: resolved.escalate,
+                                  modelOverride: esc.model,
+                                  effortOverride: esc.effort,
+                                  ...(dispatchIdentityArmed &&
+                                  this.currentRunId &&
+                                  isVerdictRunIdentityStep(step.name)
+                                    ? { runId: this.currentRunId }
+                                    : {}),
+                                });
+                              })()
                           : await this.stepRunner.run(step.name, state, {
                             retryReason: retryHint,
                             attempt,
@@ -9938,9 +10439,7 @@ export class Conductor {
             if (step.name === 'prd_audit' && !handshake) {
               const prdAuditRoute = await this.routeCurrentPrdAudit(state);
               if (prdAuditRoute.kind === 'projection-halt') {
-                const reason =
-                  `prd-audit halted: a recorded finding could not be projected into the verdict ` +
-                  `artifact — ${prdAuditRoute.reason}`;
+                const reason = renderPrdAuditProjectionHalt(prdAuditRoute.reason);
                 await this.writeHaltMarker(reason + '\n', 'needs-human');
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
@@ -9960,10 +10459,14 @@ export class Conductor {
                 return;
               }
               if (prdAuditRoute.kind === 'over-scope-halt') {
-                const reason =
-                  `prd-audit halted: user-visible scope requires operator acceptance — ` +
-                  `${prdAuditRoute.route.detail}` +
-                  `\n\n${renderOverScopeDecisionBlock(prdAuditRoute.route.undecided, prdAuditRoute.route.refused, prdAuditRoute.route.defects ?? [])}`;
+                const reason = renderPrdAuditScopeHalt(
+                  prdAuditRoute.route.detail,
+                  renderOverScopeDecisionBlock(
+                    [...prdAuditRoute.route.undecided, ...prdAuditRoute.route.refused],
+                    prdAuditRoute.route.refused,
+                    prdAuditRoute.route.defects ?? [],
+                  ),
+                );
                 await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);

@@ -6,6 +6,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
 
+vi.mock('../src/engine/build-review-effective.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../src/engine/build-review-effective.js')>(),
+  resolveBuildReviewFeatureIdentity: vi.fn(async () => ({
+    version: 'v1' as const,
+    repository: '/fixture/repository',
+    feature: 'prd-audit-kickback',
+  })),
+}));
+
 import {
   Conductor,
   remediationLapCapForGate,
@@ -17,6 +26,7 @@ import {
   type StepRunner,
 } from '../src/engine/conductor.js';
 import {
+  AcceptedWideningDecisionStore,
   classifyOverScopeCriterion,
   overScopeRelations,
   parseClearedOverScopeDecisions,
@@ -25,6 +35,7 @@ import {
   renderOverScopeDecisionBlock,
 } from '../src/engine/accepted-widenings.js';
 import { parsePrdAuditReport } from '../src/engine/artifacts.js';
+import { prdWideningSourceId } from '../src/engine/prd-widening-context.js';
 import { readGrowth, readKickbackLedger } from '../src/engine/kickback-ledger.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
 import { readState, writeState } from '../src/engine/state.js';
@@ -608,10 +619,10 @@ describe('prd_audit kickback', () => {
     });
   });
 
-  it('carries harvest defects and recorded decisions out of a halted over-scope route', async () => {
-    // ADR D7: a defect the operator's edit produced must reach the next halt
-    // body, not only the spine. ADR D8: recorded decisions project into the
-    // verdict artifact even when the route halts on a refusal.
+  it('preserves migrated sibling decisions while routing a current refusal', async () => {
+    // Legacy decisions are migrated at the pre-audit entry boundary. A clear
+    // that names a different historical finding remains durable but inert;
+    // routing only projects the current refusal into the verdict artifact.
     const root = await mkdtemp(join(tmpdir(), 'over-scope-halt-route-'));
     dirs.push(root);
     await mkdir(join(root, '.pipeline'), { recursive: true });
@@ -636,7 +647,7 @@ describe('prd_audit kickback', () => {
         decidedAt: '2026-08-24T00:00:00.000Z',
       }],
     }));
-    // An entry naming a criterion the halt never offered is a named defect.
+    // This is a valid pre-offer legacy clear, not a v2 offer reference.
     await writeFile(join(root, '.pipeline', 'HALT.cleared'), [
       '```json over-scope-decisions',
       '[{"criterion":"S9.9","summary":"x","decision":"accept","rationale":"x"}]',
@@ -654,6 +665,11 @@ describe('prd_audit kickback', () => {
       maxRetries: 1,
     });
 
+    const recovery = await (conductor as unknown as {
+      preparePrdWideningBeforeAudit: () => Promise<string | undefined>;
+    }).preparePrdWideningBeforeAudit();
+    expect(recovery).toBeUndefined();
+
     const route = await (conductor as unknown as {
       routeCurrentPrdAuditOverScope: () => Promise<{
         kind: string;
@@ -664,9 +680,7 @@ describe('prd_audit kickback', () => {
 
     expect(route.kind).toBe('halt');
     expect(route.refused).toEqual([expect.objectContaining({ criterion: 'S3.1' })]);
-    expect(route.defects).toEqual(
-      expect.arrayContaining([expect.objectContaining({ kind: 'unknown-criterion', criterion: 'S9.9' })]),
-    );
+    expect(route.defects).toBeUndefined();
 
     const report = await readFile(join(root, '.pipeline', 'prd-audit.md'), 'utf8');
     expect(report).toContain('## Recorded Findings');
@@ -904,6 +918,27 @@ describe('prd_audit kickback', () => {
           await writeFile(join(root, '.pipeline', 'prd-audit.md'), report);
           if (report.includes('S13.4')) {
             await writeFile(join(root, '.pipeline', 's13.4-probe-file'), 'keep this review finding\n');
+          }
+        } else if (step === 'remediate') {
+          const cases = await readFile(join(root, '.pipeline', 'remediation-cases.json'), 'utf8')
+            .then((raw) => JSON.parse(raw) as { prdWideningCases?: Array<{ id: string }> })
+            .catch(() => undefined);
+          const caseId = cases?.prdWideningCases?.[0]?.id;
+          if (caseId) {
+            return {
+              success: true,
+              finalStructuredResult: {
+                version: 'v1',
+                results: [{
+                  sourceId: prdWideningSourceId({
+                    criterion: 'NC.1', grade: 'OVER_SCOPE',
+                    evidence: 'A visible behavior exists outside the approved plan.', prdIds: [],
+                  }),
+                  kind: 'same-case', caseId,
+                  reason: 'The current report names the original accepted behavior.',
+                }],
+              },
+            };
           }
         } else if (step === 'architecture_review_as_built') {
           await writeFile(
@@ -2139,15 +2174,22 @@ describe('prd_audit kickback', () => {
         await rm(join(root, '.pipeline', 'HALT'));
         await rm(join(root, '.pipeline', 'HALT.class'));
       }, { root: first.root });
-      const decisions = await readOverScopeDecisions(second.root);
+      const decisions = await new AcceptedWideningDecisionStore(second.root, {
+        version: 1,
+        repository: '/fixture/repository',
+        feature: 'prd-audit-kickback',
+      }).read();
 
-      expect(decisions.decisions).toEqual([expect.objectContaining({
+      expect(decisions).toMatchObject({ kind: 'valid', state: { decisions: [expect.objectContaining({
         criterion: 'NC.1',
-        summary,
-        decision: 'accept',
+        authority: 'accept',
         rationale: 'Approved for this feature.',
         operator: 'operator@example.test',
-      })]);
+        originalSource: {
+          id: prdWideningSourceId({ criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: summary, prdIds: [] }),
+          snapshot: summary,
+        },
+      })] } });
       expect(second.gateBlocks).not.toContainEqual(expect.objectContaining({ step: 'prd_audit' }));
       expect(second.state.ok && second.state.value.prd_audit).toBe('done');
     } finally {

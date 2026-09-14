@@ -399,6 +399,15 @@ export type ConductorEvent =
       residualEffectId?: string;
     }
   | {
+      /** Durable PRD widening lifecycle occurrence; detail remains in case/decision state. */
+      type: 'prd_widening_reconciled';
+      sourceId: string;
+      caseId?: string;
+      decisionId?: string;
+      outcome: 'offer' | 'imported' | 'recovered' | 'same-case' | 'different' | 'uncertain' | 'reused' | 'rejected';
+      reason?: string;
+    }
+  | {
       /** One idempotent remediation effect was reserved before execution. */
       type: 'remediation_effect_reserved';
       domain: 'build_review';

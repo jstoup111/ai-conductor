@@ -1,4 +1,8 @@
-// Covers: task:2, task:4
+// Covers: task:2, task:4, task:14
+import { access, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 import type {
   InvokeOptions,
@@ -604,6 +608,222 @@ describe('executeProviderCandidates', () => {
     });
 
     expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ streamConsumer: observer }));
+  });
+
+  it('forwards an engine-owned native schema and preserves the provider terminal structured result', async () => {
+    const nativeSchema = {
+      type: 'object',
+      properties: { version: { const: 1 } },
+      required: ['version'],
+      additionalProperties: false,
+    };
+    const finalStructuredResult = { version: 1 };
+    const observer = { onProviderStream: vi.fn(), close: vi.fn() };
+    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+      options.onProviderStream?.({
+        childObservability: 'unsupported',
+        uncachedInputTokens: 3,
+        outputTokens: 2,
+      });
+      return {
+        success: true,
+        output: 'native-schema result',
+        exitCode: 0,
+        finalStructuredResult,
+        tokenUsage: { input: 3, output: 2 },
+      };
+    });
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', {
+          nativeSchemaCapability: { nativeOutputSchema: true },
+          invoke,
+        }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('stored-session')),
+      options: {
+        prompt: 'Return the constrained result.',
+        cwd: '/workspace/feature',
+        nativeSchema,
+        providerStreamObserverForCandidate: () => observer,
+      },
+    });
+
+    expect(invoke).toHaveBeenCalledOnce();
+    const invocation = invoke.mock.calls[0]?.[0];
+    expect(invocation).toEqual(expect.objectContaining({
+      nativeSchema,
+      streamConsumer: observer,
+      onProviderStream: observer.onProviderStream,
+    }));
+    expectFreshSessions([invocation!]);
+    expect(result).toMatchObject({
+      success: true,
+      output: 'native-schema result',
+      finalStructuredResult,
+      tokenUsage: { input: 3, output: 2 },
+    });
+    // The execution result is the StepRunner boundary: it must retain the
+    // adapter's terminal value itself, rather than reconstructing it from
+    // prose or dropping it while adding provider attribution.
+    expect(result.finalStructuredResult).toBe(finalStructuredResult);
+    expect(observer.onProviderStream).toHaveBeenCalledOnce();
+    expect(observer.close).toHaveBeenCalledOnce();
+  });
+
+  it('owns and removes worktree scratch for a non-self-host Codex schema invocation', async () => {
+    const worktreeRoot = await mkdtemp(join(tmpdir(), 'provider-schema-scratch-'));
+    let scratchHome: string | undefined;
+    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+      scratchHome = options.nativeSchemaScratchHome;
+      return { success: true, output: 'constrained result', exitCode: 0, finalStructuredResult: { version: 'v1' } };
+    });
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    try {
+      await expect(executeProviderCandidates({
+        step: 'remediate', configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { nativeSchemaCapability: { nativeOutputSchema: true }, invoke })]),
+        sessions: new ProviderSessionScope(vi.fn().mockReturnValue('stored-session')),
+        runId: 'feature-run', attempt: 2,
+        nativeSchemaScratch: { worktreeRoot, repository: 'acme/repo', featureSlug: 'feature' },
+        options: { prompt: 'Return the constrained result.', cwd: worktreeRoot, nativeSchema: { type: 'object' } },
+      })).resolves.toMatchObject({ success: true, finalStructuredResult: { version: 'v1' } });
+      expect(scratchHome).toBe(join(worktreeRoot, '.daemon', 'scratch', 'feature-run', '2-codex'));
+      await expect(access(scratchHome!)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(invoke.mock.calls[0]?.[0]).not.toHaveProperty('selfHost');
+    } finally {
+      await rm(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('retains an engine-owned native schema when candidate options attempt to clear it', async () => {
+    const nativeSchema = { type: 'object', properties: { result: { type: 'string' } } };
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'constrained result',
+      exitCode: 0,
+      finalStructuredResult: { result: 'accepted' },
+    }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', {
+          nativeSchemaCapability: { nativeOutputSchema: true },
+          invoke,
+        }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('stored-session')),
+      options: {
+        prompt: 'Return the constrained result.',
+        cwd: '/workspace/feature',
+        nativeSchema,
+      },
+      optionsForCandidate: () => ({
+        prompt: 'Candidate-local constrained prompt.',
+        cwd: '/workspace/feature',
+        nativeSchema: undefined,
+      }),
+    });
+
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
+      nativeSchema,
+      prompt: 'Candidate-local constrained prompt.',
+    }));
+  });
+
+  it('fails mechanically before dispatch when a native schema is requested from an unsupported provider', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'must not run unconstrained',
+      exitCode: 0,
+    }));
+    const fallback = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'must not run as a schema fallback',
+      exitCode: 0,
+    }));
+    const observerForCandidate = vi.fn();
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke }),
+        runtime('claude', { invoke: fallback }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('stored-session')),
+      options: {
+        prompt: 'Return the constrained result.',
+        cwd: '/workspace/feature',
+        nativeSchema: { type: 'object' },
+        providerStreamObserverForCandidate: observerForCandidate,
+      },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      nativeSchemaUnsupported: true,
+      providerInvocationSkipped: true,
+    });
+    expect(result.output).toContain('native output schema capability');
+    expect(invoke).not.toHaveBeenCalled();
+    expect(fallback).not.toHaveBeenCalled();
+    expect(observerForCandidate).not.toHaveBeenCalled();
+  });
+
+  it('keeps no-schema invocation behavior on the existing single dispatch path', async () => {
+    const observer = { onProviderStream: vi.fn(), close: vi.fn() };
+    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+      options.onProviderStream?.({
+        childObservability: 'unsupported',
+        uncachedInputTokens: 5,
+        outputTokens: 3,
+      });
+      return {
+        success: true,
+        output: 'ordinary result',
+        exitCode: 0,
+        tokenUsage: { input: 5, output: 3 },
+      };
+    });
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('stored-session')),
+      options: {
+        prompt: 'Run the ordinary step.',
+        cwd: '/workspace/feature',
+        providerStreamObserverForCandidate: () => observer,
+      },
+    });
+
+    expect(invoke).toHaveBeenCalledOnce();
+    const invocation = invoke.mock.calls[0]?.[0];
+    expect(invocation).not.toHaveProperty('nativeSchema');
+    expect(invocation).toEqual(expect.objectContaining({
+      streamConsumer: observer,
+      onProviderStream: observer.onProviderStream,
+    }));
+    expectFreshSessions([invocation!]);
+    expect(result).toMatchObject({
+      success: true,
+      output: 'ordinary result',
+      tokenUsage: { input: 5, output: 3 },
+    });
+    expect(result).not.toHaveProperty('finalStructuredResult');
+    expect(observer.onProviderStream).toHaveBeenCalledOnce();
+    expect(observer.close).toHaveBeenCalledOnce();
   });
 
   it('supplies no stream consumer to an interactive dispatch', async () => {

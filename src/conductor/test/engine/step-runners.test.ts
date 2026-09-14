@@ -1,4 +1,4 @@
-// Covers: task:1, task:3
+// Covers: task:1, task:3, task:17
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir, lstat, realpath } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
@@ -655,6 +655,107 @@ describe('DefaultStepRunner', () => {
       renderedSkillInvocation: true,
       diagnosticLogForwarded: true,
       scopedLogLines: ['claude: subprocess diagnostic'],
+    });
+  });
+
+  it.each(['claude', 'codex'] as const)(
+    'forwards one native reconciliation invocation and its terminal structured result to %s',
+    async (providerKey) => {
+      const nativeSchema = { type: 'object', required: ['version', 'results'] };
+      const terminalResult = {
+        version: 'v1',
+        results: [{ sourceId: 'current-1', kind: 'different', reason: 'The lease duration changed.' }],
+      };
+      const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+        success: true,
+        output: '```json\nnot the terminal contract result\n```',
+        exitCode: 0,
+        finalStructuredResult: terminalResult,
+      }));
+      const provider: LLMProvider = {
+        lifecycleCapability: { synchronousSpawnPermit: true },
+        nativeSchemaCapability: { nativeOutputSchema: true },
+        invoke,
+      };
+      const policy = providerKey === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
+      const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+        config: { llm_provider: providerKey, steps: { remediate: { llm_provider: providerKey } } },
+        configuredProviders: [providerKey],
+        providerRuntimes: new ProviderRuntimeSet([{
+          key: providerKey,
+          provider,
+          policy,
+          builtIn: true,
+          availability: new ModelAvailability(policy.modelFallbackLadder),
+        }]),
+        sessionStore: new ProviderSessionStore(),
+      });
+
+      const result = await runner.run('remediate', emptyState, {
+        remediationRequest: {
+          mode: 'prd-widening-reconciliation',
+          projection: '{"currentSources":[{"id":"current-1"}],"priorCases":[]}',
+          nativeSchema,
+        },
+      });
+
+      const options = (invoke.mock.calls as unknown as [InvokeOptions][])[0]?.[0];
+      expect({
+        prompt: options.prompt,
+        nativeSchema: options.nativeSchema,
+        terminalResult: result.finalStructuredResult,
+      }).toEqual({
+        prompt: `${providerKey === 'claude' ? '/' : '$'}remediate\n\nPRD WIDENING RECONCILIATION INPUT (engine-owned):\n{"currentSources":[{"id":"current-1"}],"priorCases":[]}`,
+        nativeSchema,
+        terminalResult,
+      });
+    },
+  );
+
+  it('fails closed only for reconciliation when the selected provider lacks native schema capability', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'gap plan', exitCode: 0 }));
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke,
+    };
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      config: { llm_provider: 'claude', steps: { remediate: { llm_provider: 'claude' } } },
+      configuredProviders: ['claude'],
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude',
+        provider,
+        policy: CLAUDE_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(),
+    });
+
+    const ordinary = await runner.run('remediate', emptyState);
+    const reconciliation = await runner.run('remediate', emptyState, {
+      remediationRequest: {
+        mode: 'prd-widening-reconciliation',
+        projection: '{"currentSources":[],"priorCases":[]}',
+        nativeSchema: { type: 'object' },
+      },
+    });
+
+    const ordinaryInvocation = (invoke.mock.calls as unknown as [InvokeOptions][])[0]?.[0];
+    expect({
+      ordinary,
+      reconciliation,
+      invokeCalls: invoke.mock.calls.length,
+      ordinaryInvocation,
+      ordinaryNativeSchema: ordinaryInvocation?.nativeSchema,
+    }).toEqual({
+      ordinary: expect.objectContaining({ success: true, output: 'gap plan' }),
+      reconciliation: expect.objectContaining({
+        success: false,
+        output: expect.stringContaining('cannot enforce the requested native output schema'),
+      }),
+      invokeCalls: 1,
+      ordinaryInvocation: expect.objectContaining({ prompt: '/remediate' }),
+      ordinaryNativeSchema: undefined,
     });
   });
 

@@ -533,6 +533,7 @@ type ClaudeSubprocessFactory = (
 export class ClaudeProvider implements LLMProvider {
   readonly supportsSessionResume = false;
   readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
+  readonly nativeSchemaCapability = { nativeOutputSchema: true } as const;
   private readonly oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
   constructor(
@@ -636,6 +637,17 @@ export class ClaudeProvider implements LLMProvider {
     // enforceFreshSessionOptions for the 2026-08-14 megatoken incident this
     // deterministically prevents.
     options = enforceFreshSessionOptions(options, 'claude');
+    // Claude's native JSON-schema mode is a non-interactive print-mode
+    // capability. A REPL cannot return its terminal result envelope, so never
+    // silently run an unconstrained interactive request.
+    if (options.nativeSchema !== undefined && options.interactive) {
+      return {
+        success: false,
+        output: 'Claude native output schema is unsupported for interactive Claude invocation. Recovery action: dispatch the schema request in non-interactive print mode.',
+        exitCode: 1,
+        nativeSchemaUnsupported: true,
+      };
+    }
     const hasMachineEnvelope = !options.interactive;
     const args = this.buildArgs(options);
 
@@ -674,6 +686,7 @@ export class ClaudeProvider implements LLMProvider {
       observed.interval,
       options.prompt,
       hasMachineEnvelope,
+      options.nativeSchema !== undefined,
     );
   }
 
@@ -688,6 +701,7 @@ export class ClaudeProvider implements LLMProvider {
     observedInterval: ObservedInterval,
     prompt?: string,
     strictMachineEnvelope = false,
+    requiresNativeSchema = false,
   ): InvokeResult {
     const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;
@@ -762,6 +776,19 @@ export class ClaudeProvider implements LLMProvider {
       deadline = parseResult.deadline;
     }
 
+    const structuredResult = requiresNativeSchema && exitCode === 0 && terminalResult
+      ? this.terminalStructuredResult(terminalResult)
+      : { kind: 'absent' as const };
+    if (requiresNativeSchema && exitCode === 0 && structuredResult.kind !== 'value') {
+      return {
+        success: false,
+        output: structuredResult.kind === 'malformed'
+          ? 'Claude provider parse failure: terminal result record has malformed structured result JSON.'
+          : 'Claude provider parse failure: terminal result record is missing its structured result.',
+        exitCode,
+        observedIntervals: [observedInterval],
+      };
+    }
     return {
       // Session-limit and out-of-credits notices ride exit 0 but are not real
       // successes — no work was done and no artifact written. Never report them
@@ -779,7 +806,34 @@ export class ClaudeProvider implements LLMProvider {
       waitSeconds,
       deadline,
       observedIntervals: [observedInterval],
+      ...(structuredResult.kind === 'value' ? { finalStructuredResult: structuredResult.value } : {}),
     };
+  }
+
+  /** Structured output is accepted only from Claude's terminal result record. */
+  private terminalStructuredResult(terminalResult: string):
+    | { kind: 'value'; value: unknown }
+    | { kind: 'absent' }
+    | { kind: 'malformed' } {
+    try {
+      const record = JSON.parse(terminalResult) as Record<string, unknown>;
+      // Claude has used both spellings across stream-json revisions.  Keep the
+      // compatibility at the adapter boundary, never by scanning tool events.
+      const structured = Object.hasOwn(record, 'structured_output')
+        ? record.structured_output
+        : Object.hasOwn(record, 'structuredOutput')
+          ? record.structuredOutput
+          : undefined;
+      if (structured === undefined) return { kind: 'absent' };
+      if (typeof structured !== 'string') return { kind: 'value', value: structured };
+      try {
+        return { kind: 'value', value: JSON.parse(structured) };
+      } catch {
+        return { kind: 'malformed' };
+      }
+    } catch {
+      return { kind: 'malformed' };
+    }
   }
 
   private buildArgs(options: InvokeOptions): string[] {
@@ -809,6 +863,9 @@ export class ClaudeProvider implements LLMProvider {
     // REPL keeps its plain-text interactive terminal contract.
     if (!options.interactive) {
       args.push('--print', '--output-format', 'stream-json', '--verbose');
+      if (options.nativeSchema !== undefined) {
+        args.push('--json-schema', JSON.stringify(options.nativeSchema));
+      }
     }
 
     return args;
