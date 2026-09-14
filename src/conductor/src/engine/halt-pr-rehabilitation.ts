@@ -666,8 +666,9 @@ export async function postHaltHistoryComment(
     if (isRefusal(result)) return 'refused';
     return result.kind === 'executed' ? 'posted' : 'gh-unavailable';
   }
-  await comment(gh, cwd, prUrl, parts.join('\n'), log);
-  return 'posted';
+  const result = await comment(gh, cwd, prUrl, parts.join('\n'), log);
+  if (isRefusal(result)) return 'refused';
+  return result.kind === 'executed' ? 'posted' : 'gh-unavailable';
 }
 
 export interface MakeRetainedPrPresentableDeps {
