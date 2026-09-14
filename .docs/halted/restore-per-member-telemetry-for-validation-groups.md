@@ -1,20 +1,23 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-14T01:31:23.854Z
+Status: halted
 Slug: restore-per-member-telemetry-for-validation-groups
 Class: needs-human
-Halting step: unknown
-Phase: unknown
+Halting step: build
+Phase: BUILD
 Branch: feat/daemon-restore-per-member-telemetry-for-validation-groups
-Head SHA: 6c915b82e5640705c5f6cae0eba4f56c0a00affa
-Halted at: 2026-09-11T22:21:14.905Z
+Head SHA: 5f2ef50368f2de8cb5427c6052afae6662920e44
+Halted at: 2026-09-14T06:31:13.191Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review clean-PASS durable settlement halted: clean PASS cannot settle open action case db5c1def-7a79-4f97-8f68-cbe2c028858f (reserved)
+Provider preparation exhausted.
+step: build
+phase: preparing
+attempt: 3bb3bae1-c4e6-4d07-a887-02122280e8eb:build:8
+elapsed_ms: 300000
+recovery_count: 1
 ```
