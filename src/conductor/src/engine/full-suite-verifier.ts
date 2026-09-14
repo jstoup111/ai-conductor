@@ -965,7 +965,13 @@ export class FullSuiteVerifier {
     } = this.options;
 
     try {
-      const resolved = inspection === undefined
+      // An inspection supplied by an execution-owning caller is also its record of
+      // pre-lock drift. Do not mutate or replace that object. A stale result, though,
+      // cannot decide whether to execute after waiting for another verifier: that
+      // verifier may have published a current PASS while this caller waited.
+      const resolved = inspection === undefined || (
+        inspection.status !== 'CURRENT' && inspection.status !== 'PRESERVED_WITHIN_BUDGET'
+      )
         ? await this.resolveInspection()
         : this.resolvedInspections.get(inspection) ?? await this.resolveInspection();
       if (!('context' in resolved)) {
