@@ -1958,6 +1958,12 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     // capability is never supplied.
     if (outcome.kind === 'changed') {
       expect(outcome.changedCodePaths.length).toBeGreaterThan(0);
+      expect(outcome.replay).toMatchObject({
+        preRebaseHead: expect.stringMatching(/^[0-9a-f]{40}$/),
+        mergeBase: expect.stringMatching(/^[0-9a-f]{40}$/),
+        target: expect.stringMatching(/^[0-9a-f]{40}$/),
+        completedHead: expect.stringMatching(/^[0-9a-f]{40}$/),
+      });
     }
   }, 20000);
 

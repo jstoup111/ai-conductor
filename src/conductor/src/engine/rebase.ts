@@ -22,6 +22,7 @@ import {
   PROTECTED_ARTIFACT_SEAL_PATH,
   verifyProtectedArtifactSeal,
 } from './protected-artifact-seal.js';
+import { captureReplayIdentity, type ReplayIdentity } from './rebase-replay.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -632,6 +633,7 @@ type RebaseOutcomeKind =
       kind: 'noop';
       /** Complete rebase delta when the base advanced without touching code/test paths. */
       allChangedPaths?: string[];
+      replay?: ReplayIdentity;
     }
   | {
       kind: 'mergeable_skip';
@@ -650,6 +652,8 @@ type RebaseOutcomeKind =
       featureSurface?: string[];
       /** Exact active feature review inputs, resolved through existing artifact conventions. */
       documentInputs?: string[];
+      /** Present only when the completed replay has a complete immutable identity. */
+      replay?: ReplayIdentity;
     }
   | {
       kind: 'conflict_halt';
@@ -938,6 +942,11 @@ export async function performRebase(
   // classification and evidence translation can use the original commit.
   const preTree = (await git(['rev-parse', 'HEAD'])).stdout.trim();
   const mergeBase = (await git(['merge-base', 'HEAD', base.ref])).stdout.trim();
+  const attachReplayIdentity = async (outcome: RebaseOutcome): Promise<RebaseOutcome> => {
+    if (outcome.kind !== 'changed' && outcome.kind !== 'noop') return outcome;
+    const replay = await captureReplayIdentity(git, preTree, mergeBase, base.ref);
+    return replay === undefined ? outcome : { ...outcome, replay };
+  };
   const translateCompletedRebase = async (): Promise<void> => {
     if (!opts?.translateAfterRebase) return;
     const ontoSha = (await git(['rev-parse', base.ref])).stdout.trim();
@@ -962,7 +971,7 @@ export async function performRebase(
     // any evidence citation pinned to the pre-rebase shas. Translate
     // unconditionally on any real rebase, not gated on that heuristic.
     await translateCompletedRebase();
-    return outcome;
+    return attachReplayIdentity(outcome);
   }
 
   // Non-zero → conflicts (or another error). Inspect unmerged paths.
@@ -983,7 +992,7 @@ export async function performRebase(
           if (retry.exitCode === 0) {
             const outcome = await classifyClean(git, preTree, mergeBase, projectRoot);
             await translateCompletedRebase();
-            return { ...outcome, quarantine };
+            return attachReplayIdentity({ ...outcome, quarantine });
           }
           const retryConflicts = await conflictedFiles(git);
           if (retryConflicts.length > 0) {
@@ -1405,6 +1414,13 @@ async function resolveRebaseConflictsInner(
     preAdvanceBaseResult.exitCode === 0 && preAdvanceBaseResult.stdout.trim()
       ? preAdvanceBaseResult.stdout.trim()
       : undefined;
+  const preRebaseHeadResult = await git(['rev-parse', 'ORIG_HEAD']);
+  const preRebaseHead = preRebaseHeadResult.exitCode === 0 ? preRebaseHeadResult.stdout.trim() : '';
+  const attachResolvedReplay = async (outcome: RebaseOutcome): Promise<RebaseOutcome> => {
+    if (outcome.kind !== 'changed' && outcome.kind !== 'noop') return outcome;
+    const replay = await captureReplayIdentity(git, preRebaseHead, preAdvanceBase ?? '', onto);
+    return replay === undefined ? outcome : { ...outcome, replay };
+  };
 
   // Feature commit subjects that must survive: all commits in <onto>..ORIG_HEAD.
   // ORIG_HEAD is the pre-rebase feature tip (set by git before it starts replaying).
@@ -1516,9 +1532,10 @@ async function resolveRebaseConflictsInner(
     }
     const documentInputs = await resolveReviewInputs(projectRoot, allChangedPaths ?? []);
     const documentsChanged = allChangedPaths?.some((path) => documentInputs.includes(path)) ?? false;
-    return changedCodePaths.length > 0 || documentsChanged
+    const resolvedOutcome = changedCodePaths.length > 0 || documentsChanged
       ? { documentInputs, ...(changedCodePaths.length === 0 ? { featureSurface: [] } : {}), kind: 'changed', changedCodePaths, ...(allChangedPaths === undefined ? {} : { allChangedPaths }) }
       : { kind: 'noop', ...(allChangedPaths === undefined ? {} : { allChangedPaths }) };
+    return attachResolvedReplay(resolvedOutcome);
   }
 
   // All cap attempts consumed without the rebase completing.
