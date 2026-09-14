@@ -23,6 +23,7 @@ import {
   isEligibleForCiFix,
   runCiFix,
   buildCiFixHint,
+  enrichCiFixHint,
   productionCiFixRunner,
   classifyFixError,
 } from './engine/ci-fix.js';
@@ -2411,6 +2412,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             enabled: config?.ci_watch?.enabled ?? true,
             isEligible: (entry, state) =>
               isEligibleForCiFix(entry, state, config, new Date(), log),
+            diagnostic: async (entry, state) => {
+              const error = state.readFailure && 'error' in state.readFailure ? state.readFailure.error : undefined;
+              const text = error instanceof Error ? `${error.message} ${(error as any).stderr ?? ''}`.toLowerCase() : '';
+              const reason = state.contextFailure ? 'malformed-context'
+                : state.readFailure?.kind === 'capability' ? 'capability'
+                : /auth|401|unauthor/.test(text) ? 'auth'
+                : /permission|forbidden|403/.test(text) ? 'permission'
+                : /timeout|timed out/.test(text) ? 'timeout' : 'api';
+              await events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
+                stage: 'context', reason, disposition: 'deferred' });
+            },
             dispatch: async (entry, state) => {
               if (!ciFixEnabled) {
                 return;
@@ -2444,13 +2456,19 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                   });
                   return { kind: 'not-started' };
                 }
-                const hint = hintResult.hint;
+                const enriched = await enrichCiFixHint(hintResult.hint, state, ghRunner, entry.repoCwd);
+                for (const reason of enriched.degradations) {
+                  void events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
+                    stage: 'log-enrichment', reason, disposition: 'degraded' });
+                }
+                const hint = enriched.hint;
 
                 // Route the ci-fix dispatch through resolveCiFailure (T4):
                 // adapt a real DefaultStepRunner into productionCiFixRunner's
                 // dispatcher seam instead of wiring the bare exec-based
                 // runner directly — mirrors the resolveRebaseConflict /
                 // DefaultStepRunner pattern used for rebase resolution above.
+                let repairProvider: string | undefined;
                 const ciFixDispatcher = {
                   resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: typeof entry }) => {
                     const sessionId = uuidv4();
@@ -2458,6 +2476,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     const selectedRuntime = providerExecution.runtimes.get(
                       providerExecution.configuredProviders[0],
                     );
+                    repairProvider = providerExecution.configuredProviders[0];
                     const stepRunner = new DefaultStepRunner(
                       selectedRuntime.provider,
                       sessionId,
@@ -2509,12 +2528,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     reason: outcome.stage === 'guard' ? 'guard-refused'
                       : outcome.stage === 'verification' ? 'verification-failed'
                       : outcome.stage === 'publication' ? 'publication-refused' : 'provider-failure',
-                    disposition: 'failed',
+                    disposition: 'failed', provider: repairProvider,
                   });
                 } else if (outcome.kind === 'published') {
                   void events.emit({
                     type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
-                    stage: 'publication', reason: 'unknown', disposition: 'published',
+                    stage: 'publication', reason: 'verified-publication', disposition: 'published', provider: repairProvider,
                   });
                 }
                 return outcome;
@@ -2522,7 +2541,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 log(
                   `[ci-fix] error resolving ${entry.prUrl} [${classifyFixError(err)}]: ${err?.message || err}`,
                 );
-                return;
+                void events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
+                  stage: 'branch', reason: classifyFixError(err), disposition: 'deferred' });
+                return { kind: 'not-started' };
               }
             },
           },
@@ -2919,7 +2940,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'ci_repair_diagnostic':
       log(
-        `${dot} ${chalk.red('✋')} ${chalk.red(`ci_repair[${event.slug}]: ${event.stage}/${event.reason} (${event.disposition})`)}`,
+        `${dot} ${chalk.red('✋')} ${chalk.red(`ci_repair[${event.slug}] PR ${event.prUrl}${event.provider ? ` provider=${event.provider}` : ''}: ${event.stage}/${event.reason} (${event.disposition})`)}`,
       );
       break;
     case 'rate_limit':

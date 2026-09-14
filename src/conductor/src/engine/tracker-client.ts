@@ -20,7 +20,7 @@ const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
  */
 export type GhRunner = (
   args: string[],
-  opts: { cwd: string },
+  opts: { cwd: string; timeout?: number; maxBuffer?: number },
 ) => Promise<{ stdout: string }>;
 
 /** A `gh` command requested a JSON field that this installed CLI does not support. */
@@ -63,12 +63,13 @@ export function assertRealExecAllowed(bin: string): void {
 
 /** Construct the real gh runner used in production. */
 export function makeProductionGh(): GhRunner {
-  return async (args: string[], opts: { cwd: string }) => {
+  return async (args: string[], opts: { cwd: string; timeout?: number; maxBuffer?: number }) => {
     assertRealExecAllowed('gh');
     try {
       const result = await execFileP('gh', args, {
         cwd: opts.cwd,
-        maxBuffer: GH_STDOUT_MAX_BUFFER,
+        maxBuffer: opts.maxBuffer ?? GH_STDOUT_MAX_BUFFER,
+        timeout: opts.timeout,
       });
       return { stdout: String(result.stdout) };
     } catch (cause) {
