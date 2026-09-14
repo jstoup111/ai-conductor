@@ -49,11 +49,17 @@ const passingEffectiveResolver = async () => ({
 describe('build-review candidate cache runner ordering', () => {
   it('resolves the prepared provider candidate before its model ladder judges', async () => {
     const root = await fixture();
-    const catalogModels: string[] = [];
+    const preparedHome = join(root, 'prepared-codex-home');
+    const catalogHomes: string[] = [];
     const invoke = vi.fn(async (options: { model?: string }) => options.model === 'gpt-5.6-sol'
       ? { success: false, exitCode: 1, output: 'model unavailable', modelUnavailable: true }
       : { success: true, exitCode: 0, output: JSON.stringify({ kind: 'custom-findings', version: 'v1', findings: [] }) });
     const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const providerRuntimes = new ProviderRuntimeSet([{
+      key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    const sessionStore = new ProviderSessionStore();
     const runner = new DefaultStepRunner(provider, 'candidate-cache', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: {
@@ -65,15 +71,23 @@ describe('build-review candidate cache runner ordering', () => {
           },
         } },
       } as HarnessConfig,
-      providerRuntimes: new ProviderRuntimeSet([{
-        key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true,
-        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
-      }]),
-      sessionStore: new ProviderSessionStore(),
+      providerRuntimes,
+      sessionStore,
+      providerExecution: {
+        configuredProviders: ['codex'],
+        runtimes: providerRuntimes,
+        sessions: sessionStore,
+        prepareCandidateSelfHost: async () => ({
+          executable: 'codex',
+          env: { CODEX_HOME: preparedHome },
+          args: [],
+          teardown: async () => {},
+        }),
+      },
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
       buildReviewEffectiveResolver: passingEffectiveResolver,
       buildReviewPolicyCatalog: async ({ preparedEnv }) => {
-        catalogModels.push(preparedEnv?.MODEL_MARKER ?? 'prepared');
+        catalogHomes.push(preparedEnv?.CODEX_HOME ?? 'unprepared');
         return [{
           semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project',
           canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const,
@@ -90,7 +104,7 @@ describe('build-review candidate cache runner ordering', () => {
     const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
 
     expect(result.success, result.output).toBe(true);
-    expect(catalogModels).toEqual(['prepared']);
+    expect(catalogHomes).toEqual([preparedHome]);
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke.mock.calls.map(([options]) => options.model)).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra']);
   });
