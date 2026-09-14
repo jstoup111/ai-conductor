@@ -21,8 +21,18 @@
  */
 
 import { parsePriorityLabels, parseSizeLabel } from '../../backlog-priority.js';
-import { ensureLabel, restAddLabelArgs, type GhRunner } from '../../pr-labels.js';
+import { ensureLabel, type GhRunner } from '../../pr-labels.js';
+import {
+  createGithubTrackerClient,
+  createGuardedGithubOperationRunner,
+  type GithubIntakeMutationExecutionContext,
+} from '../../tracker-client.js';
 import { parseSourceRef } from '../issue-ref.js';
+import {
+  createGithubIntakeAuthorization,
+  type InteractiveGithubOperationConfirmation,
+} from './github-issues.js';
+import type { OwnerResolution } from '../../owner-gate/identity.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,6 +57,12 @@ export interface IntakeBackfillDeps {
   /** Working directory for gh calls; defaults to '.'. */
   cwd?: string;
   log?: (msg: string) => void;
+  /** Fresh assignment/approval authority for each existing intake issue write. */
+  intakeAuthorization?: GithubIntakeMutationExecutionContext;
+  /** Injectable identity resolver for the default intake authorization seam. */
+  resolveActor?: () => Promise<OwnerResolution>;
+  /** Exact interactive approval for an otherwise unauthorized individual write. */
+  confirmation?: InteractiveGithubOperationConfirmation;
 }
 
 export interface AppliedLabel {
@@ -120,6 +136,19 @@ export async function backfillIntakeLabels(
   const { gh } = deps;
   const cwd = deps.cwd ?? '.';
   const log = deps.log ?? (() => {});
+  const intakeAuthorization = deps.intakeAuthorization ?? createGithubIntakeAuthorization({
+    gh,
+    cwd,
+    resolveActor: deps.resolveActor,
+    confirmation: deps.confirmation,
+  });
+  const tracker = createGithubTrackerClient(gh, { intake: intakeAuthorization });
+  // Label definitions are shared repository state. This runner deliberately
+  // has no shared approval, so ensureLabel can never create one as a fallback.
+  const guardedRunner = createGuardedGithubOperationRunner(gh, {
+    cwd,
+    intake: intakeAuthorization,
+  });
 
   const report: BackfillReport = {
     labelled: [],
@@ -155,8 +184,8 @@ export async function backfillIntakeLabels(
         const size = inferredSize ?? DEFAULT_SIZE;
         const source: 'inferred' | 'default' = inferredSize ? 'inferred' : 'default';
         const labelName = `size: ${size}`;
-        await ensureLabel(gh, cwd, labelName, LABEL_COLOR, log);
-        await gh(restAddLabelArgs(repo, number, labelName), { cwd });
+        await ensureLabel(guardedRunner, cwd, labelName, LABEL_COLOR, log, { repository: repo });
+        await tracker.addIntakeIssueLabel(repo, Number(number), labelName, cwd);
         applied.push({ label: labelName, source });
       }
 
@@ -165,8 +194,8 @@ export async function backfillIntakeLabels(
         const priority = inferredPriority ?? DEFAULT_PRIORITY;
         const source: 'inferred' | 'default' = inferredPriority ? 'inferred' : 'default';
         const labelName = `priority: ${priority}`;
-        await ensureLabel(gh, cwd, labelName, LABEL_COLOR, log);
-        await gh(restAddLabelArgs(repo, number, labelName), { cwd });
+        await ensureLabel(guardedRunner, cwd, labelName, LABEL_COLOR, log, { repository: repo });
+        await tracker.addIntakeIssueLabel(repo, Number(number), labelName, cwd);
         applied.push({ label: labelName, source });
       }
 

@@ -64,6 +64,10 @@ function makeFakeGh(opts: { failFor?: Set<string> } = {}) {
 
   const run = async (args: string[], _opts: { cwd: string }) => {
     calls.push({ args });
+    if (args[0] === 'issue' && args[1] === 'view' && args.includes('assignees')) {
+      return { stdout: JSON.stringify({ assignees: [{ login: 'alice' }] }) };
+    }
+    if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
     if (args[0] === 'label' && args[1] === 'create') return { stdout: '' };
     if (args.some((a) => a.includes('labels')) && args.some((a) => a.startsWith('labels[]='))) {
       const target = args.find((a) => /^repos\/[^/]+\/[^/]+\/issues\/\d+\/labels$/.test(a));
@@ -82,13 +86,21 @@ function makeFakeGh(opts: { failFor?: Set<string> } = {}) {
   return { run, calls, appliedByRef };
 }
 
+function authorizedBackfillDeps(gh: ReturnType<typeof makeFakeGh>['run']) {
+  return {
+    gh,
+    cwd: '.',
+    resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
+  };
+}
+
 describe('Story 3 — one-shot backfill completes the backlog, no HALT', () => {
   describe('Happy path', () => {
     it('labels every incomplete issue (infer where confident, else default) and skips the already-complete one', async () => {
       const backfillIntakeLabels = requireBackfillFn(await loadBackfillModule());
       const gh = makeFakeGh();
 
-      const report = await backfillIntakeLabels(FIXTURE_BACKLOG, { gh: gh.run, cwd: '.' });
+      const report = await backfillIntakeLabels(FIXTURE_BACKLOG, authorizedBackfillDeps(gh.run));
 
       // #4 was already complete — never touched.
       expect(gh.appliedByRef.has('acme/app#4')).toBe(false);
@@ -103,7 +115,7 @@ describe('Story 3 — one-shot backfill completes the backlog, no HALT', () => {
       const backfillIntakeLabels = requireBackfillFn(await loadBackfillModule());
       const gh = makeFakeGh();
 
-      const report = await backfillIntakeLabels(FIXTURE_BACKLOG, { gh: gh.run, cwd: '.' });
+      const report = await backfillIntakeLabels(FIXTURE_BACKLOG, authorizedBackfillDeps(gh.run));
 
       for (const entry of report.labelled) {
         expect(entry.ref).toBeDefined();
@@ -118,7 +130,7 @@ describe('Story 3 — one-shot backfill completes the backlog, no HALT', () => {
       const backfillIntakeLabels = requireBackfillFn(await loadBackfillModule());
       const gh = makeFakeGh();
 
-      await backfillIntakeLabels(FIXTURE_BACKLOG, { gh: gh.run, cwd: '.' });
+      await backfillIntakeLabels(FIXTURE_BACKLOG, authorizedBackfillDeps(gh.run));
       const afterFirstRun = new Map(gh.appliedByRef);
 
       // Simulate the backlog now reflecting the applied labels for the re-run.
@@ -126,7 +138,7 @@ describe('Story 3 — one-shot backfill completes the backlog, no HALT', () => {
         ...issue,
         labels: [...issue.labels, ...(afterFirstRun.get(issue.ref) ?? [])],
       }));
-      const secondReport = await backfillIntakeLabels(updatedBacklog, { gh: gh.run, cwd: '.' });
+      const secondReport = await backfillIntakeLabels(updatedBacklog, authorizedBackfillDeps(gh.run));
 
       expect(secondReport.labelled.length).toBe(0);
     });
@@ -137,7 +149,7 @@ describe('Story 3 — one-shot backfill completes the backlog, no HALT', () => {
       const backfillIntakeLabels = requireBackfillFn(await loadBackfillModule());
       const gh = makeFakeGh({ failFor: new Set(['acme/app#5']) });
 
-      const report = await backfillIntakeLabels(FIXTURE_BACKLOG, { gh: gh.run, cwd: '.' });
+      const report = await backfillIntakeLabels(FIXTURE_BACKLOG, authorizedBackfillDeps(gh.run));
 
       const failedEntry = report.failed.find((f: any) => f.ref === 'acme/app#5');
       expect(failedEntry, 'the failing issue must be reported as skipped, not thrown').toBeDefined();
@@ -152,7 +164,7 @@ describe('Story 3 — one-shot backfill completes the backlog, no HALT', () => {
       const gh = makeFakeGh();
       const noSignalIssue = [{ ref: 'acme/app#6', body: 'totally ambiguous text', labels: [] }];
 
-      const report = await backfillIntakeLabels(noSignalIssue, { gh: gh.run, cwd: '.' });
+      const report = await backfillIntakeLabels(noSignalIssue, authorizedBackfillDeps(gh.run));
 
       const entry = report.labelled.find((e: any) => e.ref === 'acme/app#6');
       expect(entry).toBeDefined();
