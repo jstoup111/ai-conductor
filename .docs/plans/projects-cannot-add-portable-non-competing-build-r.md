@@ -1058,3 +1058,17 @@ All 43 citable decisions extracted by the repository parser from the seven chang
 - The 40-task size is at the normal supported ceiling. At five minutes per focused task the nominal task work is about 3 hours 20 minutes, excluding queued gates, review, and environment setup; this is a sizing aid rather than a delivery-time guarantee. Consider splitting if that implementation batch is too large; the current artifact preserves the already approved full feature scope.
 - Load-bearing design choices are operator-approved. Module entry points and existing lifecycle/store/parser seams were verified against the local baseline. The two host metadata formats were inspected during DECIDE; adapter failure tests cover unsupported formats. Live provider behavior and the private Kotlin package remain outside the claimed verification.
 - Protected-target, overlap, diagram rendering, and repository integrity results are recorded with this plan's review; none is represented as implemented runtime proof.
+
+### Task rem-as-built-rem-ab9-1: docs/reference/configuration.md build_review section (~:1081-1169) — add a build_review.custom_rubrics reference: skill/question/source/resources fields, default-disabled, 32-declaration cap, id grammar, adjudication requirement, source selection and ambiguity, supporting resources, Linux bubblewrap containment readiness, unsupported-policy errors, cache identity, and decision stops; keep the existing testQuality rows and reword :1094 so it no longer implies testQuality is the only reviewable rubric
+**Gate:** as-built
+**Rationale:** ADR D12 requires consumer guidance (selection, ambiguity, resources, containment readiness, unsupported-policy errors, cache identity, decision stops) and none exists: docs/reference/configuration.md:1094 still says build_review.rubrics is 'testQuality only' with no custom_rubrics entry, and docs/explanation/gates.md:130 and :427 say the container ships only testQuality. This is documentation drift that preserves the approved architecture, and no plan task Files list names these docs (FR-17 was reclassified as delivery documentation), so it is appended build work; existing testQuality docs content is kept, not removed.
+**Governing clause:** adr-2026-09-10-portable-build-review-policy D12
+**Done when:**
+- adr-2026-09-10-portable-build-review-policy D12 is satisfied by this task.
+
+### Task rem-as-built-rem-ab9-2: docs/explanation/gates.md:130 and :427 — replace 'currently only testQuality' / 'ships only testQuality' with the built-in testQuality plus opt-in installed custom rubrics, linking the configuration reference section added by rem-ab9-1
+**Gate:** as-built
+**Rationale:** ADR D12 requires consumer guidance (selection, ambiguity, resources, containment readiness, unsupported-policy errors, cache identity, decision stops) and none exists: docs/reference/configuration.md:1094 still says build_review.rubrics is 'testQuality only' with no custom_rubrics entry, and docs/explanation/gates.md:130 and :427 say the container ships only testQuality. This is documentation drift that preserves the approved architecture, and no plan task Files list names these docs (FR-17 was reclassified as delivery documentation), so it is appended build work; existing testQuality docs content is kept, not removed.
+**Governing clause:** adr-2026-09-10-portable-build-review-policy D12
+**Done when:**
+- adr-2026-09-10-portable-build-review-policy D12 is satisfied by this task.
