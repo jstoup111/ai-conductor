@@ -5963,8 +5963,15 @@ export class Conductor {
      * stamp carry one value on the self-host path too (D1).
      */
     verdictRunId?: string,
+    /**
+     * Retry-as-escalation per-attempt overrides (adr-2026-07-05 decision 6):
+     * the self-host path must hand the runner the same `(attempt, model,
+     * effort)` the ordinary path does, so the `step_retry` annotation names
+     * what the next dispatch actually receives.
+     */
+    escalation: Pick<StepRunOptions, 'attempt' | 'escalate' | 'modelOverride' | 'effortOverride'> = {},
   ): Promise<StepRunResult> {
-    const identityOption = verdictRunId ? { runId: verdictRunId } : {};
+    const identityOption = { ...escalation, ...(verdictRunId ? { runId: verdictRunId } : {}) };
     const selfHostConfig = resolveSelfHostConfig(this.config);
     const stepSelection =
       this.config.steps?.[name]?.llm_provider ?? this.config.llm_provider;
@@ -9621,6 +9628,12 @@ export class Conductor {
                               isVerdictRunIdentityStep(step.name)
                                 ? this.currentRunId
                                 : undefined,
+                              {
+                                attempt,
+                                escalate: resolved.escalate,
+                                modelOverride: esc.model,
+                                effortOverride: esc.effort,
+                              },
                             )
                           : step.name === 'prd_audit'
                             ? await (async () => {
