@@ -27,7 +27,7 @@ function fakeOperations(
   return {
     calls,
     runner: {
-      run: vi.fn(async (request) => {
+      run: vi.fn(async (request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> => {
         calls.push(request);
         return handler(request);
       }),
@@ -79,7 +79,7 @@ describe('pr-labels — guarded PR primitives and label definitions', () => {
   });
 
   it('does not turn applying a label into a forced label-definition update, and refuses definition creation without scoped authorization', async () => {
-    const terminal = fakeOperations((request) => request.operation === 'label-definition.create'
+    const terminal = fakeOperations((request): GithubOperationRunnerResponse | GithubOperationRunnerRefusal => request.operation === 'label-definition.create'
       ? { kind: 'refused', reason: 'explicit-authorization-required' }
       : {});
 
