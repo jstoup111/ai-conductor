@@ -16,7 +16,6 @@ describe('self-host candidate preparation', () => {
       ]), options: { prompt: 'build', cwd: '/workspace' },
       prepareCandidateSelfHost: async (candidate) => { if (candidate.providerKey === 'codex') throw new ProviderSetupUnavailableError({ provider: 'codex', reason: 'isolated home unavailable', recoveryAction: 'install home' }); return undefined; },
     });
-    expect(result).toMatchObject({ success: true, actualProvider: 'claude', attempts: expect.arrayContaining([{ provider: 'codex', invoked: false, skipReason: 'setup-unavailable' }]) });
     expect(result.success).toBe(true);
     expect(result.actualProvider).toBe('claude');
     expect(result.attempts[0]).toMatchObject({ provider: 'codex', invoked: false, skipReason: 'setup-unavailable' });

@@ -24,7 +24,6 @@ describe('non-self-host provider setup routing', () => {
       step: 'build', configuredProviders: [first, second], runtimes: runtimes(first, calls),
       sessions: new ProviderSessionScope(vi.fn()), options: { prompt: 'build', cwd: '/workspace', spawnPermit: () => ({ permitted: true }) },
     });
-    expect(result).toMatchObject({ success: true, actualProvider: second, attempts: expect.arrayContaining([{ provider: first, invoked: false, skipReason: 'setup-unavailable' }]) });
     expect(result.success).toBe(true);
     expect(result.actualProvider).toBe(second);
     expect(result.attempts[0]).toMatchObject({ provider: first, invoked: false, skipReason: 'setup-unavailable' });

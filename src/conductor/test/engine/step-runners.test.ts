@@ -1776,6 +1776,9 @@ describe('DefaultStepRunner', () => {
         reason: 'codex executable missing',
         fallbackReason: 'codex executable missing',
         invoked: false,
+        skipReason: 'cached-unavailable',
+        setupCapability: 'cached-provider-availability',
+        setupRecoveryAction: 'Restore the provider availability, then re-queue this feature.',
       },
       // The store is never consulted: no session is recorded for the scope.
       cachedSession: undefined,
