@@ -246,7 +246,7 @@ async function runBuiltinGroup(input: {
       emitExecutionEvent(event: ConductorEvent): Promise<void>;
     };
     const emitExecutionEvent = prototype.emitExecutionEvent;
-    vi.spyOn(prototype, 'emitExecutionEvent').mockImplementation(function (event) {
+    vi.spyOn(prototype, 'emitExecutionEvent').mockImplementation(function (this: Conductor, event) {
       if (event.type === 'step_started' && event.step === input.omitAdmissionFor) return Promise.resolve();
       return emitExecutionEvent.call(this, event);
     });
@@ -352,7 +352,7 @@ async function runConfiguredGroup(input: {
       emitExecutionEvent(event: ConductorEvent): Promise<void>;
     };
     const emitExecutionEvent = prototype.emitExecutionEvent;
-    vi.spyOn(prototype, 'emitExecutionEvent').mockImplementation(function (event) {
+    vi.spyOn(prototype, 'emitExecutionEvent').mockImplementation(function (this: Conductor, event) {
       if (
         event.type === 'step_started'
         && event.executionContext?.subject.kind === 'configured-member'
