@@ -2266,6 +2266,7 @@ export class DefaultStepRunner implements StepRunner {
       inputs,
       lapId,
       engineIdentity,
+      useCandidateCache: true,
       preflight: async () => this.runTautologyPreflight(inputs),
       readCache: async (branch, _projection, _policyFingerprint, semanticIdentity) => readBuildReviewCacheEntry(this.projectDir, branch.rubric, {
         readFile: async (path) => readFile(path, 'utf-8'),
@@ -2832,7 +2833,20 @@ export class DefaultStepRunner implements StepRunner {
       emit: (event) => this.events?.emit(event),
       minConfidence: Object.fromEntries(Object.entries(input.config.rubrics).map(([id, policy]) => [id, policy.min_confidence])),
     });
-    if (!effective.ok) return { success: false, output: `build_review disposition resolution failed: ${effective.reason}` };
+    if (!effective.ok) {
+      // A failed custom policy has already crossed its authoritative boundary:
+      // preserve its typed, candidate-local diagnostic even when the later
+      // feature-scoped disposition reader is unavailable.  Otherwise an
+      // ambiguous/missing catalog is incorrectly reported as an unrelated
+      // disposition-identity fault, violating the terminal loading contract.
+      const policyFailure = Object.values(input.customResults).find((member) =>
+        member.result.kind === 'infrastructure-failure',
+      );
+      if (policyFailure?.result.kind === 'infrastructure-failure') {
+        return { success: false, output: `${JSON.stringify(aggregate)}\n\n${policyFailure.result.detail}` };
+      }
+      return { success: false, output: `build_review disposition resolution failed: ${effective.reason}` };
+    }
     if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
     const hasFinding = Object.values(input.customResults).some((member) =>
       member.result.kind === 'judged' && member.result.findings.length > 0,
@@ -2953,6 +2967,12 @@ export class DefaultStepRunner implements StepRunner {
               prompt: `${renderAuxiliarySkillInvocation(branch.skillName, providerKey)}\n\n${prompt}`,
             }),
             preparedCandidateOperation: async (context) => {
+              // Direct rubric-dispatch callers retain the historic lifecycle:
+              // they have no frozen inputs or run-level engine identity from
+              // which a candidate-bound cache key could be derived.
+              if (!inputs || !engineIdentity) {
+                return { kind: 'judged' as const, result: await context.invoke({}) };
+              }
               const containmentProvider = context.candidate.providerKey === 'claude' || context.candidate.providerKey === 'codex'
                 ? context.candidate.providerKey : undefined;
               let reviewAccess: InvokeOptions['reviewAccess'];

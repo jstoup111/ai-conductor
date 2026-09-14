@@ -115,6 +115,11 @@ describe('custom build-review policy runner', () => {
     const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
     expect(result.success).toBe(false);
     expect(result.output).toContain('ambiguous');
+    expect(result.output).not.toContain('disposition resolution failed');
+    const aggregate = JSON.parse(await readFile(join(root, '.pipeline', 'build-review.json'), 'utf8'));
+    expect(aggregate.customResults.portable.result).toMatchObject({
+      kind: 'infrastructure-failure', reason: 'policy-load-failed',
+    });
     expect(invoke).not.toHaveBeenCalled();
   });
 
