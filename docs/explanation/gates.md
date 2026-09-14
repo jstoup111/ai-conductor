@@ -682,9 +682,10 @@ Three things in this repo are easy to conflate and are not the same:
 
 - **Gates** block a feature's progression. This page.
 - **The integrity suite** validates the harness repo's own structure before a commit —
-  [validation](../contributing/validation.md).
-- **The release gate** is one self-host gate that happens to run the integrity suite as its first sub-check
-  — [releases](../contributing/releases.md).
+  [validation](../contributing/validation.md). The BUILD `test_suite` gate runs it with the
+  conductor test suite before SHIP.
+- **The release gate** is a self-host SHIP gate for release metadata and migration validation —
+  [releases](../contributing/releases.md).
 
 Per-step enforcement values and skip rules: [steps](../reference/steps.md). Gate-related config keys:
 [configuration](../reference/configuration.md).

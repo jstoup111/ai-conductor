@@ -400,7 +400,7 @@ execute smoke tests.
 
 40 `.sh` files live under `test/`. Only six ever execute:
 
-- `test/test_harness_integrity.sh`, run by CI and by the self-host release gate. See
+- `test/test_harness_integrity.sh`, run by CI and by the BUILD `test_suite` gate. See
   [validation](validation.md).
 - `test/test_ci_detect_docs_only.sh` and `test/test_provider_skill_contracts.sh`, executed by the
   integrity suite as checks 13 and 14.
@@ -450,7 +450,6 @@ test_suite:
       working_directory: src/conductor
     - command: test/test_harness_integrity.sh
       working_directory: .
-  working_directory: src/conductor
   timeout_seconds: 1800
 ```
 
