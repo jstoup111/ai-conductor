@@ -910,7 +910,7 @@ export async function resolveConflictingPr(
     isFeatureInFlight?: IsFeatureInFlight;
     worktreeLifecycle?: WorktreeLifecycleQueue;
   },
-): Promise<{ kind: 'refreshed' | 'escalated' }> {
+): Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' }> {
   const { prUrl, slug, repoCwd } = entry;
   const { log } = deps;
 
@@ -977,6 +977,10 @@ export async function resolveConflictingPr(
           });
           logOutcome(log, prUrl, 'tier2-resolve', 'escalated');
           return { kind: 'escalated' };
+        }
+        if (tier2Outcome.kind === 'setup_stop') {
+          logOutcome(log, prUrl, 'tier2-setup', 'setup-stop');
+          return { kind: 'setup-stop' };
         }
       }
 

@@ -1,6 +1,7 @@
 // Covers: task:1, task:3, task:5
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, access, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execa } from 'execa';
@@ -901,6 +902,25 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
       'prd_audit',
       'architecture_review_as_built',
     ]);
+  });
+
+  it('setup_stop → rebase is refused and remains unsatisfied', async () => {
+    const outcome: RebaseOutcome = {
+      kind: 'setup_stop',
+      conflicts: ['src/x.ts'],
+      reason: 'every configured provider is unavailable during setup',
+    };
+    const r = await applyRebaseVerdicts(dir, outcome, true);
+    await recordRebaseStepCompletion(join(dir, '.pipeline', 'conduct-state.json'), outcome);
+    expect(r.satisfied).toBe(false);
+    const verdict = await readVerdict(dir, 'rebase');
+    expect(verdict?.satisfied).toBe(false);
+    expect(verdict?.reason).toContain('provider setup unavailable');
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    const state = existsSync(statePath)
+      ? (JSON.parse(await readFile(statePath, 'utf8')) as { rebase?: string })
+      : {};
+    expect(state.rebase).toBe('refused');
   });
 
   it('conflict_halt → rebase NOT satisfied', async () => {

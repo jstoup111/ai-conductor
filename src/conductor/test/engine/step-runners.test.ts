@@ -897,6 +897,30 @@ describe('DefaultStepRunner', () => {
     expect(safety).toHaveBeenCalledOnce();
   });
 
+  it('retains terminal setup exhaustion when the real build runner maps an executor result', async () => {
+    const executor = vi.fn(async () => ({
+      success: false,
+      output: 'all setup unavailable',
+      preferredProvider: 'codex',
+      attempts: [],
+      providerSetupExhaustion: {
+        candidates: [{ provider: 'codex', reason: 'missing isolation', recoveryAction: 'update Codex' }],
+      },
+    }));
+    const context: any = {
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([interactiveRuntime('codex', vi.fn())]),
+      sessions: new ProviderSessionStore(),
+      executor,
+    };
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', { providerExecution: context });
+
+    await expect(runner.run('build', emptyState)).resolves.toMatchObject({
+      success: false,
+      providerSetupExhaustion: { candidates: [{ provider: 'codex', reason: 'missing isolation' }] },
+    });
+  });
+
   it('forwards the live self-host preparation hook through build_review one-shot dispatch', async () => {
     const executor = vi.fn(async (input: any) => {
       const candidate = { step: 'build_review', providerKey: 'claude', model: 'sonnet', effort: 'medium' };
@@ -1752,6 +1776,9 @@ describe('DefaultStepRunner', () => {
         reason: 'codex executable missing',
         fallbackReason: 'codex executable missing',
         invoked: false,
+        skipReason: 'cached-unavailable',
+        setupCapability: 'cached-provider-availability',
+        setupRecoveryAction: 'Restore the provider availability, then re-queue this feature.',
       },
       // The store is never consulted: no session is recorded for the scope.
       cachedSession: undefined,

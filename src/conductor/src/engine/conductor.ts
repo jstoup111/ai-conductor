@@ -77,6 +77,9 @@ import type {
   ProviderCandidate,
 } from './provider-execution.js';
 import { formatProviderCapabilityGapMessages } from './provider-execution.js';
+import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
+import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
+import { redactSafetyText } from './safety-diagnostics.js';
 import { createEngineStateStore } from './engine-state-store.js';
 import { createRepairObligationStore } from './repair-obligations.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
@@ -1241,6 +1244,8 @@ export interface StepRunResult {
   commandUnresolvedName?: string;
   /** A provider's automatic permission review denied the requested action. */
   permissionDenied?: boolean;
+  /** Every configured candidate was explicitly unavailable before invocation. */
+  providerSetupExhaustion?: ProviderSetupExhaustion;
   /**
    * Set by the runner's dispatch preflight when the step's working directory
    * (the feature worktree) no longer exists. Terminal for this run: no provider
@@ -1306,6 +1311,7 @@ export interface StepRunResult {
 export interface SpotAuditDispatchResult {
   success: boolean;
   output?: string;
+  providerSetupExhaustion?: ProviderSetupExhaustion;
   observedIntervals?: readonly ObservedInterval[];
   authFailure?: boolean;
   authentication?: AuthenticationReadiness;
@@ -1331,6 +1337,9 @@ export function toSpotAuditVerifierResult(
     output: result.output ?? '',
     ...(result.observedIntervals
       ? { observedIntervals: result.observedIntervals }
+      : {}),
+    ...(result.providerSetupExhaustion
+      ? { providerSetupExhaustion: result.providerSetupExhaustion }
       : {}),
     ...(result.authFailure !== undefined ? { authFailure: result.authFailure } : {}),
     ...(result.authentication ? { authentication: result.authentication } : {}),
@@ -5592,6 +5601,22 @@ export class Conductor {
         return result;
       };
       this.providerExecution.prepareCandidateSelfHost = async (candidate, runtime, identity) => {
+        // This is a candidate-local setup capability. Check it before opening
+        // a live-boundary window or allocating scratch state so fallback has
+        // no resource ownership to unwind.
+        if (candidate.providerKey === 'codex') {
+          const missing = !runtime.provider.prepareSelfHostAuth
+            || !runtime.provider.resolveSelfHostExecutable
+            || !this.guardrails.provisionProviderHome;
+          if (missing) {
+            throw new ProviderSetupUnavailableError({
+              provider: 'codex',
+              capability: 'self-host-isolation',
+              reason: 'Codex self-host isolation is unavailable for the resolved provider candidate.',
+              recoveryAction: 'Update Codex and the self-host guardrails to provide isolated-home setup.',
+            });
+          }
+        }
         const installed = await this.guardrails.resolveInstalledHarnessRoot();
         const liveCheckout = installed.status === 'ok' ? installed.root : this.projectRoot;
         const codex = candidate.providerKey === 'codex';
@@ -5663,45 +5688,56 @@ export class Conductor {
             boundaryWindow?.close();
           }
         };
-        const featureSlug = this.featureSlug ?? state.feature_desc;
-        if (!featureSlug || !identity?.runId || identity.attempt === undefined) {
-          throw new Error('Candidate self-host provisioning requires repository, featureSlug, runId, and attempt.');
-        }
-        if (codex) {
-          const prepareAuth = runtime.provider.prepareSelfHostAuth;
-          const resolveExecutable = runtime.provider.resolveSelfHostExecutable;
-          const provisionHome = this.guardrails.provisionProviderHome;
-          if (!prepareAuth || !resolveExecutable || !provisionHome) {
-            throw new Error('Codex self-host isolation is unavailable for the resolved provider candidate.');
+        // Until a context is returned its setup owns this window.  If any
+        // allocation or verification precondition fails, there is no executor
+        // teardown to close it on the candidate's behalf.
+        let ownershipTransferred = false;
+        try {
+          const featureSlug = this.featureSlug ?? state.feature_desc;
+          if (!featureSlug || !identity?.runId || identity.attempt === undefined) {
+            throw new Error('Candidate self-host provisioning requires repository, featureSlug, runId, and attempt.');
           }
-          const executable = await resolveExecutable.call(runtime.provider);
-          const home = await provisionHome({
-            provider: { id: 'codex', prepareSelfHostAuth: (context) => prepareAuth.call(runtime.provider, { provider: 'codex', homeDir: context.homeDir }) },
-            worktreeRoot: this.projectRoot,
-            repository: this.projectRoot,
-            featureSlug,
-            runId: identity.runId,
-            attempt: identity.attempt,
-          });
-          return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), teardown: async () => { try { await verify(); } finally { await home.teardown(); } } });
+          if (codex) {
+            const prepareAuth = runtime.provider.prepareSelfHostAuth;
+            const resolveExecutable = runtime.provider.resolveSelfHostExecutable;
+            const provisionHome = this.guardrails.provisionProviderHome;
+            // The capability check above establishes these values before any
+            // resource acquisition; retain the guard for type narrowing only.
+            if (!prepareAuth || !resolveExecutable || !provisionHome) throw new Error('Self-host capability changed during preparation.');
+            const executable = await resolveExecutable.call(runtime.provider);
+            const home = await provisionHome({
+              provider: { id: 'codex', prepareSelfHostAuth: (context) => prepareAuth.call(runtime.provider, { provider: 'codex', homeDir: context.homeDir }) },
+              worktreeRoot: this.projectRoot,
+              repository: this.projectRoot,
+              featureSlug,
+              runId: identity.runId,
+              attempt: identity.attempt,
+            });
+            ownershipTransferred = true;
+            return prepareInvocation({ executable, env: home.childEnv(), args: home.childArgs(), teardown: async () => { try { await verify(); } finally { await home.teardown(); } } });
+          }
+          if (candidate.providerKey === 'claude') {
+            const sandbox = await this.guardrails.provisionSandbox({
+              worktreeRoot: this.projectRoot,
+              harnessRoot: liveCheckout,
+              repository: this.projectRoot,
+              featureSlug,
+              runId: identity.runId,
+              attempt: identity.attempt,
+            });
+            ownershipTransferred = true;
+            return prepareInvocation({
+              executable: 'claude',
+              env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
+              args: [],
+              teardown: async () => { try { await verify(); } finally { await sandbox.teardown(); } },
+            });
+          }
+          ownershipTransferred = true;
+          return priorPreparation?.(candidate, runtime, identity);
+        } finally {
+          if (!ownershipTransferred) boundaryWindow?.close();
         }
-        if (candidate.providerKey === 'claude') {
-          const sandbox = await this.guardrails.provisionSandbox({
-            worktreeRoot: this.projectRoot,
-            harnessRoot: liveCheckout,
-            repository: this.projectRoot,
-            featureSlug,
-            runId: identity.runId,
-            attempt: identity.attempt,
-          });
-          return prepareInvocation({
-            executable: 'claude',
-            env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
-            args: [],
-            teardown: async () => { try { await verify(); } finally { await sandbox.teardown(); } },
-          });
-        }
-        return priorPreparation?.(candidate, runtime, identity);
       };
     }
     try {
@@ -9103,6 +9139,20 @@ export class Conductor {
             // completes, further down.
           }
 
+          // Rebase setup exhaustion is a pre-invocation environmental refusal.
+          // Its native handler has already written the HALT and recorded the
+          // step_refused terminal; return before ordinary retry/success routing
+          // can reinterpret it as completed work.
+          if (step.name === 'rebase' && this.lastRebaseOutcome?.kind === 'setup_stop') {
+            const haltReason =
+              `rebase resolution paused — provider setup unavailable: ${this.lastRebaseOutcome.reason}`;
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
+            await this.emitLoopHalt(haltReason, await this.surfaceRemediationPr(haltReason));
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
+          }
+
           // Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o):
           // base-freshness telemetry. Fire-and-forget: emitted whenever
           // runBuildReview successfully assembled grader inputs (any outcome
@@ -9337,6 +9387,24 @@ export class Conductor {
             await this.writeHaltMarker(haltReason + '\n', 'mechanical');
             await this.persistPendingStateChanges(state, 'persist conductor transition');
             await this.emitLoopHalt(haltReason);
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
+          }
+
+          // Setup-only exhaustion has not dispatched a provider, so retrying
+          // would only repeat the same verified capability checks.
+          if (result.providerSetupExhaustion) {
+            const diagnostics = result.providerSetupExhaustion.candidates
+              .map((candidate) => `${candidate.provider}: ${redactSafetyText(candidate.reason)} Recovery: ${redactSafetyText(candidate.recoveryAction)}`)
+              .join('\n');
+            const haltReason =
+              `Cannot dispatch '${step.name}': every configured provider is unavailable during setup.\n${diagnostics}\n` +
+              'Complete a listed recovery action, then re-queue this feature.';
+            await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+            await this.recordStepRefusal(state, step.name, 'needs-human', haltReason);
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
+            await this.emitLoopHalt(haltReason, await this.surfaceRemediationPr(haltReason));
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -13454,9 +13522,24 @@ export class Conductor {
 
     if (outcome.kind === 'conflict_halt' && !sealRejectionReason) {
       await writeRebaseOutcomeHalt(this.projectRoot, outcome, this.events);
+    } else if (outcome.kind === 'setup_stop') {
+      // Setup-only resolver exhaustion leaves the rebase paused: park it for the
+      // provider recovery action instead of stamping the gate satisfied.
+      await writeHalt(
+        this.projectRoot,
+        outcome.conflicts,
+        `provider setup unavailable: ${outcome.reason}`,
+        this.events,
+      );
     }
 
     await recordRebaseStepCompletion(this.stateFilePath, outcome);
+
+    if (outcome.kind === 'setup_stop') {
+      const reason = `rebase resolution paused — provider setup unavailable: ${outcome.reason}`;
+      await this.recordStepRefusal(state, 'rebase', 'needs-human', reason);
+      return { success: false, refusal: { kind: 'needs-human', reason } };
+    }
 
     // The step itself "succeeds" (it ran); advanceTail/the HALT signal decide
     // routing. A conflict_halt is surfaced there, not as a step failure.
@@ -13572,6 +13655,9 @@ export class Conductor {
     if (!recommended && this.stepRunner.assessComplexity) {
       try {
         const assessment = await this.stepRunner.assessComplexity();
+        if (typeof assessment !== 'string' && assessment?.providerSetupExhaustion) {
+          return { success: false, providerSetupExhaustion: assessment.providerSetupExhaustion };
+        }
         recommended =
           typeof assessment === 'string'
             ? assessment

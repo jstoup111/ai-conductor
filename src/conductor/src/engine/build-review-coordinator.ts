@@ -1,4 +1,5 @@
 import type { BuildReviewRubricId } from "../types/config.js";
+import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import {
   CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
   describeBuildReviewJudgedResultRejection,
@@ -91,6 +92,8 @@ export type BuildReviewCoordinatedBranch =
       readonly reason: BuildReviewCoordinatorFailureReason;
       /** Bounded diagnostic (e.g. a raw-output excerpt); never part of routing identity. */
       readonly detail?: string;
+      /** Terminal setup-only dispatch signal, carried to the owning build-review step. */
+      readonly providerSetupExhaustion?: ProviderSetupExhaustion;
     };
 
 /**
@@ -221,8 +224,8 @@ export function preflightProjection(preflight: TautologyPreflightResult): BuildR
   };
 }
 
-function infrastructure(rubric: BuildReviewRubricId, reason: BuildReviewCoordinatorFailureReason, detail?: string): BuildReviewCoordinatedBranch {
-  return { kind: "infrastructure-failure", rubric, reason, ...(detail === undefined ? {} : { detail }) };
+function infrastructure(rubric: BuildReviewRubricId, reason: BuildReviewCoordinatorFailureReason, detail?: string, setupExhaustion?: ProviderSetupExhaustion): BuildReviewCoordinatedBranch {
+  return { kind: "infrastructure-failure", rubric, reason, ...(detail === undefined ? {} : { detail }), ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}) };
 }
 
 /**
@@ -669,7 +672,7 @@ export async function coordinateBuildReviewRubrics(
               ? "no parseable JSON object was found in the response"
               : describeBuildReviewDispatchedResultRejection(candidate, rubric, projection)
           ));
-          return { rubric, branch: infrastructure(rubric, "invalid-provider-result", detail) };
+          return { rubric, branch: infrastructure(rubric, "invalid-provider-result", detail, failure?.providerSetupExhaustion) };
         }
         let written: BuildReviewJudgedResult | undefined;
         try {

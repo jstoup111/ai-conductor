@@ -19,7 +19,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
-import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type { GhRunner, PrMergeState } from '../../src/engine/pr-labels.js';
 import { makeAutoresolveEligibility } from '../../src/engine/autoresolve.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
@@ -61,7 +61,14 @@ describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
     const prUrl = 'https://github.com/acme/widget/pull/1';
     await enrollWatch(projectRoot, { prUrl, slug: 'widget', repoCwd: projectRoot });
 
-    const gh = makeGh({ [prUrl]: 'CONFLICTING' });
+    let labelled = false;
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'CONFLICTING', statusCheckRollup: [], labels: labelled ? [{ name: 'needs-remediation' }] : [] }) };
+      }
+      if (args[0] === 'api' && args.join(' ').includes('needs-remediation')) labelled = true;
+      return { stdout: '' };
+    };
     const dispatched: WatchEntry[] = [];
 
     await sweepMergeableLabels({
@@ -111,7 +118,19 @@ describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
     const prUrl = 'https://github.com/acme/widget/pull/1';
     await enrollWatch(projectRoot, { prUrl, slug: 'widget', repoCwd: projectRoot });
 
-    const gh = makeGh({ [prUrl]: 'CONFLICTING' });
+    let labelled = false;
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            state: 'OPEN', mergeable: 'CONFLICTING', statusCheckRollup: [],
+            labels: labelled ? [{ name: 'needs-remediation' }] : [],
+          }),
+        };
+      }
+      if (args[0] === 'api' && args.join(' ').includes('needs-remediation')) labelled = true;
+      return { stdout: '' };
+    };
     let observedAtDispatch: WatchEntry | undefined;
 
     await sweepMergeableLabels({
@@ -344,5 +363,34 @@ describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
 
     expect(persistedB).toBeDefined();
     expect(persistedB?.resolveAttempts).toBe(1); // Unchanged
+  });
+
+  it('setup-stop restores the pre-dispatch attempt and does not dispatch again after cooldown', async () => {
+    const prUrl = 'https://github.com/acme/widget/pull/1';
+    await enrollWatch(projectRoot, { prUrl, slug: 'widget', repoCwd: projectRoot, resolveAttempts: 1 });
+    let labelled = false;
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'CONFLICTING', statusCheckRollup: [], labels: labelled ? [{ name: 'needs-remediation' }] : [] }) };
+      }
+      if (args[0] === 'api' && args.join(' ').includes('needs-remediation')) labelled = true;
+      return { stdout: '' };
+    };
+    let dispatches = 0;
+    const autoresolve = {
+      enabled: true,
+      isEligible: async (_entry: WatchEntry, state: PrMergeState) => ({ eligible: !state.labels.includes('needs-remediation') }),
+      dispatch: async () => {
+        dispatches += 1;
+        return { kind: 'setup-stop' as const };
+      },
+    };
+
+    await sweepMergeableLabels({ projectRoot, runGh: gh, autoresolve });
+    await sweepMergeableLabels({ projectRoot, runGh: gh, autoresolve });
+
+    const raw = await readFile(join(projectRoot, '.daemon/mergeable-watch.jsonl'), 'utf-8');
+    expect(JSON.parse(raw.trim()).resolveAttempts).toBe(1);
+    expect(dispatches).toBe(1);
   });
 });

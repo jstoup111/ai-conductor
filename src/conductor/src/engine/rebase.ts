@@ -659,6 +659,12 @@ type RebaseOutcomeKind =
       resumeShape?: RebaseResumeShape;
       /** Git refused before creating rebase state; `--continue` is invalid. */
       startFailure?: boolean;
+    }
+  | {
+      /** Provider setup was refused before a rebase resolver invocation. */
+      kind: 'setup_stop';
+      conflicts: string[];
+      reason: string;
     };
 
 /** A quarantine applies to every outcome after an untracked-collision heal. */
@@ -1418,6 +1424,13 @@ async function resolveRebaseConflictsInner(
     const result = await resolver({ conflicts: ctxConflicts, projectRoot, baseRef: onto });
 
     if (!result.resolved) {
+      if (result.providerSetupExhaustion) {
+        return {
+          kind: 'setup_stop',
+          conflicts,
+          reason: 'every configured provider is unavailable during setup',
+        };
+      }
       // FR-6: resolver gave up — short-circuit, no further attempts.
       return {
         kind: 'conflict_halt',
@@ -1588,7 +1601,7 @@ export async function runGatedRebaseResolution(opts: {
   const resolved = await resolveRebaseConflicts(git, projectRoot, outcome, countingResolver, cap);
   if (onSettled) {
     try {
-      await onSettled(resolved.kind === 'conflict_halt' ? 'exhausted' : 'succeeded');
+      await onSettled(resolved.kind === 'changed' || resolved.kind === 'noop' ? 'succeeded' : 'exhausted');
     } catch {
       /* best-effort */
     }
@@ -1623,10 +1636,14 @@ export async function applyRebaseVerdicts(
   reverified: StepName[];
   preserved?: Array<{ gate: StepName; basis: 'test_suite_drift_budget' }>;
 }> {
-  if (outcome.kind === 'conflict_halt') {
+  if (outcome.kind === 'conflict_halt' || outcome.kind === 'setup_stop') {
+    // A setup-only resolver exhaustion leaves the rebase paused exactly like an
+    // unresolved conflict: the gate stays unsatisfied and the run parks.
     await writeVerdict(projectRoot, 'rebase', {
       satisfied: false,
-      reason: `rebase conflict: ${outcome.reason}`,
+      reason: outcome.kind === 'setup_stop'
+        ? `rebase resolution paused — provider setup unavailable: ${outcome.reason}`
+        : `rebase conflict: ${outcome.reason}`,
       checkedAt: Date.now(),
     });
     return { satisfied: false, kickedBack: [], reverified: [] };
@@ -1751,7 +1768,7 @@ export async function applyRebaseVerdicts(
  * `applyRebaseVerdicts` wrote a satisfied gate verdict — i.e. every outcome
  * kind except `conflict_halt` (noop / changed leave
  * the branch current with base). A `conflict_halt` outcome parks the step for
- * human resolution and must NOT be stamped `done` — the gate stays
+ * human resolution and must NOT be stamped — the gate stays
  * unsatisfied and a resumed run needs to re-attempt the rebase.
  *
  * Shared by the in-loop `runRebaseStep` (conductor.ts) and the pre-loop
@@ -1763,6 +1780,10 @@ export async function recordRebaseStepCompletion(
   outcome: RebaseOutcome,
 ): Promise<void> {
   if (outcome.kind === 'conflict_halt') return;
+  if (outcome.kind === 'setup_stop') {
+    await saveStepStatus(stateFilePath, 'rebase', 'refused');
+    return;
+  }
   await saveStepStatus(stateFilePath, 'rebase', 'done');
 }
 
@@ -1908,6 +1929,16 @@ export async function emitRebaseEvent(
           type: 'rebase_conflict_halt',
           step: 'rebase',
           reason: outcome.reason,
+          conflicts: outcome.conflicts,
+        });
+        break;
+      case 'setup_stop':
+        // Same parked terminal as a conflict halt; the reason names setup so the
+        // observation stays distinguishable from resolver exhaustion.
+        await events.emit({
+          type: 'rebase_conflict_halt',
+          step: 'rebase',
+          reason: `provider setup unavailable: ${outcome.reason}`,
           conflicts: outcome.conflicts,
         });
         break;

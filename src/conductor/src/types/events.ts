@@ -189,6 +189,11 @@ export interface ProviderAttemptEvent {
   observedIntervals?: readonly ObservedInterval[];
   reason?: string;
   fallbackReason?: string;
+  /** Present only for an unavailable candidate that was not invoked. */
+  skipReason?: 'setup-unavailable' | 'cached-unavailable';
+  /** Redacted details retained for an explicit setup-unavailable skip. */
+  setupCapability?: string;
+  setupRecoveryAction?: string;
   lifecycle?: ProviderLifecycleEventMetadata;
 }
 
@@ -586,6 +591,7 @@ export type ConductorEvent =
       step: StepName;
       failedProvider: string;
       reason: string;
+      recoveryAction?: string;
       nextProvider: string;
     }
   | {

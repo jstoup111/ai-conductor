@@ -76,7 +76,7 @@ describe('renderDaemonEvent: provider_attempt', () => {
     expect(line).not.toContain('✓');
   });
 
-  it('renders nothing for a cached availability skip that dispatched no process', () => {
+  it('renders a skipped provider with its unavailable reason', () => {
     expect(
       lines({
         type: 'provider_attempt',
@@ -86,7 +86,7 @@ describe('renderDaemonEvent: provider_attempt', () => {
         invoked: false,
         reason: 'cached run-wide unavailability',
       }),
-    ).toEqual([]);
+    ).toEqual(['·   build skipped codex (unavailable: cached run-wide unavailability)']);
   });
 
   it.each([

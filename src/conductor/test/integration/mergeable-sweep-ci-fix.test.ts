@@ -471,4 +471,25 @@ describe('mergeable-sweep native CI state + bounded CI-fix dispatch', () => {
     const [persisted] = await readEntries(projectRoot);
     expect(persisted.ciFixAttempts ?? 0).toBe(0);
   });
+
+  it('setup-only needs-human restores the attempt and leaves an operator-clearable label', async () => {
+    const prUrl = 'https://github.com/acme/widget/pull/1';
+    await enrollWatch(projectRoot, { prUrl, slug: 'widget', repoCwd: projectRoot, ciFixAttempts: 1 });
+    const calls: GhCall[] = [];
+    const gh = makeGh({ [prUrl]: { checks: FAILED_CHECKS } }, calls);
+
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: gh,
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async () => ({ kind: 'needs-human' }),
+      },
+    });
+
+    const [persisted] = await readEntries(projectRoot);
+    expect(persisted.ciFixAttempts).toBe(1);
+    expect(calls.some((call) => call.args.join(' ').includes('needs-remediation'))).toBe(true);
+  });
 });

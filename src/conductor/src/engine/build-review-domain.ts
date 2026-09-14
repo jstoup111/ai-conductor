@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { BuildReviewRubricId } from '../types/config.js';
+import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import { buildReviewScopeCandidateIdentityKey } from './build-review-scope-identity.js';
 import type { BuildReviewRubricProjection } from './build-review-projections.js';
 import { isCanonicalBuildReviewRepoRelativePath } from './build-review-scope-source.js';
@@ -40,7 +41,7 @@ export interface BuildReviewCandidateScopeResolutionContext { readonly candidate
 export interface BuildReviewFinding { readonly concernKind: string; readonly summary: string; readonly evidenceLocations: readonly string[]; readonly anchor: BuildReviewFindingAnchor; readonly confidence?: number; }
 export interface BuildReviewJudgedResult { readonly kind: 'judged'; readonly rubric: BuildReviewRubricId; readonly lapId: BuildReviewLapId; readonly snapshotDigest: string; readonly contractVersion: BuildReviewRubricContractVersion; readonly findings: readonly BuildReviewFinding[]; readonly scopeResolutions?: readonly BuildReviewCandidateScopeResolution[]; readonly counterfactualSensitivity?: CounterfactualSensitivity; readonly verdict: 'PASS' | 'FAIL'; }
 export interface BuildReviewSkip { readonly kind: 'skipped'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewSkipReason; }
-export interface BuildReviewInfrastructureFailure { readonly kind: 'infrastructure-failure'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewInfrastructureFailureReason; readonly detail: string; }
+export interface BuildReviewInfrastructureFailure { readonly kind: 'infrastructure-failure'; readonly rubric: BuildReviewRubricId; readonly reason: BuildReviewInfrastructureFailureReason; readonly detail: string; readonly providerSetupExhaustion?: ProviderSetupExhaustion; }
 export type BuildReviewRubricResult = BuildReviewJudgedResult | BuildReviewSkip | BuildReviewInfrastructureFailure;
 /** A non-judgment coverage fault derived only from an already-valid judged result. */
 export interface BuildReviewScopeIncompleteFault {
@@ -395,12 +396,13 @@ export function describeBuildReviewJudgedResultRejection(value: unknown, rubric:
   const shown = problems.slice(0, MAX_REJECTION_PROBLEMS);
   return shown.join('; ') + (problems.length > shown.length ? `; and ${problems.length - shown.length} more problem(s)` : '');
 }
-export interface BuildReviewDispatchFailure { readonly kind: 'dispatch-failure'; readonly detail: string; }
+export interface BuildReviewDispatchFailure { readonly kind: 'dispatch-failure'; readonly detail: string; readonly providerSetupExhaustion?: ProviderSetupExhaustion; }
 export function renderBuildReviewUnresolvedSkillRemedy(rubricSkillName: string, unresolvedCommandName: string): string {
   const commandDetail = unresolvedCommandName.trim()
     ? ` The unresolved command was "${unresolvedCommandName}".`
     : ' The provider did not report the unresolved command name.';
   return `Build-review rubric skill "${rubricSkillName}" could not be dispatched.${commandDetail} No judgement was produced, and retrying cannot make the command resolvable. Relink the provider skill catalog; if this feature's base predates the skill, rebase the feature.`;
 }
-export function makeBuildReviewDispatchFailure(detail: string): BuildReviewDispatchFailure { return { kind: 'dispatch-failure', detail }; }
-export function parseBuildReviewDispatchFailure(value: unknown): BuildReviewDispatchFailure | undefined { const source = object(value); return source?.kind === 'dispatch-failure' && text(source.detail) ? { kind: 'dispatch-failure', detail: source.detail } : undefined; }
+function providerSetupExhaustion(value: unknown): ProviderSetupExhaustion | undefined { const source = object(value); if (!source || !Array.isArray(source.candidates) || source.candidates.length === 0) return undefined; const candidates = source.candidates.map(object); if (candidates.some((candidate) => !candidate || !text(candidate.provider) || !text(candidate.reason) || !text(candidate.recoveryAction) || (candidate.capability !== undefined && !text(candidate.capability)))) return undefined; return { candidates: candidates.map((candidate) => ({ provider: candidate!.provider as string, reason: candidate!.reason as string, recoveryAction: candidate!.recoveryAction as string, ...(candidate!.capability === undefined ? {} : { capability: candidate!.capability as string }) })) as unknown as ProviderSetupExhaustion['candidates'] }; }
+export function makeBuildReviewDispatchFailure(detail: string, setupExhaustion?: ProviderSetupExhaustion): BuildReviewDispatchFailure { return { kind: 'dispatch-failure', detail, ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}) }; }
+export function parseBuildReviewDispatchFailure(value: unknown): BuildReviewDispatchFailure | undefined { const source = object(value); const setupExhaustion = source && (source.providerSetupExhaustion === undefined ? undefined : providerSetupExhaustion(source.providerSetupExhaustion)); return source?.kind === 'dispatch-failure' && text(source.detail) && (source.providerSetupExhaustion === undefined || setupExhaustion) ? { kind: 'dispatch-failure', detail: source.detail, ...(setupExhaustion ? { providerSetupExhaustion: setupExhaustion } : {}) } : undefined; }

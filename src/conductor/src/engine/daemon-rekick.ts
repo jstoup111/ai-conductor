@@ -895,6 +895,24 @@ export async function resumeRebaseFirst(opts: {
     opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase re-conflicted on advanced base — re-parked`);
     return 'halted';
   }
+  if (outcome.kind === 'setup_stop') {
+    // Setup-only resolver exhaustion: the rebase is still paused, so park it
+    // for the provider recovery action rather than reporting it rebased.
+    await writeHalt(
+      opts.worktreePath,
+      outcome.conflicts,
+      `provider setup unavailable: ${outcome.reason}`,
+      opts.events,
+    );
+    await opts.events.emit({
+      type: 'step_refused',
+      step: 'rebase',
+      kind: 'needs-human',
+      reason: `rebase resolution paused — provider setup unavailable: ${outcome.reason}`,
+    });
+    opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase resolution paused — provider setup unavailable — re-parked`);
+    return 'halted';
+  }
 
   opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebased onto latest before resuming gate`);
   return 'rebased';

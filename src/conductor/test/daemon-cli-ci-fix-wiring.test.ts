@@ -43,22 +43,21 @@ describe('Task 23 — daemon-cli wires ci_watch config and runCiFix dispatch', (
   it('the sweepMergeableLabels call passes a ciFix opts block reading config?.ci_watch, mirroring mergeable_autoresolve', async () => {
     const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
 
-    const sweepCallMatch = source.match(
-      /await sweepMergeableLabels\(\{([\s\S]*?)\n\s*\}\);\n\s*\},/,
+    const ciFixMatch = source.match(
+      /ciFix\s*:\s*\{([\s\S]*?)\n          \},\n        \}\);/,
     );
-    expect(sweepCallMatch, 'expected an `await sweepMergeableLabels({ ... });` call').toBeTruthy();
-    const sweepCallBody = sweepCallMatch![1];
+    expect(ciFixMatch, 'expected a complete `ciFix: { ... }` block in `sweepMergeableLabels`').toBeTruthy();
+    const ciFixBody = ciFixMatch![1];
 
     // AC2/AC4: a `ciFix:` block exists, shaped like `autoresolve:`.
-    expect(sweepCallBody).toMatch(/ciFix\s*:\s*\{/);
-    expect(sweepCallBody).toMatch(/enabled\s*:\s*config\?\.ci_watch\?\.enabled\s*\?\?\s*true/);
-    expect(sweepCallBody).toMatch(/isEligible\s*:/);
-    expect(sweepCallBody).toMatch(/isEligibleForCiFix\(/);
-    expect(sweepCallBody).toMatch(/dispatch\s*:/);
-    expect(sweepCallBody).toMatch(/runCiFix\(/);
+    expect(ciFixBody).toMatch(/enabled\s*:\s*config\?\.ci_watch\?\.enabled\s*\?\?\s*true/);
+    expect(ciFixBody).toMatch(/isEligible\s*:/);
+    expect(ciFixBody).toMatch(/isEligibleForCiFix\(/);
+    expect(ciFixBody).toMatch(/dispatch\s*:/);
+    expect(ciFixBody).toMatch(/runCiFix\(/);
 
     // AC1: config is read from the outer `config` binding (populated once at
     // startup via `loadConfig` — see daemon-cli.ts:545), not re-loaded here.
-    expect(sweepCallBody).not.toMatch(/loadConfig\(/);
+    expect(ciFixBody).not.toMatch(/loadConfig\(/);
   });
 });

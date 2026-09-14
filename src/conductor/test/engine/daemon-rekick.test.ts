@@ -1129,6 +1129,36 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     expect(halt).toContain('No git rebase is in progress; do not run git rebase --continue.');
   });
 
+  it('a re-conflict whose resolver reports setup-only exhaustion → halted, rebase left paused, never stamped done', async () => {
+    await initConflictRepo();
+
+    await writeSentinel();
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      resolveAttempts: 2,
+      resolveConflict: async () => ({
+        resolved: false,
+        reason: 'no provider',
+        providerSetupExhaustion: true,
+      } as unknown as Awaited<ReturnType<NonNullable<Parameters<typeof resumeRebaseFirst>[0]['resolveConflict']>>>),
+    });
+    expect(res).toBe('halted');
+    expect(await fileExists(join(dir, HALT_MARKER))).toBe(true);
+    expect(await readFile(join(dir, HALT_MARKER), 'utf8')).toContain('provider setup unavailable');
+    const inProgress =
+      (await fileExists(join(dir, '.git/rebase-merge'))) ||
+      (await fileExists(join(dir, '.git/rebase-apply')));
+    expect(inProgress).toBe(true);
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    const state = (await fileExists(statePath))
+      ? (JSON.parse(await readFile(statePath, 'utf8')) as { rebase?: string })
+      : {};
+    expect(state.rebase).not.toBe('done');
+  });
+
   it('a stale seal before rebase halts as a seal error without claiming a rebase conflict', async () => {
     await initFeatureRepo();
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
@@ -1956,6 +1986,57 @@ describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase
 
     // Sanity: unaffected fields from before the re-kick are left untouched.
     expect(state.build).toBe('done');
+  });
+
+  it('refuses setup-only play-forward resolution once and preserves the paused-rebase recovery', async () => {
+    await initTestRepo(dir);
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 0;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'init');
+    await git('checkout', '-b', 'feature/foo');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 1; // branch\n');
+    await git('add', '.');
+    await git('commit', '-m', 'branch');
+    await git('checkout', 'main');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 2; // base\n');
+    await git('add', '.');
+    await git('commit', '-m', 'base');
+    await git('checkout', 'feature/foo');
+    await writeInitialConductState();
+    await writeSentinel();
+
+    let calls = 0;
+    const refusals: ConductorEvent[] = [];
+    events.on('step_refused', (event) => {
+      refusals.push(event);
+    });
+    const result = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      resolveAttempts: 3,
+      resolveConflict: async () => {
+        calls += 1;
+        return {
+          resolved: false,
+          reason: 'provider setup unavailable',
+          providerSetupExhaustion: { candidates: [] },
+        } as never;
+      },
+    });
+
+    expect(result).toBe('halted');
+    expect(calls).toBe(1);
+    const stateResult = await readState(join(dir, STATE_PATH_REL));
+    expect(stateResult.ok).toBe(true);
+    expect(stateResult.ok && stateResult.value.rebase).toBe('refused');
+    expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(false);
+    await expect(readFile(join(dir, HALT_MARKER), 'utf8')).resolves.toContain('git rebase --continue');
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toMatchObject({ step: 'rebase', kind: 'needs-human' });
   });
 });
 

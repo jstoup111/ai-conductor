@@ -24,6 +24,7 @@ import {
   executeAuxiliaryProviderCandidates,
   formatProviderCapabilityGapMessages,
 } from '../../src/engine/provider-execution.js';
+import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -121,6 +122,118 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('skips a typed setup-unavailable candidate and returns setup-only exhaustion without invocation', async () => {
+    const codexInvoke = vi.fn();
+    const claudeInvoke = vi.fn();
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    const unavailable = (provider: string) => new ProviderSetupUnavailableError({
+      provider,
+      reason: `${provider} lacks isolated setup`,
+      recoveryAction: `install ${provider}`,
+    });
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: codexInvoke }),
+        runtime('claude', { invoke: claudeInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      prepareCandidateSelfHost: async (candidate) => { throw unavailable(candidate.providerKey); },
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      providerSetupExhaustion: { candidates: [
+        { provider: 'codex', reason: 'codex lacks isolated setup' },
+        { provider: 'claude', reason: 'claude lacks isolated setup' },
+      ] },
+      attempts: [
+        { provider: 'codex', invoked: false, skipReason: 'setup-unavailable' },
+        { provider: 'claude', invoked: false, skipReason: 'setup-unavailable' },
+      ],
+    });
+    expect(codexInvoke).not.toHaveBeenCalled();
+    expect(claudeInvoke).not.toHaveBeenCalled();
+  });
+
+  it('falls through a typed setup-unavailable candidate without treating ordinary errors as fallback authority', async () => {
+    const codexInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async () => ({ success: true, output: 'done', exitCode: 0 }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      prepareCandidateSelfHost: async (candidate) => {
+        if (candidate.providerKey === 'codex') throw new ProviderSetupUnavailableError({ provider: 'codex', reason: 'missing setup', recoveryAction: 'install' });
+        return undefined;
+      },
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+    expect(result).toMatchObject({ success: true, actualProvider: 'claude' });
+    expect(codexInvoke).not.toHaveBeenCalled();
+    expect(claudeInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not advance after cleanup or safety failure, but does preserve typed setup exhaustion for auxiliary callers', async () => {
+    const codexInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async () => ({ success: true, output: 'must not run', exitCode: 0 }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    await expect(executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      prepareCandidateSelfHost: async () => ({ executable: 'fake', env: {}, args: [], teardown: async () => { throw new Error('cleanup failed'); } }),
+      options: { prompt: 'build', cwd: '/workspace' },
+    })).rejects.toThrow('cleanup failed');
+    expect(claudeInvoke).not.toHaveBeenCalled();
+
+    const skipped = vi.fn();
+    const exhausted = await executeAuxiliaryProviderCandidates({
+      step: 'build_review', memberId: 'scope',
+      policy: { enabled: true, llm_provider: ['codex', 'claude'], model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0 },
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: skipped }), runtime('claude', { invoke: skipped })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      prepareCandidateSelfHost: async (candidate) => { throw new ProviderSetupUnavailableError({ provider: candidate.providerKey, capability: 'isolation', reason: 'missing setup', recoveryAction: 'update provider' }); },
+      options: { prompt: 'review', cwd: '/workspace' },
+    });
+    expect(exhausted.providerSetupExhaustion?.candidates).toHaveLength(2);
+    expect(skipped).not.toHaveBeenCalled();
+  });
+
+  it('attributes a setup skip as not invoked with its actionable capability details', async () => {
+    const { buildProviderAttemptMetadata } = await import('../../src/engine/provider-execution.js');
+    expect(buildProviderAttemptMetadata({
+      providerKey: 'codex',
+      result: { success: false, output: 'missing isolation', exitCode: 1, providerInvocationSkipped: true },
+      resolvedModel: 'gpt-5.6-sol',
+      unavailable: { scope: 'step', reason: 'missing isolation' },
+      setupUnavailable: { provider: 'codex', capability: 'isolated-home', reason: 'missing isolation', recoveryAction: 'update Codex' },
+    })).toMatchObject({
+      provider: 'codex', outcome: 'unavailable', invoked: false,
+      skipReason: 'setup-unavailable', setupCapability: 'isolated-home', setupRecoveryAction: 'update Codex',
+    });
+  });
+
+  it('keeps a cached setup skip distinct from a newly observed capability failure', async () => {
+    const { buildProviderAttemptMetadata } = await import('../../src/engine/provider-execution.js');
+    expect(buildProviderAttemptMetadata({
+      providerKey: 'codex',
+      result: { success: false, output: 'cached unavailable', exitCode: 127, providerInvocationSkipped: true },
+      resolvedModel: 'gpt-5.6-sol',
+      unavailable: { scope: 'step', reason: 'cached unavailable' },
+      cachedUnavailable: true,
+      setupUnavailable: {
+        provider: 'codex',
+        capability: 'cached-provider-availability',
+        reason: 'cached unavailable',
+        recoveryAction: 'restore provider',
+      },
+    })).toMatchObject({ invoked: false, skipReason: 'cached-unavailable' });
+  });
   it('executes an auxiliary rubric through its own provider, fallback ladder, retries, and attribution label', async () => {
     const codexInvoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> =>
       options.model === 'gpt-5.6-sol'
@@ -1770,6 +1883,7 @@ describe('executeProviderCandidates', () => {
             step: 'build',
             failedProvider: 'codex',
             reason: missingReason,
+            recoveryAction: 'Restore the provider availability, then re-queue this feature.',
             nextProvider: 'claude',
           },
         },
@@ -1817,6 +1931,9 @@ describe('executeProviderCandidates', () => {
             outcome: 'unavailable',
             reason: missingReason,
             fallbackReason: missingReason,
+            skipReason: 'cached-unavailable',
+            setupCapability: 'cached-provider-availability',
+            setupRecoveryAction: 'Restore the provider availability, then re-queue this feature.',
             invoked: false,
           },
           {
@@ -1832,7 +1949,7 @@ describe('executeProviderCandidates', () => {
       noNext: {
         success: false,
         output:
-          `All configured providers are unavailable for step build: codex (${missingReason}, cached skip).`,
+          `All configured providers are unavailable for step build: codex (${missingReason}, cached unavailable).`,
         exitCode: 127,
         preferredProvider: 'codex',
         attempts: [
@@ -1840,9 +1957,13 @@ describe('executeProviderCandidates', () => {
             provider: 'codex',
             reason: missingReason,
             outcome: 'unavailable',
+            skipReason: 'cached-unavailable',
+            setupCapability: 'cached-provider-availability',
+            setupRecoveryAction: 'Restore the provider availability, then re-queue this feature.',
             invoked: false,
           },
         ],
+        providerSetupExhaustion: { candidates: [{ provider: 'codex', capability: 'cached-provider-availability', reason: missingReason, recoveryAction: 'Restore the provider availability, then re-queue this feature.' }] },
       },
     });
   });
@@ -2630,6 +2751,7 @@ describe('executeProviderCandidates', () => {
               step: 'build',
               failedProvider: 'claude',
               reason: 'claude cached missing',
+              recoveryAction: 'Restore the provider availability, then re-queue this feature.',
               nextProvider: 'third',
             },
           },
@@ -2637,7 +2759,7 @@ describe('executeProviderCandidates', () => {
         result: {
           success: false,
           output:
-            'All configured providers are unavailable for step build: codex (codex binary missing); claude (claude cached missing, cached skip); third (third integration missing).',
+            'All configured providers are unavailable for step build: codex (codex binary missing); claude (claude cached missing, cached unavailable); third (third integration missing).',
           exitCode: 127,
           preferredProvider: 'codex',
           attempts: [
@@ -2656,6 +2778,9 @@ describe('executeProviderCandidates', () => {
               outcome: 'unavailable',
               reason: 'claude cached missing',
               fallbackReason: 'claude cached missing',
+              skipReason: 'cached-unavailable',
+              setupCapability: 'cached-provider-availability',
+              setupRecoveryAction: 'Restore the provider availability, then re-queue this feature.',
               invoked: false,
             },
             {

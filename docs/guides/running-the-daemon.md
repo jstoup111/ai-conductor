@@ -221,7 +221,9 @@ necessarily the repo default.
 - **`·   <step> via <provider> (<model>) ✓ — <turns>, <duration>, <cost>`** attributes the completed
   dispatch. `grep ' via '` over the log answers "which provider ran this step" without inspecting
   process argv. A provider skipped from a cached availability result dispatches no process and is
-  not logged; a fallback between providers still prints its own `⚠ PROVIDER FALLBACK` line.
+  not logged. A candidate skipped because required setup is unavailable also dispatches no process,
+  but its fallback prints `⚠ PROVIDER FALLBACK`; the line identifies the unavailable candidate and
+  the next provider.
 - **`· gate <step>: satisfied`** or **`· gate <step>: unsatisfied — <reason>`** states the
   objective gate verdict. A satisfied line may include a reason; neither verdict line uses the
   provider-completion check glyph, so it is distinct from the preceding dispatch attribution.

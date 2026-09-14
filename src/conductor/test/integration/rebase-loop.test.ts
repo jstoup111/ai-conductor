@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
+import { readVerdict } from '../../src/engine/gate-verdicts.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
@@ -285,7 +286,11 @@ describe('integration/rebase-loop', () => {
     prospectiveMergeFixture.forceIndeterminate = true;
   }
 
-  function conductorWith(runner: StepRunner, fromStep: 'build' | 'rebase' = 'build'): Conductor {
+  function conductorWith(
+    runner: StepRunner,
+    fromStep: 'build' | 'rebase' = 'build',
+    rebaseResolutionAttempts = 0,
+  ): Conductor {
     const fakeGit: GitRunner = async (args) =>
       args.includes('--symbolic-full-name')
         ? { stdout: 'refs/remotes/origin/feature/x\n' }
@@ -304,6 +309,7 @@ describe('integration/rebase-loop', () => {
       mode: 'auto',
       fromStep,
       maxRetries: 1,
+      config: { rebase_resolution_attempts: rebaseResolutionAttempts },
       git: fakeGit,
       shipmentEvidence: validShipmentEvidence,
     });
@@ -320,6 +326,10 @@ describe('integration/rebase-loop', () => {
       if (done || halted) return;
       await conductorWith(runner, 'rebase').run();
     }
+  }
+
+  async function runThroughShipWithRebaseResolver(runner: StepRunner): Promise<void> {
+    await conductorWith(runner, 'build', 3).run();
   }
 
   // Per-step artifact creation so each gate's objective verdict passes (matches
@@ -818,6 +828,40 @@ describe('integration/rebase-loop', () => {
     expect(gitCommandSpy.mock.calls.filter(
       ([command, args]) => command === 'git' && Array.isArray(args) && args[0] === 'merge-tree',
     )).toEqual([]);
+  });
+
+  it('refuses setup-only rebase resolution before generic completion telemetry', async () => {
+    await initRepoOnFeatureBranch({
+      path: 'src/feature.ts',
+      content: 'export const v = 1; // feature\n',
+    });
+    await git('checkout', BASE);
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 2; // base\n');
+    await git('add', 'src/feature.ts');
+    await git('commit', '-m', 'base edits feature');
+    await git('checkout', 'feature/foo');
+    await writeState(statePath, { ...FRONT_DONE });
+
+    let resolverCalls = 0;
+    await runThroughShipWithRebaseResolver({
+      run: async (step) => satisfy(step),
+      resolveRebaseConflict: async () => {
+        resolverCalls += 1;
+        return {
+          resolved: false,
+          reason: 'provider setup unavailable',
+          providerSetupExhaustion: { candidates: [] },
+        } as never;
+      },
+    });
+
+    expect(resolverCalls).toBe(1);
+    const stateResult = await readState(statePath);
+    expect(stateResult.ok).toBe(true);
+    expect(stateResult.ok && stateResult.value.rebase).toBe('refused');
+    expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(false);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain('git rebase --continue');
   });
 
   it('re-parks when the rebase is paused but staged-without-continue (no unmerged paths) (FR-9 hardening)', async () => {

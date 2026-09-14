@@ -127,6 +127,18 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
     }
   });
 
+  it('setup exhaustion stops after one resolver pass without converting to an ordinary conflict halt', async () => {
+    const { git, pre } = await intoConflict();
+    let calls = 0;
+    const outcome = await resolveRebaseConflicts(git, repo, pre, async () => {
+      calls += 1;
+      return { resolved: false, reason: 'redacted', providerSetupExhaustion: { candidates: [] } } as never;
+    }, 3);
+
+    expect(calls).toBe(1);
+    expect(outcome.kind).toBe('setup_stop');
+  });
+
   it('FR-5/FR-3: a resolver that never actually completes is retried exactly N times, then HALTs', async () => {
     const { git, pre } = await intoConflict();
     let calls = 0;

@@ -20,6 +20,8 @@ import {
   type ResolveWorktreeLiveness,
 } from './autoresolve.js';
 import { makeGitRunner } from './rebase.js';
+import type { CiFailureAttempt } from './rebase.js';
+import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import { execa } from 'execa';
 import { dispatchTestSuiteCommand } from './test-suite-cli.js';
 
@@ -337,7 +339,7 @@ async function evaluateEligibilityGates(
 /**
  * Result of a CI fix attempt.
  */
-export type CiFixOutcome = { kind: 'changed' } | { kind: 'noop' } | { kind: 'branch-gone' };
+export type CiFixOutcome = { kind: 'changed' } | { kind: 'noop' } | { kind: 'branch-gone' } | { kind: 'needs-human'; providerSetupExhaustion: ProviderSetupExhaustion };
 
 /**
  * Injected fix-runner seam (pattern: {@link RebaseResolver} in rebase.ts).
@@ -370,7 +372,7 @@ export interface CiFixDispatcher {
     worktreePath: string;
     hint: string;
     entry: WatchEntry;
-  }): Promise<CiFixOutcome>;
+  }): Promise<CiFailureAttempt>;
 }
 
 /**
@@ -394,7 +396,10 @@ export const productionCiFixRunner: CiFixRunner = {
       );
     }
 
-    return dispatcher.resolveCiFailure({ worktreePath, hint, entry });
+    const attempt = await dispatcher.resolveCiFailure({ worktreePath, hint, entry });
+    return attempt.providerSetupExhaustion
+      ? { kind: 'needs-human', providerSetupExhaustion: attempt.providerSetupExhaustion }
+      : { kind: 'changed' };
   },
 };
 

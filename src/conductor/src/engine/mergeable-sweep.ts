@@ -228,7 +228,7 @@ export interface AutoresolveDispatchOpts {
    * (AC3) — the git work itself happens inside this callback.
    * Returns the outcome kind so the sweep can reset the counter on success.
    */
-  dispatch: (entry: WatchEntry) => Promise<{ kind: 'refreshed' | 'escalated' } | void>;
+  dispatch: (entry: WatchEntry) => Promise<{ kind: 'refreshed' | 'escalated' | 'setup-stop' } | void>;
   /** Clock override for tests; defaults to `new Date()`. */
   now?: () => Date;
 }
@@ -260,7 +260,7 @@ export interface CiFixDispatchOpts {
    * (AC3) — the git work itself happens inside this callback.
    * Returns the outcome kind so the sweep can reset the counter on success.
    */
-  dispatch: (entry: WatchEntry) => Promise<{ kind: 'green-verified' } | void>;
+  dispatch: (entry: WatchEntry) => Promise<{ kind: 'green-verified' | 'needs-human' } | void>;
   /** Clock override for tests; defaults to `new Date()`. */
   now?: () => Date;
 }
@@ -612,6 +612,22 @@ export async function sweepMergeableLabels({
         const dispatchResult = await autoresolve.dispatch(updated);
         if (dispatchResult?.kind === 'refreshed') {
           survivors[idx] = { ...updated, resolveAttempts: 0 };
+        } else if (dispatchResult?.kind === 'setup-stop') {
+          survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
+          try {
+            await ensureLabel(gh, entry.repoCwd, 'needs-remediation', 'B60205', log);
+            await addLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+            await upsertComment(
+              gh,
+              entry.repoCwd,
+              entry.prUrl,
+              '<!-- conductor:rebase-setup -->',
+              '## Rebase resolution paused\n\nProvider setup was unavailable before a resolver was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
+              log,
+            );
+          } catch (err) {
+            log?.(`[mergeable-sweep] rebase setup-recovery marker error for ${entry.prUrl}: ${err}`);
+          }
         }
       }
     }
@@ -648,6 +664,22 @@ export async function sweepMergeableLabels({
           const dispatchResult = await ciFix.dispatch(updated);
           if (dispatchResult?.kind === 'green-verified') {
             survivors[idx] = { ...updated, ciFixAttempts: 0 };
+          } else if (dispatchResult?.kind === 'needs-human') {
+            survivors[idx] = { ...updated, ciFixAttempts: entry.ciFixAttempts ?? 0 };
+            try {
+              await ensureLabel(gh, entry.repoCwd, 'needs-remediation', 'B60205', log);
+              await addLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+              await upsertComment(
+                gh,
+                entry.repoCwd,
+                entry.prUrl,
+                '<!-- conductor:ci-fix-setup -->',
+                '## CI repair paused\n\nProvider setup was unavailable before a repair provider was invoked. Complete the provider recovery action, remove `needs-remediation`, then retry.',
+                log,
+              );
+            } catch (err) {
+              log?.(`[mergeable-sweep] ciFix setup-recovery marker error for ${entry.prUrl}: ${err}`);
+            }
           }
         } catch (err) {
           // Task 11: dispatch error is logged but not propagated (AC1b)

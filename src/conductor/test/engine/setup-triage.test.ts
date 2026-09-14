@@ -1116,6 +1116,7 @@ describe('engine/setup-triage — fixSession accepted repair dispositions (Task 
   it('parks an initially dirty worktree before dispatch and emits no repair event', async () => {
     const { git } = fakeGit([
       { match: ['rev-parse', 'HEAD'], result: { stdout: `${'a'.repeat(40)}\n` } },
+      { match: ['rev-parse', 'HEAD^{tree}'], result: { stdout: 'tree\n' } },
       { match: ['status', '--porcelain'], result: { stdout: ' M src/dirty.ts\n' } },
       { match: ['write-tree'], result: { stdout: 'dirty-tree\n' } },
     ]);
@@ -1135,6 +1136,29 @@ describe('engine/setup-triage — fixSession accepted repair dispositions (Task 
     expect(outcome).toMatchObject({ kind: 'park', contractOutcome: 'precondition-failed' });
     expect(dispatches).toBe(0);
     expect(emitted).toEqual([]);
+  });
+});
+
+describe('engine/setup-triage — provider setup exhaustion settlement', () => {
+  it('emits one rejected setup_repair event without preserving a never-dispatched repair', async () => {
+    const { git, calls } = fakeGit([
+      { match: ['rev-parse', 'HEAD^{tree}'], result: { stdout: 'tree\n' } },
+      { match: ['rev-parse', 'HEAD'], result: { stdout: `${'a'.repeat(40)}\n` } },
+      { match: ['status', '--porcelain'], result: { stdout: '' } },
+    ]);
+    const emitted: Array<Record<string, unknown>> = [];
+    const outcome = await fixSession(
+      git,
+      '/worktree',
+      'task-6',
+      async () => ({ attempted: true, providerSetupExhaustion: { candidates: [] } } as never),
+      async () => {},
+      { emit: async (event: Record<string, unknown>) => { emitted.push(event); } } as never,
+    );
+
+    expect(outcome).toMatchObject({ kind: 'park', contractOutcome: 'provider-failure', preservedPaths: [] });
+    expect(emitted).toEqual([expect.objectContaining({ type: 'setup_repair', disposition: 'rejected', reason: 'provider-failure' })]);
+    expect(calls.some(([command]) => command === 'branch' || command === 'reset')).toBe(false);
   });
 });
 

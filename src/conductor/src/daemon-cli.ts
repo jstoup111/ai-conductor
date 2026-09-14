@@ -1524,7 +1524,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         },
       );
       featureLog(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
-      await stepRunner.resolveSetupFailure({
+      return stepRunner.resolveSetupFailure({
         worktreePath: worktree.path,
         outputTail: error.outputTail ?? '',
         slug: item.slug,
@@ -2474,13 +2474,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                         ),
                       },
                     );
-                    await stepRunner.resolveCiFailure({
+                    return stepRunner.resolveCiFailure({
                       worktreePath: ctx.worktreePath,
                       prUrl: ctx.entry.prUrl,
                       hint: ctx.hint,
                       slug: ctx.entry.slug,
                     });
-                    return { kind: 'changed' as const };
                   },
                 };
 
@@ -2500,6 +2499,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 log(`[ci-fix] outcome for ${entry.prUrl}: ${outcome.kind}`);
                 if (outcome.kind === 'changed') {
                   return { kind: 'green-verified' };
+                }
+                if (outcome.kind === 'needs-human') {
+                  log(`[ci-fix] setup-only provider exhaustion for ${entry.prUrl}; parking for human recovery`);
+                  return { kind: 'needs-human' };
                 }
                 return;
               } catch (err: any) {
@@ -2774,9 +2777,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // Which provider actually executed this step. The daemon routes per-step
       // (`llm_provider` top-level + per-step overrides), so without this line an
       // operator has to read process argv to learn whether a step ran under
-      // claude or codex. A non-invoked attempt is a cached availability skip —
-      // no process was dispatched, so there is nothing to attribute.
-      if (!event.invoked) break;
+      // claude or codex. A non-invoked attempt still tells the operator which
+      // provider was skipped and what recovery is available.
+      if (!event.invoked) {
+        const recovery = event.setupRecoveryAction ? `; recovery: ${event.setupRecoveryAction}` : '';
+        log(`${dot}   ${event.step} skipped ${chalk.cyan(event.provider)} (${event.skipReason ?? 'unavailable'}: ${event.reason ?? 'unavailable'}${recovery})`);
+        break;
+      }
       const model = event.model ? chalk.dim(` (${event.model})`) : '';
       const usage = event.tokenUsage;
       const facts: string[] = [];
@@ -2818,7 +2825,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'provider_fallback':
       log(
         chalk.bold.yellow(
-          `⚠ PROVIDER FALLBACK: ${event.step} — ${event.failedProvider} unavailable (${event.reason}); trying ${event.nextProvider}`,
+          `⚠ PROVIDER FALLBACK: ${event.step} — ${event.failedProvider} unavailable (${event.reason}${event.recoveryAction ? `; recovery: ${event.recoveryAction}` : ''}); trying ${event.nextProvider}`,
         ),
       );
       break;

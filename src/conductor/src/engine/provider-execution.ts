@@ -38,6 +38,11 @@ import { redactSafetyText } from './safety-diagnostics.js';
 import { ModelAvailability } from './model-availability.js';
 import type { ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
+import {
+  normalizeProviderSetupUnavailable,
+  type ProviderSetupUnavailable,
+  type ProviderSetupExhaustion,
+} from './provider-setup-failure.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -68,6 +73,11 @@ export interface ProviderAttemptMetadata {
   outcome: 'success' | 'failure' | 'unavailable';
   reason?: string;
   fallbackReason?: string;
+  /** Why an uninvoked unavailable candidate was skipped. */
+  skipReason?: 'setup-unavailable' | 'cached-unavailable';
+  /** Structured, redacted setup diagnostic for an explicitly skipped candidate. */
+  setupCapability?: string;
+  setupRecoveryAction?: string;
   /** Visible diagnostic-only boundary notices; never controls fallback. */
   safetyDiagnostics?: readonly string[];
   invoked: boolean;
@@ -77,6 +87,8 @@ export interface ProviderAttributionMetadata {
   preferredProvider?: string;
   actualProvider?: string;
   attempts?: ProviderAttemptMetadata[];
+  /** Every candidate was unavailable during setup before an invocation began. */
+  providerSetupExhaustion?: ProviderSetupExhaustion;
 }
 
 export interface ProviderExecutionResult extends InvokeResult, ProviderAttributionMetadata {
@@ -94,6 +106,7 @@ export type ProviderTransitionWarning =
       step: StepName;
       failedProvider: string;
       reason: string;
+      recoveryAction?: string;
       nextProvider: string;
     }
   | {
@@ -271,6 +284,21 @@ function unsupportedLifecycleProviderResult(providerKey: string): InvokeResult {
     providerUnavailableReason: reason,
     providerInvocationSkipped: true,
   };
+}
+
+function skippedCandidateSetupUnavailable(provider: string, result: InvokeResult, cached: boolean): ProviderSetupUnavailable | undefined {
+  if (result.providerInvocationSkipped !== true) return undefined;
+  if (cached) return {
+    provider, capability: 'cached-provider-availability',
+    reason: result.providerUnavailableReason ?? result.output ?? 'Provider is cached as unavailable.',
+    recoveryAction: 'Restore the provider availability, then re-queue this feature.',
+  };
+  if (result.providerUnavailable === true) return {
+    provider, capability: 'synchronous-spawn-permit',
+    reason: result.providerUnavailableReason ?? result.output ?? 'Provider lifecycle capability is unavailable.',
+    recoveryAction: 'Update the provider to declare and synchronously consume lifecycleCapability.synchronousSpawnPermit.',
+  };
+  return undefined;
 }
 
 export function classifyProviderAttempt(
@@ -492,6 +520,8 @@ export interface BuildProviderAttemptMetadataInput {
   unavailable?: ProviderCandidateFailureClassification;
   nextProvider?: string;
   auxiliaryMember?: string;
+  setupUnavailable?: ProviderSetupUnavailable;
+  cachedUnavailable?: boolean;
 }
 
 /** Construct event-boundary metadata for exactly one candidate result. */
@@ -508,6 +538,8 @@ export function buildProviderAttemptMetadata({
   unavailable,
   nextProvider,
   auxiliaryMember,
+  setupUnavailable,
+  cachedUnavailable,
 }: BuildProviderAttemptMetadataInput): ProviderAttemptMetadata {
   const invoked = result.providerInvocationSkipped !== true;
   const failureReason = redactSafetyText(unavailable?.reason ?? result.output ?? 'Provider attempt failed.');
@@ -535,6 +567,23 @@ export function buildProviderAttemptMetadata({
       : {}),
     ...(unavailable && nextProvider
       ? { fallbackReason: redactSafetyText(unavailable.reason) }
+      : {}),
+    // A cached run-wide unavailability is still a setup-only skip, but it is
+    // materially different from a capability discovered during this pass.
+    // Keep that provenance at the event boundary; otherwise an exhausted
+    // cached candidate is misleadingly reported as a newly observed setup
+    // failure.
+    ...(!invoked && unavailable && cachedUnavailable
+      ? { skipReason: 'cached-unavailable' as const }
+      : {}),
+    ...(!invoked && unavailable && setupUnavailable && !cachedUnavailable
+      ? { skipReason: 'setup-unavailable' as const }
+      : {}),
+    ...(!invoked && setupUnavailable?.capability
+      ? { setupCapability: redactSafetyText(setupUnavailable.capability) }
+      : {}),
+    ...(!invoked && setupUnavailable
+      ? { setupRecoveryAction: redactSafetyText(setupUnavailable.recoveryAction) }
       : {}),
     ...(result.safetyDiagnostics ? { safetyDiagnostics: result.safetyDiagnostics } : {}),
     invoked,
@@ -583,6 +632,8 @@ export async function executeProviderCandidates({
   const taskId = attribution && 'taskId' in attribution ? attribution.taskId : undefined;
   const taskAttributionDiagnostic =
     attribution && 'diagnostic' in attribution ? attribution.diagnostic.code : undefined;
+  const setupUnavailableCandidates: ProviderSetupUnavailable[] = [];
+  let anyCandidateInvoked = false;
 
   for (const [index, providerKey] of candidates.entries()) {
     const runtime = runtimes.get(providerKey);
@@ -619,6 +670,8 @@ export async function executeProviderCandidates({
       : options;
     let candidateObserver: ReturnType<NonNullable<typeof candidateOptions.providerStreamObserverForCandidate>> | undefined;
     let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
+    let setupUnavailable: ProviderSetupUnavailable | undefined;
+    const cachedUnavailable = runtime.runWideUnavailable !== undefined;
     const invoke = async (): Promise<InvokeResult> => {
       // The REPL path supplies no stream consumer
       // (adr-2026-08-24-one-dispatch-member-on-the-provider-contract, and the
@@ -644,10 +697,23 @@ export async function executeProviderCandidates({
       };
       let selfHost: SelfHostInvocation | undefined;
       try {
-        selfHost = await prepareCandidateSelfHost?.(candidate, runtime, {
-          runId,
-          attempt: index,
-        });
+        try {
+          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, {
+            runId,
+            attempt: index,
+          });
+        } catch (error) {
+          setupUnavailable = normalizeProviderSetupUnavailable(error, providerKey);
+          if (setupUnavailable) {
+            return {
+              success: false,
+              output: setupUnavailable.reason,
+              exitCode: 1,
+              providerInvocationSkipped: true,
+            };
+          }
+          throw error;
+        }
         invocation = await invokeProviderCandidate({
           providerKey,
           runtime,
@@ -685,6 +751,7 @@ export async function executeProviderCandidates({
             invoke,
           )
         : await invoke();
+    setupUnavailable ??= skippedCandidateSetupUnavailable(providerKey, result, cachedUnavailable);
     const invokedModel = invocation?.invokedModel;
     const suppression = invocation?.sessionPolicySuppression;
     const emittedProviders = sessionPolicyDiagnostics.get(sessions) ?? new Set<string>();
@@ -703,6 +770,9 @@ export async function executeProviderCandidates({
     }
 
     const unavailable = classifyProviderCandidateFailure(result);
+    const candidateUnavailable = setupUnavailable
+      ? { scope: 'step' as const, reason: setupUnavailable.reason }
+      : unavailable;
     const safeResult = result.output === undefined
       ? result
       : { ...result, output: redactSafetyText(result.output) };
@@ -717,9 +787,11 @@ export async function executeProviderCandidates({
       resolvedEffort: resolved.effort,
       tier,
       invokedModel,
-      unavailable,
+      unavailable: candidateUnavailable,
       nextProvider,
       auxiliaryMember,
+      setupUnavailable,
+      cachedUnavailable,
     });
     attempts.push(attemptMetadata);
     const observedIntervals = attempts.flatMap(
@@ -736,7 +808,7 @@ export async function executeProviderCandidates({
         // Reporting the telemetry failure is itself best effort.
       }
     }
-    if (!unavailable) {
+    if (!candidateUnavailable) {
       return {
         ...safeResult,
         preferredProvider,
@@ -748,10 +820,34 @@ export async function executeProviderCandidates({
       };
     }
 
+    if (setupUnavailable) {
+      setupUnavailableCandidates.push({
+        ...setupUnavailable,
+        reason: redactSafetyText(setupUnavailable.reason),
+        recoveryAction: redactSafetyText(setupUnavailable.recoveryAction),
+        ...(setupUnavailable.capability ? { capability: redactSafetyText(setupUnavailable.capability) } : {}),
+      });
+    }
+    if (attemptMetadata.invoked) anyCandidateInvoked = true;
+
+    // Setup has not created a process. Preserve the enclosing lifecycle
+    // authority before considering another candidate.
+    if (setupUnavailable && candidateOptions.spawnPermit) {
+      const permit = candidateOptions.spawnPermit();
+      if (!permit.permitted) {
+        return {
+          ...safeResult,
+          preferredProvider,
+          attempts,
+          ...(observedIntervals.length ? { observedIntervals } : {}),
+        };
+      }
+    }
+
     if (!nextProvider) {
       const diagnostic = attempts
-        .map(({ provider, reason, invoked }) =>
-          `${provider} (${reason}${invoked ? '' : ', cached skip'})`,
+        .map(({ provider, reason, invoked, skipReason }) =>
+          `${provider} (${reason}${invoked ? '' : `, ${skipReason === 'setup-unavailable' ? 'setup unavailable' : skipReason === 'cached-unavailable' ? 'cached unavailable' : 'not invoked'}`})`,
         )
         .join('; ');
       return {
@@ -760,6 +856,13 @@ export async function executeProviderCandidates({
         exitCode: result.exitCode,
         preferredProvider,
         attempts,
+        ...(!anyCandidateInvoked && setupUnavailableCandidates.length === candidates.length
+          ? {
+              providerSetupExhaustion: {
+                candidates: setupUnavailableCandidates as [ProviderSetupUnavailable, ...ProviderSetupUnavailable[]],
+              },
+            }
+          : {}),
         ...(observedIntervals.length ? { observedIntervals } : {}),
       };
     }
@@ -768,11 +871,12 @@ export async function executeProviderCandidates({
       type: 'provider_fallback',
       step,
       failedProvider: providerKey,
-      reason: redactSafetyText(unavailable.reason),
+      reason: redactSafetyText(candidateUnavailable.reason),
+      ...(setupUnavailable ? { recoveryAction: redactSafetyText(setupUnavailable.recoveryAction) } : {}),
       nextProvider,
     };
     await warn?.(
-      `Step ${step}: provider ${providerKey} unavailable (${redactSafetyText(unavailable.reason)}); falling back to ${nextProvider}.`,
+      `Step ${step}: provider ${providerKey} unavailable (${redactSafetyText(candidateUnavailable.reason)}); falling back to ${nextProvider}.`,
       transition,
     );
   }
@@ -812,7 +916,10 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
       modelFallbackLadder: input.policy.model_fallback_ladder,
       auxiliaryMember: input.memberId,
     });
-    if (result.success || result.commandUnresolved) return result;
+    // A setup-only exhaustion is terminal for this logical dispatch: retrying
+    // repeats the same verified capability checks without ever invoking a
+    // provider.
+    if (result.success || result.commandUnresolved || result.providerSetupExhaustion) return result;
     last = result;
   }
   return last ?? {
