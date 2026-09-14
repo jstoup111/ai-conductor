@@ -126,6 +126,32 @@ describe('GitHub invocation audit', () => {
     expect(auditGithubInvocationSource('engine/pr-labels.ts', literalRead)).toEqual([]);
   });
 
+  it('does not let migration or repair-publisher function names suppress raw writes', () => {
+    const dependencyMigration = [
+      "import type { GhRunner } from './tracker-client.js';",
+      'async function createDependencyLinks(gh: GhRunner) {',
+      "  await gh(['api', '--method', 'POST', 'repos/acme/app/issues/1/dependencies/blocked_by']);",
+      '}',
+    ].join('\n');
+    const repairPublisher = [
+      "import type { GhRunner } from './tracker-client.js';",
+      'function makeProductionRepairPublisher(runGh: GhRunner) {',
+      '  return {',
+      "    async findOrCreateRepairPullRequest() { await runGh(['pr', 'create']); },",
+      "    async postStatus() { await runGh(['api', '--method', 'POST', 'repos/acme/app/statuses/abc']); },",
+      '  };',
+      '}',
+    ].join('\n');
+
+    expect(auditGithubInvocationSource('engine/engineer/issue-dep-migration.ts', dependencyMigration)).toEqual([
+      expect.objectContaining({ line: 3, message: 'direct injected GitHub mutation outside guarded adapter' }),
+    ]);
+    expect(auditGithubInvocationSource('engine/shipment-evidence-cli.ts', repairPublisher)).toEqual([
+      expect.objectContaining({ line: 4, message: 'direct injected GitHub mutation outside guarded adapter' }),
+      expect.objectContaining({ line: 5, message: 'direct injected GitHub mutation outside guarded adapter' }),
+    ]);
+  });
+
   it('preserves local Git but rejects remote mutation and mutable forwarding', () => {
     const local = "import { execFile } from 'node:child_process'; await execFile('git', ['status']);";
     const remote = "import { execFile } from 'node:child_process'; await execFile('git', ['push', 'origin', 'main']);";
