@@ -1179,6 +1179,51 @@ steps:
   });
 
   describe('test_suite config block', () => {
+    it('loads and preserves ordered command entries without suite names or runner identifiers', async () => {
+      const commands = [
+        { command: 'npm run test:unit' },
+        {
+          command: 'npm run test:integration',
+          working_directory: 'src/conductor',
+          timeout_seconds: 1800,
+        },
+      ];
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  commands:\n    - command: npm run test:unit\n    - command: npm run test:integration\n      working_directory: src/conductor\n      timeout_seconds: 1800\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.test_suite?.commands).toEqual(commands);
+    });
+
+    it.each([
+      [
+        'a scalar aggregate command',
+        'test_suite:\n  command: npm test\n  scoped_command: npx vitest run {selectors}\n',
+        { command: 'npm test' },
+      ],
+      [
+        'an aggregate command list',
+        'test_suite:\n  commands:\n    - command: npm run test:unit\n  scoped_command: npx vitest run {selectors}\n',
+        { commands: [{ command: 'npm run test:unit' }] },
+      ],
+    ])('loads %s alongside scoped_command', async (_name, yaml, aggregate) => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), yaml);
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.test_suite).toMatchObject({
+        ...aggregate,
+        scoped_command: 'npx vitest run {selectors}',
+      });
+    });
+
     it('resolves aggregate verification with an all-none drift budget', async () => {
       await writeFile(
         join(tmpDir, '.ai-conductor', 'config.yml'),
@@ -1439,12 +1484,30 @@ steps:
       expect(result.config.test_suite?.scoped_command).toBe('npx vitest run {selectors}');
     });
 
-    it('accepts a scoped-only test_suite declaration', () => {
-      const result = validateConfig({
-        test_suite: { scoped_command: 'npx vitest run {selectors}' },
-      });
+    it('loads an unchanged scalar-only test_suite declaration', async () => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), 'test_suite:\n  command: npm test\n');
+
+      const result = await loadConfig(tmpDir);
 
       expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.test_suite?.command).toBe('npm test');
+      expect(result.config.test_suite?.commands).toBeUndefined();
+    });
+
+    it('loads an unchanged scoped-only test_suite declaration', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  scoped_command: npx vitest run {selectors}\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.test_suite?.scoped_command).toBe('npx vitest run {selectors}');
+      expect(result.config.test_suite?.command).toBeUndefined();
+      expect(result.config.test_suite?.commands).toBeUndefined();
     });
 
     it('rejects a scoped_command template without the selector placeholder', async () => {

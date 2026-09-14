@@ -129,7 +129,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'architecture_review_as_built.remediation': ['enabled'],
   'architecture_review_as_built.checks': ['tiers'],
   assess: ['stale_after_days', 'stale_after_commits'],
-  test_suite: ['command', 'scoped_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment', 'verification'],
+  test_suite: ['command', 'commands', 'scoped_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment', 'verification'],
   'test_suite.verification': ['mode', 'drift_budget'],
   build_progress: ['poll_seconds', 'quiet_minutes', 'heartbeat_minutes', 'enabled'],
   provider_stream: ['min_interval_ms'],
@@ -1726,10 +1726,14 @@ function validateTestSuiteBlock(
     }
   }
 
-  if (raw.command === undefined && raw.scoped_command === undefined) {
+  if (
+    raw.command === undefined &&
+    raw.commands === undefined &&
+    raw.scoped_command === undefined
+  ) {
     return {
       type: 'validation_error',
-      message: 'test_suite.command or test_suite.scoped_command must be configured',
+      message: 'test_suite.command, test_suite.commands, or test_suite.scoped_command must be configured',
     };
   }
 
