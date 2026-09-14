@@ -2531,25 +2531,15 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     expect(invalidated).toEqual([
       { type: 'rebase_gate_invalidated', gate: 'test_suite', matchedPaths: ['src/sibling.ts'] },
       { type: 'rebase_gate_invalidated', gate: 'manual_test', matchedPaths: ['src/sibling.ts'] },
+      { type: 'rebase_gate_invalidated', gate: 'coverage_binding', matchedPaths: [] },
+      { type: 'rebase_gate_invalidated', gate: 'build_review', matchedPaths: [] },
+      { type: 'rebase_gate_invalidated', gate: 'prd_audit', matchedPaths: [] },
+      { type: 'rebase_gate_invalidated', gate: 'architecture_review_as_built', matchedPaths: [] },
     ]);
-    expect(preserved.map(({ gate, surface, deltaConsidered, basis }) => ({
-      gate, surface, deltaConsidered, basis,
-    }))).toEqual([
-      {
-        gate: 'coverage_binding',
-        surface: ['src/task-1.ts', '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/>'],
-        deltaConsidered: [],
-        basis: undefined,
-      },
-      { gate: 'build_review', surface: ['src/task-1.ts'], deltaConsidered: [], basis: undefined },
-      {
-        gate: 'prd_audit',
-        surface: ['src/task-1.ts', '<.docs/stories/|.docs/specs/>'],
-        deltaConsidered: [],
-        basis: undefined,
-      },
-      { gate: 'architecture_review_as_built', surface: ['src/task-1.ts'], deltaConsidered: [], basis: undefined },
-    ]);
+    // The applied decision invalidates these gates because their prior passes
+    // are not applicable in this fixture; candidate preservation must never
+    // be emitted alongside that actual invalidation.
+    expect(preserved).toEqual([]);
     expect(reverified).toEqual([
       expect.objectContaining({ type: 'rebase_gate_reverified', step: 'build', skippedDispatch: true }),
     ]);

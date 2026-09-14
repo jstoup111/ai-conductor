@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import type { ConductState, StepName } from '../types/index.js';
+import type { ConductState, StateMutation, StepName } from '../types/index.js';
 import type { ConductStateStore } from './conduct-state-store.js';
 import type { ReplayEvidence, RebaseOperationRecord } from './gate-verdicts.js';
 import { readVerdict, writeVerdict } from './gate-verdicts.js';
@@ -72,7 +72,7 @@ export async function applyRebaseTransition(
       expected: snapshot.value[gate],
       next: 'pending' as const,
       intent: `apply rebase operation ${operation.id}`,
-    }));
+    }) as StateMutation<ConductState>);
   const result = mutations.length === 0
     ? { kind: 'idempotent' as const }
     : await options.stateStore.applyBatch({ name: `apply rebase operation ${operation.id}`, mutations });
