@@ -34,7 +34,7 @@ import {
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/state.js';
 
-// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, S2.3, S2.4, S2.5, S2.6, S3.2, S3.3, S3.5, S3.6, S4.1, S4.2, S4.3, S4.4, S4.5, task:1, task:2, task:3, task:4, task:5, task:6, task:7, task:8, task:9
+// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, S2.3, S2.4, S2.5, S2.6, S3.2, S3.3, S3.5, S3.6, S4.1, S4.2, S4.3, S4.4, S4.5, S4.6, task:1, task:2, task:3, task:4, task:5, task:6, task:7, task:8, task:9, task:10
 
 const temporaryDirectories: string[] = [];
 
@@ -874,6 +874,160 @@ describe('conduct-state lease', () => {
         message: 'Unable to recover conduct-state lease: recovery claim creation failed (no space left)',
       },
       writes: [],
+    });
+  });
+
+  it('cleans only the verified quarantine while a replacement lease remains live', async () => {
+    const statePath = '/worktree/quarantine-replacement/.pipeline/conduct-state.json';
+    const leasePath = `${statePath}.lease`;
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared,
+      pid: 101,
+      newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    const releasedPaths: string[] = [];
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async moveDirectory(path, destination): Promise<void> {
+        await shared.moveDirectory(path, destination);
+        await shared.acquireDirectory(path);
+        await shared.writeOwner(`${path}/owner.json`, JSON.stringify({
+          version: 1, pid: 303, token: 'replacement-owner', acquiredAt: '1970-01-01T00:00:00.000Z',
+        }));
+      },
+      async releaseDirectory(path): Promise<void> {
+        releasedPaths.push(path);
+        await shared.releaseDirectory(path);
+      },
+    };
+    let now = 0;
+
+    const result = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 202,
+      newToken: () => 'contender',
+      now: () => now,
+      wait: async (milliseconds) => { now += milliseconds; },
+      waitTimeoutMs: 1,
+      retryDelayMs: 1,
+      processIsLive: (candidatePid) => candidatePid === 303,
+    }).acquire();
+
+    expect({
+      result,
+      releasedPaths,
+      replacementRetained: shared.hasDirectory(leasePath),
+      replacementOwner: shared.owner,
+    }).toMatchObject({
+      result: {
+        ok: false,
+        kind: 'timeout',
+        message: 'Unable to acquire conduct-state lease within 1ms; owner pid 303 is live',
+      },
+      releasedPaths: [`${leasePath}.stale.202.contender`],
+      replacementRetained: true,
+      replacementOwner: expect.stringContaining('"token":"replacement-owner"'),
+    });
+  });
+
+  it('leaves a replacement and quarantine intact when identity confirmation fails', async () => {
+    const statePath = '/worktree/quarantine-mismatch/.pipeline/conduct-state.json';
+    const leasePath = `${statePath}.lease`;
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared,
+      pid: 101,
+      newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    let quarantinedPath = '';
+    const releasedPaths: string[] = [];
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async moveDirectory(path, destination): Promise<void> {
+        quarantinedPath = destination;
+        await shared.moveDirectory(path, destination);
+        await shared.acquireDirectory(path);
+        await shared.writeOwner(`${path}/owner.json`, JSON.stringify({
+          version: 1, pid: 303, token: 'replacement-owner', acquiredAt: '1970-01-01T00:00:00.000Z',
+        }));
+      },
+      async readOwner(path): Promise<string> {
+        if (quarantinedPath !== '' && path.startsWith(quarantinedPath)) {
+          return JSON.stringify({
+            version: 1, pid: 404, token: 'unexpected-owner', acquiredAt: '1970-01-01T00:00:00.000Z',
+          });
+        }
+        return shared.readOwner(path);
+      },
+      async releaseDirectory(path): Promise<void> {
+        releasedPaths.push(path);
+        await shared.releaseDirectory(path);
+      },
+    };
+
+    const result = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 202,
+      newToken: () => 'contender',
+      processIsLive: () => false,
+    }).acquire();
+
+    expect({
+      result,
+      releasedPaths,
+      quarantineRetained: shared.hasDirectory(quarantinedPath),
+      replacementRetained: shared.hasDirectory(leasePath),
+    }).toEqual({
+      result: {
+        ok: false,
+        kind: 'recovery_refused',
+        message: 'Unable to recover conduct-state lease: quarantine identity confirmation failed',
+      },
+      releasedPaths: [],
+      quarantineRetained: true,
+      replacementRetained: true,
+    });
+  });
+
+  it('leaves the verified quarantine intact when cleanup fails', async () => {
+    const statePath = '/worktree/quarantine-cleanup-failure/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared,
+      pid: 101,
+      newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    let quarantinedPath = '';
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async moveDirectory(path, destination): Promise<void> {
+        quarantinedPath = destination;
+        await shared.moveDirectory(path, destination);
+      },
+      async releaseDirectory(path): Promise<void> {
+        if (path === quarantinedPath) throw new Error('cleanup denied');
+        await shared.releaseDirectory(path);
+      },
+    };
+
+    const result = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 202,
+      newToken: () => 'contender',
+      processIsLive: () => false,
+    }).acquire();
+
+    expect({ result, quarantineRetained: shared.hasDirectory(quarantinedPath) }).toEqual({
+      result: {
+        ok: false,
+        kind: 'recovery_refused',
+        message: 'Unable to recover conduct-state lease: quarantine cleanup failed (cleanup denied)',
+      },
+      quarantineRetained: true,
     });
   });
 
