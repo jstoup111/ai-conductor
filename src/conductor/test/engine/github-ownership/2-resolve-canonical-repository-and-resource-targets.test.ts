@@ -41,6 +41,8 @@ describe('engine/github-target — canonical repository and resource targets', (
 
     const resolved = await resolveGithubTarget({ ref: 'refs/heads/feature/owned' }, discovery);
 
+    if (resolved.kind !== 'resolved') throw new Error('expected resolved GitHub target');
+
     expect(resolved).toEqual({
       kind: 'resolved',
       target: {
