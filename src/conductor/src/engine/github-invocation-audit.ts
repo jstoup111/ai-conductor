@@ -33,7 +33,6 @@ const APPROVED_INJECTED_GH_BOUNDARIES = new Set([
   'engine/backlog-priority.ts',
   'engine/engineer/issue-dep-migration.ts',
   'engine/gate-writeback.ts',
-  'engine/pr-labels.ts',
   'intake-file-cli.ts',
   'engine/tracker-client.ts',
 ]);
@@ -52,6 +51,7 @@ interface OperationCallerProof { readonly adapter: 'createGuardedGithubOperation
  */
 export const SHIPPED_MUTATION_OPERATION_CALLER_PROOFS = {
   'issue.comment.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
+  'issue.comment.update': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'issue.edit': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'issue.close': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'issue.label.add': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
@@ -210,8 +210,13 @@ function injectedGhRunnerNames(parsed: ts.SourceFile): Set<string> {
     !!initializer && ts.isIdentifier(initializer) && runnerProperties.get(initializer.text)?.has(property) === true;
   const classify = (node: ts.Node): void => {
     if (ts.isParameter(node) || ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node)) {
-      mark(node.name, node.type);
+      if (ts.isIdentifier(node.name) || ts.isObjectBindingPattern(node.name) || ts.isArrayBindingPattern(node.name)) {
+        mark(node.name, node.type);
+      }
       if (ts.isVariableDeclaration(node)) {
+        if (ts.isIdentifier(node.name) && node.initializer && ts.isIdentifier(node.initializer) && runners.has(node.initializer.text)) {
+          runners.add(node.name.text);
+        }
         if (ts.isIdentifier(node.name) && propertyAlias(node.initializer)) runners.add(node.name.text);
         if (ts.isObjectBindingPattern(node.name)) {
           for (const element of node.name.elements) {

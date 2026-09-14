@@ -69,6 +69,30 @@ describe('GitHub invocation audit', () => {
     expect(auditGithubInvocationSource('engine/tracker-client.ts', direct)).toEqual([]);
   });
 
+  it('does not exempt pr-labels: mutable aliases fail while literal reads remain admissible', () => {
+    const mutableAlias = [
+      "import type { GhRunner } from './tracker-client.js';",
+      'async function write(runGh: GhRunner) {',
+      '  const gh = runGh;',
+      "  await gh(['issue', 'comment', 'https://github.com/acme/app/issues/1'], { cwd: '/tmp' });",
+      '}',
+    ].join('\n');
+    const literalRead = [
+      "import type { GhRunner } from './tracker-client.js';",
+      'async function read(runGh: GhRunner) {',
+      "  await runGh(['issue', 'view', 'https://github.com/acme/app/issues/1', '--json', 'comments'], { cwd: '/tmp' });",
+      '}',
+    ].join('\n');
+
+    expect(auditGithubInvocationSource('engine/pr-labels.ts', mutableAlias)).toEqual([
+      expect.objectContaining({
+        line: 4,
+        message: 'direct injected GitHub mutation outside guarded adapter',
+      }),
+    ]);
+    expect(auditGithubInvocationSource('engine/pr-labels.ts', literalRead)).toEqual([]);
+  });
+
   it('preserves local Git but rejects remote mutation and mutable forwarding', () => {
     const local = "import { execFile } from 'node:child_process'; await execFile('git', ['status']);";
     const remote = "import { execFile } from 'node:child_process'; await execFile('git', ['push', 'origin', 'main']);";

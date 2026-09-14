@@ -145,6 +145,7 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
     }
     case 'pull-request.comment.create':
       return ['pr', 'comment', issueNumber(request), '-R', repository, '--body', payloadField(request, 'body')];
+    case 'issue.comment.update':
     case 'pull-request.comment.update': {
       const payload = request.payload;
       if (!payload || !('commentId' in payload) || typeof payload.commentId !== 'string') {

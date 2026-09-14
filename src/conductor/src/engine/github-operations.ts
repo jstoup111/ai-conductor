@@ -66,10 +66,14 @@ export interface GithubPullRequestEditPayload {
   readonly body?: string;
 }
 
-export interface GithubPullRequestCommentUpdatePayload {
+/** Issue and pull-request comments share GitHub's issue-comment update API. */
+export interface GithubCommentUpdatePayload {
   readonly commentId: string;
   readonly body: string;
 }
+
+/** @deprecated Use {@link GithubCommentUpdatePayload}; retained for API compatibility. */
+export type GithubPullRequestCommentUpdatePayload = GithubCommentUpdatePayload;
 
 export interface GithubDependencyPayload {
   readonly dependency: GithubIssueTarget;
@@ -82,13 +86,13 @@ export type GithubOperationPayload =
   | { readonly title: string; readonly body: string; readonly head: string; readonly base: string; readonly draft?: boolean }
   | { readonly name: string; readonly color?: string; readonly description?: string }
   | GithubPullRequestEditPayload
-  | GithubPullRequestCommentUpdatePayload
+  | GithubCommentUpdatePayload
   | GithubDependencyPayload;
 
 interface GithubOperationDefinition {
   readonly access: GithubOperationAccess;
   readonly targetKinds: readonly GithubResourceKind[];
-  readonly payload?: 'body' | 'label' | 'issue-create' | 'pull-request-create' | 'label-definition' | 'pull-request-edit' | 'pull-request-comment-update' | 'dependency';
+  readonly payload?: 'body' | 'label' | 'issue-create' | 'pull-request-create' | 'label-definition' | 'pull-request-edit' | 'comment-update' | 'dependency';
 }
 
 /** Every operation admitted by this boundary is named here. */
@@ -97,6 +101,7 @@ export const GITHUB_OPERATION_REGISTRY = {
   'pull-request.read': { access: 'read', targetKinds: ['pull-request'] },
   'repository.read': { access: 'read', targetKinds: ['repository'] },
   'issue.comment.create': { access: 'feature-write', targetKinds: ['issue'], payload: 'body' },
+  'issue.comment.update': { access: 'feature-write', targetKinds: ['issue'], payload: 'comment-update' },
   'issue.edit': { access: 'feature-write', targetKinds: ['issue'], payload: 'body' },
   'issue.close': { access: 'feature-write', targetKinds: ['issue'] },
   'issue.label.add': { access: 'feature-write', targetKinds: ['issue'], payload: 'label' },
@@ -104,7 +109,7 @@ export const GITHUB_OPERATION_REGISTRY = {
   'issue.dependency.add': { access: 'feature-write', targetKinds: ['issue'], payload: 'dependency' },
   'issue.dependency.remove': { access: 'feature-write', targetKinds: ['issue'], payload: 'dependency' },
   'pull-request.comment.create': { access: 'feature-write', targetKinds: ['pull-request'], payload: 'body' },
-  'pull-request.comment.update': { access: 'feature-write', targetKinds: ['pull-request'], payload: 'pull-request-comment-update' },
+  'pull-request.comment.update': { access: 'feature-write', targetKinds: ['pull-request'], payload: 'comment-update' },
   'pull-request.edit': { access: 'feature-write', targetKinds: ['pull-request'], payload: 'pull-request-edit' },
   'pull-request.ready': { access: 'feature-write', targetKinds: ['pull-request'] },
   'pull-request.draft': { access: 'feature-write', targetKinds: ['pull-request'] },
@@ -332,7 +337,7 @@ function payloadFrom(value: unknown, required: GithubOperationDefinition['payloa
       ...(typeof value.body === 'string' ? { body: value.body } : {}),
     };
   }
-  if (required === 'pull-request-comment-update'
+  if (required === 'comment-update'
     && typeof value.commentId === 'string'
     && /^\d+$/.test(value.commentId)
     && typeof value.body === 'string') {
