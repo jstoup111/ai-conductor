@@ -14,6 +14,12 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { extractPrUrl } from './state.js';
 import type { ParsedIssueRef } from './engineer/issue-ref.js';
+import {
+  executeGithubOperation,
+  type GithubOperationName,
+  type GithubOperationResult,
+  type GithubOperationRunner,
+} from './github-operations.js';
 
 const execFileP = promisify(execFileCb);
 
@@ -29,6 +35,58 @@ export type GitRunner = (
   args: string[],
   opts: { cwd: string },
 ) => Promise<{ stdout: string }>;
+
+/**
+ * The PR seam accepts its historical raw runner for read-only compatibility,
+ * but mutations are admitted only through the typed guarded-operation runner.
+ * Keeping the union at this boundary lets the remaining read callers migrate
+ * independently without reintroducing a raw mutation escape hatch.
+ */
+export type PrRunner = GhRunner | GithubOperationRunner;
+
+export type PrMutationResult = GithubOperationResult;
+
+function isGuardedRunner(runner: PrRunner): runner is GithubOperationRunner {
+  return typeof runner === 'object' && runner !== null && typeof runner.run === 'function';
+}
+
+function prTarget(url: string): { repository: string; kind: 'pull-request'; number: number } | null {
+  const ref = parseIssueRef(url);
+  if (!ref || !Number.isSafeInteger(Number(ref.number)) || Number(ref.number) < 1) return null;
+  return { repository: ref.repo, kind: 'pull-request', number: Number(ref.number) };
+}
+
+function refused(
+  operation: GithubOperationName,
+  reason: 'invalid-target' | 'explicit-authorization-required',
+): PrMutationResult {
+  return { kind: 'refused', operation, reason };
+}
+
+/** Submit a typed PR operation; a raw runner can never perform the mutation. */
+async function runMutation(
+  runner: PrRunner,
+  operation: GithubOperationName,
+  repository: string | undefined,
+  resource: Record<string, unknown>,
+  payload?: Record<string, unknown>,
+): Promise<PrMutationResult> {
+  if (!repository) return refused(operation, 'invalid-target');
+  if (!isGuardedRunner(runner)) return refused(operation, 'explicit-authorization-required');
+  const result = await executeGithubOperation({
+    operation,
+    repository,
+    resource,
+    // The canonical runner resolves the actual machine actor afresh. This
+    // field satisfies the closed request decoder; it is never authority.
+    context: { actor: 'pr-labels' },
+    ...(payload ? { payload } : {}),
+  }, runner);
+  if (result.kind === 'refused' && !('operation' in result)) {
+    return refused(operation, result.reason === 'invalid-target' ? 'invalid-target' : 'explicit-authorization-required');
+  }
+  return result;
+}
 
 // ── Production factories ──────────────────────────────────────────────────────
 
@@ -99,17 +157,21 @@ export function restRemoveLabelArgs(repo: string, number: string, name: string):
  * Swallows all errors.
  */
 export async function ensureLabel(
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   name: string,
   color: string,
   log?: (msg: string) => void,
-): Promise<void> {
-  try {
-    await runGh(['label', 'create', name, '--color', color, '--force'], { cwd });
-  } catch (err) {
-    log?.(`[pr-labels] ensureLabel(${name}) error: ${err}`);
-  }
+  target?: { readonly repository: string },
+): Promise<PrMutationResult> {
+  // A label definition is repository-wide shared state. It is deliberately
+  // never force-created or force-updated: callers without an exact shared
+  // approval receive a refusal, and existing definitions need no write.
+  const result = target
+    ? await runMutation(runGh, 'label-definition.create', target.repository, { kind: 'label-definition', name }, { name, color })
+    : refused('label-definition.create', 'explicit-authorization-required');
+  if (result.kind === 'failed') log?.(`[pr-labels] ensureLabel(${name}) error: ${result.error}`);
+  return result;
 }
 
 /**
@@ -117,22 +179,20 @@ export async function ensureLabel(
  * for why we don't use `gh pr edit`). Swallows all errors.
  */
 export async function addLabel(
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   prUrl: string,
   name: string,
   log?: (msg: string) => void,
-): Promise<void> {
-  const ref = parseIssueRef(prUrl);
-  if (!ref) {
+): Promise<PrMutationResult> {
+  const target = prTarget(prUrl);
+  if (!target) {
     log?.(`[pr-labels] addLabel: unparseable PR URL "${prUrl}"`);
-    return;
+    return refused('pull-request.label.add', 'invalid-target');
   }
-  try {
-    await runGh(restAddLabelArgs(ref.repo, ref.number, name), { cwd });
-  } catch (err) {
-    log?.(`[pr-labels] addLabel(${prUrl}, ${name}) error: ${err}`);
-  }
+  const result = await runMutation(runGh, 'pull-request.label.add', target.repository, target, { label: name });
+  if (result.kind === 'failed') log?.(`[pr-labels] addLabel(${prUrl}, ${name}) error: ${result.error}`);
+  return result;
 }
 
 /**
@@ -140,22 +200,20 @@ export async function addLabel(
  * {@link restRemoveLabelArgs}). Swallows all errors.
  */
 export async function removeLabel(
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   prUrl: string,
   name: string,
   log?: (msg: string) => void,
-): Promise<void> {
-  const ref = parseIssueRef(prUrl);
-  if (!ref) {
+): Promise<PrMutationResult> {
+  const target = prTarget(prUrl);
+  if (!target) {
     log?.(`[pr-labels] removeLabel: unparseable PR URL "${prUrl}"`);
-    return;
+    return refused('pull-request.label.remove', 'invalid-target');
   }
-  try {
-    await runGh(restRemoveLabelArgs(ref.repo, ref.number, name), { cwd });
-  } catch (err) {
-    log?.(`[pr-labels] removeLabel(${prUrl}, ${name}) error: ${err}`);
-  }
+  const result = await runMutation(runGh, 'pull-request.label.remove', target.repository, target, { label: name });
+  if (result.kind === 'failed') log?.(`[pr-labels] removeLabel(${prUrl}, ${name}) error: ${result.error}`);
+  return result;
 }
 
 // ── PR merge state ────────────────────────────────────────────────────────────
@@ -392,6 +450,8 @@ export function isMergeable(s: PrMergeState): boolean {
 // ── Find-or-create PR ─────────────────────────────────────────────────────────
 
 export interface FindOrCreatePrOpts {
+  /** Canonical destination required before a creation write can be authorized. */
+  repository?: string;
   branch: string;
   base: string;
   draft?: boolean;
@@ -401,6 +461,7 @@ export interface FindOrCreatePrOpts {
 
 export interface FindOrCreatePrResult {
   prUrl?: string;
+  outcome?: PrMutationResult;
 }
 
 /**
@@ -413,7 +474,7 @@ export interface FindOrCreatePrResult {
  * - On any runner error, returns {} (swallows).
  */
 export async function findOrCreatePr(
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   opts: FindOrCreatePrOpts,
   log?: (msg: string) => void,
@@ -421,6 +482,12 @@ export async function findOrCreatePr(
   try {
     // ── Step 1: check for an existing PR ──────────────────────────────────
     try {
+      if (typeof runGh !== 'function') {
+        // A typed guarded runner intentionally exposes no raw stdout escape
+        // hatch. Creation remains safe and idempotent: the guarded create is
+        // attempted once, never retried as a duplicate fallback.
+        throw new Error('guarded PR lookup has no raw response adapter');
+      }
       const { stdout } = await runGh(
         ['pr', 'view', opts.branch, '--json', 'url,state'],
         { cwd },
@@ -438,26 +505,14 @@ export async function findOrCreatePr(
     }
 
     // ── Step 2: create a new PR ───────────────────────────────────────────
-    const createArgs: string[] = [
-      'pr',
-      'create',
-      '--head',
-      opts.branch,
-      '--base',
-      opts.base,
-      '--title',
-      opts.title,
-      '--body',
-      opts.body,
-    ];
-    if (opts.draft) createArgs.push('--draft');
-
-    const { stdout: createOut } = await runGh(createArgs, { cwd });
-    const prUrl = extractPrUrl(createOut);
-    if (prUrl) return { prUrl };
-
-    log?.(`[pr-labels] findOrCreatePr: could not parse URL from output: ${createOut}`);
-    return {};
+    const result = await runMutation(
+      runGh,
+      'pull-request.create',
+      opts.repository,
+      { kind: 'repository' },
+      { title: opts.title, body: opts.body, head: opts.branch, base: opts.base },
+    );
+    return { outcome: result };
   } catch (err) {
     log?.(`[pr-labels] findOrCreatePr(${opts.branch}) error: ${err}`);
     return {};
@@ -499,17 +554,17 @@ export async function resolveSpecPrUrl(
  * Swallows all errors.
  */
 export async function comment(
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   prUrl: string,
   body: string,
   log?: (msg: string) => void,
-): Promise<void> {
-  try {
-    await runGh(['pr', 'comment', prUrl, '--body', body], { cwd });
-  } catch (err) {
-    log?.(`[pr-labels] comment(${prUrl}) error: ${err}`);
-  }
+): Promise<PrMutationResult> {
+  const target = prTarget(prUrl);
+  if (!target) return refused('pull-request.comment.create', 'invalid-target');
+  const result = await runMutation(runGh, 'pull-request.comment.create', target.repository, target, { body });
+  if (result.kind === 'failed') log?.(`[pr-labels] comment(${prUrl}) error: ${result.error}`);
+  return result;
 }
 
 /**
@@ -727,16 +782,16 @@ export async function upsertIssueComment(
  * Swallows all errors.
  */
 export async function setReady(
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   prUrl: string,
   log?: (msg: string) => void,
-): Promise<void> {
-  try {
-    await runGh(['pr', 'ready', prUrl], { cwd });
-  } catch (err) {
-    log?.(`[pr-labels] setReady(${prUrl}) error: ${err}`);
-  }
+): Promise<PrMutationResult> {
+  const target = prTarget(prUrl);
+  if (!target) return refused('pull-request.ready', 'invalid-target');
+  const result = await runMutation(runGh, 'pull-request.ready', target.repository, target);
+  if (result.kind === 'failed') log?.(`[pr-labels] setReady(${prUrl}) error: ${result.error}`);
+  return result;
 }
 
 /**
@@ -744,16 +799,16 @@ export async function setReady(
  * Swallows all errors.
  */
 export async function convertToDraft(
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   prUrl: string,
   log?: (msg: string) => void,
-): Promise<void> {
-  try {
-    await runGh(['pr', 'ready', '--undo', prUrl], { cwd });
-  } catch (err) {
-    log?.(`[pr-labels] convertToDraft(${prUrl}) error: ${err}`);
-  }
+): Promise<PrMutationResult> {
+  const target = prTarget(prUrl);
+  if (!target) return refused('pull-request.draft', 'invalid-target');
+  const result = await runMutation(runGh, 'pull-request.draft', target.repository, target);
+  if (result.kind === 'failed') log?.(`[pr-labels] convertToDraft(${prUrl}) error: ${result.error}`);
+  return result;
 }
 
 // ── Halt presentation read ────────────────────────────────────────────────────
@@ -804,20 +859,24 @@ export async function readHaltPresentation(
  * {@link readHaltPresentation}. Swallows all errors and never throws.
  */
 export async function ensureBodyMarker(
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   prUrl: string,
   currentBody?: string,
   log?: (msg: string) => void,
-): Promise<void> {
+): Promise<PrMutationResult | undefined> {
   try {
     // ── Step 1: determine the current body ────────────────────────────────
     let body = currentBody;
     if (body === undefined) {
+      if (typeof runGh !== 'function') {
+        log?.('[pr-labels] ensureBodyMarker: guarded runner has no body-read adapter');
+        return undefined;
+      }
       const presentation = await readHaltPresentation(runGh, cwd, prUrl, log);
       if (!presentation) {
         log?.(`[pr-labels] ensureBodyMarker: could not read PR presentation`);
-        return;
+        return undefined;
       }
       body = presentation.body;
     }
@@ -825,14 +884,17 @@ export async function ensureBodyMarker(
     // ── Step 2: check if marker is present; if so, idempotent-exit ────────
     if (body.includes(NEEDS_REMEDIATION_BODY_MARKER)) {
       // Marker already present — no edit needed
-      return;
+      return undefined;
     }
 
-    // ── Step 3: append marker and call gh pr edit ────────────────────────
+    // ── Step 3: append marker through the guarded edit operation ─────────
     const newBody = `${body}\n${NEEDS_REMEDIATION_BODY_MARKER}`;
-    await runGh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+    const target = prTarget(prUrl);
+    if (!target) return refused('pull-request.edit', 'invalid-target');
+    return await runMutation(runGh, 'pull-request.edit', target.repository, target, { body: newBody });
   } catch (err) {
     log?.(`[pr-labels] ensureBodyMarker(${prUrl}) error: ${err}`);
+    return undefined;
   }
 }
 
@@ -960,23 +1022,26 @@ export async function ensureHaltPresentation(
  * @param log - Optional logging callback
  */
 export async function removeBodyMarker(
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   prUrl: string,
   currentBody: string,
   log?: (msg: string) => void,
-): Promise<void> {
+): Promise<PrMutationResult | undefined> {
   try {
     // Check if marker is present; if not, idempotent-exit
     if (!currentBody.includes(NEEDS_REMEDIATION_BODY_MARKER)) {
-      return;
+      return undefined;
     }
 
-    // Strip the marker and call gh pr edit
+    // Strip the marker and submit the same guarded edit primitive.
     const newBody = currentBody.replace(NEEDS_REMEDIATION_BODY_MARKER, '').trim();
-    await runGh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+    const target = prTarget(prUrl);
+    if (!target) return refused('pull-request.edit', 'invalid-target');
+    return await runMutation(runGh, 'pull-request.edit', target.repository, target, { body: newBody });
   } catch (err) {
     log?.(`[pr-labels] removeBodyMarker(${prUrl}) error: ${err}`);
+    return undefined;
   }
 }
 
