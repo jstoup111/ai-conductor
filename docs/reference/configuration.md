@@ -1195,6 +1195,10 @@ only when discovery finds one unambiguous installation; otherwise select the pro
 plugin source explicitly. `resources` name policy-package material captured with the selected skill;
 they cannot grant checkout, credential, sibling-review, or network access.
 
+Selecting a custom rubric adopts its skill as a read-only review policy: its criteria and captured
+resources inform findings for the declared question, but its standalone workflow and output format do
+not replace the engine's bounded review contract or aggregate verdict.
+
 Custom review is available on Linux only after bubblewrap proves the read-only profile: the frozen
 source and policy material are readable, while the original checkout, engine evidence, and sibling
 review evidence remain protected. If that profile, an admitted declared requirement, or a runtime
