@@ -37,6 +37,19 @@ export interface GateCodeValidityContext {
 
 export type GateVerdictValidity = 'preserve' | 'rerun';
 
+/**
+ * A satisfied gate record is not automatically a judged PASS: skip records
+ * and kickback-shaped records deliberately share the durable verdict format.
+ * Rebase preservation may use only a real, currently satisfied judgement.
+ */
+export function isApplicableOriginalPass(
+  verdict: { satisfied: boolean; reason?: string; kickback?: unknown } | null | undefined,
+): boolean {
+  return verdict?.satisfied === true &&
+    verdict.kickback === undefined &&
+    !verdict.reason?.startsWith('skipped: ');
+}
+
 /** The identity comparison result for a SHIP-tail verdict sidecar. */
 export type VerdictRunIdentity =
   | { state: 'match'; runId: string }
