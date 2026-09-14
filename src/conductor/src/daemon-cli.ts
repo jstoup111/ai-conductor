@@ -21,12 +21,8 @@ import {
 } from './engine/autoresolve.js';
 import {
   isEligibleForCiFix,
-  runCiFix,
-  buildCiFixHint,
-  enrichCiFixHint,
-  productionCiFixRunner,
-  classifyFixError,
 } from './engine/ci-fix.js';
+import { createDaemonCiFixDispatch } from './engine/daemon-ci-fix.js';
 import {
   resolveRebaseResolutionAttempts,
   resolveDispatchStartTimeoutSeconds,
@@ -2424,52 +2420,23 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 stage: 'context', reason, disposition: 'deferred' });
             },
             dispatch: async (entry, state) => {
-              if (!ciFixEnabled) {
-                return;
-              }
-              log(`[mergeable-sweep] ci-fix dispatch: ${entry.prUrl} (attempt ${entry.ciFixAttempts})`);
-
-              try {
-                const ghRunner = makeProductionGh();
-                const prViewResult = await ghRunner(
-                  ['pr', 'view', entry.prUrl, '--json', 'headRefName'],
-                  { cwd: entry.repoCwd },
-                );
-                const parsed = JSON.parse(prViewResult.stdout) as { headRefName?: unknown };
-                const branch = typeof parsed.headRefName === 'string' ? parsed.headRefName.trim() : '';
-                if (!branch) {
-                  log(`[ci-fix] empty branch name for ${entry.prUrl}`);
-                  void events.emit({
-                    type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
-                    stage: 'branch', reason: 'missing-branch', disposition: 'deferred',
-                  });
-                  return { kind: 'not-started' };
-                }
-                const hintResult = buildCiFixHint(state);
-                if (hintResult.kind !== 'ready') {
-                  void events.emit({
-                    type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
-                    stage: 'context',
-                    reason: hintResult.reason === 'read-failure' ? 'read-failure'
-                      : hintResult.reason === 'malformed-context' ? 'malformed-context' : 'missing-context',
-                    disposition: 'deferred',
-                  });
-                  return { kind: 'not-started' };
-                }
-                const enriched = await enrichCiFixHint(hintResult.hint, state, ghRunner, entry.repoCwd);
-                for (const reason of enriched.degradations) {
+              if (!ciFixEnabled) return;
+              let repairProvider: string | undefined;
+              return createDaemonCiFixDispatch({
+                gh: makeProductionGh(),
+                liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
+                log,
+                diagnostic: async ({ stage, reason }) => {
                   void events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
-                    stage: 'log-enrichment', reason, disposition: 'degraded' });
-                }
-                const hint = enriched.hint;
-
+                    stage, reason: reason === 'empty-failure-context' ? 'missing-context' : reason,
+                    disposition: stage === 'log-enrichment' ? 'degraded' : 'deferred' });
+                },
+                createDispatcher: () => ({
                 // Route the ci-fix dispatch through resolveCiFailure (T4):
                 // adapt a real DefaultStepRunner into productionCiFixRunner's
                 // dispatcher seam instead of wiring the bare exec-based
                 // runner directly — mirrors the resolveRebaseConflict /
                 // DefaultStepRunner pattern used for rebase resolution above.
-                let repairProvider: string | undefined;
-                const ciFixDispatcher = {
                   resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: typeof entry }) => {
                     const sessionId = uuidv4();
                     const providerExecution = createSlugScopedProviderExecution(ctx.entry.slug);
@@ -2502,48 +2469,16 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     });
                     return attempt;
                   },
-                };
-
-                const outcome = await runCiFix(
-                  entry,
-                  branch,
-                  hint,
-                  {
-                    fixRunner: {
-                      run: (opts) => productionCiFixRunner.run({ ...opts, dispatcher: ciFixDispatcher }),
-                    },
-                    liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
-                  },
-                  log,
-                );
-
-                log(`[ci-fix] outcome for ${entry.prUrl}: ${outcome.kind}`);
-                if (outcome.kind === 'failed') {
-                  void events.emit({
-                    type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
-                    stage: outcome.stage === 'guard' ? 'guard'
-                      : outcome.stage === 'verification' ? 'verification'
-                      : outcome.stage === 'publication' ? 'publication' : 'execution',
-                    reason: outcome.stage === 'guard' ? 'guard-refused'
-                      : outcome.stage === 'verification' ? 'verification-failed'
-                      : outcome.stage === 'publication' ? 'publication-refused' : 'provider-failure',
-                    disposition: 'failed', provider: repairProvider,
-                  });
-                } else if (outcome.kind === 'published') {
-                  void events.emit({
-                    type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
-                    stage: 'publication', reason: 'verified-publication', disposition: 'published', provider: repairProvider,
-                  });
+                }),
+              }).then(async (outcome) => {
+                if (outcome.kind === 'failed' || outcome.kind === 'published') {
+                  await events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
+                    stage: outcome.kind === 'published' ? 'publication' : outcome.stage === 'guard' ? 'guard' : outcome.stage === 'verification' ? 'verification' : outcome.stage === 'publication' ? 'publication' : 'execution',
+                    reason: outcome.kind === 'published' ? 'verified-publication' : outcome.stage === 'guard' ? 'guard-refused' : outcome.stage === 'verification' ? 'verification-failed' : outcome.stage === 'publication' ? 'publication-refused' : 'provider-failure',
+                    disposition: outcome.kind === 'published' ? 'published' : 'failed', provider: repairProvider });
                 }
                 return outcome;
-              } catch (err: any) {
-                log(
-                  `[ci-fix] error resolving ${entry.prUrl} [${classifyFixError(err)}]: ${err?.message || err}`,
-                );
-                void events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
-                  stage: 'branch', reason: classifyFixError(err), disposition: 'deferred' });
-                return { kind: 'not-started' };
-              }
+              });
             },
           },
         });
