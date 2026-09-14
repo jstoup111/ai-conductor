@@ -509,7 +509,7 @@ export function createFinishPresentationRepair(input: {
       if (outcome === 'refused') {
         throw new Error('guarded halt-history repair refused');
       }
-    } catch (error) { repairLog(`[conductor-repair] postHaltHistoryComment failed: ${error}`); }
+    } catch (error) { repairLog(`[conductor-repair] postHaltHistoryComment failed: ${error}`); throw error; }
     if (mode === 'capture-only') return;
     try {
       const outcome = await rehabilitateHaltPr({

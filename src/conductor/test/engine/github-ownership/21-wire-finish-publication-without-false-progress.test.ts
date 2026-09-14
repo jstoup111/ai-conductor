@@ -11,7 +11,10 @@ vi.mock('../../../src/engine/owner-gate/machine-identity.js', async (importOrigi
 });
 afterEach(() => { machineOwner.id = 'alice'; });
 
-import { createProvenanceGuardedFinishPresentationRepair } from '../../../src/engine/conductor.js';
+import {
+  createFinishPresentationRepair,
+  createProvenanceGuardedFinishPresentationRepair,
+} from '../../../src/engine/conductor.js';
 import { openShipDraftPr } from '../../../src/engine/ship-draft-pr.js';
 import type { GithubMutationExecutionContext } from '../../../src/engine/tracker-client.js';
 
@@ -38,6 +41,32 @@ function mutation(): GithubMutationExecutionContext {
 }
 
 describe('finish publication guarded draft boundary', () => {
+  it('fails closed when capture-only halt history lacks guarded comment authority', async () => {
+    const gh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            title: 'needs-remediation: owned', body: 'halted', isDraft: true, labels: [], comments: [],
+          }),
+        };
+      }
+      throw new Error(`raw mutation must not run: ${args.join(' ')}`);
+    });
+    const repair = createFinishPresentationRepair({ projectRoot: '/fixture', gh });
+
+    await expect(repair({
+      prUrl: `https://github.com/${REPOSITORY}/pull/42`,
+      state: { feature_desc: 'owned', worktree_branch: BRANCH },
+      mode: 'capture-only',
+    })).rejects.toThrow('guarded halt-history repair refused');
+
+    expect(gh).toHaveBeenCalledTimes(1);
+    expect(gh).toHaveBeenCalledWith(
+      ['pr', 'view', `https://github.com/${REPOSITORY}/pull/42`, '--json', 'title,isDraft,labels,body,comments'],
+      { cwd: '/fixture' },
+    );
+  });
+
   it('resolves fresh committed provenance for live presentation repair and refuses without a ready fallback', async () => {
     let draft = true;
     const gh = vi.fn(async (args: string[]) => {
