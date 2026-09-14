@@ -11,6 +11,8 @@ import { createFilesystemConductStateStore } from '../../src/engine/filesystem-c
 import { readState, writeState } from '../../src/engine/state.js';
 import { applyRebaseVerdicts, type RebaseOutcome } from '../../src/engine/rebase.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -454,6 +456,115 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       expect(halt).toContain('manual_test');
       expect(halt).not.toContain('prd_audit');
       expect(halt).not.toContain('architecture_review_as_built');
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    ['permission denial', 'manual_test', {
+      prd_audit: 'done', architecture_review_as_built: 'done',
+      validation__prd_audit: 'done', validation__architecture_review_as_built: 'done',
+    }],
+    ['PLAN_GAP halt', 'prd_audit', {
+      manual_test: 'done', architecture_review_as_built: 'done',
+      validation__manual_test: 'done', validation__architecture_review_as_built: 'done',
+    }],
+    ['manual-test no-op cap', 'manual_test', {
+      prd_audit: 'done', architecture_review_as_built: 'done',
+      validation__prd_audit: 'done', validation__architecture_review_as_built: 'done',
+    }],
+  ] as const)('closes a retained width-one group after a %s', async (route, entry, retained) => {
+    const dir = await mkdtemp(join(tmpdir(), 'validation-retained-terminal-'));
+    const statePath = join(dir, 'conduct-state.json');
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events);
+    persister.start();
+    try {
+      await seedValidators(dir, statePath, retained);
+      if (route === 'manual-test no-op cap') {
+        await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
+          version: 1,
+          gates: {
+            manual_test: {
+              count: 1, treeHash: null, lastReason: 'prior validation kickback',
+              priorVerdict: false, resolvedBefore: 1,
+            },
+          },
+        }));
+      }
+      const conductor = new Conductor({
+        stateFilePath: statePath, events, projectRoot: dir, mode: 'auto', daemon: true,
+        verifyArtifacts: true, maxRetries: 1, fromStep: entry,
+        stepRunner: { run: vi.fn(async (step: StepName) => {
+          if (route === 'permission denial' && step === 'manual_test') {
+            return {
+              success: false, permissionDenied: true, actualProvider: 'codex',
+              output: 'permission denied',
+              authentication: { provider: 'codex', source: 'api-key', state: 'ready' },
+            } as StepRunResult;
+          }
+          if (route === 'manual-test no-op cap' && step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n');
+          }
+          if (route === 'PLAN_GAP halt' && step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+          }
+          return { success: true } as StepRunResult;
+        }) },
+      });
+      if (route === 'PLAN_GAP halt') {
+        (conductor as unknown as { routeCurrentPrdAudit: () => Promise<unknown> }).routeCurrentPrdAudit = async () => ({
+          kind: 'plan-gap-halt', route: { kind: 'halt', haltClass: 'plan-gap', detail: 'unowned PLAN_GAP', findings: [] },
+        });
+      }
+      await conductor.run();
+      const ledger = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+      const terminals = ledger.filter((event) =>
+        event.type === 'parallel_failure' && event.step === entry,
+      );
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0]).toMatchObject({
+        branch: 'conductor', activeInterval: expect.any(Object),
+        error: 'validation group round exited without a join terminal',
+      });
+      expect(await computeTimingRollup(dir)).not.toMatchObject({
+        state: 'partial', reason: `open-executions:parallel:${entry}`,
+      });
+    } finally {
+      persister.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['no-verdict', async (dir: string, step: StepName) => {
+      if (step === 'manual_test') throw new Error('validator crashed');
+      return { success: true } as StepRunResult;
+    }],
+    ['all-green', async (dir: string, step: StepName) => {
+      if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+      return { success: true } as StepRunResult;
+    }],
+  ] as const)('keeps exactly one terminal for retained width-one %s rounds', async (_route, run) => {
+    const dir = await mkdtemp(join(tmpdir(), 'validation-retained-existing-terminal-'));
+    const statePath = join(dir, 'conduct-state.json');
+    const events: ConductorEvent[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('parallel_failure', event => { events.push(event); });
+    emitter.on('parallel_completed', event => { events.push(event); });
+    try {
+      await seedValidators(dir, statePath, {
+        prd_audit: 'done', architecture_review_as_built: 'done',
+        validation__prd_audit: 'done', validation__architecture_review_as_built: 'done',
+      });
+      await new Conductor({
+        stateFilePath: statePath, events: emitter, projectRoot: dir, mode: 'auto', daemon: true,
+        verifyArtifacts: true, maxRetries: 1, fromStep: 'manual_test',
+        stepRunner: { run: (step) => run(dir, step) },
+      }).run();
+      expect(events.filter(event =>
+        (event.type === 'parallel_failure' || event.type === 'parallel_completed') && event.step === 'manual_test',
+      )).toHaveLength(1);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });

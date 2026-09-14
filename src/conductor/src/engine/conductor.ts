@@ -8985,6 +8985,21 @@ export class Conductor {
             }
             return;
           } finally {
+              // A retained width-one round can halt before its join path
+              // emits a terminal. Close that group-owned execution here so
+              // every exit from the fan-out has exactly one lifecycle end.
+              const groupExecutionKey = `parallel:${step.name}`;
+              if (
+                this.openExecutions.has(groupExecutionKey) &&
+                !this.closingExecutions.has(groupExecutionKey)
+              ) {
+                await emitTracked({
+                  type: 'parallel_failure',
+                  step: step.name,
+                  branch: 'conductor',
+                  error: 'validation group round exited without a join terminal',
+                });
+              }
               // Task 4 (#788): unconditional clear, mirroring the ordinary
               // per-step dispatch's finally — this round is done (all-green,
               // halted, or kicked back) either way.
@@ -9708,18 +9723,6 @@ export class Conductor {
                                   : {}),
                               });
                             } catch (error) {
-                              // A retained sibling re-dispatch, including a
-                              // width-one recheck selected by the FINISH
-                              // validation fence, borrows the group branch's
-                              // retry contract. Ordinary serial validation
-                              // dispatches keep their existing exception
-                              // routing.
-                              if (this.hasRetainedValidationSibling(step.name, state)) {
-                                return {
-                                  success: false,
-                                  output: error instanceof Error ? error.message : String(error),
-                                };
-                              }
                               throw error;
                             }
                           })());
@@ -12942,23 +12945,6 @@ export class Conductor {
           // stamped 'done' here. For all other steps, here.
           if (step.name !== 'complexity' && step.name !== 'worktree' && step.name !== 'rebase') {
             await this.saveConductorStepStatus(state, step.name, 'done');
-            // A width-one built-in validation group deliberately follows the
-            // serial dispatch path (and therefore preserves the established
-            // serial event stream), but its durable state must remain
-            // equivalent to the width-2+ join.  Complete the paired synthetic
-            // member key here rather than routing width one through the join.
-            const group = getGroupForStep(step.name);
-            if (group?.name === 'validation' && this.hasRetainedValidationSibling(step.name, state)) {
-              // Synthetic group-member keys are not StepName values.  Commit
-              // the paired status through the mutation port without using the
-              // step-status helper, which would incorrectly advance last_step
-              // to the synthetic key.
-              await this.commitStateChanges(
-                state,
-                `complete ${group.name} ${step.name} synthetic member state`,
-                { [`${group.name}__${step.name}`]: 'done' },
-              );
-            }
           }
           state[step.name] = 'done';
           lastSettledUnit = { kind: 'step', name: step.name };
