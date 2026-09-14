@@ -2427,10 +2427,23 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 const branch = typeof parsed.headRefName === 'string' ? parsed.headRefName.trim() : '';
                 if (!branch) {
                   log(`[ci-fix] empty branch name for ${entry.prUrl}`);
+                  void events.emit({
+                    type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
+                    stage: 'branch', reason: 'missing-branch', disposition: 'deferred',
+                  });
                   return { kind: 'not-started' };
                 }
                 const hintResult = buildCiFixHint(state);
-                if (hintResult.kind !== 'ready') return { kind: 'not-started' };
+                if (hintResult.kind !== 'ready') {
+                  void events.emit({
+                    type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
+                    stage: 'context',
+                    reason: hintResult.reason === 'read-failure' ? 'read-failure'
+                      : hintResult.reason === 'malformed-context' ? 'malformed-context' : 'missing-context',
+                    disposition: 'deferred',
+                  });
+                  return { kind: 'not-started' };
+                }
                 const hint = hintResult.hint;
 
                 // Route the ci-fix dispatch through resolveCiFailure (T4):
@@ -2486,6 +2499,23 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 );
 
                 log(`[ci-fix] outcome for ${entry.prUrl}: ${outcome.kind}`);
+                if (outcome.kind === 'failed') {
+                  void events.emit({
+                    type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
+                    stage: outcome.stage === 'guard' ? 'guard'
+                      : outcome.stage === 'verification' ? 'verification'
+                      : outcome.stage === 'publication' ? 'publication' : 'execution',
+                    reason: outcome.stage === 'guard' ? 'guard-refused'
+                      : outcome.stage === 'verification' ? 'verification-failed'
+                      : outcome.stage === 'publication' ? 'publication-refused' : 'provider-failure',
+                    disposition: 'failed',
+                  });
+                } else if (outcome.kind === 'published') {
+                  void events.emit({
+                    type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
+                    stage: 'publication', reason: 'unknown', disposition: 'published',
+                  });
+                }
                 return outcome;
               } catch (err: any) {
                 log(
@@ -2875,6 +2905,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'ci_failed':
       log(
         `${dot} ${chalk.red('✋')} ${chalk.red(`ci_failed[${event.slug}]: phase=${event.phase} attempts=${event.attempts} checks=[${event.checks.join(',')}]`)}`,
+      );
+      break;
+    case 'ci_repair_diagnostic':
+      log(
+        `${dot} ${chalk.red('✋')} ${chalk.red(`ci_repair[${event.slug}]: ${event.stage}/${event.reason} (${event.disposition})`)}`,
       );
       break;
     case 'rate_limit':

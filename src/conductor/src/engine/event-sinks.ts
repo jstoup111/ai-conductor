@@ -153,6 +153,7 @@ export const EVENT_SINKS = {
   halt_cleared: { render: false, persist: false, audit: true, otel: false },
   kickback_budget_adjustment_authorized: { render: false, persist: true, audit: true, otel: false },
   ci_failed: { render: true, persist: false, audit: false, otel: false },
+  ci_repair_diagnostic: { render: true, persist: true, audit: false, otel: false },
   attribution_divergence: { render: false, persist: true, audit: false, otel: false },
   acceptance_red: { render: false, persist: true, audit: false, otel: false },
 } as const satisfies Record<ConductorEvent['type'], SinkDeclaration>;
