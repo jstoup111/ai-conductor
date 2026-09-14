@@ -16,6 +16,7 @@ import { withEngineCommitEnv } from './engine-commit-env.js';
 import { saveStepStatus } from './state.js';
 import {
   classifyGateInvalidation,
+  classifyReplayGateInvalidation,
   GATE_SURFACE,
   isReviewDocumentPath,
   projectGateSurfaces,
@@ -30,9 +31,11 @@ import {
 } from './protected-artifact-seal.js';
 import {
   captureReplayIdentity,
+  compareReplayTree,
   type ReplayIdentity,
   type ReplayIdentitySeed,
 } from './rebase-replay.js';
+import type { ReplayEvidence } from './gate-verdicts.js';
 import { isApplicableOriginalPass } from './gate-code-validity.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
@@ -1684,11 +1687,13 @@ export async function applyRebaseVerdicts(
     reason?: string;
     preservationBasis?: 'test_suite_drift_budget';
   }>,
+  git?: GitRunner,
 ): Promise<{
   satisfied: boolean;
   kickedBack: StepName[];
   reverified: StepName[];
   preserved?: Array<{ gate: StepName; basis: 'test_suite_drift_budget' }>;
+  replay?: ReplayEvidence;
 }> {
   if (outcome.kind === 'conflict_halt') {
     await writeVerdict(projectRoot, 'rebase', {
@@ -1780,8 +1785,17 @@ export async function applyRebaseVerdicts(
   // — or a gate whose surface can't be proven to miss the delta would be
   // silently left un-re-verified (prd_audit/architecture_review_as_built
   // included).
+  // Path overlap alone cannot distinguish an upstream edit in the same file
+  // from a changed replay. Use the exact reconstructed merge tree whenever
+  // the completed replay supplied immutable identities; an unavailable proof
+  // remains conservative through the replay classifier.
+  const replayComparison = git && outcome.replay
+    ? await compareReplayTree(git, outcome.replay)
+    : undefined;
   const partition = outcome.featureSurface !== undefined
-    ? classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
+    ? replayComparison
+      ? classifyReplayGateInvalidation(delta, outcome.featureSurface, ranManualTest, replayComparison, outcome.documentInputs)
+      : classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
     : undefined;
   const applicablePreservations = new Set<StepName>();
   if (partition !== undefined) {
@@ -1828,6 +1842,18 @@ export async function applyRebaseVerdicts(
     kickedBack,
     reverified,
     ...(preserved.length === 0 ? {} : { preserved }),
+    ...(replayComparison
+      ? { replay: {
+          preRebaseHead: replayComparison.identity.preRebaseHead,
+          mergeBase: replayComparison.identity.mergeBase,
+          target: replayComparison.identity.target,
+          completedHead: replayComparison.identity.completedHead,
+          // Empty is deliberately non-authoritative: it lets the transition
+          // record the conservative unproved decision while the shared
+          // preservation reader rejects it as replay authority.
+          expectedTree: replayComparison.kind === 'unproved' ? '' : replayComparison.expectedTree,
+        } }
+      : {}),
   };
 }
 

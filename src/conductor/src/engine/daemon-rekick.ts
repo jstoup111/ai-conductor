@@ -30,6 +30,8 @@ import {
 } from './rebase.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
+import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
+import { applyRebaseTransition } from './rebase-transition.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { GhRunner } from './pr-labels.js';
@@ -861,7 +863,22 @@ export async function resumeRebaseFirst(opts: {
     outcome,
     opts.ranManualTest,
     preVerify,
+    git,
   );
+  if (rebaseVerdict.replay && rebaseVerdict.kickedBack.length > 0) {
+    const transition = await applyRebaseTransition({
+      projectRoot: opts.worktreePath,
+      stateStore: createFilesystemConductStateStore(join(opts.worktreePath, '.pipeline', 'conduct-state.json')),
+      replay: rebaseVerdict.replay,
+      invalidated: rebaseVerdict.kickedBack,
+      preserved: [],
+      reverified: rebaseVerdict.reverified,
+    });
+    if (transition.stateResult === 'refused') {
+      await writeHalt(opts.worktreePath, [], 'rebase continuation state transition was refused; inspect concurrent state updates before resuming', opts.events);
+      return 'halted';
+    }
+  }
   for (const step of rebaseVerdict.reverified) {
     await opts.events.emit({
       type: 'rebase_gate_reverified',
