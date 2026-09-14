@@ -1783,6 +1783,13 @@ function validateTestSuiteBlock(
           message: `test_suite.commands[${index}].command must be a non-empty string`,
         };
       }
+
+      const workingDirectoryError = validateTestSuiteWorkingDirectory(
+        entry.working_directory,
+        projectRoot,
+        `test_suite.commands[${index}].working_directory`,
+      );
+      if (workingDirectoryError) return workingDirectoryError;
     }
   }
 
@@ -1801,30 +1808,12 @@ function validateTestSuiteBlock(
     }
   }
 
-  if (raw.working_directory !== undefined) {
-    if (typeof raw.working_directory !== 'string') {
-      return {
-        type: 'validation_error',
-        message: 'test_suite.working_directory must be a relative path within the project root',
-      };
-    }
-    const root = resolvePath(projectRoot ?? '.');
-    const resolvedDirectory = resolvePath(root, raw.working_directory);
-    const relativeDirectory = relative(root, resolvedDirectory);
-    if (
-      isAbsolute(raw.working_directory) ||
-      relativeDirectory === '..' ||
-      relativeDirectory.startsWith(`..${sep}`) ||
-      isAbsolute(relativeDirectory) ||
-      (projectRoot !== undefined &&
-        existingRealPathEscapesRoot(projectRoot, resolvedDirectory))
-    ) {
-      return {
-        type: 'validation_error',
-        message: 'test_suite.working_directory must be a relative path within the project root',
-      };
-    }
-  }
+  const workingDirectoryError = validateTestSuiteWorkingDirectory(
+    raw.working_directory,
+    projectRoot,
+    'test_suite.working_directory',
+  );
+  if (workingDirectoryError) return workingDirectoryError;
 
   if (
     raw.timeout_seconds !== undefined &&
@@ -1861,6 +1850,37 @@ function validateTestSuiteBlock(
     raw.verification = resolveTestSuiteVerification(raw.verification);
   }
 
+  return null;
+}
+
+function validateTestSuiteWorkingDirectory(
+  workingDirectory: unknown,
+  projectRoot: string | undefined,
+  field: string,
+): ConfigError | null {
+  if (workingDirectory === undefined) return null;
+  if (typeof workingDirectory !== 'string') {
+    return {
+      type: 'validation_error',
+      message: `${field} must be a relative path within the project root`,
+    };
+  }
+  const root = resolvePath(projectRoot ?? '.');
+  const resolvedDirectory = resolvePath(root, workingDirectory);
+  const relativeDirectory = relative(root, resolvedDirectory);
+  if (
+    isAbsolute(workingDirectory) ||
+    relativeDirectory === '..' ||
+    relativeDirectory.startsWith(`..${sep}`) ||
+    isAbsolute(relativeDirectory) ||
+    (projectRoot !== undefined &&
+      existingRealPathEscapesRoot(projectRoot, resolvedDirectory))
+  ) {
+    return {
+      type: 'validation_error',
+      message: `${field} must be a relative path within the project root`,
+    };
+  }
   return null;
 }
 

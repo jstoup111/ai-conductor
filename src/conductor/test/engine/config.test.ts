@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:2.1, task:3, task:9
+// Covers: task:1, task:2, task:2.1, task:3, task:4, task:9
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -1211,6 +1211,70 @@ steps:
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.config.test_suite?.commands).toEqual(commands);
+    });
+
+    it('rejects an absolute working directory in a command entry with its index', () => {
+      const result = validateConfig(
+        {
+          test_suite: {
+            commands: [{ command: 'npm test', working_directory: '/tmp/outside-project' }],
+          },
+        },
+        tmpDir,
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'test_suite.commands[0].working_directory must be a relative path within the project root',
+        },
+      });
+    });
+
+    it('rejects a parent escape in a command entry with its index', () => {
+      const result = validateConfig(
+        {
+          test_suite: {
+            commands: [{ command: 'npm test', working_directory: '../outside-project' }],
+          },
+        },
+        tmpDir,
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'test_suite.commands[0].working_directory must be a relative path within the project root',
+        },
+      });
+    });
+
+    it('rejects an outward symlink in a command entry with its index', async () => {
+      const outside = await mkdtemp(join(tmpdir(), 'config-outside-'));
+      try {
+        await symlink(outside, join(tmpDir, 'outward-link'));
+
+        const result = validateConfig(
+          {
+            test_suite: {
+              commands: [{ command: 'npm test', working_directory: 'outward-link' }],
+            },
+          },
+          tmpDir,
+        );
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: 'test_suite.commands[0].working_directory must be a relative path within the project root',
+          },
+        });
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
     });
 
     it.each([
