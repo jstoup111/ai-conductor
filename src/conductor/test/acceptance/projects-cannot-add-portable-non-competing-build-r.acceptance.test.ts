@@ -166,14 +166,21 @@ async function seedProject(): Promise<{ root: string; statePath: string }> {
 
 function scriptedGit(head: () => string) {
   return async (args: string[]) => {
+    const featureSource = head() === 'head-after-repair'
+      ? 'export const cacheKey = "effective-policy";\n'
+      : 'export const cacheKey = "legacy";\n';
     if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
     if (args[0] === 'rev-parse') return { exitCode: 0, stdout: args[1] === 'HEAD' ? `${head()}\n` : 'base-tip\n', stderr: '' };
     if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base\n', stderr: '' };
     if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: 'M\u0000src/feature.ts\u0000', stderr: '' };
-    if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/src/feature.ts b/src/feature.ts\n', stderr: '' };
+    if (args[0] === 'diff') return {
+      exitCode: 0,
+      stdout: `diff --git a/src/feature.ts b/src/feature.ts\n--- a/src/feature.ts\n+++ b/src/feature.ts\n@@ -1 +1 @@\n-export const cacheKey = "base";\n+${featureSource}`,
+      stderr: '',
+    };
     if (args[0] === 'show' && args[1] === `${head()}:${PLAN_PATH}`) return { exitCode: 0, stdout: '# Plan\n', stderr: '' };
     if (args[0] === 'show' && args[1] === `${head()}:${STORY_PATH}`) return { exitCode: 0, stdout: '# Stories\n', stderr: '' };
-    if (args[0] === 'show' && args[1] === `${head()}:src/feature.ts`) return { exitCode: 0, stdout: 'export const cacheKey = "legacy";\n', stderr: '' };
+    if (args[0] === 'show' && args[1] === `${head()}:src/feature.ts`) return { exitCode: 0, stdout: featureSource, stderr: '' };
     if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '', stderr: '' };
     return { exitCode: 1, stdout: '', stderr: '' };
   };
