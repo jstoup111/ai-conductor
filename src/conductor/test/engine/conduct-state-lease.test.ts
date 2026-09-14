@@ -319,6 +319,34 @@ describe('conduct-state lease', () => {
     if (acquired.ok) await expect(acquired.handle.release()).resolves.toEqual({ ok: true });
   });
 
+  it('keeps one live recovery claimant authoritative until it releases the recovered lease', async () => {
+    const statePath = '/worktree/recovery-contenders/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, { filesystem: shared, pid: 101, newToken: () => 'dead-owner' }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    let allowMove: (() => void) | undefined;
+    const moveAllowed = new Promise<void>((resolve) => { allowMove = resolve; });
+    let claimWritten: (() => void) | undefined;
+    const claimHasWritten = new Promise<void>((resolve) => { claimWritten = resolve; });
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async writeRecoveryClaim(path, contents) { await shared.writeRecoveryClaim(path, contents); claimWritten?.(); },
+      async moveDirectory(path, destination) { await moveAllowed; await shared.moveDirectory(path, destination); },
+    };
+    const first = createConductStateLease(statePath, { filesystem, pid: 202, newToken: () => 'first', processIsLive: () => false }).acquire();
+    await claimHasWritten;
+    const second = createConductStateLease(statePath, {
+      filesystem,
+      pid: 303,
+      newToken: () => 'second',
+      processIsLive: (candidatePid) => candidatePid === 202,
+      wait: async () => { allowMove?.(); const acquired = await first; if (acquired.ok) await acquired.handle.release(); },
+    }).acquire();
+    await expect(second).resolves.toMatchObject({ ok: true });
+    const acquired = await second;
+    if (acquired.ok) await expect(acquired.handle.release()).resolves.toEqual({ ok: true });
+  });
+
   it.each([
     ['truncated JSON', '{"version": 1, "pid":'],
     ['an unsupported version', JSON.stringify({ version: 2, pid: 303, token: 'claim', claimedAt: '1970-01-01T00:00:00.000Z' })],
