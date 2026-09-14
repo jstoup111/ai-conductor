@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: kickback-budget
+Resolved at: 2026-09-14T14:23:34.557Z
 Slug: unusable-provider-candidate-throws-instead-of-fall
 Class: kickback-cap
 Halting step: prd_audit
