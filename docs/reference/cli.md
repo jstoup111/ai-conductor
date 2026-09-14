@@ -710,13 +710,13 @@ to /tdd or /pipeline before SHIP.` to stderr and exits 1.
 | Outcome | Output | Exit |
 | --- | --- | --- |
 | Pass | `<status>: full test suite PASS (fingerprint <fp>, duration <n>ms)` on stdout | 0 |
-| Fail | `FAILED: full test suite evidence=<reason>[ freshness=<reason>]. <guidance> Return to /tdd or /pipeline, fix the failure, then rerun ai-conductor test-suite.` on stderr | 1 |
+| Fail | `FAILED: full test suite evidence=<reason>[ freshness=<reason>]. [entry #<n>/<total> failed;] <failure detail> <guidance> Return to /tdd or /pipeline, fix the failure, then rerun ai-conductor test-suite.` on stderr | 1 |
 
 Failure reasons and their guidance:
 
 | Reason | Guidance |
 | --- | --- |
-| `missing_config` | Declare `test_suite.command` in `.ai-conductor/config.yml`. |
+| `missing_config` | Declare `test_suite.command` or `test_suite.commands` in `.ai-conductor/config.yml`. |
 | `invalid_config` | Fix the `test_suite` block in `.ai-conductor/config.yml`. |
 | `invalid_input` | Fix the declared test-suite inputs. |
 | `unlaunchable` | Make the declared aggregate command launchable. |
@@ -728,6 +728,10 @@ Failure reasons and their guidance:
 
 This command is dispatched before every other detector and sets the process exit code rather than
 exiting immediately. It does not appear in `--help`.
+
+For an ordered `test_suite.commands` list, successful entries run in declaration order. The first
+failed entry stops the collection; failure output identifies its ordinal and includes the bounded
+per-entry diagnostic context. Later entries do not run.
 
 ## `ai-conductor scoped-run`
 

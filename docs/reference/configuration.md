@@ -593,10 +593,14 @@ The project-owned aggregate verification command run by the pre-SHIP `test_suite
 
 | Key | Type | Required | Validation | Default |
 | --- | --- | --- | --- | --- |
-| `test_suite.command` | string | Yes, unless `test_suite.scoped_command` is configured | Non-empty after trim (`config.ts:1217-1221`) | — |
+| `test_suite.command` | string | Yes, unless `test_suite.commands` or `test_suite.scoped_command` is configured | Non-empty after trim. Mutually exclusive with `test_suite.commands`. | — |
+| `test_suite.commands` | object[] | Yes, unless `test_suite.command` or `test_suite.scoped_command` is configured | Non-empty ordered list. Each entry requires `command` and may set `working_directory` and `timeout_seconds`; unknown entry keys are rejected. Entries run serially and stop at the first failure. | — |
+| `test_suite.commands[].command` | string | Yes | Non-empty after trim. | — |
+| `test_suite.commands[].working_directory` | string | No | Relative project-root-contained directory. Overrides `test_suite.working_directory` for that entry. | shared setting, then project root |
+| `test_suite.commands[].timeout_seconds` | number | No | Finite and `> 0`. Overrides `test_suite.timeout_seconds` for that entry. | shared setting, then 1800 s |
 | `test_suite.scoped_command` | string | No | Non-empty after trim and must contain `{selectors}`. `ai-conductor scoped-run <selectors...>` replaces that placeholder with the selected tests; it never falls back to `command`. (`config.ts:1223-1236`) | none; scoped runs are unavailable |
-| `test_suite.working_directory` | string | No | Must be relative and resolve inside the project root. Absolute paths, `..` escapes, and symlinks whose realpath escapes the root are hard errors. A non-ENOENT/ENOTDIR realpath error fails closed (`config.ts:1239-1262`). Applies to both the aggregate `command` and `scoped_command`; `ai-conductor scoped-run` rebases project-root-relative selectors onto it | project root |
-| `test_suite.timeout_seconds` | number | No | Finite and `> 0` (`config.ts:1264-1274`) | 1800 s (`DEFAULT_FULL_SUITE_TIMEOUT_MS`, `src/conductor/src/engine/full-suite-executor.ts:7`) |
+| `test_suite.working_directory` | string | No | Must be relative and resolve inside the project root. Absolute paths, `..` escapes, and symlinks whose realpath escapes the root are hard errors. Applies to scalar aggregate and scoped commands, and is the shared fallback for list entries; `ai-conductor scoped-run` rebases project-root-relative selectors onto it. | project root |
+| `test_suite.timeout_seconds` | number | No | Finite and `> 0`. Shared fallback for list entries. | 1800 s (`DEFAULT_FULL_SUITE_TIMEOUT_MS`, `src/conductor/src/engine/full-suite-executor.ts`) |
 | `test_suite.inputs` | string[] | No | Array of strings (`config.ts:1276-1287`) | none |
 | `test_suite.environment` | string[] | No | Array of strings | none |
 | `test_suite.verification.mode` | `aggregate` \| `scoped` | No | `scoped` requires `test_suite.scoped_command`; unknown modes are rejected | `aggregate` |
@@ -607,8 +611,10 @@ fingerprint (`src/conductor/src/engine/full-suite-fingerprint.ts:209-228`) so th
 invalidates cached verification with reason `environment_changed`, and each is redacted from verifier
 output. See [environment](environment.md).
 
-The block must configure at least one of `command` or `scoped_command`. `command` is still required for
-the aggregate pre-SHIP gate. Omitting the block entirely is a gating failure at SHIP: the verifier returns
+The block must configure at least one of `command`, `commands`, or `scoped_command`. Aggregate verification
+requires either `command` or `commands`; a scalar command and command list cannot be combined. A list keeps
+its declared order, runs every entry only when all earlier entries succeed, and records the failed entry and
+unexecuted remainder when it stops. Omitting the block entirely is a gating failure at SHIP: the verifier returns
 `{ status: 'FAILED', reason: 'missing_config' }` (`src/conductor/src/engine/full-suite-verifier.ts:717-724`)
 and the run HALTs. The gate itself is described in [gates](../explanation/gates.md).
 
@@ -1502,7 +1508,10 @@ steps:
         effort: xhigh
 
 test_suite:
-  command: npm test
+  commands:
+    - command: npm test
+      working_directory: src/conductor
+    - command: bash test/test_harness_integrity.sh
   scoped_command: npx vitest run {selectors}
   working_directory: .
   timeout_seconds: 1800
