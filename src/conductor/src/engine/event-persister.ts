@@ -46,7 +46,14 @@ export function boundCiRepairDiagnostic(event: ConductorEvent): ConductorEvent {
     stage: CI_REPAIR_STAGES.has(event.stage) ? event.stage : 'execution',
     reason: CI_REPAIR_REASONS.has(event.reason) ? event.reason : 'unknown',
     disposition: CI_REPAIR_DISPOSITIONS.has(event.disposition) ? event.disposition : 'failed',
-    ...(event.provider === undefined ? {} : { provider: /^[A-Za-z0-9._-]+$/.test(event.provider) ? truncate(event.provider, 256) : 'unknown' }),
+    // Provider identity is attribution, not diagnostic text. Never preserve a
+    // prefix of an oversized value: a malformed adapter could otherwise place
+    // a credential in that prefix. Known production identities are tiny.
+    ...(event.provider === undefined ? {} : {
+      provider: /^[A-Za-z0-9._-]+$/.test(event.provider)
+        ? (Buffer.byteLength(event.provider, 'utf8') <= 64 ? event.provider : '[truncated]')
+        : 'unknown',
+    }),
   };
   if (Buffer.byteLength(JSON.stringify(bounded), 'utf8') > MAX_CI_REPAIR_DIAGNOSTIC_BYTES) {
     bounded = { ...bounded, provider: '[truncated]' };
