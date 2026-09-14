@@ -133,17 +133,21 @@ describe('git-hook-assets — embedding hook scripts', () => {
     });
 
     it.each([
-      ['malformed JSON', '{ not json', undefined],
-      ['failing Node', JSON.stringify({ tasks: [{ id: '7' }] }), '#!/bin/sh\nexit 42\n'],
-      ['Node exit 127', JSON.stringify({ tasks: [{ id: '7' }] }), '#!/bin/sh\nexit 127\n'],
-    ])('rejects %s as a processing error rather than an ID non-match', async (_name, status, node) => {
+      ['malformed JSON', '{ not json', undefined, undefined],
+      ['unreadable status file', JSON.stringify({ tasks: [{ id: '7' }] }), undefined, 0o000],
+      ['absent Node', JSON.stringify({ tasks: [{ id: '7' }] }), undefined, undefined],
+      ['failing Node', JSON.stringify({ tasks: [{ id: '7' }] }), '#!/bin/sh\nexit 42\n', undefined],
+      ['Node exit 127', JSON.stringify({ tasks: [{ id: '7' }] }), '#!/bin/sh\nexit 127\n', undefined],
+    ])('rejects %s as a processing error rather than an ID non-match', async (_name, status, node, mode) => {
       const root = join(tempDir, `processing-${_name.replaceAll(' ', '-')}`);
       const fakeBin = join(root, 'bin');
       const hook = join(root, 'commit-msg');
       const message = join(root, 'message');
       await mkdir(join(root, '.pipeline'), { recursive: true });
       await mkdir(fakeBin);
-      await writeFile(join(root, '.pipeline', 'task-status.json'), status);
+      const statusPath = join(root, '.pipeline', 'task-status.json');
+      await writeFile(statusPath, status);
+      if (mode !== undefined) await chmod(statusPath, mode);
       await writeFile(join(fakeBin, 'git'), `#!/bin/bash
 if [[ "$1" == rev-parse && "$2" == --show-toplevel ]]; then printf '%s\\n' "$HOOK_TEST_ROOT";
 elif [[ "$1" == rev-parse && "$2" == --git-common-dir ]]; then printf '.git\\n';
@@ -154,7 +158,9 @@ elif [[ "$1" == interpret-trailers ]]; then cat; fi
       await writeFile(hook, buildCommitMsgHook('/usr/bin/true'), { mode: 0o755 });
       await writeFile(message, 'subject\n\nTask: 7\n');
       try {
-        await execFileAsync('bash', [hook, message], { env: { ...process.env, HOOK_TEST_ROOT: root, PATH: `${fakeBin}:${process.env.PATH ?? ''}` } });
+        // Keep Bash and core utilities available, but deliberately omit the
+        // host's asdf Node shim when Node itself is the failed dependency.
+        await execFileAsync('bash', [hook, message], { env: { ...process.env, HOOK_TEST_ROOT: root, PATH: `${fakeBin}:/usr/bin:/bin` } });
         throw new Error('expected processing failure');
       } catch (error) {
         const result = error as { code?: number; stderr?: string };

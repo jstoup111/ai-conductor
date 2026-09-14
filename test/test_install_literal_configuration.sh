@@ -105,6 +105,28 @@ if PATH="$TMP_ROOT/failing-python:$PATH" run_hooks > "$TMP_ROOT/failing-python-h
 grep -Fq 'Could not configure hooks automatically' "$TMP_ROOT/failing-python-hooks-error"
 ! grep -Fq 'OK:' "$TMP_ROOT/failing-python-hooks-out"
 
+# A present settings file that cannot be read or overwritten must make each
+# helper fail truthfully, without reporting a successful configuration.
+printf '{"custom":true}' > "$SETTINGS_FILE"
+chmod 000 "$SETTINGS_FILE"
+if run_permissions > "$TMP_ROOT/unreadable-permissions-out" 2> "$TMP_ROOT/unreadable-permissions-error"; then exit 1; fi
+grep -Fq 'Could not configure permissions automatically' "$TMP_ROOT/unreadable-permissions-error"
+! grep -Fq 'OK:' "$TMP_ROOT/unreadable-permissions-out"
+if run_hooks > "$TMP_ROOT/unreadable-hooks-out" 2> "$TMP_ROOT/unreadable-hooks-error"; then exit 1; fi
+grep -Fq 'Could not configure hooks automatically' "$TMP_ROOT/unreadable-hooks-error"
+! grep -Fq 'OK:' "$TMP_ROOT/unreadable-hooks-out"
+chmod 600 "$SETTINGS_FILE"
+
+printf '{"custom":true}' > "$SETTINGS_FILE"
+chmod 444 "$SETTINGS_FILE"
+if run_permissions > "$TMP_ROOT/unwritable-permissions-out" 2> "$TMP_ROOT/unwritable-permissions-error"; then exit 1; fi
+grep -Fq 'Could not configure permissions automatically' "$TMP_ROOT/unwritable-permissions-error"
+! grep -Fq 'OK:' "$TMP_ROOT/unwritable-permissions-out"
+if run_hooks > "$TMP_ROOT/unwritable-hooks-out" 2> "$TMP_ROOT/unwritable-hooks-error"; then exit 1; fi
+grep -Fq 'Could not configure hooks automatically' "$TMP_ROOT/unwritable-hooks-error"
+! grep -Fq 'OK:' "$TMP_ROOT/unwritable-hooks-out"
+chmod 600 "$SETTINGS_FILE"
+
 # install() retains its warning-and-continue callers for both helpers.
 grep -Fq 'configure_permissions "$settings_file" || warn "Permissions configuration incomplete — continuing"' "$HARNESS_DIR/bin/install"
 grep -Fq 'configure_hooks "$settings_file" || warn "Hooks configuration incomplete — continuing"' "$HARNESS_DIR/bin/install"
