@@ -256,6 +256,20 @@ export class AuditTrailWriter {
           reason: `${event.rubric}: ${event.reason}`,
           cause: `cached ${event.cachedEngineStamp ?? 'pre-identity'} -> current ${event.currentEngineStamp}`,
         };
+      case 'build_review_policy_resolved':
+        return {
+          origin: 'build_review',
+          event: event.type,
+          reason: `${event.rubric} policy resolved for ${event.provider} (${event.source})`,
+          cause: event.bundleDigest,
+        };
+      case 'build_review_policy_failed':
+        return {
+          origin: 'build_review',
+          event: event.type,
+          reason: `${event.rubric} ${event.stage} failed: ${event.reason}`,
+          cause: event.provider,
+        };
       case 'verdict_freshness':
         return {
           origin: event.step,

@@ -14,6 +14,8 @@ export interface ResolveScratchHomeOptions {
   readonly runId: string;
   readonly attempt: number;
   readonly provider: SelfHostProviderId;
+  /** A review member prevents sibling rubric candidates sharing scratch. */
+  readonly memberId?: string;
 }
 
 /** Minimal filesystem boundary for acquiring and reading a scratch-home lease. */
@@ -521,5 +523,6 @@ export function resolveScratchHome(options: ResolveScratchHomeOptions): string {
  * provider lease remains the owner and cleanup boundary for this directory.
  */
 export function resolveReviewScratchHome(options: ResolveScratchHomeOptions): string {
-  return resolveScratchHome(options);
+  const base = resolveScratchHome(options);
+  return options.memberId === undefined ? base : join(base, `review-${options.memberId}`);
 }

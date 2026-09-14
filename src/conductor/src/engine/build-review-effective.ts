@@ -10,6 +10,8 @@ import {
 import {
   BuildReviewDispositionStore,
   isRetiredBuildReviewRubric,
+  matchesBuildReviewDisposition,
+  rehydrateBuildReviewAcceptedRiskFinding,
   matchesBuildReviewReducedCoverageDisposition,
   type BuildReviewDispositionListResult,
   type BuildReviewDispositionRecord,
@@ -58,6 +60,7 @@ function applyCurrentCustomEffectiveVerdict(
   effective: BuildReviewEffectiveVerdict,
   feature: BuildReviewFeatureIdentity,
   reducedCoverage: readonly import('./build-review-dispositions.js').BuildReviewReducedCoverageDispositionRecord[],
+  dispositions: readonly import('./build-review-dispositions.js').BuildReviewDispositionRecord[],
   minConfidence: Partial<Record<string, number>>,
 ): BuildReviewEffectiveVerdict | undefined {
   const customSources = projectBuildReviewCustomSuppressionSources(aggregate);
@@ -83,7 +86,16 @@ function applyCurrentCustomEffectiveVerdict(
   ));
   const unresolved = [...effective.unresolvedFindingIds];
   const suppressed = [...effective.suppressedFindingIds];
+  const acceptedCustomFindingIds = new Set(Object.values(aggregate.customResults ?? {}).flatMap((member) =>
+    member.result.kind !== 'judged' ? [] : member.result.findings.flatMap((finding) => {
+      const identity = typeof finding === 'object' && finding !== null && 'identity' in finding
+        ? rehydrateBuildReviewAcceptedRiskFinding((finding as { identity?: { canonicalPayload?: unknown } }).identity?.canonicalPayload)
+        : undefined;
+      return identity && matchesBuildReviewDisposition(feature, identity, dispositions) ? [identity.id] : [];
+    }),
+  ));
   for (const source of customSources) {
+    if (acceptedCustomFindingIds.has(source.findingId)) continue;
     if (source.confidence !== undefined && source.confidence < (minConfidence[source.rubric] ?? 0)) suppressed.push(source.findingId);
     else unresolved.push(source.findingId);
   }
@@ -96,6 +108,7 @@ function applyCurrentCustomEffectiveVerdict(
       ? 'PASS'
       : 'FAIL',
     unresolvedFindingIds: Object.freeze(unresolved),
+    acceptedFindingIds: Object.freeze([...new Set([...effective.acceptedFindingIds, ...acceptedCustomFindingIds])]),
     suppressedFindingIds: Object.freeze(suppressed),
   });
 }
@@ -181,7 +194,7 @@ export async function resolveEffectiveBuildReviewVerdict(
     const builtinDispositions = dispositions.filter((record) => record.finding.canonicalPayload.rubric === 'testQuality');
     const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, builtinDispositions, reducedCoverageRecords, deps.minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>> | undefined);
     effective = builtin === undefined ? undefined : applyCurrentCustomEffectiveVerdict(
-      aggregate, builtin, feature, reducedCoverageRecords, deps.minConfidence ?? {},
+      aggregate, builtin, feature, reducedCoverageRecords, dispositions, deps.minConfidence ?? {},
     );
   } catch {
     return { ok: false, reason: 'build-review disposition state is invalid' };

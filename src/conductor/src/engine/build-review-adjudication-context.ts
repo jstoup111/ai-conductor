@@ -160,7 +160,7 @@ function customPolicyContext(
     rubric,
     question: descriptor.declaration.question,
     effectivePolicyIdentity: descriptor.effectivePolicy.bundleDigest,
-    criteria: Object.freeze([...descriptor.declaration.resources]),
+    criteria: Object.freeze([...(descriptor.criteria ?? descriptor.declaration.resources)]),
   });
 }
 

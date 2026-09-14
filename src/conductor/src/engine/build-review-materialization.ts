@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { basename, dirname, join, relative } from 'node:path';
 
 import {
+  buildReviewSourceViewIdentity,
   type BuildReviewSourceSnapshot,
   type BuildReviewSourceViewIdentity,
 } from './build-review-inputs.js';
@@ -47,15 +48,6 @@ export class BuildReviewSourceMaterializationError extends Error {
 }
 
 const GIT_OBJECT_ID = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
-
-function sourceViewIdentity(snapshot: BuildReviewSourceSnapshot): BuildReviewSourceViewIdentity {
-  return Object.freeze({
-    snapshotDigest: snapshot.digest,
-    contentDigest: snapshot.contentDigest,
-    mergeBase: snapshot.mergeBase,
-    headSha: snapshot.headSha,
-  });
-}
 
 function isPrivateChild(parent: string, path: string): boolean {
   const child = relative(parent, path);
@@ -154,7 +146,7 @@ export async function materializeBuildReviewLap(
   }
 
   const source = Object.freeze({
-    identity: sourceViewIdentity(snapshot),
+    identity: buildReviewSourceViewIdentity(snapshot),
     baselinePath,
     headPath,
   });

@@ -107,5 +107,14 @@ describe('build-review candidate cache runner ordering', () => {
     expect(catalogHomes).toEqual([preparedHome]);
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke.mock.calls.map(([options]) => options.model)).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra']);
+
+    // A second lap reuses only after the same prepared candidate resolves the
+    // catalog and captures the same immutable policy bundle.
+    const replay = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    expect(replay.success, replay.output).toBe(true);
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke.mock.calls.map(([options]) => options.model)).toEqual([
+      'gpt-5.6-sol', 'gpt-5.6-terra',
+    ]);
   });
 });

@@ -36,6 +36,8 @@ export interface BuildReviewCustomEvidenceDescriptor {
   readonly declaration: BuildReviewCustomDeclaration;
   readonly installation: { readonly source: 'project' | 'global' | 'plugin'; readonly plugin?: { readonly id: string; readonly version?: string } };
   readonly effectivePolicy: { readonly version: 'v1'; readonly bundleDigest: string };
+  /** Captured SKILL.md/resources, never a mutable installation path. */
+  readonly criteria?: readonly string[];
   readonly reviewedInput: { readonly version: 'v1'; readonly contentDigest: string };
   readonly producer: { readonly provider: string; readonly model: string; readonly effort: string };
 }
@@ -148,7 +150,11 @@ export function parseBuildReviewCustomDeclaration(value: unknown): BuildReviewCu
 
 function parseCustomDescriptor(value: unknown): BuildReviewCustomEvidenceDescriptor | undefined {
   const source = typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-  if (!source || !exactKeys(source, ['version', 'semanticSkill', 'declaration', 'installation', 'effectivePolicy', 'reviewedInput', 'producer']) || source.version !== 'v1' || !isNonEmptyString(source.semanticSkill)) return undefined;
+  const descriptorKeys = source?.criteria === undefined
+    ? ['version', 'semanticSkill', 'declaration', 'installation', 'effectivePolicy', 'reviewedInput', 'producer']
+    : ['version', 'semanticSkill', 'declaration', 'installation', 'effectivePolicy', 'criteria', 'reviewedInput', 'producer'];
+  if (!source || !exactKeys(source, descriptorKeys) || source.version !== 'v1' || !isNonEmptyString(source.semanticSkill) ||
+    (source.criteria !== undefined && (!stringArray(source.criteria) || source.criteria.some((criterion) => criterion.length > 8_000)))) return undefined;
   const installation = source.installation as Record<string, unknown> | undefined;
   const policy = source.effectivePolicy as Record<string, unknown> | undefined;
   const input = source.reviewedInput as Record<string, unknown> | undefined;

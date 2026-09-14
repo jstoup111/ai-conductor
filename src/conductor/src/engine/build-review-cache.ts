@@ -10,6 +10,7 @@ import {
   type BuildReviewRubricContractVersion,
 } from "./build-review-domain.js";
 import { isRetiredBuildReviewRubric } from './build-review-dispositions.js';
+import { parseBuildReviewCustomArtifactMember, type BuildReviewCustomArtifactMember } from './build-review-artifacts.js';
 
 const LEGACY_CACHE_VERSION = 1;
 const CACHE_VERSION = 2;
@@ -51,7 +52,7 @@ export interface BuildReviewCacheSemanticIdentity {
  */
 export interface BuildReviewCacheEntry {
   version: typeof LEGACY_CACHE_VERSION | typeof CACHE_VERSION;
-  rubric: BuildReviewRubricId;
+  rubric: BuildReviewRubricId | string;
   contractVersion: "v3";
   projectionVersion: "v3";
   projectionDigest: string;
@@ -59,7 +60,7 @@ export interface BuildReviewCacheEntry {
   engineIdentity: BuildReviewEngineIdentity;
   /** Candidate-bound identity; absent only on legacy/incomplete entries. */
   semanticIdentity?: BuildReviewCacheSemanticIdentity;
-  result: BuildReviewJudgedResult;
+  result: BuildReviewJudgedResult | BuildReviewCustomArtifactMember;
 }
 
 /** Injected so cache tests never touch the host filesystem. */
@@ -72,7 +73,7 @@ export interface BuildReviewCacheFilesystem {
 
 /** The complete identity that must match before a semantic cache entry is reusable. */
 export interface BuildReviewCacheLookup {
-  rubric: BuildReviewRubricId;
+  rubric: BuildReviewRubricId | string;
   contractVersion: "v3";
   projectionVersion: "v3";
   projectionDigest: string;
@@ -99,7 +100,7 @@ export interface BuildReviewCacheEntryCandidate extends Omit<BuildReviewCacheEnt
 
 /** Explicit cache provenance accompanies a newly materialized current-lap result. */
 export interface BuildReviewCacheHit {
-  result: BuildReviewJudgedResult;
+  result: BuildReviewJudgedResult | BuildReviewCustomArtifactMember;
   provenance: {
     kind: "cache-hit";
     cachedLapId: BuildReviewLapId;
@@ -160,7 +161,7 @@ function cacheCandidateIdentityKey(identity: BuildReviewCacheSemanticIdentity): 
  */
 export function cacheEntryPath(
   projectRoot: string,
-  rubric: BuildReviewRubricId,
+  rubric: BuildReviewRubricId | string,
   semanticIdentity?: BuildReviewCacheSemanticIdentity,
 ): string {
   const directory = join(projectRoot, CACHE_DIRECTORY);
@@ -175,6 +176,10 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isRubric(value: unknown): value is BuildReviewRubricId {
   return value === "testQuality";
+}
+
+function isCacheRubric(value: unknown): value is string {
+  return isRubric(value) || (typeof value === 'string' && /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value));
 }
 
 function parseBuildReviewEngineIdentity(value: unknown): BuildReviewEngineIdentity | undefined {
@@ -237,13 +242,16 @@ function parseBuildReviewCacheEntryCandidate(value: unknown): BuildReviewCacheEn
     : parseBuildReviewCacheSemanticIdentity(candidate.semanticIdentity);
   if (candidate.semanticIdentity !== undefined && !semanticIdentity) return undefined;
   const contractVersion = parseBuildReviewRubricContractVersion(candidate.contractVersion);
-  if ((candidate.version !== LEGACY_CACHE_VERSION && candidate.version !== CACHE_VERSION) || !isRubric(candidate.rubric) || !contractVersion ||
+  if ((candidate.version !== LEGACY_CACHE_VERSION && candidate.version !== CACHE_VERSION) || !isCacheRubric(candidate.rubric) || !contractVersion ||
     (candidate.projectionVersion !== "v1" && candidate.projectionVersion !== "v2" && candidate.projectionVersion !== "v3") ||
     !isNonEmptyString(candidate.projectionDigest) || !isNonEmptyString(candidate.policyFingerprint)) {
     return undefined;
   }
-  const result = parseBuildReviewJudgedResult(candidate.result);
-  if (!result || result.rubric !== candidate.rubric || result.contractVersion !== candidate.contractVersion) {
+  const builtin = parseBuildReviewJudgedResult(candidate.result);
+  const custom = builtin === undefined ? parseBuildReviewCustomArtifactMember(candidate.result) : undefined;
+  const result = builtin ?? custom;
+  if (!result || (builtin !== undefined && (builtin.rubric !== candidate.rubric || builtin.contractVersion !== candidate.contractVersion)) ||
+    (custom !== undefined && (custom.result.kind !== 'judged' || custom.result.rubric !== candidate.rubric))) {
     return undefined;
   }
   return {
@@ -278,7 +286,7 @@ export function parseBuildReviewCacheEntry(value: unknown): BuildReviewCacheEntr
 /** Reads a cached semantic judgement, treating every read/parse error as a miss. */
 export async function readBuildReviewCacheEntry(
   projectRoot: string,
-  rubric: BuildReviewRubricId,
+  rubric: BuildReviewRubricId | string,
   fs: BuildReviewCacheFilesystem,
   semanticIdentity?: BuildReviewCacheSemanticIdentity,
 ): Promise<BuildReviewCacheEntryCandidate | undefined> {
@@ -359,18 +367,23 @@ export function classifyBuildReviewCacheLookup(
       return { kind: "miss", reason: "effort-mismatch" };
     }
   }
+  const result = 'result' in entry.result
+    ? { ...entry.result, result: { ...entry.result.result, ...(entry.result.result.kind === 'judged' ? { lapId: lookup.lapId } : {}) } }
+    : { ...entry.result, lapId: lookup.lapId, snapshotDigest: lookup.snapshotDigest };
+  const cachedLapId = 'result' in entry.result
+    ? lookup.lapId
+    : entry.result.lapId;
+  const cachedSnapshotDigest = 'result' in entry.result
+    ? entry.result.result.kind === 'judged' ? entry.result.result.reviewedInput.contentDigest : lookup.snapshotDigest
+    : entry.result.snapshotDigest;
   return {
     kind: "hit",
     hit: {
-      result: {
-        ...entry.result,
-        lapId: lookup.lapId,
-        snapshotDigest: lookup.snapshotDigest,
-      },
+      result,
       provenance: {
         kind: "cache-hit",
-        cachedLapId: entry.result.lapId,
-        cachedSnapshotDigest: entry.result.snapshotDigest,
+        cachedLapId,
+        cachedSnapshotDigest,
         projectionDigest: entry.projectionDigest,
         policyFingerprint: entry.policyFingerprint,
       },
