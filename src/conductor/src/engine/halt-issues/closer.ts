@@ -12,7 +12,11 @@
  */
 
 import { LedgerEntry } from './ledger.js';
-import { GhRunnerError, TrackerClient } from '../tracker-client.js';
+import {
+  GhRunnerError,
+  GithubTrackerOperationRefusalError,
+  TrackerClient,
+} from '../tracker-client.js';
 
 export type { TrackerClient } from '../tracker-client.js';
 
@@ -39,6 +43,9 @@ export interface StampResult {
    * Error message if stamping failed
    */
   lastError?: string;
+
+  /** The guarded tracker boundary denied this entry before any mutation. */
+  refused?: boolean;
 }
 
 /**
@@ -64,6 +71,22 @@ export interface CloseResult {
    * Error message if closing failed or issue was kept open
    */
   lastError?: string;
+
+  /** The guarded tracker boundary denied this entry before any mutation. */
+  refused?: boolean;
+}
+
+/** Keep policy denials machine-distinguishable without exposing transport text. */
+function failureDetails(err: unknown): { readonly lastError: string; readonly refused?: true } {
+  if (err instanceof GithubTrackerOperationRefusalError) {
+    return { lastError: `refused: ${err.reason}`, refused: true };
+  }
+  return { lastError: err instanceof Error ? err.message : String(err) };
+}
+
+function contextualFailure(context: string, err: unknown): { readonly lastError: string; readonly refused?: true } {
+  const failure = failureDetails(err);
+  return failure.refused ? failure : { lastError: `${context}: ${failure.lastError}` };
 }
 
 /**
@@ -115,10 +138,9 @@ export async function stampIssue(entry: LedgerEntry, gh: TrackerClient, cwd = '.
     // anything it throws — a real gh failure, a JSON parse error, or the
     // AI_CONDUCTOR_NO_REAL_EXEC guard rejecting a real spawn — is a retriable
     // error, not an external closure. Record it so callers/operators see it.
-    const errorMsg = err instanceof Error ? err.message : String(err);
     return {
       stamped: false,
-      lastError: errorMsg
+      ...failureDetails(err)
     };
   }
 
@@ -163,10 +185,9 @@ export async function stampIssue(entry: LedgerEntry, gh: TrackerClient, cwd = '.
     };
   } catch (err) {
     // Edit failed: record error, do NOT throw
-    const errorMsg = err instanceof Error ? err.message : String(err);
     return {
       stamped: false,
-      lastError: errorMsg
+      ...failureDetails(err)
     };
   }
 }
@@ -211,10 +232,9 @@ export async function closeIssue(
     labels = await gh.getIssueLabels(repo, Number(issue), cwd);
   } catch (err) {
     // If we can't fetch labels, treat as retriable error
-    const errorMsg = err instanceof Error ? err.message : String(err);
     return {
       closed: false,
-      lastError: `failed to fetch labels: ${errorMsg}`
+      ...contextualFailure('failed to fetch labels', err)
     };
   }
 
@@ -239,10 +259,9 @@ export async function closeIssue(
       state = null;
     } else {
       // If we can't fetch state, treat as retriable error
-      const errorMsg = err instanceof Error ? err.message : String(err);
       return {
         closed: false,
-        lastError: `failed to fetch issue state: ${errorMsg}`
+        ...contextualFailure('failed to fetch issue state', err)
       };
     }
   }
@@ -260,27 +279,26 @@ export async function closeIssue(
     await gh.upsertIssueComment(repo, issue, renderCloseComment(slug, prUrl), cwd);
   } catch (err) {
     // Comment failed: return error, do NOT attempt close
-    const errorMsg = err instanceof Error ? err.message : String(err);
     return {
       closed: false,
-      lastError: errorMsg
+      ...failureDetails(err)
     };
   }
 
   // Step 4: Close the issue
-  let closeError: string | undefined;
+  let closeFailure: { readonly lastError: string; readonly refused?: true } | undefined;
   try {
     await gh.closeIssue(repo, issue, cwd);
   } catch (err) {
     // Record error
-    closeError = err instanceof Error ? err.message : String(err);
+    closeFailure = failureDetails(err);
   }
 
   // Step 5: Determine result
-  if (closeError) {
+  if (closeFailure) {
     return {
       closed: false,
-      lastError: closeError
+      ...closeFailure
     };
   }
 
