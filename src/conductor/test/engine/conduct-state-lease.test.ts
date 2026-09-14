@@ -14,7 +14,7 @@ import {
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/state.js';
 
-// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, S2.3, S2.4, S2.5, S3.2, S3.3, S3.5, S3.6, S4.1, S4.4, S4.5, task:1, task:2, task:3, task:4, task:5, task:6, task:7
+// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, S2.3, S2.4, S2.5, S3.2, S3.3, S3.5, S3.6, S4.1, S4.2, S4.3, S4.4, S4.5, task:1, task:2, task:3, task:4, task:5, task:6, task:7, task:8
 
 const temporaryDirectories: string[] = [];
 
@@ -610,6 +610,38 @@ describe('conduct-state lease', () => {
     await held.handle.release();
   });
 
+  it('reports a live recovery claimant instead of the dead owner on timeout', async () => {
+    const statePath = '/worktree/recovery-claimant-timeout/.pipeline/conduct-state.json';
+    const filesystem = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 101,
+      newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    await filesystem.writeRecoveryClaim(`${statePath}.lease/recovery.json`, JSON.stringify({
+      version: 1, pid: 202, token: 'live-claimant', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'dead-owner', predecessorToken: null,
+    }));
+    let now = 0;
+
+    const result = await createConductStateLease(statePath, {
+      filesystem,
+      label: 'intake ledger',
+      now: () => now,
+      wait: async (milliseconds) => { now += milliseconds; },
+      waitTimeoutMs: 5,
+      retryDelayMs: 5,
+      processIsLive: (candidatePid) => candidatePid === 202,
+    }).acquire();
+
+    expect(result).toEqual({
+      ok: false,
+      kind: 'timeout',
+      message: 'Unable to acquire intake ledger lease within 5ms; recovery claimant pid 202 is live',
+    });
+  });
+
   it.each([
     ['truncated JSON', '{"version": 1, "pid":'],
     ['an unsupported version', JSON.stringify({ version: 2, pid: 303, token: 'claim', claimedAt: '1970-01-01T00:00:00.000Z' })],
@@ -767,7 +799,7 @@ describe('conduct-state lease', () => {
     expect(result).toEqual({
       ok: false,
       kind: 'timeout',
-      message: 'Unable to acquire conduct-state lease within 5ms',
+      message: 'Unable to acquire conduct-state lease within 5ms; lease owner is initializing',
     });
     expect(waitDelays).toEqual([5]);
     expect(acquisitionAttempts).toBe(waitDelays.length + 1);

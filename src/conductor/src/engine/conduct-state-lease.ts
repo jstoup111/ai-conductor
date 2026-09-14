@@ -251,7 +251,7 @@ export function createConductStateLease(
 
   async function recoverDeadOwner(deadline: number): Promise<
     | { status: 'recovered'; ownerPid: number }
-    | { status: 'occupied'; ownerPid?: number }
+    | { status: 'occupied'; blocker: { kind: 'owner' | 'claimant'; pid: number } }
     // `mkdir` succeeds before the owner metadata write. A peer that observes
     // that short creation window must wait for the owner (or release), not
     // misclassify a healthy concurrent writer as an ambiguous lease.
@@ -290,7 +290,7 @@ export function createConductStateLease(
         message: `Unable to recover ${leaseName} lease: owner liveness is unverifiable (${errorMessage(error)})`,
       };
     }
-    if (ownerIsLive) return { status: 'occupied', ownerPid: owner.pid };
+    if (ownerIsLive) return { status: 'occupied', blocker: { kind: 'owner', pid: owner.pid } };
     if (now() >= deadline) return { status: 'timeout' };
 
     const claimFor = (predecessorToken: string | null): string => `${JSON.stringify({
@@ -351,7 +351,9 @@ export function createConductStateLease(
           }
           visitedClaimTokens.add(existingClaim.identity.token);
           try {
-            if (processIsLive(existingClaim.identity.pid)) return { status: 'occupied', ownerPid: owner.pid };
+            if (processIsLive(existingClaim.identity.pid)) {
+              return { status: 'occupied', blocker: { kind: 'claimant', pid: existingClaim.identity.pid } };
+            }
           } catch (claimLivenessError) {
             return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claimant liveness is unverifiable (${errorMessage(claimLivenessError)})` };
           }
@@ -453,8 +455,24 @@ export function createConductStateLease(
         acquiredAt: new Date(startedAt).toISOString(),
       };
       const serializedOwner = `${JSON.stringify(owner)}\n`;
-      let lastLiveOwnerPid: number | undefined;
+      let blocker: { kind: 'owner' | 'claimant' | 'initializing' | 'changed'; pid?: number } | undefined;
       const deadline = startedAt + waitTimeoutMs;
+
+      const timeoutMessage = (): string => {
+        if (blocker?.kind === 'owner') {
+          return `Unable to acquire ${leaseName} lease within ${waitTimeoutMs}ms; owner pid ${blocker.pid} is live`;
+        }
+        if (blocker?.kind === 'claimant') {
+          return `Unable to acquire ${leaseName} lease within ${waitTimeoutMs}ms; recovery claimant pid ${blocker.pid} is live`;
+        }
+        if (blocker?.kind === 'initializing') {
+          return `Unable to acquire ${leaseName} lease within ${waitTimeoutMs}ms; lease owner is initializing`;
+        }
+        if (blocker?.kind === 'changed') {
+          return `Unable to acquire ${leaseName} lease within ${waitTimeoutMs}ms; lease ownership changed during acquisition`;
+        }
+        return `Unable to acquire ${leaseName} lease within ${waitTimeoutMs}ms`;
+      };
 
       while (true) {
         try {
@@ -477,17 +495,19 @@ export function createConductStateLease(
             return {
               ok: false,
               kind: 'timeout',
-              message: `Unable to acquire ${leaseName} lease within ${waitTimeoutMs}ms${lastLiveOwnerPid === undefined ? '' : `; owner pid ${lastLiveOwnerPid} is live`}`,
+              message: timeoutMessage(),
             };
           }
-          if (recovery.status === 'occupied') lastLiveOwnerPid = recovery.ownerPid;
+          if (recovery.status === 'occupied') blocker = recovery.blocker;
+          if (recovery.status === 'initializing') blocker = { kind: 'initializing' };
+          if (recovery.status === 'vanished') blocker = { kind: 'changed' };
 
           const elapsedMs = now() - startedAt;
           if (elapsedMs >= waitTimeoutMs) {
             return {
               ok: false,
               kind: 'timeout',
-              message: `Unable to acquire ${leaseName} lease within ${waitTimeoutMs}ms${lastLiveOwnerPid === undefined ? '' : `; owner pid ${lastLiveOwnerPid} is live`}`,
+              message: timeoutMessage(),
             };
           }
           // A vanished lease is unheld right now, so retry the creation without
