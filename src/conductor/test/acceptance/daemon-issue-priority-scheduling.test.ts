@@ -344,6 +344,31 @@ describe('Flow A — banded ordering via localWorkSource.discover()', () => {
 // Stories: FR-6 all paths
 // ─────────────────────────────────────────────────────────────────────────────
 describe('Flow B — refresh caching and relabel reorders without a restart', () => {
+  it('a cold local discovery primes bands once and later reads only a newly joined spec', async () => {
+    const dir = await freshDir();
+    await seedSpec(dir, '2026-06-10-low', { sourceRef: 'acme/app#1' });
+    await seedSpec(dir, '2026-06-05-high', { sourceRef: 'acme/app#2' });
+    const reader = makeFakeReader({
+      'acme/app#1': ['priority: low'],
+      'acme/app#2': ['priority: high'],
+      'acme/app#3': ['priority: critical'],
+    });
+    const deps = await buildDeps(dir, { reader });
+
+    expect(await orderedSlugs(dir, deps, false)).toEqual(['2026-06-05-high', '2026-06-10-low']);
+    await orderedSlugs(dir, deps, false);
+    await seedSpec(dir, '2026-06-01-critical', { sourceRef: 'acme/app#3' });
+    expect(await orderedSlugs(dir, deps, false)).toEqual([
+      '2026-06-01-critical',
+      '2026-06-05-high',
+      '2026-06-10-low',
+    ]);
+    expect(reader.calls).toEqual([
+      ['acme/app#2', 'acme/app#1'],
+      ['acme/app#3'],
+    ]);
+  });
+
   it('a relabel takes effect on the NEXT refresh scan, in the same process', async () => {
     const dir = await freshDir();
     await seedSpec(dir, '2026-06-10-relabel-target', { sourceRef: 'acme/app#1' });
@@ -401,6 +426,32 @@ describe('Flow B — refresh caching and relabel reorders without a restart', ()
 // Stories: FR-7 all paths
 // ─────────────────────────────────────────────────────────────────────────────
 describe('Flow C — outage fail-soft through the real WorkSource', () => {
+  it('a cold local-read outage remains fallback, unannotated, and dashboard-visible across later polls', async () => {
+    const dir = await freshDir();
+    await seedSpec(dir, '2026-06-05-linked-high', { sourceRef: 'acme/app#1' });
+    await seedSpec(dir, '2026-06-10-unlinked');
+    const log: string[] = [];
+    const reader = makeFakeReader({ 'acme/app#1': 'THROW' });
+    const deps = await buildDeps(dir, { reader, log: (message) => log.push(message) });
+
+    const first = await localWorkSource(deps).discover({ refresh: false });
+    await localWorkSource(deps).discover({ refresh: false });
+    await localWorkSource(deps).discover({ refresh: false });
+    expect(first.map((item) => item.slug)).toEqual(['2026-06-05-linked-high', '2026-06-10-unlinked']);
+    expect(first.every((item) => item.band === undefined && item.resolutionMode === 'fallback')).toBe(true);
+    expect(reader.calls).toEqual([['acme/app#1']]);
+    expect(log.filter((message) => /outage|unreachable|fallback/i.test(message))).toHaveLength(1);
+
+    const state = await scanInheritedState({
+      worktreeBase: join(dir, '.worktrees'),
+      processedDir: join(dir, '.daemon/processed'),
+      discover: () => localWorkSource(deps).discover({ refresh: false }),
+    });
+    const dashboard = renderDashboard(state);
+    expect(dashboard).toContain('(priority: chronological fallback)');
+    expect(dashboard).not.toMatch(/2026-06-05-linked-high\s*\[/);
+  });
+
   it('a fetch failure falls back to chronological order, warns exactly once, and still dispatches', async () => {
     const dir = await freshDir();
     await seedSpec(dir, '2026-06-10-a', { sourceRef: 'acme/app#1' });
