@@ -31,6 +31,12 @@ import { injectIssueRef } from './issue-ref.js';
 import { buildSpecPrCreateArgs, ensureReleaseMetadata } from './release-metadata-inject.js';
 import { mirrorIssueCriticalityLabels } from '../pr-criticality-labels.js';
 import type { GitRunner } from '../pr-labels.js';
+import {
+  executeGithubOperation,
+  type GithubOperationRunner,
+  type GithubOperationRefusalReason,
+} from '../github-operations.js';
+import { executeRemoteGit, type RemoteGitOperationDependencies } from '../remote-git-operations.js';
 
 // ─── Public types ──────────────────────────────────────────────────────────────
 
@@ -82,6 +88,15 @@ export interface HandoffDeps {
   sourceRef?: string;
   /** Optional log sink for the (non-fatal) issue-ref injection. */
   log?: (msg: string) => void;
+  /**
+   * The guarded initial-publication composition.  It is optional only while
+   * legacy in-process callers migrate; the CLI supplies it for real handoffs.
+   */
+  publication?: {
+    readonly remote: RemoteGitOperationDependencies;
+    readonly operations: GithubOperationRunner;
+    readonly repository: string;
+  };
 }
 
 // ─── Result types (discriminated union) ───────────────────────────────────────
@@ -109,8 +124,14 @@ export interface PrSkippedResult {
   reason: string;
 }
 
+/** A policy denial is terminal for this handoff, but preserves local authoring work. */
+export interface PrRefusedResult {
+  kind: 'pr-refused';
+  reason: GithubOperationRefusalReason;
+}
+
 /** Discriminated union returned by `openSpecPr`. Callers must narrow on `kind`. */
-export type OpenSpecPrResult = PrOpenedResult | PrSkippedResult;
+export type OpenSpecPrResult = PrOpenedResult | PrSkippedResult | PrRefusedResult;
 
 // ─── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -139,6 +160,29 @@ const NO_REMOTE_PATTERNS: RegExp[] = [
 function isNoRemoteError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return NO_REMOTE_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function createPayload(branch: string, args: readonly string[]): { title: string; body: string } {
+  const titleIndex = args.indexOf('--title');
+  const bodyIndex = args.indexOf('--body');
+  return {
+    title: titleIndex >= 0 && typeof args[titleIndex + 1] === 'string' ? args[titleIndex + 1]! : branch,
+    body: bodyIndex >= 0 && typeof args[bodyIndex + 1] === 'string' ? args[bodyIndex + 1]! : '',
+  };
+}
+
+async function readCreatedPrUrl(
+  runner: CommandRunner,
+  branch: string,
+  cwd: string,
+): Promise<string | undefined> {
+  const response = await runner(['pr', 'view', branch, '--json', 'url'], { cwd });
+  try {
+    const url = (JSON.parse(response.stdout || '{}') as { url?: unknown }).url;
+    return typeof url === 'string' && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(url) ? url : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // ─── Public API ────────────────────────────────────────────────────────────────
@@ -177,23 +221,48 @@ export async function openSpecPr(
     );
   }
 
-  await gitRunner(['push', '-u', 'origin', branch], { cwd });
-
   const createArgs = await buildSpecPrCreateArgs({ cwd, branch, git: gitRunner });
 
-  // 1. Invoke `gh pr create` with the spec branch in the worktree's cwd.
-  //    The `--head` flag names the branch to open a PR for; `--fill` uses the
-  //    branch name + last commit message as the title/body, and `--label spec`
-  //    classifies the DECIDE deliverable atomically when the PR is created.
-  let result: RunnerResult;
-  try {
-    result = await runner(
-      createArgs.length === 0
-        ? ['pr', 'create', '--head', branch, '--fill', '--label', 'spec']
-        : ['pr', 'create', '--head', branch, ...createArgs, '--label', 'spec'],
-      { cwd },
+  let url: string | undefined;
+  let legacyStdout = '';
+  if (deps.publication) {
+    const push = await executeRemoteGit(
+      ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`],
+      deps.publication.remote,
     );
-  } catch (err) {
+    if (push.kind === 'refused') return { kind: 'pr-refused', reason: push.reason };
+    if (push.kind === 'failed') throw new Error(`openSpecPr: guarded push failed: ${push.error}`);
+    if (push.kind !== 'executed') throw new Error('openSpecPr: guarded publication did not resolve a remote push target');
+
+    const payload = createPayload(branch, createArgs);
+    const created = await executeGithubOperation({
+      operation: 'pull-request.create',
+      repository: deps.publication.repository,
+      resource: { kind: 'repository' },
+      context: { actor: 'engineer-handoff' },
+      payload: { title: payload.title, body: payload.body, head: branch, base: 'main' },
+    }, deps.publication.operations);
+    if (created.kind === 'refused') return { kind: 'pr-refused', reason: created.reason };
+    if (created.kind === 'failed') throw new Error(`openSpecPr: guarded PR creation failed: ${created.error}`);
+    if (created.kind === 'partial') throw new Error('openSpecPr: PR creation returned an invalid partial result');
+    url = created.target.kind === 'pull-request'
+      ? `https://github.com/${created.target.repository}/pull/${created.target.number}`
+      : await readCreatedPrUrl(runner, branch, cwd);
+    if (!url) throw new Error(`openSpecPr: guarded PR creation did not identify a URL for branch "${branch}".`);
+  } else {
+    await gitRunner(['push', '-u', 'origin', branch], { cwd });
+
+    // Legacy raw composition remains only for older embedded callers. The CLI
+    // takes the guarded branch above and has no mutation fallback after refusal.
+    let result: RunnerResult;
+    try {
+      result = await runner(
+        createArgs.length === 0
+          ? ['pr', 'create', '--head', branch, '--fill', '--label', 'spec']
+          : ['pr', 'create', '--head', branch, ...createArgs, '--label', 'spec'],
+        { cwd },
+      );
+    } catch (err) {
     // 1a. Detect the no-remote condition: the runner rejected with an error whose
     //     message matches one of the NO_REMOTE_PATTERNS above.
     if (isNoRemoteError(err)) {
@@ -207,15 +276,17 @@ export async function openSpecPr(
     }
     // 1b. Any other runner error (network timeout, auth, etc.) is a hard failure —
     //     re-throw so the engineer loop can surface it.
-    throw err;
+      throw err;
+    }
+    legacyStdout = result.stdout;
+    url = extractPrUrl(legacyStdout) ?? undefined;
   }
 
-  // 2. Scrape the PR URL from stdout via the shared extractPrUrl helper.
-  const url = extractPrUrl(result.stdout);
+  // 2. Scrape the legacy runner URL, or retain the canonical guarded result.
   if (!url) {
     throw new Error(
       `openSpecPr: no PR URL found in runner stdout for branch "${branch}" in "${target.canonicalPath}". ` +
-        `stdout was: ${JSON.stringify(result.stdout)}`,
+        `stdout was: ${JSON.stringify(legacyStdout)}`,
     );
   }
 

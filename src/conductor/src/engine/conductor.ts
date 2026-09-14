@@ -424,6 +424,8 @@ import {
 import { openShipDraftPr } from './ship-draft-pr.js';
 import { mirrorIssueCriticalityLabels } from './pr-criticality-labels.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
+import { executeRemoteGit } from './remote-git-operations.js';
+import type { GithubMutationExecutionContext } from './tracker-client.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
@@ -1858,6 +1860,8 @@ interface PostFinishShippedRecordRefreshOptions {
   requestedSlug: string;
   pr: string;
   log: (message: string) => void;
+  remoteGit?: typeof executeRemoteGit;
+  remoteMutation?: GithubMutationExecutionContext;
 }
 
 /** Refresh the final Cost block and make its push best-effort and non-blocking. */
@@ -1867,6 +1871,8 @@ async function refreshPostFinishShippedRecord({
   requestedSlug,
   pr,
   log,
+  remoteGit,
+  remoteMutation,
 }: PostFinishShippedRecordRefreshOptions): Promise<void> {
   try {
     const planPaths = (await readdir(join(cwd, '.docs/plans')))
@@ -1916,7 +1922,14 @@ async function refreshPostFinishShippedRecord({
     }
 
     try {
-      await runGit(['push'], { cwd });
+      const { stdout: branchOut } = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
+      await pushPostFinishShippedRecord({
+        runGit,
+        cwd,
+        branch: branchOut.trim(),
+        remoteGit,
+        remoteMutation,
+      });
     } catch (pushError) {
       let recoveryHead = preRefreshHead;
       let upstreamHead: string | undefined;
@@ -1965,6 +1978,31 @@ async function refreshPostFinishShippedRecord({
       }`,
     );
   }
+}
+
+export async function pushPostFinishShippedRecord(input: {
+  runGit: GitRunner;
+  cwd: string;
+  branch: string;
+  remoteGit?: typeof executeRemoteGit;
+  remoteMutation?: GithubMutationExecutionContext;
+}): Promise<void> {
+  const pushed = await (input.remoteGit ?? executeRemoteGit)(
+    ['push', 'origin', `HEAD:refs/heads/${input.branch}`],
+    {
+      cwd: input.cwd,
+      config: (args) => input.runGit(args, { cwd: input.cwd }),
+      runRemoteGit: input.runGit,
+      mutation: input.remoteMutation,
+    },
+  );
+  if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));
+}
+
+function remoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
+  if (result.kind === 'failed') return result.error;
+  if (result.kind === 'refused') return result.reason;
+  return 'remote Git operation did not execute';
 }
 
 function testSuiteBudgetVerdict(inspection: FullSuiteInspectionResult) {

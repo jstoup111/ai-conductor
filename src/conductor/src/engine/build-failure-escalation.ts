@@ -27,6 +27,8 @@ import {
   HALT_PR_BANNER_SENTINEL,
   HALT_PR_BANNER_LINES,
 } from './pr-labels.js';
+import { executeRemoteGit } from './remote-git-operations.js';
+import type { GithubMutationExecutionContext } from './tracker-client.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -45,6 +47,9 @@ export interface EscalateBuildFailureOpts {
   runGit?: GitRunner;
   /** Injectable gh runner (defaults to the production factory). */
   runGh?: GhRunner;
+  /** Guarded remote-write seam; absent context refuses publication. */
+  remoteGit?: typeof executeRemoteGit;
+  remoteMutation?: GithubMutationExecutionContext;
 }
 
 export interface EscalateBuildFailureResult {
@@ -139,7 +144,16 @@ export async function escalateBuildFailure(
 
   // ── Step 3: push the branch ───────────────────────────────────────────────
   try {
-    await runGit(['push', '-u', 'origin', branch], { cwd });
+    const pushed = await (opts.remoteGit ?? executeRemoteGit)(
+      ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`],
+      {
+        cwd,
+        config: (args) => runGit(args, { cwd }),
+        runRemoteGit: runGit,
+        mutation: opts.remoteMutation,
+      },
+    );
+    if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));
   } catch (err) {
     log?.(`[escalate] push failed — skipping PR creation: ${err}`);
     return {}; // FR-7: push failure silently aborts (no partial PR)
@@ -187,4 +201,10 @@ export async function escalateBuildFailure(
   await upsertComment(runGh, cwd, prUrl, NEEDS_REMEDIATION_MARKER, commentBody, log);
 
   return { prUrl };
+}
+
+function remoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
+  if (result.kind === 'failed') return result.error;
+  if (result.kind === 'refused') return result.reason;
+  return 'remote Git operation did not execute';
 }
