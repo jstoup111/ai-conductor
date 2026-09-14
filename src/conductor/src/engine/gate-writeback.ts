@@ -4,8 +4,8 @@
  *
  * Design constraints (mirroring the build-failure-escalation.ts / pr-labels.ts
  * seam):
- *   - Every public function is dependency-injected (runner defaults to the
- *     prod factory so call-sites with no fake need no wiring).
+ *   - Read and mutation seams are dependency-injected. An absent mutation
+ *     seam keeps the local GATED state but performs no remote write.
  *   - All operations are best-effort / non-throwing: errors are caught
  *     internally, logged via the optional `log` callback, and never
  *     re-thrown to callers.
@@ -16,15 +16,19 @@
 
 import {
   type GhRunner,
+  type PrRunner,
   makeProductionGh,
-  ensureLabel,
   addLabel,
   upsertComment,
-  upsertIssueComment,
   prMergeState,
   OWNER_GATED_MARKER,
 } from './pr-labels.js';
 import { parseSourceRef } from './engineer/issue-ref.js';
+import {
+  executeGithubOperation,
+  type GithubOperationRunner,
+  type GithubOperationResult,
+} from './github-operations.js';
 
 export { OWNER_GATED_MARKER };
 
@@ -45,7 +49,6 @@ const TERMINAL_PR_STATES = new Set(['CLOSED', 'NOTFOUND']);
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 export const OWNER_GATED_LABEL = 'owner-gated';
-const LABEL_COLOR = 'FBCA04';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -65,6 +68,11 @@ export interface GatedSpecEntry {
 
 export interface GateWritebackDeps {
   runGh?: GhRunner;
+  /**
+   * Required for every announcement mutation. Reads remain on `runGh`, while
+   * this guarded seam decides each label/comment write independently.
+   */
+  operations?: GithubOperationRunner;
   cwd: string;
   log?: (msg: string) => void;
   /**
@@ -78,6 +86,20 @@ export interface GateWritebackDeps {
    * them (subject to `warnedSkips` dedup).
    */
   verbose?: boolean;
+}
+
+/**
+ * The marker helper needs read access to find an existing comment and the
+ * guarded operation seam to mutate it. Combining the two does not expose a
+ * raw write path: `pr-labels` directs every mutation through `.run`.
+ */
+function guardedPrRunner(runGh: GhRunner, operations: GithubOperationRunner): PrRunner {
+  const read: GhRunner = (args, opts) => runGh(args, opts);
+  return Object.assign(read, { run: operations.run.bind(operations) });
+}
+
+function isRefused(result: GithubOperationResult | { readonly kind: 'refused'; readonly reason: string }): boolean {
+  return result.kind === 'refused';
 }
 
 /**
@@ -107,19 +129,20 @@ function logSkipOnce(
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Ensure the `owner-gated` label exists in the repo and is applied to the
- * given PR. Best-effort / non-throwing (delegates to the pr-labels seam,
- * which swallows its own errors).
+ * Apply the pre-existing `owner-gated` label to the given PR. Definition
+ * creation is shared repository administration and is deliberately excluded.
  */
 export async function ensureGatedPrLabel(
   _spec: GatedSpecEntry,
   prUrl: string,
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   log?: (msg: string) => void,
-): Promise<void> {
-  await ensureLabel(runGh, cwd, OWNER_GATED_LABEL, LABEL_COLOR, log);
-  await addLabel(runGh, cwd, prUrl, OWNER_GATED_LABEL, log);
+): Promise<GithubOperationResult> {
+  // Label definitions are repository-wide shared state. D4 deliberately
+  // forbids an owner-gated feature from creating or force-updating one; the
+  // association below is enough when an administrator has installed it.
+  return await addLabel(runGh, cwd, prUrl, OWNER_GATED_LABEL, log);
 }
 
 /** Render the body of the owner-gated marker comment for a given spec entry. */
@@ -151,7 +174,7 @@ function renderCommentBody(spec: GatedSpecEntry): string {
 export async function upsertGatedMarkerComment(
   spec: GatedSpecEntry,
   prUrl: string,
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   log?: (msg: string) => void,
 ): Promise<void> {
@@ -216,8 +239,18 @@ export async function announceGatedPr(
     return;
   }
 
-  await ensureGatedPrLabel(spec, prUrl, runGh, cwd, log);
-  await upsertGatedMarkerComment(spec, prUrl, runGh, cwd, log);
+  // Local GATED visibility is recorded by the discovery snapshot/dashboard
+  // before this write-back callback runs. Without an injected guarded seam,
+  // retain that local state and decline all remote escalation writes.
+  if (!deps.operations) return;
+  const guarded = guardedPrRunner(runGh, deps.operations);
+  const label = await ensureGatedPrLabel(spec, prUrl, guarded, cwd, log);
+  // A policy refusal is terminal for this resource: never turn a denied label
+  // into a comment fallback on the same foreign PR (ADR D6/D8).
+  if (isRefused(label)) return;
+  // Transport failure remains per-surface best-effort; the marker can still
+  // make the gated state visible if the existing label association failed.
+  await upsertGatedMarkerComment(spec, prUrl, guarded, cwd, log);
 }
 
 /**
@@ -238,18 +271,18 @@ export async function announceGatedPr(
  *     skipped with a logged notice (deduped per `(slug, 'no-source-ref')` via
  *     {@link logSkipOnce}), never a `gh` call with garbage arguments.
  *
- * Otherwise labels + upserts the marker comment on the issue. Commenting is
- * attempted regardless of the issue's open/closed state (a closed issue can
- * still receive comments). Both steps are best-effort/non-throwing — this
- * function itself never throws, mirroring {@link announceGatedPr}.
+ * Otherwise labels + posts the marker comment on the issue through its own
+ * guarded authorization path. Commenting is attempted regardless of the
+ * issue's open/closed state (a closed issue can still receive comments). Both
+ * steps are best-effort/non-throwing — this function itself never throws,
+ * mirroring {@link announceGatedPr}.
  */
 export async function announceGatedIssue(
   spec: GatedSpecEntry,
   sourceRef: string | undefined,
   deps: GateWritebackDeps,
 ): Promise<void> {
-  const { cwd, log, warnedSkips, verbose } = deps;
-  const runGh = deps.runGh ?? makeProductionGh();
+  const { log, warnedSkips, verbose } = deps;
 
   if (spec.kind !== 'spec') {
     return;
@@ -269,23 +302,29 @@ export async function announceGatedIssue(
     return;
   }
 
-  // Ownership isolation (the #691-class breach): a gated spec is always
-  // `other-owner`, so its originating intake issue belongs to a DIFFERENT
-  // operator. This daemon must NOT label or comment on another operator's
-  // issue — that is exactly how one operator's daemon left 83 owner-gated
-  // comments on issues assigned to another operator. Silently skip; only the
-  // issue's own operator (whose daemon does not gate the spec) may write on it.
-  if (spec.reason === 'other-owner') {
-    return;
-  }
+  // A Source-Ref identifies a target but grants no authority. Its policy is
+  // intentionally independent from the gated implementation PR.
+  if (!deps.operations) return;
+  const number = Number(parsed.number);
+  if (!Number.isSafeInteger(number) || number < 1) return;
+  const target = { repository: parsed.repo, kind: 'issue' as const, number };
+  const label = await executeGithubOperation({
+    operation: 'issue.label.add',
+    repository: parsed.repo,
+    resource: target,
+    context: { actor: 'gate-writeback' },
+    payload: { label: OWNER_GATED_LABEL },
+  }, deps.operations);
+  if (isRefused(label)) return;
 
-  const issueUrl = `https://github.com/${parsed.repo}/issues/${parsed.number}`;
-
-  try {
-    await ensureLabel(runGh, cwd, OWNER_GATED_LABEL, LABEL_COLOR, log);
-    await addLabel(runGh, cwd, issueUrl, OWNER_GATED_LABEL, log);
-    await upsertIssueComment(runGh, cwd, issueUrl, OWNER_GATED_MARKER, renderCommentBody(spec), log);
-  } catch (err) {
-    log?.(`[gate-writeback] issue announcement for ${issueUrl} failed: ${err}`);
+  const comment = await executeGithubOperation({
+    operation: 'intake.issue.comment.create',
+    repository: parsed.repo,
+    resource: target,
+    context: { actor: 'gate-writeback' },
+    payload: { body: `${OWNER_GATED_MARKER}\n${renderCommentBody(spec)}` },
+  }, deps.operations);
+  if (comment.kind === 'failed') {
+    log?.(`[gate-writeback] issue announcement for ${parsed.repo}#${parsed.number} failed: ${comment.error}`);
   }
 }
