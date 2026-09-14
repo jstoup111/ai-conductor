@@ -89,17 +89,15 @@ build_review:
       model: opus
       effort: high
 
-# Native pre-SHIP aggregate verification. The ordered commands run the conductor
-# test suite and this repository's harness-integrity suite in one BUILD gate.
+# Native pre-SHIP aggregate verification. The project-owned npm script runs
+# Vitest's test/**/*.test.ts inclusion, covering ordinary and acceptance tests
+# in one operation. Harness integrity remains a separate self-host gate.
 test_suite:
-  commands:
-    - command: npm test
-      working_directory: src/conductor
-    - command: test/test_harness_integrity.sh
-      working_directory: .
+  command: npm test
   # The detached counterfactual checkout materializes this ignored dependency
   # installation at its root before the scoped command runs.
   scoped_command: './node_modules/.bin/vitest run {selectors}'
+  working_directory: src/conductor
   timeout_seconds: 1800
   # One full-suite run per feature, then hold that PASS across small laps.
   #
