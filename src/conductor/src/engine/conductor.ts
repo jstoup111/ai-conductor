@@ -4184,6 +4184,7 @@ export class Conductor {
       },
     };
     const codeDigest = await readCodeDigest();
+    const remediateModelPolicy = this.modelPolicyForStep('remediate');
     const publication = await coordinatePrdWidening({
       store: caseStore,
       context: context.value,
@@ -4212,7 +4213,7 @@ export class Conductor {
         remainingAttempts: resolveStepConfig(
           'remediate',
           phaseForStep('remediate'),
-          this.modelPolicyForStep('remediate'),
+          remediateModelPolicy,
           this.config,
           { tier: state.complexity_tier },
         ).max_retries,
