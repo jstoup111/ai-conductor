@@ -166,6 +166,14 @@ export async function sweep(config: SweepConfig): Promise<SweepResult> {
           entry.closedBy = 'external';
           entry.closedAt = config.clock.now().toISOString();
           entry.status = 'closed';
+        } else if (stampResult.refused) {
+          // A policy denial is terminal for this entry.  In particular, do
+          // not fall through to closure and turn a refused stamp into a
+          // comment/close attempt against the same issue.
+          entry.lastError = stampResult.lastError ?? 'refused';
+          counts.errors++;
+          ledgerSchema.entries[issue] = entry;
+          continue;
         } else if (stampResult.lastError) {
           // Stamp failed with error
           entry.lastError = stampResult.lastError;
@@ -204,6 +212,11 @@ export async function sweep(config: SweepConfig): Promise<SweepResult> {
           entry.closedBy = 'external';
           entry.closedAt = closeResult.closedAt;
           entry.status = 'closed';
+        } else if (closeResult.refused) {
+          // Refusal is not an externally closed issue and must never advance
+          // its ledger status.  The next entry remains independently runnable.
+          entry.lastError = closeResult.lastError ?? 'refused';
+          counts.errors++;
         } else if (closeResult.lastError) {
           // Close failed
           entry.lastError = closeResult.lastError;
