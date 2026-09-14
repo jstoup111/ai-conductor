@@ -52,9 +52,8 @@ export type PrRunner = GhRunner | GithubOperationRunner | (GhRunner & GithubOper
 export type PrMutationResult = GithubOperationResult;
 
 function isGuardedRunner(runner: PrRunner): runner is GithubOperationRunner {
-  return runner !== null
-    && (typeof runner === 'object' || typeof runner === 'function')
-    && typeof runner.run === 'function';
+  if (runner === null || (typeof runner !== 'object' && typeof runner !== 'function')) return false;
+  return 'run' in runner && typeof (runner as { run?: unknown }).run === 'function';
 }
 
 function prTarget(url: string): { repository: string; kind: 'pull-request'; number: number } | null {
