@@ -1,12 +1,16 @@
-// Covers: S1.1, S1.2, S1.3, S1.4, S2.1, S2.2, S2.6, S2.8, task:2, task:5
+// Covers: S1.1, S1.2, S1.3, S1.4, S2.1, S2.2, S2.5, S2.6, S2.8, S3.2, S3.3,
+// S3.4, S3.5, S3.7, task:2, task:3, task:5, task:6, task:7, task:8
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
 import { readState, writeState } from '../../src/engine/state.js';
+import { applyRebaseVerdicts, type RebaseOutcome } from '../../src/engine/rebase.js';
+import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -222,6 +226,35 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
+  it('does not retain a passing sibling when its verdict-run-identity handshake fails', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'validation-handshake-retention-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedValidators(dir, statePath);
+      const conductor = new Conductor({
+        stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
+        verifyArtifacts: true, maxRetries: 1, fromStep: 'manual_test',
+        stepRunner: { run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          if (step === 'prd_audit') throw new Error('sibling crashed');
+          if (step === 'architecture_review_as_built') await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+          return { success: true } as StepRunResult;
+        }) },
+      });
+      (conductor as unknown as {
+        verdictDispatchHandshake(name: StepName): Promise<{ done: false; routeClass: 'absent'; reason: string } | undefined>;
+      }).verdictDispatchHandshake = async (name) => name === 'manual_test'
+        ? { done: false, routeClass: 'absent', reason: 'stale validation run identity' }
+        : undefined;
+      await conductor.run();
+      const result = await readState(statePath);
+      if (!result.ok) throw result.error;
+      const state = result.value as Record<string, unknown>;
+      expect([state.manual_test, state.validation__manual_test]).not.toContain('done');
+      expect([state.prd_audit, state.validation__prd_audit]).not.toContain('done');
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
   it('re-dispatches only the failed member after the HALT is cleared', async () => {
     const dir = await mkdtemp(join(process.env.TMPDIR!, 'validation-retained-redispatch-'));
     const statePath = join(dir, 'conduct-state.json');
@@ -232,8 +265,13 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
         rebase: 'done', finish: 'done',
       });
       const calls: StepName[] = [];
+      const events = new ConductorEventEmitter();
+      const completed: string[][] = [];
+      events.on('parallel_completed', event => {
+        if (event.type === 'parallel_completed') completed.push(event.branches);
+      });
       const conductor = new Conductor({
-        stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
+        stateFilePath: statePath, events, projectRoot: dir, mode: 'auto', daemon: true,
         verifyArtifacts: true, maxRetries: 2, fromStep: 'manual_test',
         stepRunner: { run: vi.fn(async (step: StepName) => {
           calls.push(step);
@@ -247,8 +285,174 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       if (!result.ok) throw result.error;
       const state = result.value as Record<string, unknown>;
       expect([state.manual_test, state.prd_audit, state.architecture_review_as_built,
-        state.validation__prd_audit, state.validation__architecture_review_as_built])
-        .toEqual(['done', 'done', 'done', 'done', 'done']);
+        state.validation__manual_test, state.validation__prd_audit, state.validation__architecture_review_as_built])
+        .toEqual(['done', 'done', 'done', 'done', 'done', 'done']);
+      expect(completed).toEqual([]);
+      const redispatchStatuses = [state.manual_test, state.prd_audit, state.architecture_review_as_built,
+        state.validation__manual_test, state.validation__prd_audit, state.validation__architecture_review_as_built];
+      const beforeFresh = await readState(statePath);
+      if (!beforeFresh.ok) throw beforeFresh.error;
+      await writeState(statePath, {
+        ...beforeFresh.value,
+        manual_test: 'stale', prd_audit: 'stale', architecture_review_as_built: 'stale',
+        validation__manual_test: 'stale', validation__prd_audit: 'stale', validation__architecture_review_as_built: 'stale',
+      } as ConductState);
+      await new Conductor({
+        stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
+        verifyArtifacts: true, fromStep: 'manual_test',
+        stepRunner: { run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+          if (step === 'architecture_review_as_built') await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+          return { success: true } as StepRunResult;
+        }) },
+      }).run();
+      const fresh = await readState(statePath);
+      if (!fresh.ok) throw fresh.error;
+      const freshState = fresh.value as Record<string, unknown>;
+      expect(redispatchStatuses).toEqual([freshState.manual_test, freshState.prd_audit, freshState.architecture_review_as_built,
+        freshState.validation__manual_test, freshState.validation__prd_audit, freshState.validation__architecture_review_as_built]);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('retries a re-dispatched member once and then completes without a loop halt', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'validation-retained-retry-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedValidators(dir, statePath, {
+        manual_test: 'failed', prd_audit: 'done', architecture_review_as_built: 'done',
+        validation__prd_audit: 'done', validation__architecture_review_as_built: 'done', rebase: 'done', finish: 'done',
+      });
+      let attempts = 0;
+      const halts: ConductorEvent[] = [];
+      const events = new ConductorEventEmitter();
+      events.on('loop_halt', event => { halts.push(event); });
+      await new Conductor({
+        stateFilePath: statePath, events, projectRoot: dir, mode: 'auto', daemon: true,
+        verifyArtifacts: true, maxRetries: 2, fromStep: 'manual_test',
+        stepRunner: { run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test' && ++attempts === 1) throw new Error('transient runner failure');
+          if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          return { success: true } as StepRunResult;
+        }) },
+      }).run();
+      expect(attempts).toBe(2);
+      expect(halts).toEqual([]);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('restages a retained done member through the skip-preserving kickback helper and dispatches it again', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'validation-retained-kickback-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedValidators(dir, statePath, {
+        manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done',
+        validation__manual_test: 'done', validation__prd_audit: 'done', validation__architecture_review_as_built: 'done',
+        rebase: 'done', finish: 'done',
+      });
+      const seeded = await readState(statePath);
+      if (!seeded.ok) throw seeded.error;
+      const calls: StepName[] = [];
+      const runner: StepRunner = { run: vi.fn(async (step: StepName) => {
+        calls.push(step);
+        if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+        if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+        if (step === 'architecture_review_as_built') await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+        return { success: true } as StepRunResult;
+      }) };
+      const conductor = new Conductor({
+        stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
+        verifyArtifacts: true, fromStep: 'manual_test', stepRunner: runner,
+      });
+      await (conductor as unknown as {
+        navigateStateBack(state: ConductState, target: StepName, steps: typeof ALL_STEPS): Promise<number>;
+      }).navigateStateBack(seeded.value, 'build', ALL_STEPS);
+      const restaged = await readState(statePath);
+      if (!restaged.ok) throw restaged.error;
+      expect(restaged.value.manual_test).toBe('stale');
+      await conductor.run();
+      expect(calls.filter(step => step === 'manual_test')).toEqual(['manual_test']);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('restages and re-dispatches a retained member after post-rebase invalidation touches its gate surface', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'validation-retained-rebase-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedValidators(dir, statePath, {
+        manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done',
+        validation__manual_test: 'done', validation__prd_audit: 'done', validation__architecture_review_as_built: 'done',
+        rebase: 'done', finish: 'done',
+      });
+      const outcome: RebaseOutcome = {
+        kind: 'changed', changedCodePaths: ['src/feature.ts'], allChangedPaths: ['src/feature.ts'], featureSurface: ['src/feature.ts'],
+      };
+      await applyRebaseVerdicts(dir, outcome, true);
+      const seeded = await readState(statePath);
+      if (!seeded.ok) throw seeded.error;
+      const calls: StepName[] = [];
+      const runner: StepRunner = { run: vi.fn(async (step: StepName) => {
+        calls.push(step);
+        if (step === 'coverage_binding') await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'one-transient-failure-in-a-validation-group-member', runId: 'test-run', status: 'disabled', entries: [] }));
+        if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+        if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+        if (step === 'architecture_review_as_built') await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+        return { success: true } as StepRunResult;
+      }) };
+      const conductor = new Conductor({
+        stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
+        verifyArtifacts: true, fromStep: 'manual_test', stepRunner: runner,
+      });
+      const rebaseTail = conductor as unknown as {
+        lastRebaseOutcome: RebaseOutcome;
+        advanceTail(step: (typeof ALL_STEPS)[number], state: ConductState, stuckGate: Map<StepName, number>, steps: typeof ALL_STEPS, indexOf: (name: StepName) => number): Promise<number | null | 'halt'>;
+      };
+      rebaseTail.lastRebaseOutcome = outcome;
+      const rebase = ALL_STEPS.find((step) => step.name === 'rebase');
+      if (!rebase) throw new Error('rebase step must be registered');
+      await rebaseTail.advanceTail(rebase, seeded.value, new Map(), ALL_STEPS, (name) => ALL_STEPS.findIndex((step) => step.name === name));
+      const restaged = await readState(statePath);
+      if (!restaged.ok) throw restaged.error;
+      expect(restaged.value.prd_audit).toBe('pending');
+      await writeState(statePath, {
+        ...restaged.value,
+        acceptance_specs: 'skipped', coverage_binding: 'done', build: 'done', test_suite: 'skipped', build_review: 'skipped', manual_test: 'done',
+      } as ConductState);
+      await Promise.all(['build', 'test_suite', 'build_review', 'manual_test'].map((step) =>
+        writeVerdict(dir, step as StepName, { satisfied: true, checkedAt: Date.now() }),
+      ));
+      await new Conductor({
+        stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
+        verifyArtifacts: true, fromStep: 'manual_test', stepRunner: runner,
+      }).run();
+      expect(calls.filter(step => step === 'prd_audit')).toEqual(['prd_audit']);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('keeps retained siblings done when the re-dispatched member halts a second time', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'validation-second-halt-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedValidators(dir, statePath, {
+        manual_test: 'failed', prd_audit: 'done', architecture_review_as_built: 'done',
+        validation__prd_audit: 'done', validation__architecture_review_as_built: 'done', rebase: 'done', finish: 'done',
+      });
+      await new Conductor({
+        stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
+        verifyArtifacts: true, maxRetries: 2, fromStep: 'manual_test',
+        stepRunner: { run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') throw new Error('second-round crash');
+          return { success: true } as StepRunResult;
+        }) },
+      }).run();
+      const result = await readState(statePath);
+      if (!result.ok) throw result.error;
+      const state = result.value as Record<string, unknown>;
+      expect([state.prd_audit, state.validation__prd_audit, state.architecture_review_as_built, state.validation__architecture_review_as_built])
+        .toEqual(['done', 'done', 'done', 'done']);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      expect(halt).toContain('manual_test');
+      expect(halt).not.toContain('prd_audit');
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });
