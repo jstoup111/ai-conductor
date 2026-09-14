@@ -222,6 +222,21 @@ hand-authoring prohibition stands. This amends
 sole source shape; `config init` becomes a parameterized instantiation of it rather than a
 byte copy, still deterministic and refuse-to-clobber.
 
+> **Amended 2026-09-14 by #2218 (guided bootstrap setup):** D8's ask-then-record pattern is
+> extended from the two `test_suite.verification` answers to every project-config setting the
+> bootstrap walkthrough asks about. The hand-authoring prohibition, the template as sole source
+> shape, idempotence, and refuse-to-clobber are all unchanged.
+>
+> D9 — `conduct-ts config init` accepts an optional flag per interview-recorded project setting,
+> beginning with the project's real aggregate test command (`test_suite.command`), which today is
+> substituted as the fixed literal `npm test` regardless of the project's stack. Each flag is
+> validated before any write; an absent flag records exactly today's value, so a flagless
+> invocation and the auto-mode invocation remain byte-identical to the current output. The
+> bootstrap skill asks and records through these flags; it never composes the file. No new
+> config key is introduced by this amendment — every substituted key already exists in the
+> consumer registry (adr-2026-08-26-config-key-consumer-registry-and-dead-surface-removal
+> decision 4).
+
 ## Consequences
 
 ### Positive
