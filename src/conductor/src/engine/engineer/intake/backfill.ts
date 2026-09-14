@@ -28,10 +28,8 @@ import {
   type GithubIntakeMutationExecutionContext,
 } from '../../tracker-client.js';
 import { parseSourceRef } from '../issue-ref.js';
-import {
-  createGithubIntakeAuthorization,
-  type InteractiveGithubOperationConfirmation,
-} from './github-issues.js';
+import { createGithubIntakeAuthorization } from './github-issues.js';
+import type { InteractiveGithubOperationConfirmation } from '../../github-operation-approval.js';
 import type { OwnerResolution } from '../../owner-gate/identity.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
