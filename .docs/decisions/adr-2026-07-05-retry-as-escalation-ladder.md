@@ -17,7 +17,7 @@ changes the odds, and shrink the now-wasteful deep budgets.
 
 ## Decision
 
-### 1. Escalation is a pure, attempt-indexed transform on the base config
+### D1. Escalation is a pure, attempt-indexed transform on the base config
 
 A new pure function `escalateAttempt(baseModel, baseEffort, attempt, escalate)`
 returns the `(model, effort)` for a given 1-based `attempt`. The base
@@ -28,7 +28,7 @@ ordering constants:
 - `EFFORT_ORDER = ['low','medium','high','xhigh','max']`
 - `MODEL_TIER_ORDER = ['haiku','sonnet','opus','fable']` (ascending capability)
 
-### 2. Effort first, then model; escalation is cumulative and monotonic
+### D2. Effort first, then model; escalation is cumulative and monotonic
 
 - **Attempt 1** — base model, base effort (unchanged).
 - **Attempt 2** — base model, effort bumped **one** level up from base.
@@ -39,7 +39,7 @@ Escalation never de-escalates. Bumps are **capped** at the top of each ladder: a
 effort already at `max` or a model already at `fable` stays put (a no-op rung, not an
 error).
 
-### 3. Model bump expresses *intent*; #186 availability guarantees *liveness*
+### D3. Model bump expresses *intent*; #186 availability guarantees *liveness*
 
 `escalateAttempt` picks a **target** tier from `MODEL_TIER_ORDER`. It does **not**
 call the availability API itself. The existing `StepRunner` path already routes the
@@ -49,7 +49,7 @@ ladder" by construction, with no new wiring. The two ladders are deliberately
 separate: `MODEL_TIER_ORDER` ascends for *upgrade-on-retry*; the availability ladder
 descends for *substitute-on-dead*.
 
-### 4. Escalating deep-step budgets floor at 3, not 2
+### D4. Escalating deep-step budgets floor at 3, not 2
 
 `DEFAULT_STEP_RETRIES` for explore/prd/plan/build drops from **5 → 3**. It is **not**
 cut to 2: the model-bump rung lives at attempt 3, so a budget of 2 would truncate the
@@ -57,7 +57,7 @@ ladder at effort and never exercise the model bump. Three attempts is the minimu
 that preserves the full effort-then-model ladder while removing wasted identical
 retries. Steps with `escalate: false` may still be tuned lower independently.
 
-### 5. `escalate` is a per-step opt-out, default true
+### D5. `escalate` is a per-step opt-out, default true
 
 A new optional `escalate?: boolean` on `StepConfig` (threaded through the
 `resolveStepConfig` precedence chain, default **true**). When false, every attempt
@@ -65,7 +65,7 @@ uses the base `(model, effort)` — identical-retry is preserved for steps where
 is intentional. Default-true means existing configs begin escalating; this is the
 intended behavior change and is documented as a migration note.
 
-### 6. Escalation is logged by extending `step_retry`, read by retro Part C
+### D6. Escalation is logged by extending `step_retry`, read by retro Part C
 
 The existing `step_retry` event gains optional `escalatedModel` and
 `escalatedEffort` fields carrying the `(model, effort)` the **next** attempt will
@@ -73,7 +73,7 @@ use. It is already persisted to `.pipeline/events.jsonl`. `aggregateRetryHotspot
 (retro Part C's feed) is extended to surface how far up each ladder a step climbed.
 No new event type is introduced (lower schema surface, backward-compatible).
 
-### 7. Escalation derives from `attempt`, never a separate counter
+### D7. Escalation derives from `attempt`, never a separate counter
 
 The retry loop has non-budget-consuming paths (rate-limit, stale session, auth
 park-and-poll) that do `attempt--; continue`. Because escalation is a function of
@@ -81,7 +81,7 @@ park-and-poll) that do `attempt--; continue`. Because escalation is a function o
 since they were not quality failures. No independent escalation counter exists to
 drift out of sync.
 
-### 8. The exhausted-retries HALT invariant is preserved
+### D8. The exhausted-retries HALT invariant is preserved
 
 The ladder adds no `continue`/`attempt--` of its own. Once the final rung (attempt ==
 `max_retries`) fails, the loop exits with `succeeded=false`, writes
