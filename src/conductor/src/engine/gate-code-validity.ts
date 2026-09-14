@@ -75,6 +75,18 @@ async function persistedVerdict(projectRoot: string, gate: StepName): Promise<Ga
   }
 }
 
+/**
+ * Replay authority explains one prior judge result; it cannot outrank an
+ * outstanding repair elsewhere in the verification tail.  In particular a
+ * failed or kicked-back aggregate suite is newer authority for every review
+ * that follows it.  Read the durable gate record rather than conduct-state:
+ * a restart may see the verdict before the state sweep has selected it.
+ */
+async function hasOutstandingVerificationRepair(projectRoot: string): Promise<boolean> {
+  const suite = await persistedVerdict(projectRoot, 'test_suite');
+  return suite?.satisfied === false || suite?.kickback !== undefined;
+}
+
 async function replayBoundAuthorityStillValid(
   ctx: GateCodeValidityContext,
   gate: string,
@@ -83,6 +95,7 @@ async function replayBoundAuthorityStillValid(
   try {
     const preserved = await persistedVerdict(ctx.projectRoot, gate as StepName);
     if (!preserved?.satisfied || preserved.kickback || !preserved.preservation) return false;
+    if (await hasOutstandingVerificationRepair(ctx.projectRoot)) return false;
 
     const authority = preserved.preservation;
     if (authority.gate !== gate || authority.original.codeStamp !== codeStamp ||

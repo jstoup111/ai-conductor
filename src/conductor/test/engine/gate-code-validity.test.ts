@@ -266,6 +266,45 @@ describe('gateVerdictStillValid', () => {
     await expect(validity()).resolves.toBe('rerun');
   });
 
+  it('refuses replay preservation when an aggregate-suite repair is outstanding', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const original = await commit(s, { 'src/shared.ts': 'original\n' }, 'original reviewed work');
+    const completed = await commit(s, { 'src/shared.ts': 'upstream plus replay\n' }, 'completed clean replay');
+    const replay = {
+      preRebaseHead: original,
+      mergeBase: original,
+      target: original,
+      completedHead: completed,
+      expectedTree: (await s.git(['rev-parse', `${completed}^{tree}`])).stdout.trim(),
+    };
+    await writeVerdict(s.repo, 'build_review', {
+      satisfied: true,
+      checkedAt: 1,
+      preservation: {
+        gate: 'build_review',
+        original: { artifactDigest: 'sha256:original', attemptId: 'attempt-1', runId: 'run-1', codeStamp: original },
+        replay,
+        relevantInputIdentities: [],
+        operationId: 'rebase-1',
+      },
+    });
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 1,
+      rebaseOperation: {
+        id: 'rebase-1', status: 'applied', transition: { preserved: ['build_review'], invalidated: [], reverified: [] }, replay,
+      },
+    });
+    await writeVerdict(s.repo, 'test_suite', {
+      satisfied: false,
+      checkedAt: 2,
+      kickback: { from: 'rebase', evidence: 'aggregate suite repair required' },
+    });
+
+    await expect(gateVerdictStillValid({ projectRoot: s.repo, git: s.git }, 'build_review', original)).resolves.toBe('rerun');
+  });
+
   it('returns rerun when codeStamp is absent', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);
