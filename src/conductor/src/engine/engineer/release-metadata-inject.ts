@@ -21,7 +21,8 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseReleaseDisposition } from '../release-metadata.js';
-import type { GitRunner } from '../pr-labels.js';
+import { parseIssueRef, type GitRunner } from '../pr-labels.js';
+import { executeGithubOperation, type GithubOperationRunner } from '../github-operations.js';
 
 /** Shell runner for the `gh` CLI. Same shape as issue-ref.ts's GhRunner. */
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
@@ -31,6 +32,11 @@ export type FileReader = (path: string) => Promise<string>;
 
 export interface EnsureReleaseMetadataOpts {
   gh: GhRunner;
+  /**
+   * Guarded mutation boundary for the body edit. When supplied, no raw `gh pr
+   * edit` fallback is permitted; a refusal leaves the delivered PR unchanged.
+   */
+  operations?: GithubOperationRunner;
   prUrl: string;
   /** Repository root (the spec worktree) — both the gh cwd and the template root. */
   cwd: string;
@@ -147,7 +153,26 @@ export async function ensureReleaseMetadata(opts: EnsureReleaseMetadataOpts): Pr
 
     const newBody = composeSpecPrBody(body);
     if (newBody === body) return false; // already declared — never overwrite the author.
-    await gh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+    if (opts.operations) {
+      const target = parseIssueRef(prUrl);
+      if (!target) {
+        log(`ensureReleaseMetadata: unparseable PR URL for guarded write-back: ${prUrl}`);
+        return false;
+      }
+      const result = await executeGithubOperation({
+        operation: 'pull-request.edit',
+        repository: target.repo,
+        resource: { kind: 'pull-request', number: Number(target.number) },
+        context: { actor: 'engineer-handoff' },
+        payload: { body: newBody },
+      }, opts.operations);
+      if (result.kind !== 'executed') {
+        log(`ensureReleaseMetadata: guarded write-back refused or failed for ${prUrl}`);
+        return false;
+      }
+    } else {
+      await gh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+    }
     return true;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);

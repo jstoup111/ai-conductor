@@ -1,6 +1,6 @@
 // Covers: task:16
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -66,7 +66,7 @@ describe('composer handoff — initial spec publication ownership', () => {
       };
       const result = await openSpecPr({ name: 'specs', canonicalPath: '/fixture', remote: `https://github.com/${REPOSITORY}.git` }, BRANCH, {
         runner: async (args, options) => {
-          const response = await gh(args, { cwd: options?.cwd ?? '/fixture' });
+          const response = await gh(args);
           return { stdout: response.stdout, stderr: '' };
         },
         gitRunner: async () => ({ stdout: '' }),
@@ -96,6 +96,74 @@ describe('composer handoff — initial spec publication ownership', () => {
       ]));
     } finally {
       await rm(engineerDir, { recursive: true, force: true });
+    }
+  });
+
+  it('routes post-create metadata, issue linkage, and criticality labels through the guarded boundary', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'handoff-ownership-followups-'));
+    try {
+      await mkdir(join(root, '.github'), { recursive: true });
+      await writeFile(
+        join(root, '.github', 'pull_request_template.md'),
+        'Release-Disposition: no-note\n',
+        'utf8',
+      );
+      const context = mutation();
+      const remoteWrites = vi.fn().mockResolvedValue({ stdout: '' });
+      const guardedRequests: Array<{ operation: string }> = [];
+      const rawWrites: string[][] = [];
+      const runner = async (args: string[]) => {
+        if ((args[0] === 'pr' && args[1] === 'edit') || (args[0] === 'api' && args.includes('POST'))) {
+          rawWrites.push(args);
+          throw new Error('raw GitHub mutation must not be called');
+        }
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ body: 'spec body' }) };
+        if (args[0] === 'api') return { stdout: JSON.stringify([{ name: 'priority: high' }]) };
+        return { stdout: '' };
+      };
+      const operations = {
+        run: vi.fn(async (request) => {
+          guardedRequests.push({ operation: request.operation });
+          if (request.operation === 'pull-request.create') {
+            return { created: { repository: REPOSITORY, kind: 'pull-request' as const, number: 42 } };
+          }
+          return {};
+        }),
+      };
+
+      const result = await openSpecPr({ name: 'specs', canonicalPath: root, remote: `https://github.com/${REPOSITORY}.git` }, BRANCH, {
+        runner: async (args, options) => ({
+          ...(await runner(args)),
+          stderr: '',
+        }),
+        gitRunner: async (args) => {
+          if (args[0] === 'show') throw new Error('force post-create repair');
+          return { stdout: '' };
+        },
+        ledgerOpts: { engineerDir: root },
+        sourceRef: 'acme/intake#7',
+        publication: {
+          repository: REPOSITORY,
+          remote: {
+            cwd: root,
+            config: async () => ({ stdout: `https://github.com/${REPOSITORY}.git\n` }),
+            runRemoteGit: remoteWrites,
+            mutation: context,
+          },
+          operations,
+        },
+      });
+
+      expect(result).toEqual({ kind: 'pr-opened', url: PR_URL });
+      expect(rawWrites).toEqual([]);
+      expect(guardedRequests.map(({ operation }) => operation)).toEqual([
+        'pull-request.create',
+        'pull-request.edit',
+        'pull-request.edit',
+        'pull-request.label.add',
+      ]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 

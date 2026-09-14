@@ -19,10 +19,10 @@
 import {
   makeProductionGh,
   parseIssueRef,
-  restAddLabelArgs,
   type GhRunner,
 } from './pr-labels.js';
 import { parseSourceRef } from './engineer/issue-ref.js';
+import { executeGithubOperation, type GithubOperationRunner } from './github-operations.js';
 
 /**
  * The criticality label family. Matches `backlog-priority.ts`'s parser exactly
@@ -46,6 +46,8 @@ export function selectCriticalityLabels(names: readonly string[]): string[] {
 export interface MirrorCriticalityLabelsDeps {
   /** Injected gh runner; defaults to the production factory. */
   gh?: GhRunner;
+  /** Guarded mutation boundary. Supplying it forbids raw REST label writes. */
+  operations?: GithubOperationRunner;
   /** Working directory for every gh invocation. */
   cwd: string;
   /** The PR to label (full github.com URL). */
@@ -141,7 +143,23 @@ export async function mirrorIssueCriticalityLabels(
   const failed: string[] = [];
   for (const name of labels) {
     try {
-      await gh(restAddLabelArgs(pr.repo, pr.number, name), { cwd });
+      if (deps.operations) {
+        const result = await executeGithubOperation({
+          operation: 'pull-request.label.add',
+          repository: pr.repo,
+          resource: { kind: 'pull-request', number: Number(pr.number) },
+          context: { actor: 'engineer-handoff' },
+          payload: { label: name },
+        }, deps.operations);
+        if (result.kind !== 'executed') {
+          failed.push(name);
+          log(`[pr-criticality] guarded label write refused or failed for "${name}" on ${prUrl}`);
+          continue;
+        }
+      } else {
+        // Legacy direct callers retain their explicitly injected raw transport.
+        await gh(['api', '--method', 'POST', `repos/${pr.repo}/issues/${pr.number}/labels`, '-f', `labels[]=${name}`], { cwd });
+      }
       applied.push(name);
     } catch (err) {
       failed.push(name);

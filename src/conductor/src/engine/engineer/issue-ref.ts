@@ -14,6 +14,8 @@
 // All gh access is injected; nothing here touches the network in tests.
 
 import { parseWorkRef } from './source-ref.js';
+import { parseIssueRef } from '../pr-labels.js';
+import { executeGithubOperation, type GithubOperationRunner } from '../github-operations.js';
 
 /** Shell runner for the `gh` CLI. Mirrors the intake adapter's GhRunner shape. */
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
@@ -75,6 +77,8 @@ export function bodyReferencesIssue(
 /** Options for {@link injectIssueRef}. */
 export interface InjectIssueRefOpts {
   gh: GhRunner;
+  /** Guarded mutation boundary. Supplying it forbids a raw edit fallback. */
+  operations?: GithubOperationRunner;
   /** The PR URL (or number) to edit. */
   prUrl: string;
   keyword: IssueRefKeyword;
@@ -121,7 +125,26 @@ export async function injectIssueRef(opts: InjectIssueRefOpts): Promise<boolean>
     }
 
     const newBody = body.trim() === '' ? line : `${body.replace(/\s+$/, '')}\n\n${line}`;
-    await gh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+    if (opts.operations) {
+      const target = parseIssueRef(prUrl);
+      if (!target) {
+        log(`injectIssueRef: unparseable PR URL for guarded write-back: ${prUrl}`);
+        return false;
+      }
+      const result = await executeGithubOperation({
+        operation: 'pull-request.edit',
+        repository: target.repo,
+        resource: { kind: 'pull-request', number: Number(target.number) },
+        context: { actor: 'engineer-handoff' },
+        payload: { body: newBody },
+      }, opts.operations);
+      if (result.kind !== 'executed') {
+        log(`injectIssueRef: guarded write-back refused or failed for ${prUrl} (${line})`);
+        return false;
+      }
+    } else {
+      await gh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+    }
     return true;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
