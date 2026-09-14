@@ -320,6 +320,7 @@ export function createConductStateLease(
         let claimPath = recoveryClaimPath(leasePath);
         let predecessorToken: string | null = null;
         let currentOwnerRoot = false;
+        const visitedClaimTokens = new Set<string>();
         while (true) {
           let serializedClaim: string | null;
           try {
@@ -354,6 +355,10 @@ export function createConductStateLease(
                 existingClaim.identity.predecessorToken !== predecessorToken))) {
             return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claim is invalid or inconsistent` };
           }
+          if (visitedClaimTokens.has(existingClaim.identity.token)) {
+            return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claim is invalid or inconsistent` };
+          }
+          visitedClaimTokens.add(existingClaim.identity.token);
           try {
             if (processIsLive(existingClaim.identity.pid)) return { status: 'occupied', ownerPid: owner.pid };
           } catch (claimLivenessError) {
