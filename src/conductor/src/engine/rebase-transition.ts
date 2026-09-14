@@ -99,6 +99,34 @@ export async function applyRebaseTransition(
     ...(priorRebase?.reason ? { reason: priorRebase.reason } : {}),
     rebaseOperation: applied,
   });
+
+  // Preserve the original verdict rather than minting a second judge result.
+  // The operation id makes this authority usable only with this exact applied
+  // replay; an ordinary later verdict replaces this whole record naturally.
+  for (const gate of options.preserved) {
+    const verdict = await readVerdict(options.projectRoot, gate);
+    if (!verdict?.satisfied || verdict.kickback || !options.replay.expectedTree) continue;
+    const originalIdentity = `${verdict.checkedAt}`;
+    await writeVerdict(options.projectRoot, gate, {
+      ...verdict,
+      preservation: {
+        gate,
+        original: {
+          // Existing gate verdicts predate replay metadata.  Their durable
+          // timestamp is the only attempt identity available to this adapter;
+          // the replay-bound reader also requires the original code stamp and
+          // actual tree before it grants authority.
+          artifactDigest: createHash('sha256').update(JSON.stringify(verdict)).digest('hex'),
+          attemptId: originalIdentity,
+          runId: originalIdentity,
+          codeStamp: options.replay.preRebaseHead,
+        },
+        replay: options.replay,
+        relevantInputIdentities: [],
+        operationId: applied.id,
+      },
+    });
+  }
   return {
     operation: applied,
     invalidated: options.invalidated,

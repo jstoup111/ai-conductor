@@ -865,13 +865,16 @@ export async function resumeRebaseFirst(opts: {
     preVerify,
     git,
   );
-  if (rebaseVerdict.replay && rebaseVerdict.kickedBack.length > 0) {
+  const transitionReplay = rebaseVerdict.replay ?? (outcome.kind === 'changed'
+    ? { preRebaseHead: '', mergeBase: '', target: '', completedHead: '', expectedTree: '' }
+    : undefined);
+  if (transitionReplay) {
     const transition = await applyRebaseTransition({
       projectRoot: opts.worktreePath,
       stateStore: createFilesystemConductStateStore(join(opts.worktreePath, '.pipeline', 'conduct-state.json')),
-      replay: rebaseVerdict.replay,
+      replay: transitionReplay,
       invalidated: rebaseVerdict.kickedBack,
-      preserved: [],
+      preserved: rebaseVerdict.preservedGates ?? [],
       reverified: rebaseVerdict.reverified,
     });
     if (transition.stateResult === 'refused') {

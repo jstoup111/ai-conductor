@@ -1393,6 +1393,32 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(byGate.prd_audit).not.toContain('docs/unrelated.md');
   });
 
+  it('emits the applied replay decision rather than recomputing a legacy preservation set', async () => {
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/foreign.ts'],
+      featureSurface: ['src/feature.ts'],
+    };
+    const events = new ConductorEventEmitter();
+    const preserved: string[] = [];
+    const invalidated: string[] = [];
+    events.on('rebase_gate_preserved', (event) => {
+      if (event.type === 'rebase_gate_preserved') preserved.push(event.gate);
+    });
+    events.on('rebase_gate_invalidated', (event) => {
+      if (event.type === 'rebase_gate_invalidated') invalidated.push(event.gate);
+    });
+
+    await emitGateInvalidationEvents(events, outcome, false, {
+      kickedBack: ['build_review'],
+      reverified: [],
+      preservedGates: ['prd_audit'],
+    });
+
+    expect(invalidated).toEqual(['build_review']);
+    expect(preserved).toEqual(['prd_audit']);
+  });
+
   it('preserves a within-budget test-suite PASS through the rebase-preserved event', async () => {
     const outcome: RebaseOutcome = {
       kind: 'changed',
