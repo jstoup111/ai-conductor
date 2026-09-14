@@ -427,6 +427,67 @@ describe('PRD widening coordinator', () => {
     expect(published).toBe(2);
   });
 
+  it('does not replay when decision authority advances between its sample and replay lease', async () => {
+    const decisions: readonly AcceptedWideningDecision[] = [{
+      id: 'decision-4', criterion: 'NC.9', authority: 'accept', rationale: 'Prior authority.', operator: 'operator', revision: 4,
+      originalSource: { id: 'prd-audit:NC.9', snapshot: 'Prior evidence.' }, originalCaseId: 'prior-case',
+    }];
+    const freshness = {
+      reportDigest: 'report-a', sourceDigest: 'source-a', codeDigest: 'code-a',
+      feature: 'acme/repo#feature', decisionRevision: 4, contractVersion: 'prd-widening-v1',
+    };
+    let state: RemediationCaseStoreState = {
+      version: 'v2', feature: { version: 'v1', repository: 'acme/repo', feature: 'feature' }, cases: [], suppressions: [], prdWideningCases: [],
+    };
+    const store = {
+      mutate: async (operation: (current: RemediationCaseStoreState) => Promise<RemediationCaseStoreMutation<PrdWideningCoordinatorResult>>) => {
+        const mutation = await operation(state);
+        if (mutation.nextState !== undefined) state = mutation.nextState;
+        return { ok: true as const, value: mutation.value };
+      },
+    };
+    const rebuildContext = (): PrdWideningContext => {
+      const cases = state.version === 'v2' ? state.prdWideningCases : [];
+      const snapshot = { version: 'v1' as const, currentSources: context.currentSources, cases, decisions };
+      return { ...snapshot, digest: createHash('sha256').update(JSON.stringify(snapshot)).digest('hex') };
+    };
+    const decisionRead = (revision: number) => ({
+      kind: 'valid' as const,
+      state: {
+        version: 2 as const,
+        feature: { version: 1 as const, repository: 'acme/repo', feature: 'feature' },
+        decisions: [{ ...decisions[0]!, revision }],
+      },
+    });
+
+    await expect(coordinatePrdWidening({
+      store,
+      context: rebuildContext(),
+      rawResult: { version: 'v1', results: [{ sourceId: 'prd-audit:NC.1', kind: 'different', reason: 'Independent behavior.' }] },
+      freshness: { sample: async () => freshness },
+      decisionStore: { read: async () => decisionRead(4) },
+      now: '2026-09-09T00:00:00.000Z',
+      createId: () => 'replay-race',
+    })).resolves.toMatchObject({ kind: 'published', reused: false });
+
+    let decisionReads = 0;
+    let judgeCalls = 0;
+    const result = await coordinatePrdWidening({
+      store,
+      context: rebuildContext(),
+      judge: async () => {
+        judgeCalls += 1;
+        return { version: 'v1', results: [{ sourceId: 'prd-audit:NC.1', kind: 'different', reason: 'Independent behavior.' }] };
+      },
+      freshness: { sample: async () => freshness },
+      decisionStore: { read: async () => decisionRead(++decisionReads === 1 ? 4 : 5) },
+      now: '2026-09-09T00:00:00.000Z',
+    });
+
+    expect(result).toEqual({ kind: 'failed', reason: 'stale-context' });
+    expect(judgeCalls).toBe(1);
+  });
+
   it.each([
     ['reportDigest', 'report-b'],
     ['sourceDigest', 'source-b'],
@@ -518,7 +579,7 @@ describe('PRD widening coordinator', () => {
     expect(calls).toBe(3);
   });
 
-  it('takes the decision read after the case transition and never calls the judge under either lease', async () => {
+  it('samples decision authority before replay and rechecks it under each case lease without calling the judge under either', async () => {
     const order: string[] = [];
     let caseLeaseHeld = false;
     let decisionLeaseHeld = false;
@@ -560,8 +621,8 @@ describe('PRD widening coordinator', () => {
 
     expect(result).toMatchObject({ kind: 'published' });
     expect(order).toEqual([
-      'case-acquire', 'case-release',
       'decision-acquire', 'decision-release',
+      'case-acquire', 'decision-acquire', 'decision-release', 'case-release',
       'judge',
       'case-acquire', 'decision-acquire', 'decision-release', 'case-release',
     ]);

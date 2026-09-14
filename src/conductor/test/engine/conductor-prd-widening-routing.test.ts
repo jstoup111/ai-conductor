@@ -305,9 +305,44 @@ describe('v2 PRD widening routing', () => {
     await expect(entry.routeCurrentPrdAuditOverScope('prd-widening-routing', state)).resolves.toMatchObject({
       kind: 'halt', detail: expect.stringContaining('attempts-exhausted'),
     });
-    expect(runner.run).toHaveBeenCalledTimes(1);
+    expect(runner.run).toHaveBeenCalledTimes(3);
     expect(runner.run).toHaveBeenCalledWith('remediate', state, expect.objectContaining({
       remediationRequest: expect.objectContaining({ mode: 'prd-widening-reconciliation' }),
     }));
+  });
+
+  it.each([
+    ['the unconfigured remediate default', undefined, undefined, 3],
+    ['a SHIP tier override', { phases: { SHIP: { by_tier: { M: { max_retries: 2 } } } } }, 'M', 2],
+  ] as const)('passes %s to the reconciliation coordinator', async (_description, config, complexityTier, expectedAttempts) => {
+    const coordinate = vi.spyOn(coordinatorModule, 'coordinatePrdWidening');
+    const state = {
+      session_started_at: Date.now(),
+      feature_desc: 'prd-widening-routing',
+      ...(complexityTier === undefined ? {} : { complexity_tier: complexityTier }),
+    } as ConductState;
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => step === 'remediate'
+        ? { success: false, output: 'Provider selected for reconciliation is unavailable.' }
+        : { success: true }),
+    };
+    const conductor = new Conductor({
+      projectRoot, stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(), config,
+    });
+    const entry = conductor as unknown as {
+      preparePrdWideningBeforeAudit(): Promise<string | undefined>;
+      routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<unknown>;
+    };
+    await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
+    await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), report('Replacement wording needs reconciliation.'));
+
+    await expect(entry.routeCurrentPrdAuditOverScope('prd-widening-routing', state)).resolves.toMatchObject({
+      kind: 'halt', detail: expect.stringContaining('attempts-exhausted'),
+    });
+    expect(coordinate).toHaveBeenCalledWith(expect.objectContaining({
+      mechanicalFailure: expect.objectContaining({ remainingAttempts: expectedAttempts }),
+    }));
+    expect(runner.run).toHaveBeenCalledTimes(expectedAttempts);
+    coordinate.mockRestore();
   });
 });

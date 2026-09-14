@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyPrdWidening } from '../../src/engine/prd-widening-classification.js';
-import { classifyPrdWideningFindings } from '../../src/engine/artifacts.js';
+import { classifyPrdWidening, classifyPrdWideningProjection } from '../../src/engine/prd-widening-classification.js';
+import { prdWideningSourceId } from '../../src/engine/prd-widening-context.js';
 
 const decision = { id: 'd1', criterion: 'NC.1', authority: 'accept' as const, rationale: 'approved', operator: 'operator', revision: 1, originalCaseId: 'case-1', originalSource: { id: 'source-1', snapshot: 'original' } };
 
@@ -17,12 +17,20 @@ describe('classifyPrdWidening', () => {
     expect(classifyPrdWidening({ grade: 'OVER_SCOPE', criterion: 'S1.1', decisions: [] })).toEqual({ kind: 'not-blocking', reason: 'non-nc' });
   });
 
-  it('projects the same classification for artifact readers without summary matching', () => {
-    const result = classifyPrdWideningFindings(
-      [{ criterion: 'NC.99', grade: 'OVER_SCOPE', prdIds: [], evidence: 'A completely reworded reviewer finding.' }],
-      [decision],
-      new Map([['NC.99', { kind: 'same-case' as const, caseId: 'case-1', fresh: true }]]),
-    );
+  it('projects an accepted reworded finding from a published same-case relation', () => {
+    const finding = { criterion: 'NC.99', grade: 'OVER_SCOPE' as const, prdIds: [], evidence: 'A completely reworded reviewer finding.' };
+    const sourceId = prdWideningSourceId(finding);
+    const result = classifyPrdWideningProjection({
+      findings: [finding],
+      decisions: [decision],
+      cases: [{
+        id: 'case-1', domain: 'prd_widening',
+        originalSources: [{ sourceId: 'source-1', snapshot: 'original' }],
+        currentSources: [{ sourceId, snapshot: finding.evidence, recordedAt: '2026-09-14T00:00:00.000Z' }],
+        relationships: [{ currentSourceId: sourceId, kind: 'same-case', caseId: 'case-1', reason: 'Same approved behavior.' }],
+        reconciliationDigest: 'published-decision-revision-1',
+      }],
+    });
     expect(result.get('NC.99')).toEqual({ kind: 'accepted', decisionId: 'd1' });
   });
 });
