@@ -227,6 +227,26 @@ describe('accepted widening decision store', () => {
     }
   });
 
+  it('permits an immediate same-case reversal to reuse its rendered offer id', async () => {
+    const projectRoot = await createProjectRoot();
+    const identifiers = ['decision-1', 'decision-2'];
+    const store = new AcceptedWideningDecisionStore(projectRoot, FEATURE, {
+      newDecisionId: () => identifiers.shift()!,
+    });
+
+    await store.append({ ...DECISION_INPUT, offerEntryId: 'offer-nc-1' });
+    await expect(store.append({
+      ...DECISION_INPUT,
+      authority: 'refuse',
+      rationale: 'The operator explicitly reversed the earlier acceptance.',
+      offerEntryId: 'offer-nc-1',
+      supersedes: { id: 'decision-1', revision: 1 },
+    })).resolves.toMatchObject({
+      ok: true,
+      decision: { id: 'decision-2', offerEntryId: 'offer-nc-1', supersedes: { id: 'decision-1', revision: 1 } },
+    });
+  });
+
   it.each([
     ['missing operator identity', { ...DECISION_INPUT, operator: '  ' }],
     ['missing rationale', { ...DECISION_INPUT, rationale: '' }],

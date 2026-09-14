@@ -182,17 +182,22 @@ function sameDecisionCase(
 function hasValidDecisionRelationships(decisions: readonly AcceptedWideningDecision[]): boolean {
   const offerEntries = new Set<string>();
   for (const decision of decisions) {
-    if (decision.offerEntryId !== undefined) {
-      if (offerEntries.has(decision.offerEntryId)) return false;
-      offerEntries.add(decision.offerEntryId);
-    }
     const prior = decisions.slice(0, decision.revision - 1).filter((candidate) => sameDecisionCase(candidate, decision)).at(-1);
+    if (decision.offerEntryId !== undefined && offerEntries.has(decision.offerEntryId)) {
+      // A rendered revision names the immutable offer that produced the
+      // immediately preceding decision.  No other offer-id reuse is valid.
+      if (!prior || prior.offerEntryId !== decision.offerEntryId || decision.supersedes?.id !== prior.id ||
+        decision.supersedes.revision !== prior.revision) return false;
+    }
+    if (decision.offerEntryId !== undefined) offerEntries.add(decision.offerEntryId);
     if (decision.supersedes === undefined) {
       if (prior !== undefined) return false;
       continue;
     }
-    if (decision.offerEntryId === undefined || !prior || decision.supersedes.id !== prior.id || decision.supersedes.revision !== prior.revision ||
-      decision.authority === prior.authority) return false;
+    // A legacy row with the same authority retains distinct attribution but
+    // does not change the effective authority.
+    if (decision.offerEntryId === undefined || !prior || decision.supersedes.id !== prior.id ||
+      decision.supersedes.revision !== prior.revision) return false;
   }
   return true;
 }

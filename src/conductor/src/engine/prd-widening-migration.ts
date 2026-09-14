@@ -18,6 +18,7 @@ import {
   type RemediationCaseStoreMutationResult,
   type RemediationCaseStoreState,
 } from './remediation-case-store.js';
+import type { LegacyPrdWideningClear } from './prd-widening-capture.js';
 
 const MAX_REFERENCE_LENGTH = 256;
 const MAX_TEXT_LENGTH = 8_000;
@@ -40,6 +41,8 @@ export interface PrdWideningMigrationCaseStore {
 export interface MigrateLegacyPrdWideningDecisionsOptions {
   readonly decisionStore?: PrdWideningMigrationDecisionStore;
   readonly caseStore?: PrdWideningMigrationCaseStore;
+  /** A fenced clear read before replacing the v1 document. */
+  readonly legacyClear?: { readonly entries: readonly LegacyPrdWideningClear[]; readonly operator: string };
 }
 
 export type MigrateLegacyPrdWideningDecisionsResult =
@@ -80,7 +83,7 @@ function bounded(value: string, maximum = MAX_TEXT_LENGTH): boolean {
   return value.trim().length > 0 && value.length <= maximum;
 }
 
-function sourceKey(row: LegacyOverScopeDecision): string {
+function sourceKey(row: Pick<LegacyOverScopeDecision, 'criterion' | 'summary'>): string {
   // Old named criteria were criterion-keyed; NC rows had evidence identity.
   return /^NC\.\d+$/i.test(row.criterion)
     ? `NC\0${row.summary}`
@@ -98,7 +101,10 @@ function supportedRow(row: LegacyOverScopeDecision): boolean {
  * state. Every identity is a deterministic document-and-row derivative; no
  * current PRD report participates in this recovery path.
  */
-function project(document: LegacyOverScopeDecisionDocument): MigrationProjection | undefined {
+function project(
+  document: LegacyOverScopeDecisionDocument,
+  legacyClear?: MigrateLegacyPrdWideningDecisionsOptions['legacyClear'],
+): MigrationProjection | undefined {
   const casesBySource = new Map<string, RemediationCasePrdWideningRecord>();
   const latestDecisionBySource = new Map<string, AcceptedWideningDecision>();
   const seenExactRows = new Set<string>();
@@ -129,10 +135,6 @@ function project(document: LegacyOverScopeDecisionDocument): MigrationProjection
       casesBySource.set(key, record);
     }
     const prior = latestDecisionBySource.get(key);
-    // A non-identical old row with the same effective authority had no v1
-    // authority effect. It has no representable v2 reversal either.
-    if (prior?.authority === row.decision) continue;
-
     const rowId = digest(document.documentId, String(index));
     const originalSource = record.originalSources[0]!;
     const decision: AcceptedWideningDecision = {
@@ -143,11 +145,45 @@ function project(document: LegacyOverScopeDecisionDocument): MigrationProjection
       operator: row.operator,
       originalSource: { id: originalSource.sourceId, snapshot: originalSource.snapshot },
       originalCaseId: record.id,
-      // This is a deterministic legacy-import provenance key, never a v2
-      // editable offer. Capture uses the same key for inert replay.
-      offerEntryId: prior === undefined
-        ? `legacy-clear-entry-${sourceDigest}`
-        : `legacy-clear-entry-${sourceDigest}-${rowId}`,
+      // Migrated v1 rows are never rendered offers and intentionally have a
+      // provenance identity distinct from a fenced legacy clear.
+      offerEntryId: `legacy-migrated-entry-${sourceDigest}-${rowId}`,
+      ...(prior === undefined ? {} : { supersedes: { id: prior.id, revision: prior.revision } }),
+      revision: decisions.length + 1,
+    };
+    decisions.push(decision);
+    latestDecisionBySource.set(key, decision);
+  }
+  for (const entry of legacyClear?.entries ?? []) {
+    if (!bounded(entry.criterion, MAX_REFERENCE_LENGTH) || !bounded(entry.summary) || !bounded(entry.rationale) ||
+      !bounded(legacyClear.operator, MAX_REFERENCE_LENGTH)) return undefined;
+    const key = sourceKey(entry);
+    const sourceDigest = digest(entry.criterion, entry.summary);
+    let record = casesBySource.get(key);
+    if (!record) {
+      record = {
+        id: `legacy-clear-case-${sourceDigest}`,
+        domain: 'prd_widening',
+        originalSources: [{ sourceId: `legacy-clear-source-${sourceDigest}`, snapshot: entry.summary }],
+        currentSources: [],
+        relationships: [],
+      };
+      casesBySource.set(key, record);
+    }
+    const prior = latestDecisionBySource.get(key);
+    // A fence which restates the same retained authority is an inert replay;
+    // a different rationale, operator, or authority remains attributable.
+    if (prior?.authority === entry.authority && prior.rationale === entry.rationale && prior.operator === legacyClear.operator) continue;
+    const originalSource = record.originalSources[0]!;
+    const decision: AcceptedWideningDecision = {
+      id: `legacy-clear-decision-${digest(entry.criterion, entry.summary, entry.authority, entry.rationale, legacyClear.operator)}`,
+      criterion: entry.criterion,
+      authority: entry.authority,
+      rationale: entry.rationale,
+      operator: legacyClear.operator,
+      originalSource: { id: originalSource.sourceId, snapshot: originalSource.snapshot },
+      originalCaseId: record.id,
+      offerEntryId: `legacy-clear-entry-${sourceDigest}`,
       ...(prior === undefined ? {} : { supersedes: { id: prior.id, revision: prior.revision } }),
       revision: decisions.length + 1,
     };
@@ -237,7 +273,7 @@ export async function migrateLegacyPrdWideningDecisions(
       cases: [],
     };
   }
-  const projection = project(legacy.document);
+  const projection = project(legacy.document, options.legacyClear);
   if (!projection) return { kind: 'failed', reason: 'unsupported-legacy-row', decisions: [], cases: [] };
   if (!await materializeSources(caseStore, projection)) {
     return { kind: 'failed', reason: 'case-write-failed', decisions: [], cases: [] };
