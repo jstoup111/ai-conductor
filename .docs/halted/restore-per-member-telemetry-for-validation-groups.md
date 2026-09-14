@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-14T01:31:23.854Z
 Slug: restore-per-member-telemetry-for-validation-groups
 Class: needs-human
 Halting step: unknown
