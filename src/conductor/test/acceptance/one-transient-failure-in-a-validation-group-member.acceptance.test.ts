@@ -267,7 +267,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
     const dir = await mkdtemp(join(tmpdir(), 'validation-prd-no-verdict-retention-'));
     const statePath = join(dir, 'conduct-state.json');
     try {
-      await seedValidators(dir, statePath);
+      await seedValidators(dir, statePath, { rebase: 'done', finish: 'done' });
       const firstRoundCalls: StepName[] = [];
       const firstRound = new Conductor({
         stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir,
@@ -296,6 +296,20 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       expect([haltedState.architecture_review_as_built, haltedState.validation__architecture_review_as_built])
         .toEqual(['done', 'done']);
       await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain('prd_audit');
+
+      await rm(join(dir, '.pipeline/HALT'), { force: true });
+      await rm(join(dir, '.pipeline/HALT.class'), { force: true });
+      const recoveryCalls: StepName[] = [];
+      await new Conductor({
+        stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir,
+        mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1, fromStep: 'prd_audit',
+        stepRunner: { run: vi.fn(async (step: StepName) => {
+          recoveryCalls.push(step);
+          if (step === 'prd_audit') await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_PASS);
+          return { success: true } as StepRunResult;
+        }) },
+      }).run();
+      expect(recoveryCalls).toEqual(['prd_audit']);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
