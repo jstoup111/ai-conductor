@@ -361,6 +361,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
         validation__prd_audit: 'done', validation__architecture_review_as_built: 'done', rebase: 'done', finish: 'done',
       });
       let attempts = 0;
+      const calls: StepName[] = [];
       const halts: ConductorEvent[] = [];
       const events = new ConductorEventEmitter();
       events.on('loop_halt', event => { halts.push(event); });
@@ -368,12 +369,14 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
         stateFilePath: statePath, events, projectRoot: dir, mode: 'auto', daemon: true,
         verifyArtifacts: true, maxRetries: 2, fromStep: 'manual_test',
         stepRunner: { run: vi.fn(async (step: StepName) => {
+          calls.push(step);
           if (step === 'manual_test' && ++attempts === 1) throw new Error('transient runner failure');
           if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
           return { success: true } as StepRunResult;
         }) },
       }).run();
       expect(attempts).toBe(2);
+      expect(calls).toEqual(['manual_test', 'manual_test']);
       expect(halts).toEqual([]);
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
