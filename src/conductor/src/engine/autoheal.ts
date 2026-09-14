@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { execa } from 'execa';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
 // Relocated shared utilities (H9 id grammar + plan-task-paths parser) — see
@@ -384,9 +385,37 @@ export async function listCommitsWithTrailers(
 }
 
 /**
+ * Resolve a repair boundary through `.pipeline/rebase-rewrites.json` (written
+ * by the rebase step, see `rebase-translate.ts`), following chained hops.
+ * Returns null when the map is absent, unreadable, or does not know the sha.
+ */
+async function translateRepairBoundary(projectRoot: string, boundary: string): Promise<string | null> {
+  let map: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(
+      await readFile(join(projectRoot, '.pipeline', 'rebase-rewrites.json'), 'utf-8'),
+    );
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    map = parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const seen = new Set<string>();
+  let current = boundary;
+  while (!seen.has(current)) {
+    seen.add(current);
+    const next = map[current];
+    if (typeof next !== 'string' || next.length === 0 || next === current) break;
+    current = next;
+  }
+  return current === boundary ? null : current;
+}
+
+/**
  * Reads only commits made after a persisted repair boundary. Unlike the
  * ordinary evidence-range ladder, an unavailable or non-ancestor boundary is
- * a typed refusal: historical evidence must not close an open repair.
+ * a typed refusal: historical evidence must not close an open repair. A
+ * boundary the rebase step rewrote is followed through the rewrite map first.
  */
 export async function listCommitsWithTrailersAfterRepairBoundary(
   projectRoot: string,
@@ -399,13 +428,26 @@ export async function listCommitsWithTrailersAfterRepairBoundary(
   if (commit.exitCode !== 0 || !commit.stdout.trim()) {
     return { kind: 'unavailable', reason: `repair boundary ${boundary} is unavailable` };
   }
-  const verifiedBoundary = commit.stdout.trim();
+  let verifiedBoundary = commit.stdout.trim();
   const ancestor = await execa('git', ['merge-base', '--is-ancestor', verifiedBoundary, 'HEAD'], {
     cwd: projectRoot,
     reject: false,
   });
   if (ancestor.exitCode !== 0) {
-    return { kind: 'unavailable', reason: `repair boundary ${verifiedBoundary} is not an ancestor of HEAD` };
+    // The engine's own rebase step rewrites every branch commit and records
+    // old→new in `.pipeline/rebase-rewrites.json`. A boundary the map explains
+    // is the same repair replayed onto a new base, so follow it — exactly as
+    // gate-code-validity follows stamped baselines. Anything the map cannot
+    // explain stays a typed refusal: historical evidence must not close an
+    // open repair.
+    const rewritten = await translateRepairBoundary(projectRoot, verifiedBoundary);
+    const rewrittenAncestor = rewritten === null
+      ? null
+      : await execa('git', ['merge-base', '--is-ancestor', rewritten, 'HEAD'], { cwd: projectRoot, reject: false });
+    if (rewritten === null || rewrittenAncestor === null || rewrittenAncestor.exitCode !== 0) {
+      return { kind: 'unavailable', reason: `repair boundary ${verifiedBoundary} is not an ancestor of HEAD` };
+    }
+    verifiedBoundary = rewritten;
   }
   const log = await execa('git', ['log', `--format=${COMMIT_RECORD_FORMAT}`, `${verifiedBoundary}..HEAD`], {
     cwd: projectRoot,

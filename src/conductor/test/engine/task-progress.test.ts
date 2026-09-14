@@ -411,6 +411,62 @@ describe('task-progress', () => {
       expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set(['2']));
     });
 
+    it('follows a repair boundary the rebase step rewrote through rebase-rewrites.json', async () => {
+      // The rebase step replays every branch commit onto a new base and
+      // records old→new in .pipeline/rebase-rewrites.json, but the obligation
+      // keeps the pre-rebase boundary sha. Without translation the boundary
+      // is "not an ancestor of HEAD", the re-opened task can never resolve,
+      // and the build stalls on no_task_progress even though the repair
+      // commit is on the branch.
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+        activePlanPath: '.docs/plans/feature.md',
+      }));
+      await writeFile(join(dir, 'base.txt'), 'base');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'base'], { cwd: dir });
+      await writeFile(join(dir, 'boundary.txt'), 'boundary');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'boundary\n\nTask: T2'], { cwd: dir });
+      const oldBoundary = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+      const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
+      await repairs.admitOrReplay('key-rewritten', {
+        id: 'rewritten-round',
+        planPath: '.docs/plans/feature.md',
+        taskIds: ['T2'],
+        source: { findingId: 'finding-3', authority: 'build_review', instruction: 'repair it' },
+        baseline: { head: oldBoundary, tree: 'tree', resolvedTaskIds: [] },
+      });
+      await writeFile(join(dir, 'repair.txt'), 'repair');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'repair\n\nTask: T2'], { cwd: dir });
+      expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set(['2']));
+
+      // Simulate the rebase step: rewrite the boundary and repair commits onto
+      // an advanced base, and record the boundary hop the way rebase-translate does.
+      await execa('git', ['checkout', '-q', '-b', 'newbase', `${oldBoundary}~1`], { cwd: dir });
+      await writeFile(join(dir, 'upstream.txt'), 'upstream');
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'upstream change'], { cwd: dir });
+      await execa('git', ['checkout', '-q', 'main'], { cwd: dir });
+      await execa('git', ['rebase', '-q', 'newbase'], { cwd: dir });
+      const newBoundary = (await execa('git', ['rev-parse', 'HEAD~1'], { cwd: dir })).stdout.trim();
+      expect(newBoundary).not.toBe(oldBoundary);
+
+      const untranslated = await resolveTaskIdsWithDiagnostics(dir, ['2']);
+      expect(untranslated.resolved).toEqual(new Set());
+      expect(untranslated.unavailableReasons.get('2')).toContain('not an ancestor of HEAD');
+
+      await writeFile(
+        join(dir, '.pipeline', 'rebase-rewrites.json'),
+        JSON.stringify({ [oldBoundary]: newBoundary }),
+      );
+      expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set(['2']));
+    });
+
     it('keeps an open obligation authoritative when engine state records no activePlanPath', async () => {
       // #1831/#2261: a daemon-dispatched feature never runs the plan step that
       // records activePlanPath, so the obligation is keyed by the
