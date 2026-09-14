@@ -5018,13 +5018,17 @@ export async function classifyPrdAuditGaps(
   sessionStartedAt: number | undefined,
   expectedRunId?: string,
   config?: Pick<HarnessConfig, 'gate_code_validity'>,
+  featureDesc?: string,
 ): Promise<PrdGapClassification> {
   const files = await findArtifactFiles(dir, 'prd_audit');
   const decisions = (await readOverScopeDecisions(dir)).decisions;
   const identity = await verdictProducedByRun(dir, 'prd_audit', expectedRunId, config);
   // Routing decides self-heal vs HALT off these rows, so it reads them under
   // the same citation authority the gate scored them with (adr-2026-08-30 D1).
-  const activePlan = await readActivePlanText(dir);
+  // The feature slug is what resolves the plan in a multi-plan corpus with no
+  // recorded activePlanPath; without it every citing row is rejected as
+  // unresolvable and a valid audit routes to a needs-decide halt.
+  const activePlan = await readActivePlanText(dir, undefined, featureDesc);
   const blocking: UnalignedFrRow[] = [];
   for (const f of files) {
     if (identity.state === 'stale-run-identity') continue;
