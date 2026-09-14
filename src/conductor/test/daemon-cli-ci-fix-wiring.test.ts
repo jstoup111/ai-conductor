@@ -1,63 +1,102 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// Test: Task 23 — daemon-cli wires ci_watch config + runCiFix dispatch into
-// the sweepMergeableLabels ciFix opts, mirroring the mergeable_autoresolve
-// wiring (source-assembly check, same pattern as
-// daemon-cli-rekick-park-wiring.test.ts: read daemon-cli.ts as text and
-// assert on the real production wiring rather than re-simulating the logic
-// inline, since sweepMergeableLabels is called deep inside runDaemon with
-// live gh/git side effects that aren't practical to drive end-to-end here).
-//
-// Acceptance criteria covered:
-//   1. Config is read once at daemon startup (not per-sweep) — the ciFix
-//      opts literal must reference the outer `config` binding, not a fresh
-//      `loadConfig()` call inside the sweepMergeableLabels callback.
-//   2. sweepMergeableLabels receives a populated `ciFix` opts when ci_watch
-//      is enabled (isEligible → isEligibleForCiFix, dispatch → runCiFix).
-//   3. When ci_watch is disabled, `ciFix.enabled` is false (config?.ci_watch
-//      ?.enabled ?? true, default-on per CiWatchConfig, but explicit false
-//      must resolve to false).
-//   4. The dispatch wiring mirrors the pattern used for
-//      `mergeable_autoresolve` (same object shape: enabled/isEligible/dispatch).
-// ─────────────────────────────────────────────────────────────────────────────
+// Covers: task:11
+import { describe, expect, it, vi } from 'vitest';
+import { createDaemonCiFixDispatch } from '../src/engine/daemon-ci-fix.js';
+import type { PrMergeState } from '../src/engine/pr-labels.js';
+import type { WatchEntry } from '../src/engine/mergeable-sweep.js';
 
-import { describe, it, expect } from 'vitest';
-import { readFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+const entry: WatchEntry = {
+  prUrl: 'https://github.com/acme/widget/pull/7', slug: 'widget', repoCwd: '/repo', ciFixAttempts: 1,
+};
+const selected: PrMergeState = {
+  state: 'OPEN', mergeable: 'MERGEABLE', hasFailingOrPendingChecks: true, labels: [], checksOutcome: 'failed',
+  statusCheckRollup: [
+    { kind: 'check-run', status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit', detailsUrl: 'https://github.com/acme/widget/actions/runs/41' },
+    { kind: 'status-context', state: 'ERROR', context: 'external lint', targetUrl: 'https://github.com/acme/widget/actions/runs/42' },
+    { kind: 'check-run', status: 'COMPLETED', conclusion: 'FAILURE' },
+    { kind: 'check-run', status: 'COMPLETED', conclusion: 'SUCCESS', name: 'passing' },
+  ],
+};
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DAEMON_CLI_SRC = join(__dirname, '../src/daemon-cli.ts');
+function factory(overrides: Partial<Parameters<typeof createDaemonCiFixDispatch>[0]> = {}) {
+  const gh = vi.fn(async (args: string[]) => {
+    if (args[0] === 'pr') return { stdout: JSON.stringify({ headRefName: 'repair-branch' }) };
+    if (args[0] === 'run') throw new Error('logs unavailable');
+    throw new Error(`unexpected gh call: ${args.join(' ')}`);
+  });
+  const runner = vi.fn(async ({ hint }: { hint: string }) => {
+    expect(hint).toContain('unit');
+    expect(hint).toContain('external lint');
+    expect(hint).toContain('(unnamed check #3)');
+    expect(hint).toContain('https://github.com/acme/widget/actions/runs/41');
+    expect(hint).not.toContain('passing');
+    return { kind: 'published' as const };
+  });
+  const run = vi.fn(async (_entry, branch, hint, deps) => {
+    expect(branch).toBe('repair-branch');
+    return deps.fixRunner.run({ worktreePath: '/repair', hint, entry: _entry });
+  });
+  const dispatch = createDaemonCiFixDispatch({
+    gh, createDispatcher: () => ({ resolveCiFailure: async () => ({ kind: 'session-completed' }) }),
+    fixRunner: { run: runner }, run, ...overrides,
+  });
+  return { dispatch, gh, runner, run };
+}
 
-describe('Task 23 — daemon-cli wires ci_watch config and runCiFix dispatch', () => {
-  it('imports isEligibleForCiFix and runCiFix from ci-fix.ts', async () => {
-    const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
-
-    expect(source).toMatch(
-      /import\s*\{[^}]*isEligibleForCiFix[^}]*\}\s*from\s*['"]\.\/engine\/ci-fix\.js['"]/,
-    );
-    expect(source).toMatch(
-      /import\s*\{[^}]*runCiFix[^}]*\}\s*from\s*['"]\.\/engine\/ci-fix\.js['"]/,
-    );
+describe('daemon CI-fix production dispatch callback', () => {
+  it('delivers the sweep snapshot’s mixed identities and usable context despite optional log failure, without a second check read', async () => {
+    const { dispatch, gh, runner, run } = factory();
+    await expect(dispatch(entry, selected)).resolves.toEqual({ kind: 'published' });
+    expect(runner).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledOnce();
+    expect(gh.mock.calls.filter(([args]) => args[0] === 'pr')).toHaveLength(1);
+    expect(gh.mock.calls.filter(([args]) => args[0] === 'run')).toHaveLength(2);
   });
 
-  it('the sweepMergeableLabels call passes a ciFix opts block reading config?.ci_watch, mirroring mergeable_autoresolve', async () => {
-    const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
+  it.each<PrMergeState>([
+    { ...selected, readFailure: { kind: 'runner', error: new Error('401') } },
+    { ...selected, contextFailure: { kind: 'invalid-rollup' } },
+    { ...selected, statusCheckRollup: [] },
+  ])('refuses unusable selected context before provider execution', async (state) => {
+    const { dispatch, runner, run } = factory();
+    await expect(dispatch(entry, state)).resolves.toEqual({ kind: 'not-started' });
+    expect(runner).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
 
-    const ciFixMatch = source.match(
-      /ciFix\s*:\s*\{([\s\S]*?)\n          \},\n        \}\);/,
-    );
-    expect(ciFixMatch, 'expected a complete `ciFix: { ... }` block in `sweepMergeableLabels`').toBeTruthy();
-    const ciFixBody = ciFixMatch![1];
+  it('returns not-started when canonical branch lookup is malformed or throws', async () => {
+    for (const gh of [vi.fn(async () => ({ stdout: '{bad json' })), vi.fn(async () => { throw new Error('permission denied'); })]) {
+      const run = vi.fn();
+      const dispatch = createDaemonCiFixDispatch({
+        gh, createDispatcher: () => ({ resolveCiFailure: async () => ({ kind: 'session-completed' }) }), run,
+      });
+      await expect(dispatch(entry, selected)).resolves.toEqual({ kind: 'not-started' });
+      expect(run).not.toHaveBeenCalled();
+    }
+  });
 
-    // AC2/AC4: a `ciFix:` block exists, shaped like `autoresolve:`.
-    expect(ciFixBody).toMatch(/enabled\s*:\s*config\?\.ci_watch\?\.enabled\s*\?\?\s*true/);
-    expect(ciFixBody).toMatch(/isEligible\s*:/);
-    expect(ciFixBody).toMatch(/isEligibleForCiFix\(/);
-    expect(ciFixBody).toMatch(/dispatch\s*:/);
-    expect(ciFixBody).toMatch(/runCiFix\(/);
-
-    // AC1: config is read from the outer `config` binding (populated once at
-    // startup via `loadConfig` — see daemon-cli.ts:545), not re-loaded here.
-    expect(ciFixBody).not.toMatch(/loadConfig\(/);
+  it('keeps the three-request and final-byte boundary when enriched context reaches repair', async () => {
+    const state: PrMergeState = {
+      ...selected,
+      statusCheckRollup: [1, 2, 3, 4].map((run) => ({
+        kind: 'check-run' as const, status: 'COMPLETED', conclusion: 'FAILURE', name: `check-${run}`,
+        detailsUrl: `https://github.com/acme/widget/actions/runs/${run}`,
+      })),
+    };
+    let logReads = 0;
+    const gh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'pr') return { stdout: JSON.stringify({ headRefName: 'repair-branch' }) };
+      logReads += 1;
+      return { stdout: 'é'.repeat(20_000) };
+    });
+    const run = vi.fn(async (_entry, _branch, hint) => {
+      expect(Buffer.byteLength(hint, 'utf8')).toBeLessThanOrEqual(24_576);
+      expect(hint).toContain('[log enrichment omitted for 1 workflow runs]');
+      return { kind: 'failed' as const, stage: 'provider' as const };
+    });
+    const dispatch = createDaemonCiFixDispatch({
+      gh, createDispatcher: () => ({ resolveCiFailure: async () => ({ kind: 'session-completed' }) }), run,
+    });
+    await expect(dispatch(entry, state)).resolves.toEqual({ kind: 'failed', stage: 'provider' });
+    expect(logReads).toBe(3);
   });
 });
