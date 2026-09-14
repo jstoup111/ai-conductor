@@ -100,6 +100,8 @@ hunk offsets, byte ranges) are forbidden in any reference kind. Any future ancho
 must bind to one of these three kinds; introducing a fourth kind requires superseding
 this ADR with operator approval — it is never a BUILD-time or remediation-lap decision.
 
+> **Amended 2026-09-14 by #2034:** the build_review `security` rubric binds `locus` → content-region, where `contentHash` is `sha256` of the projected hunk's added+removed line content, whitespace-normalized (the rootCause `locus` grammar), with `occurrence` as the only tie-breaker. No fourth reference kind is introduced.
+
 Why: it is the only option that is simultaneously closed (ends the per-lap grammar
 enumeration), rebase-stable (per the cache precedent), and fail-closed narrow for
 dispositions (content change ⇒ new identity), while staying inside

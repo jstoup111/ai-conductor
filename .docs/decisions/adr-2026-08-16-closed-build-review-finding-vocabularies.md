@@ -76,6 +76,8 @@ Every field that survives into the identity hash is either a **closed vocabulary
 | rootCause | `anchor.relation` | `anchor.locus` |
 | completeness | `anchor.missingKind` | `anchor.planTask`, plus a missing-surface reference |
 
+> **Amended 2026-09-14 by #2034:** the table gains the row **security** — closed vocabulary `concernKind` over exactly `committed-secret`, `injection`, `broken-access-control`, `path-traversal`, `unsafe-deserialization`, `cryptographic-failure`, `security-misconfiguration`, `authentication-failure`, `integrity-failure`, `ssrf`; verified reference `anchor.locus` (content-region). The set is the five classes named in jstoup111/ai-conductor#2034 plus the OWASP Top 10 (2021) categories that a diff can concretely evidence; A04 Insecure Design, A06 Vulnerable and Outdated Components, and A09 Logging and Monitoring Failures are deliberately excluded because they are judged from architecture, dependency inventories, or runtime configuration rather than from changed hunks, and grading them from a diff is the false-positive shape #2034 rules out. There is no `other` member, and D5 binds the skill text to the engine set through the existing integrity check.
+
 The residual free-text subjects — `tautology.exercisedBehavior`, `rootCause.statedDefect`,
 `completeness.missingOutcome` — leave the **identity** and remain on the finding for the human
 report, joining `summary` and `evidenceLocations`, which `adr-2026-08-13` already excludes

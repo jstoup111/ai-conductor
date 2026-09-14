@@ -111,6 +111,8 @@ no per-task SHA or reachability reasoning. A lap whose only findings are `beyond
 consumes no kickback, and advances no counter (adr-2026-08-12 D1, adr-2026-08-18-rebase D6 — no
 PASS reset is reintroduced). The fresh-base exit (adr-2026-07-23) precedes all `boundTo` handling.
 
+> **Amended 2026-09-14 by #2034:** D3 does not apply to the build_review `security` rubric. A security finding is blocking regardless of whether any `Done when:` check names its location: it is never graded `beyond`, never enters `beyondFindingIds`, and is never filed as intake by this decision's D4/D5 path. It flows to the shared adjudicator as an ordinary judged finding, where `act` issues a bounded retry work order under the existing cumulative bound, `defer` files intake with a justification, and `refute` is the terminal for a finding the judge rejects. Operator-approved on 2026-09-14: an off-plan security defect must fail build_review before the SHIP tail, and the deadlock class this decision guards against is bounded by the unchanged adr-2026-08-12 cap.
+
 **D4 — A `beyond` record in the existing store is filing bookkeeping, not authority.** A third
 record kind `beyond` (same store, same lease — #1734 D6) keyed by the closed finding id (#1692
 identity; D7 coarsest key) records `{findingId, rubric, summary, evidenceLocations, status:
@@ -140,6 +142,8 @@ check the diff fails; anything else is `beyond`; a task with no block is judged 
 with a `{render:false, persist:true, audit:true}` sink row; a member rather than a field because the
 occurrence is one-to-one with a store write and has no existing carrier. No new step, artifact, or
 land primitive (adr-2026-07-21-s-tier-pipeline-knobs).
+
+> **Amended 2026-09-14 by #2034:** the `boundTo` grammar and the "anything else is `beyond`" instruction are not stated in `skills/build-review-security/SKILL.md`; that rubric's result contract carries no `boundTo` field and the engine treats every one of its findings as bound. No new event member is needed for it.
 
 **Sequencing.** This feature builds after PR #1734 merges (its seams are the baseline) and after
 PR #1750 (shares `plan-task-parse.ts`). Engine exits that read the effective verdict are re-derived
