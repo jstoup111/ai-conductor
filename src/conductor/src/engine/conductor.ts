@@ -13428,6 +13428,21 @@ export class Conductor {
       return checkStepCompletion(this.projectRoot, 'build', ctx);
     };
 
+    // A completed BUILD is not an ordinary rebase invalidation candidate.
+    // Its evidence is the only authority that says the task list can remain
+    // closed.  If that evidence cannot be read or derived after the rebase,
+    // stop for recovery rather than silently dispatching BUILD as though the
+    // completed work had merely become stale.  A prior ordinary repair has
+    // already moved BUILD out of `done`, and keeps its existing owner.
+    if (getStepStatus(state, 'build') === 'done') {
+      const buildEvidence = await preVerify('build');
+      if (!buildEvidence.done) {
+        const reason = `completed BUILD evidence is unavailable after rebase: ${buildEvidence.reason ?? 'completion predicate did not confirm the recorded BUILD'}`;
+        await this.writeHaltMarker(`${reason}\nRecover .pipeline task evidence before resuming; do not redispatch completed BUILD blindly.\n`, 'needs-human');
+        return { success: false, output: reason };
+      }
+    }
+
     const verdict = await applyRebaseVerdicts(
       this.projectRoot,
       outcome,

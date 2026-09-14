@@ -1859,7 +1859,7 @@ describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('clean play-forward rebase: gate verdict and conduct-state.rebase must agree (RED — state.rebase never stamped)', async () => {
+  it('halts a clean play-forward rebase when recorded completed BUILD evidence is unavailable', async () => {
     await initFeatureRepo();
     await writeInitialConductState();
 
@@ -1877,23 +1877,11 @@ describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase
       events,
       ranManualTest: true,
     });
-    expect(res).toBe('rebased');
-
-    // The gate verdict IS recorded — this mirrors what runRebaseStep writes
-    // via applyRebaseVerdicts and is expected to pass today.
-    const gateVerdict = await readVerdict(dir, 'rebase');
-    expect(gateVerdict?.satisfied).toBe(true);
-
-    // conduct-state.json's `rebase` field should be stamped 'done' — exactly
-    // as runRebaseStep's fall-through to saveStepStatus(..., 'rebase',
-    // 'done') would do for the SAME successful outcome inside the gate loop.
-    // THIS IS THE RED ASSERTION: resumeRebaseFirst never writes
-    // conduct-state.json, so `rebase` stays unset here, diverging silently
-    // from the gate verdict that says the rebase is satisfied.
-    const stateResult = await readState(join(dir, STATE_PATH_REL));
-    expect(stateResult.ok).toBe(true);
-    const state = stateResult.ok ? stateResult.value : {};
-    expect(state.rebase).toBe('done');
+    expect(res).toBe('halted');
+    await expect(readFile(join(dir, HALT_MARKER), 'utf8')).resolves.toContain(
+      'completed BUILD evidence is unavailable after rebase',
+    );
+    expect((await readVerdict(dir, 'rebase'))).toBeNull();
   });
 
   // Negative path: a conflicted pre-loop rebase must NOT stamp state.rebase.
