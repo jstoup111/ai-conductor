@@ -38,6 +38,10 @@ import { redactSafetyText } from './safety-diagnostics.js';
 import { ModelAvailability } from './model-availability.js';
 import type { ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
+import {
+  normalizeProviderSetupUnavailable,
+  type ProviderSetupUnavailable,
+} from './provider-setup-failure.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -68,6 +72,8 @@ export interface ProviderAttemptMetadata {
   outcome: 'success' | 'failure' | 'unavailable';
   reason?: string;
   fallbackReason?: string;
+  /** Why an uninvoked unavailable candidate was skipped. */
+  skipReason?: 'setup-unavailable' | 'cached-unavailable';
   /** Visible diagnostic-only boundary notices; never controls fallback. */
   safetyDiagnostics?: readonly string[];
   invoked: boolean;
@@ -492,6 +498,7 @@ export interface BuildProviderAttemptMetadataInput {
   unavailable?: ProviderCandidateFailureClassification;
   nextProvider?: string;
   auxiliaryMember?: string;
+  setupUnavailable?: ProviderSetupUnavailable;
 }
 
 /** Construct event-boundary metadata for exactly one candidate result. */
@@ -508,6 +515,7 @@ export function buildProviderAttemptMetadata({
   unavailable,
   nextProvider,
   auxiliaryMember,
+  setupUnavailable,
 }: BuildProviderAttemptMetadataInput): ProviderAttemptMetadata {
   const invoked = result.providerInvocationSkipped !== true;
   const failureReason = redactSafetyText(unavailable?.reason ?? result.output ?? 'Provider attempt failed.');
@@ -535,6 +543,9 @@ export function buildProviderAttemptMetadata({
       : {}),
     ...(unavailable && nextProvider
       ? { fallbackReason: redactSafetyText(unavailable.reason) }
+      : {}),
+    ...(!invoked && unavailable && setupUnavailable
+      ? { skipReason: 'setup-unavailable' as const }
       : {}),
     ...(result.safetyDiagnostics ? { safetyDiagnostics: result.safetyDiagnostics } : {}),
     invoked,
@@ -583,6 +594,8 @@ export async function executeProviderCandidates({
   const taskId = attribution && 'taskId' in attribution ? attribution.taskId : undefined;
   const taskAttributionDiagnostic =
     attribution && 'diagnostic' in attribution ? attribution.diagnostic.code : undefined;
+  const setupUnavailableCandidates: ProviderSetupUnavailable[] = [];
+  let anyCandidateInvoked = false;
 
   for (const [index, providerKey] of candidates.entries()) {
     const runtime = runtimes.get(providerKey);
@@ -619,6 +632,7 @@ export async function executeProviderCandidates({
       : options;
     let candidateObserver: ReturnType<NonNullable<typeof candidateOptions.providerStreamObserverForCandidate>> | undefined;
     let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
+    let setupUnavailable: ProviderSetupUnavailable | undefined;
     const invoke = async (): Promise<InvokeResult> => {
       // The REPL path supplies no stream consumer
       // (adr-2026-08-24-one-dispatch-member-on-the-provider-contract, and the
@@ -644,10 +658,23 @@ export async function executeProviderCandidates({
       };
       let selfHost: SelfHostInvocation | undefined;
       try {
-        selfHost = await prepareCandidateSelfHost?.(candidate, runtime, {
-          runId,
-          attempt: index,
-        });
+        try {
+          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, {
+            runId,
+            attempt: index,
+          });
+        } catch (error) {
+          setupUnavailable = normalizeProviderSetupUnavailable(error, providerKey);
+          if (setupUnavailable) {
+            return {
+              success: false,
+              output: setupUnavailable.reason,
+              exitCode: 1,
+              providerInvocationSkipped: true,
+            };
+          }
+          throw error;
+        }
         invocation = await invokeProviderCandidate({
           providerKey,
           runtime,
@@ -703,6 +730,9 @@ export async function executeProviderCandidates({
     }
 
     const unavailable = classifyProviderCandidateFailure(result);
+    const candidateUnavailable = setupUnavailable
+      ? { scope: 'step' as const, reason: setupUnavailable.reason }
+      : unavailable;
     const safeResult = result.output === undefined
       ? result
       : { ...result, output: redactSafetyText(result.output) };
@@ -717,9 +747,10 @@ export async function executeProviderCandidates({
       resolvedEffort: resolved.effort,
       tier,
       invokedModel,
-      unavailable,
+      unavailable: candidateUnavailable,
       nextProvider,
       auxiliaryMember,
+      setupUnavailable,
     });
     attempts.push(attemptMetadata);
     const observedIntervals = attempts.flatMap(
@@ -736,7 +767,7 @@ export async function executeProviderCandidates({
         // Reporting the telemetry failure is itself best effort.
       }
     }
-    if (!unavailable) {
+    if (!candidateUnavailable) {
       return {
         ...safeResult,
         preferredProvider,
@@ -748,10 +779,13 @@ export async function executeProviderCandidates({
       };
     }
 
+    if (setupUnavailable) setupUnavailableCandidates.push(setupUnavailable);
+    if (attemptMetadata.invoked) anyCandidateInvoked = true;
+
     if (!nextProvider) {
       const diagnostic = attempts
-        .map(({ provider, reason, invoked }) =>
-          `${provider} (${reason}${invoked ? '' : ', cached skip'})`,
+        .map(({ provider, reason, invoked, skipReason }) =>
+          `${provider} (${reason}${invoked ? '' : `, ${skipReason === 'setup-unavailable' ? 'setup unavailable' : 'cached skip'}`})`,
         )
         .join('; ');
       return {
@@ -760,6 +794,13 @@ export async function executeProviderCandidates({
         exitCode: result.exitCode,
         preferredProvider,
         attempts,
+        ...(!anyCandidateInvoked && setupUnavailableCandidates.length === candidates.length
+          ? {
+              providerSetupExhaustion: {
+                candidates: setupUnavailableCandidates as [ProviderSetupUnavailable, ...ProviderSetupUnavailable[]],
+              },
+            }
+          : {}),
         ...(observedIntervals.length ? { observedIntervals } : {}),
       };
     }
@@ -768,11 +809,11 @@ export async function executeProviderCandidates({
       type: 'provider_fallback',
       step,
       failedProvider: providerKey,
-      reason: redactSafetyText(unavailable.reason),
+      reason: redactSafetyText(candidateUnavailable.reason),
       nextProvider,
     };
     await warn?.(
-      `Step ${step}: provider ${providerKey} unavailable (${redactSafetyText(unavailable.reason)}); falling back to ${nextProvider}.`,
+      `Step ${step}: provider ${providerKey} unavailable (${redactSafetyText(candidateUnavailable.reason)}); falling back to ${nextProvider}.`,
       transition,
     );
   }
@@ -812,7 +853,10 @@ export async function executeAuxiliaryProviderCandidates<MemberId extends string
       modelFallbackLadder: input.policy.model_fallback_ladder,
       auxiliaryMember: input.memberId,
     });
-    if (result.success || result.commandUnresolved) return result;
+    // A setup-only exhaustion is terminal for this logical dispatch: retrying
+    // repeats the same verified capability checks without ever invoking a
+    // provider.
+    if (result.success || result.commandUnresolved || result.providerSetupExhaustion) return result;
     last = result;
   }
   return last ?? {

@@ -24,6 +24,7 @@ import {
   executeAuxiliaryProviderCandidates,
   formatProviderCapabilityGapMessages,
 } from '../../src/engine/provider-execution.js';
+import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -121,6 +122,61 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('skips a typed setup-unavailable candidate and returns setup-only exhaustion without invocation', async () => {
+    const codexInvoke = vi.fn();
+    const claudeInvoke = vi.fn();
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    const unavailable = (provider: string) => new ProviderSetupUnavailableError({
+      provider,
+      reason: `${provider} lacks isolated setup`,
+      recoveryAction: `install ${provider}`,
+    });
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke: codexInvoke }),
+        runtime('claude', { invoke: claudeInvoke }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      prepareCandidateSelfHost: async (candidate) => { throw unavailable(candidate.providerKey); },
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      providerSetupExhaustion: { candidates: [
+        { provider: 'codex', reason: 'codex lacks isolated setup' },
+        { provider: 'claude', reason: 'claude lacks isolated setup' },
+      ] },
+      attempts: [
+        { provider: 'codex', invoked: false, skipReason: 'setup-unavailable' },
+        { provider: 'claude', invoked: false, skipReason: 'setup-unavailable' },
+      ],
+    });
+    expect(codexInvoke).not.toHaveBeenCalled();
+    expect(claudeInvoke).not.toHaveBeenCalled();
+  });
+
+  it('falls through a typed setup-unavailable candidate without treating ordinary errors as fallback authority', async () => {
+    const codexInvoke = vi.fn();
+    const claudeInvoke = vi.fn(async () => ({ success: true, output: 'done', exitCode: 0 }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: codexInvoke }), runtime('claude', { invoke: claudeInvoke })]),
+      sessions: new ProviderSessionScope(vi.fn()),
+      prepareCandidateSelfHost: async (candidate) => {
+        if (candidate.providerKey === 'codex') throw new ProviderSetupUnavailableError({ provider: 'codex', reason: 'missing setup', recoveryAction: 'install' });
+        return undefined;
+      },
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+    expect(result).toMatchObject({ success: true, actualProvider: 'claude' });
+    expect(codexInvoke).not.toHaveBeenCalled();
+    expect(claudeInvoke).toHaveBeenCalledTimes(1);
+  });
   it('executes an auxiliary rubric through its own provider, fallback ladder, retries, and attribution label', async () => {
     const codexInvoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> =>
       options.model === 'gpt-5.6-sol'

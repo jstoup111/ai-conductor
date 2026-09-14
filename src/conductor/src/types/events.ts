@@ -189,6 +189,8 @@ export interface ProviderAttemptEvent {
   observedIntervals?: readonly ObservedInterval[];
   reason?: string;
   fallbackReason?: string;
+  /** Present only for an unavailable candidate that was not invoked. */
+  skipReason?: 'setup-unavailable' | 'cached-unavailable';
   lifecycle?: ProviderLifecycleEventMetadata;
 }
 
