@@ -141,14 +141,14 @@ describe('ci-fix: optional bounded log enrichment', () => {
 
   it('deduplicates workflow runs, forwards bounded runner options, and degrades without dropping required context', async () => {
     const calls: Array<{ args: string[]; opts: any }> = [];
-    const gh = vi.fn(async (args: string[], opts: any) => {
-      calls.push({ args, opts });
-      if (args.includes('8')) throw new Error('denied');
-      return { stdout: 'useful failure excerpt' };
-    });
+    const tracker = { viewWorkflowRunFailedLog: vi.fn(async (repo: string, run: string, _cwd: string, opts: any) => {
+      calls.push({ args: [repo, run], opts });
+      if (run === '8') throw new Error('denied');
+      return 'useful failure excerpt';
+    }) } as any;
     const required = buildCiFixHint(state);
     if (required.kind !== 'ready') throw new Error('expected required hint');
-    const result = await enrichCiFixHint(required.hint, state, gh, '/repo');
+    const result = await enrichCiFixHint(required.hint, state, tracker, '/repo');
     expect(calls).toHaveLength(2);
     expect(calls[0].opts).toMatchObject({ timeout: 10_000, maxBuffer: 65_536 });
     expect(result.hint).toContain('one');
@@ -159,7 +159,7 @@ describe('ci-fix: optional bounded log enrichment', () => {
   it('never splits UTF-8 or exceeds the total hint budget', async () => {
     const required = buildCiFixHint(state);
     if (required.kind !== 'ready') throw new Error('expected required hint');
-    const result = await enrichCiFixHint(required.hint, state, async () => ({ stdout: '😀'.repeat(20_000) }), '/repo');
+    const result = await enrichCiFixHint(required.hint, state, { viewWorkflowRunFailedLog: async () => '😀'.repeat(20_000) } as any, '/repo');
     expect(Buffer.byteLength(result.hint, 'utf8')).toBeLessThanOrEqual(CI_FIX_HINT_MAX_BYTES);
     expect(result.hint).toContain('[context truncated]');
     expect(result.hint).not.toContain('�');
@@ -180,10 +180,10 @@ describe('ci-fix: optional bounded log enrichment', () => {
     };
     const required = buildCiFixHint(expanded);
     if (required.kind !== 'ready') throw new Error('expected required hint');
-    const result = await enrichCiFixHint(required.hint, expanded, async (args) => {
-      calls.push(args);
-      return { stdout: '😀'.repeat(4_000) };
-    }, '/repo');
+    const result = await enrichCiFixHint(required.hint, expanded, { viewWorkflowRunFailedLog: async (repo: string, run: string) => {
+      calls.push([repo, run]);
+      return '😀'.repeat(4_000);
+    } } as any, '/repo');
 
     expect(calls).toHaveLength(3);
     expect(calls.flat()).not.toContain('99');

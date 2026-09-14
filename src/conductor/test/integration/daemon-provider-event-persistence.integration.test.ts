@@ -473,9 +473,9 @@ describe('daemon feature provider-event persistence', () => {
       type: 'ci_repair_diagnostic',
       prUrl: 'https://github.com/acme/widget/pull/7',
       slug: 'widget',
-      stage: 'verification',
-      reason: 'verification-failed',
-      disposition: 'failed',
+      stage: 'readiness',
+      reason: 'provider-unavailable',
+      disposition: 'deferred',
       provider: 'codex',
     });
     // A failing renderer is an observational subscriber and cannot make emit
@@ -499,10 +499,10 @@ describe('daemon feature provider-event persistence', () => {
     expect(firstReader).toEqual(restartedReader);
     const diagnostics = firstReader.filter((event): event is Extract<ConductorEvent, { type: 'ci_repair_diagnostic' }> => event.type === 'ci_repair_diagnostic');
     expect(diagnostics.map((event) => [event.type, event.slug, event.stage, event.reason, event.provider])).toEqual([
-      ['ci_repair_diagnostic', 'widget', 'verification', 'verification-failed', 'codex'],
+      ['ci_repair_diagnostic', 'widget', 'readiness', 'provider-unavailable', 'codex'],
       ['ci_repair_diagnostic', 'widget', 'publication', 'verified-publication', 'claude'],
     ]);
-    expect(rendered.join('\n')).toContain('verification/verification-failed (failed)');
+    expect(rendered.join('\n')).toContain('readiness/provider-unavailable (deferred)');
   });
 
   it('bounds oversized CI-repair attribution and excludes credential-bearing URL text', async () => {

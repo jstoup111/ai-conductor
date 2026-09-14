@@ -7,7 +7,7 @@
  * - `runCiFix`: Resolver orchestration (Tasks 17–20)
  */
 
-import type { GhRunner } from './pr-labels.js';
+import type { TrackerClient } from './tracker-client.js';
 import type { WatchEntry } from './mergeable-sweep.js';
 import type { CiRepairDiagnosticReason } from '../types/events.js';
 import type { PrMergeState } from './pr-labels.js';
@@ -108,23 +108,8 @@ function isFailedCheck(check: NonNullable<PrMergeState['statusCheckRollup']>[num
   return FAILED_CHECK_RUN_CONCLUSIONS.has((check.conclusion ?? '').toUpperCase());
 }
 
-/**
- * Prepare a hint from a selected PR state. The legacy overload exists only so
- * Task 11 can replace the old daemon callback without changing this task's
- * file scope; it performs no independent GitHub listing.
- */
-export function buildCiFixHint(prState: PrMergeState): CiFixHintResult;
-export function buildCiFixHint(legacyGh: GhRunner, cwd: string, prUrl: string): string;
-export function buildCiFixHint(
-  prStateOrLegacyGh: PrMergeState | GhRunner,
-  _cwd?: string,
-  _prUrl?: string,
-): CiFixHintResult | string {
-  if (typeof prStateOrLegacyGh === 'function') {
-    return 'CI repair context unavailable: selected PR state is required.';
-  }
-
-  const prState = prStateOrLegacyGh;
+/** Prepare a hint from a selected PR state. */
+export function buildCiFixHint(prState: PrMergeState): CiFixHintResult {
   if (prState.readFailure) {
     return { kind: 'context-error', reason: 'read-failure' };
   }
@@ -175,7 +160,7 @@ export interface CiFixHintEnrichment {
 export async function enrichCiFixHint(
   hint: string,
   state: PrMergeState,
-  runGh: GhRunner,
+  tracker: TrackerClient,
   cwd: string,
 ): Promise<CiFixHintEnrichment> {
   const runKeys = new Set<string>();
@@ -196,8 +181,8 @@ export async function enrichCiFixHint(
   for (const key of uniqueRuns.slice(0, 3)) {
     const [repo, run] = key.split('#');
     try {
-      const { stdout } = await runGh(['run', 'view', run, '--repo', repo, '--log-failed'], {
-        cwd, timeout: CI_FIX_LOG_TIMEOUT_MS, maxBuffer: CI_FIX_LOG_MAX_BUFFER,
+      const stdout = await tracker.viewWorkflowRunFailedLog(repo, run, cwd, {
+        timeout: CI_FIX_LOG_TIMEOUT_MS, maxBuffer: CI_FIX_LOG_MAX_BUFFER,
       });
       // Buffer slicing can split a multibyte code point and decode it as U+FFFD.
       // Iterate strings instead so the excerpt remains valid UTF-8 text.
@@ -408,19 +393,19 @@ async function evaluateEligibilityGates(
  */
 export type CiFixOutcome =
   | { kind: 'not-started'; provider?: string; reason?: CiRepairDiagnosticReason }
-  | { kind: 'noop' }
+  | { kind: 'noop'; provider?: string }
   | { kind: 'failed'; stage: 'provider' | 'guard' | 'verification' | 'publication' | 'worktree'; provider?: string; reason?: CiRepairDiagnosticReason }
-  | { kind: 'published' }
+  | { kind: 'published'; provider?: string }
   | { kind: 'branch-gone' }
   | { kind: 'needs-human'; providerSetupExhaustion: ProviderSetupExhaustion };
 
 /** Internal result emitted by the provider-session boundary. */
 export type CiFixSessionOutcome =
-  | { kind: 'not-started'; actualProvider?: string; reason?: CiRepairDiagnosticReason }
-  | { kind: 'failed'; actualProvider?: string; reason?: CiRepairDiagnosticReason }
-  | { kind: 'session-completed' }
+  | { kind: 'not-started'; actualProvider?: string; preferredProvider?: string; reason?: CiRepairDiagnosticReason }
+  | { kind: 'failed'; actualProvider?: string; preferredProvider?: string; reason?: CiRepairDiagnosticReason }
+  | { kind: 'session-completed'; actualProvider?: string; preferredProvider?: string }
   /** @deprecated compatibility for existing injected seams; treated as completed. */
-  | { kind: 'changed' }
+  | { kind: 'changed'; actualProvider?: string; preferredProvider?: string }
   /** @deprecated compatibility for existing injected seams; treated as no-start. */
   | { kind: 'noop' }
   /** Every provider candidate was unavailable during setup; park for human recovery. */
@@ -606,7 +591,7 @@ export async function runCiFix(
       if (fixOutcome.kind === 'not-started') {
         return {
           kind: 'not-started',
-          ...(fixOutcome.actualProvider ? { provider: fixOutcome.actualProvider } : {}),
+          ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}),
           ...(fixOutcome.reason ? { reason: fixOutcome.reason } : {}),
         };
       }
@@ -614,7 +599,7 @@ export async function runCiFix(
       if (fixOutcome.kind === 'failed') {
         return {
           kind: 'failed', stage: 'provider',
-          ...(fixOutcome.actualProvider ? { provider: fixOutcome.actualProvider } : {}),
+          ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}),
           ...(fixOutcome.reason ? { reason: fixOutcome.reason } : {}),
         };
       }
@@ -622,7 +607,7 @@ export async function runCiFix(
       const afterHead = await git(['rev-parse', 'HEAD']);
       if (afterHead.exitCode !== 0) return { kind: 'failed', stage: 'worktree' };
       if (afterHead.stdout.trim() === beforeHead.stdout.trim()) {
-        return { kind: 'noop' };
+        return { kind: 'noop', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
       }
 
       // Task 19: guards + suite gate before push.
@@ -631,7 +616,7 @@ export async function runCiFix(
         const reason = `${guardsResult.guard}: ${guardsResult.reason}`;
         log(`${prUrl}: ci-fix acceptance guard failed: ${reason}`);
         logOutcome(log, prUrl, 'ci-fix-acceptance-guards', 'escalated');
-        return { kind: 'failed', stage: 'guard' };
+        return { kind: 'failed', stage: 'guard', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
       }
 
       const verify = deps.verify ?? ((projectRoot: string) =>
@@ -640,23 +625,23 @@ export async function runCiFix(
       try {
         suiteExitCode = await verify(worktreePath);
       } catch {
-        return { kind: 'failed', stage: 'verification' };
+        return { kind: 'failed', stage: 'verification', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
       }
       if (suiteExitCode !== 0) {
         log(`${prUrl}: ci-fix suite gate failed`);
         logOutcome(log, prUrl, 'ci-fix-suite-gate', 'escalated');
-        return { kind: 'failed', stage: 'verification' };
+        return { kind: 'failed', stage: 'verification', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
       }
 
       const pushResult = await pushRefreshedBranch(git, branch, log);
       if (!pushResult.pushed) {
         log(`${prUrl}: ci-fix lease push failed: ${pushResult.reason}`);
         logOutcome(log, prUrl, 'ci-fix-lease-push', 'escalated');
-        return { kind: 'failed', stage: 'publication' };
+        return { kind: 'failed', stage: 'publication', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
       }
 
       logOutcome(log, prUrl, 'ci-fix-lease-push', 'refreshed');
-      return { kind: 'published' };
+      return { kind: 'published', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
     }, undefined, deps.liveness ?? {});
 
     return outcome as CiFixOutcome;

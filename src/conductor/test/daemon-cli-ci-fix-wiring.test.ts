@@ -1,6 +1,6 @@
 // Covers: task:11
 import { describe, expect, it, vi } from 'vitest';
-import { createDaemonCiFixDispatch } from '../src/engine/daemon-ci-fix.js';
+import { classifyCiContextFailure, createDaemonCiFixDispatch } from '../src/engine/daemon-ci-fix.js';
 import type { PrMergeState } from '../src/engine/pr-labels.js';
 import type { WatchEntry } from '../src/engine/mergeable-sweep.js';
 
@@ -36,13 +36,26 @@ function factory(overrides: Partial<Parameters<typeof createDaemonCiFixDispatch>
     return deps.fixRunner.run({ worktreePath: '/repair', hint, entry: _entry });
   });
   const dispatch = createDaemonCiFixDispatch({
-    gh, createDispatcher: () => ({ resolveCiFailure: async () => ({ kind: 'session-completed' }) }),
+    tracker: {
+      getPullRequestHeadRef: async () => JSON.parse((await gh(['pr'])).stdout).headRefName,
+      viewWorkflowRunFailedLog: async (repo, run, cwd, opts) => (await gh(['run', 'view', run, '--repo', repo, '--log-failed'], { cwd, ...opts })).stdout,
+    } as any, createDispatcher: () => ({ resolveCiFailure: async () => ({ kind: 'session-completed' }) }),
     fixRunner: { run: runner }, run, ...overrides,
   });
   return { dispatch, gh, runner, run };
 }
 
 describe('daemon CI-fix production dispatch callback', () => {
+  it.each([
+    ['auth', { readFailure: { kind: 'runner', error: new Error('401 unauthorized') } }, 'auth'],
+    ['permission', { readFailure: { kind: 'runner', error: new Error('403 forbidden') } }, 'permission'],
+    ['timeout', { readFailure: { kind: 'runner', error: new Error('timed out') } }, 'timeout'],
+    ['api', { readFailure: { kind: 'runner', error: new Error('upstream unavailable') } }, 'api'],
+    ['malformed', { contextFailure: { kind: 'invalid-rollup' } }, 'malformed-context'],
+  ] as const)('classifies selected %s context failures without dispatching a provider', (_label, partial, reason) => {
+    expect(classifyCiContextFailure({ ...selected, ...partial })).toBe(reason);
+  });
+
   it('delivers the sweep snapshot’s mixed identities and usable context despite optional log failure, without a second check read', async () => {
     const { dispatch, gh, runner, run } = factory();
     await expect(dispatch(entry, selected)).resolves.toEqual({ kind: 'session-completed' });
@@ -67,7 +80,7 @@ describe('daemon CI-fix production dispatch callback', () => {
     for (const gh of [vi.fn(async () => ({ stdout: '{bad json' })), vi.fn(async () => { throw new Error('permission denied'); })]) {
       const run = vi.fn();
       const dispatch = createDaemonCiFixDispatch({
-        gh, createDispatcher: () => ({ resolveCiFailure: async () => ({ kind: 'session-completed' }) }), run,
+        tracker: { getPullRequestHeadRef: async () => { throw new Error('permission denied'); }, viewWorkflowRunFailedLog: async () => '' } as any, createDispatcher: () => ({ resolveCiFailure: async () => ({ kind: 'session-completed' }) }), run,
       });
       await expect(dispatch(entry, selected)).resolves.toEqual({ kind: 'not-started' });
       expect(run).not.toHaveBeenCalled();
@@ -88,7 +101,7 @@ describe('daemon CI-fix production dispatch callback', () => {
         : { kind: 'failed' as const, stage: 'provider' as const };
     });
     const dispatch = createDaemonCiFixDispatch({
-      gh: vi.fn(async () => ({ stdout: JSON.stringify({ headRefName: 'repair-branch' }) })),
+      tracker: { getPullRequestHeadRef: async () => 'repair-branch', viewWorkflowRunFailedLog: async () => '' } as any,
       createDispatcher: () => ({ resolveCiFailure }),
       diagnostic,
       run,
@@ -105,7 +118,7 @@ describe('daemon CI-fix production dispatch callback', () => {
     }
     expect(resolveCiFailure).toHaveBeenCalledOnce();
     expect(diagnostic).toHaveBeenCalledWith({
-      entry, stage: 'execution', reason: 'provider-unavailable', provider: 'codex',
+      entry, stage: 'readiness', reason: 'provider-unavailable', provider: 'codex',
     });
   });
 
@@ -129,7 +142,7 @@ describe('daemon CI-fix production dispatch callback', () => {
       return { kind: 'failed' as const, stage: 'provider' as const };
     });
     const dispatch = createDaemonCiFixDispatch({
-      gh, createDispatcher: () => ({ resolveCiFailure: async () => ({ kind: 'session-completed' }) }), run,
+      tracker: { getPullRequestHeadRef: async () => 'repair-branch', viewWorkflowRunFailedLog: async () => { logReads += 1; return 'é'.repeat(20_000); } } as any, createDispatcher: () => ({ resolveCiFailure: async () => ({ kind: 'session-completed' }) }), run,
     });
     await expect(dispatch(entry, state)).resolves.toEqual({ kind: 'failed', stage: 'provider' });
     expect(logReads).toBe(3);

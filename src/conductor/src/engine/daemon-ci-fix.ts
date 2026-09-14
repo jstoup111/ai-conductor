@@ -10,19 +10,19 @@ import {
 } from './ci-fix.js';
 import type { WatchEntry } from './mergeable-sweep.js';
 import type { PrMergeState } from './pr-labels.js';
-import type { GhRunner } from './tracker-client.js';
+import type { TrackerClient } from './tracker-client.js';
 import type { ResolveWorktreeLiveness } from './autoresolve.js';
-import type { CiRepairDiagnosticReason } from '../types/events.js';
+import type { CiRepairDiagnosticReason, CiRepairDiagnosticStage } from '../types/events.js';
 
 export type CiFixDiagnostic = (input: {
   entry: WatchEntry;
-  stage: 'branch' | 'context' | 'log-enrichment' | 'execution';
+  stage: CiRepairDiagnosticStage;
   reason: CiRepairDiagnosticReason;
   provider?: string;
 }) => void | Promise<void>;
 
 export interface DaemonCiFixDispatchDeps {
-  gh: GhRunner;
+  tracker: TrackerClient;
   createDispatcher: (entry: WatchEntry) => CiFixDispatcher;
   liveness?: ResolveWorktreeLiveness;
   log?: (message: string) => void;
@@ -38,7 +38,20 @@ function diagnosticReason(reason: string): CiRepairDiagnosticReason {
   if (reason === 'missing-branch') return 'missing-branch';
   if (reason === 'malformed-context') return 'malformed-context';
   if (reason === 'log-unavailable') return 'log-unavailable';
+  if (reason === 'context-truncated') return 'context-truncated';
   return 'unknown';
+}
+
+/** Classify selected-state read failures using the root-event vocabulary. */
+export function classifyCiContextFailure(state: PrMergeState): CiRepairDiagnosticReason {
+  const error = state.readFailure && 'error' in state.readFailure ? state.readFailure.error : undefined;
+  const text = error instanceof Error ? `${error.message} ${(error as { stderr?: unknown }).stderr ?? ''}`.toLowerCase() : '';
+  if (state.contextFailure) return 'malformed-context';
+  if (state.readFailure?.kind === 'capability') return 'capability';
+  if (/auth|401|unauthor/.test(text)) return 'auth';
+  if (/permission|forbidden|403/.test(text)) return 'permission';
+  if (/timeout|timed out/.test(text)) return 'timeout';
+  return 'api';
 }
 
 /**
@@ -52,9 +65,7 @@ export function createDaemonCiFixDispatch(deps: DaemonCiFixDispatchDeps) {
   return async (entry: WatchEntry, state: PrMergeState): Promise<CiFixOutcome> => {
     let branch: string;
     try {
-      const result = await deps.gh(['pr', 'view', entry.prUrl, '--json', 'headRefName'], { cwd: entry.repoCwd });
-      const parsed = JSON.parse(result.stdout) as { headRefName?: unknown };
-      branch = typeof parsed.headRefName === 'string' ? parsed.headRefName.trim() : '';
+      branch = await deps.tracker.getPullRequestHeadRef(entry.prUrl, entry.repoCwd);
     } catch (error) {
       log(`[ci-fix] branch lookup failed for ${entry.prUrl}: ${error instanceof Error ? error.message : String(error)}`);
       await deps.diagnostic?.({ entry, stage: 'branch', reason: 'api' });
@@ -70,7 +81,7 @@ export function createDaemonCiFixDispatch(deps: DaemonCiFixDispatchDeps) {
       await deps.diagnostic?.({ entry, stage: 'context', reason: diagnosticReason(prepared.reason) });
       return { kind: 'not-started' };
     }
-    const enriched = await enrichCiFixHint(prepared.hint, state, deps.gh, entry.repoCwd);
+    const enriched = await enrichCiFixHint(prepared.hint, state, deps.tracker, entry.repoCwd);
     for (const reason of enriched.degradations) {
       await deps.diagnostic?.({ entry, stage: 'log-enrichment', reason: diagnosticReason(reason) });
     }
@@ -81,8 +92,9 @@ export function createDaemonCiFixDispatch(deps: DaemonCiFixDispatchDeps) {
     // A provider boundary can affirmatively refuse before a session starts.
     // Keep that distinct from an unobserved/no-op repair: it is a deferred
     // execution diagnostic with the provider chosen by the execution result.
-    if (outcome.kind === 'not-started' && outcome.provider && outcome.reason) {
-      await deps.diagnostic?.({ entry, stage: 'execution', reason: outcome.reason, provider: outcome.provider });
+    if (outcome.kind === 'not-started') {
+      const readiness = outcome.reason === 'readiness-degraded' || outcome.reason === 'provider-unavailable';
+      await deps.diagnostic?.({ entry, stage: readiness ? 'readiness' : 'execution', reason: outcome.reason ?? 'unknown', ...(outcome.provider ? { provider: outcome.provider } : {}) });
     }
     return outcome;
   };

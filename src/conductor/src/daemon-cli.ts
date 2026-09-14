@@ -22,7 +22,7 @@ import {
 import {
   isEligibleForCiFix,
 } from './engine/ci-fix.js';
-import { createDaemonCiFixDispatch } from './engine/daemon-ci-fix.js';
+import { classifyCiContextFailure, createDaemonCiFixDispatch } from './engine/daemon-ci-fix.js';
 import {
   resolveRebaseResolutionAttempts,
   resolveDispatchStartTimeoutSeconds,
@@ -83,7 +83,7 @@ import {
   withDaemonLogFeatureOwnership,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
-import type { CiRepairDiagnosticReason, ConductState, ConductorEvent, StepName, StepStatus } from './types/index.js';
+import type { ConductState, ConductorEvent, StepName, StepStatus } from './types/index.js';
 import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
 import {
   createDaemonTeardown,
@@ -801,21 +801,6 @@ export function createForcedSetupPrepare(
  * the worktree down on success. Unattended; ceilings + supervision live in
  * runDaemon / makeRunFeature.
  */
-/** Convert producer-local failure labels into the closed, payload-free event vocabulary. */
-function ciRepairReason(reason: string): CiRepairDiagnosticReason {
-  const known: readonly CiRepairDiagnosticReason[] = [
-    'auth', 'permission', 'timeout', 'api', 'capability', 'malformed-context',
-    'missing-context', 'missing-branch', 'log-unavailable', 'context-truncated',
-    'provider-unavailable', 'readiness-degraded', 'flag-invalid', 'spawn-env',
-    'unknown', 'guard-refused', 'verification-failed', 'publication-refused',
-    'verified-publication',
-  ];
-  if ((known as readonly string[]).includes(reason)) return reason as CiRepairDiagnosticReason;
-  if (reason === 'empty-failure-context') return 'missing-context';
-  if (reason === 'read-failure' || reason === 'branch-lookup-failed') return 'api';
-  return 'unknown';
-}
-
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
   const configResult = await loadMergedConfig(projectRoot);
@@ -2424,25 +2409,19 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             isEligible: (entry, state) =>
               isEligibleForCiFix(entry, state, config, new Date(), log),
             diagnostic: async (entry, state) => {
-              const error = state.readFailure && 'error' in state.readFailure ? state.readFailure.error : undefined;
-              const text = error instanceof Error ? `${error.message} ${(error as any).stderr ?? ''}`.toLowerCase() : '';
-              const reason = state.contextFailure ? 'malformed-context'
-                : state.readFailure?.kind === 'capability' ? 'capability'
-                : /auth|401|unauthor/.test(text) ? 'auth'
-                : /permission|forbidden|403/.test(text) ? 'permission'
-                : /timeout|timed out/.test(text) ? 'timeout' : 'api';
+              const reason = classifyCiContextFailure(state);
               await events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
                 stage: 'context', reason, disposition: 'deferred' });
             },
             dispatch: async (entry, state) => {
               if (!ciFixEnabled) return;
               const dispatchCiFix = createDaemonCiFixDispatch({
-                gh: makeProductionGh(),
+                tracker: createGithubTrackerClient(makeProductionGh()),
                 liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
                 log,
                 diagnostic: async ({ stage, reason, provider }) => {
                   void events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
-                    stage, reason: ciRepairReason(reason),
+                    stage, reason,
                     disposition: stage === 'log-enrichment' ? 'degraded' : 'deferred', provider });
                 },
                 createDispatcher: () => ({
@@ -2492,7 +2471,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                   stage: outcome.kind === 'published' ? 'publication' : outcome.stage === 'guard' ? 'guard' : outcome.stage === 'verification' ? 'verification' : outcome.stage === 'publication' ? 'publication' : 'execution',
                   reason: outcome.kind === 'published' ? 'verified-publication' : outcome.stage === 'guard' ? 'guard-refused' : outcome.stage === 'verification' ? 'verification-failed' : outcome.stage === 'publication' ? 'publication-refused' : outcome.reason ?? 'unknown',
                   disposition: outcome.kind === 'published' ? 'published' : 'failed',
-                  ...(outcome.kind === 'failed' && outcome.provider ? { provider: outcome.provider } : {}) });
+                  ...(outcome.provider ? { provider: outcome.provider } : {}) });
               }
               return outcome;
             },

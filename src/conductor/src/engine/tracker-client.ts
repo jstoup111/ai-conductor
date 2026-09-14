@@ -137,6 +137,15 @@ export interface TrackerClient {
   upsertIssueComment(repo: string, issueRef: string, body: string, cwd: string): Promise<void>;
   /** `gh pr view <url> --json state,mergedAt` — PR state + merge timestamp for reopen checks. */
   viewPullRequest(url: string, cwd: string): Promise<{ state?: string; mergedAt?: string | null }>;
+  /** `gh pr view <url> --json headRefName` — source branch for CI repair. */
+  getPullRequestHeadRef(prUrl: string, cwd: string): Promise<string>;
+  /** `gh run view <run> --repo <repo> --log-failed` — bounded failed-log enrichment. */
+  viewWorkflowRunFailedLog(
+    repo: string,
+    runId: string,
+    cwd: string,
+    opts: { timeout: number; maxBuffer: number },
+  ): Promise<string>;
   /** `gh label create <name> -R <repo>` — create a label (idempotent; caller swallows "already exists"). */
   createLabel(repo: string, name: string, cwd: string): Promise<void>;
   /** `gh api --method DELETE repos/<repo>/issues/<number>/labels/<name>` — remove a label via REST. */
@@ -362,6 +371,21 @@ export function createGithubTrackerClient(runner: GhRunner): EffectMarkerTracker
         cwd,
       });
       return parseJsonOrThrow('viewPullRequest', stdout || '{}');
+    },
+
+    async getPullRequestHeadRef(prUrl, cwd) {
+      const { stdout } = await runOrThrow(runner, ['pr', 'view', prUrl, '--json', 'headRefName'], { cwd });
+      const data = parseJsonOrThrow<{ headRefName?: unknown }>('getPullRequestHeadRef', stdout || '{}');
+      return typeof data.headRefName === 'string' ? data.headRefName.trim() : '';
+    },
+
+    async viewWorkflowRunFailedLog(repo, runId, cwd, opts) {
+      const { stdout } = await runOrThrow(
+        runner,
+        ['run', 'view', runId, '--repo', repo, '--log-failed'],
+        { cwd, ...opts },
+      );
+      return stdout;
     },
 
     async createLabel(repo, name, cwd) {

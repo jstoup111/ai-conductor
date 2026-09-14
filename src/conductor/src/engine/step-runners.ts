@@ -1303,7 +1303,7 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   /** Translate untrusted provider output into the closed root-bus vocabulary. */
-  private ciFailureReason(result: ProviderExecutionResult): CiRepairDiagnosticReason {
+  private ciFailureReason(result: Pick<InvokeResult, 'output' | 'commandUnresolved' | 'permissionDenied' | 'providerUnavailable' | 'executionDisposition'>): CiRepairDiagnosticReason {
     const text = `${result.output ?? ''}`.toLowerCase();
     if (result.commandUnresolved) return 'flag-invalid';
     if (result.permissionDenied || /permission|forbidden|\b403\b/.test(text)) return 'permission';
@@ -1922,7 +1922,11 @@ export class DefaultStepRunner implements StepRunner {
       cwd: ctx.worktreePath,
     }, async () => ({ sessionId: uuidv4(), resume: false }));
 
-    return { kind: result.success ? 'session-completed' : 'failed' };
+    return {
+      kind: result.success ? 'session-completed' : result.executionDisposition === 'not-started' ? 'not-started' : 'failed',
+      reason: this.ciFailureReason(result),
+      preferredProvider: this.providerKey,
+    };
   }
 
   /**

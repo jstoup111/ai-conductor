@@ -4994,6 +4994,17 @@ TIER: M`,
   });
 
   describe('resolveCiFailure one-shot dispatch', () => {
+    it.each([
+      [{ success: false, output: 'readiness unavailable', exitCode: 1, executionDisposition: 'not-started' as const }, 'not-started'],
+      [{ success: false, output: 'provider exited', exitCode: 1 }, 'failed'],
+      [{ success: true, output: 'completed', exitCode: 0, executionDisposition: 'not-started' as const }, 'session-completed'],
+    ])('preserves legacy scalar disposition (%s)', async (result, expectedKind) => {
+      const runner = new DefaultStepRunner({ invoke: vi.fn().mockResolvedValue(result) }, 'session-1', '/tmp/project');
+      await expect(runner.resolveCiFailure({
+        worktreePath: '/wt/feature-x', prUrl: 'https://github.com/org/repo/pull/42', hint: 'failure', slug: 'my-feature',
+      })).resolves.toMatchObject({ kind: expectedKind, preferredProvider: 'claude' });
+    });
+
     it('invokes the model ladder once with resume:false, dangerouslySkipPermissions:true, cwd=worktreePath, and the hint in the prompt', async () => {
       const invoke = vi.fn().mockResolvedValue({
         success: true,
