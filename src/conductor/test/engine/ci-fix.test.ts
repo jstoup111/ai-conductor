@@ -22,7 +22,7 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -671,7 +671,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       const fixRunner = {
         run: async ({ worktreePath }: { worktreePath: string }) => {
           execSync(`git commit --allow-empty -m "ci fix commit"`, { cwd: worktreePath });
-          return { kind: 'changed' as const };
+          return { kind: 'session-completed' as const };
         },
       };
 
@@ -807,6 +807,96 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       expect(originLog).toContain('ci fix commit');
 
       expect(logs.some((l) => l.includes('refreshed'))).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('session completion without a committed HEAD change is a noop and never verifies or publishes', async () => {
+    const { repoPath, originPath, cleanup } = await createFixtureRepo();
+    try {
+      const beforeSha = execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim();
+      const verify = vi.fn(async () => 0);
+      const fixRunner = { run: async () => ({ kind: 'session-completed' as const }) };
+
+      const result = await runCiFix(
+        { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 },
+        'feat/fix', 'hint', { fixRunner, verify }, () => {},
+      );
+
+      expect(result).toEqual({ kind: 'noop' });
+      expect(verify).not.toHaveBeenCalled();
+      expect(execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim()).toBe(beforeSha);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('uncommitted-only session edits are a noop and never verify or publish', async () => {
+    const { repoPath, originPath, cleanup } = await createFixtureRepo();
+    try {
+      const beforeSha = execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim();
+      const verify = vi.fn(async () => 0);
+      const fixRunner = {
+        run: async ({ worktreePath }: { worktreePath: string }) => {
+          await writeFile(join(worktreePath, 'uncommitted-repair.txt'), 'repair');
+          return { kind: 'session-completed' as const };
+        },
+      };
+
+      const result = await runCiFix(
+        { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 },
+        'feat/fix', 'hint', { fixRunner, verify }, () => {},
+      );
+
+      expect(result).toEqual({ kind: 'noop' });
+      expect(verify).not.toHaveBeenCalled();
+      expect(execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim()).toBe(beforeSha);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('a provider failure remains failed even when the provider changed committed HEAD', async () => {
+    const { repoPath, originPath, cleanup } = await createFixtureRepo();
+    try {
+      const beforeSha = execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim();
+      const verify = vi.fn(async () => 0);
+      const fixRunner = {
+        run: async ({ worktreePath }: { worktreePath: string }) => {
+          execSync('git commit --allow-empty -m "untrusted provider commit"', { cwd: worktreePath });
+          return { kind: 'failed' as const };
+        },
+      };
+
+      const result = await runCiFix(
+        { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 },
+        'feat/fix', 'hint', { fixRunner, verify }, () => {},
+      );
+
+      expect(result).toEqual({ kind: 'failed', stage: 'provider' });
+      expect(verify).not.toHaveBeenCalled();
+      expect(execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim()).toBe(beforeSha);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('an affirmative no-start remains not-started and never verifies or publishes', async () => {
+    const { repoPath, originPath, cleanup } = await createFixtureRepo();
+    try {
+      const beforeSha = execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim();
+      const verify = vi.fn(async () => 0);
+      const fixRunner = { run: async () => ({ kind: 'not-started' as const }) };
+
+      const result = await runCiFix(
+        { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 },
+        'feat/fix', 'hint', { fixRunner, verify }, () => {},
+      );
+
+      expect(result).toEqual({ kind: 'not-started' });
+      expect(verify).not.toHaveBeenCalled();
+      expect(execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim()).toBe(beforeSha);
     } finally {
       await cleanup();
     }
