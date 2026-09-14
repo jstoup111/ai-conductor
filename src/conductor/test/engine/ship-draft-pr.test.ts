@@ -7,19 +7,54 @@
  * outcome, and NOTHING it does may throw into the conductor loop.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
-  openShipDraftPr,
+  openShipDraftPr as openGuardedShipDraftPr,
   shipDraftPrBody,
   SHIP_DRAFT_PR_NOTE,
+  type OpenShipDraftPrDeps,
 } from '../../src/engine/ship-draft-pr.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
+import { createGuardedGithubOperationRunner, type GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 
 const CWD = '/repo';
 const BRANCH = 'feat/widget-import';
 const BASE = 'main';
 const PR_URL = 'https://github.com/acme/repo/pull/7';
+
+function mutation(): GithubMutationExecutionContext {
+  return {
+    provenance: {
+      repository: 'acme/repo',
+      defaultBranch: BASE,
+      specBranch: BRANCH,
+      featureMarker: '.docs/intake/widget-import.md',
+      publication: 'initial',
+    },
+    dependencies: {
+      resolveMachineOwner: vi.fn().mockResolvedValue({ resolved: true, id: 'alice' }),
+      provenanceDiscovery: {
+        readCommittedRecords: vi.fn().mockResolvedValue([
+          { path: '.docs/intake/widget-import.md', content: 'Owner: alice\n' },
+        ]),
+      },
+    },
+  };
+}
+
+/** Every legacy behavior fixture now crosses the guarded production seam. */
+function openShipDraftPr(input: OpenShipDraftPrDeps) {
+  const remoteMutation = mutation();
+  return openGuardedShipDraftPr({
+    ...input,
+    remoteMutation,
+    operations: createGuardedGithubOperationRunner(input.gh!, {
+      cwd: input.cwd,
+      mutation: remoteMutation,
+    }),
+  });
+}
 
 function fakeGit(
   handler: (args: string[]) => { stdout: string } | Error,
@@ -27,6 +62,7 @@ function fakeGit(
   const calls: string[][] = [];
   const git: GitRunner = async (args) => {
     calls.push([...args]);
+    if (args[0] === 'config') return { stdout: 'https://github.com/acme/repo.git\n' };
     const result = handler(args);
     if (result instanceof Error) throw result;
     return result;
@@ -38,6 +74,7 @@ function fakeGit(
 function aheadGit(): { git: GitRunner; calls: string[][] } {
   return fakeGit((args) => {
     if (args[0] === 'rev-list') return { stdout: '2\n' };
+    if (args[0] === 'config') return { stdout: 'https://github.com/acme/repo.git\n' };
     if (args[0] === 'push') return { stdout: '' };
     return { stdout: '' };
   });
@@ -58,9 +95,17 @@ function fakeGh(
 
 /** Default gh fake: no PR exists yet; `pr create` prints the new URL. */
 function createsGh(): { gh: GhRunner; calls: string[][] } {
+  let created = false;
   return fakeGh((args) => {
-    if (args[1] === 'view') return new Error('no pull requests found');
-    if (args[1] === 'create') return { stdout: `${PR_URL}\n` };
+    if (args[1] === 'view') {
+      return created
+        ? { stdout: JSON.stringify({ url: PR_URL, state: 'OPEN' }) }
+        : new Error('no pull requests found');
+    }
+    if (args[1] === 'create') {
+      created = true;
+      return { stdout: `${PR_URL}\n` };
+    }
     return { stdout: '' };
   });
 }
@@ -83,7 +128,7 @@ describe('openShipDraftPr', () => {
 
     // Plain, non-force push of the feature branch.
     const push = gitCalls.find((c) => c[0] === 'push');
-    expect(push).toEqual(['push', '-u', 'origin', BRANCH]);
+    expect(push).toEqual(['push', '-u', 'origin', `HEAD:refs/heads/${BRANCH}`]);
     expect(gitCalls.flat()).not.toContain('--force');
     expect(gitCalls.flat()).not.toContain('--force-with-lease');
 
@@ -360,7 +405,7 @@ describe('openShipDraftPr', () => {
 
     await openShipDraftPr({ gh, git, cwd: CWD, branch: BRANCH, baseBranch: BASE, featureDesc: 'x' });
 
-    expect(gitCalls.find((c) => c[0] === 'push')).toEqual(['push', '-u', 'origin', BRANCH]);
+    expect(gitCalls.find((c) => c[0] === 'push')).toEqual(['push', '-u', 'origin', `HEAD:refs/heads/${BRANCH}`]);
     expect(gitCalls.flat()).not.toContain('--force-with-lease');
   });
 
@@ -378,7 +423,7 @@ describe('openShipDraftPr', () => {
       pushMode: 'plain',
     });
 
-    expect(gitCalls.find((c) => c[0] === 'push')).toEqual(['push', '-u', 'origin', BRANCH]);
+    expect(gitCalls.find((c) => c[0] === 'push')).toEqual(['push', '-u', 'origin', `HEAD:refs/heads/${BRANCH}`]);
     expect(gitCalls.flat()).not.toContain('--force-with-lease');
     expect(gitCalls.flat()).not.toContain('--force');
   });
@@ -409,7 +454,7 @@ describe('openShipDraftPr', () => {
 
     expect(result).toEqual({ outcome: 'published', prUrl: PR_URL });
     const push = gitCalls.find((c) => c[0] === 'push');
-    expect(push).toEqual(['push', '-u', 'origin', BRANCH, '--force-with-lease']);
+    expect(push).toEqual(['push', '-u', 'origin', `HEAD:refs/heads/${BRANCH}`, '--force-with-lease']);
     // A lease, never a bare force: a genuinely-moved remote must still fail closed.
     expect(gitCalls.flat()).not.toContain('--force');
   });
