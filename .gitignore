@@ -7,6 +7,9 @@
 .daemon/
 .worktrees/
 
+# Checkout-local disposable Vitest storage.
+/src/conductor/.vitest-tmp/
+
 # Node / TypeScript conductor build artifacts
 node_modules/
 .vite/
