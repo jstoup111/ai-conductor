@@ -38,6 +38,7 @@ import {
   type Signal,
 } from './complexity.js';
 import type { ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt, CiFailureContext, CiFailureAttempt } from './rebase.js';
+import type { CiRepairDiagnosticReason } from '../types/events.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import {
   resolveFeaturePlanPath,
@@ -1301,6 +1302,18 @@ export class DefaultStepRunner implements StepRunner {
     };
   }
 
+  /** Translate untrusted provider output into the closed root-bus vocabulary. */
+  private ciFailureReason(result: ProviderExecutionResult): CiRepairDiagnosticReason {
+    const text = `${result.output ?? ''}`.toLowerCase();
+    if (result.commandUnresolved) return 'flag-invalid';
+    if (result.permissionDenied || /permission|forbidden|\b403\b/.test(text)) return 'permission';
+    if (/auth|unauthor|\b401\b/.test(text)) return 'auth';
+    if (/timeout|timed out/.test(text)) return 'timeout';
+    if (result.providerUnavailable) return 'provider-unavailable';
+    if (/spawn|enoent|environment/.test(text)) return 'spawn-env';
+    return result.executionDisposition === 'not-started' ? 'readiness-degraded' : 'unknown';
+  }
+
   private createProviderStreamConsumer(
     step: StepName,
     provider: string,
@@ -1885,6 +1898,7 @@ export class DefaultStepRunner implements StepRunner {
           : providerResult.executionDisposition === 'not-started'
             ? 'not-started'
             : 'failed',
+        reason: this.ciFailureReason(providerResult),
         ...this.providerAttribution(providerResult),
       };
     }

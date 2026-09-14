@@ -941,14 +941,18 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
     try {
       const beforeSha = execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim();
       const verify = vi.fn(async () => 0);
-      const fixRunner = { run: async () => ({ kind: 'not-started' as const }) };
+      const fixRunner = { run: async () => ({
+        kind: 'not-started' as const,
+        actualProvider: 'codex',
+        reason: 'provider-unavailable' as const,
+      }) };
 
       const result = await runCiFix(
         { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 },
         'feat/fix', 'hint', { fixRunner, verify }, () => {},
       );
 
-      expect(result).toEqual({ kind: 'not-started' });
+      expect(result).toEqual({ kind: 'not-started', provider: 'codex', reason: 'provider-unavailable' });
       expect(verify).not.toHaveBeenCalled();
       expect(execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim()).toBe(beforeSha);
     } finally {

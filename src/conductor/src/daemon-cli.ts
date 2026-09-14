@@ -2436,15 +2436,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             },
             dispatch: async (entry, state) => {
               if (!ciFixEnabled) return;
-              let repairProvider: string | undefined;
               const dispatchCiFix = createDaemonCiFixDispatch({
                 gh: makeProductionGh(),
                 liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
                 log,
-                diagnostic: async ({ stage, reason }) => {
+                diagnostic: async ({ stage, reason, provider }) => {
                   void events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
                     stage, reason: ciRepairReason(reason),
-                    disposition: stage === 'log-enrichment' ? 'degraded' : 'deferred' });
+                    disposition: stage === 'log-enrichment' ? 'degraded' : 'deferred', provider });
                 },
                 createDispatcher: () => ({
                 // Route the ci-fix dispatch through resolveCiFailure (T4):
@@ -2458,7 +2457,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     const selectedRuntime = providerExecution.runtimes.get(
                       providerExecution.configuredProviders[0],
                     );
-                    repairProvider = providerExecution.configuredProviders[0];
                     const stepRunner = new DefaultStepRunner(
                       selectedRuntime.provider,
                       sessionId,
@@ -2492,8 +2490,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               if (outcome.kind === 'failed' || outcome.kind === 'published') {
                 await events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
                   stage: outcome.kind === 'published' ? 'publication' : outcome.stage === 'guard' ? 'guard' : outcome.stage === 'verification' ? 'verification' : outcome.stage === 'publication' ? 'publication' : 'execution',
-                  reason: outcome.kind === 'published' ? 'verified-publication' : outcome.stage === 'guard' ? 'guard-refused' : outcome.stage === 'verification' ? 'verification-failed' : outcome.stage === 'publication' ? 'publication-refused' : 'unknown',
-                  disposition: outcome.kind === 'published' ? 'published' : 'failed', provider: repairProvider });
+                  reason: outcome.kind === 'published' ? 'verified-publication' : outcome.stage === 'guard' ? 'guard-refused' : outcome.stage === 'verification' ? 'verification-failed' : outcome.stage === 'publication' ? 'publication-refused' : outcome.reason ?? 'unknown',
+                  disposition: outcome.kind === 'published' ? 'published' : 'failed',
+                  ...(outcome.kind === 'failed' && outcome.provider ? { provider: outcome.provider } : {}) });
               }
               return outcome;
             },
