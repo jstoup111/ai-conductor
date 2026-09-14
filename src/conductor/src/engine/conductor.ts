@@ -449,8 +449,6 @@ export function createFinishPresentationRepair(input: {
   projectRoot: string;
   gh: GhRunner;
   operations?: GithubOperationRunner;
-  /** Live CLI roots require every presentation mutation to use operations. */
-  requireGuardedOperations?: boolean;
   log?: (message: string) => void;
   restoreReleaseMetadata?: (prUrl: string) => Promise<void>;
 }): (request: { prUrl: string; state: ConductState; mode?: 'capture-only' | 'full' }) => Promise<void> {
@@ -473,31 +471,33 @@ export function createFinishPresentationRepair(input: {
     try {
       const haltReason = await readFile(join(cwd, '.pipeline/halt-user-input-required'), 'utf8').catch(() => null);
       const outcome = await postHaltHistoryComment({
-        gh, cwd, prUrl, haltReason,
-        ...(input.requireGuardedOperations ? { operations: input.operations } : {}),
-        log: repairLog,
+        gh, cwd, prUrl, haltReason, operations: input.operations, log: repairLog,
       });
-      if (input.requireGuardedOperations && outcome === 'refused') {
+      if (outcome === 'refused') {
         throw new Error('guarded halt-history repair refused');
       }
     } catch (error) { repairLog(`[conductor-repair] postHaltHistoryComment failed: ${error}`); }
     if (mode === 'capture-only') return;
     try {
-      await rehabilitateHaltPr({ gh, cwd, prUrl, sourceRef, operations: input.operations, log: repairLog });
+      const outcome = await rehabilitateHaltPr({
+        gh, cwd, prUrl, sourceRef, preserveDraft: true, operations: input.operations, log: repairLog,
+      });
+      if (outcome === 'refused') throw new Error('guarded halt rehabilitation refused');
     } catch (error) { repairLog(`[conductor-repair] rehabilitateHaltPr failed: ${error}`); throw error; }
     try {
-      await retitleFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, branch: state.worktree_branch, operations: input.operations }, repairLog);
+      const outcome = await retitleFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, branch: state.worktree_branch, operations: input.operations }, repairLog);
+      if (outcome.outcome === 'refused') throw new Error('guarded title repair refused');
     } catch (error) { repairLog(`[conductor-repair] retitleFloor failed: ${error}`); throw error; }
     try {
-      await bodyFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, sourceRef, testEvidenceLine, operations: input.operations }, repairLog);
+      const outcome = await bodyFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, sourceRef, testEvidenceLine, operations: input.operations }, repairLog);
+      if (outcome === 'refused') throw new Error('guarded body repair refused');
     } catch (error) { repairLog(`[conductor-repair] bodyFloor failed: ${error}`); throw error; }
     await input.restoreReleaseMetadata?.(prUrl);
     try {
       const outcome = await ensureShipReady(
-        gh, cwd, prUrl, repairLog, undefined,
-        input.requireGuardedOperations ? input.operations : undefined,
+        gh, cwd, prUrl, repairLog, undefined, input.operations,
       );
-      if (input.requireGuardedOperations && outcome === 'refused') {
+      if (outcome === 'refused') {
         throw new Error('guarded ready-for-review repair refused');
       }
     } catch (error) { repairLog(`[conductor-repair] ensureShipReady failed: ${error}`); throw error; }
@@ -533,7 +533,6 @@ export function createProvenanceGuardedFinishPresentationRepair(input: {
       projectRoot: input.projectRoot,
       gh: input.gh,
       operations: publication.operations,
-      requireGuardedOperations: true,
       log: input.log,
     })({ prUrl, state });
   };
@@ -2644,9 +2643,22 @@ export class Conductor {
         join(this.projectRoot, '.pipeline/halt-user-input-required'),
         'utf-8',
       ).catch(() => null);
+      // Retained-PR adoption is a live presentation mutation, so construct a
+      // fresh guard from this feature's committed ownership before handing the
+      // repair its transport. An absent provenance boundary remains a refusal
+      // inside the advisory repair; it never re-enables raw gh writes.
+      const publication = await createShipDraftPublicationDependencies({
+        cwd: this.projectRoot,
+        branch: state.worktree_branch,
+        baseBranch: this.baseBranch,
+        featureDesc: state.feature_desc,
+        git: this.git,
+        gh: this.gh,
+      });
 
       const outcome = await makeRetainedPrPresentable({
         gh: this.gh,
+        operations: publication?.operations,
         cwd: this.projectRoot,
         prUrl,
         sourceRef,
