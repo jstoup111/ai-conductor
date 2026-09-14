@@ -88,6 +88,8 @@ export type RemediationCasePrdWideningRelationship =
 export interface RemediationCasePrdWideningRecord {
   readonly id: string;
   readonly domain: 'prd_widening';
+  /** Immutable criterion stamped with a modern editable offer; absent for legacy provenance. */
+  readonly offeredCriterion?: string;
   readonly originalSources: readonly RemediationCasePrdWideningOriginalSourceSnapshot[];
   readonly currentSources: readonly RemediationCasePrdWideningCurrentSourceLink[];
   readonly relationships: readonly RemediationCasePrdWideningRelationship[];
@@ -357,8 +359,11 @@ function parsePrdWideningRelationship(
 }
 
 function parsePrdWideningCase(value: unknown): RemediationCasePrdWideningRecord | undefined {
-  if (!isRecord(value) || !exactKeys(value, ['id', 'domain', 'originalSources', 'currentSources', 'relationships', ...(Object.hasOwn(value, 'reconciliationDigest') ? ['reconciliationDigest'] : [])]) ||
+  if (!isRecord(value) || !exactKeys(value, ['id', 'domain', 'originalSources', 'currentSources', 'relationships',
+    ...(Object.hasOwn(value, 'offeredCriterion') ? ['offeredCriterion'] : []),
+    ...(Object.hasOwn(value, 'reconciliationDigest') ? ['reconciliationDigest'] : [])]) ||
     value.domain !== 'prd_widening' || !boundedString(value.id, MAX_REFERENCE_LENGTH) ||
+    (Object.hasOwn(value, 'offeredCriterion') && !boundedString(value.offeredCriterion, MAX_REFERENCE_LENGTH)) ||
     !Array.isArray(value.originalSources) || value.originalSources.length === 0 ||
     value.originalSources.length > MAX_SOURCES_PER_CASE || !Array.isArray(value.currentSources) ||
     value.currentSources.length > MAX_SOURCES_PER_CASE || !Array.isArray(value.relationships) ||
@@ -379,6 +384,7 @@ function parsePrdWideningCase(value: unknown): RemediationCasePrdWideningRecord 
   return {
     id: value.id,
     domain: 'prd_widening',
+    ...(Object.hasOwn(value, 'offeredCriterion') ? { offeredCriterion: value.offeredCriterion as string } : {}),
     originalSources: originalSources as RemediationCasePrdWideningOriginalSourceSnapshot[],
     currentSources: currentSources as RemediationCasePrdWideningCurrentSourceLink[],
     relationships: relationships as RemediationCasePrdWideningRelationship[],

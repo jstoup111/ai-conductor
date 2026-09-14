@@ -61,14 +61,13 @@ function validInput(input: PrdWideningOfferInput): boolean {
 }
 
 function offeredCaseToPersistedOffer(
-  criterion: string,
   record: RemediationCasePrdWideningRecord,
 ): OverScopePersistedOffer | undefined {
   const original = record.originalSources.at(0);
-  if (!original) return undefined;
+  if (!original || !record.offeredCriterion) return undefined;
   return {
     kind: 'pending',
-    criterion,
+    criterion: record.offeredCriterion,
     summary: original.snapshot,
     relation: 'outside-visible',
     // One original source opens one PRD case. The case id is therefore the
@@ -143,13 +142,14 @@ export async function persistPrdWideningOffers(
         record = {
           id,
           domain: 'prd_widening',
+          offeredCriterion: input.criterion.trim(),
           originalSources: [{ sourceId: input.sourceId, snapshot: input.evidence }],
           currentSources: [{ sourceId: input.sourceId, snapshot: input.reportSnapshot, recordedAt: now() }],
           relationships: [],
         };
         next.push(record);
       }
-      const offer = offeredCaseToPersistedOffer(input.criterion, record);
+      const offer = offeredCaseToPersistedOffer(record);
       if (!offer) return { value: [] as readonly OverScopePersistedOffer[] };
       offers.push(offer);
     }

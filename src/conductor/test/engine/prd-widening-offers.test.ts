@@ -65,6 +65,7 @@ describe('PRD widening offers', () => {
         prdWideningCases: [{
           id: 'prd-case-7',
           domain: 'prd_widening',
+          offeredCriterion: 'NC.7',
           originalSources: [{
             sourceId: 'prd-audit:NC.7',
             snapshot: 'The original finding describes an externally visible lease expansion.',
@@ -79,14 +80,15 @@ describe('PRD widening offers', () => {
     });
 
     await expect(persistPrdWideningOffers(projectRoot, FEATURE, [{
-      criterion: 'NC.7',
+      // A later caller cannot rewrite the criterion in an already stamped offer.
+      criterion: 'S1.1',
       sourceId: 'prd-audit:NC.7',
       evidence: 'The original finding describes an externally visible lease expansion.',
       reportSnapshot: 'The full original PRD audit report snapshot.',
       relation: 'outside-visible',
     }], { newCaseId: () => 'must-not-be-used' })).resolves.toMatchObject({
       ok: true,
-      offers: [{ offerEntryId: 'prd-case-7', originalCaseId: 'prd-case-7' }],
+      offers: [{ criterion: 'NC.7', offerEntryId: 'prd-case-7', originalCaseId: 'prd-case-7' }],
     });
   });
 

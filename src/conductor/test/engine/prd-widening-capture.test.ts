@@ -33,8 +33,24 @@ function offerState(): RemediationCaseStoreState {
     prdWideningCases: [{
       id: 'case-1',
       domain: 'prd_widening',
+      offeredCriterion: 'NC.1',
       originalSources: [{ sourceId: originalSource.id, snapshot: originalSource.snapshot }],
       currentSources: [{ sourceId: originalSource.id, snapshot: 'Current report wording must not bind authority.', recordedAt: '2026-09-09T00:00:00.000Z' }],
+      relationships: [],
+    }],
+  };
+}
+
+function siblingOfferState(): RemediationCaseStoreState {
+  const state = offerState();
+  return {
+    ...state,
+    prdWideningCases: [...state.prdWideningCases, {
+      id: 'case-2',
+      domain: 'prd_widening',
+      offeredCriterion: 'NC.2',
+      originalSources: [{ sourceId: 'NC.source.2', snapshot: 'A second originally offered visible behavior.' }],
+      currentSources: [],
       relationships: [],
     }],
   };
@@ -58,7 +74,7 @@ function decisionStore(recorded: AcceptedWideningDecisionInput[] = []): PrdWiden
 function decision(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     criterion: 'NC.1',
-    summary: 'This text is editable and is not used to bind authority.',
+    summary: originalSource.snapshot,
     relation: 'outside-visible',
     offerEntryId: 'case-1',
     originalSource,
@@ -66,6 +82,19 @@ function decision(overrides: Record<string, unknown> = {}): Record<string, unkno
     decision: 'accept',
     rationale: 'The operator intentionally approves this original behavior.',
     ...overrides,
+  };
+}
+
+function siblingDecision(): Record<string, unknown> {
+  return {
+    criterion: 'NC.2',
+    summary: 'A second originally offered visible behavior.',
+    relation: 'outside-visible',
+    offerEntryId: 'case-2',
+    originalSource: { id: 'NC.source.2', snapshot: 'A second originally offered visible behavior.' },
+    originalCaseId: 'case-2',
+    decision: 'refuse',
+    rationale: 'The operator intentionally refuses this separate original behavior.',
   };
 }
 
@@ -129,7 +158,7 @@ describe('capturePrdWideningDecisions', () => {
         originalSource, originalCaseId: 'case-1', offerEntryId: 'case-1',
       });
       const rendered = renderOverScopeDecisionBlock([{
-        kind: 'revise-decision', criterion: 'NC.1', summary: 'This text is editable and is not used to bind authority.',
+        kind: 'revise-decision', criterion: 'NC.1', summary: originalSource.snapshot,
         relation: 'outside-visible', offerEntryId: 'case-1', originalSource, originalCaseId: 'case-1',
         priorDecision: { id: 'decision-1', revision: 1 },
       }]);
@@ -180,6 +209,27 @@ describe('capturePrdWideningDecisions', () => {
         { kind: 'invalid-decision', offerEntryId: 'case-1' },
         { kind: 'missing-rationale', offerEntryId: 'case-1' },
       ],
+    });
+  });
+
+  it.each([
+    ['criterion', decision({ criterion: 'S1.1' })],
+    ['summary', decision({ summary: 'An operator-edited evidence summary.' })],
+    ['relation', decision({ relation: 'inside-visible' })],
+  ])('rejects an edited rendered offer %s while capturing a valid sibling', async (_field, altered) => {
+    const recorded: AcceptedWideningDecisionInput[] = [];
+
+    const result = await capturePrdWideningDecisions(cleared([altered, siblingDecision()]), {
+      operator: 'operator@example.test',
+      offerStore: offerStore(siblingOfferState()),
+      decisionStore: decisionStore(recorded),
+    });
+
+    expect(recorded).toEqual([expect.objectContaining({ offerEntryId: 'case-2', criterion: 'NC.2' })]);
+    expect(result).toMatchObject({
+      kind: 'captured',
+      captured: [expect.objectContaining({ offerEntryId: 'case-2' })],
+      defects: [{ kind: 'changed-offer-reference', offerEntryId: 'case-1' }],
     });
   });
 

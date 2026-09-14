@@ -233,6 +233,60 @@ describe('legacy PRD widening decision migration', () => {
     ] } });
   });
 
+  it('retains distinct legacy evidence and attribution for criterion revisions', async () => {
+    const projectRoot = await createProjectRoot();
+    await writeLegacy(projectRoot, [
+      {
+        criterion: 'S3.1', summary: 'The first authored criterion summary.', decision: 'accept',
+        rationale: 'Initially accepted.', operator: 'operator@example.test', decidedAt: '2026-09-01T00:00:00.000Z',
+      },
+      {
+        criterion: 'S3.1', summary: 'The later authored criterion summary.', decision: 'refuse',
+        rationale: 'Later refused.', operator: 'operator@example.test', decidedAt: '2026-09-02T00:00:00.000Z',
+      },
+    ]);
+
+    await expect(migrateLegacyPrdWideningDecisions(projectRoot, FEATURE)).resolves.toMatchObject({
+      kind: 'migrated',
+      decisions: [
+        { legacyRow: { summary: 'The first authored criterion summary.', decidedAt: '2026-09-01T00:00:00.000Z' } },
+        { legacyRow: { summary: 'The later authored criterion summary.', decidedAt: '2026-09-02T00:00:00.000Z' }, supersedes: { revision: 1 } },
+      ],
+    });
+
+    await expect(new AcceptedWideningDecisionStore(projectRoot, FEATURE).read()).resolves.toMatchObject({
+      kind: 'valid',
+      state: { decisions: [
+        { legacyRow: { summary: 'The first authored criterion summary.', decidedAt: '2026-09-01T00:00:00.000Z' } },
+        { legacyRow: { summary: 'The later authored criterion summary.', decidedAt: '2026-09-02T00:00:00.000Z' }, supersedes: { revision: 1 } },
+      ] },
+    });
+  });
+
+  it('retains legacy-clear authored evidence apart from its criterion case snapshot', async () => {
+    const projectRoot = await createProjectRoot();
+    await writeLegacy(projectRoot, [{
+      criterion: 'S3.1', summary: 'The first criterion case snapshot.', decision: 'accept',
+      rationale: 'Initially accepted.', operator: 'operator@example.test', decidedAt: '2026-09-01T00:00:00.000Z',
+    }]);
+
+    await expect(migrateLegacyPrdWideningDecisions(projectRoot, FEATURE, {
+      legacyClear: {
+        operator: 'operator@example.test',
+        entries: [{
+          criterion: 'S3.1', summary: 'The later fenced-clear authored summary.', authority: 'refuse',
+          rationale: 'The later clear reverses the prior authority.',
+        }],
+      },
+    })).resolves.toMatchObject({
+      kind: 'migrated',
+      decisions: [
+        { legacyRow: { summary: 'The first criterion case snapshot.', decidedAt: '2026-09-01T00:00:00.000Z' } },
+        { legacyRow: { summary: 'The later fenced-clear authored summary.' }, supersedes: { revision: 1 } },
+      ],
+    });
+  });
+
   it('retains non-identical same-authority rows with their attribution in append order', async () => {
     const projectRoot = await createProjectRoot();
     const accepted = {

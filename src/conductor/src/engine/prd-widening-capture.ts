@@ -63,6 +63,8 @@ export type CapturePrdWideningDecisionsResult =
 
 interface ClearedDecisionEntry {
   readonly criterion: string;
+  readonly summary: string;
+  readonly relation: 'outside-visible' | undefined;
   readonly authority: 'accept' | 'refuse' | 'pending' | undefined;
   readonly rationale: string | undefined;
   readonly offerEntryId: string | undefined;
@@ -112,6 +114,8 @@ function parseEntry(value: unknown): ClearedDecisionEntry | undefined {
   if (Object.hasOwn(entry, 'priorDecision') && priorDecision === undefined) return undefined;
   return {
     criterion: typeof entry.criterion === 'string' ? entry.criterion.trim() : '',
+    summary: typeof entry.summary === 'string' ? entry.summary.trim() : '',
+    relation: entry.relation === 'outside-visible' ? entry.relation : undefined,
     authority: entry.decision === 'accept' || entry.decision === 'refuse' || entry.decision === 'pending'
       ? entry.decision
       : undefined,
@@ -208,8 +212,11 @@ function matchesPersistedOffer(
   if (!entry.offerEntryId || !entry.originalCaseId || !entry.originalSource ||
     entry.offerEntryId !== entry.originalCaseId) return false;
   const offer = cases.find((candidate) => candidate.id === entry.offerEntryId);
-  return offer !== undefined && offer.originalSources.some((source) =>
-    source.sourceId === entry.originalSource!.id && source.snapshot === entry.originalSource!.snapshot);
+  return offer !== undefined && offer.offeredCriterion === entry.criterion &&
+    entry.summary === entry.originalSource.snapshot && entry.relation === 'outside-visible' &&
+    offer.originalSources.some((source) =>
+      source.sourceId === entry.originalSource!.id && source.snapshot === entry.originalSource!.snapshot &&
+      source.snapshot === entry.summary);
 }
 
 async function persistedOffers(

@@ -34,6 +34,12 @@ export interface AcceptedWideningDecisionReference {
   readonly revision: number;
 }
 
+/** Immutable row evidence retained when a legacy authority document is migrated. */
+export interface AcceptedWideningLegacyRowEvidence {
+  readonly summary: string;
+  readonly decidedAt?: string;
+}
+
 /**
  * An immutable operator decision. Criterion decisions deliberately omit source
  * references; NC decisions carry the original offer's source and case rather
@@ -50,6 +56,8 @@ export interface AcceptedWideningDecision {
   readonly originalCaseId?: string;
   /** Immutable identity of the editable offer entry that created this decision. */
   readonly offerEntryId?: string;
+  /** Original row evidence and attribution retained from v1 migration. */
+  readonly legacyRow?: AcceptedWideningLegacyRowEvidence;
   readonly supersedes?: AcceptedWideningDecisionReference;
 }
 
@@ -67,6 +75,7 @@ export interface AcceptedWideningDecisionInput {
   readonly originalSource?: AcceptedWideningOriginalSource;
   readonly originalCaseId?: string;
   readonly offerEntryId?: string;
+  readonly legacyRow?: AcceptedWideningLegacyRowEvidence;
   readonly supersedes?: AcceptedWideningDecisionReference;
 }
 
@@ -170,6 +179,18 @@ function parseDecisionReference(value: unknown): AcceptedWideningDecisionReferen
   return { id: value.id, revision: value.revision };
 }
 
+function parseLegacyRowEvidence(value: unknown): AcceptedWideningLegacyRowEvidence | undefined {
+  if (!isObjectRecord(value) || !hasExactKeys(value, [
+    'summary',
+    ...(Object.hasOwn(value, 'decidedAt') ? ['decidedAt'] : []),
+  ]) || !boundedDecisionString(value.summary) ||
+    (Object.hasOwn(value, 'decidedAt') && !boundedDecisionString(value.decidedAt, MAX_DECISION_REFERENCE_LENGTH))) return undefined;
+  return {
+    summary: value.summary,
+    ...(Object.hasOwn(value, 'decidedAt') ? { decidedAt: value.decidedAt as string } : {}),
+  };
+}
+
 function sameDecisionCase(
   left: Pick<AcceptedWideningDecision, 'originalCaseId' | 'originalSource'>,
   right: Pick<AcceptedWideningDecision, 'originalCaseId' | 'originalSource'>,
@@ -211,6 +232,7 @@ function parseDecision(value: unknown): AcceptedWideningDecision | undefined {
     'id', 'criterion', 'authority', 'rationale', 'operator', 'revision',
     ...(hasSource ? ['originalSource', 'originalCaseId'] : []),
     ...(Object.hasOwn(value, 'offerEntryId') ? ['offerEntryId'] : []),
+    ...(Object.hasOwn(value, 'legacyRow') ? ['legacyRow'] : []),
     ...(Object.hasOwn(value, 'supersedes') ? ['supersedes'] : []),
   ];
   if (!hasExactKeys(value, keys) || !boundedDecisionString(value.id, MAX_DECISION_REFERENCE_LENGTH) ||
@@ -220,8 +242,10 @@ function parseDecision(value: unknown): AcceptedWideningDecision | undefined {
     typeof value.revision !== 'number' || !Number.isInteger(value.revision) || value.revision < 1 ||
     (Object.hasOwn(value, 'offerEntryId') && !boundedDecisionString(value.offerEntryId, MAX_DECISION_REFERENCE_LENGTH))) return undefined;
   const originalSource = hasSource ? parseOriginalSource(value.originalSource) : undefined;
+  const legacyRow = Object.hasOwn(value, 'legacyRow') ? parseLegacyRowEvidence(value.legacyRow) : undefined;
   const supersedes = Object.hasOwn(value, 'supersedes') ? parseDecisionReference(value.supersedes) : undefined;
   if (hasSource && (!originalSource || !boundedDecisionString(value.originalCaseId, MAX_DECISION_REFERENCE_LENGTH)) ||
+    (Object.hasOwn(value, 'legacyRow') && !legacyRow) ||
     (Object.hasOwn(value, 'offerEntryId') && !hasSource) ||
     (Object.hasOwn(value, 'supersedes') && (!supersedes || !hasSource || !Object.hasOwn(value, 'offerEntryId')))) return undefined;
   return {
@@ -233,6 +257,7 @@ function parseDecision(value: unknown): AcceptedWideningDecision | undefined {
     revision: value.revision,
     ...(originalSource === undefined ? {} : { originalSource, originalCaseId: value.originalCaseId as string }),
     ...(Object.hasOwn(value, 'offerEntryId') ? { offerEntryId: value.offerEntryId as string } : {}),
+    ...(legacyRow === undefined ? {} : { legacyRow }),
     ...(supersedes === undefined ? {} : { supersedes }),
   };
 }
@@ -463,6 +488,7 @@ function parseDecisionInput(value: unknown): Omit<AcceptedWideningDecision, 'id'
     'criterion', 'authority', 'rationale', 'operator',
     ...(hasSource ? ['originalSource', 'originalCaseId'] : []),
     ...(Object.hasOwn(value, 'offerEntryId') ? ['offerEntryId'] : []),
+    ...(Object.hasOwn(value, 'legacyRow') ? ['legacyRow'] : []),
     ...(Object.hasOwn(value, 'supersedes') ? ['supersedes'] : []),
   ];
   if (!hasExactKeys(value, keys) || !boundedDecisionString(value.criterion, MAX_DECISION_REFERENCE_LENGTH) ||
@@ -470,8 +496,10 @@ function parseDecisionInput(value: unknown): Omit<AcceptedWideningDecision, 'id'
     !boundedDecisionString(value.operator, MAX_DECISION_REFERENCE_LENGTH) ||
     (Object.hasOwn(value, 'offerEntryId') && !boundedDecisionString(value.offerEntryId, MAX_DECISION_REFERENCE_LENGTH))) return undefined;
   const originalSource = hasSource ? parseOriginalSource(value.originalSource) : undefined;
+  const legacyRow = Object.hasOwn(value, 'legacyRow') ? parseLegacyRowEvidence(value.legacyRow) : undefined;
   const supersedes = Object.hasOwn(value, 'supersedes') ? parseDecisionReference(value.supersedes) : undefined;
   if ((hasSource && (!originalSource || !boundedDecisionString(value.originalCaseId, MAX_DECISION_REFERENCE_LENGTH))) ||
+    (Object.hasOwn(value, 'legacyRow') && !legacyRow) ||
     (Object.hasOwn(value, 'offerEntryId') && !hasSource) ||
     (Object.hasOwn(value, 'supersedes') && (!supersedes || !hasSource || !Object.hasOwn(value, 'offerEntryId')))) return undefined;
   return {
@@ -481,6 +509,7 @@ function parseDecisionInput(value: unknown): Omit<AcceptedWideningDecision, 'id'
     operator: value.operator.trim(),
     ...(originalSource === undefined ? {} : { originalSource, originalCaseId: (value.originalCaseId as string).trim() }),
     ...(Object.hasOwn(value, 'offerEntryId') ? { offerEntryId: (value.offerEntryId as string).trim() } : {}),
+    ...(legacyRow === undefined ? {} : { legacyRow }),
     ...(supersedes === undefined ? {} : { supersedes }),
   };
 }

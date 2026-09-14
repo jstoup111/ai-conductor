@@ -148,6 +148,7 @@ function project(
       // Migrated v1 rows are never rendered offers and intentionally have a
       // provenance identity distinct from a fenced legacy clear.
       offerEntryId: `legacy-migrated-entry-${sourceDigest}-${rowId}`,
+      legacyRow: { summary: row.summary, decidedAt: row.decidedAt },
       ...(prior === undefined ? {} : { supersedes: { id: prior.id, revision: prior.revision } }),
       revision: decisions.length + 1,
     };
@@ -184,6 +185,7 @@ function project(
       originalSource: { id: originalSource.sourceId, snapshot: originalSource.snapshot },
       originalCaseId: record.id,
       offerEntryId: `legacy-clear-entry-${sourceDigest}`,
+      legacyRow: { summary: entry.summary },
       ...(prior === undefined ? {} : { supersedes: { id: prior.id, revision: prior.revision } }),
       revision: decisions.length + 1,
     };
