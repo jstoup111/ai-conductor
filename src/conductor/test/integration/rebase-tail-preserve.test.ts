@@ -11,6 +11,8 @@ import { writeState, readState } from '../../src/engine/state.js';
 import { readVerdict } from '../../src/engine/gate-verdicts.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import type { LLMProvider } from '../../src/execution/llm-provider.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
 
@@ -97,6 +99,13 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
       join(dir, '.docs/stories/add-foo.md'),
       '**Status:** Accepted\n\n## Story 1: Foo\n\n**Requirements:** FR-1\n\n### Happy Path\n- Given foo, when it runs, then it succeeds.\n',
     );
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/coherence/add-foo.md'),
+      '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n' +
+      '| --- | --- | --- | --- | --- | --- |\n' +
+      '| criterion | Foo is implemented | task-1 | covered | "Foo is implemented." | diff-local |\n',
+    );
     await git('add', '.');
     await git('commit', '-m', 'initial commit on base');
 
@@ -136,7 +145,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     prospectiveMergeFixture.forceIndeterminate = true;
   }
 
-  function conductorWith(runner: StepRunner): Conductor {
+  function conductorWith(runner: StepRunner, config: Record<string, unknown> = {}): Conductor {
     const fakeGit: GitRunner = async (args) =>
       args.includes('--symbolic-full-name')
         ? { stdout: 'refs/remotes/origin/feature/x\n' }
@@ -151,6 +160,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
       mode: 'auto',
       fromStep: 'build',
       maxRetries: 1,
+      config: config as never,
       git: fakeGit,
       shipmentEvidence: async (input) => ({
         kind: 'valid',
@@ -233,6 +243,37 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     };
   }
 
+  function coverageRefreshRunner(
+    counts: Record<string, number>,
+    provider: LLMProvider,
+    config: Record<string, unknown>,
+  ): StepRunner {
+    const coverage = new DefaultStepRunner(provider, 'rebase-coverage-refresh', dir, {
+      featureDesc: 'add-foo',
+      config: config as never,
+    });
+    return {
+      run: async (step, state, options) => {
+        counts[step] = (counts[step] ?? 0) + 1;
+        return step === 'coverage_binding'
+          ? coverage.run(step, state, options)
+          : satisfy(step);
+      },
+    };
+  }
+
+  async function prepareChangedCoveragePair(): Promise<void> {
+    await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+    await writeFile(
+      join(dir, '.docs/plans/add-foo.md'),
+      '### Task 1: Implement foo\n\n**Criterion:** S1.1\n\n**Done when:**\n- Foo is implemented with an audit record.\n',
+    );
+    await git('add', '.docs/plans/add-foo.md');
+    await git('commit', '-m', 'change coverage pair');
+    await advanceBaseForeignRuntimeOnly();
+    await writeState(statePath, { ...FRONT_DONE_M });
+  }
+
   it('takes the explicit conservative path when replay proof is unavailable without replaying completed authoring or BUILD by position', async () => {
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',
@@ -265,5 +306,88 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     const finalState = finalStateResult.ok ? finalStateResult.value : {};
     expect(finalState.prd_audit).toBe('done');
     expect(finalState.architecture_review_as_built).toBe('done');
+  });
+
+  it('refreshes changed coverage pairs with the existing runner before verification, without reopening authoring or BUILD', async () => {
+    const config = { coverage_binding: { judge: { enabled: true } } };
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: async () => {
+        providerCalls++;
+        return { success: true, output: '{"verdict":"asserts"}', exitCode: 0 };
+      },
+    };
+    const oldRunner = new DefaultStepRunner(provider, 'coverage-before-rebase', dir, {
+      featureDesc: 'add-foo', planPath: join(dir, '.docs/plans/add-foo.md'), config: config as never,
+    });
+    await oldRunner.run('coverage_binding', { complexity_tier: 'M' });
+    await prepareChangedCoveragePair();
+
+    const counts: Record<string, number> = {};
+    await conductorWith(coverageRefreshRunner(counts, provider, config), config).run();
+
+    expect(providerCalls).toBe(1);
+    expect(counts.coverage_binding).toBe(1);
+    expect(counts.acceptance_specs ?? 0).toBe(0);
+    expect(JSON.parse(await readFile(join(dir, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({
+      status: 'done', entries: [{ verdict: 'asserts' }],
+    });
+  });
+
+  it('uses the existing disabled envelope without invoking a coverage provider', async () => {
+    await prepareChangedCoveragePair();
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: async () => {
+        providerCalls++;
+        return { success: true, output: '{"verdict":"asserts"}', exitCode: 0 };
+      },
+    };
+    const counts: Record<string, number> = {};
+    await conductorWith(coverageRefreshRunner(counts, provider, {})).run();
+
+    expect(counts.coverage_binding).toBe(1);
+    expect(providerCalls).toBe(0);
+    expect(JSON.parse(await readFile(join(dir, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'disabled' });
+  });
+
+  it('routes a does-not-assert coverage result to its existing human refusal without authoring or publication', async () => {
+    await prepareChangedCoveragePair();
+    const config = { coverage_binding: { judge: { enabled: true } } };
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: async () => ({
+        success: true,
+        output: '{"verdict":"does-not-assert","missingAssertion":"The pair does not prove the criterion."}',
+        exitCode: 0,
+      }),
+    };
+    const counts: Record<string, number> = {};
+    await conductorWith(coverageRefreshRunner(counts, provider, config), config).run();
+
+    expect(counts.coverage_binding).toBe(1);
+    expect(counts.acceptance_specs ?? 0).toBe(0);
+    expect(counts.finish ?? 0).toBe(0);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toMatch(/coverage_binding refused/);
+    expect(JSON.parse(await readFile(join(dir, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'refused' });
+  });
+
+  it.each([
+    ['unavailable', async () => ({ success: false, output: 'coverage provider unavailable', exitCode: 1 })],
+    ['malformed', async () => ({ success: true, output: '{"verdict":"partial"}', exitCode: 0 })],
+  ])('keeps %s coverage results in the existing bounded failure route', async (_kind, invoke) => {
+    await prepareChangedCoveragePair();
+    const config = { coverage_binding: { judge: { enabled: true } } };
+    const provider: LLMProvider = { lifecycleCapability: { synchronousSpawnPermit: true }, invoke };
+    const counts: Record<string, number> = {};
+    await conductorWith(coverageRefreshRunner(counts, provider, config), config).run();
+
+    expect(counts.coverage_binding).toBe(1);
+    expect(counts.acceptance_specs ?? 0).toBe(0);
+    expect(counts.finish ?? 0).toBe(0);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toMatch(/coverage_binding.*retries exhausted/);
+    expect(JSON.parse(await readFile(join(dir, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({ status: 'failed' });
   });
 });
