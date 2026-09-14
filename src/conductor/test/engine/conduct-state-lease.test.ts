@@ -170,6 +170,33 @@ describe('conduct-state lease', () => {
     if (recovered.ok) await expect(recovered.handle.release()).resolves.toEqual({ ok: true });
   });
 
+  it('recovers a dead owner despite a valid legacy recovery claim left by a dead process', async () => {
+    const statePath = '/worktree/stale-legacy-recovery-claim/.pipeline/conduct-state.json';
+    const filesystem = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 101,
+      newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    await filesystem.writeRecoveryClaim(`${statePath}.lease/recovery.json`, JSON.stringify({
+      version: 1,
+      pid: 202,
+      token: 'dead-recovery-claimant',
+      claimedAt: '1970-01-01T00:00:00.000Z',
+    }));
+
+    const acquired = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 303,
+      newToken: () => 'new-owner',
+      processIsLive: () => false,
+    }).acquire();
+
+    expect(acquired).toMatchObject({ ok: true });
+    if (acquired.ok) await expect(acquired.handle.release()).resolves.toEqual({ ok: true });
+  });
+
   it.each([
     ['truncated JSON', '{"version": 1, "pid":'],
     ['an unsupported version', JSON.stringify({ version: 2, pid: 303, token: 'claim', claimedAt: '1970-01-01T00:00:00.000Z' })],
