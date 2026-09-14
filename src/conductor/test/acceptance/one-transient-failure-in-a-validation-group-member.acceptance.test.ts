@@ -223,6 +223,41 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const state = result.value as Record<string, unknown>;
       expect(result.ok && result.value.prd_audit).not.toBe('done');
       expect(state.validation__prd_audit).not.toBe('done');
+      expect([state.manual_test, state.validation__manual_test]).not.toContain('done');
+      expect([state.architecture_review_as_built, state.validation__architecture_review_as_built])
+        .toEqual(['done', 'done']);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('does not retain manual_test when its successful dispatch records FAIL rows', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'validation-manual-test-fail-retention-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedValidators(dir, statePath);
+      const runner: StepRunner = { run: vi.fn(async (step: StepName) => {
+        if (step === 'manual_test') {
+          await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | FAIL |\n');
+        }
+        if (step === 'prd_audit') throw new Error('sibling crashed');
+        if (step === 'architecture_review_as_built') {
+          await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+        }
+        return { success: true } as StepRunResult;
+      }) };
+      const conductor = new Conductor({
+        stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir, mode: 'auto', daemon: true,
+        verifyArtifacts: true, maxRetries: 1, fromStep: 'manual_test',
+        stepRunner: runner,
+      });
+      await conductor.run();
+      expect(runner.run).toHaveBeenCalledWith(
+        'manual_test', expect.anything(), expect.anything(),
+      );
+      const result = await readState(statePath);
+      if (!result.ok) throw result.error;
+      const state = result.value as Record<string, unknown>;
+      expect([state.manual_test, state.validation__manual_test]).not.toContain('done');
+      expect([state.prd_audit, state.validation__prd_audit]).not.toContain('done');
       expect([state.architecture_review_as_built, state.validation__architecture_review_as_built])
         .toEqual(['done', 'done']);
     } finally { await rm(dir, { recursive: true, force: true }); }
