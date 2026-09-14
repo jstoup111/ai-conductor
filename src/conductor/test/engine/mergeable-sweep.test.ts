@@ -1394,10 +1394,10 @@ describe('sweepMergeableLabels — Task 11: bump-before-dispatch crash safety', 
     expect(dispatchCalls[0].ciFixAttempts).toBe(1);
     expect(dispatchCalls[0].lastCiFixAt).toBe('2026-07-08T12:00:00.000Z');
 
-    // Registry should reflect bumped values (reset because dispatch returned 'green-verified')
+    // A local dispatch result is not remote GitHub-green evidence.
     const result = await readWatch(tmpDir);
     expect(result).toHaveLength(1);
-    expect(result[0].ciFixAttempts).toBe(0); // reset because of green-verified outcome
+    expect(result[0].ciFixAttempts).toBe(1);
   });
 
   it('rewrites registry with bumped attempts and timestamp even when dispatch throws', async () => {

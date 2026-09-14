@@ -915,7 +915,13 @@ export type SetupFailureResolver = (ctx: SetupFailureContext) => Promise<SetupFa
 
 // ── CI failure resolution (ci-fix resolver autofix) ─────────────────────────
 
-export type CiFailureAttempt = { attempted: true } & ProviderAttributionMetadata;
+/** A repair session result.  Session completion is deliberately not proof that
+ * it produced a commit, passed verification, or was published. */
+export type CiFailureAttempt = (
+  | { kind: 'not-started' }
+  | { kind: 'failed' }
+  | { kind: 'session-completed' }
+) & ProviderAttributionMetadata;
 export interface CiFailureContext { worktreePath: string; prUrl: string; hint: string; slug: string }
 export type CiFailureResolver = (ctx: CiFailureContext) => Promise<CiFailureAttempt>;
 

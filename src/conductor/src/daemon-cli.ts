@@ -25,8 +25,6 @@ import {
   buildCiFixHint,
   productionCiFixRunner,
   classifyFixError,
-  preflightCiFixInvocation,
-  defaultCiFixProbe,
 } from './engine/ci-fix.js';
 import {
   resolveRebaseResolutionAttempts,
@@ -868,17 +866,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // Logs fetch failures/recovery only on state transitions
   const discoveryLogger = createDiscoveryLogger(log);
 
-  // CF-5/CF-6 (intake #666): run the ci-fix startup preflight exactly once,
-  // before the sweep loop starts, so a broken `claude` fix-invocation surface
-  // (missing binary, bad auth, stale flag) disables ci-fix for this daemon
-  // run instead of crashing or silently retrying a broken invocation on every
-  // PR. Never repeated per-PR — the `ciFix.dispatch` closure only reads the
-  // resulting `ciFixEnabled` flag.
-  const ciFixPreflight = await preflightCiFixInvocation({ probe: defaultCiFixProbe });
-  if (!ciFixPreflight.ok) {
-    ciFixEnabled = false;
-    log(`[ci-fix] startup preflight failed, disabling ci-fix for this run: ${ciFixPreflight.reason}`);
-  }
+  // CI-fix readiness is evaluated by the selected build provider at the
+  // invocation boundary. Do not let a Claude-only startup probe veto a
+  // configured Codex repair path.
 
   // ADR-010: claim the 1-per-repo pidfile so this daemon's liveness is observable
   // (the pidfile under .daemon/ holds our pid) and a second daemon for the same repo
@@ -2421,29 +2411,27 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             enabled: config?.ci_watch?.enabled ?? true,
             isEligible: (entry, state) =>
               isEligibleForCiFix(entry, state, config, new Date(), log),
-            dispatch: async (entry) => {
+            dispatch: async (entry, state) => {
               if (!ciFixEnabled) {
                 return;
               }
               log(`[mergeable-sweep] ci-fix dispatch: ${entry.prUrl} (attempt ${entry.ciFixAttempts})`);
 
               try {
-                const prViewResult = await execFile('sh', [
-                  '-c',
-                  `gh pr view "${entry.prUrl}" --json headRefName --jq '.headRefName'`,
-                ], { cwd: entry.repoCwd });
-
-                const branch = (prViewResult.stdout || '').toString().trim();
+                const ghRunner = makeProductionGh();
+                const prViewResult = await ghRunner(
+                  ['pr', 'view', entry.prUrl, '--json', 'headRefName'],
+                  { cwd: entry.repoCwd },
+                );
+                const parsed = JSON.parse(prViewResult.stdout) as { headRefName?: unknown };
+                const branch = typeof parsed.headRefName === 'string' ? parsed.headRefName.trim() : '';
                 if (!branch) {
                   log(`[ci-fix] empty branch name for ${entry.prUrl}`);
-                  return;
+                  return { kind: 'not-started' };
                 }
-
-                const productionGh = makeProductionGh();
-                const ghRunner = async (args: string[]) =>
-                  productionGh(args, { cwd: entry.repoCwd });
-
-                const hint = await buildCiFixHint(ghRunner, entry.repoCwd, entry.prUrl);
+                const hintResult = buildCiFixHint(state);
+                if (hintResult.kind !== 'ready') return { kind: 'not-started' };
+                const hint = hintResult.hint;
 
                 // Route the ci-fix dispatch through resolveCiFailure (T4):
                 // adapt a real DefaultStepRunner into productionCiFixRunner's
@@ -2474,13 +2462,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                         ),
                       },
                     );
-                    await stepRunner.resolveCiFailure({
+                    const attempt = await stepRunner.resolveCiFailure({
                       worktreePath: ctx.worktreePath,
                       prUrl: ctx.entry.prUrl,
                       hint: ctx.hint,
                       slug: ctx.entry.slug,
                     });
-                    return { kind: 'changed' as const };
+                    return attempt;
                   },
                 };
 
@@ -2498,10 +2486,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                 );
 
                 log(`[ci-fix] outcome for ${entry.prUrl}: ${outcome.kind}`);
-                if (outcome.kind === 'changed') {
-                  return { kind: 'green-verified' };
-                }
-                return;
+                return outcome;
               } catch (err: any) {
                 log(
                   `[ci-fix] error resolving ${entry.prUrl} [${classifyFixError(err)}]: ${err?.message || err}`,

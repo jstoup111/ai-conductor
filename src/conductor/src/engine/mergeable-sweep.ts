@@ -34,6 +34,7 @@ import {
 import type { ConductorEvent } from '../types/events.js';
 import type { FeatureWorktree } from './daemon-runner.js';
 import { shippedRecordOnMain } from './shipped-record-on-main.js';
+import type { CiFixOutcome } from './ci-fix.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
 
@@ -260,7 +261,7 @@ export interface CiFixDispatchOpts {
    * (AC3) — the git work itself happens inside this callback.
    * Returns the outcome kind so the sweep can reset the counter on success.
    */
-  dispatch: (entry: WatchEntry) => Promise<{ kind: 'green-verified' } | void>;
+  dispatch: (entry: WatchEntry, state: PrMergeState) => Promise<CiFixOutcome | { kind: 'green-verified' } | void>;
   /** Clock override for tests; defaults to `new Date()`. */
   now?: () => Date;
 }
@@ -645,9 +646,15 @@ export async function sweepMergeableLabels({
         if (idx >= 0) survivors[idx] = updated;
 
         try {
-          const dispatchResult = await ciFix.dispatch(updated);
-          if (dispatchResult?.kind === 'green-verified') {
-            survivors[idx] = { ...updated, ciFixAttempts: 0 };
+          const dispatchResult = await ciFix.dispatch(updated, state);
+          // Only an affirmative pre-provider refusal can restore the exact
+          // reservation. A local publication is not GitHub green; remote green
+          // is reconciled by the normal state transition on a later sweep.
+          if (dispatchResult?.kind === 'not-started' || dispatchResult?.kind === 'branch-gone') {
+            survivors[idx] = {
+              ...entry,
+              ciFailureDetected: true,
+            };
           }
         } catch (err) {
           // Task 11: dispatch error is logged but not propagated (AC1b)
