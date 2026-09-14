@@ -59,10 +59,14 @@ describe('relocated Vitest temporary lifecycle', () => {
     vi.doMock('./tmux-leak-guard.js', () => ({ snapshotDaemonSessions: () => ({ sessions: [], failed: false }), sweepStaleDaemonSessions: () => ({ killed: [] }), reapLeakedDaemonSessions: () => ({ killed: [], indeterminate: [] }) }));
     vi.doMock('./signals-leak-guard.js', () => ({ snapshotEngineerSignals: async () => ({ exists: false, lines: [] }), diffEngineerSignals: () => ({ addedTestProjectLines: 0 }) }));
     vi.doMock('./engine-dist-guard.js', () => ({ ensureEngineDist: async () => false }));
-    process.env.TMPDIR = root;
-    process.env.AI_CONDUCTOR_TEST_TMP_ROOT = root;
-    process.env.AI_CONDUCTOR_TEST_TMP_SCOPE = join(selected, 'outer');
-    process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR = original;
+    const callerEnvironment = {
+      TMPDIR: root,
+      AI_CONDUCTOR_TEST_TMP_ROOT: `${root}/.`,
+      AI_CONDUCTOR_TEST_TMP_SCOPE: `${join(selected, 'outer')}/.`,
+      AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR: original,
+      GIT_CEILING_DIRECTORIES: '/caller/git-ceiling',
+    };
+    Object.assign(process.env, callerEnvironment);
     process.env.AI_CONDUCTOR_TEST_TMP_BASE = selected;
     vi.useFakeTimers();
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
@@ -73,10 +77,13 @@ describe('relocated Vitest temporary lifecycle', () => {
     process.emit('SIGINT');
     vi.runAllTimers();
     expect(exit).toHaveBeenCalledWith(1);
-    expect(process.env.TMPDIR).toBe(root);
+    expect(process.env).toMatchObject(callerEnvironment);
+    expect(removed).toEqual([]);
     await writeFile(join(original, 'bypass-leak'), 'must survive');
     leakedEntry = true;
     await expect(teardown()).rejects.toThrow(/bypass-leak/);
     expect(existsSync(join(original, 'bypass-leak'))).toBe(true);
+    expect(process.env).toMatchObject(callerEnvironment);
+    expect(removed).toEqual([]);
   });
 });
