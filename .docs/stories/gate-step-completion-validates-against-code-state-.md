@@ -60,7 +60,7 @@ As a re-dispatched feature, a judged gate that already passed against the curren
 ### Negative Path
 
 - **Given** the same `PASS` verdict but the delta since its baseline **does** include a path in the
-  gate's surface (the feature's own runtime source changed),
+  gate's surface and no valid unchanged-replay authority explains it (the feature contribution changed),
 - **When** completion is re-evaluated,
 - **Then** the verdict is **not** preserved — the gate re-runs.
 
@@ -83,7 +83,7 @@ As the gate layer, a verdict whose stamped baseline no longer exists in history 
 ### Happy Path
 
 - **Given** a `PASS` verdict whose `codeStamp` baseline is unreachable (orphaned by a rebase/reset/amend,
-  the #766 hazard),
+  the #766 hazard) and neither valid engine translation nor replay-bound preservation explains it,
 - **When** completion is re-evaluated,
 - **Then** the verdict is **not** preserved (the gate re-runs), and no "uncreditable-undemotable" wedge
   or operator halt is produced.
@@ -111,7 +111,7 @@ As the gate layer, a kickback-to-build that changes code must not let a pre-kick
 
 - **Given** a no-op kickback that changes no code under the gate's surface (e.g. only docs/CHANGELOG),
 - **When** the gate is re-evaluated,
-- **Then** the verdict is preserved — a no-op kickback does not force a needless re-run.
+- **Then** the verdict may be preserved only if no ordinary failure or repair obligation remains outstanding; unchanged code cannot erase a pending repair.
 
 ## Story 6 — The within-dispatch attempt-floor is preserved when a gate DOES re-run
 

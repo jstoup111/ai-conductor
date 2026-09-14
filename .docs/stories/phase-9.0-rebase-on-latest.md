@@ -130,74 +130,50 @@ cleanly without rewriting history, so that unchanged feature work goes straight 
 
 ---
 
-## Story: Invalidate downstream gates on a file-changing clean rebase
+## Story: Selectively revalidate after a file-changing clean rebase
 
 **Requirement:** FR-5
 
-> **Amended 2026-07-08** by `adr-2026-07-08-post-rebase-gate-first-mechanical-reverify`
-> (issue #420): the `build` verdict write is now conditional — the gate's mechanical
-> completion predicate is evaluated against the rebased tree first, and `satisfied:false`
-> is written only when it fails. `build_review`/`manual_test` invalidation stays
-> unconditional. The fail-closed re-verify *semantics* of this story are unchanged.
-
-As the daemon, I want a clean rebase that **changed files** to invalidate the downstream gates
-the same way a kickback does, so that I never open a PR that was verified against the old base.
+As the daemon, I want current verification after rebase without reopening completed work by position.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a clean rebase whose post-rebase worktree tree differs from the pre-rebase tree **in
-  code/test paths**, when the rebase completes, then the daemon writes `satisfied:false`
-  (kickback-shaped) verdicts for `build` (and `manual_test` if it ran) via the existing verdict
-  mechanism.
-- Given those gates are invalidated, when the selector runs, then it routes back to `build`
-  before `finish`.
+- Given a successful code/test-changing rebase and valid completed BUILD evidence, when continuation is selected, then required suite and affected review checks run while completed acceptance authoring and BUILD stay complete.
+- Given valid unchanged-replay evidence and unchanged active review inputs, when preservation is selected, then already-passing feature reviews remain valid even with disjoint upstream changes in their files.
 
 #### Negative Paths
-- Given a file-changing rebase, when invalidation is written, then it uses the **existing**
-  verdict/kickback path (not a new bespoke flag) — the selector treats it identically to any
-  other external invalidation.
-- Given `manual_test` was auto-skipped for this feature, when a file-changing rebase occurs, then
-  only the gates that actually ran are invalidated; the skipped gate is not spuriously required.
-- Given a rebase that changed **only docs/non-code paths** (e.g. a `CHANGELOG.md`-only change,
-  including the FR-7 auto-resolution), when the rebase completes, then build/manual_test are
-  **not** invalidated — the invalidation trigger is a change to **code/test paths**, not any
-  file change. (Resolves the FR-5 × FR-7 overlap: auto-resolving CHANGELOG must not force a
-  full re-verify.)
+- Given changed active review inputs or unproved replay, when the decision is applied, then affected reviews cannot inherit approval from unchanged filenames or old artifact presence.
+- Given manual_test is skipped, when revalidation is selected, then it remains skipped.
+- Given a document-only delta, when it is classified, then BUILD and aggregate proof remain unchanged while affected active-document reviews may reopen.
 
 ### Done When
-- [ ] Pre/post-rebase tree comparison drives invalidation (changed → invalidate, unchanged → not).
-- [ ] Invalidation is recorded through the existing gate-verdict kickback mechanism.
-- [ ] Test: file-changing rebase → build verdict becomes unsatisfied → selector returns to build.
+- [ ] Post-rebase integration observes exactly the required checks and no positional acceptance/BUILD replay.
+- [ ] State, verdicts, and applied-decision events agree.
+- [ ] Active-document and skipped-gate behavior retains its owning policy.
 
 ---
 
-## Story: Re-verify through the normal loop; HALT only if stuck
+## Story: Concrete post-rebase failure uses existing repair and recovery
 
 **Requirement:** FR-6
 
-As the daemon, I want post-rebase re-verification to run through the normal retry/autoheal loop,
-so that a simple post-rebase break can self-heal and only a genuinely stuck loop parks a human.
+As the daemon, I want concrete test failures repaired and unavailable evidence handled without inventing unfinished implementation.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a file-changing rebase invalidated `build`, when re-verification runs and build passes on
-  the new base, then the loop proceeds to `finish` and opens the PR.
-- Given a post-rebase break that autoheal/retry can fix, when the loop re-runs build, then it
-  self-heals within the existing retry budget and proceeds — no HALT.
+- Given a post-rebase suite command completes with a failing exit, when the result is handled, then BUILD receives the failure evidence for bounded repair followed by suite and ordinary downstream validation.
+- Given a verifier infrastructure failure, when it is handled, then existing infrastructure retries and halt policy apply without charging code repair as if tests failed.
 
 #### Negative Paths
-- Given build keeps failing on the new base, when the loop re-selects the same gate up to the
-  existing `MAX_GATE_SELECTIONS` threshold, then `.pipeline/HALT` is written via the **existing**
-  stuck-loop path — there is **no** special-case immediate-HALT for post-rebase failure.
-- Given a post-rebase failure, when it occurs, then it is **not** parked on the first failure;
-  the normal retry/anti-oscillation machinery governs when HALT happens.
+- Given completed BUILD evidence is unavailable after rebase, when continuation is evaluated, then evidence recovery or halt blocks publication without blindly redispatching completed tasks.
+- Given repair or infrastructure recovery exhausts its allowance, when the next failure is handled, then the existing bounded halt blocks publication.
 
 ### Done When
-- [ ] Post-rebase failure flows through the existing kickback re-verify path, not a new branch.
-- [ ] HALT on post-rebase failure occurs only via the existing anti-oscillation threshold.
-- [ ] Test: post-rebase build fails N times → existing stuck-loop HALT (not first-failure HALT).
+- [ ] The suite-failure integration observes BUILD repair and subsequent revalidation.
+- [ ] Missing-evidence and infrastructure fixtures do not manufacture a code-repair dispatch.
+- [ ] Existing recovery budgets remain enforced.
 
 ---
 

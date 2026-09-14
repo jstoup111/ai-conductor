@@ -85,6 +85,10 @@ delta touches their source.
 
 ## Decision
 
+### D1 — Selective replay amendment
+
+> **Amended 2026-09-11 by #2253:** adr-2026-09-11-selective-post-rebase-verification refines post-rebase preservation with exact expected-replay evidence and one explicit state/verdict/event decision. A proved unchanged contribution may preserve already-passing feature-scoped reviews despite shared-file upstream edits; changed active review inputs remain invalidating. Rebase refresh no longer uses a positional downstream-stale sweep. Combined-runtime verification, conservative fallback, and unrelated repair obligations remain governed as described by the new ADR.
+
 Adopt **Option A**. On a `changed` rebase, compute `D` (rebase delta) and `F` (feature claimed
 surface); partition `D` into `D_test` (test-only paths), `D_featureSrc = D ∩ F ∩ runtime-source`,
 and `D_foreignSrc = D ∩ runtime-source \ F`. Apply this **conservative** per-gate rule:
