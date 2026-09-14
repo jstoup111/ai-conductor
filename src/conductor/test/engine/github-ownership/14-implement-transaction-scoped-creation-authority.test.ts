@@ -6,6 +6,7 @@ import type { GithubOperationRequest } from '../../../src/engine/github-operatio
 const CREATION_CONTEXT_MODULE = '../../../src/engine/github-creation-context.js';
 
 type CreationContextModule = {
+  authorizeGithubFeatureIssueCreation: (input: unknown) => Promise<unknown>;
   executeGithubIssueCreationTransaction: (
     transaction: unknown,
     runner: { run(request: GithubOperationRequest): Promise<unknown> },
@@ -14,6 +15,28 @@ type CreationContextModule = {
 
 async function creationContext(): Promise<CreationContextModule> {
   return import(CREATION_CONTEXT_MODULE) as unknown as Promise<CreationContextModule>;
+}
+
+async function authorizedFeatureAuthority(repository = 'acme/intake'): Promise<unknown> {
+  const { authorizeGithubFeatureIssueCreation } = await creationContext();
+  return authorizeGithubFeatureIssueCreation({
+    repository,
+    mutation: {
+      provenance: {
+        repository,
+        defaultBranch: 'origin/main',
+        specBranch: 'feature/intake',
+        featureMarker: '.docs/intake/intake.md',
+        publication: 'initial',
+      },
+      dependencies: {
+        resolveMachineOwner: async () => ({ resolved: true as const, id: 'alice' }),
+        provenanceDiscovery: {
+          readCommittedRecords: async () => [{ path: '.docs/intake/intake.md', content: 'Owner: alice\n' }],
+        },
+      },
+    },
+  });
 }
 
 describe('engine/github-creation-context — transaction-scoped creation authority', () => {
@@ -78,12 +101,10 @@ describe('engine/github-creation-context — transaction-scoped creation authori
   it('reports ambiguous creation as partial and never guesses a target for metadata', async () => {
     const { executeGithubIssueCreationTransaction } = await creationContext();
     const runner = { run: vi.fn().mockResolvedValue({ created: { repository: 'acme/intake', kind: 'pull-request', number: 41 } }) };
+    const authority = await authorizedFeatureAuthority();
 
     await expect(executeGithubIssueCreationTransaction({
-      authority: {
-        resolveActor: async () => ({ resolved: true, id: 'alice' }),
-        intent: { kind: 'authorized-feature', repository: 'acme/intake' },
-      },
+      authority,
       creation: {
         operation: 'issue.create',
         access: 'create',
@@ -103,6 +124,47 @@ describe('engine/github-creation-context — transaction-scoped creation authori
       metadataFailures: [{ operation: 'issue.create' }],
     });
 
+    expect(runner.run).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a forged authorized-feature tag before the fake creation boundary', async () => {
+    const { executeGithubIssueCreationTransaction } = await creationContext();
+    const runner = { run: vi.fn() };
+
+    await expect(executeGithubIssueCreationTransaction({
+      authority: {
+        resolveActor: async () => ({ resolved: true, id: 'alice' }),
+        intent: { kind: 'authorized-feature', repository: 'acme/intake' },
+      } as unknown,
+      creation: {
+        operation: 'issue.create', access: 'create',
+        target: { repository: 'acme/intake', kind: 'repository' },
+        context: { actor: 'alice' }, payload: { title: 'Forged', body: 'Must not publish.' },
+      },
+    }, runner)).resolves.toMatchObject({ kind: 'refused', reason: 'explicit-authorization-required' });
+
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it('consumes a provenance-bound feature capability after one creation transaction', async () => {
+    const { executeGithubIssueCreationTransaction } = await creationContext();
+    const authority = await authorizedFeatureAuthority();
+    const runner = {
+      run: vi.fn().mockResolvedValue({ created: { repository: 'acme/intake', kind: 'issue', number: 41 } }),
+    };
+    const transaction = {
+      authority,
+      creation: {
+        operation: 'issue.create', access: 'create',
+        target: { repository: 'acme/intake', kind: 'repository' },
+        context: { actor: 'alice' }, payload: { title: 'One shot', body: 'Bound to this creation.' },
+      },
+    };
+
+    await expect(executeGithubIssueCreationTransaction(transaction, runner)).resolves.toMatchObject({ kind: 'executed' });
+    await expect(executeGithubIssueCreationTransaction(transaction, runner)).resolves.toMatchObject({
+      kind: 'refused', reason: 'explicit-authorization-required',
+    });
     expect(runner.run).toHaveBeenCalledTimes(1);
   });
 

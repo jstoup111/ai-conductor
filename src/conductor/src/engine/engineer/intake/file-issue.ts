@@ -17,6 +17,7 @@ import { sanitizeIntakeText, type Redaction } from './sanitize.js';
 import type { GhRunner } from '../../tracker-client.js';
 import {
   executeGithubIssueCreationTransaction,
+  resolveGithubIssueCreationAuthority,
   type GithubIssueCreationAuthority,
 } from '../../github-creation-context.js';
 import type {
@@ -289,27 +290,21 @@ export async function fileIntakeIssue(
   // metadata only while executeGithubIssueCreationTransaction is still
   // handling this exact creation response, and every metadata target is
   // rebuilt from that response.
-  let resolution: Awaited<ReturnType<GithubIssueCreationAuthority['resolveActor']>>;
-  try {
-    resolution = await deps.creation.authority.resolveActor();
-  } catch {
-    warnings.push('issue creation refused: unresolved-actor');
-    return result;
-  }
-  if (!resolution.resolved) {
+  const authority = await resolveGithubIssueCreationAuthority(deps.creation.authority);
+  if (!authority) {
     warnings.push('issue creation refused: unresolved-actor');
     return result;
   }
 
-  const repository = opts.repo ?? deps.creation.authority.intent.repository;
+  const repository = opts.repo ?? authority.repository;
   const linked = new Set<string>();
   const transaction = await executeGithubIssueCreationTransaction({
-    authority: { ...deps.creation.authority, resolveActor: async () => resolution },
+    authority: deps.creation.authority,
     creation: {
       operation: 'issue.create',
       access: 'create',
       target: { repository, kind: 'repository' },
-      context: { actor: resolution.id },
+      context: { actor: authority.actor },
       payload: { title: cleanTitle.text, body: cleanBody.text },
     },
   }, {
@@ -324,19 +319,19 @@ export async function fileIntakeIssue(
           {
             request: {
               operation: 'issue.label.add', access: 'feature-write', target: created,
-              context: { actor: resolution.id }, payload: { label: `priority: ${priority}` },
+              context: { actor: authority.actor }, payload: { label: `priority: ${priority}` },
             },
           },
           {
             request: {
               operation: 'issue.label.add', access: 'feature-write', target: created,
-              context: { actor: resolution.id }, payload: { label: `size: ${size}` },
+              context: { actor: authority.actor }, payload: { label: `size: ${size}` },
             },
           },
           ...validDependencies.map((dependency) => ({
             request: {
               operation: 'issue.dependency.add' as const, access: 'feature-write' as const, target: created,
-              context: { actor: resolution.id },
+              context: { actor: authority.actor },
               // The dependency is payload data only.  Its repository is never
               // a mutation target and a read of it grants no authority.
               payload: { dependency: { repository: dependency.repo, kind: 'issue' as const, number: dependency.number } },
