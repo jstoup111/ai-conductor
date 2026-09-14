@@ -12,6 +12,16 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { PrMergeState } from './pr-labels.js';
+import type {
+  GithubOperationRequest,
+  GithubOperationRunner,
+  GithubOperationRunnerResponse,
+} from './github-operations.js';
+import { authorizeGithubMutation } from './owner-gate/mutation-policy.js';
+import type {
+  GithubMutationAuthorizationDependencies,
+} from './owner-gate/mutation-policy.js';
+import type { MutationProvenanceRequest } from './owner-gate/mutation-provenance.js';
 
 const execFileP = promisify(execFileCb);
 const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
@@ -23,6 +33,132 @@ export type GhRunner = (
   args: string[],
   opts: { cwd: string; timeout?: number; maxBuffer?: number },
 ) => Promise<{ stdout: string }>;
+
+/**
+ * Evidence needed to authorize one or more feature-resource mutations. The
+ * policy resolves it afresh for every request; this object is context, not a
+ * reusable authorization capability.
+ */
+export interface GithubMutationExecutionContext {
+  readonly provenance: MutationProvenanceRequest;
+  readonly dependencies: GithubMutationAuthorizationDependencies;
+}
+
+/** Factory inputs for the sole guarded adapter from typed operations to `gh`. */
+export interface GuardedGithubOperationRunnerOptions {
+  readonly cwd: string;
+  /** Absent context refuses every mutation while retaining discovery reads. */
+  readonly mutation?: GithubMutationExecutionContext;
+}
+
+function issueNumber(request: GithubOperationRequest): string {
+  if (request.target.kind !== 'issue' && request.target.kind !== 'pull-request') {
+    throw new Error(`GitHub operation '${request.operation}' requires an issue-like target.`);
+  }
+  return String(request.target.number);
+}
+
+function payloadField(request: GithubOperationRequest, field: 'body' | 'label' | 'title' | 'head' | 'base'): string {
+  const payload = request.payload;
+  const value = payload && (payload as unknown as Record<string, unknown>)[field];
+  if (typeof value !== 'string') {
+    throw new Error(`GitHub operation '${request.operation}' is missing its registered '${field}' payload.`);
+  }
+  return value;
+}
+
+/**
+ * Translate only the closed operation registry to argv. This is deliberately
+ * private: callers submit typed operations, never mutable arbitrary argv.
+ */
+function ghArgsFor(request: GithubOperationRequest): string[] {
+  const { repository } = request.target;
+  switch (request.operation) {
+    case 'issue.read':
+      return ['issue', 'view', issueNumber(request), '-R', repository];
+    case 'pull-request.read':
+      return ['pr', 'view', issueNumber(request), '-R', repository];
+    case 'repository.read':
+      return ['api', `repos/${repository}`];
+    case 'issue.comment.create':
+    case 'intake.issue.comment.create':
+      return ['issue', 'comment', issueNumber(request), '-R', repository, '--body', payloadField(request, 'body')];
+    case 'issue.edit':
+      return ['issue', 'edit', issueNumber(request), '--body', payloadField(request, 'body'), '-R', repository];
+    case 'issue.close':
+    case 'intake.issue.close':
+      return ['issue', 'close', issueNumber(request), '-R', repository];
+    case 'issue.label.add':
+    case 'pull-request.label.add':
+      return ['api', '--method', 'POST', `repos/${repository}/issues/${issueNumber(request)}/labels`, '-f', `labels[]=${payloadField(request, 'label')}`];
+    case 'issue.label.remove':
+    case 'pull-request.label.remove':
+      return ['api', '--method', 'DELETE', `repos/${repository}/issues/${issueNumber(request)}/labels/${encodeURIComponent(payloadField(request, 'label'))}`];
+    case 'issue.dependency.add': {
+      const dependency = request.payload && 'dependency' in request.payload ? request.payload.dependency : undefined;
+      if (!dependency || dependency.kind !== 'issue') throw new Error('Registered dependency payload is missing its issue target.');
+      return ['api', '--method', 'POST', `repos/${repository}/issues/${issueNumber(request)}/dependencies/blocked_by`, '-f', `issue_number=${dependency.number}`];
+    }
+    case 'issue.dependency.remove': {
+      const dependency = request.payload && 'dependency' in request.payload ? request.payload.dependency : undefined;
+      if (!dependency || dependency.kind !== 'issue') throw new Error('Registered dependency payload is missing its issue target.');
+      return ['api', '--method', 'DELETE', `repos/${repository}/issues/${issueNumber(request)}/dependencies/blocked_by/${dependency.number}`];
+    }
+    case 'pull-request.comment.create':
+      return ['pr', 'comment', issueNumber(request), '-R', repository, '--body', payloadField(request, 'body')];
+    case 'pull-request.edit': {
+      const args = ['pr', 'edit', issueNumber(request), '-R', repository];
+      if (request.payload && 'title' in request.payload && typeof request.payload.title === 'string') args.push('--title', request.payload.title);
+      if (request.payload && 'body' in request.payload && typeof request.payload.body === 'string') args.push('--body', request.payload.body);
+      return args;
+    }
+    case 'pull-request.ready':
+      return ['pr', 'ready', issueNumber(request), '-R', repository];
+    case 'pull-request.draft':
+      return ['pr', 'ready', issueNumber(request), '-R', repository, '--undo'];
+    case 'issue.create':
+      return ['issue', 'create', '-R', repository, '--title', payloadField(request, 'title'), '--body', payloadField(request, 'body')];
+    case 'pull-request.create':
+      return ['pr', 'create', '-R', repository, '--title', payloadField(request, 'title'), '--body', payloadField(request, 'body'), '--head', payloadField(request, 'head'), '--base', payloadField(request, 'base')];
+    case 'label-definition.create':
+    case 'label-definition.update': {
+      if (request.target.kind !== 'label-definition') throw new Error('Registered label operation has an invalid target.');
+      const args = ['label', request.operation === 'label-definition.create' ? 'create' : 'edit', request.target.name, '-R', repository];
+      if (request.payload && 'color' in request.payload && typeof request.payload.color === 'string') args.push('--color', request.payload.color);
+      if (request.payload && 'description' in request.payload && typeof request.payload.description === 'string') args.push('--description', request.payload.description);
+      return args;
+    }
+    case 'remote-ref.push':
+    case 'remote-ref.delete':
+      throw new Error(`GitHub operation '${request.operation}' requires the remote-Git adapter, not gh.`);
+  }
+}
+
+/**
+ * Canonical guarded operation adapter. Reads go straight to the injected `gh`
+ * transport; every registered mutation first obtains a fresh, exact decision
+ * from `authorizeGithubMutation`. No raw argv reaches this public boundary.
+ */
+export function createGuardedGithubOperationRunner(
+  transport: GhRunner,
+  options: GuardedGithubOperationRunnerOptions,
+): GithubOperationRunner {
+  return {
+    async run(request): Promise<GithubOperationRunnerResponse | { readonly kind: 'refused'; readonly reason: 'missing-provenance' | 'other-owner' | 'unresolved-actor' | 'conflicting-provenance' | 'provenance-unreadable' | 'provenance-timeout' | 'invalid-target' }> {
+      if (request.access !== 'read') {
+        if (!options.mutation) return { kind: 'refused', reason: 'missing-provenance' };
+        const decision = await authorizeGithubMutation({
+          operation: request.operation,
+          target: request.target,
+          provenance: options.mutation.provenance,
+        }, options.mutation.dependencies);
+        if (decision.kind === 'refused') return decision;
+      }
+      await transport(ghArgsFor(request), { cwd: options.cwd });
+      return {};
+    },
+  };
+}
 
 /** A `gh` command requested a JSON field that this installed CLI does not support. */
 export class GhCapabilityError extends Error {
