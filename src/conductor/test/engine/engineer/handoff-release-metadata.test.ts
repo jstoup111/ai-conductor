@@ -78,11 +78,44 @@ function deps(
   runner: HandoffDeps['runner'],
   gitRunner: NonNullable<HandoffDeps['gitRunner']> = noOpGitRunner,
 ): HandoffDeps {
+  const repository = 'acme/app';
+  const marker = '.docs/intake/test.md';
   return {
     runner,
     gitRunner,
     ledgerOpts: { engineerDir: tempDir },
-  } as HandoffDeps;
+    publication: {
+      repository,
+      remote: {
+        cwd: tempDir,
+        config: async () => ({ stdout: 'https://github.com/acme/app.git' }),
+        runRemoteGit: gitRunner,
+        mutation: {
+          provenance: { repository, defaultBranch: 'main', specBranch: 'spec/test', featureMarker: marker, publication: 'initial' },
+          dependencies: {
+            resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
+            provenanceDiscovery: { readCommittedRecords: async () => [{ path: marker, content: 'Owner: alice\n' }] },
+          },
+        },
+      },
+      operations: {
+        async run(request) {
+          const payload = request.payload as { title?: string; body?: string; head?: string } | undefined;
+          if (request.operation === 'pull-request.create') {
+            const args = payload?.body
+              ? ['pr', 'create', '--head', payload.head ?? '', '--title', payload.title ?? '', '--body', payload.body]
+              : ['pr', 'create', '--head', payload?.head ?? '', '--fill', '--label', 'spec'];
+            await runner(args, { cwd: tempDir });
+            return { created: { repository, kind: 'pull-request' as const, number: 53 } };
+          }
+          if (request.operation === 'pull-request.edit') {
+            await runner(['pr', 'edit', PR_URL, '--body', payload?.body ?? ''], { cwd: tempDir });
+          }
+          return {};
+        },
+      },
+    },
+  };
 }
 
 describe('declaresReleaseDisposition — repository opt-in', () => {

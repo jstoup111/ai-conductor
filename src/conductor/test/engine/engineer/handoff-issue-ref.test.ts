@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openSpecPr } from '../../../src/engine/engineer/handoff.js';
+import { openSpecPr as openSpecPrProduction } from '../../../src/engine/engineer/handoff.js';
 import type { HandoffDeps } from '../../../src/engine/engineer/handoff.js';
 import type { TargetRepo } from '../../../src/engine/engineer/target.js';
 
@@ -61,6 +61,46 @@ const noOpGitRunner: NonNullable<HandoffDeps['gitRunner']> = async () => ({
   stdout: '',
   stderr: '',
 });
+
+function openSpecPr(targetRepo: TargetRepo, branch: string, deps: HandoffDeps) {
+  const repository = 'acme/app';
+  const marker = '.docs/intake/test.md';
+  const cwd = deps.worktreePath ?? targetRepo.canonicalPath;
+  return openSpecPrProduction(targetRepo, branch, {
+    ...deps,
+    publication: {
+      repository,
+      remote: {
+        cwd,
+        config: async () => ({ stdout: targetRepo.remote ?? '' }),
+        runRemoteGit: async (args, options) => {
+          if (!deps.gitRunner) throw new Error('missing test git runner');
+          return deps.gitRunner(args, options);
+        },
+        mutation: {
+          provenance: { repository, defaultBranch: 'main', specBranch: branch, featureMarker: marker, publication: 'initial' },
+          dependencies: {
+            resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
+            provenanceDiscovery: { readCommittedRecords: async () => [{ path: marker, content: 'Owner: alice\n' }] },
+          },
+        },
+      },
+      operations: {
+        async run(request) {
+          const payload = request.payload as { head?: string; body?: string } | undefined;
+          if (request.operation === 'pull-request.create') {
+            await deps.runner(['pr', 'create', '--head', payload?.head ?? branch, '--fill', '--label', 'spec'], { cwd });
+            return { created: { repository, kind: 'pull-request' as const, number: 53 } };
+          }
+          if (request.operation === 'pull-request.edit') {
+            await deps.runner(['pr', 'edit', `https://github.com/${repository}/pull/53`, '--body', payload?.body ?? ''], { cwd });
+          }
+          return {};
+        },
+      },
+    },
+  });
+}
 
 describe('openSpecPr — spec PR issue linkage (FR-2)', () => {
   it('adds a non-closing Refs line when sourceRef is supplied', async () => {

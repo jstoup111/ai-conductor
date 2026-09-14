@@ -43,7 +43,9 @@ import {
 import { readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { createGithubTrackerClient } from './tracker-client.js';
-import { fileIntakeIssue } from './engineer/intake/file-issue.js';
+import { executeGithubOperation, type GithubOperationRunner } from './github-operations.js';
+import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
+import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import { planContractPointers, priorAttemptPointers, readActivePlanPath } from './remediation-context-pointers.js';
@@ -422,8 +424,11 @@ import {
   type CostRollup,
 } from './cost-rollup.js';
 import { openShipDraftPr } from './ship-draft-pr.js';
+import { createShipDraftPublicationDependencies } from './ship-draft-pr.js';
 import { mirrorIssueCriticalityLabels } from './pr-criticality-labels.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
+import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
+import type { GithubMutationExecutionContext } from './tracker-client.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
@@ -444,6 +449,7 @@ export interface OperatorParkedTermination {
 export function createFinishPresentationRepair(input: {
   projectRoot: string;
   gh: GhRunner;
+  operations?: GithubOperationRunner;
   log?: (message: string) => void;
   restoreReleaseMetadata?: (prUrl: string) => Promise<void>;
 }): (request: { prUrl: string; state: ConductState; mode?: 'capture-only' | 'full' }) => Promise<void> {
@@ -465,22 +471,71 @@ export function createFinishPresentationRepair(input: {
     } catch { /* optional body evidence */ }
     try {
       const haltReason = await readFile(join(cwd, '.pipeline/halt-user-input-required'), 'utf8').catch(() => null);
-      await postHaltHistoryComment({ gh, cwd, prUrl, haltReason, log: repairLog });
-    } catch (error) { repairLog(`[conductor-repair] postHaltHistoryComment failed: ${error}`); }
+      const outcome = await postHaltHistoryComment({
+        gh, cwd, prUrl, haltReason, operations: input.operations, log: repairLog,
+      });
+      if (outcome === 'refused') {
+        throw new Error('guarded halt-history repair refused');
+      }
+    } catch (error) { repairLog(`[conductor-repair] postHaltHistoryComment failed: ${error}`); throw error; }
     if (mode === 'capture-only') return;
     try {
-      await rehabilitateHaltPr({ gh, cwd, prUrl, sourceRef, log: repairLog });
+      const outcome = await rehabilitateHaltPr({
+        gh, cwd, prUrl, sourceRef, preserveDraft: true, operations: input.operations, log: repairLog,
+      });
+      if (outcome === 'refused') throw new Error('guarded halt rehabilitation refused');
     } catch (error) { repairLog(`[conductor-repair] rehabilitateHaltPr failed: ${error}`); throw error; }
     try {
-      await retitleFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, branch: state.worktree_branch }, repairLog);
+      const outcome = await retitleFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, branch: state.worktree_branch, operations: input.operations }, repairLog);
+      if (outcome.outcome === 'refused') throw new Error('guarded title repair refused');
     } catch (error) { repairLog(`[conductor-repair] retitleFloor failed: ${error}`); throw error; }
     try {
-      await bodyFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, sourceRef, testEvidenceLine }, repairLog);
+      const outcome = await bodyFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, sourceRef, testEvidenceLine, operations: input.operations }, repairLog);
+      if (outcome === 'refused') throw new Error('guarded body repair refused');
     } catch (error) { repairLog(`[conductor-repair] bodyFloor failed: ${error}`); throw error; }
     await input.restoreReleaseMetadata?.(prUrl);
     try {
-      await ensureShipReady(gh, cwd, prUrl, repairLog);
+      const outcome = await ensureShipReady(
+        gh, cwd, prUrl, repairLog, undefined, input.operations,
+      );
+      if (outcome === 'refused') {
+        throw new Error('guarded ready-for-review repair refused');
+      }
     } catch (error) { repairLog(`[conductor-repair] ensureShipReady failed: ${error}`); throw error; }
+  };
+}
+
+/**
+ * Compose FINISH presentation repair at a live CLI root.  The guarded runner
+ * is deliberately resolved for each repair attempt: its authorization reads
+ * the current committed owner evidence when a mutation is requested, rather
+ * than retaining a decision from coordinator construction.
+ */
+export function createProvenanceGuardedFinishPresentationRepair(input: {
+  projectRoot: string;
+  git: GitRunner;
+  gh: GhRunner;
+  baseBranch: string;
+  log?: (message: string) => void;
+}): (request: { prUrl: string; state: ConductState }) => Promise<void> {
+  return async ({ prUrl, state }) => {
+    const publication = await createShipDraftPublicationDependencies({
+      cwd: input.projectRoot,
+      branch: state.worktree_branch,
+      baseBranch: input.baseBranch,
+      featureDesc: state.feature_desc,
+      git: input.git,
+      gh: input.gh,
+    });
+    if (!publication) {
+      throw new Error('guarded finish presentation repair unavailable: committed feature provenance could not be resolved');
+    }
+    await createFinishPresentationRepair({
+      projectRoot: input.projectRoot,
+      gh: input.gh,
+      operations: publication.operations,
+      log: input.log,
+    })({ prUrl, state });
   };
 }
 
@@ -1580,6 +1635,8 @@ export interface ConductorOptions {
   buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   /** Test seam for an adjudicated action-effect charge failure. */
   buildReviewChargeEffect?: typeof chargeBuildReviewEffectInLedger;
+  /** Test seam; production resolves fresh committed feature evidence. */
+  resolveFeatureCreationMutation?: typeof resolveFeatureRemoteMutation;
   /** Feature description — used by the engine-run worktree step to name the
    *  worktree/branch when state.feature_desc isn't set yet. */
   featureDesc?: string;
@@ -1858,6 +1915,9 @@ interface PostFinishShippedRecordRefreshOptions {
   requestedSlug: string;
   pr: string;
   log: (message: string) => void;
+  gh: GhRunner;
+  remoteGit?: typeof executeRemoteGit;
+  remoteMutation?: GithubMutationExecutionContext;
 }
 
 /** Refresh the final Cost block and make its push best-effort and non-blocking. */
@@ -1867,6 +1927,9 @@ async function refreshPostFinishShippedRecord({
   requestedSlug,
   pr,
   log,
+  gh,
+  remoteGit,
+  remoteMutation,
 }: PostFinishShippedRecordRefreshOptions): Promise<void> {
   try {
     const planPaths = (await readdir(join(cwd, '.docs/plans')))
@@ -1916,7 +1979,21 @@ async function refreshPostFinishShippedRecord({
     }
 
     try {
-      await runGit(['push'], { cwd });
+      const { stdout: branchOut } = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
+      const resolvedMutation = remoteMutation ?? await resolveFeatureRemoteMutation({
+        cwd,
+        slug: requestedSlug,
+        branch: branchOut.trim(),
+        git: (args) => runGit(args, { cwd }),
+        gh,
+      });
+      await pushPostFinishShippedRecord({
+        runGit,
+        cwd,
+        branch: branchOut.trim(),
+        remoteGit,
+        remoteMutation: resolvedMutation,
+      });
     } catch (pushError) {
       let recoveryHead = preRefreshHead;
       let upstreamHead: string | undefined;
@@ -1965,6 +2042,31 @@ async function refreshPostFinishShippedRecord({
       }`,
     );
   }
+}
+
+export async function pushPostFinishShippedRecord(input: {
+  runGit: GitRunner;
+  cwd: string;
+  branch: string;
+  remoteGit?: typeof executeRemoteGit;
+  remoteMutation?: GithubMutationExecutionContext;
+}): Promise<void> {
+  const pushed = await (input.remoteGit ?? executeRemoteGit)(
+    ['push', 'origin', `HEAD:refs/heads/${input.branch}`],
+    {
+      cwd: input.cwd,
+      config: (args) => input.runGit(args, { cwd: input.cwd }),
+      runRemoteGit: input.runGit,
+      mutation: input.remoteMutation,
+    },
+  );
+  if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));
+}
+
+function remoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
+  if (result.kind === 'failed') return result.error;
+  if (result.kind === 'refused') return result.reason;
+  return 'remote Git operation did not execute';
 }
 
 function testSuiteBudgetVerdict(inspection: FullSuiteInspectionResult) {
@@ -2263,6 +2365,7 @@ export class Conductor {
     Partial<Pick<FullSuiteVerifier, 'recordPreservation'>>;
   private readonly buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   private readonly buildReviewChargeEffect?: typeof chargeBuildReviewEffectInLedger;
+  private readonly resolveFeatureCreationMutation: typeof resolveFeatureRemoteMutation;
   private retainedFullSuiteInspection:
     | Awaited<ReturnType<FullSuiteVerifier['inspect']>>
     | undefined;
@@ -2544,9 +2647,22 @@ export class Conductor {
         join(this.projectRoot, '.pipeline/halt-user-input-required'),
         'utf-8',
       ).catch(() => null);
+      // Retained-PR adoption is a live presentation mutation, so construct a
+      // fresh guard from this feature's committed ownership before handing the
+      // repair its transport. An absent provenance boundary remains a refusal
+      // inside the advisory repair; it never re-enables raw gh writes.
+      const publication = await createShipDraftPublicationDependencies({
+        cwd: this.projectRoot,
+        branch: state.worktree_branch,
+        baseBranch: this.baseBranch,
+        featureDesc: state.feature_desc,
+        git: this.git,
+        gh: this.gh,
+      });
 
       const outcome = await makeRetainedPrPresentable({
         gh: this.gh,
+        operations: publication?.operations,
         cwd: this.projectRoot,
         prUrl,
         sourceRef,
@@ -2631,9 +2747,18 @@ export class Conductor {
 
     // Every production path uses this one sequence. The conductor alone adds
     // its retained release-metadata restore between the body floor and ready.
+    const publication = await createShipDraftPublicationDependencies({
+      cwd: this.projectRoot,
+      branch: state.worktree_branch ?? this.worktreeBranch,
+      baseBranch: this.baseBranch,
+      featureDesc: state.feature_desc ?? this.featureDesc,
+      git: this.git,
+      gh: this.gh,
+    });
     const presentationRepair = createFinishPresentationRepair({
       projectRoot: this.projectRoot,
       gh: this.gh,
+      operations: publication?.operations,
       log: this.log,
       restoreReleaseMetadata: (prUrl) => this.restoreFinishReleaseMetadata(prUrl),
     });
@@ -3266,6 +3391,7 @@ export class Conductor {
       opts.fullSuiteVerifier ?? new FullSuiteVerifier({ projectRoot: this.projectRoot });
     this.buildReviewEffectiveResolver = opts.buildReviewEffectiveResolver;
     this.buildReviewChargeEffect = opts.buildReviewChargeEffect;
+    this.resolveFeatureCreationMutation = opts.resolveFeatureCreationMutation ?? resolveFeatureRemoteMutation;
     this.featureDesc = opts.featureDesc;
     this.worktreeBranch = opts.worktreeBranch;
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
@@ -6073,7 +6199,24 @@ export class Conductor {
       if (snapshotReleaseMetadataBlock(before) === snapshot.block) return;
       const merged = mergeReleaseMetadataBlock(before, snapshot.block);
       if (merged === null) throw new Error('captured release metadata is no longer valid');
-      await this.gh(['pr', 'edit', prUrl, '--body', merged], { cwd: this.projectRoot });
+      const publication = await createShipDraftPublicationDependencies({
+        cwd: this.projectRoot,
+        branch: this.worktreeBranch,
+        baseBranch: this.baseBranch,
+        featureDesc: this.featureDesc,
+        git: this.git,
+        gh: this.gh,
+      });
+      const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/([1-9]\d*)$/.exec(prUrl);
+      if (!publication || !match) throw new Error('guarded release metadata restore is unavailable at this composition boundary');
+      const result = await executeGithubOperation({
+        operation: 'pull-request.edit',
+        repository: match[1],
+        resource: { kind: 'pull-request', number: Number(match[2]) },
+        context: { actor: 'finish-release-metadata-restore' },
+        payload: { body: merged },
+      }, publication.operations);
+      if (result.kind !== 'executed') throw new Error('guarded release metadata restore was refused or failed');
       const after = await readBody();
       if (snapshotReleaseMetadataBlock(after) !== snapshot.block) {
         throw new Error('release metadata restore could not be verified');
@@ -7068,6 +7211,14 @@ export class Conductor {
         // Advisory: openShipDraftPr never throws and a failure only logs.
         if (step.phase === 'SHIP' && !this.shipDraftPrAttempted) {
           this.shipDraftPrAttempted = true;
+          const publication = await createShipDraftPublicationDependencies({
+            cwd: this.projectRoot,
+            branch: state.worktree_branch,
+            baseBranch: this.baseBranch,
+            featureDesc: state.feature_desc,
+            git: this.git,
+            gh: this.gh,
+          });
           const draftPr = await openShipDraftPr({
             gh: this.gh,
             git: this.git,
@@ -7075,6 +7226,8 @@ export class Conductor {
             branch: state.worktree_branch,
             baseBranch: this.baseBranch,
             featureDesc: state.feature_desc,
+            remoteMutation: publication?.remoteMutation,
+            operations: publication?.operations,
             log: this.log ?? console.warn,
           });
           if (draftPr.outcome === 'published') {
@@ -11065,6 +11218,29 @@ export class Conductor {
                     return new Set(latest.effective.acceptedFindingIds);
                   };
                   const trackerRepo = await this.resolveTrackerRepoSlug();
+                  // A deferred issue is creation, not an existing-resource
+                  // mutation. Obtain fresh feature provenance now and mint the
+                  // opaque, one-shot capability before exposing a filing path
+                  // to the coordinator. Missing state/evidence deliberately
+                  // leaves `fileIssue` absent, so the coordinator can read for
+                  // an existing marker but cannot create a new remote issue.
+                  const featureCreationAuthority = trackerRepo === undefined
+                    ? undefined
+                    : await (async () => {
+                      const slug = this.featureSlug ?? state.feature_desc;
+                      const branch = state.worktree_branch ?? this.worktreeBranch;
+                      if (!slug || !branch) return undefined;
+                      const mutation = await this.resolveFeatureCreationMutation({
+                        cwd: this.projectRoot,
+                        slug,
+                        branch,
+                        git: (args) => this.git(args, { cwd: this.projectRoot }),
+                        gh: this.gh,
+                      });
+                      return mutation
+                        ? authorizeGithubFeatureIssueCreation({ repository: trackerRepo, mutation })
+                        : undefined;
+                    })();
                   const floors = resolveBuildReviewConfig(this.config).rubrics;
                   const suppressedFindingIds = effective.effective.suppressedFindingIds ?? [];
                   // One shared projection with the effective-verdict seam that
@@ -11108,13 +11284,18 @@ export class Conductor {
                     ...(trackerRepo === undefined ? {} : {
                       repo: trackerRepo,
                       tracker: createGithubTrackerClient(this.gh),
-                      fileIssue: async (issue: { title: string; body: string; priority: 'critical' | 'high' | 'medium' | 'low' }) => {
+                      ...(featureCreationAuthority === undefined ? {} : { fileIssue: async (issue: { title: string; body: string; priority: 'critical' | 'high' | 'medium' | 'low' }) => {
                         const filed = await fileIntakeIssue(
                           { title: issue.title, body: issue.body, priority: issue.priority, repo: trackerRepo },
-                          { tracker: createGithubTrackerClient(this.gh), gh: this.gh, cwd: this.projectRoot },
+                          {
+                            creation: {
+                              authority: featureCreationAuthority,
+                              operations: createIntakeFilingOperations(this.gh, this.projectRoot, featureCreationAuthority),
+                            },
+                          },
                         );
                         return { issueUrl: filed.issueUrl };
-                      },
+                      } }),
                     }),
                     emit: async (event) => { await this.events.emit(event); },
                   });
@@ -12465,6 +12646,7 @@ export class Conductor {
           requestedSlug: state.feature_desc,
           pr: state.pr_url,
           log: this.log ?? console.warn,
+          gh: this.gh,
         });
       }
     } catch (err) {

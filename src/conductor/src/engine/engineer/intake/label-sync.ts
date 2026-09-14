@@ -22,6 +22,7 @@
 
 import { ensureLabel, addLabel, type GhRunner } from '../../pr-labels.js';
 import { createDependencyLinks, type DependencyEdge } from '../issue-dep-migration.js';
+import type { GithubOperationRunner } from '../../github-operations.js';
 import { strictSlugGithubRef, parseWorkRef } from '../source-ref.js';
 
 export type { GhRunner } from '../../pr-labels.js';
@@ -34,6 +35,10 @@ export interface SyncIssueLabelsFields {
 
 export interface SyncIssueLabelsDeps {
   gh: GhRunner;
+  /** Required for dependency writes; label synchronization remains best-effort without it. */
+  dependencyOperations?: GithubOperationRunner;
+  /** Identity bound to each guarded dependency request. */
+  actor?: string;
   cwd: string;
   log?: (msg: string) => void;
 }
@@ -154,8 +159,19 @@ export async function syncIssueLabels(
   }
 
   if (edges.length > 0) {
+    if (!deps.dependencyOperations || !deps.actor) {
+      log('[label-sync] syncIssueLabels: dependency links refused without guarded operation authorization');
+      badRefs.push(...edges.map((edge) => edge.target));
+      return { priorityLabel, sizeLabel, priorityDefaulted, sizeDefaulted, linked, badRefs };
+    }
     try {
-      const results = await createDependencyLinks(edges, { gh, cwd, log });
+      const results = await createDependencyLinks(edges, {
+        gh,
+        operations: deps.dependencyOperations,
+        actor: deps.actor,
+        cwd,
+        log,
+      });
       for (const result of results) {
         if (result.status === 'created' || result.status === 'already-present') {
           linked.push(result.edge.target);

@@ -32,7 +32,7 @@ import { landSpec } from './engineer/land-spec.js';
 import { loadConfig } from './config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
-import { openSpecPr } from './engineer/handoff.js';
+import { openSpecPr, type HandoffDeps } from './engineer/handoff.js';
 import {
   createEngineerWorktree,
   removeEngineerWorktree,
@@ -44,9 +44,14 @@ import { ensureRunning } from './daemon-lock.js';
 import { brainLoopAlive } from './engineer/brain-liveness.js';
 import { CorruptLedgerError, createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
-import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
+import {
+  createGithubIntakeAuthorization,
+  createGithubIssuesAdapter,
+  GITHUB_ISSUES_SOURCE,
+  HANDLED_LABEL,
+} from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
-import { makeProductionGit, restRemoveLabelArgs, type GitRunner } from './pr-labels.js';
+import { makeProductionGit, type GitRunner } from './pr-labels.js';
 import {
   claimUnblocked,
   resolveClaimBands,
@@ -60,7 +65,8 @@ import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
-import { createGithubTrackerClient, makeProductionGh } from './tracker-client.js';
+import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh } from './tracker-client.js';
+import type { OwnerResolution } from './owner-gate/identity.js';
 import {
   GH_VERSION_FLOOR,
   probeGhVersion,
@@ -456,10 +462,14 @@ export interface DispatchEngineerOpts {
   printErr?: (s: string) => void;
   /** Injected gh runner (for tests). */
   gh?: (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
+  /** Test seam for fresh machine identity used by independently authorized intake writes. */
+  intakeResolveActor?: () => Promise<OwnerResolution>;
   /** Machine-level gh capability probe; injectable so entry refusal is testable. */
   probeGhVersion?: () => Promise<GhVersionFloorVerdict>;
   /** Injected git runner (for tests). */
   git?: GitRunner;
+  /** Task 16 handoff-publication seam; production derives this from current machine evidence. */
+  handoffPublication?: HandoffDeps['publication'];
   /** Injected ensureRunning launch spy (for tests). */
   ensureRunningLaunch?: (repoPath: string) => void | Promise<void>;
   /**
@@ -565,6 +575,61 @@ function parseGhRepo(remote: string): string | null {
   // Matches both git@github.com:owner/repo.git and https://github.com/owner/repo.git
   const m = remote.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/);
   return m ? m[1] : null;
+}
+
+function featureMarkerForSpecBranch(branch: string): string {
+  const match = /^spec\/([a-z0-9]+(?:-[a-z0-9]+)*)$/.exec(branch);
+  if (!match) throw new Error(`engineer handoff: branch "${branch}" is not a canonical spec/<slug> branch.`);
+  return `.docs/intake/${match[1]}.md`;
+}
+
+/**
+ * Build the one-use initial-publication composition.  Provenance intentionally
+ * reads the committed spec branch (D2), never a live marker or PR hint; a
+ * missing marker is a refusal before either remote mutation runs.
+ */
+function initialSpecPublication(
+  target: { remote?: string },
+  branch: string,
+  cwd: string,
+  gh: NonNullable<DispatchEngineerOpts['gh']>,
+  git: GitRunner,
+): NonNullable<HandoffDeps['publication']> {
+  const repository = target.remote ? parseGhRepo(target.remote)?.toLowerCase() : null;
+  if (!repository || !/^[^/\s]+\/[^/\s]+$/.test(repository)) {
+    throw new Error('engineer handoff: remote GitHub repository could not be resolved for guarded publication.');
+  }
+  const featureMarker = featureMarkerForSpecBranch(branch);
+  const mutation = {
+    provenance: {
+      repository,
+      // `readMutationProvenance` selects `specBranch` for publication=initial;
+      // this required field is deliberately not used to infer or read main.
+      defaultBranch: branch,
+      specBranch: branch,
+      featureMarker,
+      publication: 'initial' as const,
+    },
+    dependencies: {
+      resolveMachineOwner: async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, cwd),
+      provenanceDiscovery: {
+        readCommittedRecords: async ({ ref }: { readonly ref: string }) => {
+          const { stdout } = await git(['show', `${ref}:${featureMarker}`], { cwd });
+          return [{ path: featureMarker, content: stdout }];
+        },
+      },
+    },
+  };
+  return {
+    repository,
+    remote: {
+      cwd,
+      config: async (args) => git(args, { cwd }),
+      runRemoteGit: git,
+      mutation,
+    },
+    operations: createGuardedGithubOperationRunner(gh, { cwd, mutation }),
+  };
 }
 
 /**
@@ -680,6 +745,7 @@ export function buildIntake(deps: {
   registryPath?: string;
   gh: NonNullable<DispatchEngineerOpts['gh']>;
   printErr: (s: string) => void;
+  resolveActor?: () => Promise<OwnerResolution>;
 }): {
   reader: ReturnType<typeof createRegistryReader>;
   ledger: ReturnType<typeof createLedger>;
@@ -701,6 +767,7 @@ export function buildIntake(deps: {
     },
     ledger,
     log: (m: string) => deps.printErr(m),
+    resolveActor: deps.resolveActor,
   });
   return { reader, ledger, queue, adapter };
 }
@@ -1045,7 +1112,9 @@ export async function dispatchEngineer(
       // a gh failure never fails a successful land.
       if (sourceRef) {
         const engDir = engineerDir ?? resolveEngineerDir({});
-        const { ledger, adapter } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
+        const { ledger, adapter } = buildIntake({
+          engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor,
+        });
         await reportRouted(
           { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
           target.name,
@@ -1078,6 +1147,8 @@ export async function dispatchEngineer(
 
       let handoffResult: Awaited<ReturnType<typeof openSpecPr>>;
       try {
+        const publication = opts.handoffPublication
+          ?? (target.remote ? initialSpecPublication(target, branch, worktree, gh, git) : undefined);
         handoffResult = await openSpecPr(target, branch, {
           gitRunner: git,
           runner: async (args, runnerOpts) => {
@@ -1091,6 +1162,7 @@ export async function dispatchEngineer(
           // Link the spec PR to its issue with a non-closing `Refs` (does not
           // close — the daemon's implementation PR closes it on merge).
           sourceRef,
+          publication,
         });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1129,6 +1201,14 @@ export async function dispatchEngineer(
         return 1;
       }
 
+      if (handoffResult.kind === 'pr-refused') {
+        printErr(
+          `engineer handoff: publication refused (${handoffResult.reason}); ` +
+          `worktree kept for inspection at "${worktree}".`,
+        );
+        return 1;
+      }
+
       // The PR opened (or was skipped on no-remote) — the cycle succeeded, so remove
       // the per-idea worktree (FR-5). The spec/<slug> branch + commit persist; a
       // removal failure is REPORTED, never swallowed (FR-5 negative).
@@ -1148,7 +1228,9 @@ export async function dispatchEngineer(
         // which has no URL to report).
         if (sourceRef) {
           const engDir = engineerDir ?? resolveEngineerDir({});
-          const { ledger, adapter } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
+          const { ledger, adapter } = buildIntake({
+            engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor,
+          });
           await reportDone(
             { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
             handoffResult.url,
@@ -1358,9 +1440,11 @@ export async function dispatchEngineer(
         return 1;
       }
       if (dispatch.resolvedBy && parsedForget) {
-        const tracker = createGithubTrackerClient(gh);
+        const tracker = createGithubTrackerClient(gh, {
+          intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor }),
+        });
         try {
-          await tracker.commentOnIssue(
+          await tracker.commentOnIntakeIssue(
             parsedForget.repo,
             Number(parsedForget.issue),
             `Resolved by ${dispatch.resolvedBy}`,
@@ -1374,7 +1458,7 @@ export async function dispatchEngineer(
           return 1;
         }
         try {
-          await tracker.closeIssue(parsedForget.repo, String(parsedForget.issue), process.cwd());
+          await tracker.closeIntakeIssue(parsedForget.repo, String(parsedForget.issue), process.cwd());
         } catch (err: unknown) {
           printErr(
             `engineer forget: failed to close ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
@@ -1390,7 +1474,15 @@ export async function dispatchEngineer(
       // entry is already gone, which is the authoritative dedup state).
       if (parsedForget) {
         try {
-          await gh(restRemoveLabelArgs(parsedForget.repo, parsedForget.issue, HANDLED_LABEL), { cwd: process.cwd() });
+          const tracker = createGithubTrackerClient(gh, {
+            intake: createGithubIntakeAuthorization({ gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor }),
+          });
+          await tracker.removeIntakeIssueLabel(
+            parsedForget.repo,
+            Number(parsedForget.issue),
+            HANDLED_LABEL,
+            process.cwd(),
+          );
         } catch (err: unknown) {
           printErr(`engineer forget: label strip failed for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -1631,8 +1723,25 @@ export async function dispatchEngineer(
         body: issue.body ?? '',
       }));
 
+      // Each source issue is authorized independently through the intake
+      // assignment seam; reading a dependency conveys no write authority.
+      const resolveActor = opts.intakeResolveActor ?? (async () =>
+        resolveDaemonOwner(await readMachineOwnerConfig(), gh, cwd));
+      let actor = 'unresolved';
+      try {
+        const identity = await resolveActor();
+        if (identity.resolved) actor = identity.id;
+      } catch {
+        // The guarded seam remains authoritative and will refuse the write.
+      }
+      const operations = createGuardedGithubOperationRunner(gh, {
+        cwd,
+        intake: createGithubIntakeAuthorization({ gh, cwd, resolveActor }),
+      });
       const result = await runMigration({
         gh,
+        operations,
+        actor,
         issues: formattedIssues,
         confirm: async () => Promise.resolve(dispatch.confirm),
       });

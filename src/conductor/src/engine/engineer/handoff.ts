@@ -1,14 +1,11 @@
 // handoff.ts — spec PR opener (Task 24 + 25, FR-7).
 //
 // `openSpecPr(target, branch, deps)`:
-//   1. Invokes the INJECTED runner with `gh pr create` args, cwd = target.canonicalPath.
-//   2. Detects the no-remote condition (runner rejects with a no-remote error message)
-//      and returns a non-fatal `{ kind: 'pr-skipped'; reason }` result rather than
-//      propagating the exception. The authored key IS recorded on skip (authoring
-//      happened; flywheel-trend.ts counts it in the learning trajectory).
-//   3. On success, scrapes the PR URL from the runner's stdout using `extractPrUrl`.
-//   4. Records the (project, feature) authored key via `recordAuthoredKey`.
-//   5. Returns `{ kind: 'pr-opened'; url }` to the caller.
+//   1. Refuses remote publication without guarded publication dependencies.
+//   2. Authorizes and pushes the branch, then creates the PR through those
+//      guarded dependencies.
+//   3. Records the (project, feature) authored key only after the PR exists.
+//   4. Returns `{ kind: 'pr-opened'; url }` to the caller.
 //
 // CONTRACT — discriminated result type (introduced by task-25):
 //
@@ -26,11 +23,16 @@
 import type { TargetRepo } from './target.js';
 import type { AuthoredLedgerOpts } from './authored-ledger.js';
 import { recordAuthoredKey } from './authored-ledger.js';
-import { extractPrUrl } from '../state.js';
 import { injectIssueRef } from './issue-ref.js';
 import { buildSpecPrCreateArgs, ensureReleaseMetadata } from './release-metadata-inject.js';
 import { mirrorIssueCriticalityLabels } from '../pr-criticality-labels.js';
 import type { GitRunner } from '../pr-labels.js';
+import {
+  executeGithubOperation,
+  type GithubOperationRunner,
+  type GithubOperationRefusalReason,
+} from '../github-operations.js';
+import { executeRemoteGit, type RemoteGitOperationDependencies } from '../remote-git-operations.js';
 
 // ─── Public types ──────────────────────────────────────────────────────────────
 
@@ -82,13 +84,23 @@ export interface HandoffDeps {
   sourceRef?: string;
   /** Optional log sink for the (non-fatal) issue-ref injection. */
   log?: (msg: string) => void;
+  /**
+ * The guarded initial-publication composition. Absent composition is a typed
+ * refusal; it can never fall back to raw GitHub or Git transports.
+   */
+  publication?: {
+    readonly remote: RemoteGitOperationDependencies;
+    readonly operations: GithubOperationRunner;
+    readonly repository: string;
+  };
 }
 
 // ─── Result types (discriminated union) ───────────────────────────────────────
 
 /**
  * Successful PR-opened result.
- * The `url` is scraped from the runner's stdout via `extractPrUrl`.
+ * The URL comes from the guarded create result, or a read through the injected
+ * runner when that result cannot identify the created pull request.
  */
 export interface PrOpenedResult {
   kind: 'pr-opened';
@@ -109,36 +121,38 @@ export interface PrSkippedResult {
   reason: string;
 }
 
+/** A policy denial is terminal for this handoff, but preserves local authoring work. */
+export interface PrRefusedResult {
+  kind: 'pr-refused';
+  reason: GithubOperationRefusalReason;
+}
+
 /** Discriminated union returned by `openSpecPr`. Callers must narrow on `kind`. */
-export type OpenSpecPrResult = PrOpenedResult | PrSkippedResult;
+export type OpenSpecPrResult = PrOpenedResult | PrSkippedResult | PrRefusedResult;
 
 // ─── Internal helpers ──────────────────────────────────────────────────────────
 
-/**
- * No-remote error patterns from `gh` and `git`.
- * These indicate the target repo has no remote configured — not a transient
- * network failure — so we can safely return a non-fatal skip result.
- *
- * Matched case-insensitively against the thrown error message.
- */
-const NO_REMOTE_PATTERNS: RegExp[] = [
-  /no remote/i,
-  /does not have any remotes/i,
-  /no configured remote/i,
-  // gh's actual message when the repo has zero remotes (e.g. `gh pr create`
-  // against a local-only repo). The phrase is "no git remotes" — note the
-  // intervening "git", which the broader /no remote/i above does NOT match.
-  /no git remotes? found/i,
-];
+function createPayload(branch: string, args: readonly string[]): { title: string; body: string } {
+  const titleIndex = args.indexOf('--title');
+  const bodyIndex = args.indexOf('--body');
+  return {
+    title: titleIndex >= 0 && typeof args[titleIndex + 1] === 'string' ? args[titleIndex + 1]! : branch,
+    body: bodyIndex >= 0 && typeof args[bodyIndex + 1] === 'string' ? args[bodyIndex + 1]! : '',
+  };
+}
 
-/**
- * Return true if the caught error message indicates "no remote configured" — a
- * permanent local-repo condition that should produce a non-fatal skip rather than
- * a hard failure.
- */
-function isNoRemoteError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return NO_REMOTE_PATTERNS.some((pattern) => pattern.test(message));
+async function readCreatedPrUrl(
+  runner: CommandRunner,
+  branch: string,
+  cwd: string,
+): Promise<string | undefined> {
+  const response = await runner(['pr', 'view', branch, '--json', 'url'], { cwd });
+  try {
+    const url = (JSON.parse(response.stdout || '{}') as { url?: unknown }).url;
+    return typeof url === 'string' && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(url) ? url : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // ─── Public API ────────────────────────────────────────────────────────────────
@@ -150,11 +164,10 @@ function isNoRemoteError(err: unknown): boolean {
  * @param branch - The spec branch name (e.g. "spec/add-auth"). Used as the
  *                 `feature` key in the authored ledger.
  * @param deps   - Injected dependencies (runner, ledgerOpts).
- * @returns      `{ kind: 'pr-opened'; url }` on success, or
- *               `{ kind: 'pr-skipped'; reason }` when the repo has no remote.
- * @throws       For any runner error that is NOT a no-remote condition (e.g.
- *               network timeout, auth failure). Also throws when the runner
- *               stdout contains no URL (never silently discards on success path).
+ * @returns      `{ kind: 'pr-opened'; url }` on success,
+ *               `{ kind: 'pr-skipped'; reason }` when the repo has no remote,
+ *               or `{ kind: 'pr-refused'; reason }` when authorization is absent
+ *               or denied.
  */
 export async function openSpecPr(
   target: TargetRepo,
@@ -171,53 +184,41 @@ export async function openSpecPr(
     return { kind: 'pr-skipped', reason: 'no remote configured' };
   }
 
+  if (!deps.publication) {
+    return { kind: 'pr-refused', reason: 'missing-provenance' };
+  }
+
   if (!gitRunner) {
     throw new Error(
       `openSpecPr: gitRunner is required to push branch "${branch}" for remote target "${target.name}"`,
     );
   }
 
-  await gitRunner(['push', '-u', 'origin', branch], { cwd });
-
   const createArgs = await buildSpecPrCreateArgs({ cwd, branch, git: gitRunner });
 
-  // 1. Invoke `gh pr create` with the spec branch in the worktree's cwd.
-  //    The `--head` flag names the branch to open a PR for; `--fill` uses the
-  //    branch name + last commit message as the title/body, and `--label spec`
-  //    classifies the DECIDE deliverable atomically when the PR is created.
-  let result: RunnerResult;
-  try {
-    result = await runner(
-      createArgs.length === 0
-        ? ['pr', 'create', '--head', branch, '--fill', '--label', 'spec']
-        : ['pr', 'create', '--head', branch, ...createArgs, '--label', 'spec'],
-      { cwd },
-    );
-  } catch (err) {
-    // 1a. Detect the no-remote condition: the runner rejected with an error whose
-    //     message matches one of the NO_REMOTE_PATTERNS above.
-    if (isNoRemoteError(err)) {
-      // Work is preserved on the spec branch. Record the authored key so the
-      // flywheel trend still counts this authoring event, then return non-fatal.
-      await recordAuthoredKey(target.name, branch, ledgerOpts ?? {});
-      return {
-        kind: 'pr-skipped',
-        reason: `no remote: ${err instanceof Error ? err.message : String(err)}`,
-      };
-    }
-    // 1b. Any other runner error (network timeout, auth, etc.) is a hard failure —
-    //     re-throw so the engineer loop can surface it.
-    throw err;
-  }
+  const push = await executeRemoteGit(
+    ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`],
+    deps.publication.remote,
+  );
+  if (push.kind === 'refused') return { kind: 'pr-refused', reason: push.reason };
+  if (push.kind === 'failed') throw new Error(`openSpecPr: guarded push failed: ${push.error}`);
+  if (push.kind !== 'executed') throw new Error('openSpecPr: guarded publication did not resolve a remote push target');
 
-  // 2. Scrape the PR URL from stdout via the shared extractPrUrl helper.
-  const url = extractPrUrl(result.stdout);
-  if (!url) {
-    throw new Error(
-      `openSpecPr: no PR URL found in runner stdout for branch "${branch}" in "${target.canonicalPath}". ` +
-        `stdout was: ${JSON.stringify(result.stdout)}`,
-    );
-  }
+  const payload = createPayload(branch, createArgs);
+  const created = await executeGithubOperation({
+    operation: 'pull-request.create',
+    repository: deps.publication.repository,
+    resource: { kind: 'repository' },
+    context: { actor: 'engineer-handoff' },
+    payload: { title: payload.title, body: payload.body, head: branch, base: 'main' },
+  }, deps.publication.operations);
+  if (created.kind === 'refused') return { kind: 'pr-refused', reason: created.reason };
+  if (created.kind === 'failed') throw new Error(`openSpecPr: guarded PR creation failed: ${created.error}`);
+  if (created.kind === 'partial') throw new Error('openSpecPr: PR creation returned an invalid partial result');
+  const url = created.target.kind === 'pull-request'
+    ? `https://github.com/${created.target.repository}/pull/${created.target.number}`
+    : await readCreatedPrUrl(runner, branch, cwd);
+  if (!url) throw new Error(`openSpecPr: guarded PR creation did not identify a URL for branch "${branch}".`);
 
   // 3. Record the (project, feature) authored key durably.
   //    The `feature` is the spec branch name — consistent with how the engineer's
@@ -235,6 +236,7 @@ export async function openSpecPr(
       return { stdout: r.stdout };
     },
     prUrl: url,
+    operations: deps.publication.operations,
     cwd,
     log: deps.log,
   });
@@ -250,6 +252,7 @@ export async function openSpecPr(
         return { stdout: r.stdout };
       },
       prUrl: url,
+      operations: deps.publication.operations,
       keyword: 'Refs',
       sourceRef: deps.sourceRef,
       cwd,
@@ -261,6 +264,7 @@ export async function openSpecPr(
     //     dispatches on. Fail-open: never throws, never discards the PR.
     await mirrorIssueCriticalityLabels({
       gh: async (args, opts) => runner(args, { cwd: opts.cwd }),
+      operations: deps.publication.operations,
       cwd,
       prUrl: url,
       sourceRef: deps.sourceRef,

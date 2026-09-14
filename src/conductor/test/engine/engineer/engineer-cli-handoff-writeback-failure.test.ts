@@ -24,6 +24,7 @@ import {
 } from '../../../src/engine/engineer-cli.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
+import type { HandoffDeps } from '../../../src/engine/engineer/handoff.js';
 
 const execFile = promisify(execFileCb);
 
@@ -88,6 +89,40 @@ async function writeRegistry(): Promise<void> {
 
 const noOpGit = async () => ({ stdout: '', stderr: '' });
 
+function authorizedPublication(
+  gh: (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>,
+  branch: string,
+  repository: string,
+  number: number,
+): NonNullable<HandoffDeps['publication']> {
+  const featureMarker = `.docs/intake/${branch.slice('spec/'.length)}.md`;
+  return {
+    repository,
+    remote: {
+      cwd: repoPath,
+      config: async () => ({ stdout: `https://github.com/${repository}.git` }),
+      runRemoteGit: noOpGit,
+      mutation: {
+        provenance: { repository, defaultBranch: 'main', specBranch: branch, featureMarker, publication: 'initial' },
+        dependencies: {
+          resolveMachineOwner: async () => ({ resolved: true as const, id: 'test-owner' }),
+          provenanceDiscovery: { readCommittedRecords: async () => [{ path: featureMarker, content: 'Owner: test-owner\n' }] },
+        },
+      },
+    },
+    operations: {
+      async run(request) {
+        if (request.operation === 'pull-request.create') {
+          const payload = request.payload as { head: string; title: string; body: string };
+          await gh(['pr', 'create', '--head', payload.head, '--title', payload.title, '--body', payload.body], { cwd: repoPath });
+          return { created: { repository, kind: 'pull-request' as const, number } };
+        }
+        return {};
+      },
+    },
+  };
+}
+
 function captureOpts(extra: Partial<DispatchEngineerOpts>): {
   out: string[];
   err: string[];
@@ -146,6 +181,9 @@ describe('engineer handoff — write-back failure is visible, non-fatal, deduped
       if (args[0] === 'pr' && args[1] === 'edit') {
         return { stdout: '' };
       }
+      if (args[0] === 'issue' && args[1] === 'view' && args.includes('assignees')) {
+        return { stdout: JSON.stringify({ assignees: [{ login: 'test-owner' }] }) };
+      }
       if (args[0] === 'issue' && args[1] === 'comment') {
         throw new Error('gh: failed to comment on issue (403 Forbidden)');
       }
@@ -155,6 +193,8 @@ describe('engineer handoff — write-back failure is visible, non-fatal, deduped
     const { out, err, opts } = captureOpts({
       gh: gh as any,
       git: noOpGit,
+      handoffPublication: authorizedPublication(gh as any, branch, 'o/e', 999),
+      intakeResolveActor: async () => ({ resolved: true, id: 'test-owner' }),
       ensureRunningLaunch: async () => {},
     });
 
@@ -201,6 +241,9 @@ describe('engineer handoff — write-back failure is visible, non-fatal, deduped
       if (args[0] === 'pr' && args[1] === 'edit') {
         return { stdout: '' };
       }
+      if (args[0] === 'issue' && args[1] === 'view' && args.includes('assignees')) {
+        return { stdout: JSON.stringify({ assignees: [{ login: 'test-owner' }] }) };
+      }
       // issue comment / label create / REST label-add all succeed.
       return { stdout: JSON.stringify({}) };
     };
@@ -208,6 +251,8 @@ describe('engineer handoff — write-back failure is visible, non-fatal, deduped
     const { out, err, opts } = captureOpts({
       gh: gh as any,
       git: noOpGit,
+      handoffPublication: authorizedPublication(gh as any, branch, 'o/e', 1000),
+      intakeResolveActor: async () => ({ resolved: true, id: 'test-owner' }),
       ensureRunningLaunch: async () => {},
     });
 
@@ -232,7 +277,9 @@ describe('engineer handoff — write-back failure is visible, non-fatal, deduped
     expect(afterHandoff?.writebackPending).toBeUndefined();
 
     // GhRunner call count: pr create (+ any auxiliary openSpecPr calls) + the
-    // three write-back calls (issue comment, label create, REST label-add).
+    // two issue-scoped write-back calls (comment and REST label-add). Shared
+    // label definition creation now needs its own explicit approval and is not
+    // implied by ownership of this intake issue.
     // The REST arm is matched on the `engineer:handled` payload specifically:
     // openSpecPr also reads the issue's labels to mirror its criticality onto
     // the spec PR, and a bare `labels` match would count that read as a
@@ -243,7 +290,7 @@ describe('engineer handoff — write-back failure is visible, non-fatal, deduped
         (c[0] === 'label' && c[1] === 'create') ||
         (c[0] === 'api' && c.some((a) => a.includes('labels[]=engineer:handled'))),
     );
-    expect(writebackCalls).toHaveLength(3);
+    expect(writebackCalls).toHaveLength(2);
     expect(calls.some((c) => c[0] === 'pr' && c[1] === 'create')).toBe(true);
   });
 });

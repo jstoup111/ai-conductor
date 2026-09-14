@@ -12,10 +12,22 @@
 // inventing new ones — see Task 4 of .docs/plans/intake-only-enforcement.md.
 
 import { parseSizeLabel, parsePriorityLabels } from '../../backlog-priority.js';
-import { restAddLabelArgs } from '../../pr-labels.js';
 import { parseSourceRef } from '../issue-ref.js';
 import { sanitizeIntakeText, type Redaction } from './sanitize.js';
-import type { TrackerClient } from '../../tracker-client.js';
+import { createGuardedGithubOperationRunner, type GhRunner } from '../../tracker-client.js';
+import {
+  executeGithubIssueCreationTransaction,
+  resolveGithubIssueCreationAuthority,
+  type GithubIssueCreationAuthority,
+} from '../../github-creation-context.js';
+import type {
+  GithubFeatureWriteOperationRequest,
+  GithubIssueTarget,
+  GithubOperationRequest,
+  GithubOperationRunner,
+  GithubOperationRunnerRefusal,
+  GithubOperationRunnerResponse,
+} from '../../github-operations.js';
 
 export interface FileIntakeIssueOpts {
   title: string;
@@ -28,14 +40,17 @@ export interface FileIntakeIssueOpts {
 }
 
 export interface FileIntakeIssueDeps {
-  tracker: TrackerClient;
-  gh: (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
-  cwd: string;
   prompt?: (question: string) => Promise<string>;
+  /** One creation authority and terminal operation seam for this filing. */
+  creation: {
+    readonly authority: GithubIssueCreationAuthority;
+    readonly operations: GithubOperationRunner;
+  };
 }
 
 export interface FileIntakeIssueResult {
   ok: boolean;
+  /** Empty when GitHub did not identify one canonical newly created issue. */
   issueUrl: string;
   size: 'S' | 'M' | 'L';
   priority: 'critical' | 'high' | 'medium' | 'low';
@@ -45,6 +60,8 @@ export interface FileIntakeIssueResult {
   linked: string[];
   badRefs: string[];
   warnings: string[];
+  /** Per-operation outcomes for a created issue whose follow-up metadata was partial. */
+  metadataFailures: Array<{ operation: string; error: string }>;
   /**
    * What the pre-publication scrub replaced in the title/body. Empty on a clean
    * filing. Reported to the operator so a redaction is never silent — the issue
@@ -81,11 +98,116 @@ function inferPriority(body: string): 'critical' | 'high' | 'medium' | 'low' | u
   return undefined;
 }
 
-/** Extract `owner/repo#N` from a `gh issue create` URL output. */
-function issueUrlToRef(url: string): { repo: string; number: string } | null {
-  const m = url.match(/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)/);
-  if (!m) return null;
-  return { repo: m[1], number: m[2] };
+type ValidDependency = { readonly source: string; readonly repo: string; readonly number: number };
+
+function isRunnerRefusal(
+  response: GithubOperationRunnerResponse | GithubOperationRunnerRefusal,
+): response is GithubOperationRunnerRefusal {
+  return 'kind' in response && response.kind === 'refused';
+}
+
+function metadataFailureError(response: GithubOperationRunnerResponse | GithubOperationRunnerRefusal): string | undefined {
+  if (isRunnerRefusal(response)) return `GitHub operation refused: ${response.reason}`;
+  if (response.metadataFailures?.length) return response.metadataFailures.map((failure) => failure.error).join('; ');
+  return undefined;
+}
+
+function canonicalIssue(target: unknown, repository: string): GithubIssueTarget | undefined {
+  if (!target || typeof target !== 'object') return undefined;
+  const value = target as Partial<GithubIssueTarget>;
+  if (value.kind !== 'issue' || value.repository !== repository
+    || !Number.isSafeInteger(value.number) || (value.number ?? 0) < 1) return undefined;
+  return { repository, kind: 'issue', number: value.number! };
+}
+
+function creationUrl(target: GithubIssueTarget): string {
+  return `https://github.com/${target.repository}/issues/${target.number}`;
+}
+
+function canonicalRepository(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !/^[^/\s]+\/[^/\s]+$/.test(value)) return undefined;
+  return value.toLowerCase();
+}
+
+/**
+ * Terminal adapter for the short-lived intake-creation transaction.
+ *
+ * This is intentionally narrower than TrackerClient: it accepts only the
+ * creation transaction's three registered operations. The caller cannot pass
+ * raw argv, and `fileIntakeIssue` reaches it only after the creation context
+ * has bound the actor, repository, and returned issue identity.
+ */
+export function createIntakeFilingOperations(
+  gh: GhRunner,
+  cwd: string,
+  authority: GithubIssueCreationAuthority,
+): GithubOperationRunner {
+  // Resolve before a feature authority is consumed by the transaction.  The
+  // transaction independently resolves and binds it again before the first
+  // mutation, so this is a terminal guard's expected identity, not authority.
+  const binding = resolveGithubIssueCreationAuthority(authority);
+  let closed = false;
+  let creationRequested = false;
+  let created: GithubIssueTarget | undefined;
+
+  const guarded = createGuardedGithubOperationRunner(gh, {
+    cwd,
+    creation: {
+      async authorize(request) {
+        const resolved = await binding;
+        if (closed || !resolved) return { kind: 'refused', reason: 'explicit-authorization-required' };
+        if (request.operation === 'issue.create') {
+          if (creationRequested
+            || request.target.kind !== 'repository'
+            || request.target.repository !== resolved.repository
+            || request.context.actor !== resolved.actor) {
+            return { kind: 'refused', reason: 'explicit-authorization-required' };
+          }
+          creationRequested = true;
+          return {} as GithubOperationRunnerResponse;
+        }
+        if (!created
+          || request.target.kind !== 'issue'
+          || request.target.repository !== created.repository
+          || request.target.number !== created.number
+          || request.context.actor !== resolved.actor
+          || (request.operation !== 'issue.label.add' && request.operation !== 'issue.dependency.add')) {
+          return { kind: 'refused', reason: 'explicit-authorization-required' };
+        }
+        return {} as GithubOperationRunnerResponse;
+      },
+      complete(request, response) {
+        if (request.operation !== 'issue.create' || request.target.kind !== 'repository') return {};
+        const match = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/([1-9]\d*)\/?\s*$/.exec(response.stdout);
+        if (!match || canonicalRepository(match[1]) !== request.target.repository.toLowerCase()) return {};
+        created = { repository: request.target.repository, kind: 'issue', number: Number(match[2]) };
+        return { created };
+      },
+    },
+  });
+
+  return {
+    async run(request) {
+      if (request.operation !== 'issue.dependency.add') return guarded.run(request);
+      const dependency = request.payload && 'dependency' in request.payload ? request.payload.dependency : undefined;
+      if (!dependency || dependency.kind !== 'issue') return { kind: 'refused', reason: 'invalid-payload' };
+
+      // This is discovery only. It identifies the foreign issue's database id
+      // for GitHub's dependency API; it never grants a write to that issue.
+      const { stdout } = await gh(['api', `repos/${dependency.repository}/issues/${dependency.number}`], { cwd });
+      const id = (JSON.parse(stdout) as { id?: unknown }).id;
+      if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 1) {
+        return { kind: 'refused', reason: 'invalid-target' };
+      }
+      return guarded.run({
+        ...request,
+        payload: { dependency, dependencyDatabaseId: id },
+      });
+    },
+    closeCreationScope() {
+      closed = true;
+    },
+  } as GithubOperationRunner;
 }
 
 export async function fileIntakeIssue(
@@ -146,16 +268,9 @@ export async function fileIntakeIssue(
   const cleanBody = sanitizeIntakeText(opts.body);
   const redactions = [...cleanTitle.redactions, ...cleanBody.redactions];
 
-  // ── Create the issue ─────────────────────────────────────────────────────
-  const issueUrl = await deps.tracker.createIssue(
-    { title: cleanTitle.text, body: cleanBody.text, repo: opts.repo },
-    deps.cwd,
-  );
-  const ref = issueUrlToRef(issueUrl);
-
   const result: FileIntakeIssueResult = {
-    ok: true,
-    issueUrl,
+    ok: false,
+    issueUrl: '',
     size,
     priority,
     sizeSource,
@@ -164,66 +279,139 @@ export async function fileIntakeIssue(
     linked: [],
     badRefs: [],
     warnings,
+    metadataFailures: [],
     redactions,
   };
 
-  // ── Apply labels (best-effort; failure is a warning, never a hard fail) ──
-  if (ref) {
-    try {
-      await deps.gh(restAddLabelArgs(ref.repo, ref.number, `priority: ${priority}`), {
-        cwd: deps.cwd,
-      });
-      await deps.gh(restAddLabelArgs(ref.repo, ref.number, `size: ${size}`), { cwd: deps.cwd });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      warnings.push(`label-apply failed: ${msg}`);
-    }
-  } else {
-    warnings.push(`could not parse issue URL "${issueUrl}" — labels not applied`);
-  }
-
-  // ── Record --depends-on link(s), or explicit "no dependencies" ──────────
   const dependsOn = opts.dependsOn ?? [];
+  const validDependencies: ValidDependency[] = [];
   if (dependsOn.length === 0) {
     result.dependsOnDecision = 'none';
   } else {
     result.dependsOnDecision = 'linked';
-    for (const dep of dependsOn) {
-      const parsed = parseSourceRef(dep);
+    for (const dependency of dependsOn) {
+      const parsed = parseSourceRef(dependency);
       if (!parsed) {
-        result.badRefs.push(dep);
-        warnings.push(`--depends-on ref "${dep}" is not a valid owner/repo#N reference`);
+        result.badRefs.push(dependency);
+        warnings.push(`--depends-on ref "${dependency}" is not a valid owner/repo#N reference`);
         continue;
       }
-      if (ref) {
-        try {
-          // The GitHub issue-dependencies API keys on the dependency issue's
-          // numeric database id, not its owner/repo#N ref, and the blocked_by
-          // link is created with POST (not PUT). Resolve the id, then link.
-          const { stdout: depIssueJson } = await deps.gh(
-            ['api', `repos/${parsed.repo}/issues/${parsed.number}`],
-            { cwd: deps.cwd },
-          );
-          const depId = (JSON.parse(depIssueJson) as { id: number }).id;
-          await deps.gh(
-            [
-              'api',
-              '--method',
-              'POST',
-              `repos/${ref.repo}/issues/${ref.number}/dependencies/blocked_by`,
-              '-F',
-              `issue_id=${depId}`,
-            ],
-            { cwd: deps.cwd },
-          );
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          warnings.push(`depends-on link failed for "${dep}": ${msg}`);
-        }
+      const number = Number(parsed.number);
+      if (!Number.isSafeInteger(number) || number < 1) {
+        result.badRefs.push(dependency);
+        warnings.push(`--depends-on ref "${dependency}" is not a valid owner/repo#N reference`);
+        continue;
       }
-      result.linked.push(dep);
+      validDependencies.push({ source: dependency, repo: parsed.repo, number });
     }
   }
 
+  // The wrapper does not expose a reusable post-create grant: it may submit
+  // metadata only while executeGithubIssueCreationTransaction is still
+  // handling this exact creation response, and every metadata target is
+  // rebuilt from that response.
+  const authority = await resolveGithubIssueCreationAuthority(deps.creation.authority);
+  if (!authority) {
+    warnings.push('issue creation refused: unresolved-actor');
+    return result;
+  }
+
+  const repository = opts.repo ?? authority.repository;
+  const linked = new Set<string>();
+  let transaction;
+  try {
+    transaction = await executeGithubIssueCreationTransaction({
+      authority: deps.creation.authority,
+      creation: {
+        operation: 'issue.create',
+        access: 'create',
+        target: { repository, kind: 'repository' },
+        context: { actor: authority.actor },
+        payload: { title: cleanTitle.text, body: cleanBody.text },
+      },
+    }, {
+      run: async (request) => {
+      if (request.operation !== 'issue.create') return { kind: 'refused', reason: 'unsupported-operation' };
+      const response = await deps.creation.operations.run(request);
+        if (isRunnerRefusal(response)) return response;
+        const created = canonicalIssue(response.created, repository);
+        if (!created) return response;
+
+        const metadata: Array<{ request: GithubFeatureWriteOperationRequest; dependency?: ValidDependency }> = [
+          {
+            request: {
+              operation: 'issue.label.add', access: 'feature-write', target: created,
+              context: { actor: authority.actor }, payload: { label: `priority: ${priority}` },
+            },
+          },
+          {
+            request: {
+              operation: 'issue.label.add', access: 'feature-write', target: created,
+              context: { actor: authority.actor }, payload: { label: `size: ${size}` },
+            },
+          },
+          ...validDependencies.map((dependency) => ({
+            request: {
+              operation: 'issue.dependency.add' as const, access: 'feature-write' as const, target: created,
+              context: { actor: authority.actor },
+              // The dependency is payload data only.  Its repository is never
+              // a mutation target and a read of it grants no authority.
+              payload: { dependency: { repository: dependency.repo, kind: 'issue' as const, number: dependency.number } },
+            },
+            dependency,
+          })),
+        ];
+        const metadataFailures = [...(response.metadataFailures ?? [])];
+        for (const entry of metadata) {
+          try {
+            const metadataResponse = await deps.creation.operations.run(entry.request);
+            const error = metadataFailureError(metadataResponse);
+            if (error) {
+              metadataFailures.push({
+                operation: entry.request.operation,
+                error: entry.dependency
+                  ? `depends-on link failed for "${entry.dependency.source}": ${error}`
+                  : error,
+              });
+            } else if (entry.dependency) {
+              linked.add(entry.dependency.source);
+            }
+          } catch (error) {
+            metadataFailures.push({
+              operation: entry.request.operation,
+              error: entry.dependency
+                ? `depends-on link failed for "${entry.dependency.source}": ${error instanceof Error ? error.message : String(error)}`
+                : error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+          return { created, ...(metadataFailures.length > 0 ? { metadataFailures } : {}) };
+      },
+    });
+  } finally {
+    (deps.creation.operations as GithubOperationRunner & { closeCreationScope?: () => void }).closeCreationScope?.();
+  }
+
+  if (transaction.kind === 'executed' || (transaction.kind === 'partial' && transaction.created)) {
+    const created = transaction.created!;
+    result.ok = true;
+    result.issueUrl = creationUrl(created);
+    result.linked.push(...linked);
+    for (const failure of transaction.kind === 'partial' ? transaction.metadataFailures : []) {
+      result.metadataFailures.push({ operation: failure.operation, error: failure.error });
+      warnings.push(failure.operation === 'issue.dependency.add'
+        ? failure.error
+        : `label-apply failed: ${failure.error}`);
+    }
+    return result;
+  }
+  if (transaction.kind === 'partial') {
+    result.metadataFailures.push(...transaction.metadataFailures);
+    warnings.push(...transaction.metadataFailures.map((failure) => failure.error));
+  } else if (transaction.kind === 'refused') {
+    warnings.push(`issue creation refused: ${transaction.reason}`);
+  } else {
+    warnings.push(`issue creation failed: ${transaction.error}`);
+  }
   return result;
 }

@@ -1,4 +1,4 @@
-// Covers: task:2, task:3, task:4, task:6
+// Covers: task:2, task:3, task:4, task:6, task:23
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import chalk from 'chalk';
 import { readFileSync } from 'node:fs';
@@ -71,6 +71,19 @@ describe('renderDaemonEvent', () => {
       requested: 'stale',
       intent: 'restage ship tail after build kickback',
     })).toEqual(['· ✋ manual_test status write refused: skipped → stale (restage ship tail after build kickback)']);
+  });
+
+  it('renders an ownership refusal with the same reason and remedy as the terminal', () => {
+    expect(lines({
+      type: 'github_operation_refused',
+      operator: 'alice',
+      target: { repository: 'acme/owned', kind: 'issue', number: 17 },
+      operation: 'issue.comment.create',
+      reason: 'other-owner',
+      remedy: 'ask-resource-owner',
+    })).toEqual([
+      '· ✋ GitHub operation refused: issue.comment.create on acme/owned#17 (other-owner); remedy: ask-resource-owner',
+    ]);
   });
 
   it('renders every confidence-suppressed build-review finding alongside the outer verdict', () => {

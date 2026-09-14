@@ -11,8 +11,35 @@ import type {
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
 import type { SchedulingUnitRef } from './scheduling-unit.js';
+import type {
+  GithubOperationName,
+  GithubOperationRefusalReason,
+  GithubOperationTarget,
+} from '../engine/github-operations.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
+
+/** Closed operator actions for a refused guarded GitHub operation. */
+export type GithubOperationRefusalRemedy =
+  | 'ask-resource-owner'
+  | 'configure-operator-identity'
+  | 'record-feature-ownership'
+  | 'repair-ownership-provenance'
+  | 'retry-provenance-read'
+  | 'correct-operation-target'
+  | 'correct-operation-payload'
+  | 'use-supported-operation'
+  | 'request-explicit-authorization';
+
+/** Secret-safe ownership refusal carried by the canonical event spine. */
+export interface GithubOperationRefusedEvent {
+  type: 'github_operation_refused';
+  operator: string;
+  target: GithubOperationTarget;
+  operation: GithubOperationName;
+  reason: GithubOperationRefusalReason;
+  remedy: GithubOperationRefusalRemedy;
+}
 
 /** Daemon-lifetime backlog dimensions. Kept closed so metric cardinality is bounded. */
 export type BacklogState = 'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked';
@@ -496,6 +523,7 @@ export type ConductorEvent =
       requested: 'stale';
       intent: string;
     }
+  | GithubOperationRefusedEvent
   | ProviderAttemptEvent
   | ProviderStreamProgressEvent
   | {

@@ -9,6 +9,7 @@
  */
 
 import type { GhRunner, GitRunner } from './pr-labels.js';
+import type { GithubOperationRunner } from './github-operations.js';
 import {
   makeProductionGh,
   makeProductionGit,
@@ -21,7 +22,7 @@ import {
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-interface GhPrListItem {
+export interface HaltPrReconciliationTarget {
   number: number;
   url: string;
   body?: string;
@@ -80,6 +81,13 @@ interface ReconcileOpts {
   projectRoot: string;
   log?: (msg: string) => void;
   runGh?: GhRunner;
+  /**
+   * Guarded mutation seam for this sweep. Reads continue through `runGh`, but
+   * every presentation write receives a fresh target-bound ownership decision.
+   * An absent runner deliberately leaves the legacy read runner unable to
+   * mutate through the PR primitives.
+   */
+  operations?: GithubOperationRunner | ((pr: HaltPrReconciliationTarget) => GithubOperationRunner | undefined);
   runGit?: GitRunner;
   cache?: Map<string, PrSweepOutcome>;
 }
@@ -99,14 +107,14 @@ interface ReconcileOpts {
  * - Best-effort / non-throwing (errors logged but never re-thrown)
  * - Returns void
  */
-export async function reconcileHaltPrs({ projectRoot, log, runGh, runGit, cache }: ReconcileOpts): Promise<void> {
+export async function reconcileHaltPrs({ projectRoot, log, runGh, operations, runGit, cache }: ReconcileOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
   const git = runGit ?? makeProductionGit();
   const outcomeCache = cache ?? new Map<string, PrSweepOutcome>();
 
   try {
     // ── Step 1: enumerate open PRs ─────────────────────────────────────────
-    let prList: GhPrListItem[] = [];
+    let prList: HaltPrReconciliationTarget[] = [];
     try {
       const { stdout } = await gh(
         [
@@ -121,7 +129,7 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, runGit, cache 
         ],
         { cwd: projectRoot },
       );
-      prList = JSON.parse(stdout || '[]') as GhPrListItem[];
+      prList = JSON.parse(stdout || '[]') as HaltPrReconciliationTarget[];
     } catch (err) {
       log?.(`[halt-pr-reconciliation] failed to enumerate PRs: ${err}`);
       return; // best-effort: no-op on list failure
@@ -144,6 +152,13 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, runGit, cache 
     // ── Step 3: for each marked PR, ensure it's conform (draft + labeled) ──
     for (const pr of markedPrs) {
       try {
+        const guardedOperations = typeof operations === 'function' ? operations(pr) : operations;
+        const prRunner = guardedOperations === undefined
+          ? gh
+          : Object.assign(
+            async (args: string[], opts: { cwd: string }) => gh(args, opts),
+            guardedOperations,
+          );
         const isDraft = pr.isDraft ?? false;
         const labels = (pr.labels ?? []).map((l) => l.name ?? '').filter(Boolean);
         const hasLabel = labels.includes('needs-remediation');
@@ -162,11 +177,11 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, runGit, cache 
               `[halt-pr-reconciliation] ${pr.url} halt resolved (shipped record for ${slug} on ${pr.headRefName}) — clearing`,
             );
           }
-          const clearResult = await cleanupHaltPresentation(gh, projectRoot, pr.url, log);
+          const clearResult = await cleanupHaltPresentation(prRunner, projectRoot, pr.url, log);
           // Supersede the halt comment in place (same marker → edited, never
           // duplicated) so the PR thread no longer reads as blocked.
           await upsertComment(
-            gh,
+            prRunner,
             projectRoot,
             pr.url,
             NEEDS_REMEDIATION_MARKER,
@@ -196,7 +211,7 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, runGit, cache 
 
         // Non-conforming: call ensureHaltPresentation to heal it
         emit(`[halt-pr-reconciliation] healing ${pr.url}: isDraft=${isDraft}, hasLabel=${hasLabel}`);
-        const result = await ensureHaltPresentation(gh, projectRoot, pr.url, log);
+        const result = await ensureHaltPresentation(prRunner, projectRoot, pr.url, log);
         if (result === 'confirmed') {
           emit(`[halt-pr-reconciliation] ${pr.url} healed (confirmed)`);
           outcomeCache.set(pr.url, 'healed');

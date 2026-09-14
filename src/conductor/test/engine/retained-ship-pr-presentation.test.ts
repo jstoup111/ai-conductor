@@ -31,6 +31,7 @@ import {
 } from '../../src/engine/pr-labels.js';
 import { buildStepRegistry, firstShipConsumer } from '../../src/engine/steps.js';
 import type { HarnessConfig } from '../../src/types/index.js';
+import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
 
 const PR_URL = 'https://github.com/acme/repo/pull/1292';
 const CWD = '/repo';
@@ -109,8 +110,51 @@ function fakeGitHub(pr: FakePr): { gh: GhRunner; calls: string[][]; pr: FakePr }
   return { gh, calls, pr };
 }
 
+/** Drive the fake PR through the same guarded-operation seam production uses. */
+function guardedOperations(gh: GhRunner): GithubOperationRunner {
+  return {
+    async run(request) {
+      if (request.target.kind !== 'pull-request') {
+        throw new Error(`unexpected target: ${request.target.kind}`);
+      }
+      const prUrl = `https://github.com/${request.target.repository}/pull/${request.target.number}`;
+      switch (request.operation) {
+        case 'pull-request.label.remove': {
+          const label = request.payload && 'label' in request.payload ? request.payload.label : undefined;
+          if (typeof label !== 'string') throw new Error('missing label payload');
+          await gh([
+            'api', '--method', 'DELETE',
+            `repos/${request.target.repository}/issues/${request.target.number}/labels/${encodeURIComponent(label)}`,
+          ], { cwd: CWD });
+          return {};
+        }
+        case 'pull-request.comment.create': {
+          const body = request.payload && 'body' in request.payload ? request.payload.body : undefined;
+          if (typeof body !== 'string') throw new Error('missing comment body');
+          await gh(['pr', 'comment', prUrl, '--body', body], { cwd: CWD });
+          return {};
+        }
+        case 'pull-request.edit': {
+          const args = ['pr', 'edit', prUrl];
+          if (request.payload && 'title' in request.payload && request.payload.title !== undefined) {
+            args.push('--title', request.payload.title);
+          }
+          if (request.payload && 'body' in request.payload && request.payload.body !== undefined) {
+            args.push('--body', request.payload.body);
+          }
+          await gh(args, { cwd: CWD });
+          return {};
+        }
+        default:
+          throw new Error(`unexpected operation: ${request.operation}`);
+      }
+    },
+  };
+}
+
 const repairDeps = (gh: GhRunner) => ({
   gh,
+  operations: guardedOperations(gh),
   cwd: CWD,
   prUrl: PR_URL,
   branch: BRANCH,

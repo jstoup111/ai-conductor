@@ -27,6 +27,12 @@ import {
   HALT_PR_BANNER_SENTINEL,
   HALT_PR_BANNER_LINES,
 } from './pr-labels.js';
+import { basename } from 'node:path';
+import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
+import {
+  createGuardedGithubOperationRunner,
+  type GithubMutationExecutionContext,
+} from './tracker-client.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -45,6 +51,9 @@ export interface EscalateBuildFailureOpts {
   runGit?: GitRunner;
   /** Injectable gh runner (defaults to the production factory). */
   runGh?: GhRunner;
+  /** Guarded remote-write seam; absent context refuses publication. */
+  remoteGit?: typeof executeRemoteGit;
+  remoteMutation?: GithubMutationExecutionContext;
 }
 
 export interface EscalateBuildFailureResult {
@@ -138,18 +147,45 @@ export async function escalateBuildFailure(
   }
 
   // ── Step 3: push the branch ───────────────────────────────────────────────
+  let mutation: GithubMutationExecutionContext | undefined;
   try {
-    await runGit(['push', '-u', 'origin', branch], { cwd });
+    mutation = opts.remoteMutation ?? await resolveFeatureRemoteMutation({
+      cwd,
+      slug: basename(cwd),
+      branch,
+      git: (args) => runGit(args, { cwd }),
+      gh: runGh,
+    });
+    const pushed = await (opts.remoteGit ?? executeRemoteGit)(
+      ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`],
+      {
+        cwd,
+        config: (args) => runGit(args, { cwd }),
+        runRemoteGit: runGit,
+        mutation,
+      },
+    );
+    if (pushed.kind !== 'executed') throw new Error(remoteFailure(pushed));
   } catch (err) {
     log?.(`[escalate] push failed — skipping PR creation: ${err}`);
     return {}; // FR-7: push failure silently aborts (no partial PR)
   }
 
+  // Keep the raw callable only for the established read/observation paths in
+  // pr-labels. Every create/presentation/comment mutation goes through this
+  // fresh guarded operation adapter, which reauthorizes the provenance for
+  // each individual write.
+  const operations = Object.assign(
+    (args: string[], options: { cwd: string }) => runGh(args, options),
+    createGuardedGithubOperationRunner(runGh, { cwd, mutation }),
+  );
+
   // ── Step 4: find or create a draft PR ────────────────────────────────────
-  const { prUrl } = await findOrCreatePr(
-    runGh,
+  const { prUrl, outcome } = await findOrCreatePr(
+    operations,
     cwd,
     {
+      repository: mutation?.provenance.repository,
       branch,
       base,
       draft: true,
@@ -159,13 +195,22 @@ export async function escalateBuildFailure(
     log,
   );
 
+  if (outcome?.kind === 'refused') {
+    log?.(`[escalate] guarded PR creation refused: ${outcome.reason}`);
+    return {};
+  }
+
   if (!prUrl) {
     log?.('[escalate] could not find or create PR — skipping label and comment');
     return {};
   }
 
   // ── Step 5: ensure halt presentation (draft + label + body marker) ────────
-  await ensureHaltPresentation(runGh, cwd, prUrl, log);
+  const presentation = await ensureHaltPresentation(operations, cwd, prUrl, log);
+  if (presentation === 'refused') {
+    log?.('[escalate] guarded halt presentation refused — skipping comment');
+    return {};
+  }
 
   // ── Step 6: comment with failure reason (priority artifact, non-throwing) ─
   // Attempt this independently of whether the label step succeeded.
@@ -184,7 +229,17 @@ export async function escalateBuildFailure(
     'Manual remediation is required.',
   ].join('\n');
 
-  await upsertComment(runGh, cwd, prUrl, NEEDS_REMEDIATION_MARKER, commentBody, log);
+  const comment = await upsertComment(operations, cwd, prUrl, NEEDS_REMEDIATION_MARKER, commentBody, log);
+  if (comment?.kind === 'refused') {
+    log?.(`[escalate] guarded remediation comment refused: ${comment.reason}`);
+    return {};
+  }
 
   return { prUrl };
+}
+
+function remoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {
+  if (result.kind === 'failed') return result.error;
+  if (result.kind === 'refused') return result.reason;
+  return 'remote Git operation did not execute';
 }

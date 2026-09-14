@@ -294,7 +294,7 @@ export function orderBacklog(items: BacklogItem[], res: PriorityResolution): Bac
  * @param runner - Injected executor for gh commands
  * @returns IssueLabelReader function that fetches labels for refs
  */
-export function ghIssueLabelReader(runner: GhRunner): IssueLabelReader {
+export function ghIssueLabelReader(runner: GhRunner, cwd = '.'): IssueLabelReader {
   return async (refs: string[]) => {
     const result = new Map<string, string[] | 'not-found'>();
 
@@ -312,9 +312,7 @@ export function ghIssueLabelReader(runner: GhRunner): IssueLabelReader {
         const { owner, repo } = ownerRepo;
         const { number } = parsed;
         // gh api accepts exactly ONE endpoint argument — path must be a single token
-        const args = ['api', `repos/${owner}/${repo}/issues/${number}`];
-
-        const { stdout } = await runner(args, { cwd: '.' });
+        const { stdout } = await runner(['api', `repos/${owner}/${repo}/issues/${number}`], { cwd });
         const data = JSON.parse(stdout) as { labels?: Array<{ name: string }> | null };
         const labels = (data.labels ?? []).map((l) => l.name ?? '').filter(Boolean);
         result.set(ref, labels);

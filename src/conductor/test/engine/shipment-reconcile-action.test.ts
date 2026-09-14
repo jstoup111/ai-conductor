@@ -161,7 +161,7 @@ describe('shipment reconciliation GitHub Actions adapter', () => {
       ['pr', 'view', 'https://github.com/acme/conductor/pull/916', '--json', 'url,body,files,headRefOid'],
       ['api', `repos/acme/conductor/git/ref/heads/${branch}`],
       ['pr', 'list', '--head', branch, '--base', 'main', '--state', 'open', '--json', 'url', '--limit', '1'],
-      ['pr', 'create', '--base', 'main', '--head', branch, '--title', title, '--body', body],
+      ['pr', 'create', '-R', 'acme/conductor', '--title', title, '--body', body, '--head', branch, '--base', 'main'],
       ['pr', 'view', repairUrl, '--json', 'url,headRefOid'],
       ['api', '--method', 'POST', 'repos/acme/conductor/statuses/repair-head', '-f', 'state=success', '-f', 'context=shipped-record', '-f', `description=${description}`],
     ];
