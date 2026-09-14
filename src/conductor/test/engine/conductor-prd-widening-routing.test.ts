@@ -1,7 +1,7 @@
 // Covers: task:21
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,6 +15,8 @@ vi.mock('../../src/engine/build-review-effective.js', async (importOriginal) => 
 }));
 
 import { Conductor, routePrdAuditOverScopeV2, type StepRunner } from '../../src/engine/conductor.js';
+import { AcceptedWideningDecisionStore, renderOverScopeDecisionBlock } from '../../src/engine/accepted-widenings.js';
+import { capturePrdWideningDecisions } from '../../src/engine/prd-widening-capture.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import { persistPrdWideningOffers } from '../../src/engine/prd-widening-offers.js';
@@ -40,7 +42,7 @@ const report = (evidence: string, criterion = 'NC.1') => [
 
 const sourceId = (evidence: string, criterion = 'NC.1') => prdWideningSourceId({ criterion, grade: 'OVER_SCOPE', evidence, prdIds: [] });
 const caseRecord = {
-  id: 'case-1', domain: 'prd_widening' as const,
+  id: 'case-1', domain: 'prd_widening' as const, offeredCriterion: 'NC.1',
   originalSources: [{ sourceId: sourceId('Original wording.'), snapshot: 'Original wording.' }],
   currentSources: [{ sourceId: sourceId('Replacement wording.'), snapshot: 'Replacement wording.', recordedAt: '2026-09-09T00:00:00.000Z' }],
   relationships: [{ currentSourceId: sourceId('Replacement wording.'), kind: 'same-case' as const, caseId: 'case-1', reason: 'Same behavior.' }],
@@ -76,7 +78,7 @@ describe('v2 PRD widening routing', () => {
       .toMatchObject({
         kind: 'halt',
         refused: [{
-          criterion: 'NC.2', kind: 'revise-decision', offerEntryId: 'case-1',
+          criterion: 'NC.1', kind: 'revise-decision', offerEntryId: 'case-1',
           originalSource: refusal.originalSource, priorDecision: { id: 'decision-refuse', revision: 1 },
         }],
       });
@@ -87,6 +89,13 @@ describe('v2 PRD widening routing', () => {
       ...caseRecord,
       reconciliationDigest: undefined,
     }])).toMatchObject({ kind: 'halt', undecided: [{ criterion: 'NC.1' }] });
+  });
+
+  it('withholds an editable block when a stored case lacks its immutable offer', () => {
+    const route = routePrdAuditOverScopeV2(report('Replacement wording.'), [], [{ ...caseRecord, offeredCriterion: undefined }]);
+    expect(route).toMatchObject({ kind: 'halt', detail: expect.stringContaining('projection-failed'),
+      undecided: [], refused: [], defects: [{ kind: 'projection-failed', criterion: 'NC.1' }],
+    });
   });
 
   let projectRoot: string;
@@ -108,7 +117,7 @@ describe('v2 PRD widening routing', () => {
     await writeFile(join(projectRoot, '.pipeline', 'HALT.cleared'), [
       '```json over-scope-decisions',
       JSON.stringify([{
-        criterion: 'NC.1', offerEntryId: offer.offerEntryId,
+        criterion: offer.criterion, summary: offer.summary, relation: offer.relation, offerEntryId: offer.offerEntryId,
         originalCaseId: offer.originalCaseId, originalSource: offer.originalSource,
         decision: 'accept', rationale: 'The operator accepted the original behavior.',
       }]),
@@ -125,6 +134,58 @@ describe('v2 PRD widening routing', () => {
       step.name, pending.includes(step.name) ? 'pending' : 'done',
     ])) as ConductState;
   }
+
+  it.each(['same-case', 'different'] as const)('captures the rendered %s offer after reconciliation', async (kind) => {
+    const feature = { version: 'v1' as const, repository: '/fixture/repository', feature: 'prd-widening-routing' };
+    const caseStore = new RemediationCaseStore(projectRoot, feature);
+    const original = await caseStore.read();
+    if (!original.ok || original.state.version !== 'v2') throw new Error('missing fixture');
+    const caseId = original.state.prdWideningCases[0]!.id;
+    const clearPath = join(projectRoot, '.pipeline', 'HALT.cleared');
+    await writeFile(clearPath, (await readFile(clearPath, 'utf8')).replace('"accept"', '"refuse"'));
+    const runner: StepRunner = { run: vi.fn(async () => ({ success: true, finalStructuredResult: {
+      version: 'v1', results: [{ sourceId: sourceId('Reworded current behavior.', 'NC.2'), kind,
+        ...(kind === 'same-case' ? { caseId } : {}),
+        reason: 'Fixture semantic judgement.',
+      }],
+    } })) };
+    const entry = new Conductor({ projectRoot, stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter() }) as unknown as {
+      preparePrdWideningBeforeAudit(): Promise<string | undefined>;
+      routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<ReturnType<typeof routePrdAuditOverScopeV2>>;
+    };
+    await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
+    await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), report('Reworded current behavior.', 'NC.2'));
+    const route = await entry.routeCurrentPrdAuditOverScope(feature.feature, { feature_desc: feature.feature } as ConductState);
+    if (route.kind !== 'halt') throw new Error('expected an operator offer');
+    expect(route.findings).toEqual(expect.arrayContaining([expect.objectContaining({ criterion: 'NC.2' })]));
+    const rendered = renderOverScopeDecisionBlock([...route.undecided, ...route.refused]);
+    const cleared = rendered.replaceAll('"decision": "pending"', '"decision": "accept", "rationale": "Explicit operator reversal."');
+    const result = await capturePrdWideningDecisions(cleared, {
+      operator: 'operator', offerStore: caseStore,
+      decisionStore: new AcceptedWideningDecisionStore(projectRoot, { ...feature, version: 1 }),
+    });
+    expect(result.defects).toEqual([]);
+    expect(result.captured).toEqual([expect.objectContaining({ authority: 'accept' })]);
+    expect(runner.run).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports the actual context size and limit through recovery and the event spine', async () => {
+    const events = new ConductorEventEmitter();
+    const emitted: unknown[] = [];
+    events.on('prd_widening_reconciled', event => { emitted.push(event); });
+    const runner: StepRunner = { run: vi.fn() };
+    const entry = new Conductor({ projectRoot, stateFilePath: statePath, stepRunner: runner, events }) as unknown as {
+      preparePrdWideningBeforeAudit(): Promise<string | undefined>;
+      routeCurrentPrdAuditOverScope(featureDesc: string, state: ConductState): Promise<unknown>;
+    };
+    await expect(entry.preparePrdWideningBeforeAudit()).resolves.toBeUndefined();
+    await writeFile(join(projectRoot, '.pipeline', 'prd-audit.md'), report('x'.repeat(8001)));
+    await expect(entry.routeCurrentPrdAuditOverScope('prd-widening-routing', {} as ConductState)).resolves.toMatchObject({
+      kind: 'halt', detail: expect.stringContaining('context-overflow:proseBytes actual=8001 limit=8000'),
+    });
+    expect(emitted).toEqual(expect.arrayContaining([expect.objectContaining({ reason: 'context-overflow:proseBytes actual=8001 limit=8000' })]));
+    expect(runner.run).not.toHaveBeenCalled();
+  });
 
   it('renders captured original authority into both serial and concurrent audit dispatches without semantic remediation', async () => {
     const contexts: unknown[] = [];

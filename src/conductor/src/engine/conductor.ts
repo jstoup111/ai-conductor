@@ -44,7 +44,7 @@ import { readRemediationCaseStoreFeature, RemediationCaseStore } from './remedia
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { AcceptedWideningDecisionStore, type AcceptedWideningDecision } from './accepted-widenings.js';
 import { preparePrdWideningEntry } from './prd-widening-entry.js';
-import { persistPrdWideningOffers } from './prd-widening-offers.js';
+import { offeredCaseToPersistedOffer, persistPrdWideningOffers } from './prd-widening-offers.js';
 import { buildPrdWideningContext, prdWideningSourceId } from './prd-widening-context.js';
 import { coordinatePrdWidening } from './prd-widening-coordinator.js';
 import { PRD_WIDENING_RECONCILIATION_SCHEMA } from './prd-widening-contract.js';
@@ -1099,12 +1099,34 @@ export function routePrdAuditOverScopeV2(
   const refused = findings.filter((finding) => finding.classification === 'blocking-refused');
   const recorded = findings.map(({ relation: _relation, classification: _classification, ...finding }) => finding);
   if (undecided.length || refused.length) {
+    const defects: Array<{ kind: string; criterion: string }> = [];
+    const editable = (items: typeof findings) => items.flatMap(({ classification: _classification, ...finding }) => {
+      if (!/^NC\.\d+$/i.test(finding.criterion)) return [finding];
+      const record = 'offerEntryId' in finding
+        ? cases.find((candidate) => candidate.id === finding.offerEntryId)
+        : undefined;
+      const offer = record && offeredCaseToPersistedOffer(record);
+      if (!offer) {
+        defects.push({ kind: 'projection-failed', criterion: finding.criterion });
+        return [];
+      }
+      // Verdict rows keep current report identities; editable offers retain
+      // their persisted identities, even after renumbering or wording drift.
+      return [{ ...finding, ...offer,
+        ...('kind' in finding && finding.kind === 'revise-decision' ? { kind: finding.kind, priorDecision: finding.priorDecision } : {}),
+      }];
+    });
+    const pendingOffers = editable(undecided);
+    const refusedOffers = editable(refused);
     return {
       kind: 'halt', haltClass: OVER_SCOPE_HALT_CLASS,
-      detail: `OVER_SCOPE visible behavior on ${[...undecided, ...refused].map((finding) => finding.criterion).join(', ')}.`,
+      detail: defects.length
+        ? renderPrdWideningRecovery('projection-failed', defects.map((defect) => defect.criterion))
+        : `OVER_SCOPE visible behavior on ${[...undecided, ...refused].map((finding) => finding.criterion).join(', ')}.`,
       findings: recorded,
-      undecided: undecided.map(({ classification: _classification, ...finding }) => finding),
-      refused: refused.map(({ classification: _classification, ...finding }) => finding),
+      undecided: pendingOffers,
+      refused: refusedOffers,
+      ...(defects.length ? { defects } : {}),
     };
   }
   const hasOtherBlockingGrade = parsed.value.findings.some((finding) => finding.grade !== 'PASS' && finding.grade !== 'OVER_SCOPE');
@@ -4049,7 +4071,9 @@ export class Conductor {
         ? 'missing-operator'
         : prepared.capture.defects.some((defect) => defect.kind === 'write-failed' || defect.kind === 'offer-read-failed')
           ? 'persistence-failed'
-          : 'malformed-history';
+          : prepared.capture.defects.some((defect) => defect.kind === 'unsupported-legacy-clear')
+            ? 'unsupported-history'
+            : 'malformed-history';
       return renderPrdWideningRecovery(reason, prepared.capture.defects.flatMap((defect) => defect.offerEntryId ? [defect.offerEntryId] : []));
     }
     const decisions = await decisionStore.read();
@@ -4128,10 +4152,11 @@ export class Conductor {
     const context = buildPrdWideningContext(report, prdCases,
       storedDecisions.kind === 'valid' ? storedDecisions.state.decisions : [], relations);
     if (!context.ok) {
-      await this.emitPrdWideningRejections(`context-overflow:${context.dimension}`, visible.map(prdWideningSourceId));
+      const reason = `context-overflow:${context.dimension} actual=${context.actual} limit=${context.limit}`;
+      await this.emitPrdWideningRejections(reason, visible.map(prdWideningSourceId));
       return renderPrdWideningRecovery(
         'context-overflow',
-        [`context:${context.dimension}`, ...visible.map(prdWideningSourceId)],
+        [reason, ...visible.map(prdWideningSourceId)],
       );
     }
     // An exact original offer waits for an explicit operator decision. Once

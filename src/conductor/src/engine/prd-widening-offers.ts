@@ -60,7 +60,7 @@ function validInput(input: PrdWideningOfferInput): boolean {
     bounded(input.reportSnapshot) && input.relation === 'outside-visible';
 }
 
-function offeredCaseToPersistedOffer(
+export function offeredCaseToPersistedOffer(
   record: RemediationCasePrdWideningRecord,
 ): OverScopePersistedOffer | undefined {
   const original = record.originalSources.at(0);

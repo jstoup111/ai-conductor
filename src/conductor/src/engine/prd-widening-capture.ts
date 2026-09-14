@@ -134,7 +134,7 @@ function parseEntry(value: unknown): ClearedDecisionEntry | undefined {
  */
 export function parseLegacyPrdWideningClear(value: string): LegacyPrdWideningClearParse {
   const match = value.match(/```json\s+over-scope-decisions\s*\n([\s\S]*?)\n```/i);
-  if (!match) return { kind: 'absent', entries: [] };
+  if (!match) return hasUnsupportedLegacyClear(value) ? { kind: 'unsupported' } : { kind: 'absent', entries: [] };
   let parsed: unknown;
   try { parsed = JSON.parse(match[1]!); } catch { return { kind: 'unsupported' }; }
   if (!Array.isArray(parsed)) return { kind: 'unsupported' };
@@ -201,8 +201,8 @@ async function materializeLegacySource(
     source.sourceId === sourceId && source.snapshot === entry.summary));
 }
 
-function hasLegacyDecisionFence(value: string): boolean {
-  return /```(?:json\s+)?over-scope-decisions\s*\n[\s\S]*?\n```/i.test(value);
+function hasUnsupportedLegacyClear(value: string): boolean {
+  return /```(?:json\s+)?over-scope-decisions\s*\n[\s\S]*?\n```/i.test(value) || /^\s*OVER_SCOPE_ACCEPT:/m.test(value);
 }
 
 function matchesPersistedOffer(
@@ -239,7 +239,7 @@ export async function capturePrdWideningDecisions(
 ): Promise<CapturePrdWideningDecisionsResult> {
   const match = clearedBlock.match(/```json\s+over-scope-decisions\s*\n([\s\S]*?)\n```/i);
   if (!match) {
-    return hasLegacyDecisionFence(clearedBlock)
+    return hasUnsupportedLegacyClear(clearedBlock)
       ? { kind: 'captured', captured: [], defects: [{ kind: 'unsupported-legacy-clear' }] }
       : { kind: 'absent', captured: [], defects: [] };
   }

@@ -1180,6 +1180,9 @@ If `HALT.class` is `over-scope`, do not clear the body unchanged. Edit the fence
 deciding as `pending`. An accept clears that criterion; a refusal records the decision but keeps
 the halt active as “refused — rework required.”
 
+Keep the offered criterion and summary unchanged, including when a revision refers to an older
+report number or wording. Only the decision and rationale are editable.
+
 For a durable PRD-widening recovery, keep every unaffected decision and refusal in place. The
 halt body names the affected source, case, decision, or artifact and one of these actions:
 
@@ -1189,7 +1192,7 @@ halt body names the affected source, case, decision, or artifact and one of thes
 - `persistence-failed`: resolve the store or lease failure and verify the durable records.
 - `invalid-provider-result`: retry only once the selected provider supports the required native schema.
 - `stale-relation`: retain the decision and rerun reconciliation against the current report.
-- `context-overflow`: reduce the cited source input; no history was pruned.
+- `context-overflow`: the halt and event name the dimension, actual size, and limit; reduce the cited source input without pruning history.
 - `projection-failed`: repair the named stored evidence or verdict renderer without re-deciding valid authority.
 - `uncertain-relation`: review the preserved original and current evidence, then submit a new explicit decision if desired.
 

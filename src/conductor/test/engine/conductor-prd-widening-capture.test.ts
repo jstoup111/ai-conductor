@@ -39,7 +39,7 @@ describe('Conductor PRD widening capture entry', () => {
     await writeFile(join(projectRoot, '.pipeline', 'HALT.cleared'), [
       '```json over-scope-decisions',
       JSON.stringify([{
-        criterion: 'NC.1', summary: 'Editable wording is not authority.', relation: 'outside-visible',
+        criterion: 'NC.1', summary: offer.summary, relation: 'outside-visible',
         offerEntryId: offer.originalCaseId, originalCaseId: offer.originalCaseId,
         originalSource: { id: offer.originalSource.id, snapshot: offer.originalSource.snapshot },
         decision: 'accept', rationale: 'The operator accepted the original behavior.',
@@ -88,6 +88,19 @@ describe('Conductor PRD widening capture entry', () => {
     await new Conductor({ projectRoot, stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter(), fromStep: 'manual_test', mode: 'auto', maxRetries: 1 }).run();
     expect(runner.run).not.toHaveBeenCalled();
     expect(await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).toContain('malformed');
+  });
+
+  it('names unsupported legacy recovery before dispatch and retains the original clear', async () => {
+    const raw = 'OVER_SCOPE_ACCEPT: NC.1 approved by operator';
+    const clearPath = join(projectRoot, '.pipeline', 'HALT.cleared');
+    await writeFile(clearPath, raw);
+    const runner: StepRunner = { run: vi.fn() };
+    const entry = new Conductor({ projectRoot, stateFilePath: statePath, stepRunner: runner, events: new ConductorEventEmitter() }) as unknown as {
+      preparePrdWideningBeforeAudit(): Promise<string | undefined>;
+    };
+    await expect(entry.preparePrdWideningBeforeAudit()).resolves.toContain('unsupported-history');
+    expect(await readFile(clearPath, 'utf8')).toBe(raw);
+    expect(runner.run).not.toHaveBeenCalled();
   });
 
   it('retains a newer fenced refusal beside a migrated v1 acceptance before audit dispatch', async () => {

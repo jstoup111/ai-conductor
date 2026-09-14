@@ -318,6 +318,7 @@ export async function coordinatePrdWidening(input: {
         : {
             id: targetId,
             domain: 'prd_widening' as const,
+            ...(outcome.kind === 'same-case' ? {} : { offeredCriterion: source.criterion.trim() }),
             originalSources: outcome.kind === 'same-case' ? [] : [{ sourceId: source.id, snapshot: source.evidence }],
             currentSources: [{ sourceId: source.id, snapshot: source.evidence, recordedAt: input.now }],
             relationships: [relationship],

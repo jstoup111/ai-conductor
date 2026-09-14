@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 // Covers: task:9
 
 import { ACCEPTED_WIDENINGS_PATH, AcceptedWideningDecisionStore } from '../../src/engine/accepted-widenings.js';
-import { capturePrdWideningDecisions, type PrdWideningCaptureDecisionStore, type PrdWideningCaptureOfferStore } from '../../src/engine/prd-widening-capture.js';
+import { parseLegacyPrdWideningClear, capturePrdWideningDecisions, type PrdWideningCaptureDecisionStore, type PrdWideningCaptureOfferStore } from '../../src/engine/prd-widening-capture.js';
 import { migrateLegacyPrdWideningDecisions } from '../../src/engine/prd-widening-migration.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 
@@ -31,6 +31,21 @@ afterEach(async () => {
 });
 
 describe('legacy PRD widening decision migration', () => {
+  it('reports a retired single-line clear as unsupported without altering its evidence', async () => {
+    const projectRoot = await createProjectRoot();
+    const raw = 'OVER_SCOPE_ACCEPT: NC.1 approved by operator';
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    const path = join(projectRoot, '.pipeline', 'HALT.cleared');
+    await writeFile(path, raw);
+    expect(parseLegacyPrdWideningClear(raw)).toEqual({ kind: 'unsupported' });
+    const decisions = new AcceptedWideningDecisionStore(projectRoot, FEATURE);
+    await expect(capturePrdWideningDecisions(raw, {
+      operator: 'operator', offerStore: new RemediationCaseStore(projectRoot, CASE_FEATURE), decisionStore: decisions,
+    })).resolves.toMatchObject({ captured: [], defects: [{ kind: 'unsupported-legacy-clear' }] });
+    expect(await readFile(path, 'utf8')).toBe(raw);
+    expect(await decisions.read()).toMatchObject({ kind: 'absent' });
+  });
+
   it('captures a pre-offer fenced clear as legacy-provenance history without a modern offer binding', async () => {
     const projectRoot = await createProjectRoot();
     const legacyClear = [

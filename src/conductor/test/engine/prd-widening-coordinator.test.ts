@@ -167,6 +167,7 @@ describe('PRD widening coordinator', () => {
       {
         id: 'prd-widening-different-case',
         domain: 'prd_widening',
+        offeredCriterion: 'NC.20',
         originalSources: [{ sourceId: currentSources[0].id, snapshot: currentSources[0].evidence }],
         currentSources: [{ sourceId: currentSources[0].id, snapshot: currentSources[0].evidence, recordedAt: '2026-09-09T00:00:00.000Z' }],
         relationships: [{
@@ -178,6 +179,7 @@ describe('PRD widening coordinator', () => {
       {
         id: 'prd-widening-uncertain-case',
         domain: 'prd_widening',
+        offeredCriterion: 'NC.21',
         originalSources: [{ sourceId: currentSources[1].id, snapshot: currentSources[1].evidence }],
         currentSources: [{ sourceId: currentSources[1].id, snapshot: currentSources[1].evidence, recordedAt: '2026-09-09T00:00:00.000Z' }],
         relationships: [{
