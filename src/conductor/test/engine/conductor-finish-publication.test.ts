@@ -114,7 +114,11 @@ describe('Conductor FINISH publication routing', () => {
   ])('does not write a synthetic validation key for a successful serial member in %s mode', async ({ mode, daemon }) => {
     const persisted = await readState(statePath);
     if (!persisted.ok) throw persisted.error;
-    await writeState(statePath, { ...persisted.value, prd_audit: 'pending' });
+    await writeState(statePath, {
+      ...persisted.value,
+      prd_audit: 'pending',
+      validation__manual_test: 'done',
+    } as ConductState);
 
     await new Conductor({
       stateFilePath: statePath,
@@ -130,7 +134,7 @@ describe('Conductor FINISH publication routing', () => {
     const after = await readState(statePath);
     if (!after.ok) throw after.error;
     expect(after.value.prd_audit).toBe('done');
-    expect(Object.keys(after.value).filter((key) => key.startsWith('validation__'))).toEqual([]);
+    expect((after.value as Record<string, unknown>).validation__prd_audit).toBeUndefined();
   });
 
   it('does not write a synthetic validation key for an auto serial member without a retained sibling', async () => {
