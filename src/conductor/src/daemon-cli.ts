@@ -2764,6 +2764,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         `${dot} ${chalk.red('✗')} ${chalk.red(`${renderedExecutionSubject(event, event.step)} failed (try ${event.retryCount}): ${event.error}`)}`,
       );
       break;
+    case 'step_interrupted':
+      log(`${dot} ${chalk.yellow('⏸')} ${chalk.yellow(`${renderedExecutionSubject(event, event.step)} interrupted: ${event.reason}`)}`);
+      break;
     case 'step_refused':
       log(
         `${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${renderedExecutionSubject(event, event.step)} refused (${event.kind}): ${event.reason}`)}`,

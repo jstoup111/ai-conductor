@@ -8380,6 +8380,7 @@ export class Conductor {
 
             if (prdAuditRoute?.kind === 'projection-halt') {
               const reason = renderPrdAuditProjectionHalt(prdAuditRoute.reason);
+              await closeSettledMembers(outcomes);
               await this.writeHaltMarker(reason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
@@ -8391,6 +8392,14 @@ export class Conductor {
 
             if (prdAuditRoute?.kind === 'plan-gap-halt') {
               const reason = `prd-audit halted: needs human DECIDE — ${prdAuditRoute.route.detail}`;
+              await this.recordGroupRefusal({
+                state,
+                groupStep: step.name,
+                judgingStep: 'prd_audit',
+                executionContexts: memberExecutionContexts,
+                reason,
+              });
+              await closeSettledMembers(outcomes);
               await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
@@ -8409,6 +8418,14 @@ export class Conductor {
                   prdAuditRoute.route.defects ?? [],
                 ),
               );
+              await this.recordGroupRefusal({
+                state,
+                groupStep: step.name,
+                judgingStep: 'prd_audit',
+                executionContexts: memberExecutionContexts,
+                reason,
+              });
+              await closeSettledMembers(outcomes);
               await this.writeHaltMarker(reason + '\n', prdAuditRoute.route.haltClass);
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);

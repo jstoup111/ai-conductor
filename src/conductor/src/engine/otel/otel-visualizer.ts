@@ -322,6 +322,9 @@ export class OtelVisualizer implements VisualizerPlugin {
       case 'step_failed':
         this.spanManager.onStepFailed(event);
         break;
+      case 'step_interrupted':
+        this.spanManager.onStepInterrupted(event);
+        break;
       case 'step_refused':
         this.spanManager.onStepRefused(event);
         break;

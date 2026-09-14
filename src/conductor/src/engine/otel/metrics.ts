@@ -39,7 +39,7 @@ export interface DispatchDimensions {
   fallback?: boolean;
 }
 
-export type StepTerminalOutcome = 'success' | 'failure' | 'refusal';
+export type StepTerminalOutcome = 'success' | 'failure' | 'interrupted' | 'refusal';
 
 const STEP_DIMENSION_KEYS = ['model', 'effort', 'provider', 'tier'] as const;
 const DISPATCH_DIMENSION_KEYS = [...STEP_DIMENSION_KEYS, 'fallback'] as const;

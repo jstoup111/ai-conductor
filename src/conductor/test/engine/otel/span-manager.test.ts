@@ -1054,6 +1054,48 @@ describe('Task 10: truthful refusal span closure', () => {
       dateNow.mockRestore();
     }
   });
+
+  it('settles a built-in member from its admitted name when its skill spelling differs', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const base = Date.now();
+    let now = base;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const execution = {
+      executionId: 'built-in-prd-audit',
+      subject: { kind: 'lifecycle-step' as const, step: 'prd_audit' as const },
+    };
+    try {
+      vis.start(emitter);
+      await emitter.emit({ type: 'step_started', step: 'prd_audit', index: 0, executionContext: execution });
+      now = base + 100;
+      await emitter.emit({
+        type: 'group_member_step', member: 'prd_audit', skill: 'prd-audit', phase: 'result',
+        outcome: 'verdict:pass', executionContext: execution,
+      });
+      now = base + 10_000;
+      await emitter.emit({ type: 'step_completed', step: 'prd_audit', status: 'done', executionContext: execution });
+      await emitter.emit({ type: 'feature_complete' });
+      await vis.stop();
+
+      const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'prd_audit')!;
+      expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(base + 100);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it('closes a catchably interrupted execution as incomplete rather than ERROR', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'step_interrupted', step: 'build', reason: 'controlled shutdown' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'build')!;
+    expect(span.status.code).toBe(0);
+    expect(span.attributes['conductor.step.status']).toBe('interrupted');
+  });
 });
 
 // ── T20: Incomplete-span close (unit-level coverage for FR-9) ─────────────────

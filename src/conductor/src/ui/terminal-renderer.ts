@@ -173,6 +173,13 @@ export class TerminalRenderer implements UIRenderer {
         this.notify('Conductor', `Step failed: ${event.step}`);
         break;
 
+      case 'step_interrupted':
+        this.currentStep = undefined;
+        this.region.resume();
+        this.region.log(chalk.yellow(`  ⏸ STEP INTERRUPTED: ${this.renderedExecutionSubject(event, event.step)} — ${event.reason}`));
+        await this.renderDashboard();
+        break;
+
       case 'step_refused':
         this.region.resume();
         this.region.log('');
@@ -382,5 +389,5 @@ export class TerminalRenderer implements UIRenderer {
 }
 
 const DEDICATED_EVENT_TYPES = new Set<ConductorEvent['type']>([
-  'step_started', 'step_completed', 'step_failed', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'provider_fallback', 'session_policy', 'rate_limit', 'session_reset', 'credentials_park_progress', 'tier_skip', 'config_skip', 'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached', 'renderer_error', 'pipeline_tail_diagnostic', 'when_skip', 'parallel_started', 'parallel_completed', 'parallel_failure', 'build_progress', 'unattributed_progress', 'build_no_progress', 'pipeline_closeout', 'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
+  'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'provider_fallback', 'session_policy', 'rate_limit', 'session_reset', 'credentials_park_progress', 'tier_skip', 'config_skip', 'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached', 'renderer_error', 'pipeline_tail_diagnostic', 'when_skip', 'parallel_started', 'parallel_completed', 'parallel_failure', 'build_progress', 'unattributed_progress', 'build_no_progress', 'pipeline_closeout', 'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
 ]);

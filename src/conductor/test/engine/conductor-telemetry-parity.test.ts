@@ -62,7 +62,7 @@ function metricPoints(exporter: InMemoryMetricExporter, name: string): MetricPoi
 
 function lifecycleEvents(events: readonly ConductorEvent[]): ConductorEvent[] {
   return events.filter((event) => (
-    event.type === 'step_started' || event.type === 'step_completed' || event.type === 'step_failed'
+    event.type === 'step_started' || event.type === 'step_completed' || event.type === 'step_failed' || event.type === 'step_interrupted'
     || event.type === 'step_refused' || event.type === 'step_retry' || event.type === 'provider_attempt'
   ));
 }
@@ -177,6 +177,11 @@ function serialStepSpan(fixture: SerialFixture) {
   return fixture.spans.filter((span) => span.name === fixture.step);
 }
 
+function spanDurationMs(span: BuiltinFixture['spans'][number]): number {
+  return (span.endTime[0] - span.startTime[0]) * 1_000
+    + Math.floor((span.endTime[1] - span.startTime[1]) / 1_000_000);
+}
+
 async function runBuiltinGroup(input: {
   outcomes?: Partial<Record<StepName, Array<Awaited<ReturnType<StepRunner['run']>>>>>;
   validationConcurrency?: number;
@@ -184,6 +189,7 @@ async function runBuiltinGroup(input: {
   telemetry?: TelemetryMode;
   asBuiltRemediationEnabled?: boolean;
   durationByMember?: Partial<Record<StepName, number>>;
+  throwOnAttempts?: Partial<Record<StepName, number[]>>;
   shutdownDuringRun?: boolean;
   authRecovery?: boolean;
 } = {}): Promise<BuiltinFixture> {
@@ -254,6 +260,9 @@ async function runBuiltinGroup(input: {
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
         const ownDuration = input.durationByMember?.[step];
         now = ownDuration === undefined ? now + 10 : 1_000 + ownDuration;
+        if (input.throwOnAttempts?.[step]?.includes(calls.filter((member) => member === step).length)) {
+          throw new Error(`controlled thrown work for ${step}`);
+        }
         await events.emit({
           type: 'provider_attempt', step, executionContext: options?.executionContext,
           provider: 'claude', preferredProvider: 'codex', model: 'gpt-5.6-luna', effort: 'high', tier: 'M',
@@ -285,6 +294,7 @@ async function runConfiguredGroup(input: {
   branches?: Array<{ name: string; advisory?: boolean }>;
   outcomes?: Record<string, Array<Awaited<ReturnType<StepRunner['run']>>>>;
   validationConcurrency?: number;
+  maxRetries?: number;
   skip?: boolean;
   twoGroups?: boolean;
 } = {}): Promise<ConfiguredFixture> {
@@ -329,7 +339,7 @@ async function runConfiguredGroup(input: {
     config: {
       validation_concurrency: input.validationConcurrency,
       steps: Object.fromEntries(parentGroups.map((parentGroup) => [parentGroup, {
-          max_retries: 1,
+          max_retries: input.maxRetries ?? 1,
           ...(input.skip ? { when: 'tier == L' } : {}),
           parallel: branches.map((branch) => ({ ...branch, skill: `skills/${branch.name}/SKILL.md` })),
         }])),
@@ -514,14 +524,15 @@ describe('serial conductor telemetry parity', () => {
 
   it('balances a deferred serial shutdown once and suppresses its late success', async () => {
     const fixture = await runSerial({ outcomes: [{ success: true }], shutdownDuringRun: true });
-    const terminals = fixture.ledger.filter((event) => event.type === 'step_failed' || event.type === 'step_completed');
+    const terminals = fixture.ledger.filter((event) => event.type === 'step_interrupted' || event.type === 'step_completed');
 
     expect(fixture.calls).toBe(1);
     expect(terminals).toEqual([expect.objectContaining({
-      type: 'step_failed', step: 'memory', activeInterval: { startedAtMs: 1_000, durationMs: 10 },
+      type: 'step_interrupted', step: 'memory', activeInterval: { startedAtMs: 1_000, durationMs: 10 },
     })]);
     expect(serialStepSpan(fixture)).toHaveLength(1);
-    expect(serialStepSpan(fixture)[0]?.attributes['conductor.step.status']).toBe('failed');
+    expect(serialStepSpan(fixture)[0]?.attributes['conductor.step.status']).toBe('interrupted');
+    expect(metricPoints(fixture.metrics, 'conductor.step.outcomes')[0]?.attributes.outcome).toBe('interrupted');
     expect(metricPoints(fixture.metrics, 'conductor.step.duration')).toHaveLength(1);
   });
 
@@ -555,6 +566,8 @@ describe('serial conductor telemetry parity', () => {
       expect(persisted?.activeInterval).toEqual({ startedAtMs: 1_000, durationMs: ownDuration });
       memberDurations.push((persisted?.activeInterval as { durationMs: number }).durationMs);
       expect(fixture.spans.filter((span) => span.name === member)).toHaveLength(1);
+      const span = fixture.spans.find((candidate) => candidate.name === member)!;
+      expect(spanDurationMs(span)).toBe((persisted?.activeInterval as { durationMs: number }).durationMs);
       const durationPoints = metricPoints(fixture.metrics, 'conductor.step.duration')
         .filter((point) => point.attributes.step === member);
       expect(durationPoints).toHaveLength(1);
@@ -588,14 +601,14 @@ describe('serial conductor telemetry parity', () => {
     const first = VALIDATION_GROUP.members[0] as StepName;
     const fixture = await runBuiltinGroup({ validationConcurrency: 1, shutdownDuringRun: true });
     const firstTerminals = fixture.ledger.filter(
-      (event) => event.step === first && (event.type === 'step_failed' || event.type === 'step_completed'),
+      (event) => event.step === first && (event.type === 'step_interrupted' || event.type === 'step_completed'),
     );
 
     expect(firstTerminals).toEqual([expect.objectContaining({
-      type: 'step_failed', activeInterval: { startedAtMs: 1_000, durationMs: 10 },
+      type: 'step_interrupted', activeInterval: { startedAtMs: 1_000, durationMs: 10 },
     })]);
     expect(fixture.spans.filter((span) => span.name === first)).toHaveLength(1);
-    expect(fixture.spans.find((span) => span.name === first)?.attributes['conductor.step.status']).toBe('failed');
+    expect(fixture.spans.find((span) => span.name === first)?.attributes['conductor.step.status']).toBe('interrupted');
     expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === first)).toHaveLength(1);
     expect(fixture.calls).toEqual([first]);
     for (const queued of VALIDATION_GROUP.members.slice(1)) {
@@ -659,6 +672,21 @@ describe('serial conductor telemetry parity', () => {
       .every((span) => span.attributes['conductor.step.status'] === 'failed')).toBe(true);
   });
 
+  it('closes thrown built-in member work once without a provider-observed interval', async () => {
+    const member = VALIDATION_GROUP.members[0] as StepName;
+    const fixture = await runBuiltinGroup({ throwOnAttempts: { [member]: [1, 2] } });
+    const terminal = fixture.ledger.find((event) => event.type === 'step_failed' && event.step === member);
+
+    expect(fixture.calls.filter((call) => call === member)).toHaveLength(2);
+    expect(terminal).toMatchObject({
+      error: expect.stringContaining('controlled thrown work'),
+      activeInterval: { startedAtMs: 1_000, durationMs: expect.any(Number) },
+    });
+    expect(terminal).not.toHaveProperty('observedIntervals');
+    expect(fixture.spans.filter((span) => span.name === member)).toHaveLength(1);
+    expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === member)).toHaveLength(1);
+  });
+
   it('closes the first auth scope before recovery replaces its member context', async () => {
     const member = VALIDATION_GROUP.members[0] as StepName;
     const fixture = await runBuiltinGroup({
@@ -682,6 +710,7 @@ describe('serial conductor telemetry parity', () => {
 
     expect(starts).toHaveLength(2);
     expect(starts[0]?.executionContext).not.toEqual(starts[1]?.executionContext);
+    expect(new Set(starts.map((event) => event.executionContext?.executionId)).size).toBe(2);
     expect(refusal).toMatchObject({ executionContext: starts[0]?.executionContext, activeInterval: { durationMs: 10 } });
     expect(completion).toMatchObject({ executionContext: starts[1]?.executionContext, activeInterval: { durationMs: 10 } });
     expect(fixture.spans.filter((span) => span.name === member)).toHaveLength(2);
@@ -810,6 +839,57 @@ describe('serial conductor telemetry parity', () => {
     expect(fixture.events.filter((event) => event.type === 'step_failed' && event.executionContext?.subject.kind === 'configured-member' && event.executionContext.subject.member === 'advisory-review')).toHaveLength(1);
     expect(fixture.spans.filter((span) => span.name === label)).toHaveLength(1);
     expect(metricPoints(fixture.metrics, 'conductor.step.outcomes').find((point) => point.attributes.step === label)?.attributes.outcome).toBe('failure');
+  });
+
+  it('keeps configured retry-success under one logical scope with one policy retry', async () => {
+    const member = 'frontend-review';
+    const fixture = await runConfiguredGroup({
+      outcomes: { [member]: [{ success: false, output: 'controlled retry' }, { success: true }] },
+      maxRetries: 2,
+    });
+    const label = configuredLabel('explore', member);
+    const started = fixture.events.find((event): event is Extract<ConductorEvent, { type: 'step_started' }> =>
+      event.type === 'step_started' && event.executionContext?.subject.kind === 'configured-member'
+        && event.executionContext.subject.member === member,
+    );
+    const retries = fixture.events.filter((event): event is Extract<ConductorEvent, { type: 'step_retry' }> =>
+      event.type === 'step_retry' && event.executionContext?.subject.kind === 'configured-member'
+        && event.executionContext.subject.member === member,
+    );
+    const terminal = fixture.ledger.find((event) => {
+      if (event.type !== 'step_completed') return false;
+      const context = event.executionContext as ExecutionContext | undefined;
+      return context?.subject.kind === 'configured-member' && context.subject.member === member;
+    });
+
+    expect(fixture.calls.filter((call) => call === member)).toHaveLength(2);
+    expect(retries).toEqual([expect.objectContaining({
+      attempt: 2, maxAttempts: 2, executionContext: started?.executionContext,
+    })]);
+    expect(fixture.spans.filter((span) => span.name === label)).toHaveLength(1);
+    expect(terminal?.activeInterval).toEqual({ startedAtMs: 1_000, durationMs: 30 });
+    expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === label)).toHaveLength(1);
+    expect(metricPoints(fixture.metrics, 'conductor.step.retries').filter((point) => point.attributes.step === label)).toHaveLength(1);
+    expect(metricPoints(fixture.metrics, 'conductor.step.dispatches').find((point) => point.attributes.step === label)?.value).toBe(2);
+  });
+
+  it('closes configured retry exhaustion once without a success terminal or extra attempt', async () => {
+    const member = 'frontend-review';
+    const fixture = await runConfiguredGroup({
+      outcomes: { [member]: [{ success: false, output: 'controlled exhaustion' }, { success: false, output: 'controlled exhaustion' }] },
+      maxRetries: 2,
+    });
+    const label = configuredLabel('explore', member);
+    const terminals = fixture.events.filter((event): event is Extract<ConductorEvent, { type: 'step_failed' | 'step_completed' }> =>
+      (event.type === 'step_failed' || event.type === 'step_completed')
+      && event.executionContext?.subject.kind === 'configured-member'
+      && event.executionContext.subject.member === member,
+    );
+
+    expect(fixture.calls.filter((call) => call === member)).toHaveLength(2);
+    expect(terminals).toEqual([expect.objectContaining({ type: 'step_failed', retryCount: 2 })]);
+    expect(fixture.spans.filter((span) => span.name === label)).toHaveLength(1);
+    expect(metricPoints(fixture.metrics, 'conductor.step.duration').filter((point) => point.attributes.step === label)).toHaveLength(1);
   });
 
   it('emits no configured lifecycle for a pre-admission skipped group', async () => {

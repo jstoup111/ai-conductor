@@ -61,7 +61,7 @@ export class EventPersister {
    * Subscribe to all ConductorEvent types.
    */
   start(): void {
-    for (const type of ledgerEventTypes()) {
+    for (const type of persistedEventTypes()) {
       this.emitter.on(type, this.handler);
     }
   }
@@ -70,7 +70,7 @@ export class EventPersister {
    * Unsubscribe from all ConductorEvent types.
    */
   stop(): void {
-    for (const type of ledgerEventTypes()) {
+    for (const type of persistedEventTypes()) {
       this.emitter.off(type, this.handler);
     }
   }
@@ -94,6 +94,7 @@ export class EventPersister {
       const closesStep = (
         event.type === 'step_completed'
         || event.type === 'step_failed'
+        || event.type === 'step_interrupted'
         || event.type === 'step_refused'
       );
       const closesGroup = (
@@ -176,11 +177,6 @@ export class EventPersister {
       executionContext,
     })?.correlationKey;
   }
-}
-
-/** Member settlement is persisted so its clock boundary reaches the terminal record. */
-function ledgerEventTypes(): ConductorEvent['type'][] {
-  return [...new Set<ConductorEvent['type']>([...persistedEventTypes(), 'group_member_step'])];
 }
 
 /**

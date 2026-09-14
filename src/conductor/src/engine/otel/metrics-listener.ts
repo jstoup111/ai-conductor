@@ -10,7 +10,7 @@ type OtelEvent = Extract<ConductorEvent, { type: OtelEventType }>;
 type MetricsEventType = OtelEventType;
 type MetricsEvent = OtelEvent;
 type MetricsHandler = (listener: MetricsListener, event: MetricsEvent) => void;
-type StepTerminalEvent = Extract<ConductorEvent, { type: 'step_completed' | 'step_failed' | 'step_refused' }>;
+type StepTerminalEvent = Extract<ConductorEvent, { type: 'step_completed' | 'step_failed' | 'step_interrupted' | 'step_refused' }>;
 
 interface StartedExecution {
   identity: ResolvedExecutionIdentity;
@@ -72,6 +72,7 @@ export class MetricsListener {
     },
     step_completed: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_completed' }>),
     step_failed: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_failed' }>),
+    step_interrupted: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_interrupted' }>),
     step_refused: (listener, event) => listener.onStepClose(event as Extract<OtelEvent, { type: 'step_refused' }>),
     group_member_step: (listener, event) => listener.onMemberSettlement(event as Extract<OtelEvent, { type: 'group_member_step' }>),
     provider_attempt: (listener, event) => listener.onProviderAttempt(event as Extract<OtelEvent, { type: 'provider_attempt' }>),
@@ -141,7 +142,9 @@ export class MetricsListener {
     if (!identity) return;
     const featureStarts = this.starts.get(slug);
     const start = featureStarts?.get(identity.correlationKey);
-    const compatibilityDispatch = event.type === 'step_refused' ? undefined : this.observeDispatch(event);
+    const compatibilityDispatch = event.type === 'step_refused' || event.type === 'step_interrupted'
+      ? undefined
+      : this.observeDispatch(event as Extract<OtelEvent, { type: 'step_completed' | 'step_failed' }>);
     const dimensions = this.dispatchDimensionsForClose(slug, identity.correlationKey, event, compatibilityDispatch);
     if (start !== undefined) {
       const endedAt = start.settledAt ?? this.now();
@@ -199,7 +202,9 @@ export class MetricsListener {
   ): DispatchDimensions {
     return {
       ...this.latestDispatchDimensions.get(slug)?.get(key),
-      ...(event.type === 'step_refused' ? {} : stepDimensionsFrom(event, observation)),
+      ...(event.type === 'step_refused' || event.type === 'step_interrupted'
+        ? {}
+        : stepDimensionsFrom(event as Extract<ConductorEvent, { type: 'step_completed' | 'step_failed' }>, observation)),
     };
   }
 
@@ -215,8 +220,14 @@ export class MetricsListener {
 
 }
 
-function terminalOutcome(event: StepTerminalEvent): 'success' | 'failure' | 'refusal' {
-  return event.type === 'step_completed' ? 'success' : event.type === 'step_failed' ? 'failure' : 'refusal';
+function terminalOutcome(event: StepTerminalEvent): 'success' | 'failure' | 'interrupted' | 'refusal' {
+  return event.type === 'step_completed'
+    ? 'success'
+    : event.type === 'step_failed'
+      ? 'failure'
+      : event.type === 'step_interrupted'
+        ? 'interrupted'
+        : 'refusal';
 }
 
 /** Lists OTel sink rows that lack a real listener projection. */

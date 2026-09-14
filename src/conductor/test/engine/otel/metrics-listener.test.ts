@@ -313,6 +313,31 @@ describe('MetricsListener correlated member duration projection (Task 7)', () =>
     }
   });
 
+  it('uses the built-in member name rather than its skill spelling at settlement', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });
+    const emitter = new ConductorEventEmitter();
+    let now = 100;
+    const listener = new MetricsListener(new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), () => now, 'feature');
+    const execution = { executionId: 'built-in-prd-audit', subject: { kind: 'lifecycle-step' as const, step: 'prd_audit' as const } };
+    listener.start(emitter);
+    try {
+      await emitter.emit({ type: 'step_started', step: 'prd_audit', index: 0, executionContext: execution });
+      now = 120;
+      await emitter.emit({ type: 'group_member_step', member: 'prd_audit', skill: 'prd-audit', phase: 'result', outcome: 'verdict:pass', executionContext: execution });
+      now = 300;
+      await emitter.emit({ type: 'step_completed', step: 'prd_audit', status: 'done', executionContext: execution });
+      await provider.forceFlush();
+
+      expect(pointsForInstrument(exporter, 'conductor.step.duration')).toEqual(expect.arrayContaining([
+        expect.objectContaining({ attributes: expect.objectContaining({ step: 'prd_audit' }), value: expect.objectContaining({ count: 1, sum: 20 }) }),
+      ]));
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
+  });
+
   it('keeps one retry lifetime and cannot let a late terminal close a newer same-subject execution', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     const provider = new MeterProvider({ readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })] });

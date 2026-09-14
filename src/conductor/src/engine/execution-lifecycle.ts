@@ -18,7 +18,7 @@ type LifecycleRetryEvent = Extract<ConductorEvent, { type: 'step_retry' }>;
 type LifecycleSettlementEvent = Extract<ConductorEvent, { type: 'group_member_step' }>;
 type LifecycleTerminalEvent = Extract<
   ConductorEvent,
-  { type: 'step_completed' | 'step_failed' | 'step_refused' | 'parallel_completed' | 'parallel_failure' }
+  { type: 'step_completed' | 'step_failed' | 'step_interrupted' | 'step_refused' | 'parallel_completed' | 'parallel_failure' }
 >;
 
 export interface ExecutionBoundary {
@@ -52,7 +52,6 @@ export interface ExecutionLifecycleOptions {
 export class ExecutionLifecycle {
   readonly openExecutions = new Map<string, OpenExecution>();
   private readonly closingExecutions = new Map<string, Promise<void>>();
-  private readonly closedBoundaries = new Map<string, Required<ExecutionBoundary>>();
   private executionEventTail: Promise<void> = Promise.resolve();
   private activeEventDeliveries = 0;
   private readonly clock: IntervalClock;
@@ -78,7 +77,6 @@ export class ExecutionLifecycle {
   admit(event: LifecycleStartEvent): Promise<void> {
     const key = startKey(event);
     if (key === undefined || this.openExecutions.has(key)) return Promise.resolve();
-    this.closedBoundaries.delete(key);
     this.openExecutions.set(key, {
       kind: event.type === 'step_started' ? 'step' : 'parallel',
       step: event.step,
@@ -135,7 +133,6 @@ export class ExecutionLifecycle {
     this.executionEventTail = delivery.catch(() => {});
     const terminalDelivery = delivery.then(async () => {
       this.openExecutions.delete(key);
-      this.closedBoundaries.set(key, boundary);
       await this.options.onTerminal?.({ event, boundary });
     }).finally(() => {
       this.closingExecutions.delete(key);
@@ -161,10 +158,9 @@ export class ExecutionLifecycle {
         });
       } else {
         await this.close({
-          type: 'step_failed',
+          type: 'step_interrupted',
           step: execution.step,
-          error: 'execution interrupted before a terminal event was emitted',
-          retryCount: 0,
+          reason: 'execution interrupted before a terminal event was emitted',
           ...(execution.executionContext === undefined ? {} : { executionContext: execution.executionContext }),
         });
       }
@@ -174,13 +170,6 @@ export class ExecutionLifecycle {
   /** Reports whether a terminal delivery is already in flight for an admitted execution. */
   isClosing(key: string): boolean {
     return this.closingExecutions.has(key);
-  }
-
-  /** Returns an admitted or recently closed member boundary for terminal consumers. */
-  boundaryFor(context: ExecutionContext): ExecutionBoundary | undefined {
-    const key = contextualKey(context);
-    if (key === undefined) return undefined;
-    return this.openExecutions.get(key)?.boundary ?? this.closedBoundaries.get(key);
   }
 
   /** Preserves the private conductor test seam while keeping ownership here. */
@@ -221,7 +210,7 @@ function terminalKey(
   event: LifecycleTerminalEvent,
   openExecutions: ReadonlyMap<string, OpenExecution>,
 ): string | undefined {
-  if (event.type === 'step_completed' || event.type === 'step_failed') {
+  if (event.type === 'step_completed' || event.type === 'step_failed' || event.type === 'step_interrupted') {
     return event.executionContext === undefined ? `step:${event.step}` : contextualKey(event.executionContext, event.step);
   }
   if (event.type === 'step_refused') {
@@ -272,6 +261,7 @@ function isOpenLegacyGroupMember(
 function isLifecycleTerminal(event: ConductorEvent): event is LifecycleTerminalEvent {
   return event.type === 'step_completed'
     || event.type === 'step_failed'
+    || event.type === 'step_interrupted'
     || event.type === 'step_refused'
     || event.type === 'parallel_completed'
     || event.type === 'parallel_failure';

@@ -178,6 +178,28 @@ export class SpanManager {
     this.callbacks?.onStepClose?.(state.subjectLabel, durationMs, event.retryCount);
   }
 
+  onStepInterrupted(event: Extract<ConductorEvent, { type: 'step_interrupted' }>): void {
+    const identity = this.resolve(event.step, event.executionContext);
+    const state = identity ? this.openSteps.get(identity.correlationKey) : undefined;
+    if (!state) {
+      this.warn(
+        `step_interrupted for '${event.step}' received but no open span exists — ignoring`,
+      );
+      return;
+    }
+    const durationMs = Date.now() - state.startTimeMs;
+
+    // Interruption means the conductor caught shutdown before the work had a
+    // verdict. It is neither successful work nor an ERROR-class work failure.
+    state.span.setAttribute('conductor.step.status', 'interrupted');
+    state.span.setAttribute('conductor.retry.count', state.retryCount);
+    state.span.setStatus({ code: SpanStatusCode.UNSET });
+    this.endSpan(state);
+    this.openSteps.delete(identity!.correlationKey);
+
+    this.callbacks?.onStepClose?.(state.subjectLabel, durationMs, state.retryCount);
+  }
+
   onStepRefused(event: Extract<ConductorEvent, { type: 'step_refused' }>): void {
     const identity = this.resolve(event.step, event.executionContext);
     const state = identity ? this.openSteps.get(identity.correlationKey) : undefined;
@@ -203,7 +225,7 @@ export class SpanManager {
 
   onGroupMemberStep(event: Extract<ConductorEvent, { type: 'group_member_step' }>): void {
     if (event.phase !== 'result') return;
-    const identity = this.resolve(event.skill, event.executionContext);
+    const identity = this.resolve(event.member, event.executionContext);
     const state = identity ? this.openSteps.get(identity.correlationKey) : undefined;
     if (!state) return;
 

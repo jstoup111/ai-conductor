@@ -529,6 +529,13 @@ export type ConductorEvent =
       executionContext?: ExecutionContext;
     }
   | {
+      /** A started execution was catchably interrupted before work could settle. */
+      type: 'step_interrupted';
+      step: StepName;
+      reason: string;
+      executionContext?: ExecutionContext;
+    }
+  | {
       /** The step was stopped before its own work could be judged a failure. */
       type: 'step_refused';
       step: StepName;

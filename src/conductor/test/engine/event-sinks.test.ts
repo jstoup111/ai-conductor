@@ -23,6 +23,7 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'step_started',
   'step_completed',
   'step_failed',
+  'step_interrupted',
   'step_refused',
   'step_status_write_refused',
   'provider_attempt',
@@ -136,6 +137,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'feature_dispatch_ended',
   'feature_shipped',
   ...PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES,
+  'group_member_step',
   ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
   'land_gate_rejected',
   'test_suite_verification',
@@ -217,6 +219,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'step_started',
   'step_completed',
   'step_failed',
+  'step_interrupted',
   'step_refused',
   'step_status_write_refused',
   'step_retry',
@@ -370,6 +373,7 @@ describe('event sink subscriptions', () => {
       'step_started',
       'step_completed',
       'step_failed',
+      'step_interrupted',
       'step_refused',
       'provider_attempt',
       'step_retry',
@@ -392,6 +396,7 @@ describe('event sink subscriptions', () => {
       'step_started',
       'step_completed',
       'step_failed',
+      'step_interrupted',
       'step_refused',
       'provider_attempt',
       'feature_usage_total',
@@ -866,13 +871,12 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('keeps non-halt lifecycle events out of the persisted set', () => {
+  it('keeps non-settlement lifecycle events out of the persisted set', () => {
     const neverPersisted = [
       'loop_converged',
       'build_review_base',
       'pipeline_closeout',
       'retry_decision',
-      'group_member_step',
       ...NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES,
     ] satisfies Array<ConductorEvent['type']>;
 

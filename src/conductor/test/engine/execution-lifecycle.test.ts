@@ -93,9 +93,11 @@ describe('engine/execution-lifecycle', () => {
   it('freezes an admitted member at settlement while its terminal can arrive later', async () => {
     const events = new RecordingEvents();
     const timestamps = [1_000, 1_025];
+    const terminals: unknown[] = [];
     const lifecycle = new ExecutionLifecycle({
       events,
       clock: { nowMs: () => timestamps.shift()! },
+      onTerminal: (observation) => { terminals.push(observation); },
     });
     const context = configuredContext('execution-1');
 
@@ -104,10 +106,11 @@ describe('engine/execution-lifecycle', () => {
       type: 'group_member_step', member: 'reviewer', skill: 'review', phase: 'result', outcome: 'completed', executionContext: context,
     });
 
-    expect(lifecycle.boundaryFor(context)).toEqual({ startedAtMs: 1_000, finishedAtMs: 1_025 });
-
     await lifecycle.close({ type: 'step_completed', step: 'build', status: 'done', executionContext: context });
-    expect(lifecycle.boundaryFor(context)).toEqual({ startedAtMs: 1_000, finishedAtMs: 1_025 });
+    expect(terminals).toEqual([{
+      event: { type: 'step_completed', step: 'build', status: 'done', executionContext: context },
+      boundary: { startedAtMs: 1_000, finishedAtMs: 1_025 },
+    }]);
     expect(events.emitted.map((event) => event.type)).toEqual([
       'step_started',
       'group_member_step',
@@ -194,7 +197,12 @@ describe('engine/execution-lifecycle', () => {
   it('closes admitted shutdown scopes once without stealing a later redispatch', async () => {
     const events = new RecordingEvents();
     let now = 1_000;
-    const lifecycle = new ExecutionLifecycle({ events, clock: { nowMs: () => now } });
+    const terminals: unknown[] = [];
+    const lifecycle = new ExecutionLifecycle({
+      events,
+      clock: { nowMs: () => now },
+      onTerminal: (observation) => { terminals.push(observation); },
+    });
     const oldExecution = configuredContext('shutdown-old');
     const freshExecution = configuredContext('shutdown-fresh');
     const queuedExecution = configuredContext('never-admitted');
@@ -211,12 +219,22 @@ describe('engine/execution-lifecycle', () => {
 
     expect(events.emitted.map((event) => `${event.type}:${'executionContext' in event ? event.executionContext?.executionId : undefined}`)).toEqual([
       'step_started:shutdown-old',
-      'step_failed:shutdown-old',
+      'step_interrupted:shutdown-old',
       'step_started:shutdown-fresh',
       'step_completed:shutdown-fresh',
     ]);
-    expect(lifecycle.boundaryFor(oldExecution)).toEqual({ startedAtMs: 1_000, finishedAtMs: 1_025 });
-    expect(lifecycle.boundaryFor(freshExecution)).toEqual({ startedAtMs: 1_025, finishedAtMs: 1_025 });
-    expect(lifecycle.boundaryFor(queuedExecution)).toBeUndefined();
+    expect(terminals).toEqual([
+      {
+        event: {
+          type: 'step_interrupted', step: 'build',
+          reason: 'execution interrupted before a terminal event was emitted', executionContext: oldExecution,
+        },
+        boundary: { startedAtMs: 1_000, finishedAtMs: 1_025 },
+      },
+      {
+        event: { type: 'step_completed', step: 'build', status: 'done', executionContext: freshExecution },
+        boundary: { startedAtMs: 1_025, finishedAtMs: 1_025 },
+      },
+    ]);
   });
 });
