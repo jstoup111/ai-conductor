@@ -10,6 +10,7 @@ import {
   buildCiFixHint,
   enrichCiFixHint,
   CI_FIX_HINT_MAX_BYTES,
+  CI_FIX_METADATA_MAX_BYTES,
   isEligibleForCiFix,
   nonTerminalCheckNames,
   runCiFix,
@@ -110,6 +111,22 @@ describe('ci-fix: buildCiFixHint', () => {
       { kind: 'status-context', context: 'neutral', state: 'SUCCESS' },
     ]))).toEqual({ kind: 'context-error', reason: 'empty-failure-context' });
   });
+
+  it('keeps metadata within its UTF-8 budget while explicitly accounting for omitted failed entries', () => {
+    const result = buildCiFixHint(selectedState(Array.from({ length: 70 }, (_, index) => ({
+      kind: 'check-run' as const,
+      name: `check-${index}-${'😀'.repeat(100)}`,
+      conclusion: 'FAILURE',
+      detailsUrl: `https://example.test/${index}/${'x'.repeat(2_100)}`,
+    }))));
+
+    if (result.kind !== 'ready') throw new Error('expected required hint');
+    expect(Buffer.byteLength(result.hint, 'utf8')).toBeLessThanOrEqual(CI_FIX_METADATA_MAX_BYTES);
+    expect(result.hint).toContain('[truncated]');
+    expect(result.hint).toContain('[link omitted: too long]');
+    expect(result.hint).toMatch(/failed check entries omitted/);
+    expect(result.hint).not.toContain('�');
+  });
 });
 
 describe('ci-fix: optional bounded log enrichment', () => {
@@ -146,6 +163,33 @@ describe('ci-fix: optional bounded log enrichment', () => {
     expect(Buffer.byteLength(result.hint, 'utf8')).toBeLessThanOrEqual(CI_FIX_HINT_MAX_BYTES);
     expect(result.hint).toContain('[context truncated]');
     expect(result.hint).not.toContain('�');
+  });
+
+  it('reads at most three failed workflow runs, never reads successful or unresolvable links, and marks omitted enrichment', async () => {
+    const calls: string[][] = [];
+    const expanded: PrMergeState = {
+      ...state,
+      statusCheckRollup: [
+        ...Array.from({ length: 4 }, (_, index) => ({
+          kind: 'check-run' as const, name: `failed-${index}`, conclusion: 'FAILURE',
+          detailsUrl: `https://github.com/acme/repo/actions/runs/${index + 1}/jobs/1`,
+        })),
+        { kind: 'check-run', name: 'green', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/acme/repo/actions/runs/99/jobs/1' },
+        { kind: 'check-run', name: 'external', conclusion: 'FAILURE', detailsUrl: 'https://ci.example.test/build/5' },
+      ],
+    };
+    const required = buildCiFixHint(expanded);
+    if (required.kind !== 'ready') throw new Error('expected required hint');
+    const result = await enrichCiFixHint(required.hint, expanded, async (args) => {
+      calls.push(args);
+      return { stdout: '😀'.repeat(4_000) };
+    }, '/repo');
+
+    expect(calls).toHaveLength(3);
+    expect(calls.flat()).not.toContain('99');
+    expect(result.hint).toContain('[log enrichment omitted for 1 workflow runs]');
+    expect(result.hint).not.toContain('�');
+    expect(result.degradations).toContain('context-truncated');
   });
 });
 

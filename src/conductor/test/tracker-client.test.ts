@@ -34,6 +34,26 @@ describe('tracker-client: canonical GhRunner + guarded makeProductionGh', () => 
     );
     expect(execFileSpy).not.toHaveBeenCalled();
   });
+
+  it('forwards caller timeout and capture limits to the process boundary without changing defaults', async () => {
+    const noRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    vi.mocked(execFileSpy).mockImplementationOnce(((_file, _args, _options, callback) => {
+      callback?.(null, 'ok', '');
+      return undefined as never;
+    }) as unknown as typeof execFileSpy);
+
+    try {
+      await expect(makeProductionGh()(['run', 'view', '7'], {
+        cwd: '/repo', timeout: 10_000, maxBuffer: 65_536,
+      })).resolves.toMatchObject({ stdout: expect.any(String) });
+      expect(execFileSpy).toHaveBeenLastCalledWith('gh', ['run', 'view', '7'], {
+        cwd: '/repo', timeout: 10_000, maxBuffer: 65_536,
+      }, expect.any(Function));
+    } finally {
+      process.env.AI_CONDUCTOR_NO_REAL_EXEC = noRealExec;
+    }
+  });
 });
 
 function mockProductionGhFailure(input: { code: number; stderr: string; message: string }): void {

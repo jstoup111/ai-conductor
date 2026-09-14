@@ -139,23 +139,29 @@ export function buildCiFixHint(
   }
 
   const lines = ['CI checks failed:'];
-  let omitted = 0;
+  let omitted = Math.max(0, failedChecks.length - CI_FIX_MAX_FAILED_ENTRIES);
   for (const { check, index } of failedChecks.slice(0, CI_FIX_MAX_FAILED_ENTRIES)) {
     const name = checkDisplayName(check, index);
     const boundedName = truncateUtf8(name, 256);
-    lines.push(`\n• ${boundedName}`);
+    const entry = [`\n• ${boundedName}`];
     const link = check.kind === 'status-context' ? check.targetUrl : check.detailsUrl;
-    if (link && Buffer.byteLength(link, 'utf8') <= 2048) lines.push(`  ${link}`);
-    else if (link) lines.push('  [link omitted: too long]');
-    if (Buffer.byteLength(lines.join('\n'), 'utf8') > CI_FIX_METADATA_MAX_BYTES) {
-      lines.pop();
-      omitted += 1;
-      break;
-    }
+    if (link && Buffer.byteLength(link, 'utf8') <= 2048) entry.push(`  ${link}`);
+    else if (link) entry.push('  [link omitted: too long]');
+    lines.push(entry.join('\n'));
   }
-  omitted += Math.max(0, failedChecks.length - CI_FIX_MAX_FAILED_ENTRIES);
-  if (omitted) lines.push(`\n[${omitted} failed check entries omitted]`);
-  return { kind: 'ready', hint: lines.join('\n') };
+  // Reserve room for the counter itself: adding an omission marker after
+  // filling the metadata used to make the supposedly bounded prefix overflow.
+  while (true) {
+    const omissionMarker = omitted ? `\n[${omitted} failed check entries omitted]` : '';
+    const metadata = `${lines.join('\n')}${omissionMarker}`;
+    if (Buffer.byteLength(metadata, 'utf8') <= CI_FIX_METADATA_MAX_BYTES) {
+      return { kind: 'ready', hint: metadata };
+    }
+    // The header is far below the fixed budget, so an oversized result always
+    // has at least one removable complete entry.
+    lines.pop();
+    omitted += 1;
+  }
 }
 
 export interface CiFixHintEnrichment {
@@ -173,19 +179,28 @@ export async function enrichCiFixHint(
 ): Promise<CiFixHintEnrichment> {
   const runKeys = new Set<string>();
   for (const check of state.statusCheckRollup ?? []) {
+    if (!isFailedCheck(check)) continue;
     const url = check.kind === 'status-context' ? check.targetUrl : check.detailsUrl;
     const match = url?.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/actions\/runs\/(\d+)(?:\/|$)/);
     if (match) runKeys.add(`${match[1]}#${match[2]}`);
   }
   const excerpts: string[] = [];
   const degradations: CiFixHintEnrichment['degradations'] = [];
-  for (const key of [...runKeys].slice(0, 3)) {
+  const uniqueRuns = [...runKeys];
+  const omittedRuns = Math.max(0, uniqueRuns.length - 3);
+  if (omittedRuns) {
+    excerpts.push(`\n[log enrichment omitted for ${omittedRuns} workflow runs]`);
+    degradations.push('context-truncated');
+  }
+  for (const key of uniqueRuns.slice(0, 3)) {
     const [repo, run] = key.split('#');
     try {
       const { stdout } = await runGh(['run', 'view', run, '--repo', repo, '--log-failed'], {
         cwd, timeout: CI_FIX_LOG_TIMEOUT_MS, maxBuffer: CI_FIX_LOG_MAX_BUFFER,
       });
-      const excerpt = Buffer.from(stdout, 'utf8').subarray(0, 12_288).toString('utf8');
+      // Buffer slicing can split a multibyte code point and decode it as U+FFFD.
+      // Iterate strings instead so the excerpt remains valid UTF-8 text.
+      const excerpt = truncateUtf8(stdout, 12_288, '[log excerpt truncated]');
       if (excerpt) excerpts.push(`\nWorkflow run ${run} log excerpt:\n${excerpt}`);
     } catch {
       degradations.push('log-unavailable');
