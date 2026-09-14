@@ -52,7 +52,7 @@ export interface SelfHostGuardrails {
   provisionProviderHome?(opts: ProvisionProviderHomeOptions): Promise<ProviderHome>;
   /** VERSION-approval finish gate (TR-7). */
   versionGate(opts: VersionGateOptions): Promise<GateVerdict>;
-  /** Release-artifact finish gate: integrity/CHANGELOG/migration (TR-8/9/10). */
+  /** Release-artifact finish gate: migration block (TR-10). */
   releaseGate(opts: ReleaseGateOptions): Promise<GateVerdict>;
 }
 
