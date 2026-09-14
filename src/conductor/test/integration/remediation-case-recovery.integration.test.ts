@@ -10,11 +10,11 @@ import { reduceBuildReviewAdjudication } from '../../src/engine/build-review-adj
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
 import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder, readBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
-import { applyBuildReviewActionEffects, isBuildEligibleActionCase } from '../../src/engine/remediation-case-effects.js';
+import { chargeBuildReviewEffectInLedger, readKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { applyBuildReviewActionEffects, isBuildEligibleActionCase, persistBuildReviewDecisionStop } from '../../src/engine/remediation-case-effects.js';
 import type { RemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
 import { reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
-import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import type { RemediationCaseGraph } from '../../src/engine/remediation-case-validator.js';
 import { Conductor } from '../test-conductor.js';
 
@@ -42,6 +42,22 @@ const graph: RemediationCaseGraph = {
   }],
 };
 
+/** A custom-policy source must remain durable even after that policy is gone. */
+const customGraph: RemediationCaseGraph = {
+  sourceOutcomes: [{ sourceId: 'custom:portable-policy@sha256:original:authorization-bypass', outcome: 'acted', caseRef: 'custom-case-ref' }],
+  cases: [{
+    sources: [{ sourceId: 'custom:portable-policy@sha256:original:authorization-bypass', outcome: 'acted', caseRef: 'custom-case-ref' }],
+    case: {
+      caseRef: 'custom-case-ref', disposition: 'act', priority: 'high', confidence: 'high',
+      rationale: 'The original portable policy found an authorization bypass.',
+      effect: { kind: 'action', route: 'build', tasks: [{
+        title: 'Restore the authorization check', admittedTaskIds: ['35'],
+        admissionRationale: 'Task 35 owns this policy-admitted repair.',
+      }] },
+    },
+  }],
+};
+
 function actionAggregate(lapId: string, findings: readonly { readonly name: string; readonly path: string }[]) {
   return joinBuildReviewRubricOutcomes({
     lapId: lapId as never,
@@ -61,6 +77,58 @@ function actionAggregate(lapId: string, findings: readonly { readonly name: stri
 }
 
 describe('remediation case recovery', () => {
+  it('replays custom decision, work, and charge boundaries by their original durable ids', async () => {
+    const projectRoot = await root();
+    const store = new RemediationCaseStore(projectRoot, feature);
+    const decision = {
+      id: 'custom-decision-stop', domain: 'build_review' as const, disposition: 'escalate' as const,
+      priority: 'high' as const, confidence: 'high' as const, resolution: 'open' as const,
+      rationale: 'The original custom policy requires product direction.',
+      sources: [{
+        sourceId: 'custom:portable-policy@sha256:original:needs-product-direction', outcome: 'escalate' as const,
+        recordedAt: '2026-09-14T00:00:00.000Z',
+      }],
+      effect: { kind: 'none' as const }, escalation: { owner: 'product' as const },
+    };
+
+    // A restart after the decision write sees the same durable stop, not a new
+    // provider decision or a default derived from today's policy catalog.
+    await expect(persistBuildReviewDecisionStop({ store, record: decision })).resolves.toMatchObject({ ok: true, status: 'persisted' });
+    await expect(persistBuildReviewDecisionStop({ store: new RemediationCaseStore(projectRoot, feature), record: decision }))
+      .resolves.toMatchObject({ ok: true, status: 'already-persisted' });
+
+    await reconcileRemediationCases(store, {
+      graph: customGraph, recordedAt: '2026-09-14T00:00:01.000Z', generateId: (() => {
+        const ids = ['custom-case', 'custom-effect'];
+        return () => ids.shift()!;
+      })(),
+    });
+    const publish = vi.fn(publishBuildReviewWorkOrder);
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+    const actionInput = {
+      projectRoot, feature,
+      tasksByCaseId: new Map([['custom-case', [{
+        title: 'Restore the authorization check', admittedTaskIds: ['35'],
+        admissionRationale: 'Task 35 owns this policy-admitted repair.',
+      }]]]),
+      chargeInput: { treeHash: 'custom-tree', resolvedCount: 1, reason: 'custom recovery fixture' },
+      workOrderId: () => 'custom-order', publishWorkOrder: publish, chargeEffect: charge,
+    };
+
+    await expect(applyBuildReviewActionEffects({ ...actionInput, store })).resolves.toMatchObject({ ok: true, status: 'applied', effectId: 'custom-effect' });
+    await expect(applyBuildReviewActionEffects({ ...actionInput, store: new RemediationCaseStore(projectRoot, feature) }))
+      .resolves.toMatchObject({ ok: true, status: 'already-applied', effectId: 'custom-effect' });
+
+    const order = await readBuildReviewWorkOrder(projectRoot, feature, ['custom-effect']);
+    expect({ publishCalls: publish.mock.calls.length, chargeCalls: charge.mock.calls.length }).toEqual({ publishCalls: 1, chargeCalls: 1 });
+    expect(order).toMatchObject({ ok: true, workOrder: { effectId: 'custom-effect' } });
+    if (!order.ok) throw new Error(`unexpected work-order recovery failure: ${order.reason}`);
+    expect(order.workOrder.cases[0]).toMatchObject({
+      caseId: 'custom-case',
+      sources: [expect.objectContaining({ sourceId: 'custom:portable-policy@sha256:original:authorization-bypass', outcome: 'acted' })],
+    });
+  });
+
   it('two restarted executors converge on one stable work order and one charged effect', async () => {
     const projectRoot = await root();
     const store = new RemediationCaseStore(projectRoot, feature);
