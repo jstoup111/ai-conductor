@@ -37,6 +37,7 @@ import {
   createEngineerWorktree,
   removeEngineerWorktree,
 } from './engineer/worktree-authoring.js';
+import { INTAKE_OUTCOMES_RELATIVE_PATH } from './engineer/outcome-staging.js';
 import { recordAuthoredKey } from './engineer/authored-ledger.js';
 import { ensureRunning } from './daemon-lock.js';
 // The CLI is the composition root for the github-issues intake adapter used by
@@ -956,6 +957,13 @@ export async function dispatchEngineer(
               // Leave the body unresolved so staging remains a no-op.
             }
           }
+        }
+
+        if (resolvedBody == null) {
+          printErr(
+            `engineer worktree: no intake outcome layer was staged for ${sourceRef}; ` +
+            `the source body could not be resolved. Supply it with --body to stage ${INTAKE_OUTCOMES_RELATIVE_PATH}.`,
+          );
         }
       }
 

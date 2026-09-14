@@ -16,6 +16,7 @@ import {
 } from '../../../src/engine/engineer-cli.js';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 import { createFileQueue } from '../../../src/engine/engineer/intake/queue.js';
+import { INTAKE_OUTCOMES_RELATIVE_PATH } from '../../../src/engine/engineer/outcome-staging.js';
 import type { Envelope } from '../../../src/engine/engineer/intake/port.js';
 
 const execFile = promisify(execFileCb);
@@ -156,9 +157,9 @@ describe('FR-13: claim → worktree Desired-outcome body threading', () => {
     );
   });
 
-  it('degrades to no staging when the injected issue-body read rejects', async () => {
+  it('reports exactly once how to supply a body when no source-ref body resolves', async () => {
     const issueViewCalls: string[][] = [];
-    const { out, opts } = captureOpts({
+    const { out, err, opts } = captureOpts({
       gh: async (args) => {
         if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
           issueViewCalls.push(args);
@@ -178,6 +179,39 @@ describe('FR-13: claim → worktree Desired-outcome body threading', () => {
     const { worktreePath } = JSON.parse(out[0]);
     expect((await stat(worktreePath)).isDirectory()).toBe(true);
     await expect(readFile(join(worktreePath, '.pipeline', 'intake-outcomes.md'), 'utf8')).rejects.toThrow();
+    expect(err).toHaveLength(1);
+    expect(err[0]).toContain(SOURCE_REF);
+    expect(err[0]).toContain(INTAKE_OUTCOMES_RELATIVE_PATH);
+    expect(err[0]).toContain('--body');
+  });
+
+  it('does not report an unstaged outcome layer without a source ref', async () => {
+    const { err, opts } = captureOpts();
+
+    expect(await dispatchEngineer(
+      { kind: 'worktree', project: 'alpha', idea: 'chat-origin' },
+      opts,
+    )).toBe(0);
+
+    expect(err).toEqual([]);
+  });
+
+  it('does not report when the tracker resolves a body without Desired-outcome bullets', async () => {
+    const { err, opts } = captureOpts({
+      gh: async (args) => {
+        if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
+          return { stdout: JSON.stringify({ body: '# Intake\n\n## Evidence\n\nNo requested outcome.\n' }) };
+        }
+        return fakeGh(args);
+      },
+    });
+
+    expect(await dispatchEngineer(
+      { kind: 'worktree', project: 'alpha', idea: 'tracker-no-outcomes', sourceRef: SOURCE_REF },
+      opts,
+    )).toBe(0);
+
+    expect(err).toEqual([]);
   });
 
   it('degrades to no staging when the injected issue-body read has the not-found shape', async () => {
