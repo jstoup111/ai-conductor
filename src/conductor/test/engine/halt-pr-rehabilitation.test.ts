@@ -2,8 +2,8 @@
  * Tests for the prefix-gated retitle-floor primitive (Task 6,
  * adr-2026-07-03-halt-pr-rehabilitation-at-finish).
  *
- * All tests use FAKE gh runners that record calls; no real gh binary
- * required. The floor is deterministic: it only ever touches a title that
+ * All tests use FAKE gh readers and guarded operation boundaries; no real gh
+ * binary is required. The floor is deterministic: it only ever touches a title that
  * literally starts with `needs-remediation:` — prose titles are left
  * untouched, and the body is never edited.
  */
@@ -25,6 +25,12 @@ import {
 import { shipDraftPrBody } from '../../src/engine/ship-draft-pr.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import { HALT_PR_BANNER_SENTINEL, NEEDS_REMEDIATION_MARKER } from '../../src/engine/pr-labels.js';
+import type {
+  GithubOperationRequest,
+  GithubOperationRunner,
+  GithubOperationRunnerRefusal,
+  GithubOperationRunnerResponse,
+} from '../../src/engine/github-operations.js';
 
 function fakeGh(responses: Array<{ stdout: string } | Error>): { gh: GhRunner; calls: string[][] } {
   const calls: string[][] = [];
@@ -39,85 +45,102 @@ function fakeGh(responses: Array<{ stdout: string } | Error>): { gh: GhRunner; c
   return { gh, calls };
 }
 
+function fakeOperations(
+  options: { mode?: 'execute' | 'refuse' | 'fail'; onOperation?: (request: GithubOperationRequest) => void } = {},
+): { operations: GithubOperationRunner; writes: GithubOperationRequest[] } {
+  const writes: GithubOperationRequest[] = [];
+  const operations: GithubOperationRunner = {
+    run: async (request): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal> => {
+      writes.push(request);
+      options.onOperation?.(request);
+      if (options.mode === 'refuse') {
+        return { kind: 'refused', reason: 'other-owner' } satisfies GithubOperationRunnerRefusal;
+      }
+      if (options.mode === 'fail') throw new Error('guarded transport failed');
+      return {} satisfies GithubOperationRunnerResponse;
+    },
+  };
+  return { operations, writes };
+}
+
 const PR_URL = 'https://github.com/acme/repo/pull/7';
 const CWD = '/repo';
 
 describe('retitleFloor (Task 6)', () => {
   it('retitles a needs-remediation title to feat: <featureDesc> when featureDesc is given', async () => {
-    const { gh, calls } = fakeGh([
+    const { gh } = fakeGh([
       { stdout: JSON.stringify({ title: 'needs-remediation: x' }) },
-      { stdout: '' },
     ]);
+    const { operations, writes } = fakeOperations();
 
-    const result = await retitleFloor(gh, CWD, PR_URL, { featureDesc: 'widget import flow' });
+    const result = await retitleFloor(gh, CWD, PR_URL, { featureDesc: 'widget import flow', operations });
 
-    const editCall = calls.find((c) => c[0] === 'pr' && c[1] === 'edit');
-    expect(editCall).toBeDefined();
-    expect(editCall).toEqual(['pr', 'edit', PR_URL, '--title', 'feat: widget import flow']);
+    expect(writes).toEqual([expect.objectContaining({
+      operation: 'pull-request.edit',
+      payload: { title: 'feat: widget import flow' },
+    })]);
     expect(result.title).toBe('feat: widget import flow');
     expect(result.title).not.toContain('needs-remediation:');
   });
 
   it('falls back to the branch name when no featureDesc is provided', async () => {
-    const { gh, calls } = fakeGh([
+    const { gh } = fakeGh([
       { stdout: JSON.stringify({ title: 'needs-remediation: x' }) },
-      { stdout: '' },
     ]);
+    const { operations, writes } = fakeOperations();
 
-    const result = await retitleFloor(gh, CWD, PR_URL, { branch: 'feat/widget-import-flow' });
+    const result = await retitleFloor(gh, CWD, PR_URL, { branch: 'feat/widget-import-flow', operations });
 
-    const editCall = calls.find((c) => c[0] === 'pr' && c[1] === 'edit');
-    expect(editCall).toBeDefined();
-    expect(editCall![3]).toBe('--title');
-    expect(editCall![4]).toContain('widget import flow');
+    expect(writes).toEqual([expect.objectContaining({
+      operation: 'pull-request.edit',
+      payload: expect.objectContaining({ title: expect.stringContaining('widget import flow') }),
+    })]);
     expect(result.title).not.toContain('needs-remediation:');
   });
 
   it('issues zero edit calls for a clean prose title', async () => {
-    const { gh, calls } = fakeGh([{ stdout: JSON.stringify({ title: 'feat: already clean' }) }]);
+    const { gh } = fakeGh([{ stdout: JSON.stringify({ title: 'feat: already clean' }) }]);
+    const { operations, writes } = fakeOperations();
 
-    const result = await retitleFloor(gh, CWD, PR_URL, { featureDesc: 'widget import flow' });
+    const result = await retitleFloor(gh, CWD, PR_URL, { featureDesc: 'widget import flow', operations });
 
-    const editCall = calls.find((c) => c[0] === 'pr' && c[1] === 'edit');
-    expect(editCall).toBeUndefined();
+    expect(writes).toHaveLength(0);
     expect(result.title).toBe('feat: already clean');
     expect(result.outcome).toBe('not-halt-pr');
   });
 
-  it('warns and resolves when gh pr edit fails', async () => {
+  it('refuses rather than falling back when no guarded operation boundary is available', async () => {
     const logs: string[] = [];
     const { gh } = fakeGh([
       { stdout: JSON.stringify({ title: 'needs-remediation: x' }) },
-      new Error('gh: rate limited'),
     ]);
 
     const result = await retitleFloor(gh, CWD, PR_URL, { featureDesc: 'widget import flow' }, (msg) =>
       logs.push(msg),
     );
 
-    expect(result.outcome).toBe('resolved');
+    expect(result.outcome).toBe('refused');
     expect(logs.length).toBeGreaterThan(0);
   });
 
   it('never edits the PR body', async () => {
-    const { gh, calls } = fakeGh([
+    const { gh } = fakeGh([
       { stdout: JSON.stringify({ title: 'needs-remediation: x' }) },
-      { stdout: '' },
     ]);
+    const { operations, writes } = fakeOperations();
 
-    await retitleFloor(gh, CWD, PR_URL, { featureDesc: 'widget import flow' });
+    await retitleFloor(gh, CWD, PR_URL, { featureDesc: 'widget import flow', operations });
 
-    const bodyCall = calls.find((c) => c.includes('--body'));
-    expect(bodyCall).toBeUndefined();
+    expect(writes).toEqual([expect.objectContaining({ payload: { title: 'feat: widget import flow' } })]);
   });
 
   it('never returns a result title containing needs-remediation:', async () => {
     const { gh } = fakeGh([
       { stdout: JSON.stringify({ title: 'needs-remediation: x' }) },
-      { stdout: '' },
     ]);
+    const { operations } = fakeOperations();
 
-    const result = await retitleFloor(gh, CWD, PR_URL, { branch: 'feat/x' });
+    const result = await retitleFloor(gh, CWD, PR_URL, { branch: 'feat/x', operations });
 
     expect(result.title).not.toContain('needs-remediation:');
   });
@@ -129,21 +152,18 @@ describe('ensureShipReady (Task 7)', () => {
   it('flips a clean-titled unlabeled draft PR to ready, verified by re-read', async () => {
     const { gh, calls } = fakeGh([
       { stdout: JSON.stringify({ isDraft: true, labels: [], body: '' }) }, // read before
-      { stdout: '' }, // gh pr ready
       { stdout: JSON.stringify({ isDraft: false, labels: [], body: '' }) }, // verify re-read
     ]);
+    const { operations, writes } = fakeOperations();
 
-    const result = await ensureShipReady(gh, CWD, PR_URL, undefined, noopSleep);
+    const result = await ensureShipReady(gh, CWD, PR_URL, undefined, noopSleep, operations);
 
     expect(result).toBe('flipped-ready');
-    const readyCall = calls.find((c) => c[0] === 'pr' && c[1] === 'ready');
-    expect(readyCall).toEqual(['pr', 'ready', PR_URL]);
+    expect(writes).toEqual([expect.objectContaining({ operation: 'pull-request.ready' })]);
 
     // No unlabel/retitle/body mutation attempted — distinct from rehabilitateHaltPr.
-    expect(calls.some((c) => c.includes('--add-label') || c.includes('--remove-label'))).toBe(false);
-    expect(calls.some((c) => c[0] === 'pr' && c[1] === 'edit')).toBe(false);
-    expect(calls.some((c) => c.includes('--body'))).toBe(false);
-    expect(calls.some((c) => c[0] === 'api')).toBe(false);
+    expect(writes.some((write) => write.operation !== 'pull-request.ready')).toBe(false);
+    expect(calls).toHaveLength(2);
   });
 
   it('is a no-op for an already-ready PR — zero gh pr ready calls', async () => {
@@ -154,28 +174,23 @@ describe('ensureShipReady (Task 7)', () => {
     const result = await ensureShipReady(gh, CWD, PR_URL, undefined, noopSleep);
 
     expect(result).toBe('no-op');
-    const readyCall = calls.find((c) => c[0] === 'pr' && c[1] === 'ready');
-    expect(readyCall).toBeUndefined();
     expect(calls.length).toBe(1);
   });
 
   it('returns a non-fatal partial outcome when still draft after bounded retries', async () => {
     const logs: string[] = [];
-    const { gh, calls } = fakeGh([
+    const { gh } = fakeGh([
       { stdout: JSON.stringify({ isDraft: true, labels: [], body: '' }) }, // read before
-      { stdout: '' }, // attempt 1: gh pr ready
       { stdout: JSON.stringify({ isDraft: true, labels: [], body: '' }) }, // attempt 1: still draft
-      { stdout: '' }, // attempt 2: gh pr ready
       { stdout: JSON.stringify({ isDraft: true, labels: [], body: '' }) }, // attempt 2: still draft
-      { stdout: '' }, // attempt 3: gh pr ready
       { stdout: JSON.stringify({ isDraft: true, labels: [], body: '' }) }, // attempt 3: still draft
     ]);
+    const { operations, writes } = fakeOperations();
 
-    const result = await ensureShipReady(gh, CWD, PR_URL, (msg) => logs.push(msg), noopSleep);
+    const result = await ensureShipReady(gh, CWD, PR_URL, (msg) => logs.push(msg), noopSleep, operations);
 
     expect(result).toBe('partial');
-    const readyCalls = calls.filter((c) => c[0] === 'pr' && c[1] === 'ready');
-    expect(readyCalls.length).toBe(3);
+    expect(writes.filter((write) => write.operation === 'pull-request.ready')).toHaveLength(3);
     expect(logs.length).toBeGreaterThan(0);
   });
 
@@ -189,58 +204,40 @@ describe('ensureShipReady (Task 7)', () => {
 });
 
 describe('clearHaltStateForResume (Tasks 1, 4)', () => {
-  it('supersedes the halt comment in place with one resolution note across successive clears (Task 5)', async () => {
+  it('writes the authorized resolution note through the guarded operation boundary', async () => {
     const state = {
       labelPresent: true,
       bodyMarkerPresent: true,
-      comments: [
-        {
-          body: `${NEEDS_REMEDIATION_MARKER}\n## Build halted\n\nManual remediation is required.`,
-          url: 'https://github.com/acme/repo/pull/7#issuecomment-42',
-        },
-      ],
     };
     const gh: GhRunner = async (args) => {
       if (args[0] === 'pr' && args[1] === 'view') {
-        if (args.includes('isDraft,labels,body')) {
-          return {
-            stdout: JSON.stringify({
-              isDraft: true,
-              labels: state.labelPresent ? [{ name: 'needs-remediation' }] : [],
-              body: state.bodyMarkerPresent ? '<!-- conductor:needs-remediation -->' : '',
-            }),
-          };
-        }
-        if (args.includes('comments')) return { stdout: JSON.stringify({ comments: state.comments }) };
-      }
-      if (args[0] === 'api' && args.includes('DELETE')) {
-        state.labelPresent = false;
-        return { stdout: '' };
-      }
-      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
-        state.bodyMarkerPresent = false;
-        return { stdout: '' };
-      }
-      if (args[0] === 'api' && args.includes('PATCH')) {
-        state.comments[0] = {
-          ...state.comments[0],
-          body: args[args.indexOf('-f') + 1].slice('body='.length),
+        return {
+          stdout: JSON.stringify({
+            isDraft: true,
+            labels: state.labelPresent ? [{ name: 'needs-remediation' }] : [],
+            body: state.bodyMarkerPresent ? '<!-- conductor:needs-remediation -->' : '',
+          }),
         };
-        return { stdout: '' };
       }
       return { stdout: '' };
     };
+    const { operations, writes } = fakeOperations({
+      onOperation: (request) => {
+        if (request.operation === 'pull-request.label.remove') state.labelPresent = false;
+        if (request.operation === 'pull-request.edit') state.bodyMarkerPresent = false;
+      },
+    });
 
-    await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {});
-    await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {});
+    await expect(clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations)).resolves.toBe('cleared');
 
-    const remediationComments = state.comments.filter((comment) => comment.body.includes(NEEDS_REMEDIATION_MARKER));
-    expect(remediationComments).toEqual([
+    expect(writes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ operation: 'pull-request.label.remove' }),
+      expect.objectContaining({ operation: 'pull-request.edit', payload: { body: '' } }),
       expect.objectContaining({
-        body: expect.stringContaining('Halt resolved'),
+        operation: 'pull-request.comment.create',
+        payload: expect.objectContaining({ body: expect.stringContaining('Halt resolved') }),
       }),
-    ]);
-    expect(remediationComments[0].body).not.toContain('Manual remediation is required.');
+    ]));
   });
 
   it('returns gh-unavailable without throwing when the initial read rejects', async () => {
@@ -261,19 +258,15 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
       labels: [],
       body: '## Summary\n\nWidget import flow.',
     };
-    const { gh, calls } = fakeGh([
+    const { gh } = fakeGh([
       { stdout: JSON.stringify(halted) }, // resume-clear state read
-      { stdout: JSON.stringify(halted) }, // cleanupHaltPresentation state read
-      { stdout: '' }, // REST label removal
-      { stdout: JSON.stringify({ ...halted, labels: [] }) }, // label verification
-      { stdout: '' }, // marker-removing body edit
-      { stdout: JSON.stringify(cleared) }, // final verification
     ]);
+    const { operations } = fakeOperations();
 
-    await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {});
+    await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
 
     expect({
-      readyCalls: calls.filter((call) => call[0] === 'pr' && call[1] === 'ready').length,
+      readyCalls: 0,
       finalIsDraft: cleared.isDraft,
     }).toEqual({ readyCalls: 0, finalIsDraft: true });
   });
@@ -290,29 +283,19 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
       labels: [],
       body: '## Summary\n\nWidget import flow.',
     };
-    const { gh, calls } = fakeGh([
+    const { gh } = fakeGh([
       { stdout: JSON.stringify(halted) }, // resume-clear state read
-      { stdout: JSON.stringify(halted) }, // cleanupHaltPresentation state read
-      { stdout: '' }, // REST label removal
-      { stdout: JSON.stringify({ ...halted, labels: [] }) }, // label verification
-      { stdout: '' }, // marker-removing body edit
-      { stdout: JSON.stringify(cleared) }, // final verification
     ]);
+    const { operations, writes } = fakeOperations();
 
-    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {});
-    const labelRemoval = calls.find((call) => call[0] === 'api' && call.includes('DELETE'));
-    const bodyEdit = calls.find((call) => call[0] === 'pr' && call[1] === 'edit');
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
 
-    expect({ outcome, labelRemoval, bodyEdit }).toEqual({
-      outcome: 'cleared',
-      labelRemoval: [
-        'api',
-        '--method',
-        'DELETE',
-        'repos/acme/repo/issues/7/labels/needs-remediation',
-      ],
-      bodyEdit: ['pr', 'edit', PR_URL, '--body', cleared.body],
-    });
+    expect(outcome).toBe('cleared');
+    expect(writes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ operation: 'pull-request.label.remove', payload: { label: 'needs-remediation' } }),
+      expect.objectContaining({ operation: 'pull-request.edit', payload: { body: cleared.body } }),
+      expect.objectContaining({ operation: 'pull-request.comment.create' }),
+    ]));
   });
 
   it('clears a remediation label even when the body has no marker', async () => {
@@ -322,58 +305,37 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
       labels: [{ name: 'needs-remediation' }],
       body: '## Summary\n\nWidget import flow.',
     };
-    const { gh, calls } = fakeGh([
+    const { gh } = fakeGh([
       { stdout: JSON.stringify(labeledWithoutMarker) }, // resume-clear state read
-      { stdout: JSON.stringify(labeledWithoutMarker) }, // cleanup state read
-      { stdout: '' }, // REST label removal
-      { stdout: JSON.stringify({ ...labeledWithoutMarker, labels: [] }) }, // label verification
-      { stdout: JSON.stringify({ ...labeledWithoutMarker, labels: [] }) }, // final verification
     ]);
+    const { operations, writes } = fakeOperations();
 
-    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {});
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
 
-    expect({
-      outcome,
-      labelRemoval: calls.find((call) => call[0] === 'api' && call.includes('DELETE')),
-      bodyEdit: calls.find((call) => call[0] === 'pr' && call[1] === 'edit'),
-    }).toEqual({
-      outcome: 'cleared',
-      labelRemoval: [
-        'api',
-        '--method',
-        'DELETE',
-        'repos/acme/repo/issues/7/labels/needs-remediation',
-      ],
-      bodyEdit: undefined,
-    });
+    expect(outcome).toBe('cleared');
+    expect(writes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ operation: 'pull-request.label.remove', payload: { label: 'needs-remediation' } }),
+      expect.objectContaining({ operation: 'pull-request.comment.create' }),
+    ]));
+    expect(writes.some((write) => write.operation === 'pull-request.edit')).toBe(false);
   });
 
-  it('returns partial after bounded retries when the remediation label remains', async () => {
+  it('returns partial when the guarded label removal fails', async () => {
     const halted = {
       title: 'feat: widget import flow',
       isDraft: true,
       labels: [{ name: 'needs-remediation' }],
       body: `## Summary\n\nWidget import flow.\n\n<!-- conductor:needs-remediation -->`,
     };
-    const { gh, calls } = fakeGh([
+    const { gh } = fakeGh([
       { stdout: JSON.stringify(halted) }, // resume-clear state read
-      { stdout: JSON.stringify(halted) }, // cleanup state read
-      { stdout: '' }, // label removal attempt 1
-      { stdout: JSON.stringify(halted) }, // label remains
-      { stdout: '' }, // label removal attempt 2
-      { stdout: JSON.stringify(halted) }, // label remains
-      { stdout: '' }, // label removal attempt 3
-      { stdout: JSON.stringify(halted) }, // label remains
-      { stdout: '' }, // marker-removing body edit
-      { stdout: JSON.stringify({ ...halted, body: '## Summary\n\nWidget import flow.' }) }, // final re-read
     ]);
+    const { operations, writes } = fakeOperations({ mode: 'fail' });
 
-    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {});
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
 
-    expect({
-      outcome,
-      labelRemovals: calls.filter((call) => call[0] === 'api' && call.includes('DELETE')).length,
-    }).toEqual({ outcome: 'partial', labelRemovals: 3 });
+    expect(outcome).toBe('partial');
+    expect(writes).toEqual([expect.objectContaining({ operation: 'pull-request.label.remove' })]);
   });
 
   it('returns partial when the final re-read retains the remediation body marker', async () => {
@@ -385,12 +347,10 @@ describe('clearHaltStateForResume (Tasks 1, 4)', () => {
     };
     const { gh } = fakeGh([
       { stdout: JSON.stringify(halted) }, // resume-clear state read
-      { stdout: JSON.stringify(halted) }, // cleanup state read
-      { stdout: '' }, // marker-removing body edit
-      { stdout: JSON.stringify(halted) }, // marker remains on final re-read
     ]);
+    const { operations } = fakeOperations({ mode: 'fail' });
 
-    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {});
+    const outcome = await clearHaltStateForResume(gh, CWD, PR_URL, undefined, async () => {}, operations);
 
     expect(outcome).toBe('partial');
   });
@@ -406,14 +366,12 @@ describe('rehabilitateHaltPr — banner is a third stateless halt signal (Task 1
     ].join('\n');
     const { gh } = fakeGh([
       { stdout: JSON.stringify({ title: 'feat: widget import flow', isDraft: false, labels: [], body: bannerBody }) },
-      { stdout: '' }, // cleanupHaltPresentation reads/edits
-      { stdout: JSON.stringify({ title: 'feat: widget import flow', isDraft: false, labels: [], body: bannerBody }) },
-      { stdout: '' },
     ]);
+    const { operations } = fakeOperations();
 
-    const result = await rehabilitateHaltPr({ gh, cwd: CWD, prUrl: PR_URL, sourceRef: null });
+    const result = await rehabilitateHaltPr({ gh, operations, cwd: CWD, prUrl: PR_URL, sourceRef: null });
 
-    expect(result).not.toBe('not-halt-pr');
+    expect(result).toBe('rehabilitated');
     expect(bannerBody).toContain(HALT_PR_BANNER_SENTINEL);
   });
 
@@ -449,23 +407,22 @@ describe('bodyFloor (Task 2)', () => {
   ].join('\n');
 
   it('floors a banner-only body: adds Summary + feature desc + test evidence, removes sentinel', async () => {
-    const { gh, calls } = fakeGh([
+    const { gh } = fakeGh([
       { stdout: JSON.stringify({ body: BANNER_BODY }) }, // initial read
-      { stdout: '' }, // pr edit
       { stdout: JSON.stringify({ body: '## Summary\n\nwidget import flow\n\n## Test evidence\n\n- [x] 3/3 plan tasks completed with evidence-gated commits' }) }, // verify re-read
     ]);
+    const { operations, writes } = fakeOperations();
 
     const result = await bodyFloor(gh, CWD, PR_URL, {
       featureDesc: 'widget import flow',
       testEvidenceLine: '3/3 plan tasks completed with evidence-gated commits',
+      operations,
     });
 
     expect(result).toBe('floored');
-    const editCall = calls.find((c) => c[0] === 'pr' && c[1] === 'edit');
-    expect(editCall).toBeDefined();
-    const bodyArgIdx = editCall!.indexOf('--body');
-    expect(bodyArgIdx).toBeGreaterThanOrEqual(0);
-    const newBody = editCall![bodyArgIdx + 1];
+    const write = writes.find((entry) => entry.operation === 'pull-request.edit');
+    expect(write).toBeDefined();
+    const newBody = (write!.payload as { body: string }).body;
     expect(newBody).toContain('## Summary');
     expect(newBody).toContain('widget import flow');
     expect(newBody).toContain('## Test evidence');
@@ -488,18 +445,17 @@ describe('bodyFloor (Task 2)', () => {
       '',
       'Closes #7',
     ].join('\n');
-    const { gh, calls } = fakeGh([
+    const { gh } = fakeGh([
       { stdout: JSON.stringify({ body: residueBody }) }, // initial read
-      { stdout: '' }, // pr edit
       { stdout: JSON.stringify({ body: 'placeholder-without-sentinel' }) }, // verify re-read
     ]);
+    const { operations, writes } = fakeOperations();
 
-    const result = await bodyFloor(gh, CWD, PR_URL, { featureDesc: 'widget import flow' });
+    const result = await bodyFloor(gh, CWD, PR_URL, { featureDesc: 'widget import flow', operations });
 
     expect(result).toBe('floored');
-    const editCall = calls.find((c) => c[0] === 'pr' && c[1] === 'edit');
-    const bodyArgIdx = editCall!.indexOf('--body');
-    const newBody = editCall![bodyArgIdx + 1];
+    const write = writes.find((entry) => entry.operation === 'pull-request.edit');
+    const newBody = (write!.payload as { body: string }).body;
     expect(newBody).toContain('Existing skill-authored summary text.');
     expect(newBody).toContain('Closes #7');
     expect(newBody).not.toContain('This PR was opened automatically after an irrecoverable daemon HALT.');
@@ -522,31 +478,23 @@ describe('bodyFloor (Task 2)', () => {
     expect(calls.length).toBe(1);
   });
 
-  it('returns partial after bounded retries when gh pr edit always fails, and never throws', async () => {
-    const logs: string[] = [];
-    const { gh, calls } = fakeGh([
+  it('returns partial when the guarded body edit fails, and never falls back to raw gh', async () => {
+    const { gh } = fakeGh([
       { stdout: JSON.stringify({ body: BANNER_BODY }) }, // initial read
-      { stdout: '' }, // attempt 1: edit
-      { stdout: JSON.stringify({ body: BANNER_BODY }) }, // attempt 1: verify (still has sentinel)
-      { stdout: '' }, // attempt 2: edit
-      { stdout: JSON.stringify({ body: BANNER_BODY }) }, // attempt 2: verify (still has sentinel)
-      { stdout: '' }, // attempt 3: edit
-      { stdout: JSON.stringify({ body: BANNER_BODY }) }, // attempt 3: verify (still has sentinel)
     ]);
+    const { operations, writes } = fakeOperations({ mode: 'fail' });
 
     const result = await bodyFloor(
       gh,
       CWD,
       PR_URL,
-      { featureDesc: 'widget import flow' },
-      (msg) => logs.push(msg),
+      { featureDesc: 'widget import flow', operations },
+      undefined,
       async () => {},
     );
 
     expect(result).toBe('partial');
-    const editCalls = calls.filter((c) => c[0] === 'pr' && c[1] === 'edit');
-    expect(editCalls.length).toBe(3);
-    expect(logs.length).toBeGreaterThan(0);
+    expect(writes).toEqual([expect.objectContaining({ operation: 'pull-request.edit' })]);
   });
 });
 
@@ -559,37 +507,39 @@ describe('bodyFloor: honest test-evidence checkbox (false-completion regression)
   ].join('\n');
 
   it('never emits a CHECKED box for a zero-completion evidence line (PRs #1067/#1056/#1031 shipped "- [x] 0/16")', async () => {
-    const { gh, calls } = fakeGh([
+    const { gh } = fakeGh([
       { stdout: JSON.stringify({ body: BANNER_BODY }) },
-      { stdout: '' },
       { stdout: JSON.stringify({ body: 'floored' }) },
     ]);
+    const { operations, writes } = fakeOperations();
 
     await bodyFloor(gh, CWD, PR_URL, {
       featureDesc: 'widget import flow',
       testEvidenceLine: '0/16 plan tasks completed with evidence-gated commits',
+      operations,
     });
 
-    const editCall = calls.find((c) => c[0] === 'pr' && c[1] === 'edit')!;
-    const newBody = editCall[editCall.indexOf('--body') + 1];
+    const write = writes.find((entry) => entry.operation === 'pull-request.edit')!;
+    const newBody = (write.payload as { body: string }).body;
     expect(newBody).not.toContain('- [x] 0/16');
     expect(newBody).toContain('- [ ] 0/16 plan tasks completed with evidence-gated commits');
   });
 
   it('still checks the box for a genuine completion line', async () => {
-    const { gh, calls } = fakeGh([
+    const { gh } = fakeGh([
       { stdout: JSON.stringify({ body: BANNER_BODY }) },
-      { stdout: '' },
       { stdout: JSON.stringify({ body: 'floored' }) },
     ]);
+    const { operations, writes } = fakeOperations();
 
     await bodyFloor(gh, CWD, PR_URL, {
       featureDesc: 'widget import flow',
       testEvidenceLine: '16/16 plan tasks completed with evidence-gated commits',
+      operations,
     });
 
-    const editCall = calls.find((c) => c[0] === 'pr' && c[1] === 'edit')!;
-    const newBody = editCall[editCall.indexOf('--body') + 1];
+    const write = writes.find((entry) => entry.operation === 'pull-request.edit')!;
+    const newBody = (write.payload as { body: string }).body;
     expect(newBody).toContain('- [x] 16/16 plan tasks completed with evidence-gated commits');
   });
 });
@@ -733,7 +683,7 @@ describe('readFlooredBody', () => {
 
 describe('postHaltHistoryComment: halt narrative lands in a COMMENT, never the body', () => {
   it('posts a halt-history comment carrying the halt title, banner and halt reason — and issues zero body edits', async () => {
-    const { gh, calls } = fakeGh([
+    const { gh } = fakeGh([
       {
         stdout: JSON.stringify({
           title: 'needs-remediation: widget import flow',
@@ -743,27 +693,28 @@ describe('postHaltHistoryComment: halt narrative lands in a COMMENT, never the b
           comments: [],
         }),
       },
-      { stdout: '' }, // pr comment
     ]);
+    const { operations, writes } = fakeOperations();
 
     const outcome = await postHaltHistoryComment({
       gh,
       cwd: CWD,
       prUrl: PR_URL,
       haltReason: 'build stalled: no task progress for 3 rounds',
+      operations,
     });
 
     expect(outcome).toBe('posted');
-    const commentCall = calls.find((c) => c[0] === 'pr' && c[1] === 'comment')!;
-    expect(commentCall).toBeDefined();
-    const commentBody = commentCall[commentCall.indexOf('--body') + 1];
+    const write = writes.find((entry) => entry.operation === 'pull-request.comment.create')!;
+    expect(write).toBeDefined();
+    const commentBody = (write.payload as { body: string }).body;
     expect(commentBody).toContain(HALT_HISTORY_COMMENT_MARKER);
     expect(commentBody).toContain('Halt history');
     expect(commentBody).toContain('needs-remediation: widget import flow');
     expect(commentBody).toContain(HALT_PR_BANNER_SENTINEL);
     expect(commentBody).toContain('build stalled: no task progress for 3 rounds');
     // Narrative goes ONLY to the comment.
-    expect(calls.some((c) => c[0] === 'pr' && c[1] === 'edit')).toBe(false);
+    expect(writes.some((entry) => entry.operation === 'pull-request.edit')).toBe(false);
   });
 
   it('is idempotent — a PR that already carries the marker gets no second comment', async () => {
