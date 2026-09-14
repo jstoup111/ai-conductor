@@ -295,8 +295,17 @@ export async function completeTaskDoneWhen(
     return { kind: 'refused', message: `[task-cli] cannot close task ${id}: ${engineState.message}` };
   }
   const recordedPlanPath = engineState.value.activePlanPath;
-  const activePlanPath =
+  let activePlanPath =
     typeof recordedPlanPath === 'string' && recordedPlanPath.trim() ? recordedPlanPath : undefined;
+  if (!activePlanPath) {
+    // A daemon-dispatched feature never runs the plan step that records
+    // activePlanPath (#1831/#2261), so the close must resolve the plan the
+    // same way readOpenRepairState does — by feature slug — or every
+    // `task done` on such a feature is a silent legacy no-op that leaves the
+    // row pending and stalls the build on no_task_progress.
+    const binding = await resolveRepairPlanBinding(projectRoot);
+    if (binding.kind === 'bound') activePlanPath = binding.identity;
+  }
   if (!activePlanPath) return { kind: 'legacy' };
 
   let planText: string;
