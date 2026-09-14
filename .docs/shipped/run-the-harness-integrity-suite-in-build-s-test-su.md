@@ -23,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:step:finish,step:test_suite
+reason: open-executions:step:test_suite
 
 ## Build Review
 laps_to_pass: 1
