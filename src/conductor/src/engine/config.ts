@@ -1744,6 +1744,48 @@ function validateTestSuiteBlock(
     };
   }
 
+  if (raw.command !== undefined && raw.commands !== undefined) {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.command and test_suite.commands cannot both be configured',
+    };
+  }
+
+  if (raw.commands !== undefined) {
+    if (!Array.isArray(raw.commands) || raw.commands.length === 0) {
+      return {
+        type: 'validation_error',
+        message: 'test_suite.commands must be a non-empty array',
+      };
+    }
+
+    const allowedCommandKeys = new Set(['command', 'working_directory', 'timeout_seconds']);
+    for (const [index, entry] of raw.commands.entries()) {
+      if (!isPlainObject(entry)) {
+        return {
+          type: 'validation_error',
+          message: `test_suite.commands[${index}] must be an object`,
+        };
+      }
+
+      for (const key of Object.keys(entry)) {
+        if (!allowedCommandKeys.has(key)) {
+          return {
+            type: 'validation_error',
+            message: `Unknown key in test_suite.commands[${index}]: "${key}"`,
+          };
+        }
+      }
+
+      if (typeof entry.command !== 'string' || entry.command.trim() === '') {
+        return {
+          type: 'validation_error',
+          message: `test_suite.commands[${index}].command must be a non-empty string`,
+        };
+      }
+    }
+  }
+
   if (raw.scoped_command !== undefined) {
     if (typeof raw.scoped_command !== 'string' || raw.scoped_command.trim() === '') {
       return {

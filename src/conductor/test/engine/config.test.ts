@@ -1,10 +1,22 @@
 // Covers: task:1, task:2, task:2.1, task:3, task:9
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+
+const userConfigFixture = vi.hoisted(() => ({ path: '' }));
+
+vi.mock('../../src/engine/user-config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/user-config.js')>();
+  return {
+    ...actual,
+    readUserConfig: (path?: string) => actual.readUserConfig(path ?? userConfigFixture.path),
+  };
+});
+
 import {
   loadConfig,
+  loadMergedConfig,
   validateConfig,
   DEPRECATED_BUILD_REVIEW_RUBRIC_IDS,
   disabledStepNames,
@@ -26,6 +38,7 @@ describe('config', () => {
   });
 
   afterEach(async () => {
+    userConfigFixture.path = '';
     await rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -1198,6 +1211,104 @@ steps:
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.config.test_suite?.commands).toEqual(commands);
+    });
+
+    it.each([
+      ['an empty list', 'test_suite:\n  commands: []\n', /test_suite\.commands/],
+      ['a non-array list', 'test_suite:\n  commands: npm test\n', /test_suite\.commands/],
+      ['a null entry', 'test_suite:\n  commands:\n    - null\n', /test_suite\.commands.*\[0\]/],
+      ['a string entry', 'test_suite:\n  commands:\n    - npm test\n', /test_suite\.commands.*\[0\]/],
+      ['an array entry', 'test_suite:\n  commands:\n    - [npm, test]\n', /test_suite\.commands.*\[0\]/],
+      ['an entry missing command', 'test_suite:\n  commands:\n    - {}\n', /test_suite\.commands.*\[0\].*command/],
+      ['an entry with a blank command', 'test_suite:\n  commands:\n    - command: "   "\n', /test_suite\.commands.*\[0\].*command/],
+      ['an entry with a non-string command', 'test_suite:\n  commands:\n    - command: 42\n', /test_suite\.commands.*\[0\].*command/],
+      ['an entry with an unknown key', 'test_suite:\n  commands:\n    - command: npm test\n      retries: 2\n', /test_suite\.commands.*\[0\].*retries/],
+    ])('rejects commands with %s', async (_name, yaml, message) => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), yaml);
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { type: 'validation_error', message: expect.stringMatching(message) },
+      });
+    });
+
+    it('rejects scalar command and commands in the same project declaration', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  commands:\n    - command: npm run test:unit\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(/test_suite.*command.*commands|test_suite.*commands.*command/),
+        },
+      });
+    });
+
+    it('rejects scalar command and commands together after ordinary user/project merging', async () => {
+      const home = await mkdtemp(join(tmpdir(), 'config-user-'));
+      try {
+        userConfigFixture.path = join(home, '.ai-conductor', 'config.yml');
+        await mkdir(join(home, '.ai-conductor'), { recursive: true });
+        await writeFile(
+          userConfigFixture.path,
+          'test_suite:\n  commands:\n    - command: npm run test:unit\n',
+        );
+        await writeFile(
+          join(tmpDir, '.ai-conductor', 'config.yml'),
+          'test_suite:\n  command: npm test\n',
+        );
+
+        const result = await loadMergedConfig(tmpDir);
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: expect.stringMatching(/test_suite.*command.*commands|test_suite.*commands.*command/),
+          },
+        });
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    });
+
+    it('replaces a user command list with the ordered project list without concatenation', async () => {
+      const home = await mkdtemp(join(tmpdir(), 'config-user-'));
+      try {
+        userConfigFixture.path = join(home, '.ai-conductor', 'config.yml');
+        await mkdir(join(home, '.ai-conductor'), { recursive: true });
+        await writeFile(
+          userConfigFixture.path,
+          'test_suite:\n  commands:\n    - command: npm run test:obsolete\n',
+        );
+        await writeFile(
+          join(tmpDir, '.ai-conductor', 'config.yml'),
+          'test_suite:\n  commands:\n    - command: npm run test:unit\n    - command: npm run test:integration\n',
+        );
+
+        const result = await loadMergedConfig(tmpDir);
+
+        expect(result).toMatchObject({
+          ok: true,
+          config: {
+            test_suite: {
+              commands: [
+                { command: 'npm run test:unit' },
+                { command: 'npm run test:integration' },
+              ],
+            },
+          },
+        });
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
     });
 
     it.each([
