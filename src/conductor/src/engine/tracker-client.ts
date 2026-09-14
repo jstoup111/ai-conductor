@@ -20,8 +20,10 @@ import type {
   GithubOperationRunnerRefusal,
   GithubOperationRunnerResponse,
   GithubIntakeWriteOperationRequest,
+  GithubSharedWriteOperationRequest,
 } from './github-operations.js';
 import { executeGithubOperation } from './github-operations.js';
+import { hasExplicitGithubOperationApproval } from './github-operation-approval.js';
 import { authorizeGithubMutation } from './owner-gate/mutation-policy.js';
 import type {
   GithubMutationAuthorizationDependencies,
@@ -57,6 +59,12 @@ export interface GithubIntakeMutationExecutionContext {
   ): Promise<GithubOperationRunnerResponse | GithubOperationRunnerRefusal>;
 }
 
+/** Opaque interactive approval for exactly one shared repository mutation. */
+export interface GithubSharedMutationExecutionContext {
+  /** Structural lookalikes are rejected at the guarded execution boundary. */
+  readonly approval: unknown;
+}
+
 /** Factory inputs for the sole guarded adapter from typed operations to `gh`. */
 export interface GuardedGithubOperationRunnerOptions {
   readonly cwd: string;
@@ -64,6 +72,8 @@ export interface GuardedGithubOperationRunnerOptions {
   readonly mutation?: GithubMutationExecutionContext;
   /** Absent context refuses every existing pre-spec intake mutation. */
   readonly intake?: GithubIntakeMutationExecutionContext;
+  /** Absent or mismatched approval refuses every shared-resource mutation. */
+  readonly shared?: GithubSharedMutationExecutionContext;
 }
 
 /** Ownership context used by the GitHub TrackerClient's structured requests. */
@@ -183,6 +193,10 @@ export function createGuardedGithubOperationRunner(
         if (!options.intake) return { kind: 'refused', reason: 'explicit-authorization-required' };
         const decision = await options.intake.authorize(request, options.cwd);
         if ('kind' in decision && decision.kind === 'refused') return decision;
+      } else if (request.access === 'shared-write') {
+        if (!options.shared || !hasExplicitGithubOperationApproval(options.shared.approval, request)) {
+          return { kind: 'refused', reason: 'explicit-authorization-required' };
+        }
       } else if (request.access !== 'read') {
         if (!options.mutation) return { kind: 'refused', reason: 'missing-provenance' };
         const decision = await authorizeGithubMutation({
