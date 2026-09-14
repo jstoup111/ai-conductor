@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { ConductState, StepName } from '../types/index.js';
 import type { ConductStateStore } from './conduct-state-store.js';
@@ -35,7 +35,14 @@ export async function applyRebaseTransition(
 ): Promise<AppliedRebaseTransition> {
   const statePath = join(options.projectRoot, '.pipeline', 'conduct-state.json');
   const operation: RebaseOperationRecord = {
-    id: options.operationId ?? randomUUID(),
+    // The replay tuple is immutable. Its digest makes a resumed application
+    // identify the same cross-file operation instead of reopening gates again.
+    id: options.operationId ?? createHash('sha256').update(JSON.stringify({
+      replay: options.replay,
+      invalidated: [...options.invalidated].sort(),
+      preserved: [...options.preserved].sort(),
+      reverified: [...(options.reverified ?? [])].sort(),
+    })).digest('hex'),
     status: 'applying',
     transition: {
       preserved: [...options.preserved],
