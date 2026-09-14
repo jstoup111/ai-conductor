@@ -56,6 +56,21 @@ export async function applyRebaseTransition(
     return { operation: priorRebase.rebaseOperation, invalidated: options.invalidated, preserved: options.preserved, stateResult: 'already-applied' };
   }
 
+  // Preservation is authority for the verdict that existed when this replay
+  // transition began.  Do not discover that verdict after applying the state
+  // batch: another writer may have recorded a genuine later judgement in the
+  // meantime, and attaching this replay to that newer authority would make it
+  // look as though the old judgement survived it.
+  const originalPreserved = new Map<StepName, { verdict: NonNullable<Awaited<ReturnType<typeof readVerdict>>>; digest: string }>();
+  for (const gate of options.preserved) {
+    const verdict = await readVerdict(options.projectRoot, gate);
+    if (!verdict?.satisfied || verdict.kickback || !options.replay.expectedTree) continue;
+    originalPreserved.set(gate, {
+      verdict,
+      digest: createHash('sha256').update(JSON.stringify(verdict)).digest('hex'),
+    });
+  }
+
   await writeVerdict(options.projectRoot, 'rebase', {
     satisfied: true,
     checkedAt: Date.now(),
@@ -104,8 +119,13 @@ export async function applyRebaseTransition(
   // The operation id makes this authority usable only with this exact applied
   // replay; an ordinary later verdict replaces this whole record naturally.
   for (const gate of options.preserved) {
+    const original = originalPreserved.get(gate);
+    if (!original) continue;
     const verdict = await readVerdict(options.projectRoot, gate);
-    if (!verdict?.satisfied || verdict.kickback || !options.replay.expectedTree) continue;
+    // A newer ordinary verdict wins.  Do not overwrite it and do not add this
+    // operation's preservation metadata to it.
+    if (!verdict?.satisfied || verdict.kickback ||
+      createHash('sha256').update(JSON.stringify(verdict)).digest('hex') !== original.digest) continue;
     const originalIdentity = `${verdict.checkedAt}`;
     await writeVerdict(options.projectRoot, gate, {
       ...verdict,
@@ -116,7 +136,7 @@ export async function applyRebaseTransition(
           // timestamp is the only attempt identity available to this adapter;
           // the replay-bound reader also requires the original code stamp and
           // actual tree before it grants authority.
-          artifactDigest: createHash('sha256').update(JSON.stringify(verdict)).digest('hex'),
+          artifactDigest: original.digest,
           attemptId: originalIdentity,
           runId: originalIdentity,
           codeStamp: options.replay.preRebaseHead,
