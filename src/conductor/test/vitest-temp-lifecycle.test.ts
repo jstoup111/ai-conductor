@@ -1,6 +1,7 @@
 // Covers: task:6, task:7, task:8
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -43,13 +44,17 @@ describe('relocated Vitest temporary lifecycle', () => {
     await mkdir(root, { recursive: true });
     const sweeps: string[] = [];
     const removed: string[] = [];
+    let leakedEntry = false;
+    await mkdir(original, { recursive: true });
     vi.doMock('./pipeline-leak-guard.js', () => ({ snapshotPipeline: async () => ({ exists: false, entries: new Map() }), diffPipeline: () => ({ added: [], modified: [] }) }));
     vi.doMock('./park-leak-guard.js', () => ({ resolveRealParkedDir: async () => null, snapshotParkedMarkers: async () => ({ exists: false, markers: {} }), diffParkedMarkers: () => ({ added: [], removed: [], modified: [] }) }));
     vi.doMock('./tmpdir-leak-guard.js', () => ({
       RUN_TMP_ROOT_ENV: 'AI_CONDUCTOR_TEST_TMP_ROOT', RUN_TMP_ROOT_STALE_AFTER_MS: 1, RUN_TMP_ROOT_LEGACY_STALE_AFTER_MS: 1, RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX: 'failure',
       writeRunRootOwnerMarker: () => {}, startRunRootHeartbeat: () => ({ stop: () => {} }),
       sweepStaleRunTmpRoots: async (parent: string) => { sweeps.push(parent); return { reaped: [], retained: [], failures: [] }; },
-      removeRunTmpRoot: async (path: string) => { removed.push(path); }, snapshotTmpdirEntries: async () => ({ exists: true, entries: new Set() }), diffTmpdirEntries: () => ({ stray: [], ignored: [] }),
+      removeRunTmpRoot: async (path: string) => { removed.push(path); },
+      snapshotTmpdirEntries: async () => ({ exists: true, entries: leakedEntry ? new Set(['bypass-leak']) : new Set<string>() }),
+      diffTmpdirEntries: (_before: unknown, after: { entries: Set<string> }) => ({ stray: [...after.entries], ignored: [] }),
     }));
     vi.doMock('./tmux-leak-guard.js', () => ({ snapshotDaemonSessions: () => ({ sessions: [], failed: false }), sweepStaleDaemonSessions: () => ({ killed: [] }), reapLeakedDaemonSessions: () => ({ killed: [], indeterminate: [] }) }));
     vi.doMock('./signals-leak-guard.js', () => ({ snapshotEngineerSignals: async () => ({ exists: false, lines: [] }), diffEngineerSignals: () => ({ addedTestProjectLines: 0 }) }));
@@ -62,12 +67,16 @@ describe('relocated Vitest temporary lifecycle', () => {
     vi.useFakeTimers();
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const { default: setup } = await import('./global-setup.js');
-    await setup();
+    const teardown = await setup();
 
     expect(sweeps).toEqual([original, selected, nested]);
     process.emit('SIGINT');
     vi.runAllTimers();
     expect(exit).toHaveBeenCalledWith(1);
     expect(process.env.TMPDIR).toBe(root);
+    await writeFile(join(original, 'bypass-leak'), 'must survive');
+    leakedEntry = true;
+    await expect(teardown()).rejects.toThrow(/bypass-leak/);
+    expect(existsSync(join(original, 'bypass-leak'))).toBe(true);
   });
 });

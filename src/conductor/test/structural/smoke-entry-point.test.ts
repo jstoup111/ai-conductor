@@ -161,6 +161,11 @@ describe('structural: smoke test entry point', () => {
         runSmokeCommand: async () => { roots.push(process.env.AI_CONDUCTOR_TEST_TMP_SCOPE!); },
       }));
       expect(new Set(roots).size).toBe(3);
+      const inheritedScope = await mkdtemp(join(selectedStorage, 'inherited-scope-'));
+      const inheritedSentinel = join(inheritedScope, 'inherited-sentinel');
+      await writeFile(inheritedSentinel, 'keep');
+      await runSmokeEntryPoint([], async () => ({ runSmokeCommand: async () => {} }));
+      expect(existsSync(inheritedSentinel)).toBe(true);
     } finally {
       if (saved.TMPDIR === undefined) delete process.env.TMPDIR;
       else process.env.TMPDIR = saved.TMPDIR;
