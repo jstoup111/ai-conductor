@@ -128,7 +128,7 @@ function sharedLeaseFilesystem(): ConductStateLeaseFilesystem & {
   };
 }
 
-function successorClaimPath(statePath: string, ownerToken: string, predecessorToken: string): string {
+function successorClaimPath(statePath: string, ownerToken: string, predecessorToken: string | null): string {
   const slot = createHash('sha256').update(JSON.stringify([ownerToken, predecessorToken])).digest('hex');
   return `${statePath}.lease/recovery.${slot}.json`;
 }
@@ -920,6 +920,56 @@ describe('conduct-state lease', () => {
       contenderClaimWrites: 0,
       recoveryClaimReads: 1,
     });
+  });
+
+  it('bounds deadline observation after redirecting from a foreign canonical root', async () => {
+    const statePath = '/worktree/foreign-root-deadline-observation/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared, pid: 101, newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+
+    const claim = (pid: number, token: string, ownerToken: string, predecessorToken: string | null): string => JSON.stringify({
+      version: 1, pid, token, claimedAt: '1970-01-01T00:00:00.000Z', ownerToken, predecessorToken,
+    });
+    await shared.writeRecoveryClaim(`${statePath}.lease/recovery.json`, claim(202, 'foreign-root', 'foreign-owner', null));
+    await shared.writeRecoveryClaim(
+      successorClaimPath(statePath, 'dead-owner', 'first-current-claim'),
+      claim(304, 'second-current-claim', 'dead-owner', 'first-current-claim'),
+    );
+    await shared.writeRecoveryClaim(
+      successorClaimPath(statePath, 'dead-owner', null),
+      claim(303, 'first-current-claim', 'dead-owner', null),
+    );
+
+    let now = 0;
+    let recoveryClaimReads = 0;
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async readOwner(path): Promise<string> {
+        now = 5;
+        return shared.readOwner(path);
+      },
+      async readRecoveryClaim(path): Promise<string | null> {
+        recoveryClaimReads += 1;
+        return shared.readRecoveryClaim(path);
+      },
+    };
+
+    await expect(createConductStateLease(statePath, {
+      filesystem,
+      label: 'intake ledger',
+      now: () => now,
+      processIsLive: () => false,
+      waitTimeoutMs: 5,
+      newToken: () => 'contender',
+    }).acquire()).resolves.toEqual({
+      ok: false,
+      kind: 'timeout',
+      message: 'Unable to acquire intake ledger lease within 5ms; recovery claimant pid 303 is unresolved',
+    });
+    expect(recoveryClaimReads).toBe(2);
   });
 
   it('returns interrupted when acquisition waiting is cancelled', async () => {
