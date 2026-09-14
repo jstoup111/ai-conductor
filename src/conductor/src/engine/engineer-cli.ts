@@ -1209,7 +1209,7 @@ export async function dispatchEngineer(
       let handoffResult: Awaited<ReturnType<typeof openSpecPr>>;
       try {
         const publication = opts.handoffPublication
-          ?? initialSpecPublication(target, branch, worktree, gh, git);
+          ?? (target.remote ? initialSpecPublication(target, branch, worktree, gh, git) : undefined);
         handoffResult = await openSpecPr(target, branch, {
           gitRunner: git,
           runner: async (args, runnerOpts) => {

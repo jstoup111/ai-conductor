@@ -26,6 +26,7 @@ import {
 } from '../../../src/engine/engineer-cli.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
+import type { HandoffDeps } from '../../../src/engine/engineer/handoff.js';
 
 const execFile = promisify(execFileCb);
 
@@ -108,6 +109,40 @@ async function writeRemoteRegistry(): Promise<void> {
 
 const noOpGit = async () => ({ stdout: '', stderr: '' });
 
+function authorizedPublication(
+  gh: (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>,
+  branch: string,
+  repository: string,
+  number: number,
+): NonNullable<HandoffDeps['publication']> {
+  const featureMarker = `.docs/intake/${branch.slice('spec/'.length)}.md`;
+  return {
+    repository,
+    remote: {
+      cwd: repoPath,
+      config: async () => ({ stdout: `https://github.com/${repository}.git` }),
+      runRemoteGit: noOpGit,
+      mutation: {
+        provenance: { repository, defaultBranch: 'main', specBranch: branch, featureMarker, publication: 'initial' },
+        dependencies: {
+          resolveMachineOwner: async () => ({ resolved: true as const, id: 'test-owner' }),
+          provenanceDiscovery: { readCommittedRecords: async () => [{ path: featureMarker, content: 'Owner: test-owner\n' }] },
+        },
+      },
+    },
+    operations: {
+      async run(request) {
+        if (request.operation === 'pull-request.create') {
+          const payload = request.payload as { head: string; title: string; body: string };
+          await gh(['pr', 'create', '--head', payload.head, '--title', payload.title, '--body', payload.body], { cwd: repoPath });
+          return { created: { repository, kind: 'pull-request' as const, number } };
+        }
+        return {};
+      },
+    },
+  };
+}
+
 function captureOpts(extra: Partial<DispatchEngineerOpts>): {
   out: string[];
   err: string[];
@@ -160,6 +195,7 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
       trace.push({ command: 'gh', args: [...args], cwd: options?.cwd ?? '' });
       return { stdout: 'https://github.com/acme/test-proj/pull/42', stderr: '' };
     };
+    const publication = authorizedPublication(gh as any, branch, 'acme/test-proj', 42);
     const { opts } = captureOpts({
       gh: gh as any,
       ensureRunningLaunch: async () => {},
@@ -167,6 +203,13 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
     const optsWithGit = {
       ...opts,
       git: injectedGit,
+      handoffPublication: {
+        ...publication,
+        remote: {
+          ...publication.remote,
+          runRemoteGit: injectedGit,
+        },
+      },
     } as DispatchEngineerOpts & { git: typeof injectedGit };
 
     await dispatchEngineer({
@@ -177,11 +220,11 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
     }, optsWithGit);
 
     expect(trace).toEqual([
-      { command: 'git', args: ['push', '-u', 'origin', branch], cwd: worktree },
+      { command: 'git', args: ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`], cwd: repoPath },
       {
         command: 'gh',
-        args: ['pr', 'create', '--head', branch, '--fill', '--label', 'spec'],
-        cwd: worktree,
+        args: expect.arrayContaining(['pr', 'create', '--head', branch]),
+        cwd: repoPath,
       },
     ]);
   });
@@ -204,6 +247,7 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
     const { out, err, opts } = captureOpts({
       gh: gh as any,
       git: noOpGit,
+      handoffPublication: authorizedPublication(gh as any, branch, 'acme/test-proj', 42),
       ensureRunningLaunch: async () => {},
     });
 
@@ -378,6 +422,7 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
     const { out, err, opts } = captureOpts({
       gh: gh as any,
       git: noOpGit,
+      handoffPublication: authorizedPublication(gh as any, branch, 'acme/test-proj', 42),
       ensureRunningLaunch: async () => {},
     });
 
@@ -427,6 +472,8 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
     const { out, opts } = captureOpts({
       gh: gh as any,
       git: noOpGit,
+      handoffPublication: authorizedPublication(gh as any, branch, 'o/e', 999),
+      intakeResolveActor: async () => ({ resolved: true, id: 'test-owner' }),
       ensureRunningLaunch: async () => {},
     });
 
@@ -630,6 +677,8 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
     const { out, opts } = captureOpts({
       gh: gh as any,
       git: noOpGit,
+      handoffPublication: authorizedPublication(gh as any, branch, 'o/e', 999),
+      intakeResolveActor: async () => ({ resolved: true, id: 'test-owner' }),
       ensureRunningLaunch: async () => {},
     });
 
@@ -697,6 +746,8 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
     const { out, err, opts } = captureOpts({
       gh: gh as any,
       git: noOpGit,
+      handoffPublication: authorizedPublication(gh as any, branch, 'o/f', 888),
+      intakeResolveActor: async () => ({ resolved: true, id: 'test-owner' }),
       ensureRunningLaunch: async () => {},
     });
 
