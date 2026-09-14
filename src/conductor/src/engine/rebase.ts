@@ -1838,7 +1838,11 @@ export async function applyRebaseVerdicts(
     ? []
     : (partition.preserved as StepName[]).filter((gate) => !applicablePreservations.has(gate));
   const targets: StepName[] = partition !== undefined
-    ? ([...(documentOnly ? [] : ['build']), ...partition.invalidated, ...unprovedPreservations] as StepName[])
+    // A completed BUILD is attested before this decision is applied. Replay
+    // equivalence changes which reviews need another judgement, not whether
+    // the already-established authoring/BUILD work is selected again by tail
+    // position. Current combined-tree verification remains in test_suite.
+    ? ([...partition.invalidated, ...unprovedPreservations] as StepName[])
     : ([
         'build',
         ...Object.keys(GATE_SURFACE).filter((gate) => ranManualTest || gate !== 'manual_test'),
