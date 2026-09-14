@@ -37,7 +37,12 @@ describe('tracker-client: canonical GhRunner + guarded makeProductionGh', () => 
   it('forwards caller timeout and capture limits to the process boundary without changing defaults', async () => {
     const noRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-    vi.mocked(execFileSpy).mockImplementationOnce(((_file, _args, _options, callback) => {
+    vi.mocked(execFileSpy).mockImplementationOnce(((
+      _file: string,
+      _args: readonly string[] | null | undefined,
+      _options: unknown,
+      callback: ((error: unknown, stdout: unknown, stderr: unknown) => void) | undefined,
+    ) => {
       callback?.(null, 'ok', '');
       return undefined as never;
     }) as unknown as typeof execFileSpy);
