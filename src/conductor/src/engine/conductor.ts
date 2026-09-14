@@ -412,6 +412,7 @@ import {
   type CiFailureAttempt,
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
+import { applyRebaseTransition } from './rebase-transition.js';
 import { classifyGateInvalidation } from './gate-invalidation.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import {
@@ -13693,7 +13694,11 @@ export class Conductor {
       // gates aren't `kickbackTarget` steps, so emit the kickback event(s)
       // here; the selector below routes back to them. test_suite re-verifies
       // before build_review judges the refreshed build.
-      if (this.lastRebaseOutcome?.kind === 'changed') {
+      // A completed replay uses applyRebaseTransition above. Its named batch
+      // is the sole state mutation: do not subsequently rewind by tail
+      // position, which would reopen completed authoring/BUILD work.
+      const appliedRebase = await readVerdict(this.projectRoot, 'rebase');
+      if (this.lastRebaseOutcome?.kind === 'changed' && appliedRebase?.rebaseOperation?.status !== 'applied') {
         const verdicts = await readAllVerdicts(this.projectRoot);
         // Task 7 (ADR-2026-07-20): a judged gate that classifyGateInvalidation
         // decided to PRESERVE (delta misses its declared surface) must not be
@@ -14457,7 +14462,31 @@ export class Conductor {
       outcome,
       ranManualTest,
       preVerify,
+      git,
     );
+
+    // The replay decision has already written the authoritative gate verdicts.
+    // Apply exactly that set through the state-store port so the tail selector
+    // sees pending gates without a positional rewind through completed BUILD
+    // or acceptance authoring. Unproved replay intentionally has no replay
+    // authority and follows the conservative verdict path below.
+    if (verdict.replay && verdict.kickedBack.length > 0) {
+      const transition = await applyRebaseTransition({
+        projectRoot: this.projectRoot,
+        stateStore: this.stateStore,
+        replay: verdict.replay,
+        invalidated: verdict.kickedBack,
+        preserved: [],
+        reverified: verdict.reverified,
+      });
+      if (transition.stateResult === 'refused') {
+        await this.writeHaltMarker('rebase continuation state transition was refused; inspect concurrent state updates before resuming\n', 'needs-human');
+        return { success: false, output: 'rebase continuation state transition refused' };
+      }
+      for (const gate of transition.invalidated) {
+        if (state[gate] !== 'skipped') state[gate] = 'pending';
+      }
+    }
 
     // Emit rebase_gate_reverified event for each step that was re-verified
     // (dispatch skipped because gate is mechanically confirmed).

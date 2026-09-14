@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
-import { readVerdict } from '../../src/engine/gate-verdicts.js';
+import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { applyRebaseTransition } from '../../src/engine/rebase-transition.js';
 
 const dirs: string[] = [];
@@ -15,6 +15,7 @@ describe('applyRebaseTransition', () => {
     dirs.push(dir);
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ build_review: 'done', manual_test: 'skipped', acceptance_specs: 'done' }));
+    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
     const result = await applyRebaseTransition({
       projectRoot: dir,
       stateStore: createFilesystemConductStateStore(join(dir, '.pipeline/conduct-state.json')),
@@ -33,6 +34,7 @@ describe('applyRebaseTransition', () => {
     dirs.push(dir);
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ build_review: 'done' }));
+    await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' } });
     const input = {
       projectRoot: dir,
       stateStore: createFilesystemConductStateStore(join(dir, '.pipeline/conduct-state.json')),
