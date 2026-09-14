@@ -1893,22 +1893,40 @@ export async function recordRebaseStepCompletion(
  * Omitting it left a real preservation invisible on the spine — neither
  * invalidated nor preserved.
  */
+type RebaseGatePreservation = {
+  gate: StepName;
+  basis: 'test_suite_drift_budget';
+};
+
+type AppliedRebaseGateDecision = {
+  kickedBack: readonly StepName[];
+  reverified: readonly StepName[];
+  preserved?: readonly RebaseGatePreservation[];
+};
+
+function isRebaseGatePreservationList(
+  applied: AppliedRebaseGateDecision | readonly RebaseGatePreservation[] | undefined,
+): applied is readonly RebaseGatePreservation[] {
+  return Array.isArray(applied);
+}
+
 export async function emitGateInvalidationEvents(
   events: ConductorEventEmitter,
   outcome: RebaseOutcome,
   ranManualTest: boolean,
-  applied?: {
-    kickedBack: readonly StepName[];
-    reverified: readonly StepName[];
-    preserved?: ReadonlyArray<{ gate: StepName; basis: 'test_suite_drift_budget' }>;
-  } | ReadonlyArray<{ gate: StepName; basis: 'test_suite_drift_budget' }>,
+  applied?: AppliedRebaseGateDecision | readonly RebaseGatePreservation[],
 ): Promise<void> {
   if (outcome.kind !== 'changed') return;
 
   // A candidate preservation without valid prior evidence is a kickback after
   // application. Report that actual effect, never the pre-application guess.
-  const application = Array.isArray(applied) ? undefined : applied;
-  const preverifiedPreserved = Array.isArray(applied) ? applied : application?.preserved ?? [];
+  // Array.isArray's built-in predicate only narrows mutable arrays. This
+  // explicit guard preserves the readonly list alternative, so both call
+  // shapes remain type-safe: the applied decision or its preservation list.
+  const application = isRebaseGatePreservationList(applied) ? undefined : applied;
+  const preverifiedPreserved = isRebaseGatePreservationList(applied)
+    ? applied
+    : application?.preserved ?? [];
 
   if (outcome.featureSurface === undefined) {
     // F is uncomputable: no declared surface and no delta partition exist, so
