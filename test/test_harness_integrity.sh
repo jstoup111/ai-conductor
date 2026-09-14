@@ -1740,6 +1740,14 @@ else
   assert "shipped interpreter source contains no shell-expanded runtime data" 1
 fi
 
+# ── 28. Guarded GitHub invocation boundary ──────────────────────────────────
+github_invocation_check="${HARNESS_DIR}/test/check_github_invocation_boundary.sh"
+if [ -x "$github_invocation_check" ] && "$github_invocation_check"; then
+  assert "test/check_github_invocation_boundary.sh — guarded invocation audit passes" 0
+else
+  assert "test/check_github_invocation_boundary.sh — guarded invocation audit passes" 1
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
