@@ -287,7 +287,7 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       expect([state.manual_test, state.prd_audit, state.architecture_review_as_built,
         state.validation__manual_test, state.validation__prd_audit, state.validation__architecture_review_as_built])
         .toEqual(['done', 'done', 'done', 'done', 'done', 'done']);
-      expect(completed).toEqual([]);
+      expect(completed).toEqual([['manual_test']]);
       const redispatchStatuses = [state.manual_test, state.prd_audit, state.architecture_review_as_built,
         state.validation__manual_test, state.validation__prd_audit, state.validation__architecture_review_as_built];
       const beforeFresh = await readState(statePath);

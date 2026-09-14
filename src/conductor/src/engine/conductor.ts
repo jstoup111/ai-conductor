@@ -7796,7 +7796,15 @@ export class Conductor {
           // Only the entry (first dispatchable) member fans out — a
           // non-entry member reaching this code falls through to the
           // ordinary serial dispatch below.
-          if (groupEntryName === step.name && membership.dispatchable.length > 1) {
+          // A retained-sibling retry is still a validation-group join even
+          // when only one member remains dispatchable. Keep its paired
+          // parallel lifecycle events so the rejoin is observable; a normal
+          // width-one validation walk, with no retained sibling, remains
+          // indistinguishable from the serial baseline.
+          if (
+            groupEntryName === step.name &&
+            (membership.dispatchable.length > 1 || this.hasRetainedValidationSibling(step.name, state))
+          ) {
             const preDispatchPark = await stopAtOperatorParkBoundary();
             if (preDispatchPark) {
               return preDispatchPark;
