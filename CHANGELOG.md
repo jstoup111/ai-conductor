@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.2.0] - 2026-09-10
+## [1.2.0] - 2026-09-14
 
 ### Added
 
@@ -25,12 +25,17 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - OpenTelemetry visualizations now enforce complete event-handler coverage for traced events. ([implementation PR #2395](https://github.com/jstoup111/ai-conductor/pull/2395)).
 - OpenTelemetry exports now label step duration, retry, and dispatch metrics with resolved provider, model, effort, and tier dimensions. ([implementation PR #2486](https://github.com/jstoup111/ai-conductor/pull/2486)).
 - Operators can add static namespaced attributes to all OpenTelemetry exports. ([implementation PR #2490](https://github.com/jstoup111/ai-conductor/pull/2490)).
+- Tracker-sourced GitHub issue text is sanitized and provenance-wrapped before it enters autonomous intake. ([implementation PR #2372](https://github.com/jstoup111/ai-conductor/pull/2372)).
+- Non-Small architecture artifacts now require a fenced Mermaid diagram before they can be landed. ([implementation PR #2496](https://github.com/jstoup111/ai-conductor/pull/2496)).
+- Pricing refreshes now include opt-in Codex Astra rates when upstream pricing is available. ([implementation PR #2502](https://github.com/jstoup111/ai-conductor/pull/2502)).
 
 ### Changed
 
 - Build review now limits test-quality checks to changed behavior and explicitly recovers uncertain coverage. ([implementation PR #2324](https://github.com/jstoup111/ai-conductor/pull/2324)).
 - OpenTelemetry traces now report the released harness version as service.version. ([implementation PR #2399](https://github.com/jstoup111/ai-conductor/pull/2399)).
 - Spec landing commits now summarize the DECIDE artifacts they contain. ([implementation PR #2400](https://github.com/jstoup111/ai-conductor/pull/2400)).
+- Inline runs now display every renderable conductor event. ([implementation PR #2448](https://github.com/jstoup111/ai-conductor/pull/2448)).
+- `brain status` reports live durable intake queue depth, including pending, claimed, and stranded work. ([implementation PR #2510](https://github.com/jstoup111/ai-conductor/pull/2510)).
 
 ### Fixed
 
@@ -70,11 +75,25 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Plan coherence validation accepts common Story reference spellings and clearly reports unbindable or absent references. ([implementation PR #2404](https://github.com/jstoup111/ai-conductor/pull/2404)).
 - Prevent inherited test coverage markers from being misattributed to unrelated features. ([implementation PR #2487](https://github.com/jstoup111/ai-conductor/pull/2487)).
 - Daemon logs now show build-review rubric progress and outcomes. ([implementation PR #2449](https://github.com/jstoup111/ai-conductor/pull/2449)).
+- Build review now settles refuted findings without repeatedly charging remediation retries. ([implementation PR #2506](https://github.com/jstoup111/ai-conductor/pull/2506)).
+- Preserve blanket command-denial claims for normal dispatch handling. ([implementation PR #2511](https://github.com/jstoup111/ai-conductor/pull/2511)).
+- Remediation halts now recognize and report documented unanswerable categories. ([implementation PR #2507](https://github.com/jstoup111/ai-conductor/pull/2507)).
+- Build review now halts with recovery guidance when a configured rubric skill cannot be dispatched. ([implementation PR #2503](https://github.com/jstoup111/ai-conductor/pull/2503)).
+- Daemon remediation redirects now identify the task or rationale clause that directed a sealed-artifact edit. ([implementation PR #2504](https://github.com/jstoup111/ai-conductor/pull/2504)).
+- `conduct shipped-record` now commits current Cost and Time totals when feature ledger data changes. ([implementation PR #2509](https://github.com/jstoup111/ai-conductor/pull/2509)).
+- Failed rewinds now restore state and verdicts so operators can retry safely. ([implementation PR #2512](https://github.com/jstoup111/ai-conductor/pull/2512)).
+- Daemon re-kick guards now persist across restarts, preventing duplicate retries at an unchanged base SHA. ([implementation PR #2508](https://github.com/jstoup111/ai-conductor/pull/2508)).
+- Intake submissions using the plural Desired outcomes heading now preserve their outcome bullets during staging. ([implementation PR #2505](https://github.com/jstoup111/ai-conductor/pull/2505)).
+- prd_audit gap routing resolves the feature's plan by slug instead of halting every citing row as unresolvable in a multi-plan corpus. ([implementation PR #2535](https://github.com/jstoup111/ai-conductor/pull/2535)).
+- The daemon re-runs PRD audit and coverage binding when a rebase changes their active inputs. ([implementation PR #2453](https://github.com/jstoup111/ai-conductor/pull/2453)).
+- Codex builds now stamp tasks through `task start` before dispatch and verify closure, so `task done` no longer silently no-ops and stalls the build. ([implementation PR #2542](https://github.com/jstoup111/ai-conductor/pull/2542)).
+- `task done` now records Done-when evidence on daemon-dispatched features by resolving the plan from the feature slug, instead of silently exiting 0 and stalling the build. ([implementation PR #2543](https://github.com/jstoup111/ai-conductor/pull/2543)).
+- Repair obligations follow the rebase step's commit rewrites, so a rebase no longer leaves re-opened tasks unresolvable and stalls the build. ([implementation PR #2544](https://github.com/jstoup111/ai-conductor/pull/2544)).
 
 ## Migration
 
 ```bash migration
-./bin/install --update
+"${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/install" --update
 ```
 
 ## [1.1.0] - 2026-09-08
