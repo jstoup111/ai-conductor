@@ -74,7 +74,19 @@ const defaultFilesystem: ConductStateLeaseFilesystem = {
     await mkdir(dirname(path), { recursive: true });
     await mkdir(path);
   },
-  writeOwner: (path, contents) => writeFile(path, contents, { encoding: 'utf8', flag: 'wx' }),
+  // A contender may begin recovery as soon as the lease directory appears.
+  // Publish ownership with a rename so it sees either no owner (initializing)
+  // or the complete record, never a transient empty/truncated JSON document.
+  async writeOwner(path, contents): Promise<void> {
+    const temporaryPath = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporaryPath, contents, { encoding: 'utf8', flag: 'wx' });
+      await rename(temporaryPath, path);
+    } catch (error) {
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
+  },
   readOwner: (path) => readFile(path, 'utf8'),
   writeRecoveryClaim: (path, contents) => writeFile(path, contents, { encoding: 'utf8', flag: 'wx' }),
   async readRecoveryClaim(path): Promise<string | null> {
@@ -350,7 +362,17 @@ export function createConductStateLease(
         try {
           await filesystem.writeOwner(ownerPath(leasePath), serializedOwner);
         } catch (error) {
-          await filesystem.releaseDirectory(leasePath).catch(() => undefined);
+          // Publication can lose a race to ownership becoming visible. Only
+          // remove the directory when its owner path is still absent: deleting
+          // on an unreadable or newly-present record could tear down a live
+          // owner's lease while reporting our own publication failure.
+          try {
+            await filesystem.readOwner(ownerPath(leasePath));
+          } catch (ownerError) {
+            if (isMissing(ownerError)) {
+              await filesystem.releaseDirectory(leasePath).catch(() => undefined);
+            }
+          }
           return {
             ok: false,
             kind: 'filesystem',

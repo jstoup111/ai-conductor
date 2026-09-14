@@ -16,14 +16,17 @@ import type { Envelope, EnvelopeStatus, IntakePort, ReportMeta, ReportOutcome } 
 import type { IntakeSource } from './source.js';
 import type { Ledger } from './ledger.js';
 import { parseSourceRef } from '../issue-ref.js';
-import { createGithubTrackerClient, type TrackerClient } from '../../tracker-client.js';
+import {
+  createGithubTrackerClient,
+  DEFAULT_ASSIGNED_ISSUES_LIMIT,
+  type GhRunner,
+  type TrackerClient,
+} from '../../tracker-client.js';
 import { formatWorkRef, type WorkRef } from '../source-ref.js';
 import { sanitizeInboundText, type InboundSanitizeResult } from './sanitize-inbound.js';
+export { type GhRunner };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-/** Shell runner for the `gh` CLI. Mirrors the engineer loop's GhRunner shape. */
-export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
 
 /** Minimal registry surface the adapter needs: the list of repos to poll. */
 export interface IntakeRepoRegistry {
@@ -41,6 +44,8 @@ export interface GithubIssuesDeps {
   newId?: () => string;
   /** Log sink; defaults to a no-op. */
   log?: (msg: string) => void;
+  /** Maximum issues requested per repository; defaults above the GitHub CLI's implicit 30. */
+  issueListLimit?: number;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
@@ -115,6 +120,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
   const now = deps.now ?? (() => new Date().toISOString());
   const newId = deps.newId ?? (() => randomUUID());
   const log = deps.log ?? (() => {});
+  const issueListLimit = deps.issueListLimit ?? DEFAULT_ASSIGNED_ISSUES_LIMIT;
   const tracker: TrackerClient = createGithubTrackerClient(gh);
 
   // Per-instance write-back de-dup: a (sourceRef\0status) that has been posted
@@ -228,12 +234,18 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
 
         let issues: RawIssue[];
         try {
-          issues = (await tracker.listAssignedIssues(ghRepo, repo.path)) as RawIssue[];
+          issues = (await tracker.listAssignedIssues(ghRepo, repo.path, issueListLimit)) as RawIssue[];
         } catch (err: unknown) {
           // FR-27: a failing repo (auth/availability) is isolated — log and move on.
           const msg = err instanceof Error ? err.message : String(err);
           log(`github-issues: poll failed for ${ghRepo} — ${msg}`);
           continue;
+        }
+
+        if (issues.length >= issueListLimit) {
+          log(
+            `github-issues: assigned issue listing for ${ghRepo} reached requested maximum ${issueListLimit}; results may be incomplete`,
+          );
         }
 
         for (const issue of issues) {

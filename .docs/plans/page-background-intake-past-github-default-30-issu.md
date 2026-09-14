@@ -8,7 +8,11 @@
 
 ## Summary
 
+> **Amended 2026-09-11 by operator approval for #1133:** Accept NC.1, the atomic publication of conduct-state lease ownership, conditional on regression proof of safe ownership under contention. Story 3 and Task 4 own that bounded addition; intake capture rules and unrelated lease/recovery policy remain unchanged.
+
 Three bounded tasks deliver #1133: the canonical tracker seam requests an explicit assigned-issue maximum instead of inheriting the GitHub CLI's 30-result default, an acceptance poll proves capture and re-poll idempotency across a result set larger than that default, and the intake adapter reports one explicit incompleteness warning when a listing comes back at exactly the maximum it asked for. Cursor paging, a configurable limit key, per-repository tuning, and any queue or ledger schema change are outside this slice.
+
+> **Amended 2026-09-11 by James Stoup (#1133):** The operator accepts a 1,000-issue result window per repository with a saturation warning and no guarantee of discovery beyond that window. Story 1 now states that bounded outcome; cursor paging remains excluded. This resolves as-built AB-2 without adding implementation work.
 
 ## Technical Approach
 
@@ -92,6 +96,24 @@ Test patterns are already established in this repository and are reused rather t
 3. The saturated poll returns one pending envelope per issue it read and does not throw.
 4. The intake unit and acceptance files pass together, and the typecheck target that includes test files passes.
 
+### Task 4: Prove atomic lease publication preserves exclusive ownership
+**Story:** Story 3
+**Type:** happy-path
+**Files:** src/conductor/src/engine/conduct-state-lease.ts, src/conductor/test/engine/conduct-state-lease.test.ts
+**Dependencies:** none
+
+**Steps:**
+1. Exercise the production owner-publication implementation through the public lease-acquisition boundary. The existing filesystem test doubles do not cover `defaultFilesystem.writeOwner`; do not replace that function with a fake that merely reproduces its desired behavior.
+2. Use a fixture-owned temporary directory and controlled low-level filesystem operations to pause publication before rename. Assert a concurrent reader sees initialization before publication and complete parseable ownership afterward. Coordinate with deferred promises rather than real sleeps, and ensure the mock actually intercepts the production adapter before running the scenario.
+3. Prove exclusive ownership: a competing acquisition cannot enter its protected operation during publication or while the first live owner holds the lease. Release the owner through the normal API and complete all pending operations before cleanup.
+4. Inject a publication failure and assert it is reported, its temporary file is cleaned up, and another live owner's metadata is not replaced. If these tests expose a defect, repair only the approved atomic-publication behavior and its necessary failure cleanup; do not broaden stale-owner reclamation or retry policy.
+5. Run the affected lease tests through `ai-conductor scoped-run` and the configured typecheck covering tests. Commit the proof and any required bounded repair. Do not claim pre-implementation RED for behavior already present; report actual test results.
+
+**Done when:**
+1. A controlled contention test exercises the production owner-publication path and observes only initialization or complete owner metadata.
+2. A contender cannot enter the protected operation while the original live owner holds the lease, including the publication window.
+3. An injected publication failure is reported, cleans its temporary file, and does not overwrite another live owner.
+
 ## Coverage Check
 
 | Criterion | Task id(s) | Done when quote | Disposition |
@@ -103,7 +125,15 @@ Test patterns are already established in this repository and are reused rather t
 | Story 2 happy: Given a registered repository whose issue listing returns fewer issues than the maximum the poll requested, when the poll completes, then it reports no incompleteness signal and captures every returned issue. | 3 | "A poll whose listing returns fewer than the requested maximum emits no such message." | diff-local |
 | Story 2 negative: Given a registered repository whose issue listing returns exactly the maximum the poll requested, when the poll completes, then intake reports one explicit incompleteness signal naming that repository and the requested maximum, and still returns one envelope for each issue it did read. | 3 | "A poll whose listing returns exactly the requested maximum emits exactly one sink message naming the repository and that maximum." | diff-local |
 
+| Story 3 happy: Given a lease owner record is being published while another acquisition inspects it, when the contender reads the owner path, then it observes either initialization or the complete owner record, never a partially written record. | 4 | "A controlled contention test exercises the production owner-publication path and observes only initialization or complete owner metadata." | diff-local |
+| Story 3 negative: Given one live process holds a conduct-state lease, when another acquisition contends during owner publication, then the contender cannot acquire that same lease until ownership is released under the existing lease rules. | 4 | "A contender cannot enter the protected operation while the original live owner holds the lease, including the publication window." | diff-local |
+| Story 3 negative: Given publishing the owner record fails, when acquisition returns failure, then the failure is reported and temporary publication files are cleaned up without replacing another live owner. | 4 | "An injected publication failure is reported, cleans its temporary file, and does not overwrite another live owner." | diff-local |
+
 ## Test dispositions and integration ownership
+
+> **Amended 2026-09-11 by operator approval for #1133:** Accept NC.1, the atomic publication of conduct-state lease ownership, conditional on regression proof of safe ownership under contention. Story 3 and Task 4 own that bounded addition; intake capture rules and unrelated lease/recovery policy remain unchanged.
+
+Task 4 owns the lease boundary proof, independently of the intake fixtures.
 
 All six criteria are diff-local: each is decided entirely by fixtures and code inside this change set. Task 1 owns the seam contract at unit level, asserting the exact argv against a recording fake runner — the lowest layer that can prove the maximum is requested at all. Task 2 owns the cross-boundary integration proof for Story 1: it drives the real adapter, the real ledger, and the real capture loop through the injected fake `gh` runner, which is the poll's only third-party boundary, and it is the single task that observes end-to-end capture through the adapter's public `poll()` entry point. Task 3 owns Story 2 at unit level with an injected maximum, because saturation is a property of the adapter's own branch and needs no larger path to observe; its injected maximum of 3 keeps the fixture cheap instead of materializing a thousand issues. No test spawns a real CLI or reaches the network, no new aggregate or smoke test is added, and no terminal validation task exists — the configured suite and the existing gates cover the completed feature.
 
@@ -111,3 +141,20 @@ All six criteria are diff-local: each is decided entirely by fixtures and code i
 
 Task 1 -> Task 2
 Task 1 -> Task 3
+
+### Task rem-as-built-rem-ab1-1: src/conductor/src/engine/engineer/intake/github-issues.ts:27-28 — delete the local `export type GhRunner = ...` declaration and instead re-export the canonical type from the existing tracker-client import at :19-23 (add `GhRunner` to that import's type list and add `export type { GhRunner };`), following the ADR-conformant re-export precedent at src/conductor/src/engine/pr-labels.ts:22-23; leave `GithubIssuesDeps.gh` at :35-38 referencing the now-canonical name unchanged, so the existing importers at src/conductor/test/engine/engineer/intake/github-issues.test.ts:13 and src/conductor/test/intake-only-no-downstream-gate.test.ts:22 keep resolving and every assertion Plan Task 3 delivered (saturated poll emits exactly one sink message; unsaturated poll emits none; saturated poll still returns one envelope per issue) continues to hold; confirm with the intake unit + acceptance files and the typecheck target that covers test files.
+**Gate:** as-built
+**Rationale:** Conforming implementation drift against applicable APPROVED architecture, not an architectural question: adr-2026-07-22-canonical-tracker-client-seam decision 1 (.docs/decisions/adr-2026-07-22-canonical-tracker-client-seam.md:74-87) requires tracker-client.ts:21 to be the single GhRunner declaration, and src/conductor/src/engine/engineer/intake/github-issues.ts:28 re-declares it structurally identically while :19-23 already imports from the canonical module — the fix is fully determined. No regression: the local type is exported and consumed by test/engine/engineer/intake/github-issues.test.ts:13 and test/intake-only-no-downstream-gate.test.ts:22, so the task re-exports the canonical type from the same specifier (the ADR-conformant precedent at src/conductor/src/engine/pr-labels.ts:22-23), preserving both importers and every behavior Task 3 delivered. Sibling sweep found four further re-declarations of the same shape — src/conductor/src/engine/engineer/issue-ref.ts:19, src/conductor/src/engine/engineer/release-metadata-inject.ts:26, src/conductor/src/engine/engineer/intake/delivery-guard.ts:60, and src/conductor/test/acceptance/daemon-issue-priority-scheduling.test.ts:64 — all deliberately EXCLUDED because no task in .docs/plans/page-background-intake-past-github-default-30-issu.md admits those files (Task 1: tracker-client.ts + its test; Task 2: the intake acceptance helpers + acceptance test; Task 3: github-issues.ts + its unit test), and widening the diff past plan admission is unauthorized; they belong to a separate ADR-conformance feature. Confidence 97%, verified by reading the ADR, both declarations, and every importer.
+**Governing clause:** adr-2026-07-22-canonical-tracker-client-seam decision 1
+**Done when:**
+- adr-2026-07-22-canonical-tracker-client-seam decision 1 is satisfied by this task.
+
+> **Amended 2026-09-11 by operator approval for #1133:** Accept NC.1, the atomic publication of conduct-state lease ownership, conditional on regression proof of safe ownership under contention. Story 3 and Task 4 own that bounded addition; intake capture rules and unrelated lease/recovery policy remain unchanged.
+
+Task 4 is independent of the intake tasks.
+
+## Verify-Claims Ledger — operator amendment — 2026-09-11
+
+- [verified] The current default filesystem writes ownership to a unique temporary file then renames it into place, with failure cleanup; read `conduct-state-lease.ts`.
+- [verified] The current NC.1 audit identifies no test exercising that production implementation. Existing injected filesystem doubles are insufficient proof.
+- Confirmed input: operator approved this scope addition with a regression test for safe lock ownership under contention. Task 4 must establish the behavior rather than presume it. No pending assumptions.

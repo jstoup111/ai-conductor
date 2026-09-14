@@ -1,24 +1,24 @@
 **Status:** Accepted
 
-# Stories: Complete assigned-issue capture for background intake (#1133)
+# Stories: Bounded assigned-issue capture for background intake (#1133)
 
 Track: technical
 
 Tier: S
 
-Approved by the operator on 2026-09-06 (delegated). Scope is the assigned-issue result window at the tracker seam and the incompleteness signal the intake poll reports when it cannot prove it read the whole eligible set. Every other capture rule — ledger dedup, handled-label skip, empty-issue skip, per-repo failure isolation, write-back — is unchanged.
+Approved by the operator on 2026-09-06 (delegated). Scope is the assigned-issue result window at the tracker seam and the incompleteness signal the intake poll reports when it cannot prove it read the whole eligible set. Operator approval on 2026-09-11 also covers atomic conduct-state lease ownership publication, with the required regression proof in Story 3. Every other capture rule — ledger dedup, handled-label skip, empty-issue skip, per-repo failure isolation, write-back — is unchanged.
 
 ## Story 1: Capture assigned issues beyond the CLI's default result window
 
-**Requirement:** Every eligible assigned issue in a registered repository is discoverable regardless of its age or position in the result set.
+**Requirement:** A poll requests up to 1,000 open assigned issues per registered repository, captures every eligible issue returned within that window, and reports possible incompleteness when the returned count reaches 1,000. Issues outside that window are not guaranteed to be discovered.
 
-As an operator running background intake, I want a poll to see every open issue assigned to me in a registered repository so that older assigned work is routed instead of silently disappearing behind the GitHub CLI's default result window.
+As an operator running background intake, I want a poll to inspect up to 1,000 open issues assigned to me per registered repository so that work beyond the default 30-result window is captured and a saturated listing is visible.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- Given a registered repository whose issue listing would return only its first 30 results without an explicit maximum, when background intake polls it, then the poll requests an explicit maximum larger than 30 and captures every open assigned issue the repository holds.
+- Given a registered repository whose issue listing would return only its first 30 results without an explicit maximum, when background intake polls it, then the poll requests an explicit maximum of 1,000 and captures every eligible issue returned within that limit.
 - Given a registered repository holding 45 open assigned issues, when background intake polls it, then it produces 45 pending envelopes, one per issue, each carrying that issue's source reference.
 
 #### Negative Paths
@@ -28,13 +28,13 @@ As an operator running background intake, I want a poll to see every open issue 
 
 ### Done When
 
-- [ ] The assigned-issue listing argv carries an explicit maximum whose value exceeds the GitHub CLI's documented 30-result default.
+- [ ] The assigned-issue listing argv carries an explicit maximum whose value is 1,000, exceeding the GitHub CLI's documented 30-result default.
 - [ ] An intake poll over a repository of 45 open assigned issues returns 45 pending envelopes with 45 distinct source references.
 - [ ] An immediately repeated poll over that same repository returns zero envelopes.
 
 ## Story 2: Report a result set whose completeness cannot be proven
 
-**Requirement:** Intake reports an explicit failure or incompleteness signal if the complete eligible set cannot be read.
+**Requirement:** Intake reports a repository failure or an explicit possible-incompleteness signal when its bounded listing reaches the requested maximum.
 
 As an operator running background intake, I want a loud signal whenever a poll's issue listing came back at exactly the maximum it asked for so that a truncated read is visible instead of being mistaken for a complete one.
 
@@ -56,4 +56,24 @@ As an operator running background intake, I want a loud signal whenever a poll's
 
 ## Negative-category review
 
-Dependency unavailability and timeouts are covered by the retained per-repository isolation criterion: an issue listing that rejects is logged and skipped without failing the sweep. Idempotency and data integrity are covered by the repeated-poll criterion, which exercises the existing ledger dedup across a result set larger than the old window. Resource exhaustion is covered by the saturation criterion, which is exactly the case where the requested maximum is the binding constraint; the response is a loud signal plus partial capture, never a silent full-looking result. Invalid input, authorization, concurrency, and cascade-deletion categories are inapplicable: the change adds one numeric argv element to a read-only listing, introduces no user-supplied input, no new permission surface, no shared mutable state, and no deletion. Partial-failure rollback is inapplicable because capture is per issue and the ledger already records each one independently.
+Dependency unavailability and timeouts are covered by the retained per-repository isolation criterion: an issue listing that rejects is logged and skipped without failing the sweep. Idempotency and data integrity are covered by the repeated-poll criterion, which exercises the existing ledger dedup across a result set larger than the old window. Resource exhaustion is covered by the saturation criterion, which is exactly the case where the requested maximum is the binding constraint; the response is a loud signal plus partial capture, never a silent full-looking result. For the intake result-window change, invalid input, authorization, concurrency, and cascade-deletion categories are inapplicable: the change adds one numeric argv element to a read-only listing, introduces no user-supplied input, no new permission surface, no shared mutable state, and no deletion. Partial-failure rollback is inapplicable because capture is per issue and the ledger already records each one independently.
+
+## Story 3: Publish lease ownership safely under contention
+
+As an operator, I want concurrent state writers to see complete ownership metadata while preserving exclusive lease ownership.
+
+### Acceptance Criteria
+
+#### Happy Path
+- Given a lease owner record is being published while another acquisition inspects it, when the contender reads the owner path, then it observes either initialization or the complete owner record, never a partially written record.
+
+#### Negative Paths
+- Given one live process holds a conduct-state lease, when another acquisition contends during owner publication, then the contender cannot acquire that same lease until ownership is released under the existing lease rules.
+- Given publishing the owner record fails, when acquisition returns failure, then the failure is reported and temporary publication files are cleaned up without replacing another live owner.
+
+### Done When
+- [ ] A controlled contention test exercises the production owner-publication path and observes only initialization or complete owner metadata.
+- [ ] A contender cannot enter the protected operation while the original live owner holds the lease, including the publication window.
+- [ ] An injected publication failure is reported, cleans its temporary file, and does not overwrite another live owner.
+
+Concurrency and publication failure are covered through controlled filesystem boundaries in the lease tests; no real provider or remote service is involved.

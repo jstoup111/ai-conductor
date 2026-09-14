@@ -174,6 +174,19 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
       });
     });
 
+    it('ends a "none" section at the shipment plan declaration', () => {
+      expect(
+        parseReleaseDisposition(
+          `## Release metadata\n\n## Migration\n\nnone\nPlan: .docs/plans/capture-all-assigned-issues.md\n\n${fields}\n`,
+        ),
+      ).toEqual({
+        disposition: 'note',
+        category: 'Added',
+        semver: 'minor',
+        note: 'Adds a thing.',
+      });
+    });
+
     it('ignores the unreplaced Closes placeholder comment below a "none" section', () => {
       // shipDraftPrBody appends this HTML comment; it survives whenever
       // issue-link injection is skipped, and swallowing it turned a correct

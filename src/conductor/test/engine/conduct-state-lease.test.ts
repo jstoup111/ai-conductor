@@ -1,7 +1,27 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const ownerPublication = vi.hoisted(() => ({
+  onRename: undefined as undefined | ((temporaryPath: string, ownerPath: string) => Promise<void>),
+  renameCalls: 0,
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    rename: async (temporaryPath: string, ownerPath: string): Promise<void> => {
+      ownerPublication.renameCalls += 1;
+      if (ownerPublication.onRename !== undefined) {
+        await ownerPublication.onRename(temporaryPath, ownerPath);
+        return;
+      }
+      await actual.rename(temporaryPath, ownerPath);
+    },
+  };
+});
 import {
   createConductStateLease,
   type ConductStateLeaseFilesystem,
@@ -28,7 +48,15 @@ afterEach(async () => {
     recursive: true,
     force: true,
   })));
+  ownerPublication.onRename = undefined;
+  ownerPublication.renameCalls = 0;
 });
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve: (() => void) | undefined;
+  const promise = new Promise<void>((complete) => { resolve = complete; });
+  return { promise, resolve: () => resolve?.() };
+}
 
 function alreadyExists(): NodeJS.ErrnoException {
   return Object.assign(new Error('lease exists'), { code: 'EEXIST' });
@@ -108,6 +136,100 @@ describe('conduct-state lease', () => {
     await writeState(statePath, { complexity_tier: 'M' });
 
     await expect(readFile(statePath, 'utf8')).resolves.toContain('"complexity_tier": "M"');
+  });
+
+  it('publishes owner metadata atomically and excludes a contender through the publication window', async () => {
+    const statePath = await createStatePath();
+    const ownerPath = `${statePath}.lease/owner.json`;
+    const allowPublication = deferred();
+    const publicationIntercepted = deferred();
+    ownerPublication.onRename = async (temporaryPath, destination) => {
+      expect(destination).toBe(ownerPath);
+      expect(temporaryPath).toMatch(/^.+\/owner\.json\.[0-9a-f-]+\.tmp$/);
+      publicationIntercepted.resolve();
+      await allowPublication.promise;
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      await actual.rename(temporaryPath, destination);
+    };
+
+    const first = createConductStateLease(statePath, {
+      pid: 101,
+      newToken: () => 'first-owner',
+    }).acquire();
+    await publicationIntercepted.promise;
+    expect(ownerPublication.renameCalls).toBe(1);
+    await expect(readFile(ownerPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const contenderMayRetry = deferred();
+    const contenderWaited = deferred();
+    let contenderEntered = false;
+    const second = createConductStateLease(statePath, {
+      pid: 202,
+      newToken: () => 'second-owner',
+      processIsLive: (pid) => pid === 101,
+      wait: async () => {
+        contenderWaited.resolve();
+        await contenderMayRetry.promise;
+      },
+    }).acquire().then((result) => {
+      contenderEntered = result.ok;
+      return result;
+    });
+    await contenderWaited.promise;
+    expect(contenderEntered).toBe(false);
+
+    allowPublication.resolve();
+    const firstResult = await first;
+    expect(firstResult).toMatchObject({ ok: true });
+    await expect(readFile(ownerPath, 'utf8')).resolves.toSatisfy((contents) => {
+      expect(JSON.parse(contents)).toMatchObject({
+        version: 1,
+        pid: 101,
+        token: 'first-owner',
+      });
+      return true;
+    });
+    expect(contenderEntered).toBe(false);
+
+    if (!firstResult.ok) throw new Error(firstResult.message);
+    await expect(firstResult.handle.release()).resolves.toEqual({ ok: true });
+    contenderMayRetry.resolve();
+    const secondResult = await second;
+    expect(secondResult).toMatchObject({ ok: true });
+    expect(contenderEntered).toBe(true);
+    if (secondResult.ok) await expect(secondResult.handle.release()).resolves.toEqual({ ok: true });
+  });
+
+  it('cleans a failed publication temporary file without replacing a live owner', async () => {
+    const statePath = await createStatePath();
+    const ownerPath = `${statePath}.lease/owner.json`;
+    const liveOwner = `${JSON.stringify({
+      version: 1,
+      pid: 404,
+      token: 'already-live',
+      acquiredAt: '2026-09-11T00:00:00.000Z',
+    })}\n`;
+    let intercepted = false;
+    ownerPublication.onRename = async (temporaryPath, destination) => {
+      intercepted = true;
+      expect(destination).toBe(ownerPath);
+      await writeFile(destination, liveOwner, { encoding: 'utf8', flag: 'wx' });
+      throw Object.assign(new Error('owner destination already exists'), { code: 'EEXIST' });
+    };
+
+    await expect(createConductStateLease(statePath, {
+      pid: 101,
+      newToken: () => 'failed-owner',
+    }).acquire()).resolves.toEqual({
+      ok: false,
+      kind: 'filesystem',
+      message: 'Unable to record conduct-state lease owner: owner destination already exists',
+    });
+
+    expect(intercepted).toBe(true);
+    expect(ownerPublication.renameCalls).toBe(1);
+    await expect(readFile(ownerPath, 'utf8')).resolves.toBe(liveOwner);
+    await expect(readdir(`${statePath}.lease`)).resolves.toEqual(['owner.json']);
   });
 
   it('returns a typed timeout without stealing from a live owner', async () => {

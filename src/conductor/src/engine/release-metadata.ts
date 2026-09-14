@@ -31,8 +31,8 @@ const fenceDelimiterRe = /^```/;
 const migrationFenceOpenRe = /^```bash migration\s*$/;
 const releaseMetadataLineRe = /^Release-(?:Disposition|Category|Semver|Note):.*(?:\r?\n|$)/gm;
 /**
- * A single release-metadata line, or a GitHub issue-linking trailer — either
- * ends the Migration section (#1396).
+ * A single release-metadata line, a GitHub issue-linking trailer, or a shipment
+ * plan declaration — any of which ends the Migration section (#1396).
  *
  * The trailer arm exists because `injectIssueRef` appends `Refs owner/repo#N`
  * (spec PRs) or `Closes owner/repo#N` (implementation PRs) to the END of a body
@@ -43,10 +43,12 @@ const releaseMetadataLineRe = /^Release-(?:Disposition|Category|Semver|Note):.*(
  * intake-sourced spec PR fails the required release-metadata check as
  * malformed. Fence tracking in `migrationSectionContent` keeps a linking line
  * INSIDE a runnable block (an echoed commit message, say) from truncating a
- * real migration.
+ * real migration. The shipment-plan declaration is appended separately by
+ * `upsertShipmentPlanDeclaration`; it is PR bookkeeping rather than migration
+ * content, so an otherwise-valid `none` section must stop before it.
  */
 const migrationSectionTerminatorRe =
-  /^(?:Release-(?:Disposition|Category|Semver|Note):|(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?|references?)\s+\S*#\d)/i;
+  /^(?:Release-(?:Disposition|Category|Semver|Note):|(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?|references?)\s+\S*#\d|plan:\s+`?\.docs\/plans\/[^/\s`]+\.md`?)/i;
 
 function invalidReleaseDisposition(field: string): never {
   throw new Error(`Invalid release disposition: ${field}`);
