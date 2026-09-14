@@ -8,7 +8,7 @@ import { ProviderSessionScope } from '../../src/engine/provider-session.js';
 
 function runtimes(first: 'codex' | 'claude', calls: string[]) {
   const provider = (name: 'codex' | 'claude'): LLMProvider => ({
-    lifecycleCapability: { synchronousSpawnPermit: name !== first },
+    lifecycleCapability: name === first ? undefined : { synchronousSpawnPermit: true },
     invoke: vi.fn(async () => { calls.push(name); return { success: true, output: name, exitCode: 0 }; }),
   });
   return new ProviderRuntimeSet([

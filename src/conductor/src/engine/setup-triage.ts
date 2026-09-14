@@ -648,7 +648,7 @@ export async function fixSession(
   git: GitRunner,
   worktreePath: string,
   slug: string,
-  dispatchFixSession: () => Promise<SetupFailureAttempt>,
+  dispatchFixSession: () => Promise<SetupFailureAttempt | void>,
   runPrepare: (worktreePath: string) => Promise<void>,
   events?: ConductorEventEmitter,
 ): Promise<TriageOutcome> {
@@ -691,7 +691,7 @@ export async function fixSession(
 
   try {
     const attempt = await dispatchFixSession();
-    if (attempt.providerSetupExhaustion) {
+    if (attempt?.providerSetupExhaustion) {
       return {
         kind: 'park',
         outputTail: 'Setup repair could not dispatch: every configured provider is unavailable during setup. Complete the provider recovery action, then re-queue this feature.',
@@ -759,7 +759,7 @@ export async function runSetupFailureTriage(
   slug: string,
   setupError: any,
   runPrepare: (worktreePath: string) => Promise<void>,
-  dispatchFixSession: () => Promise<SetupFailureAttempt>,
+  dispatchFixSession: () => Promise<SetupFailureAttempt | void>,
   logger?: Logger,
   events?: ConductorEventEmitter,
 ): Promise<TriageOutcome> {
