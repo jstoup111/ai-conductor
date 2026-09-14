@@ -858,6 +858,29 @@ export async function resumeRebaseFirst(opts: {
   // against the rebased tree, and any failure/throw falls back to the
   // unconditional kickback (`applyRebaseVerdicts` catches).
   const preVerify = opts.preVerify ?? makeRekickBuildPreVerify(opts.worktreePath, opts.slug);
+  // Match the foreground rebase path: an already-completed BUILD with missing
+  // evidence is a recovery halt, not a reason to dispatch the old task list.
+  // Existing repair work is represented by a non-done BUILD state and retains
+  // the ordinary repair route below.
+  try {
+    const rawState = JSON.parse(await readFile(join(opts.worktreePath, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<string, unknown>;
+    if (rawState.build === 'done') {
+      const buildEvidence = await preVerify('build');
+      if (!buildEvidence.done) {
+        await writeHalt(
+          opts.worktreePath,
+          [],
+          `completed BUILD evidence is unavailable after rebase: ${buildEvidence.reason ?? 'completion predicate did not confirm the recorded BUILD'}; recover .pipeline task evidence before resuming`,
+          opts.events,
+        );
+        return 'halted';
+      }
+    }
+  } catch {
+    // Older re-kick entries may not yet have conduct state. They do not assert
+    // a completed BUILD, so retain their established entry behavior. A state
+    // that explicitly says `build: done` is handled fail-closed above.
+  }
   const rebaseVerdict = await applyRebaseVerdicts(
     opts.worktreePath,
     outcome,
