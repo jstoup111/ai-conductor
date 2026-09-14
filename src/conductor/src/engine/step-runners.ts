@@ -2555,7 +2555,7 @@ export class DefaultStepRunner implements StepRunner {
         if (!catalogProvider) {
           coverageFailure = true;
           failure = { reason: 'policy-load-failed', detail: `Installed build-review policy ${entry.skill} has no catalog adapter for provider ${context.candidate.providerKey}` };
-          await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider: context.candidate.providerKey, stage: 'catalog', reason: failure.detail });
+          await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider: context.candidate.providerKey, stage: 'catalog', reason: failure.detail, provenance: { inputDigest: inputs.sourceSnapshot.contentDigest, candidate: { provider: context.candidate.providerKey, model: context.candidate.model, effort: context.candidate.effort ?? 'default' } } });
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
         }
         let catalog: readonly InstalledReviewSkill[] | ReviewPolicyCatalogError;
@@ -2579,7 +2579,7 @@ export class DefaultStepRunner implements StepRunner {
         if (resolved.kind === 'failure') {
           failure = { reason: 'policy-load-failed', detail: `Installed build-review policy ${entry.skill} is unavailable: ${resolved.failure.code}` };
           coverageFailure = true;
-          await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider: context.candidate.providerKey, stage: 'catalog', reason: failure.detail });
+          await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider: context.candidate.providerKey, stage: 'catalog', reason: failure.detail, provenance: { inputDigest: inputs.sourceSnapshot.contentDigest, candidate: { provider: context.candidate.providerKey, model: context.candidate.model, effort: context.candidate.effort ?? 'default' } } });
           return { kind: 'failure' as const, result: {
             success: false, exitCode: 1,
             output: failure.detail,
@@ -2597,12 +2597,18 @@ export class DefaultStepRunner implements StepRunner {
         } catch (error) {
           coverageFailure = true;
           failure = { reason: 'policy-load-failed', detail: `Installed build-review policy ${entry.skill} could not be loaded: ${error instanceof Error ? error.message : String(error)}` };
+          await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider: context.candidate.providerKey, stage: 'capture', reason: failure.detail, provenance: { inputDigest: inputs.sourceSnapshot.contentDigest, candidate: { provider: context.candidate.providerKey, model: context.candidate.model, effort: context.candidate.effort ?? 'default' } } });
           return { kind: 'failure' as const, result: {
             success: false, exitCode: 1,
             output: failure.detail,
           } };
         }
         const candidateEngine = await this.resolveBuildReviewEngineIdentity();
+        const policyProvenance = {
+          inputDigest: inputs.sourceSnapshot.contentDigest,
+          candidate: { provider: context.candidate.providerKey, model: context.candidate.model, effort: context.candidate.effort ?? 'default' },
+          ...(policy.plugin === undefined ? {} : { plugin: policy.plugin }),
+        };
         const policyFingerprint = fingerprintBuildReviewPolicyDeclaration({ rubric: entry.id, skill: entry.skill, question: entry.question, ...(entry.source === undefined ? {} : { source: entry.source as 'project' | 'global' | 'plugin' }), resources: entry.resources });
         const semanticIdentity: BuildReviewCacheSemanticIdentity = {
           declarationFingerprint: policyFingerprint, effectiveBundleDigest: bundle.digest, contractVersion: 'v3', projectionVersion: 'v3',
@@ -2615,7 +2621,10 @@ export class DefaultStepRunner implements StepRunner {
           policyFingerprint, engineIdentity: { engineStamp: candidateEngine.engineStamp, skillDigest: bundle.digest }, semanticIdentity, lapId, snapshotDigest: inputs.sourceSnapshot.digest,
         });
         if (cache.kind === 'hit' && 'result' in cache.hit.result && parseBuildReviewCustomArtifactMember(cache.hit.result)) {
-          await this.events?.emit({ type: 'build_review_cache_hit', rubric: entry.id, lapId });
+          await this.events?.emit({ type: 'build_review_cache_hit', rubric: entry.id, lapId, customReuse: {
+            source: policy.source, bundleDigest: bundle.digest, ...policyProvenance,
+            originalLapId: cache.hit.provenance.cachedLapId, originalSnapshotDigest: cache.hit.provenance.cachedSnapshotDigest,
+          } });
           return { kind: 'hit' as const, result: { success: true, exitCode: 0, output: JSON.stringify(cache.hit.result) } };
         }
         await this.events?.emit({
@@ -2623,6 +2632,7 @@ export class DefaultStepRunner implements StepRunner {
           provider: context.candidate.providerKey, source: policy.source,
           ...(policy.plugin === undefined ? {} : { pluginId: policy.plugin.id }),
           bundleDigest: bundle.digest,
+          provenance: policyProvenance,
         });
         const provider = context.candidate.providerKey === 'claude' || context.candidate.providerKey === 'codex'
           ? context.candidate.providerKey
@@ -2630,6 +2640,7 @@ export class DefaultStepRunner implements StepRunner {
         if (!provider) {
           coverageFailure = true;
           failure = { reason: 'preflight-failed', detail: `Installed build-review policy ${entry.skill} has no read-only profile for provider ${context.candidate.providerKey}` };
+          await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider: context.candidate.providerKey, stage: 'preflight', reason: failure.detail, provenance: policyProvenance });
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
         }
         const preflight = evaluateBuildReviewPolicyPreflight({
@@ -2650,7 +2661,7 @@ export class DefaultStepRunner implements StepRunner {
           coverageFailure = true;
           const classification = classifyBuildReviewPolicyIncompatibility(preflight);
           failure = { reason: classification.reason, detail: renderBuildReviewPolicyUnsupportedDiagnostic(preflight) };
-          await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider, stage: 'preflight', reason: failure.detail });
+          await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider, stage: 'preflight', reason: failure.detail, provenance: policyProvenance });
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
         }
         // The prepared-candidate callback is the only route that can bind a
@@ -2681,7 +2692,7 @@ export class DefaultStepRunner implements StepRunner {
           if (containment.kind === 'unsupported') {
             coverageFailure = true;
             failure = { reason: 'preflight-failed', detail: `Installed build-review policy ${entry.skill} cannot establish read-only containment: ${containment.reason}. Recovery: ${containment.recovery}.` };
-            await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider, stage: 'containment', reason: containment.reason });
+            await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider, stage: 'containment', reason: containment.reason, provenance: policyProvenance });
             return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
           }
           reviewAccess = containment;
@@ -2705,7 +2716,7 @@ export class DefaultStepRunner implements StepRunner {
           coverageFailure = true;
           const classification = classifyBuildReviewPolicyIncompatibility(runtimeUnsupported);
           failure = { reason: classification.reason, detail: renderBuildReviewPolicyUnsupportedDiagnostic(runtimeUnsupported) };
-          await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider, stage: 'runtime', reason: failure.detail });
+          await this.events?.emit({ type: 'build_review_policy_failed', rubric: entry.id, lapId, provider, stage: 'runtime', reason: failure.detail, provenance: policyProvenance });
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
         }
         const parsed = parseBuildReviewReviewerPayload(raw, buildReviewEffectiveResultDescriptor(entry));

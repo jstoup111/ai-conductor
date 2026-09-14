@@ -2661,14 +2661,16 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'build_review_policy_resolved': {
       const provenance = event.pluginId === undefined ? event.source : `${event.source}/${event.pluginId}`;
-      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} policy resolved: ${event.provider} ${provenance}`);
+      const candidate = event.provenance === undefined ? event.provider
+        : `${event.provenance.candidate.provider}/${event.provenance.candidate.model}/${event.provenance.candidate.effort}`;
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} policy resolved: ${candidate} ${provenance}`);
       break;
     }
     case 'build_review_policy_failed':
       log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} policy ${event.stage} failed: ${event.reason}`);
       break;
     case 'build_review_cache_hit':
-      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} cache hit`);
+      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} cache hit${event.customReuse === undefined ? '' : ` (custom reuse from ${event.customReuse.originalLapId})`}`);
       break;
     case 'build_review_rubric_result':
       log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} ${event.verdict}`);

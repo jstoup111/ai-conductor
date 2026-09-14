@@ -261,14 +261,29 @@ export class AuditTrailWriter {
           origin: 'build_review',
           event: event.type,
           reason: `${event.rubric} policy resolved for ${event.provider} (${event.source})`,
-          cause: event.bundleDigest,
+          cause: event.provenance === undefined
+            ? event.bundleDigest
+            : `${event.bundleDigest}; input ${event.provenance.inputDigest}; candidate ${event.provenance.candidate.provider}/${event.provenance.candidate.model}/${event.provenance.candidate.effort}`,
         };
       case 'build_review_policy_failed':
         return {
           origin: 'build_review',
           event: event.type,
           reason: `${event.rubric} ${event.stage} failed: ${event.reason}`,
-          cause: event.provider,
+          cause: event.provenance === undefined
+            ? event.provider
+            : `${event.provenance.inputDigest}; candidate ${event.provenance.candidate.provider}/${event.provenance.candidate.model}/${event.provenance.candidate.effort}`,
+        };
+      case 'build_review_cache_hit':
+        return {
+          origin: 'build_review',
+          event: event.type,
+          reason: event.customReuse === undefined
+            ? `${event.rubric} cache hit`
+            : `${event.rubric} custom policy cache hit from ${event.customReuse.originalLapId}`,
+          ...(event.customReuse === undefined ? {} : {
+            cause: `${event.customReuse.bundleDigest}; input ${event.customReuse.inputDigest}; candidate ${event.customReuse.candidate.provider}/${event.customReuse.candidate.model}/${event.customReuse.candidate.effort}`,
+          }),
         };
       case 'verdict_freshness':
         return {

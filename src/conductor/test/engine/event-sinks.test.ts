@@ -203,6 +203,7 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
   'kickback_budget_adjustment_authorized',
   'build_review_policy_resolved',
   'build_review_policy_failed',
+  'build_review_cache_hit',
 ] satisfies Array<ConductorEvent['type']>;
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
