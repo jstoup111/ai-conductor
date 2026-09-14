@@ -9,6 +9,7 @@
 
 import type { GhRunner } from './pr-labels.js';
 import type { WatchEntry } from './mergeable-sweep.js';
+import type { CiRepairDiagnosticReason } from '../types/events.js';
 import type { PrMergeState } from './pr-labels.js';
 import type { HarnessConfig } from '../types/config.js';
 import {
@@ -404,16 +405,16 @@ async function evaluateEligibilityGates(
  * Result of a CI fix attempt.
  */
 export type CiFixOutcome =
-  | { kind: 'not-started' }
+  | { kind: 'not-started'; provider?: string; reason?: CiRepairDiagnosticReason }
   | { kind: 'noop' }
-  | { kind: 'failed'; stage: 'provider' | 'guard' | 'verification' | 'publication' | 'worktree' }
+  | { kind: 'failed'; stage: 'provider' | 'guard' | 'verification' | 'publication' | 'worktree'; provider?: string; reason?: CiRepairDiagnosticReason }
   | { kind: 'published' }
   | { kind: 'branch-gone' };
 
 /** Internal result emitted by the provider-session boundary. */
 export type CiFixSessionOutcome =
-  | { kind: 'not-started' }
-  | { kind: 'failed' }
+  | { kind: 'not-started'; actualProvider?: string; reason?: CiRepairDiagnosticReason }
+  | { kind: 'failed'; actualProvider?: string; reason?: CiRepairDiagnosticReason }
   | { kind: 'session-completed' }
   /** @deprecated compatibility for existing injected seams; treated as completed. */
   | { kind: 'changed' }
@@ -593,8 +594,21 @@ export async function runCiFix(
       // only a candidate repair; the committed HEAD check below is authoritative.
       const fixOutcome = await deps.fixRunner.run({ worktreePath, hint, entry });
 
-      if (fixOutcome.kind === 'not-started' || fixOutcome.kind === 'noop') return { kind: 'not-started' };
-      if (fixOutcome.kind === 'failed') return { kind: 'failed', stage: 'provider' };
+      if (fixOutcome.kind === 'not-started') {
+        return {
+          kind: 'not-started',
+          ...(fixOutcome.actualProvider ? { provider: fixOutcome.actualProvider } : {}),
+          ...(fixOutcome.reason ? { reason: fixOutcome.reason } : {}),
+        };
+      }
+      if (fixOutcome.kind === 'noop') return { kind: 'not-started' };
+      if (fixOutcome.kind === 'failed') {
+        return {
+          kind: 'failed', stage: 'provider',
+          ...(fixOutcome.actualProvider ? { provider: fixOutcome.actualProvider } : {}),
+          ...(fixOutcome.reason ? { reason: fixOutcome.reason } : {}),
+        };
+      }
 
       const afterHead = await git(['rev-parse', 'HEAD']);
       if (afterHead.exitCode !== 0) return { kind: 'failed', stage: 'worktree' };

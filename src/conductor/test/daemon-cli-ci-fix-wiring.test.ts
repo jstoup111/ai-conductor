@@ -74,6 +74,41 @@ describe('daemon CI-fix production dispatch callback', () => {
     }
   });
 
+  it('preserves the resolving provider and classified readiness refusal as a deferred execution diagnostic', async () => {
+    const diagnostic = vi.fn();
+    const resolveCiFailure = vi.fn(async () => ({
+      kind: 'not-started' as const,
+      actualProvider: 'codex',
+      reason: 'provider-unavailable' as const,
+    }));
+    const run = vi.fn(async (_entry, _branch, hint, deps) => {
+      const session = await deps.fixRunner.run({ worktreePath: '/repair', hint, entry: _entry });
+      return session.kind === 'not-started'
+        ? { kind: 'not-started' as const, provider: session.actualProvider, reason: session.reason }
+        : { kind: 'failed' as const, stage: 'provider' as const };
+    });
+    const dispatch = createDaemonCiFixDispatch({
+      gh: vi.fn(async () => ({ stdout: JSON.stringify({ headRefName: 'repair-branch' }) })),
+      createDispatcher: () => ({ resolveCiFailure }),
+      diagnostic,
+      run,
+    });
+
+    const savedKillSwitch = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    try {
+      await expect(dispatch(entry, selected)).resolves.toEqual({
+        kind: 'not-started', provider: 'codex', reason: 'provider-unavailable',
+      });
+    } finally {
+      if (savedKillSwitch !== undefined) process.env.AI_CONDUCTOR_NO_REAL_EXEC = savedKillSwitch;
+    }
+    expect(resolveCiFailure).toHaveBeenCalledOnce();
+    expect(diagnostic).toHaveBeenCalledWith({
+      entry, stage: 'execution', reason: 'provider-unavailable', provider: 'codex',
+    });
+  });
+
   it('keeps the three-request and final-byte boundary when enriched context reaches repair', async () => {
     const state: PrMergeState = {
       ...selected,
