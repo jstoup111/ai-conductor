@@ -1633,6 +1633,7 @@ describe('CodexProvider', () => {
       readiness: expect.objectContaining({ state: 'missing' }),
       execCalls: 0,
     });
+    expect(result).toMatchObject({ executionDisposition: 'not-started' });
     expect(result).not.toHaveProperty('observedIntervals');
   });
 
@@ -1678,6 +1679,7 @@ describe('CodexProvider', () => {
         },
       },
     });
+    expect(result).not.toHaveProperty('executionDisposition');
   });
 
   it.each([
@@ -2192,6 +2194,7 @@ describe('CodexProvider', () => {
       source: 'cached-login',
       state: expectedFlag === 'authFailure' ? 'unusable' : 'ready',
     });
+    expect(result).not.toHaveProperty('executionDisposition');
     if (expectedFlag === 'rateLimited') expect(result.waitSeconds).toBe(45);
   });
 

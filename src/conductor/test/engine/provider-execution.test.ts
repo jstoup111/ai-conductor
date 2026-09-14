@@ -554,25 +554,37 @@ describe('executeProviderCandidates', () => {
       },
     });
 
-    expect({
-      calls: invoke.mock.calls,
-      success: result.success,
-      output: result.output,
-      attempt: result.attempts[0],
-    }).toMatchObject({
-      calls: [],
+    expect(result).toMatchObject({
       success: false,
-      output: expect.stringMatching(
-        /Provider custom.*synchronous spawn-permit capability.*Recovery action/i,
-      ),
-      attempt: {
-        provider: 'custom',
-        invoked: false,
-        reason: expect.stringMatching(
-          /synchronous spawn-permit capability.*Recovery action/i,
-        ),
-      },
+      executionDisposition: 'not-started',
     });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('marks cached provider unavailability as not started without invoking the provider', async () => {
+    const cachedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'cached provider must not invoke',
+      exitCode: 0,
+    }));
+    const cachedRuntime = runtime('codex', { invoke: cachedInvoke });
+    cachedRuntime.runWideUnavailable = { reason: 'Codex is unavailable from an earlier attempt.' };
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      preferredProvider: 'codex',
+      runtimes: new ProviderRuntimeSet([cachedRuntime]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('cached-session')),
+      options: { prompt: 'Build.', cwd: '/workspace/feature' },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      executionDisposition: 'not-started',
+    });
+    expect(cachedInvoke).not.toHaveBeenCalled();
   });
 
   it('invokes a custom provider that synchronously consumes its declared lifecycle spawn permit', async () => {
@@ -633,6 +645,43 @@ describe('executeProviderCandidates', () => {
       },
     });
     expect(spawnPermit).toHaveBeenCalledOnce();
+    expect(result).not.toHaveProperty('executionDisposition');
+  });
+
+  it('marks required safety-boundary refusal as not started before invoking the candidate', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'provider must not run after safety refusal',
+      exitCode: 0,
+    }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      preferredProvider: 'codex',
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('safety-refusal-session')),
+      options: { prompt: 'Build safely.', cwd: '/workspace/feature' },
+      withCandidateSafety: createCandidateSafetyBoundary({
+        protections: () => [{
+          name: 'workspace-isolation',
+          criticality: 'required',
+          classification: 'required',
+          applicability: 'applicable',
+          state: 'missing',
+        }],
+      }),
+    });
+
+    expect({ calls: invoke.mock.calls, result }).toMatchObject({
+      calls: [],
+      result: {
+        success: false,
+        permissionDenied: true,
+        executionDisposition: 'not-started',
+      },
+    });
   });
 
   it('applies and tears down an isolated self-host context only for the resolved Codex candidate', async () => {
@@ -693,6 +742,48 @@ describe('executeProviderCandidates', () => {
     });
   });
 
+  it('keeps an ambiguous self-host preparation outcome conservative', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'provider ran after ambiguous preparation',
+      exitCode: 0,
+    }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('ambiguous-preparation-session')),
+      options: { prompt: 'build', cwd: '/workspace' },
+      prepareCandidateSelfHost: async () => undefined,
+    });
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(result).not.toHaveProperty('executionDisposition');
+  });
+
+  it('strips contradictory no-start evidence from a successful provider result', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'provider completed',
+      exitCode: 0,
+      executionDisposition: 'not-started',
+    }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('contradictory-success-session')),
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(result).toMatchObject({ success: true, actualProvider: 'codex' });
+    expect(result).not.toHaveProperty('executionDisposition');
+  });
+
   it('passes the candidate stream observer to the normal provider invocation', async () => {
     const observer = { onProviderStream: vi.fn(), close: vi.fn() };
     const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
@@ -702,7 +793,7 @@ describe('executeProviderCandidates', () => {
     }));
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
 
-    await executeProviderCandidates({
+    const result = await executeProviderCandidates({
       step: 'build',
       configuredProviders: ['codex'],
       runtimes: new ProviderRuntimeSet([
@@ -717,6 +808,7 @@ describe('executeProviderCandidates', () => {
     });
 
     expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ streamConsumer: observer }));
+    expect(result).not.toHaveProperty('executionDisposition');
   });
 
   it('supplies no stream consumer to an interactive dispatch', async () => {
@@ -1951,6 +2043,7 @@ describe('executeProviderCandidates', () => {
         output:
           `All configured providers are unavailable for step build: codex (${missingReason}, cached unavailable).`,
         exitCode: 127,
+        executionDisposition: 'not-started',
         preferredProvider: 'codex',
         attempts: [
           {

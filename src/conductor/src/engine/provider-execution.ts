@@ -181,6 +181,7 @@ export function createCandidateSafetyBoundary(options: {
         success: false,
         exitCode: 1,
         permissionDenied: true,
+        executionDisposition: 'not-started',
         output: `Required safety protection unavailable: ${verdict.requiredFailures.map((p) => p.name).join(', ')}`,
         ...(notices.length ? { safetyDiagnostics: notices } : {}),
       };
@@ -283,6 +284,7 @@ function unsupportedLifecycleProviderResult(providerKey: string): InvokeResult {
     providerUnavailableScope: 'run',
     providerUnavailableReason: reason,
     providerInvocationSkipped: true,
+    executionDisposition: 'not-started',
   };
 }
 
@@ -364,6 +366,7 @@ async function invokeRuntimeResolved(
         providerUnavailableReason: reason,
         providerUnavailableScope: 'run',
         providerInvocationSkipped: true,
+        executionDisposition: 'not-started',
       },
     };
   }
@@ -809,8 +812,14 @@ export async function executeProviderCandidates({
       }
     }
     if (!candidateUnavailable) {
+      const resultForReturn = safeResult.success
+        ? (() => {
+            const { executionDisposition: _executionDisposition, ...successfulResult } = safeResult;
+            return successfulResult;
+          })()
+        : safeResult;
       return {
-        ...safeResult,
+        ...resultForReturn,
         preferredProvider,
         actualProvider: providerKey,
         resolvedModel: invokedModel ?? resolved.model,
@@ -854,6 +863,9 @@ export async function executeProviderCandidates({
         success: false,
         output: `All configured providers are unavailable for step ${step}: ${diagnostic}.`,
         exitCode: result.exitCode,
+        ...(result.executionDisposition
+          ? { executionDisposition: result.executionDisposition }
+          : {}),
         preferredProvider,
         attempts,
         ...(!anyCandidateInvoked && setupUnavailableCandidates.length === candidates.length
