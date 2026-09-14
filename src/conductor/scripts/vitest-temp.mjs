@@ -32,7 +32,18 @@ export function selectVitestTmpParent({
   env = process.env,
   packageDir = packageLocalDir,
 } = {}) {
-  return env[VITEST_TMP_BASE_ENV] ?? join(packageDir, '.vitest-tmp');
+  const configuredParent = env[VITEST_TMP_BASE_ENV];
+  if (configuredParent === undefined) return join(packageDir, '.vitest-tmp');
+  if (
+    configuredParent.trim() === ''
+    || configuredParent.includes('\0')
+    || !isAbsolute(configuredParent)
+  ) {
+    throw new Error(
+      `Invalid ${VITEST_TMP_BASE_ENV} path ${JSON.stringify(configuredParent)}: expected a non-empty absolute path without NUL bytes`,
+    );
+  }
+  return configuredParent;
 }
 
 /** Capture precisely the environment entries this module can mutate. */
@@ -121,6 +132,12 @@ export function installVitestTmpRoot({
 } = {}) {
   const environment = snapshotVitestTmpEnvironment(env);
   const existingRoot = !fresh && env[VITEST_TMP_ROOT_ENV];
+  selectVitestTmpParent({ env, packageDir });
+  if (existingRoot && env[VITEST_ORIGINAL_TMPDIR_ENV] === undefined) {
+    throw new Error(
+      `Cannot reuse ${VITEST_TMP_ROOT_ENV} without ${VITEST_ORIGINAL_TMPDIR_ENV}`,
+    );
+  }
   const allocation = existingRoot
     ? {
       root: canonicalize(fs, existingRoot),

@@ -1,4 +1,9 @@
-// Covers: task:1
+// Covers: task:2
+import type {
+  mkdirSync as nodeMkdirSync,
+  mkdtempSync as nodeMkdtempSync,
+  realpathSync as nodeRealpathSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -7,12 +12,21 @@ import {
   selectVitestTmpParent,
 } from '../scripts/vitest-temp.mjs';
 
-function fakeFilesystem() {
+type VitestTempFilesystem = {
+  mkdirSync: typeof nodeMkdirSync;
+  mkdtempSync: typeof nodeMkdtempSync;
+  realpathSync: typeof nodeRealpathSync;
+};
+
+function fakeFilesystem(): VitestTempFilesystem {
   let sequence = 0;
   return {
-    mkdirSync: () => undefined,
-    mkdtempSync: (prefix: string) => `${prefix}${++sequence}`,
-    realpathSync: (path: string) => path.replace('/fixture/package/.vitest-tmp', '/canonical/storage'),
+    mkdirSync: (() => undefined) as typeof nodeMkdirSync,
+    mkdtempSync: ((prefix: string) => `${prefix}${++sequence}`) as typeof nodeMkdtempSync,
+    realpathSync: Object.assign(
+      ((path: string) => path.replace('/fixture/package/.vitest-tmp', '/canonical/storage')) as typeof nodeRealpathSync,
+      { native: ((path: string) => path.replace('/fixture/package/.vitest-tmp', '/canonical/storage')) as typeof nodeRealpathSync.native },
+    ),
   };
 }
 
@@ -36,6 +50,52 @@ describe('Vitest temporary storage selection', () => {
     });
 
     expect(parent).toBe('/fixture/override');
+  });
+
+  it('rejects invalid base settings and incomplete installed-root context before filesystem allocation', () => {
+    const cases = [
+      {
+        name: 'a blank base setting',
+        env: { AI_CONDUCTOR_TEST_TMP_BASE: '' },
+        error: /AI_CONDUCTOR_TEST_TMP_BASE|blank/i,
+      },
+      {
+        name: 'a relative base setting',
+        env: { AI_CONDUCTOR_TEST_TMP_BASE: 'relative/storage' },
+        error: /AI_CONDUCTOR_TEST_TMP_BASE|relative/i,
+      },
+      {
+        name: 'a NUL-containing base setting',
+        env: { AI_CONDUCTOR_TEST_TMP_BASE: '/fixture/invalid\0storage' },
+        error: /AI_CONDUCTOR_TEST_TMP_BASE/i,
+      },
+      {
+        name: 'an installed root without its original directory',
+        env: { AI_CONDUCTOR_TEST_TMP_ROOT: '/fixture/installed-root' },
+        error: /AI_CONDUCTOR_TEST_TMP_ROOT|AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR|original/i,
+      },
+    ];
+
+    for (const { name, env, error } of cases) {
+      const input = { ...env };
+      let mkdirCalls = 0;
+      let mkdtempCalls = 0;
+      const fs: VitestTempFilesystem = {
+        mkdirSync: (() => { mkdirCalls += 1; }) as typeof nodeMkdirSync,
+        mkdtempSync: ((prefix: string) => { mkdtempCalls += 1; return `${prefix}unexpected-root`; }) as typeof nodeMkdtempSync,
+        realpathSync: Object.assign(
+          ((path: string) => path) as typeof nodeRealpathSync,
+          { native: ((path: string) => path) as typeof nodeRealpathSync.native },
+        ),
+      };
+
+      expect(() => installVitestTmpRoot({ env, packageDir: '/fixture/package', fs })).toThrow(error);
+      expect({ env, mkdirCalls, mkdtempCalls }, name).toEqual({
+        env: input,
+        mkdirCalls: 0,
+        mkdtempCalls: 0,
+      });
+    }
   });
 
   it('allocates distinct canonical roots and installs the owned context without duplicating Git ceilings', () => {
