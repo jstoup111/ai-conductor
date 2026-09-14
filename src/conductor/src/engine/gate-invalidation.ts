@@ -7,6 +7,7 @@
 // feed.
 
 import { isCodeOrTestPath } from './rebase.js';
+import type { ReplayComparison } from './rebase-replay.js';
 
 /**
  * Test-path convention: a path is test-only if it matches
@@ -140,6 +141,32 @@ export interface GateSurfaceProjection {
 }
 
 /**
+ * A single gate's conservative post-rebase candidate.  Application and event
+ * owners consume this same source instead of reconstructing a second
+ * preserve/invalidate explanation from the paths.
+ */
+export interface ReplayGateCandidate {
+  gate: string;
+  decision: 'preserve' | 'invalidate' | 'skip';
+  source: {
+    surface: GateSurfaceKind;
+    /** The complete post-rebase tree delta, retained for suite/runtime policy. */
+    combinedDelta: string[];
+    /** The feature's code/test contribution, separate from the combined tree. */
+    featureContribution: string[];
+    /** Changed, declared review inputs relevant to this gate. */
+    activeInputs: string[];
+    replay: ReplayComparison['kind'];
+  };
+}
+
+export interface ReplayGateInvalidation {
+  preserved: string[];
+  invalidated: string[];
+  candidates: ReplayGateCandidate[];
+}
+
+/**
  * The one projection shared by classification and rebase event payloads.
  * Every `GateSurfaceKind` receives its own matched delta and declared
  * dependency surface, making a new kind a type error until it is explicit.
@@ -240,4 +267,74 @@ export function classifyGateInvalidation(
   }
 
   return { preserved, invalidated };
+}
+
+function isFeatureScopedReview(surface: GateSurfaceKind): boolean {
+  return surface === 'feature-runtime' ||
+    surface === 'feature-codetest' ||
+    surface === 'feature-runtime-or-prd-inputs' ||
+    surface === 'feature-runtime-or-coverage-inputs';
+}
+
+/**
+ * Classify a completed replay while retaining the two inputs the policy must
+ * not conflate.  Exact unchanged replay proof can preserve a feature-scoped
+ * review even when the combined delta overlaps its paths.  It never relaxes
+ * active document inputs, aggregate suite evidence, or whole-runtime manual
+ * verification.  Changed and unproved reconstructions retain the established
+ * path-based conservative result.
+ */
+export function classifyReplayGateInvalidation(
+  D: string[],
+  F: string[],
+  ranManualTest: boolean,
+  replay: ReplayComparison,
+  documentInputs?: readonly string[],
+): ReplayGateInvalidation {
+  const projections = projectGateSurfaces(D, F, documentInputs);
+  const featureSet = new Set(F);
+  const featureContribution = D.filter((path) => featureSet.has(path) &&
+    (isRuntimeSourcePath(path) || isTestPath(path)));
+  const preserved: string[] = [];
+  const invalidated: string[] = [];
+  const candidates: ReplayGateCandidate[] = [];
+
+  for (const [gate, surface] of Object.entries(GATE_SURFACE)) {
+    const projection = projections[surface];
+    const activeInputs = projection.matchedPaths.filter(isReviewDocumentPath);
+    if (gate === 'manual_test' && !ranManualTest) {
+      candidates.push({
+        gate,
+        decision: 'skip',
+        source: {
+          surface,
+          combinedDelta: [...D],
+          featureContribution: [...featureContribution],
+          activeInputs,
+          replay: replay.kind,
+        },
+      });
+      continue;
+    }
+
+    const preserveUnchangedFeatureContribution = replay.kind === 'unchanged' &&
+      isFeatureScopedReview(surface) && activeInputs.length === 0;
+    const decision = preserveUnchangedFeatureContribution || projection.matchedPaths.length === 0
+      ? 'preserve'
+      : 'invalidate';
+    (decision === 'preserve' ? preserved : invalidated).push(gate);
+    candidates.push({
+      gate,
+      decision,
+      source: {
+        surface,
+        combinedDelta: [...D],
+        featureContribution: [...featureContribution],
+        activeInputs,
+        replay: replay.kind,
+      },
+    });
+  }
+
+  return { preserved, invalidated, candidates };
 }

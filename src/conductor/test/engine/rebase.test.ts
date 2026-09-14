@@ -246,6 +246,11 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
           kind: 'conflict_halt',
           conflicts: ['shared.txt'],
           reason: 'rebase conflict requires human resolution',
+          replaySeed: expect.objectContaining({
+            preRebaseHead: expect.any(String),
+            mergeBase: expect.any(String),
+            target: expect.any(String),
+          }),
         },
         rebaseActive: true,
       });
@@ -286,6 +291,7 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         conflicts: [],
         reason: rebaseStderr,
         startFailure: true,
+        replaySeed: { preRebaseHead: '', mergeBase: '', target: '' },
       });
       expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
     } finally {
@@ -319,6 +325,7 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         conflicts: [],
         reason: rebaseStderr,
         startFailure: true,
+        replaySeed: { preRebaseHead: '', mergeBase: '', target: '' },
       });
       expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
     } finally {
@@ -818,6 +825,7 @@ describe('engine/rebase — HALT (FR-8)', () => {
       kind: 'conflict_halt',
       conflicts: ['CHANGELOG.md'],
       reason: 'rebase conflict requires human resolution',
+      replaySeed: { preRebaseHead: '', mergeBase: '', target: '' },
     });
   });
 });
@@ -1178,7 +1186,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(manualTest).toBeNull();
   });
 
-  it('Task 6: delta-aware — foreign runtime + feature test file → audits preserved, manual_test invalidated', async () => {
+  it('Task 6: unproved prior passes are revalidated after a foreign runtime + feature test delta', async () => {
     // Feature's claimed surface is src/feature.ts only. The rebase delta
     // touches a foreign runtime file (src/foreign.ts) and one of the
     // feature's own test files (src/feature.test.ts) — no feature runtime
@@ -1189,8 +1197,8 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
       featureSurface: ['src/feature.ts', 'src/feature.test.ts'],
     };
 
-    // Pre-seed prd_audit / architecture_review_as_built as done so we can
-    // assert they are left untouched (preserved), not overwritten.
+    // Bare verdicts are not applicable original PASS evidence, so the
+    // candidate preservations must be revalidated rather than trusted.
     await writeVerdict(dir, 'prd_audit', { satisfied: true, reason: 'prior audit', checkedAt: 1 });
     await writeVerdict(dir, 'architecture_review_as_built', {
       satisfied: true,
@@ -1201,31 +1209,30 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, outcome, true);
 
     expect(r.satisfied).toBe(true);
-    // build_review/test_suite ('any-codetest') and manual_test
-    // ('all-runtime', foreignSrc non-empty) are invalidated; the two
-    // feature-runtime audits are preserved (featureSrc is empty).
+    // The directly matched gates and every unproved candidate preservation
+    // are invalidated. Completed BUILD is not selected by rebase position.
     expect(r.kickedBack).toEqual([
-      'build',
       'build_review',
       'test_suite',
       'manual_test',
+      'coverage_binding',
+      'prd_audit',
+      'architecture_review_as_built',
     ]);
-    expect(r.kickedBack).not.toContain('prd_audit');
-    expect(r.kickedBack).not.toContain('architecture_review_as_built');
+    expect(r.kickedBack).toContain('prd_audit');
+    expect(r.kickedBack).toContain('architecture_review_as_built');
 
     const manualTest = await readVerdict(dir, 'manual_test');
     expect(manualTest?.satisfied).toBe(false);
 
-    // Preserved audits are untouched — verdict stays exactly what it was.
+    // Old, unstamped verdicts are replaced by the rebase invalidation.
     const prdAudit = await readVerdict(dir, 'prd_audit');
-    expect(prdAudit?.satisfied).toBe(true);
-    expect(prdAudit?.reason).toBe('prior audit');
-    expect(prdAudit?.checkedAt).toBe(1);
+    expect(prdAudit?.satisfied).toBe(false);
+    expect(prdAudit?.kickback?.from).toBe('rebase');
 
     const archReview = await readVerdict(dir, 'architecture_review_as_built');
-    expect(archReview?.satisfied).toBe(true);
-    expect(archReview?.reason).toBe('prior review');
-    expect(archReview?.checkedAt).toBe(1);
+    expect(archReview?.satisfied).toBe(false);
+    expect(archReview?.kickback?.from).toBe('rebase');
   });
 
   it('Task 8: emits rebase_gate_invalidated for each invalidated gate with matched delta paths', async () => {
@@ -1267,6 +1274,33 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // Preserved audits must not appear at all.
     expect(byGate.prd_audit).toBeUndefined();
     expect(byGate.architecture_review_as_built).toBeUndefined();
+  });
+
+  it('emits no surface event for the mechanical BUILD kickback in an applied decision', async () => {
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/feature.ts'],
+      featureSurface: ['src/feature.ts'],
+    };
+    const events = new ConductorEventEmitter();
+    const invalidated: string[] = [];
+    events.on('rebase_gate_invalidated', (event) => {
+      if (event.type === 'rebase_gate_invalidated') invalidated.push(event.gate);
+    });
+
+    await emitGateInvalidationEvents(events, outcome, false, {
+      kickedBack: ['build', 'coverage_binding', 'build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built'],
+      reverified: [],
+    });
+
+    expect(invalidated).not.toContain('build');
+    expect(invalidated.sort()).toEqual([
+      'architecture_review_as_built',
+      'build_review',
+      'coverage_binding',
+      'prd_audit',
+      'test_suite',
+    ]);
   });
 
   it('Task 9: emits rebase_gate_preserved for each preserved gate with its non-empty declared surface and empty matched delta', async () => {
@@ -1356,6 +1390,32 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     ]);
     expect(byGate.prd_audit).not.toContain('src/foreign.ts');
     expect(byGate.prd_audit).not.toContain('docs/unrelated.md');
+  });
+
+  it('emits the applied replay decision rather than recomputing a legacy preservation set', async () => {
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/foreign.ts'],
+      featureSurface: ['src/feature.ts'],
+    };
+    const events = new ConductorEventEmitter();
+    const preserved: string[] = [];
+    const invalidated: string[] = [];
+    events.on('rebase_gate_preserved', (event) => {
+      if (event.type === 'rebase_gate_preserved') preserved.push(event.gate);
+    });
+    events.on('rebase_gate_invalidated', (event) => {
+      if (event.type === 'rebase_gate_invalidated') invalidated.push(event.gate);
+    });
+
+    await emitGateInvalidationEvents(events, outcome, false, {
+      kickedBack: ['build_review'],
+      reverified: [],
+      preservedGates: ['prd_audit'],
+    });
+
+    expect(invalidated).toEqual(['build_review']);
+    expect(preserved).toEqual(['prd_audit']);
   });
 
   it('preserves a within-budget test-suite PASS through the rebase-preserved event', async () => {
@@ -1477,7 +1537,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     expect(r.satisfied).toBe(true);
     expect(r.kickedBack).toEqual([
-      'build',
       'coverage_binding',
       'build_review',
       'test_suite',
@@ -1550,15 +1609,14 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, outcome, true);
 
     expect(r.satisfied).toBe(true);
-    // prd_audit is preserved (not invalidated) — it must not appear in
-    // kickedBack.
-    expect(r.kickedBack).not.toContain('prd_audit');
+    // A candidate preservation without an original PASS is revalidated.
+    expect(r.kickedBack).toContain('prd_audit');
 
-    // Preservation is a pure no-op: it never writes a verdict for a gate
-    // that never ran. A never-run gate stays exactly as it was —
-    // no-verdict/pending — never manufactured into `done`/satisfied.
+    // Revalidation records an unsatisfied rebase kickback; it never
+    // manufactures a passing verdict.
     const after = await readVerdict(dir, 'prd_audit');
-    expect(after).toBeNull();
+    expect(after?.satisfied).toBe(false);
+    expect(after?.kickback?.from).toBe('rebase');
     expect(after?.satisfied).not.toBe(true);
   });
 
@@ -1617,17 +1675,17 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
         await rm(dirA, { recursive: true, force: true });
       }
 
-      // Case 2: preVerify('build') finds evidence stale → kicked back,
-      // again regardless of the delta's judged-gate classification.
+      // Case 2: a stale build pre-verification does not turn the selective
+      // review transition into a positional BUILD replay. The conductor's
+      // completed-BUILD recovery owner blocks this before application.
       const dirB = await mkdtemp(join(tmpdir(), 'rebase-build-preverify-'));
       await mkdir(join(dirB, '.pipeline'), { recursive: true });
       try {
         const rB = await applyRebaseVerdicts(dirB, outcome, true, preVerifyNotDone);
-        expect(rB.kickedBack).toContain('build');
+        expect(rB.kickedBack).not.toContain('build');
         expect(rB.reverified).toEqual([]);
         const buildB = await readVerdict(dirB, 'build');
-        expect(buildB?.satisfied).toBe(false);
-        expect(buildB?.reason).toBe('invalidated by file-changing rebase');
+        expect(buildB).toBeNull();
       } finally {
         await rm(dirB, { recursive: true, force: true });
       }
@@ -1958,6 +2016,12 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
     // capability is never supplied.
     if (outcome.kind === 'changed') {
       expect(outcome.changedCodePaths.length).toBeGreaterThan(0);
+      expect(outcome.replay).toMatchObject({
+        preRebaseHead: expect.stringMatching(/^[0-9a-f]{40}$/),
+        mergeBase: expect.stringMatching(/^[0-9a-f]{40}$/),
+        target: expect.stringMatching(/^[0-9a-f]{40}$/),
+        completedHead: expect.stringMatching(/^[0-9a-f]{40}$/),
+      });
     }
   }, 20000);
 
