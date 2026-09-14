@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-14T13:51:19.685Z
+Status: halted
 Slug: heal-pre-rebase-untracked-file-collisions-and-park
 Class: needs-human
 Halting step: rebase
 Phase: SHIP
 Branch: feat/daemon-heal-pre-rebase-untracked-file-collisions-and-park
-Head SHA: 9fddd750f049562fc95b946766b1eeb6201afd38
-Halted at: 2026-09-14T13:13:24.535Z
+Head SHA: 75bfd3f3ab2c2d94f49263eec5564adbea507bb3
+Halted at: 2026-09-14T14:23:29.409Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
@@ -17,7 +15,7 @@ Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ```text
 rebase completed — parked for human review
-feature commit(s) lost during resolution: Merge commit '0682591d1436f906e6ed17f63ae622c435d0f664' into feat/daemon-heal-pre-rebase-untracked-file-collisions-and-park (7ac012a72f5a; empty commit diff)
+feature commit(s) lost during resolution: Merge remote-tracking branch 'origin/feat/daemon-heal-pre-rebase-untracked-file-collisions-and-park' into feat/daemon-heal-pre-rebase-untracked-file-collisions-and-park (2bf6d27fe765; empty commit diff); Merge remote-tracking branch 'origin/feat/daemon-heal-pre-rebase-untracked-file-collisions-and-park' into feat/daemon-heal-pre-rebase-untracked-file-collisions-and-park (2bf6d27fe765; empty commit diff)
 
 Resume procedure:
   1. Review the completed rebase and restore any missing feature content.
