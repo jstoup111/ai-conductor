@@ -898,6 +898,7 @@ export async function resumeRebaseFirst(opts: {
       replay: transitionReplay,
       invalidated: rebaseVerdict.kickedBack,
       preserved: rebaseVerdict.preservedGates ?? [],
+      preservedCandidates: rebaseVerdict.preservedCandidates ?? [],
       reverified: rebaseVerdict.reverified,
     });
     if (transition.stateResult === 'refused') {

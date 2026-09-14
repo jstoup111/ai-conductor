@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { ConductState, StateMutation, StepName } from '../types/index.js';
 import type { ConductStateStore } from './conduct-state-store.js';
-import type { ReplayEvidence, RebaseOperationRecord } from './gate-verdicts.js';
+import type { PreservedJudgeIdentity, ReplayEvidence, RebaseOperationRecord } from './gate-verdicts.js';
 import { readVerdict, writeVerdict } from './gate-verdicts.js';
 import { readState } from './state.js';
 
@@ -14,12 +14,26 @@ export interface AppliedRebaseTransition {
   stateResult: 'applied' | 'already-applied' | 'refused';
 }
 
+/**
+ * The preservation candidate captured while applying the replay decision.
+ * It is intentionally a snapshot, rather than a gate name that this service
+ * re-discovers after writes have begun: a later ordinary verdict must never be
+ * retroactively claimed as the original replayed PASS.
+ */
+export interface RebasePreservedCandidate {
+  gate: StepName;
+  original: PreservedJudgeIdentity;
+  originalVerdictDigest: string;
+  relevantInputIdentities: readonly string[];
+}
+
 export interface ApplyRebaseTransitionOptions {
   projectRoot: string;
   stateStore: ConductStateStore<ConductState>;
   replay: ReplayEvidence;
   invalidated: readonly StepName[];
   preserved: readonly StepName[];
+  preservedCandidates: readonly RebasePreservedCandidate[];
   reverified?: readonly StepName[];
   operationId?: string;
 }
@@ -61,14 +75,17 @@ export async function applyRebaseTransition(
   // batch: another writer may have recorded a genuine later judgement in the
   // meantime, and attaching this replay to that newer authority would make it
   // look as though the old judgement survived it.
-  const originalPreserved = new Map<StepName, { verdict: NonNullable<Awaited<ReturnType<typeof readVerdict>>>; digest: string }>();
+  const preservationCandidates = new Map(
+    options.preservedCandidates.map((candidate) => [candidate.gate, candidate]),
+  );
+  const originalPreserved = new Map<StepName, RebasePreservedCandidate>();
   for (const gate of options.preserved) {
+    const candidate = preservationCandidates.get(gate);
+    if (!candidate) continue;
     const verdict = await readVerdict(options.projectRoot, gate);
-    if (!verdict?.satisfied || verdict.kickback || !options.replay.expectedTree) continue;
-    originalPreserved.set(gate, {
-      verdict,
-      digest: createHash('sha256').update(JSON.stringify(verdict)).digest('hex'),
-    });
+    if (!verdict?.satisfied || verdict.kickback || !options.replay.expectedTree ||
+      createHash('sha256').update(JSON.stringify(verdict)).digest('hex') !== candidate.originalVerdictDigest) continue;
+    originalPreserved.set(gate, candidate);
   }
 
   await writeVerdict(options.projectRoot, 'rebase', {
@@ -125,24 +142,14 @@ export async function applyRebaseTransition(
     // A newer ordinary verdict wins.  Do not overwrite it and do not add this
     // operation's preservation metadata to it.
     if (!verdict?.satisfied || verdict.kickback ||
-      createHash('sha256').update(JSON.stringify(verdict)).digest('hex') !== original.digest) continue;
-    const originalIdentity = `${verdict.checkedAt}`;
+      createHash('sha256').update(JSON.stringify(verdict)).digest('hex') !== original.originalVerdictDigest) continue;
     await writeVerdict(options.projectRoot, gate, {
       ...verdict,
       preservation: {
         gate,
-        original: {
-          // Existing gate verdicts predate replay metadata.  Their durable
-          // timestamp is the only attempt identity available to this adapter;
-          // the replay-bound reader also requires the original code stamp and
-          // actual tree before it grants authority.
-          artifactDigest: original.digest,
-          attemptId: originalIdentity,
-          runId: originalIdentity,
-          codeStamp: options.replay.preRebaseHead,
-        },
+        original: original.original,
         replay: options.replay,
-        relevantInputIdentities: [],
+        relevantInputIdentities: original.relevantInputIdentities,
         operationId: applied.id,
       },
     });
