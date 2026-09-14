@@ -642,9 +642,27 @@ export async function findOrCreatePr(
       'pull-request.create',
       opts.repository,
       { kind: 'repository' },
-      { title: opts.title, body: opts.body, head: opts.branch, base: opts.base },
+      { title: opts.title, body: opts.body, head: opts.branch, base: opts.base, draft: opts.draft },
     );
-    return { outcome: result };
+    if (result.kind !== 'executed') return { outcome: result };
+
+    // A guarded transport deliberately does not expose raw mutation stdout.
+    // Re-observe once instead of retrying creation: GitHub may have accepted a
+    // create whose response was lost, and another create-capable call could
+    // duplicate the PR.
+    if (typeof runGh !== 'function') return { outcome: result };
+    try {
+      const { stdout } = await runGh(
+        ['pr', 'view', opts.branch, '--json', 'url,state'],
+        { cwd },
+      );
+      const data: { url?: string; state?: string } = JSON.parse(stdout);
+      return data.state === 'OPEN' && data.url
+        ? { prUrl: data.url, outcome: result }
+        : { outcome: result };
+    } catch {
+      return { outcome: result };
+    }
   } catch (err) {
     log?.(`[pr-labels] findOrCreatePr(${opts.branch}) error: ${err}`);
     return {};
@@ -781,12 +799,12 @@ export async function upsertComment(
   marker: string,
   body: string,
   log?: (msg: string) => void,
-): Promise<void> {
+): Promise<PrMutationResult | undefined> {
   const taggedBody = `${marker}\n${body}`;
 
   if (typeof runGh !== 'function') {
     log?.(`[pr-labels] upsertComment(${prUrl}) requires a read-capable guarded runner`);
-    return;
+    return undefined;
   }
 
   let matchedUrl: string | undefined;
@@ -799,8 +817,7 @@ export async function upsertComment(
     matchedUrl = matched?.url;
   } catch (err) {
     log?.(`[pr-labels] upsertComment(${prUrl}) lookup failed: ${err} — creating new comment`);
-    await comment(runGh, cwd, prUrl, taggedBody, log);
-    return;
+    return await comment(runGh, cwd, prUrl, taggedBody, log);
   }
 
   if (matchedUrl) {
@@ -811,7 +828,7 @@ export async function upsertComment(
       const target = prTarget(prUrl);
       if (!target) {
         log?.(`[pr-labels] upsertComment(${prUrl}) invalid PR target`);
-        return;
+        return undefined;
       }
       const result = await runMutation(
         runGh,
@@ -825,7 +842,7 @@ export async function upsertComment(
           `[pr-labels] upsertComment(${prUrl}) update failed — leaving existing comment as-is`,
         );
       }
-      return;
+      return result;
     }
     log?.(
       `[pr-labels] upsertComment(${prUrl}) marked comment url unparseable (${matchedUrl}) — creating new comment`,
@@ -833,7 +850,7 @@ export async function upsertComment(
   }
 
   // No editable marked comment — create one carrying the marker.
-  await comment(runGh, cwd, prUrl, taggedBody, log);
+  return await comment(runGh, cwd, prUrl, taggedBody, log);
 }
 
 /**
@@ -1075,14 +1092,15 @@ export async function ensureHaltPresentation(
   prUrl: string,
   log?: (msg: string) => void,
   sleep: (ms: number) => Promise<void> = defaultSleep,
-): Promise<'confirmed' | 'unconfirmed'> {
+): Promise<'confirmed' | 'unconfirmed' | 'refused'> {
   try {
     if (typeof runGh !== 'function') {
       log?.('[pr-labels] ensureHaltPresentation: guarded runner has no read adapter');
       return 'unconfirmed';
     }
     // ── Step 1: ensure body marker ────────────────────────────────────────
-    await ensureBodyMarker(runGh, cwd, prUrl, undefined, log);
+    const bodyMarker = await ensureBodyMarker(runGh, cwd, prUrl, undefined, log);
+    if (bodyMarker?.kind === 'refused') return 'refused';
 
     // ── Step 2: read current state to decide if we need to convert to draft ─
     const beforeConvert = await readHaltPresentation(runGh, cwd, prUrl, log);
@@ -1093,7 +1111,8 @@ export async function ensureHaltPresentation(
 
     // ── Step 3: convert to draft only if not already draft ─────────────────
     if (!beforeConvert.isDraft) {
-      await convertToDraft(runGh, cwd, prUrl, log);
+      const draft = await convertToDraft(runGh, cwd, prUrl, log);
+      if (draft.kind === 'refused') return 'refused';
     }
 
     // ── Step 4: add the needs-remediation label with retry logic ──────────
@@ -1102,7 +1121,8 @@ export async function ensureHaltPresentation(
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // Add the label
-      await addLabel(runGh, cwd, prUrl, 'needs-remediation', log);
+      const label = await addLabel(runGh, cwd, prUrl, 'needs-remediation', log);
+      if (label.kind === 'refused') return 'refused';
 
       // Re-read to check if label is present
       const afterAdd = await readHaltPresentation(runGh, cwd, prUrl, log);

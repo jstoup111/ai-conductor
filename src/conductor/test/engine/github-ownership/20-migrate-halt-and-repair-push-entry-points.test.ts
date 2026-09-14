@@ -105,6 +105,57 @@ describe('engine remote Git publication callers', () => {
     expect(runGh).not.toHaveBeenCalled();
   });
 
+  it('does not report a remediation PR or post a comment when guarded presentation is refused', async () => {
+    const calls: string[][] = [];
+    let created = false;
+    const runGh = vi.fn(async (args: string[]) => {
+      calls.push([...args]);
+      if (args[0] === 'pr' && args[1] === 'create') {
+        created = true;
+        return { stdout: '' };
+      }
+      if (args[0] === 'pr' && args[1] === 'view' && !created) {
+        throw new Error('no pull request');
+      }
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({
+          url: 'https://github.com/acme/rocket/pull/55',
+          state: 'OPEN',
+          isDraft: true,
+          labels: [],
+          body: 'halted build',
+        }) };
+      }
+      return { stdout: '' };
+    });
+    const runGit = vi.fn(async (args: string[]) => {
+      if (args[0] === 'rev-parse') return { stdout: 'feature/escalation\n' };
+      if (args[0] === 'symbolic-ref') return { stdout: 'refs/remotes/origin/main\n' };
+      if (args[0] === 'merge-base') return { stdout: 'base\n' };
+      if (args[0] === 'config') return { stdout: 'git@github.com:acme/rocket.git\n' };
+      return { stdout: args[0] === 'rev-list' ? '1\n' : '' };
+    });
+    const mutation = mutationContext();
+    mutation.dependencies.resolveMachineOwner
+      .mockResolvedValueOnce({ resolved: true as const, id: 'alice' }) // remote push
+      .mockResolvedValueOnce({ resolved: true as const, id: 'alice' }) // PR create
+      .mockResolvedValue({ resolved: true as const, id: 'bob' }); // body marker edit
+
+    await expect(escalateBuildFailure({
+      projectRoot: '/fixture',
+      failureReason: 'failed build',
+      runGit,
+      runGh,
+      remoteMutation: mutation,
+    })).resolves.toEqual({});
+
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.arrayContaining(['pr', 'create']),
+    ]));
+    expect(calls.some((args) => args[0] === 'pr' && args[1] === 'comment')).toBe(false);
+    expect(mutation.dependencies.resolveMachineOwner).toHaveBeenCalledTimes(3);
+  });
+
   it('authorizes shipment repair through the real guard and performs no fallback push', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'remote-git-repair-'));
     scratch.push(cwd);
