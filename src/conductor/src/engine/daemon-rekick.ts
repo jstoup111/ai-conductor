@@ -904,6 +904,12 @@ export async function resumeRebaseFirst(opts: {
       `provider setup unavailable: ${outcome.reason}`,
       opts.events,
     );
+    await opts.events.emit({
+      type: 'step_refused',
+      step: 'rebase',
+      kind: 'needs-human',
+      reason: `rebase resolution paused — provider setup unavailable: ${outcome.reason}`,
+    });
     opts.log?.(`re-kick ${basename(opts.worktreePath)}: rebase resolution paused — provider setup unavailable — re-parked`);
     return 'halted';
   }

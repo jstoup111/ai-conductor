@@ -1768,7 +1768,7 @@ export async function applyRebaseVerdicts(
  * `applyRebaseVerdicts` wrote a satisfied gate verdict — i.e. every outcome
  * kind except `conflict_halt` (noop / changed leave
  * the branch current with base). A `conflict_halt` outcome parks the step for
- * human resolution and must NOT be stamped `done` — the gate stays
+ * human resolution and must NOT be stamped — the gate stays
  * unsatisfied and a resumed run needs to re-attempt the rebase.
  *
  * Shared by the in-loop `runRebaseStep` (conductor.ts) and the pre-loop
@@ -1779,7 +1779,11 @@ export async function recordRebaseStepCompletion(
   stateFilePath: string,
   outcome: RebaseOutcome,
 ): Promise<void> {
-  if (outcome.kind === 'conflict_halt' || outcome.kind === 'setup_stop') return;
+  if (outcome.kind === 'conflict_halt') return;
+  if (outcome.kind === 'setup_stop') {
+    await saveStepStatus(stateFilePath, 'rebase', 'refused');
+    return;
+  }
   await saveStepStatus(stateFilePath, 'rebase', 'done');
 }
 

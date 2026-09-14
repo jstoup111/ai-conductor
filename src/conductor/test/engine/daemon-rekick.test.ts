@@ -1987,6 +1987,53 @@ describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase
     // Sanity: unaffected fields from before the re-kick are left untouched.
     expect(state.build).toBe('done');
   });
+
+  it('refuses setup-only play-forward resolution once and preserves the paused-rebase recovery', async () => {
+    await initTestRepo(dir);
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 0;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'init');
+    await git('checkout', '-b', 'feature/foo');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 1; // branch\n');
+    await git('add', '.');
+    await git('commit', '-m', 'branch');
+    await git('checkout', 'main');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const v = 2; // base\n');
+    await git('add', '.');
+    await git('commit', '-m', 'base');
+    await git('checkout', 'feature/foo');
+    await writeInitialConductState();
+    await writeSentinel();
+
+    let calls = 0;
+    const refusals: ConductorEvent[] = [];
+    events.on('step_refused', (event) => refusals.push(event));
+    const result = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      resolveAttempts: 3,
+      resolveConflict: async () => {
+        calls += 1;
+        return {
+          resolved: false,
+          reason: 'provider setup unavailable',
+          providerSetupExhaustion: { candidates: [] },
+        } as never;
+      },
+    });
+
+    expect(result).toBe('halted');
+    expect(calls).toBe(1);
+    expect((await readState(join(dir, STATE_PATH_REL))).value.rebase).toBe('refused');
+    expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(false);
+    await expect(readFile(join(dir, HALT_MARKER), 'utf8')).resolves.toContain('git rebase --continue');
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toMatchObject({ step: 'rebase', kind: 'needs-human' });
+  });
 });
 
 // ── Task 7 (#486): Regression — capped worktree feature is skipped by the sweep ──

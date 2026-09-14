@@ -9139,6 +9139,20 @@ export class Conductor {
             // completes, further down.
           }
 
+          // Rebase setup exhaustion is a pre-invocation environmental refusal.
+          // Its native handler has already written the HALT and recorded the
+          // step_refused terminal; return before ordinary retry/success routing
+          // can reinterpret it as completed work.
+          if (step.name === 'rebase' && this.lastRebaseOutcome?.kind === 'setup_stop') {
+            const haltReason =
+              `rebase resolution paused — provider setup unavailable: ${this.lastRebaseOutcome.reason}`;
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
+            await this.emitLoopHalt(haltReason, await this.surfaceRemediationPr(haltReason));
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
+          }
+
           // Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o):
           // base-freshness telemetry. Fire-and-forget: emitted whenever
           // runBuildReview successfully assembled grader inputs (any outcome
@@ -12819,12 +12833,6 @@ export class Conductor {
         await this.emitLoopHalt(this.lastRebaseSealError);
         return 'halt';
       }
-      if (this.lastRebaseOutcome?.kind === 'setup_stop') {
-        const reason = `rebase resolution paused — provider setup unavailable: ${this.lastRebaseOutcome.reason}`;
-        // writeHalt already wrote .pipeline/HALT in runRebaseStep.
-        await this.emitLoopHalt(reason);
-        return 'halt';
-      }
       if (this.lastRebaseOutcome?.kind === 'conflict_halt') {
         const reason = `rebase conflict — parked for human resolution: ${this.lastRebaseOutcome.reason}`;
         // writeHalt already wrote .pipeline/HALT in runRebaseStep.
@@ -13526,6 +13534,12 @@ export class Conductor {
     }
 
     await recordRebaseStepCompletion(this.stateFilePath, outcome);
+
+    if (outcome.kind === 'setup_stop') {
+      const reason = `rebase resolution paused — provider setup unavailable: ${outcome.reason}`;
+      await this.recordStepRefusal(state, 'rebase', 'needs-human', reason);
+      return { success: false, refusal: { kind: 'needs-human', reason } };
+    }
 
     // The step itself "succeeds" (it ran); advanceTail/the HALT signal decide
     // routing. A conflict_halt is surfaced there, not as a step failure.

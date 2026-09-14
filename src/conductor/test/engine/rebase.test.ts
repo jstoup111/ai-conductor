@@ -904,7 +904,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     ]);
   });
 
-  it('setup_stop → rebase NOT satisfied and never stamped done', async () => {
+  it('setup_stop → rebase is refused and remains unsatisfied', async () => {
     const outcome: RebaseOutcome = {
       kind: 'setup_stop',
       conflicts: ['src/x.ts'],
@@ -920,7 +920,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const state = existsSync(statePath)
       ? (JSON.parse(await readFile(statePath, 'utf8')) as { rebase?: string })
       : {};
-    expect(state.rebase).not.toBe('done');
+    expect(state.rebase).toBe('refused');
   });
 
   it('conflict_halt → rebase NOT satisfied', async () => {
