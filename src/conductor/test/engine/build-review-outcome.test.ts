@@ -123,6 +123,20 @@ describe('applyBuildReviewOutcome', () => {
     expect(charge).not.toHaveBeenCalled();
   });
 
+  it('consumes an already-settled recorded lap without a content adjudicator', async () => {
+    const projectRoot = await root();
+    const judge = vi.fn(async () => actionJudgement());
+    const input = {
+      settlement: 'settled' as const,
+      recordedAggregate: aggregate,
+      adjudication: { ...coordinatorInput(projectRoot, judge), operatorResolvedFindingIds: new Set([source.findingId]) },
+    };
+
+    await expect(applyBuildReviewOutcome(input)).resolves.toMatchObject({ kind: 'settled', lapId: aggregate.lapId });
+
+    expect(judge).not.toHaveBeenCalled();
+  });
+
   it('preserves the no-content infrastructure route and does not re-dispatch an exact settled aggregate', async () => {
     const projectRoot = await root();
     const judge = vi.fn(async () => actionJudgement());
