@@ -12,10 +12,13 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import type {
+  GithubOperationName,
   GithubOperationRequest,
+  GithubOperationRefusalReason,
   GithubOperationRunner,
   GithubOperationRunnerResponse,
 } from './github-operations.js';
+import { executeGithubOperation } from './github-operations.js';
 import { authorizeGithubMutation } from './owner-gate/mutation-policy.js';
 import type {
   GithubMutationAuthorizationDependencies,
@@ -48,6 +51,14 @@ export interface GuardedGithubOperationRunnerOptions {
   readonly cwd: string;
   /** Absent context refuses every mutation while retaining discovery reads. */
   readonly mutation?: GithubMutationExecutionContext;
+}
+
+/** Ownership context used by the GitHub TrackerClient's structured requests. */
+export interface GithubTrackerClientOptions {
+  /** Absent context refuses issue mutations while preserving tracker reads. */
+  readonly mutation?: GithubMutationExecutionContext;
+  /** Canonical repository for operations whose legacy call shape omits one. */
+  readonly repository?: string;
 }
 
 function issueNumber(request: GithubOperationRequest): string {
@@ -248,6 +259,20 @@ export interface TrackerClient {
   viewerIdentity(cwd: string): Promise<string>;
   /** `gh api repos/<repo>/issues/<number>/dependencies/blocked_by` — raw JSON. */
   getBlockedBy(repo: string, number: number, cwd: string): Promise<unknown>;
+  /** Add one blocking issue to this issue without mutating the referenced issue. */
+  addIssueDependency?(
+    repo: string,
+    number: number,
+    dependency: { repo: string; number: number },
+    cwd: string,
+  ): Promise<void>;
+  /** Remove one blocking issue from this issue without mutating the referenced issue. */
+  removeIssueDependency?(
+    repo: string,
+    number: number,
+    dependency: { repo: string; number: number },
+    cwd: string,
+  ): Promise<void>;
   /** `gh issue list --assignee @me --state open --json ... -R <repo>` — assigned issues. */
   listAssignedIssues(repo: string, cwd: string): Promise<AssignedIssue[]>;
   /** `gh issue comment <number> -R <repo> --body <body>` — comment on an issue. */
@@ -307,6 +332,19 @@ export class GhRunnerError extends Error {
   }
 }
 
+/** A guarded TrackerClient mutation was denied before the terminal transport. */
+export class GithubTrackerOperationRefusalError extends Error {
+  readonly operation: GithubOperationName;
+  readonly reason: GithubOperationRefusalReason;
+
+  constructor(operation: GithubOperationName, reason: GithubOperationRefusalReason) {
+    super(`GitHub tracker operation '${operation}' was refused: ${reason}`);
+    this.name = 'GithubTrackerOperationRefusalError';
+    this.operation = operation;
+    this.reason = reason;
+  }
+}
+
 /** Error thrown when a parsing op receives stdout that is not valid JSON; names the
  * failing operation so callers get an actionable message instead of a raw JSON.parse error.
  * Module-private: nothing outside this file catches it by type — callers match on the
@@ -349,8 +387,101 @@ function parseJsonOrThrow<T>(operation: string, stdout: string): T {
   }
 }
 
+function issueNumberFromRef(issueRef: string): number | undefined {
+  const match = /(?:^|[#/])([1-9]\d*)$/.exec(issueRef);
+  if (!match) return undefined;
+  const number = Number(match[1]);
+  return Number.isSafeInteger(number) ? number : undefined;
+}
+
+function issueTargetFromSlug(slug: string): { readonly repository: string; readonly number: number } | undefined {
+  const match = /^([^/\s]+\/[^/#\s]+)#([1-9]\d*)$/.exec(slug);
+  if (!match) return undefined;
+  const number = Number(match[2]);
+  return Number.isSafeInteger(number) ? { repository: match[1], number } : undefined;
+}
+
+function pullRequestTargetFromUrl(url: string): { readonly repository: string; readonly number: number } | undefined {
+  const match = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/pull\/([1-9]\d*)$/.exec(url);
+  if (!match) return undefined;
+  const number = Number(match[2]);
+  return Number.isSafeInteger(number) ? { repository: match[1], number } : undefined;
+}
+
+/**
+ * Keep TrackerClient's backend-neutral methods while making each GitHub issue
+ * mutation a closed guarded request. A refusal remains a typed error rather
+ * than a raw transport fallback, preserving the interface's existing failure
+ * semantics while allowing callers to distinguish a policy denial.
+ */
+async function runTrackerIssueOperation(
+  runner: GhRunner,
+  options: GithubTrackerClientOptions,
+  cwd: string,
+  operation: GithubOperationName,
+  repository: string,
+  resource: Record<string, unknown>,
+  payload?: Record<string, unknown>,
+): Promise<{ readonly stdout: string }> {
+  let stdout = '';
+  const transport: GhRunner = async (args, transportOptions) => {
+    const result = await runner(args, transportOptions);
+    stdout = result.stdout;
+    return result;
+  };
+  const result = await executeGithubOperation({
+    operation,
+    repository,
+    resource,
+    context: { actor: 'tracker-client' },
+    ...(payload === undefined ? {} : { payload }),
+  }, createGuardedGithubOperationRunner(transport, { cwd, mutation: options.mutation }));
+
+  if (result.kind === 'refused') {
+    throw new GithubTrackerOperationRefusalError(operation, result.reason);
+  }
+  if (result.kind === 'failed') {
+    throw new Error(`GitHub tracker operation '${operation}' failed: ${result.error}`);
+  }
+  return { stdout };
+}
+
+/** Run a registered read through the same closed request decoder without authority. */
+async function runTrackerRead(
+  runner: GhRunner,
+  cwd: string,
+  operation: Extract<GithubOperationName, 'issue.read' | 'pull-request.read' | 'repository.read'>,
+  repository: string,
+  resource: Record<string, unknown>,
+  args: string[],
+): Promise<string> {
+  let stdout = '';
+  const result = await executeGithubOperation({
+    operation,
+    repository,
+    resource,
+    context: { actor: 'tracker-client' },
+  }, {
+    async run() {
+      const response = await runOrThrow(runner, args, { cwd });
+      stdout = response.stdout;
+      return {};
+    },
+  });
+  if (result.kind === 'refused') {
+    throw new GithubTrackerOperationRefusalError(operation, result.reason);
+  }
+  if (result.kind === 'failed') {
+    throw new Error(`GitHub tracker operation '${operation}' failed: ${result.error}`);
+  }
+  return stdout;
+}
+
 /** Construct a `TrackerClient` backed by the GitHub `gh` CLI via the given runner. */
-export function createGithubTrackerClient(runner: GhRunner): EffectMarkerTrackerClient {
+export function createGithubTrackerClient(
+  runner: GhRunner,
+  options: GithubTrackerClientOptions = {},
+): EffectMarkerTrackerClient {
   return {
     async findIssueByEffectMarker(marker, repo, cwd) {
       const args = [
@@ -367,7 +498,9 @@ export function createGithubTrackerClient(runner: GhRunner): EffectMarkerTracker
         '-R',
         repo,
       ];
-      const { stdout } = await runOrThrow(runner, args, { cwd });
+      const stdout = await runTrackerRead(
+        runner, cwd, 'repository.read', repo, { kind: 'repository' }, args,
+      );
       const issues = parseJsonOrThrow<Array<{ url?: unknown; body?: unknown }>>(
         'findIssueByEffectMarker',
         stdout || '[]',
@@ -379,9 +512,14 @@ export function createGithubTrackerClient(runner: GhRunner): EffectMarkerTracker
     },
 
     async getIssueLabels(repo, number, cwd) {
-      const { stdout } = await runOrThrow(runner, ['api', `repos/${repo}/issues/${number}`], {
+      const stdout = await runTrackerRead(
+        runner,
         cwd,
-      });
+        'issue.read',
+        repo,
+        { kind: 'issue', number },
+        ['api', `repos/${repo}/issues/${number}`],
+      );
       const data = parseJsonOrThrow<{ labels?: Array<{ name: string }> | null }>(
         'getIssueLabels',
         stdout,
@@ -390,9 +528,16 @@ export function createGithubTrackerClient(runner: GhRunner): EffectMarkerTracker
     },
 
     async viewIssue(slug, cwd) {
-      const { stdout } = await runOrThrow(runner, ['issue', 'view', slug, '--json', 'state'], {
+      const target = issueTargetFromSlug(slug);
+      if (!target) throw new GithubTrackerOperationRefusalError('issue.read', 'invalid-target');
+      const stdout = await runTrackerRead(
+        runner,
         cwd,
-      });
+        'issue.read',
+        target.repository,
+        { kind: 'issue', number: target.number },
+        ['issue', 'view', slug, '--json', 'state'],
+      );
       return parseJsonOrThrow<{ state: string }>('viewIssue', stdout);
     },
 
@@ -402,22 +547,67 @@ export function createGithubTrackerClient(runner: GhRunner): EffectMarkerTracker
     },
 
     async viewerIdentity(cwd) {
-      const { stdout } = await runOrThrow(runner, ['api', 'user', '--jq', '.login'], { cwd });
+      // This account-identity lookup has no repository resource to bind. It
+      // remains a read-only machine-identity seam until the operation registry
+      // admits an account target; it never carries mutation authority.
+      if (!options.repository) {
+        const { stdout } = await runOrThrow(runner, ['api', 'user', '--jq', '.login'], { cwd });
+        return stdout.trim();
+      }
+      const stdout = await runTrackerRead(
+        runner,
+        cwd,
+        'repository.read',
+        options.repository,
+        { kind: 'repository' },
+        ['api', 'user', '--jq', '.login'],
+      );
       return stdout.trim();
     },
 
     async getBlockedBy(repo, number, cwd) {
-      const { stdout } = await runOrThrow(
+      const stdout = await runTrackerRead(
         runner,
+        cwd,
+        'issue.read',
+        repo,
+        { kind: 'issue', number },
         ['api', `repos/${repo}/issues/${number}/dependencies/blocked_by`],
-        { cwd },
       );
       return parseJsonOrThrow('getBlockedBy', stdout);
     },
 
-    async listAssignedIssues(repo, cwd) {
-      const { stdout } = await runOrThrow(
+    async addIssueDependency(repo, number, dependency, cwd) {
+      await runTrackerIssueOperation(
         runner,
+        options,
+        cwd,
+        'issue.dependency.add',
+        repo,
+        { kind: 'issue', number },
+        { dependency: { repository: dependency.repo, resource: { kind: 'issue', number: dependency.number } } },
+      );
+    },
+
+    async removeIssueDependency(repo, number, dependency, cwd) {
+      await runTrackerIssueOperation(
+        runner,
+        options,
+        cwd,
+        'issue.dependency.remove',
+        repo,
+        { kind: 'issue', number },
+        { dependency: { repository: dependency.repo, resource: { kind: 'issue', number: dependency.number } } },
+      );
+    },
+
+    async listAssignedIssues(repo, cwd) {
+      const stdout = await runTrackerRead(
+        runner,
+        cwd,
+        'repository.read',
+        repo,
+        { kind: 'repository' },
         [
           'issue',
           'list',
@@ -430,44 +620,56 @@ export function createGithubTrackerClient(runner: GhRunner): EffectMarkerTracker
           '-R',
           repo,
         ],
-        { cwd },
       );
       return parseJsonOrThrow<AssignedIssue[]>('listAssignedIssues', stdout || '[]');
     },
 
     async commentOnIssue(repo, number, body, cwd) {
-      await runOrThrow(runner, ['issue', 'comment', String(number), '-R', repo, '--body', body], {
-        cwd,
-      });
+      await runTrackerIssueOperation(
+        runner, options, cwd, 'issue.comment.create', repo, { kind: 'issue', number }, { body },
+      );
     },
 
     async createIssue(input, cwd) {
-      const args = ['issue', 'create', '--title', input.title, '--body', input.body];
-      if (input.repo) {
-        args.push('--repo', input.repo);
-      }
-      const { stdout } = await runOrThrow(runner, args, { cwd });
-      return stdout.trim();
+      const repository = input.repo ?? options.repository;
+      if (!repository) throw new GithubTrackerOperationRefusalError('issue.create', 'invalid-target');
+      const result = await runTrackerIssueOperation(
+        runner,
+        options,
+        cwd,
+        'issue.create',
+        repository,
+        { kind: 'repository' },
+        { title: input.title, body: input.body },
+      );
+      return result.stdout.trim();
     },
 
     async addIssueLabel(repo, number, label, cwd) {
-      await runOrThrow(
-        runner,
-        ['api', '--method', 'POST', `repos/${repo}/issues/${number}/labels`, '-f', `labels[]=${label}`],
-        { cwd },
+      await runTrackerIssueOperation(
+        runner, options, cwd, 'issue.label.add', repo, { kind: 'issue', number }, { label },
       );
     },
 
     async closeIssue(repo, issueRef, cwd) {
-      await runOrThrow(runner, ['issue', 'close', issueRef, '-R', repo], { cwd });
+      const number = issueNumberFromRef(issueRef);
+      if (number === undefined) throw new GithubTrackerOperationRefusalError('issue.close', 'invalid-target');
+      await runTrackerIssueOperation(
+        runner, options, cwd, 'issue.close', repo, { kind: 'issue', number },
+      );
     },
 
     async getIssueBody(repo, issueRef, cwd) {
       try {
-        const { stdout } = await runOrThrow(
+        const number = issueNumberFromRef(issueRef);
+        if (number === undefined) throw new GithubTrackerOperationRefusalError('issue.read', 'invalid-target');
+        const stdout = await runTrackerRead(
           runner,
+          cwd,
+          'issue.read',
+          repo,
+          { kind: 'issue', number },
           ['issue', 'view', issueRef, '--json', 'body', '-R', repo],
-          { cwd },
         );
         const data = parseJsonOrThrow<{ body?: string }>('getIssueBody', stdout);
         return data.body ?? '';
@@ -480,17 +682,32 @@ export function createGithubTrackerClient(runner: GhRunner): EffectMarkerTracker
     },
 
     async upsertIssueBody(repo, issueRef, body, cwd) {
-      await runOrThrow(runner, ['issue', 'edit', issueRef, '--body', body, '-R', repo], { cwd });
+      const number = issueNumberFromRef(issueRef);
+      if (number === undefined) throw new GithubTrackerOperationRefusalError('issue.edit', 'invalid-target');
+      await runTrackerIssueOperation(
+        runner, options, cwd, 'issue.edit', repo, { kind: 'issue', number }, { body },
+      );
     },
 
     async upsertIssueComment(repo, issueRef, body, cwd) {
-      await runOrThrow(runner, ['issue', 'comment', issueRef, '--body', body, '-R', repo], { cwd });
+      const number = issueNumberFromRef(issueRef);
+      if (number === undefined) throw new GithubTrackerOperationRefusalError('issue.comment.create', 'invalid-target');
+      await runTrackerIssueOperation(
+        runner, options, cwd, 'issue.comment.create', repo, { kind: 'issue', number }, { body },
+      );
     },
 
     async viewPullRequest(url, cwd) {
-      const { stdout } = await runOrThrow(runner, ['pr', 'view', url, '--json', 'state,mergedAt'], {
+      const target = pullRequestTargetFromUrl(url);
+      if (!target) throw new GithubTrackerOperationRefusalError('pull-request.read', 'invalid-target');
+      const stdout = await runTrackerRead(
+        runner,
         cwd,
-      });
+        'pull-request.read',
+        target.repository,
+        { kind: 'pull-request', number: target.number },
+        ['pr', 'view', url, '--json', 'state,mergedAt'],
+      );
       return parseJsonOrThrow('viewPullRequest', stdout || '{}');
     },
 
@@ -499,10 +716,8 @@ export function createGithubTrackerClient(runner: GhRunner): EffectMarkerTracker
     },
 
     async removeIssueLabel(repo, number, label, cwd) {
-      await runOrThrow(
-        runner,
-        ['api', '--method', 'DELETE', `repos/${repo}/issues/${number}/labels/${encodeURIComponent(label)}`],
-        { cwd },
+      await runTrackerIssueOperation(
+        runner, options, cwd, 'issue.label.remove', repo, { kind: 'issue', number }, { label },
       );
     },
   };
