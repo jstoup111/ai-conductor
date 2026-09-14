@@ -877,7 +877,7 @@ export async function resumeRebaseFirst(opts: {
     opts.events,
     outcome,
     opts.ranManualTest,
-    rebaseVerdict.preserved ?? [],
+    rebaseVerdict,
   );
   // #436: stamp state.rebase = 'done' for clean/noop/changelog-resolved
   // outcomes via the shared helper (no-ops on conflict_halt) — same call

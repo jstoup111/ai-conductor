@@ -1277,6 +1277,33 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(byGate.architecture_review_as_built).toBeUndefined();
   });
 
+  it('emits no surface event for the mechanical BUILD kickback in an applied decision', async () => {
+    const outcome: RebaseOutcome = {
+      kind: 'changed',
+      changedCodePaths: ['src/feature.ts'],
+      featureSurface: ['src/feature.ts'],
+    };
+    const events = new ConductorEventEmitter();
+    const invalidated: string[] = [];
+    events.on('rebase_gate_invalidated', (event) => {
+      if (event.type === 'rebase_gate_invalidated') invalidated.push(event.gate);
+    });
+
+    await emitGateInvalidationEvents(events, outcome, false, {
+      kickedBack: ['build', 'coverage_binding', 'build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built'],
+      reverified: [],
+    });
+
+    expect(invalidated).not.toContain('build');
+    expect(invalidated.sort()).toEqual([
+      'architecture_review_as_built',
+      'build_review',
+      'coverage_binding',
+      'prd_audit',
+      'test_suite',
+    ]);
+  });
+
   it('Task 9: emits rebase_gate_preserved for each preserved gate with its non-empty declared surface and empty matched delta', async () => {
     // Same fixture as the Task 8 test above: feature surface is
     // src/feature.ts only; the delta touches a foreign runtime file and a
