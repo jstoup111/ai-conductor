@@ -91,7 +91,7 @@ Documentation: the build-progress ceilings section of the stalled-or-stuck-featu
 
 **Done when:**
 1. The daemon log line for a refunded retry contains the in-range fixed counter and the allowance fragment.
-2. Both terminal renderer fixtures produce those same two elements for the same event.
+2. The terminal renderer fixture produces those same two elements for the same event.
 3. Every pre-existing retry fixture across the three files passes unchanged and its output contains no allowance fragment.
 
 ### Task 4: Record the allowance on the retry span and document the line
@@ -134,10 +134,10 @@ Documentation: the build-progress ceilings section of the stalled-or-stuck-featu
 | --- | --- | --- | --- |
 | Story 1 happy: Given a build attempt resolves more tasks than the previous attempt and the progress-attempt ceiling has not been reached, when the retry is emitted, then its fixed-retry attempt number is the slot the next attempt reuses and is never greater than the stated maximum on the same event. | 1 | "Every retry event observed in the new conductor test has an attempt number no greater than its own stated maximum." | diff-local |
 | Story 1 happy: Given that same refunded retry, when it is emitted, then it additionally carries the number of progress attempts consumed so far and the configured progress-attempt ceiling. | 1 | "Each refunded retry event carries a consumed progress-attempt count one higher than the previous refunded retry and a ceiling equal to the configured attempt ceiling." | diff-local |
-| Story 1 happy: Given a refunded retry, when the daemon log line and both terminal renderers render it, then each line shows the in-range fixed counter and, distinctly from it, the consumed progress-attempt count and its ceiling. | 2, 3 | "Both terminal renderer fixtures produce those same two elements for the same event." | diff-local |
+| Story 1 happy: Given a refunded retry, when the daemon log line and the terminal renderer render it, then each line shows the in-range fixed counter and, distinctly from it, the consumed progress-attempt count and its ceiling. | 2, 3 | "Both terminal renderer fixtures produce those same two elements for the same event." | diff-local |
 | Story 1 happy: Given a refunded retry, when the OpenTelemetry span recorder consumes it, then the retry span event carries the consumed progress-attempt count and its ceiling alongside the existing fixed attempt and maximum. | 4 | "An allowance-bearing retry records the consumed progress-attempt count and its ceiling as attributes on its retry span event." | diff-local |
 | Story 1 negative: Given a build retry whose attempt resolved no additional tasks, when it is emitted and rendered, then it carries no progress-attempt count and no ceiling, and every rendered line reads exactly as it did before this change. | 1, 3 | "A build retry that resolved no additional tasks, and every retry from a step other than build, emit neither allowance field." | diff-local |
-| Story 2 happy: Given a step retry that consumed a fixed retry, when the daemon log line and both terminal renderers render it, then the line carries the plain fixed counter and no progress-allowance fragment. | 3 | "Every pre-existing retry fixture across the three files passes unchanged and its output contains no allowance fragment." | diff-local |
+| Story 2 happy: Given a step retry that consumed a fixed retry, when the daemon log line and the terminal renderer render it, then the line carries the plain fixed counter and no progress-allowance fragment. | 3 | "Every pre-existing retry fixture across the three files passes unchanged and its output contains no allowance fragment." | diff-local |
 | Story 2 negative: Given a retry record carrying no progress-attempt fields, such as one replayed from an event log written before those fields existed, when the renderers and the span recorder consume it, then they report the fixed pair alone and add no text fragment or span attribute holding an undefined value. | 2, 4 | "A retry with no allowance fields records only the pre-existing attempt, maximum, and reason attributes and adds no undefined-valued attribute." | diff-local |
 
 ## Test dispositions and integration ownership
