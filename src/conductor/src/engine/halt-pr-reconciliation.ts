@@ -22,7 +22,7 @@ import {
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-interface GhPrListItem {
+export interface HaltPrReconciliationTarget {
   number: number;
   url: string;
   body?: string;
@@ -87,7 +87,7 @@ interface ReconcileOpts {
    * An absent runner deliberately leaves the legacy read runner unable to
    * mutate through the PR primitives.
    */
-  operations?: GithubOperationRunner;
+  operations?: GithubOperationRunner | ((pr: HaltPrReconciliationTarget) => GithubOperationRunner | undefined);
   runGit?: GitRunner;
   cache?: Map<string, PrSweepOutcome>;
 }
@@ -109,18 +109,12 @@ interface ReconcileOpts {
  */
 export async function reconcileHaltPrs({ projectRoot, log, runGh, operations, runGit, cache }: ReconcileOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
-  const prRunner = operations === undefined
-    ? gh
-    : Object.assign(
-      async (args: string[], opts: { cwd: string }) => gh(args, opts),
-      operations,
-    );
   const git = runGit ?? makeProductionGit();
   const outcomeCache = cache ?? new Map<string, PrSweepOutcome>();
 
   try {
     // ── Step 1: enumerate open PRs ─────────────────────────────────────────
-    let prList: GhPrListItem[] = [];
+    let prList: HaltPrReconciliationTarget[] = [];
     try {
       const { stdout } = await gh(
         [
@@ -135,7 +129,7 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, operations, ru
         ],
         { cwd: projectRoot },
       );
-      prList = JSON.parse(stdout || '[]') as GhPrListItem[];
+      prList = JSON.parse(stdout || '[]') as HaltPrReconciliationTarget[];
     } catch (err) {
       log?.(`[halt-pr-reconciliation] failed to enumerate PRs: ${err}`);
       return; // best-effort: no-op on list failure
@@ -158,6 +152,13 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, operations, ru
     // ── Step 3: for each marked PR, ensure it's conform (draft + labeled) ──
     for (const pr of markedPrs) {
       try {
+        const guardedOperations = typeof operations === 'function' ? operations(pr) : operations;
+        const prRunner = guardedOperations === undefined
+          ? gh
+          : Object.assign(
+            async (args: string[], opts: { cwd: string }) => gh(args, opts),
+            guardedOperations,
+          );
         const isDraft = pr.isDraft ?? false;
         const labels = (pr.labels ?? []).map((l) => l.name ?? '').filter(Boolean);
         const hasLabel = labels.includes('needs-remediation');
