@@ -29,7 +29,10 @@ import {
 } from './pr-labels.js';
 import { basename } from 'node:path';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
-import type { GithubMutationExecutionContext } from './tracker-client.js';
+import {
+  createGuardedGithubOperationRunner,
+  type GithubMutationExecutionContext,
+} from './tracker-client.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -144,8 +147,9 @@ export async function escalateBuildFailure(
   }
 
   // ── Step 3: push the branch ───────────────────────────────────────────────
+  let mutation: GithubMutationExecutionContext | undefined;
   try {
-    const mutation = opts.remoteMutation ?? await resolveFeatureRemoteMutation({
+    mutation = opts.remoteMutation ?? await resolveFeatureRemoteMutation({
       cwd,
       slug: basename(cwd),
       branch,
@@ -167,11 +171,21 @@ export async function escalateBuildFailure(
     return {}; // FR-7: push failure silently aborts (no partial PR)
   }
 
+  // Keep the raw callable only for the established read/observation paths in
+  // pr-labels. Every create/presentation/comment mutation goes through this
+  // fresh guarded operation adapter, which reauthorizes the provenance for
+  // each individual write.
+  const operations = Object.assign(
+    (args: string[], options: { cwd: string }) => runGh(args, options),
+    createGuardedGithubOperationRunner(runGh, { cwd, mutation }),
+  );
+
   // ── Step 4: find or create a draft PR ────────────────────────────────────
-  const { prUrl } = await findOrCreatePr(
-    runGh,
+  const { prUrl, outcome } = await findOrCreatePr(
+    operations,
     cwd,
     {
+      repository: mutation?.provenance.repository,
       branch,
       base,
       draft: true,
@@ -181,13 +195,22 @@ export async function escalateBuildFailure(
     log,
   );
 
+  if (outcome?.kind === 'refused') {
+    log?.(`[escalate] guarded PR creation refused: ${outcome.reason}`);
+    return {};
+  }
+
   if (!prUrl) {
     log?.('[escalate] could not find or create PR — skipping label and comment');
     return {};
   }
 
   // ── Step 5: ensure halt presentation (draft + label + body marker) ────────
-  await ensureHaltPresentation(runGh, cwd, prUrl, log);
+  const presentation = await ensureHaltPresentation(operations, cwd, prUrl, log);
+  if (presentation === 'refused') {
+    log?.('[escalate] guarded halt presentation refused — skipping comment');
+    return {};
+  }
 
   // ── Step 6: comment with failure reason (priority artifact, non-throwing) ─
   // Attempt this independently of whether the label step succeeded.
@@ -206,7 +229,11 @@ export async function escalateBuildFailure(
     'Manual remediation is required.',
   ].join('\n');
 
-  await upsertComment(runGh, cwd, prUrl, NEEDS_REMEDIATION_MARKER, commentBody, log);
+  const comment = await upsertComment(operations, cwd, prUrl, NEEDS_REMEDIATION_MARKER, commentBody, log);
+  if (comment?.kind === 'refused') {
+    log?.(`[escalate] guarded remediation comment refused: ${comment.reason}`);
+    return {};
+  }
 
   return { prUrl };
 }
