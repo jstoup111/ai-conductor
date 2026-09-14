@@ -373,10 +373,32 @@ function isNullableString(value: unknown): value is string | null | undefined {
 function parseRollupEntry(value: unknown): PrCheckRollupEntry | undefined {
   if (!isRecord(value)) return undefined;
 
-  // Older gh fixtures omitted __typename for CheckRun entries. Keep accepting
-  // that flat shape while normalizing every returned entry to a discriminator.
+  // Older gh output/fixtures can omit `__typename`.  In that flat form,
+  // StatusContext is still identifiable by its `state` field; treating it as
+  // a CheckRun silently drops its terminal state and makes a failed rollup
+  // look green or malformed to the repair sweep.
   const typename = value.__typename;
   if (typename !== undefined && typeof typename !== 'string') return undefined;
+  const isFlatStatusContext =
+    typename === undefined &&
+    ('state' in value || 'context' in value || 'targetUrl' in value) &&
+    !('status' in value || 'conclusion' in value || 'detailsUrl' in value || 'name' in value);
+  if (typename === 'StatusContext' || isFlatStatusContext) {
+    if (
+      !isNullableString(value.state) ||
+      !isNullableString(value.context) ||
+      !isNullableString(value.targetUrl)
+    ) {
+      return undefined;
+    }
+    return {
+      kind: 'status-context',
+      state: value.state as string | null | undefined,
+      ...(typeof value.context === 'string' ? { context: value.context } : {}),
+      ...(typeof value.targetUrl === 'string' ? { targetUrl: value.targetUrl } : {}),
+    };
+  }
+
   if (typename === undefined || typename === 'CheckRun') {
     if (
       !isNullableString(value.status) ||
@@ -392,22 +414,6 @@ function parseRollupEntry(value: unknown): PrCheckRollupEntry | undefined {
       conclusion: value.conclusion as string | null | undefined,
       ...(typeof value.name === 'string' ? { name: value.name } : {}),
       ...(typeof value.detailsUrl === 'string' ? { detailsUrl: value.detailsUrl } : {}),
-    };
-  }
-
-  if (typename === 'StatusContext') {
-    if (
-      !isNullableString(value.state) ||
-      !isNullableString(value.context) ||
-      !isNullableString(value.targetUrl)
-    ) {
-      return undefined;
-    }
-    return {
-      kind: 'status-context',
-      state: value.state as string | null | undefined,
-      ...(typeof value.context === 'string' ? { context: value.context } : {}),
-      ...(typeof value.targetUrl === 'string' ? { targetUrl: value.targetUrl } : {}),
     };
   }
 
