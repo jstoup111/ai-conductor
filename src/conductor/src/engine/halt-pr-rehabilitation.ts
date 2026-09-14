@@ -22,6 +22,12 @@
 
 import type { GhRunner } from './pr-labels.js';
 import {
+  executeGithubOperation,
+  type GithubOperationName,
+  type GithubOperationResult,
+  type GithubOperationRunner,
+} from './github-operations.js';
+import {
   cleanupHaltPresentation,
   upsertComment,
   readHaltPresentation,
@@ -42,6 +48,7 @@ export type RehabilitationOutcome =
   | 'not-halt-pr'
   | 'rehabilitated'
   | 'partial'
+  | 'refused'
   | 'gh-unavailable';
 
 export interface RehabilitateHaltPrDeps {
@@ -57,6 +64,12 @@ export interface RehabilitateHaltPrDeps {
    * marker, Closes injection) is safe at any point in the SHIP phase.
    */
   preserveDraft?: boolean;
+  /**
+   * The guarded mutation boundary. Reads intentionally continue through `gh`;
+   * this separate seam makes it impossible for a rehabilitation write to use
+   * a recovery/raw-argv fallback.
+   */
+  operations?: GithubOperationRunner;
 }
 
 export interface PrViewState {
@@ -84,6 +97,44 @@ function parsePrView(stdout: string): PrViewState {
   };
 }
 
+function prTarget(prUrl: string): { repository: string; kind: 'pull-request'; number: number } | null {
+  const match = prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
+  if (!match) return null;
+  const number = Number(match[2]);
+  return Number.isSafeInteger(number) && number > 0
+    ? { repository: match[1], kind: 'pull-request', number }
+    : null;
+}
+
+/** Run one rehabilitation write only through the typed operation boundary. */
+async function rehabilitateMutation(
+  operations: GithubOperationRunner | undefined,
+  prUrl: string,
+  operation: GithubOperationName,
+  payload?: Record<string, unknown>,
+): Promise<GithubOperationResult | { kind: 'refused'; reason: string }> {
+  const target = prTarget(prUrl);
+  if (!target) return { kind: 'refused', reason: 'invalid-target' };
+  if (!operations) return { kind: 'refused', reason: 'explicit-authorization-required' };
+  return executeGithubOperation({
+    operation,
+    repository: target.repository,
+    resource: target,
+    context: { actor: 'halt-pr-rehabilitation' },
+    ...(payload ? { payload } : {}),
+  }, operations);
+}
+
+function isRefusal(result: GithubOperationResult | { kind: 'refused'; reason: string }): boolean {
+  return result.kind === 'refused';
+}
+
+function injectCloses(body: string, sourceRef: string | undefined | null): string {
+  const ref = sourceRef?.trim();
+  if (!ref || /^(?:closes|fixes|resolves)\s+[^\s]*$/im.test(body) && body.includes(ref)) return body;
+  return `${body.trim()}\n\nCloses ${ref}`.trim();
+}
+
 /**
  * Rehabilitate a reused halt PR at finish time. Returns:
  *   - 'not-halt-pr'    — no halt signal on the PR; zero mutations issued
@@ -108,6 +159,29 @@ export async function rehabilitateHaltPr(
 
   if (!hasHaltSignal(view)) return 'not-halt-pr';
 
+  // New guarded callers use the typed operation runner for every write. The
+  // legacy raw path stays only for older callers until their composition is
+  // migrated; it cannot accidentally be selected after a typed refusal.
+  if (deps.operations) {
+    const mutations: Array<() => Promise<GithubOperationResult | { kind: 'refused'; reason: string }>> = [];
+    if (view.labels.includes(NEEDS_REMEDIATION_LABEL)) {
+      mutations.push(() => rehabilitateMutation(deps.operations, prUrl, 'pull-request.label.remove', { label: NEEDS_REMEDIATION_LABEL }));
+    }
+    if (!deps.preserveDraft && view.isDraft) {
+      mutations.push(() => rehabilitateMutation(deps.operations, prUrl, 'pull-request.ready'));
+    }
+    const repairedBody = injectCloses((view.body ?? '').replace(NEEDS_REMEDIATION_BODY_MARKER, '').trim(), sourceRef);
+    if (repairedBody !== (view.body ?? '').trim()) {
+      mutations.push(() => rehabilitateMutation(deps.operations, prUrl, 'pull-request.edit', { body: repairedBody }));
+    }
+    for (const mutation of mutations) {
+      const result = await mutation();
+      if (isRefusal(result)) return 'refused';
+      if (result.kind !== 'executed') return 'partial';
+    }
+    return 'rehabilitated';
+  }
+
   // Label/draft/body-marker removal is delegated to cleanupHaltPresentation,
   // which retries each mutation (bounded, with backoff) and re-reads to
   // confirm — the same verify-after-write guarantee ADR
@@ -124,7 +198,7 @@ export async function rehabilitateHaltPr(
   return anyFailed ? 'partial' : 'rehabilitated';
 }
 
-export type ClearHaltStateForResumeOutcome = 'cleared' | 'not-halted' | 'partial' | 'gh-unavailable';
+export type ClearHaltStateForResumeOutcome = 'cleared' | 'not-halted' | 'partial' | 'refused' | 'gh-unavailable';
 
 /**
  * Clear the machine-owned halt state before a resumed feature dispatches.
@@ -139,6 +213,7 @@ export async function clearHaltStateForResume(
   prUrl: string,
   log: (msg: string) => void = () => {},
   sleep: (ms: number) => Promise<void> = defaultSleep,
+  operations?: GithubOperationRunner,
 ): Promise<ClearHaltStateForResumeOutcome> {
   let view: PrViewState;
   try {
@@ -154,6 +229,36 @@ export async function clearHaltStateForResume(
   if (!hasLabel && !hasMarker) {
     log(`[halt-pr-rehab] resume clear found no halt state for ${prUrl}`);
     return 'not-halted';
+  }
+
+  if (operations) {
+    const mutations: Array<() => Promise<GithubOperationResult | { kind: 'refused'; reason: string }>> = [];
+    if (hasLabel) {
+      mutations.push(() => rehabilitateMutation(operations, prUrl, 'pull-request.label.remove', { label: NEEDS_REMEDIATION_LABEL }));
+    }
+    if (hasMarker) {
+      mutations.push(() => rehabilitateMutation(
+        operations,
+        prUrl,
+        'pull-request.edit',
+        { body: (view.body ?? '').replace(NEEDS_REMEDIATION_BODY_MARKER, '').trim() },
+      ));
+    }
+    // A denied clear must not become a successful-clear result and must not
+    // enter the resolution-comment recovery path.
+    for (const mutation of mutations) {
+      const result = await mutation();
+      if (isRefusal(result)) return 'refused';
+      if (result.kind !== 'executed') return 'partial';
+    }
+    const note = await rehabilitateMutation(
+      operations,
+      prUrl,
+      'pull-request.comment.create',
+      { body: `${NEEDS_REMEDIATION_MARKER}\nHalt resolved — the feature resumed and its remediation state was cleared automatically.` },
+    );
+    if (isRefusal(note)) return 'refused';
+    return note.kind === 'executed' ? 'cleared' : 'partial';
   }
 
   const cleanup = await cleanupHaltPresentation(gh, cwd, prUrl, log, sleep, { preserveDraft: true });
@@ -174,7 +279,7 @@ export async function clearHaltStateForResume(
   return 'partial';
 }
 
-export type RetitleFloorOutcome = 'not-halt-pr' | 'resolved';
+export type RetitleFloorOutcome = 'not-halt-pr' | 'resolved' | 'refused';
 
 export interface RetitleFloorResult {
   outcome: RetitleFloorOutcome;
@@ -200,7 +305,7 @@ export async function retitleFloor(
   gh: GhRunner,
   cwd: string,
   prUrl: string,
-  opts: { featureDesc?: string; branch?: string } = {},
+  opts: { featureDesc?: string; branch?: string; operations?: GithubOperationRunner } = {},
   log: (msg: string) => void = () => {},
 ): Promise<RetitleFloorResult> {
   let currentTitle = '';
@@ -219,6 +324,17 @@ export async function retitleFloor(
   const featureDesc =
     opts.featureDesc?.trim() || (opts.branch ? branchToFeatureDesc(opts.branch) : '') || 'rehabilitated PR';
   const newTitle = `feat: ${featureDesc}`;
+
+  if (opts.operations) {
+    const result = await rehabilitateMutation(opts.operations, prUrl, 'pull-request.edit', { title: newTitle });
+    if (isRefusal(result)) {
+      log(`[halt-pr-rehab] retitle-floor refused for ${prUrl}; no raw edit fallback`);
+      return { outcome: 'refused', title: currentTitle };
+    }
+    return result.kind === 'executed'
+      ? { outcome: 'resolved', title: newTitle }
+      : { outcome: 'resolved', title: currentTitle };
+  }
 
   try {
     await gh(['pr', 'edit', prUrl, '--title', newTitle], { cwd });
@@ -253,7 +369,7 @@ export async function readStaleHaltTitle(
   }
 }
 
-export type EnsureShipReadyOutcome = 'no-op' | 'flipped-ready' | 'partial';
+export type EnsureShipReadyOutcome = 'no-op' | 'flipped-ready' | 'partial' | 'refused';
 
 /**
  * Unconditional draft→ready flip for the recorded PR at finish time (Task 7).
@@ -277,6 +393,7 @@ export async function ensureShipReady(
   prUrl: string,
   log?: (msg: string) => void,
   sleep: (ms: number) => Promise<void> = defaultSleep,
+  operations?: GithubOperationRunner,
 ): Promise<EnsureShipReadyOutcome> {
   const logFn = log ?? (() => {});
 
@@ -293,7 +410,16 @@ export async function ensureShipReady(
 
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      await setReady(gh, cwd, prUrl, logFn);
+      if (operations) {
+        const result = await rehabilitateMutation(operations, prUrl, 'pull-request.ready');
+        if (isRefusal(result)) {
+          logFn(`[halt-pr-rehab] ensureShipReady(${prUrl}) refused; no retry or raw ready fallback`);
+          return 'refused';
+        }
+        if (result.kind !== 'executed') return 'partial';
+      } else {
+        await setReady(gh, cwd, prUrl, logFn);
+      }
 
       const after = await readHaltPresentation(gh, cwd, prUrl, logFn);
       if (after && !after.isDraft) {
@@ -472,6 +598,7 @@ export async function readFlooredBody(
 
 export interface HaltHistoryCommentDeps {
   gh: GhRunner;
+  operations?: GithubOperationRunner;
   cwd: string;
   prUrl: string;
   /** Halt reason text, e.g. the contents of `.pipeline/halt-user-input-required`. */
@@ -479,7 +606,7 @@ export interface HaltHistoryCommentDeps {
   log?: (msg: string) => void;
 }
 
-export type HaltHistoryCommentOutcome = 'not-halt-pr' | 'already-posted' | 'posted' | 'gh-unavailable';
+export type HaltHistoryCommentOutcome = 'not-halt-pr' | 'already-posted' | 'posted' | 'refused' | 'gh-unavailable';
 
 /**
  * Preserve a reused halt PR's remediation narrative as a PR COMMENT.
@@ -554,12 +681,18 @@ export async function postHaltHistoryComment(
     parts.push('', '**Halt reason (`.pipeline/halt-user-input-required`):**', '', '```', haltReason, '```');
   }
 
+  if (deps.operations) {
+    const result = await rehabilitateMutation(deps.operations, prUrl, 'pull-request.comment.create', { body: parts.join('\n') });
+    if (isRefusal(result)) return 'refused';
+    return result.kind === 'executed' ? 'posted' : 'gh-unavailable';
+  }
   await comment(gh, cwd, prUrl, parts.join('\n'), log);
   return 'posted';
 }
 
 export interface MakeRetainedPrPresentableDeps {
   gh: GhRunner;
+  operations?: GithubOperationRunner;
   cwd: string;
   /** The retained SHIP PR adopted by `openShipDraftPr`. */
   prUrl: string;
@@ -581,6 +714,7 @@ export type RetainedPrPresentableOutcome =
   | 'repaired'
   /** Halt signal present but some mutation could not be confirmed (logged). */
   | 'partial'
+  | 'refused'
   /** The state read failed — nothing attempted. */
   | 'gh-unavailable';
 
@@ -657,6 +791,7 @@ export async function makeRetainedPrPresentable(
   try {
     await postHaltHistoryComment({
       gh,
+      operations: deps.operations,
       cwd,
       prUrl,
       haltReason: deps.haltReason,
@@ -671,6 +806,7 @@ export async function makeRetainedPrPresentable(
   try {
     rehabOutcome = await rehabilitateHaltPr({
       gh,
+      operations: deps.operations,
       cwd,
       prUrl,
       sourceRef: deps.sourceRef ?? undefined,
@@ -682,11 +818,17 @@ export async function makeRetainedPrPresentable(
     return 'partial';
   }
 
+  if (rehabOutcome === 'refused') return 'refused';
   let anyFailed = rehabOutcome === 'partial' || rehabOutcome === 'gh-unavailable';
 
   // Step 2: retitle floor (`needs-remediation:` → `feat: …`).
   try {
-    await retitleFloor(gh, cwd, prUrl, { featureDesc: deps.featureDesc, branch: deps.branch }, log);
+    const retitle = await retitleFloor(gh, cwd, prUrl, {
+      featureDesc: deps.featureDesc,
+      branch: deps.branch,
+      operations: deps.operations,
+    }, log);
+    if (retitle.outcome === 'refused') return 'refused';
   } catch (err) {
     log(`[halt-pr-rehab] retained-PR retitleFloor failed for ${prUrl}: ${err}`);
     anyFailed = true;
@@ -702,9 +844,11 @@ export async function makeRetainedPrPresentable(
         featureDesc: deps.featureDesc,
         sourceRef: deps.sourceRef,
         testEvidenceLine: deps.testEvidenceLine,
+        operations: deps.operations,
       },
       log,
     );
+    if (floored === 'refused') return 'refused';
     if (floored === 'partial') anyFailed = true;
   } catch (err) {
     log(`[halt-pr-rehab] retained-PR bodyFloor failed for ${prUrl}: ${err}`);
@@ -714,7 +858,7 @@ export async function makeRetainedPrPresentable(
   return anyFailed ? 'partial' : 'repaired';
 }
 
-export type BodyFloorOutcome = 'not-halt-body' | 'floored' | 'partial';
+export type BodyFloorOutcome = 'not-halt-body' | 'floored' | 'partial' | 'refused';
 
 /**
  * Deterministic body floor (Task 2, companion to {@link retitleFloor}).
@@ -732,7 +876,7 @@ export async function bodyFloor(
   gh: GhRunner,
   cwd: string,
   prUrl: string,
-  opts: { featureDesc?: string; sourceRef?: string | null; testEvidenceLine?: string } = {},
+  opts: { featureDesc?: string; sourceRef?: string | null; testEvidenceLine?: string; operations?: GithubOperationRunner } = {},
   log?: (msg: string) => void,
   sleep: (ms: number) => Promise<void> = defaultSleep,
 ): Promise<BodyFloorOutcome> {
@@ -799,7 +943,16 @@ export async function bodyFloor(
   const maxAttempts = 3;
   try {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      await gh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+      if (opts.operations) {
+        const result = await rehabilitateMutation(opts.operations, prUrl, 'pull-request.edit', { body: newBody });
+        if (isRefusal(result)) {
+          logFn(`[halt-pr-rehab] bodyFloor(${prUrl}) refused; no retry or raw edit fallback`);
+          return 'refused';
+        }
+        if (result.kind !== 'executed') return 'partial';
+      } else {
+        await gh(['pr', 'edit', prUrl, '--body', newBody], { cwd });
+      }
 
       const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
       const verifyBody = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');

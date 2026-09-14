@@ -5,7 +5,9 @@ import {
   ensureLabel,
   findOrCreatePr,
   setReady,
+  upsertComment,
   type FindOrCreatePrOpts,
+  type GhRunner,
 } from '../../../src/engine/pr-labels.js';
 import type {
   GithubOperationRequest,
@@ -94,5 +96,32 @@ describe('pr-labels — guarded PR primitives and label definitions', () => {
       expect.objectContaining({ operation: 'pull-request.label.add' }),
       expect.objectContaining({ operation: 'label-definition.create' }),
     ]);
+  });
+
+  it('updates a marked halt comment through the guarded operation seam and never creates a duplicate after an update refusal', async () => {
+    const terminal = fakeOperations(() => ({ kind: 'refused', reason: 'other-owner' }));
+    const comments = [{
+      body: '<!-- conductor:needs-remediation -->\nold halt',
+      url: `https://github.com/${REPOSITORY}/pull/47#issuecomment-81`,
+    }];
+    const rawReads: GhRunner = async (args) => {
+      if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ comments }) };
+      throw new Error(`raw mutation attempted: ${args.join(' ')}`);
+    };
+    const hybrid = Object.assign(rawReads, terminal.runner);
+
+    await upsertComment(
+      hybrid,
+      CWD,
+      PR_URL,
+      '<!-- conductor:needs-remediation -->',
+      'new halt',
+    );
+
+    expect(terminal.calls).toEqual([expect.objectContaining({
+      operation: 'pull-request.comment.update',
+      target: { repository: REPOSITORY, kind: 'pull-request', number: 47 },
+      payload: { commentId: '81', body: '<!-- conductor:needs-remediation -->\nnew halt' },
+    })]);
   });
 });
