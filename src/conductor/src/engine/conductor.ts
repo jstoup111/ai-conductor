@@ -79,6 +79,7 @@ import type {
 import { formatProviderCapabilityGapMessages } from './provider-execution.js';
 import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
+import { redactSafetyText } from './safety-diagnostics.js';
 import { createEngineStateStore } from './engine-state-store.js';
 import { createRepairObligationStore } from './repair-obligations.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
@@ -9377,17 +9378,15 @@ export class Conductor {
           // would only repeat the same verified capability checks.
           if (result.providerSetupExhaustion) {
             const diagnostics = result.providerSetupExhaustion.candidates
-              .map((candidate) => `${candidate.provider}: ${candidate.reason} Recovery: ${candidate.recoveryAction}`)
+              .map((candidate) => `${candidate.provider}: ${redactSafetyText(candidate.reason)} Recovery: ${redactSafetyText(candidate.recoveryAction)}`)
               .join('\n');
             const haltReason =
               `Cannot dispatch '${step.name}': every configured provider is unavailable during setup.\n${diagnostics}\n` +
               'Complete a listed recovery action, then re-queue this feature.';
-            await this.haltSerialExecution({
-              reason: haltReason,
-              haltClass: 'needs-human',
-              persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
-              surfaceRemediation: true,
-            });
+            await this.writeHaltMarker(haltReason + '\n', 'needs-human');
+            await this.recordStepRefusal(state, step.name, 'needs-human', haltReason);
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
+            await this.emitLoopHalt(haltReason, await this.surfaceRemediationPr(haltReason));
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;

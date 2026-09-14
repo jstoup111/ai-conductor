@@ -10,6 +10,7 @@ import type {
   ProviderStreamObservation,
 } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
+import { redactSafetyText } from './safety-diagnostics.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
 import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
 import type { HarnessConfig, EffortLevel, BuildReviewRubricId } from '../types/config.js';
@@ -1294,6 +1295,9 @@ export class DefaultStepRunner implements StepRunner {
       ...(result.observedIntervals
         ? { observedIntervals: result.observedIntervals }
         : {}),
+      ...(result.providerSetupExhaustion
+        ? { providerSetupExhaustion: result.providerSetupExhaustion }
+        : {}),
     };
   }
 
@@ -2354,7 +2358,7 @@ export class DefaultStepRunner implements StepRunner {
     if (initial.providerSetupExhaustion) {
       return makeBuildReviewDispatchFailure(
         `All configured providers were unavailable during setup: ${initial.providerSetupExhaustion.candidates.map(
-          ({ provider, reason, recoveryAction }) => `${provider}: ${reason} Recovery: ${recoveryAction}`,
+          ({ provider, reason, recoveryAction }) => `${provider}: ${redactSafetyText(reason)} Recovery: ${redactSafetyText(recoveryAction)}`,
         ).join('; ')}`,
       );
     }
@@ -2603,7 +2607,7 @@ export class DefaultStepRunner implements StepRunner {
         'Return exactly one JSON object: {"verdict":"asserts"} or {"verdict":"does-not-assert","missingAssertion":"..."}.',
         JSON.stringify({ criterion: claim.criterion, taskIds: claim.taskIds, doneWhen: claim.doneWhen }),
       ].join('\n\n');
-      let result: { success: boolean; output?: string };
+      let result: { success: boolean; output?: string; providerSetupExhaustion?: ProviderExecutionResult['providerSetupExhaustion'] };
       if (this.providerRuntimes && this.sessionStore) {
         const dispatched = await this.dispatchProviderWithLifecycleSupervision(
           'coverage_binding',
@@ -2620,7 +2624,7 @@ export class DefaultStepRunner implements StepRunner {
           }),
         );
         this.callCount++;
-        result = { success: dispatched.success, output: dispatched.output };
+        result = { success: dispatched.success, output: dispatched.output, providerSetupExhaustion: dispatched.providerSetupExhaustion };
       } else {
         const dispatched = await this.provider.invoke({
           prompt: `${renderAuxiliarySkillInvocation('coverage-binding', this.providerKey)}\n\n${prompt}`,
@@ -2632,7 +2636,7 @@ export class DefaultStepRunner implements StepRunner {
       }
       if (!result.success || typeof result.output !== 'string') {
         await writeEnvelope('failed', entries);
-        return { success: false, output: result.output ?? `coverage_binding provider failed for ${digest}` };
+        return { success: false, output: result.output ?? `coverage_binding provider failed for ${digest}`, ...(result.providerSetupExhaustion ? { providerSetupExhaustion: result.providerSetupExhaustion } : {}) };
       }
       const parsed = parseJudgePayload(result.output);
       if (!parsed.ok) {

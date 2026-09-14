@@ -591,6 +591,7 @@ export type ConductorEvent =
       step: StepName;
       failedProvider: string;
       reason: string;
+      recoveryAction?: string;
       nextProvider: string;
     }
   | {

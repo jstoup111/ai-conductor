@@ -1866,6 +1866,7 @@ describe('executeProviderCandidates', () => {
             step: 'build',
             failedProvider: 'codex',
             reason: missingReason,
+            recoveryAction: 'Restore the provider availability, then re-queue this feature.',
             nextProvider: 'claude',
           },
         },
@@ -1913,6 +1914,9 @@ describe('executeProviderCandidates', () => {
             outcome: 'unavailable',
             reason: missingReason,
             fallbackReason: missingReason,
+            skipReason: 'cached-unavailable',
+            setupCapability: 'cached-provider-availability',
+            setupRecoveryAction: 'Restore the provider availability, then re-queue this feature.',
             invoked: false,
           },
           {
@@ -1928,7 +1932,7 @@ describe('executeProviderCandidates', () => {
       noNext: {
         success: false,
         output:
-          `All configured providers are unavailable for step build: codex (${missingReason}, cached skip).`,
+          `All configured providers are unavailable for step build: codex (${missingReason}, cached unavailable).`,
         exitCode: 127,
         preferredProvider: 'codex',
         attempts: [
@@ -1936,9 +1940,13 @@ describe('executeProviderCandidates', () => {
             provider: 'codex',
             reason: missingReason,
             outcome: 'unavailable',
+            skipReason: 'cached-unavailable',
+            setupCapability: 'cached-provider-availability',
+            setupRecoveryAction: 'Restore the provider availability, then re-queue this feature.',
             invoked: false,
           },
         ],
+        providerSetupExhaustion: { candidates: [{ provider: 'codex', capability: 'cached-provider-availability', reason: missingReason, recoveryAction: 'Restore the provider availability, then re-queue this feature.' }] },
       },
     });
   });
@@ -2726,6 +2734,7 @@ describe('executeProviderCandidates', () => {
               step: 'build',
               failedProvider: 'claude',
               reason: 'claude cached missing',
+              recoveryAction: 'Restore the provider availability, then re-queue this feature.',
               nextProvider: 'third',
             },
           },
@@ -2733,7 +2742,7 @@ describe('executeProviderCandidates', () => {
         result: {
           success: false,
           output:
-            'All configured providers are unavailable for step build: codex (codex binary missing); claude (claude cached missing, cached skip); third (third integration missing).',
+            'All configured providers are unavailable for step build: codex (codex binary missing); claude (claude cached missing, cached unavailable); third (third integration missing).',
           exitCode: 127,
           preferredProvider: 'codex',
           attempts: [
@@ -2752,6 +2761,9 @@ describe('executeProviderCandidates', () => {
               outcome: 'unavailable',
               reason: 'claude cached missing',
               fallbackReason: 'claude cached missing',
+              skipReason: 'cached-unavailable',
+              setupCapability: 'cached-provider-availability',
+              setupRecoveryAction: 'Restore the provider availability, then re-queue this feature.',
               invoked: false,
             },
             {

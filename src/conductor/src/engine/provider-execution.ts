@@ -103,6 +103,7 @@ export type ProviderTransitionWarning =
       step: StepName;
       failedProvider: string;
       reason: string;
+      recoveryAction?: string;
       nextProvider: string;
     }
   | {
@@ -280,6 +281,21 @@ function unsupportedLifecycleProviderResult(providerKey: string): InvokeResult {
     providerUnavailableReason: reason,
     providerInvocationSkipped: true,
   };
+}
+
+function skippedCandidateSetupUnavailable(provider: string, result: InvokeResult, cached: boolean): ProviderSetupUnavailable | undefined {
+  if (result.providerInvocationSkipped !== true) return undefined;
+  if (cached) return {
+    provider, capability: 'cached-provider-availability',
+    reason: result.providerUnavailableReason ?? result.output ?? 'Provider is cached as unavailable.',
+    recoveryAction: 'Restore the provider availability, then re-queue this feature.',
+  };
+  if (result.providerUnavailable === true) return {
+    provider, capability: 'synchronous-spawn-permit',
+    reason: result.providerUnavailableReason ?? result.output ?? 'Provider lifecycle capability is unavailable.',
+    recoveryAction: 'Update the provider to declare and synchronously consume lifecycleCapability.synchronousSpawnPermit.',
+  };
+  return undefined;
 }
 
 export function classifyProviderAttempt(
@@ -502,6 +518,7 @@ export interface BuildProviderAttemptMetadataInput {
   nextProvider?: string;
   auxiliaryMember?: string;
   setupUnavailable?: ProviderSetupUnavailable;
+  cachedUnavailable?: boolean;
 }
 
 /** Construct event-boundary metadata for exactly one candidate result. */
@@ -519,6 +536,7 @@ export function buildProviderAttemptMetadata({
   nextProvider,
   auxiliaryMember,
   setupUnavailable,
+  cachedUnavailable,
 }: BuildProviderAttemptMetadataInput): ProviderAttemptMetadata {
   const invoked = result.providerInvocationSkipped !== true;
   const failureReason = redactSafetyText(unavailable?.reason ?? result.output ?? 'Provider attempt failed.');
@@ -549,6 +567,9 @@ export function buildProviderAttemptMetadata({
       : {}),
     ...(!invoked && unavailable && setupUnavailable
       ? { skipReason: 'setup-unavailable' as const }
+      : {}),
+    ...(!invoked && unavailable && cachedUnavailable
+      ? { skipReason: 'cached-unavailable' as const }
       : {}),
     ...(!invoked && setupUnavailable?.capability
       ? { setupCapability: redactSafetyText(setupUnavailable.capability) }
@@ -642,6 +663,7 @@ export async function executeProviderCandidates({
     let candidateObserver: ReturnType<NonNullable<typeof candidateOptions.providerStreamObserverForCandidate>> | undefined;
     let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
     let setupUnavailable: ProviderSetupUnavailable | undefined;
+    const cachedUnavailable = runtime.runWideUnavailable !== undefined;
     const invoke = async (): Promise<InvokeResult> => {
       // The REPL path supplies no stream consumer
       // (adr-2026-08-24-one-dispatch-member-on-the-provider-contract, and the
@@ -721,6 +743,7 @@ export async function executeProviderCandidates({
             invoke,
           )
         : await invoke();
+    setupUnavailable ??= skippedCandidateSetupUnavailable(providerKey, result, cachedUnavailable);
     const invokedModel = invocation?.invokedModel;
     const suppression = invocation?.sessionPolicySuppression;
     const emittedProviders = sessionPolicyDiagnostics.get(sessions) ?? new Set<string>();
@@ -760,6 +783,7 @@ export async function executeProviderCandidates({
       nextProvider,
       auxiliaryMember,
       setupUnavailable,
+      cachedUnavailable,
     });
     attempts.push(attemptMetadata);
     const observedIntervals = attempts.flatMap(
@@ -791,10 +815,24 @@ export async function executeProviderCandidates({
     if (setupUnavailable) setupUnavailableCandidates.push(setupUnavailable);
     if (attemptMetadata.invoked) anyCandidateInvoked = true;
 
+    // Setup has not created a process. Preserve the enclosing lifecycle
+    // authority before considering another candidate.
+    if (setupUnavailable && candidateOptions.spawnPermit) {
+      const permit = candidateOptions.spawnPermit();
+      if (!permit.permitted) {
+        return {
+          ...safeResult,
+          preferredProvider,
+          attempts,
+          ...(observedIntervals.length ? { observedIntervals } : {}),
+        };
+      }
+    }
+
     if (!nextProvider) {
       const diagnostic = attempts
         .map(({ provider, reason, invoked, skipReason }) =>
-          `${provider} (${reason}${invoked ? '' : `, ${skipReason === 'setup-unavailable' ? 'setup unavailable' : 'cached skip'}`})`,
+          `${provider} (${reason}${invoked ? '' : `, ${skipReason === 'setup-unavailable' ? 'setup unavailable' : skipReason === 'cached-unavailable' ? 'cached unavailable' : 'not invoked'}`})`,
         )
         .join('; ');
       return {
@@ -819,6 +857,7 @@ export async function executeProviderCandidates({
       step,
       failedProvider: providerKey,
       reason: redactSafetyText(candidateUnavailable.reason),
+      ...(setupUnavailable ? { recoveryAction: redactSafetyText(setupUnavailable.recoveryAction) } : {}),
       nextProvider,
     };
     await warn?.(
