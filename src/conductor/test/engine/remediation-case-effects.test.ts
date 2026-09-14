@@ -200,8 +200,7 @@ describe('remediation case effects', () => {
       effect: { id: 'effect-refuted', kind: 'deferral', status: 'reserved' },
       refutation: { claim: 'The finding is false.', assertions: [{ assertion: 'The behavior exists.', verdict: 'refuted', evidence: [{ path: 'test/evidence.ts', excerpt: 'evidence' }] }] },
     }] });
-    const createIssue = vi.fn().mockResolvedValue('https://github.test/acme/repo/issues/43');
-    const intakeTracker = { createIssue } as unknown as TrackerClient;
+    const createIssue = vi.fn();
     const effect = {
       kind: 'deferral' as const,
       title: 'Deferred refutation',
@@ -215,7 +214,24 @@ describe('remediation case effects', () => {
       tracker: { findIssueByEffectMarker: vi.fn().mockResolvedValue(null) } as never,
       fileIssue: async ({ title, body, priority }) => fileIntakeIssue(
         { title, body, priority, repo: 'acme/repo' },
-        { tracker: intakeTracker, gh: async () => ({ stdout: '{}' }), cwd: root },
+        {
+          creation: {
+            authority: {
+              resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
+              intent: { kind: 'authorized-feature' as const, repository: 'acme/repo' },
+            },
+            operations: {
+              run: async (request) => {
+                if (request.operation === 'issue.create') {
+                  const payload = request.payload as { title: string; body: string };
+                  createIssue({ title: payload.title, body: payload.body, repo: request.target.repository });
+                  return { created: { repository: 'acme/repo', kind: 'issue' as const, number: 43 } };
+                }
+                return {};
+              },
+            },
+          },
+        },
       ),
     })).resolves.toMatchObject({ ok: true, status: 'applied', effectId: 'effect-refuted' });
 
@@ -224,10 +240,10 @@ describe('remediation case effects', () => {
       title: 'Deferred refutation',
       body: sanitizeIntakeText(rendered).text,
       repo: 'acme/repo',
-    }, root);
+    });
     expect(createIssue.mock.calls[0]![0].body).toContain(remediationEffectMarker('effect-refuted'));
     await expect(store.read()).resolves.toMatchObject({ ok: true, state: { cases: [expect.objectContaining({
-      disposition: 'refute', effect: { id: 'effect-refuted', kind: 'deferral', status: 'applied', issueUrl: 'https://github.test/acme/repo/issues/43' },
+      disposition: 'refute', effect: { id: 'effect-refuted', kind: 'deferral', status: 'applied', issueUrl: 'https://github.com/acme/repo/issues/43' },
     })] } });
   });
 

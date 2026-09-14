@@ -44,7 +44,8 @@ import { readRemediationCaseStoreFeature, RemediationCaseStore } from './remedia
 import { reconcileRemediationCases } from './remediation-case-reconciler.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { executeGithubOperation, type GithubOperationRunner } from './github-operations.js';
-import { fileIntakeIssue } from './engineer/intake/file-issue.js';
+import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
+import { makeMachineOwnerResolver } from './owner-gate/machine-identity.js';
 import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import { planContractPointers, priorAttemptPointers, readActivePlanPath } from './remediation-context-pointers.js';
@@ -11257,7 +11258,15 @@ export class Conductor {
                       fileIssue: async (issue: { title: string; body: string; priority: 'critical' | 'high' | 'medium' | 'low' }) => {
                         const filed = await fileIntakeIssue(
                           { title: issue.title, body: issue.body, priority: issue.priority, repo: trackerRepo },
-                          { tracker: createGithubTrackerClient(this.gh), gh: this.gh, cwd: this.projectRoot },
+                          {
+                            creation: {
+                              authority: {
+                                resolveActor: makeMachineOwnerResolver(this.gh, this.projectRoot),
+                                intent: { kind: 'authorized-feature', repository: trackerRepo },
+                              },
+                              operations: createIntakeFilingOperations(this.gh, this.projectRoot),
+                            },
+                          },
                         );
                         return { issueUrl: filed.issueUrl };
                       },

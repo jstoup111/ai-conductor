@@ -40,7 +40,6 @@ describe('intake filing — creation-scoped metadata follow-ups', () => {
       dependsOn: ['acme/foreign#99'],
       repo: REPOSITORY,
     }, {
-      cwd: '/fixture',
       creation: { authority: creationAuthority(), operations: operations.runner },
     });
 
@@ -68,7 +67,6 @@ describe('intake filing — creation-scoped metadata follow-ups', () => {
       : { kind: 'refused' as const, reason: 'other-owner' as const });
 
     const result = await fileIntakeIssue({ title: 'Partial', body: 'Body', repo: REPOSITORY }, {
-      cwd: '/fixture',
       creation: { authority: creationAuthority(), operations: operations.runner },
     });
 
@@ -88,7 +86,6 @@ describe('intake filing — creation-scoped metadata follow-ups', () => {
     const operations = operationRunner(() => ({}));
 
     const result = await fileIntakeIssue({ title: 'Ambiguous', body: 'Body', repo: REPOSITORY }, {
-      cwd: '/fixture',
       creation: { authority: creationAuthority(), operations: operations.runner },
     });
 

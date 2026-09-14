@@ -42,7 +42,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect } from 'vitest';
-import { createGithubTrackerClient } from '../../src/engine/tracker-client.js';
+import { createIntakeFilingOperations } from '../../src/engine/engineer/intake/file-issue.js';
 
 const FILE_ISSUE_MOD = '../../src/engine/engineer/intake/file-issue.js';
 
@@ -96,6 +96,16 @@ function makeFakeGh(opts: { failLabelApply?: boolean; failIssueCreate?: boolean 
   return { run, calls, appliedLabels, createdIssues };
 }
 
+function creation(gh: ReturnType<typeof makeFakeGh>['run']) {
+  return {
+    authority: {
+      resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
+      intent: { kind: 'explicit-intake' as const, repository: 'acme/app' },
+    },
+    operations: createIntakeFilingOperations(gh, '.'),
+  };
+}
+
 describe('Story 2 — bin/intake-file files criteria-complete issues', () => {
   describe('Happy path', () => {
     it('given size and priority, files the issue AND applies labels + records blocked_by in one filing', async () => {
@@ -111,7 +121,7 @@ describe('Story 2 — bin/intake-file files criteria-complete issues', () => {
           dependsOn: ['acme/app#99'],
           interactive: false,
         },
-        { gh: gh.run, cwd: '.', tracker: createGithubTrackerClient(gh.run) },
+        { creation: creation(gh.run) },
       );
 
       expect(result.issueUrl).toContain('acme/app/issues/300');
@@ -128,7 +138,7 @@ describe('Story 2 — bin/intake-file files criteria-complete issues', () => {
           body: 'no clear signal about size or priority here',
           interactive: false,
         },
-        { gh: gh.run, cwd: '.', tracker: createGithubTrackerClient(gh.run) },
+        { creation: creation(gh.run) },
       );
 
       expect(result.issueUrl).toBeDefined();
@@ -152,7 +162,7 @@ describe('Story 2 — bin/intake-file files criteria-complete issues', () => {
 
       const result = await fileIntakeIssue(
         { title: 'Interactive report', body: 'body text', interactive: true },
-        { gh: gh.run, cwd: '.', tracker: createGithubTrackerClient(gh.run), prompt },
+        { creation: creation(gh.run), prompt },
       );
 
       expect(prompted.length).toBeGreaterThan(0);
@@ -166,7 +176,7 @@ describe('Story 2 — bin/intake-file files criteria-complete issues', () => {
 
       const result = await fileIntakeIssue(
         { title: 'No deps', body: 'body', size: 'S', priority: 'low', interactive: false },
-        { gh: gh.run, cwd: '.', tracker: createGithubTrackerClient(gh.run) },
+        { creation: creation(gh.run) },
       );
 
       expect(result.dependsOnDecision).toBe('none');
@@ -185,7 +195,7 @@ describe('Story 2 — bin/intake-file files criteria-complete issues', () => {
           dependsOn: ['acme/app#42'],
           interactive: false,
         },
-        { gh: gh.run, cwd: '.', tracker: createGithubTrackerClient(gh.run) },
+        { creation: creation(gh.run) },
       );
 
       expect(result.dependsOnDecision).toBe('linked');
@@ -208,7 +218,7 @@ describe('Story 2 — bin/intake-file files criteria-complete issues', () => {
           dependsOn: ['acme/app#42'],
           interactive: false,
         },
-        { gh: gh.run, cwd: '.', tracker: createGithubTrackerClient(gh.run) },
+        { creation: creation(gh.run) },
       );
 
       // The dependency's numeric id was resolved before linking.
@@ -236,7 +246,7 @@ describe('Story 2 — bin/intake-file files criteria-complete issues', () => {
 
       const result = await fileIntakeIssue(
         { title: 'Label fails', body: 'body', size: 'M', priority: 'medium', interactive: false },
-        { gh: gh.run, cwd: '.', tracker: createGithubTrackerClient(gh.run) },
+        { creation: creation(gh.run) },
       );
 
       expect(result.issueUrl).toBeDefined();
@@ -257,7 +267,7 @@ describe('Story 2 — bin/intake-file files criteria-complete issues', () => {
           dependsOn: ['not-a-valid-ref'],
           interactive: false,
         },
-        { gh: gh.run, cwd: '.', tracker: createGithubTrackerClient(gh.run) },
+        { creation: creation(gh.run) },
       );
 
       expect(result.badRefs).toContain('not-a-valid-ref');

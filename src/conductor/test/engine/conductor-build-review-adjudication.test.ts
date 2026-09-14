@@ -447,10 +447,15 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
   it('files a deferred case through the production tracker and intake dependencies', async () => {
     const run = await fixture({ judgement: deferralJudgement() });
 
-    // Done-when 4: exact marker lookup precedes create, and both run from the
-    // real dispatch — not from an injected coordinator fixture.
+    // The real Conductor composition supplies authorized-feature creation to
+    // fileIntakeIssue. The transaction returns #77, then both labels target
+    // only that returned identity — no coordinator-local filing fake is used.
     expect(run.ghCalls.some((args) => args[0] === 'issue' && args[1] === 'list' && args.includes('--state') && args.includes('all'))).toBe(true);
     expect(run.ghCalls.some((args) => args[0] === 'issue' && args[1] === 'create')).toBe(true);
+    expect(run.ghCalls.filter((args) => args.some((arg) => arg === 'repos/acme/conductor/issues/77/labels'))).toEqual([
+      expect.arrayContaining(['labels[]=priority: low']),
+      expect.arrayContaining(['labels[]=size: M']),
+    ]);
     const cases = await run.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ effect: { status: string; issueUrl?: string } }> };
     expect(cases.cases[0]!.effect).toMatchObject({ status: 'applied', issueUrl: 'https://github.com/acme/conductor/issues/77' });
     // A finalized non-action outcome performs no BUILD navigation.
