@@ -1957,6 +1957,15 @@ type AppliedRebaseGateDecision = {
   preserved?: readonly RebaseGatePreservation[];
 };
 
+function isAppliedRebaseGateDecision(
+  applied: AppliedRebaseGateDecision | readonly RebaseGatePreservation[] | undefined,
+): applied is AppliedRebaseGateDecision {
+  // `Array.isArray` does not narrow a readonly-array union sufficiently for
+  // the declarations build.  The decision has required object-only fields,
+  // so use that contract as the discriminator for the legacy list overload.
+  return applied !== undefined && !Array.isArray(applied);
+}
+
 function isRebaseGatePreservationList(
   applied: AppliedRebaseGateDecision | readonly RebaseGatePreservation[] | undefined,
 ): applied is readonly RebaseGatePreservation[] {
@@ -1976,10 +1985,10 @@ export async function emitGateInvalidationEvents(
   // Array.isArray's built-in predicate only narrows mutable arrays. This
   // explicit guard preserves the readonly list alternative, so both call
   // shapes remain type-safe: the applied decision or its preservation list.
-  const application = isRebaseGatePreservationList(applied) ? undefined : applied;
-  const preverifiedPreserved = isRebaseGatePreservationList(applied)
-    ? applied
-    : application?.preserved ?? [];
+  const application = isAppliedRebaseGateDecision(applied) ? applied : undefined;
+  const preverifiedPreserved: readonly RebaseGatePreservation[] = application
+    ? application.preserved ?? []
+    : isRebaseGatePreservationList(applied) ? applied : [];
 
   if (outcome.featureSurface === undefined) {
     // F is uncomputable: no declared surface and no delta partition exist, so
