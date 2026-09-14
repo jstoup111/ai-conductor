@@ -259,6 +259,25 @@ describe('integration/git-hooks-attribution', () => {
       expect(res.code).toBe(0);
     });
 
+    it('treats a matching interpreter-shaped trailer id as literal argv data', async () => {
+      const literalId = "id with spaces 'quotes' \\ $(touch SHOULD_NOT_RUN) `touch ALSO_NOT_RUN`";
+      await seedTaskStatus([{ id: literalId, status: 'pending' }]);
+      const res = await commitFile('literal-id.txt', 'content', `feat: literal id\n\nTask: ${literalId}`);
+      expect(res.code).toBe(0);
+      expect(await lastCommitMessage()).toContain(`Task: ${literalId}`);
+      await expect(readFile(join(dir, 'SHOULD_NOT_RUN'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(dir, 'ALSO_NOT_RUN'))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('rejects an absent interpreter-shaped trailer id without executing it', async () => {
+      const literalId = "nope ' \" \\ $(touch SHOULD_NOT_RUN) `touch ALSO_NOT_RUN`";
+      const res = await commitFile('literal-absent-id.txt', 'content', `feat: literal absent id\n\nTask: ${literalId}`);
+      expect(res.code).toBe(1);
+      expect(res.stderr).toContain(`Task: ${literalId} not found in task-status.json`);
+      await expect(readFile(join(dir, 'SHOULD_NOT_RUN'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(dir, 'ALSO_NOT_RUN'))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
     it('rejects an unknown Task: id', async () => {
       const res = await commitFile('i.txt', 'i', 'feat: bad id\n\nTask: 99');
       expect(res.code).not.toBe(0);

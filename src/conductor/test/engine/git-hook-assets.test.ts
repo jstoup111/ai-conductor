@@ -131,6 +131,38 @@ describe('git-hook-assets — embedding hook scripts', () => {
         vi.resetModules();
       }
     });
+
+    it.each([
+      ['malformed JSON', '{ not json', undefined],
+      ['failing Node', JSON.stringify({ tasks: [{ id: '7' }] }), '#!/bin/sh\nexit 42\n'],
+      ['Node exit 127', JSON.stringify({ tasks: [{ id: '7' }] }), '#!/bin/sh\nexit 127\n'],
+    ])('rejects %s as a processing error rather than an ID non-match', async (_name, status, node) => {
+      const root = join(tempDir, `processing-${_name.replaceAll(' ', '-')}`);
+      const fakeBin = join(root, 'bin');
+      const hook = join(root, 'commit-msg');
+      const message = join(root, 'message');
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      await mkdir(fakeBin);
+      await writeFile(join(root, '.pipeline', 'task-status.json'), status);
+      await writeFile(join(fakeBin, 'git'), `#!/bin/bash
+if [[ "$1" == rev-parse && "$2" == --show-toplevel ]]; then printf '%s\\n' "$HOOK_TEST_ROOT";
+elif [[ "$1" == rev-parse && "$2" == --git-common-dir ]]; then printf '.git\\n';
+elif [[ "$1" == rev-parse && "$2" == --git-path ]]; then printf '%s/%s\\n' "$HOOK_TEST_ROOT/.git" "$3";
+elif [[ "$1" == interpret-trailers ]]; then cat; fi
+`, { mode: 0o755 });
+      if (node) await writeFile(join(fakeBin, 'node'), node, { mode: 0o755 });
+      await writeFile(hook, buildCommitMsgHook('/usr/bin/true'), { mode: 0o755 });
+      await writeFile(message, 'subject\n\nTask: 7\n');
+      try {
+        await execFileAsync('bash', [hook, message], { env: { ...process.env, HOOK_TEST_ROOT: root, PATH: `${fakeBin}:${process.env.PATH ?? ''}` } });
+        throw new Error('expected processing failure');
+      } catch (error) {
+        const result = error as { code?: number; stderr?: string };
+        expect(result.code).toBe(1);
+        expect(result.stderr).toContain('could not process task-status.json');
+        expect(result.stderr).not.toContain('not found in task-status.json');
+      }
+    });
   });
 
   it('rejects staging .docs/specs/other-feature.md while a BUILD phase marker is present', async () => {
@@ -884,5 +916,51 @@ describe('git-hook-assets — embedding hook scripts', () => {
       const log = await git('log', '-1', '--format=%s');
       expect(log.stdout).toBe('shipped record: demo-slug');
     });
+  });
+});
+
+describe('commit-msg literal lookup regression', () => {
+  it('passes matching and rejects absent interpreter-shaped task IDs without executing them', async () => {
+    const repo = await mkdtemp(join(tmpdir(), "git hook 'literal' $() `ticks` "));
+    const sentinel = join(repo, 'PWNED');
+    const git = async (...args: string[]) => execFileAsync('git', ['-C', repo, ...args]);
+    const matching = "id '\\ $() `ticks`";
+    const missing = "nope '\\ $(touch PWNED) `touch PWNED`";
+    try {
+      await git('init', '-b', 'main');
+      await git('config', 'user.email', 'test@example.com');
+      await git('config', 'user.name', 'Test');
+      await writeFile(join(repo, 'README.md'), 'initial\n');
+      await git('add', '.');
+      await git('commit', '-m', 'initial');
+      await prepareWorktree(repo);
+      await mkdir(join(repo, '.pipeline'), { recursive: true });
+      await writeFile(join(repo, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: matching }] }));
+      await writeFile(join(repo, 'match.txt'), 'match\n');
+      await git('add', 'match.txt');
+      await expect(git('commit', '-m', `literal match\n\nTask: ${matching}`)).resolves.toBeDefined();
+      await writeFile(join(repo, 'missing.txt'), 'missing\n');
+      await git('add', 'missing.txt');
+      await expect(git('commit', '-m', `literal absent\n\nTask: ${missing}`)).rejects.toMatchObject({ code: 1 });
+      expect(await (async () => { try { await execFileAsync('test', ['-e', sentinel]); return true; } catch { return false; } })()).toBe(false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['{bad json', 'not readable by node'])('reports task-status processing failures distinctly: %s', async (contents) => {
+    const repo = await mkdtemp(join(tmpdir(), 'git-hook-assets-processing-'));
+    try {
+      await execFileAsync('git', ['-C', repo, 'init', '-q']);
+      await mkdir(join(repo, '.pipeline', 'git-hooks'), { recursive: true });
+      const hook = join(repo, '.pipeline', 'git-hooks', 'commit-msg');
+      const message = join(repo, 'message');
+      await writeFile(hook, buildCommitMsgHook('/bin/true'), { mode: 0o755 });
+      await writeFile(join(repo, '.pipeline', 'task-status.json'), contents);
+      await writeFile(message, 'test\n\nTask: 1\n');
+      await expect(execFileAsync(hook, [message], { cwd: repo })).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining('could not process task-status.json') });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
   });
 });
