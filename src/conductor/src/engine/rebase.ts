@@ -1939,7 +1939,12 @@ export async function emitGateInvalidationEvents(
     ? classifiedPreserved.filter((gate) => !invalidated.includes(gate as StepName))
     : classifiedPreserved;
 
-  for (const gate of invalidated) {
+  // `applyRebaseVerdicts` also reports the mechanical BUILD gate in its
+  // applied kickbacks. BUILD deliberately has no declared review surface and
+  // therefore no rebase_gate_invalidated event shape. Emit only surface-map
+  // gates here; attempting to project BUILD used an undefined key and turned
+  // an otherwise successful rebase into a HALT.
+  for (const gate of invalidated.filter((gate) => GATE_SURFACE[gate] !== undefined)) {
     if (preservationBases.has(gate as StepName)) continue;
     await events.emit({
       type: 'rebase_gate_invalidated',
@@ -1949,6 +1954,7 @@ export async function emitGateInvalidationEvents(
   }
 
   for (const gate of new Set([...preserved, ...preservationBases.keys()])) {
+    if (GATE_SURFACE[gate] === undefined) continue;
     await events.emit({
       type: 'rebase_gate_preserved',
       gate: gate as StepName,
