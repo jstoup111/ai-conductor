@@ -63,8 +63,10 @@ function registeredMutation(operation: GithubOperationName): Record<string, unkn
       : createsRepositoryResource
         ? { kind: 'repository' }
         : { kind: pullRequest ? 'pull-request' : 'issue', number: 17 };
-  const payload = operation.includes('.comment.') || operation === 'issue.edit'
-    ? { body: 'guarded write' }
+  const payload = operation === 'pull-request.comment.update'
+    ? { commentId: '123', body: 'guarded write' }
+    : operation.includes('.comment.') || operation === 'issue.edit'
+      ? { body: 'guarded write' }
     : operation.includes('.label.')
       ? { label: 'owned-label' }
       : operation.includes('.dependency.')
