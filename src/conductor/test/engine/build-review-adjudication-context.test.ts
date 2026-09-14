@@ -60,7 +60,7 @@ function securityAggregate() {
   });
 }
 
-function customAggregate() {
+function customAggregate(criteria?: readonly string[]) {
   const declaration = {
     version: 'v1' as const, rubricId: 'security', semanticSkill: 'security-review',
     question: 'Does the changed code preserve the security boundary?',
@@ -72,6 +72,7 @@ function customAggregate() {
     effectivePolicy: { version: 'v1' as const, bundleDigest: POLICY_DIGEST },
     reviewedInput: { version: 'v1' as const, contentDigest: POLICY_DIGEST },
     producer: { provider: 'codex', model: 'gpt-5.6', effort: 'high' },
+    ...(criteria === undefined ? {} : { criteria: Object.freeze([...criteria]) }),
   };
   const sourceRegion = { path: 'src/handler.ts', startLine: 12, endLine: 16, contentHash: HASH, display: 'changed handler' };
   const result = stampBuildReviewCustomJudgedResult({
@@ -377,6 +378,32 @@ describe('build-review adjudication context', () => {
       }),
       priorCases: [expect.objectContaining({ id: 'case-security' })],
     } });
+  });
+
+  it('delivers captured policy bytes to the case dispatcher instead of their resource paths', () => {
+    const capturedCriteria = [
+      '# Authorization policy\n\nEvery changed handler must enforce authorization.',
+      '## Evidence\n\nA focused regression must cover the authorized route.',
+    ];
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: customAggregate(capturedCriteria),
+      priorCases: [],
+      planContract: {
+        path: '.docs/plans/example.md', pointers: [],
+        admittedTaskContracts: [{ id: '28', contract: 'Preserve the authorization boundary.' }],
+      },
+      taskStatus: { path: '.pipeline/task-status.json', tasks: [{ id: '28', status: 'in_progress' }] },
+    });
+
+    expect(result).toMatchObject({ ok: true, context: {
+      policyContext: [{
+        rubric: 'security',
+        effectivePolicyIdentity: POLICY_DIGEST,
+        criteria: capturedCriteria,
+      }],
+    } });
+    if (!result.ok) return;
+    expect(result.context.policyContext[0]!.criteria).not.toContain('references/security-criteria.md');
   });
 
   it('stops rather than dispatching a custom policy without complete scope evidence', () => {
