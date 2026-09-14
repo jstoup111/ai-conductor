@@ -138,7 +138,7 @@ describe('test-suite CLI adapter', () => {
             signal: 'SIGTERM' as const,
             plannedEntryCount: 3,
             failedEntryIndex: 1,
-            entries: [{ index: 0, result: 'passed' as const, durationMs: 1, workingDirectory: 'packages/unit', exitCode: 0, signal: null, terminationReason: null }, { index: 1, result: 'failed' as const, durationMs: 42, workingDirectory: 'packages/integration', exitCode: null, signal: 'SIGTERM' as const, terminationReason: 'signal' as const }],
+            entries: [{ index: 0, result: 'passed' as const, durationMs: 1, command: 'npm run test:unit', workingDirectory: 'packages/unit', exitCode: 0, signal: null, terminationReason: null, stdout: 'unit passed', stderr: '' }, { index: 1, result: 'failed' as const, durationMs: 42, command: 'npm run test:integration', workingDirectory: 'packages/integration', exitCode: null, signal: 'SIGTERM' as const, terminationReason: 'signal' as const, stdout: '', stderr: 'terminated' }],
           },
         }),
       },

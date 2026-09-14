@@ -79,7 +79,7 @@ describe('executeFullSuite', () => {
     expect(forwardedTimeout).toBe(DEFAULT_FULL_SUITE_TIMEOUT_MS);
   });
 
-  it('records each list attempt with its effective directory and termination metadata', async () => {
+  it('retains command and diagnostics on every list attempt', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-list-attempts-'));
     await Promise.all([
       mkdir(join(projectRoot, 'packages/unit'), { recursive: true }),
@@ -105,8 +105,8 @@ describe('executeFullSuite', () => {
       expect(result).toMatchObject({
         ok: false, failedEntryIndex: 1, plannedEntryCount: 2,
         entries: [
-          { index: 0, result: 'passed', workingDirectory: join(projectRoot, 'packages/unit'), exitCode: 0, signal: null, terminationReason: null },
-          { index: 1, result: 'failed', workingDirectory: join(projectRoot, 'packages/integration'), exitCode: 7, signal: null, terminationReason: 'nonzero_exit' },
+          { index: 0, result: 'passed', command: 'npm run unit', workingDirectory: join(projectRoot, 'packages/unit'), exitCode: 0, signal: null, terminationReason: null, stdout: '', stderr: '' },
+          { index: 1, result: 'failed', command: 'npm run integration', workingDirectory: join(projectRoot, 'packages/integration'), exitCode: 7, signal: null, terminationReason: 'nonzero_exit', stdout: '', stderr: '' },
         ],
       });
     } finally {

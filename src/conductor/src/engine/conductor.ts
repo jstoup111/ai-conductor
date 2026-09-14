@@ -244,7 +244,10 @@ import {
   type FullSuiteInspectionResult,
   type FullSuiteVerifierResult,
 } from './full-suite-verifier.js';
-import { sanitizeFullSuiteDiagnosticOutput } from './full-suite-evidence.js';
+import {
+  sanitizeFullSuiteDiagnosticOutput,
+  type FullSuiteEvidenceAttempt,
+} from './full-suite-evidence.js';
 import {
   extractFlaggedPaths,
   runScopeFailDisposition,
@@ -1987,6 +1990,12 @@ function testSuiteBudgetVerdict(inspection: FullSuiteInspectionResult) {
     };
   }
   return undefined;
+}
+
+function projectExecutionSummaryEntries(
+  entries: readonly FullSuiteEvidenceAttempt[],
+): Array<Pick<FullSuiteEvidenceAttempt, 'index' | 'result' | 'durationMs'>> {
+  return entries.map(({ index, result, durationMs }) => ({ index, result, durationMs }));
 }
 
 export class Conductor {
@@ -12546,7 +12555,7 @@ export class Conductor {
           executionSummary: {
             plannedEntryCount: verification.evidence.plannedEntryCount!,
             attemptedEntryCount: verification.evidence.entries.length,
-            entries: verification.evidence.entries,
+            entries: projectExecutionSummaryEntries(verification.evidence.entries),
           },
         });
       }
@@ -12609,7 +12618,7 @@ export class Conductor {
           executionSummary: {
             plannedEntryCount: verification.evidence.plannedEntryCount!,
             attemptedEntryCount: verification.evidence.entries.length,
-            entries: verification.evidence.entries,
+            entries: projectExecutionSummaryEntries(verification.evidence.entries),
           },
         });
       }

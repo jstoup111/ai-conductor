@@ -62,15 +62,18 @@ interface FullSuiteExecutionFailureBase {
   entries?: FullSuiteExecutionAttempt[];
 }
 
-/** A completed list member. Output stays on the aggregate result only. */
+/** A completed list member, including its independently captured diagnostics. */
 export interface FullSuiteExecutionAttempt {
   index: number;
   result: 'passed' | 'failed';
   durationMs: number;
+  command: string;
   workingDirectory: string;
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   terminationReason: FullSuiteExecutionFailure['reason'] | null;
+  stdout: string;
+  stderr: string;
 }
 
 type FullSuiteExecutionFailureDetails =
@@ -371,7 +374,8 @@ export async function executeFullSuite(
       const ended = clock();
       attempts.push({
         index, result: 'passed', durationMs: ended.getTime() - started.getTime(),
-        workingDirectory: cwd, exitCode: 0, signal: null, terminationReason: null,
+        command, workingDirectory: cwd, exitCode: 0, signal: null, terminationReason: null,
+        stdout: result.stdout, stderr: result.stderr,
       });
       if (index !== entries.length - 1) continue;
       return {
@@ -386,8 +390,10 @@ export async function executeFullSuite(
       const ended = clock();
       attempts.push({
         index, result: 'failed', durationMs: ended.getTime() - started.getTime(),
-        workingDirectory: cwd, exitCode: classification.exitCode,
+        command, workingDirectory: cwd, exitCode: classification.exitCode,
         signal: classification.signal, terminationReason: classification.reason,
+        stdout: errorOutput(failure, 'stdout'),
+        stderr: errorOutput(failure, 'stderr', classification.reason === 'internal_error'),
       });
       return {
         ok: false, ...classification, command, cwd,
