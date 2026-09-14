@@ -1356,6 +1356,9 @@ export class DefaultStepRunner implements StepRunner {
           }
         : {}),
       ...(result.permissionDenied ? { permissionDenied: true } : {}),
+      ...(result.providerSetupExhaustion
+        ? { providerSetupExhaustion: result.providerSetupExhaustion }
+        : {}),
       ...(result.rateLimited
         ? {
             rateLimited: true,

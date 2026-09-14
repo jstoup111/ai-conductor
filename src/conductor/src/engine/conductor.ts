@@ -77,6 +77,8 @@ import type {
   ProviderCandidate,
 } from './provider-execution.js';
 import { formatProviderCapabilityGapMessages } from './provider-execution.js';
+import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
+import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import { createEngineStateStore } from './engine-state-store.js';
 import { createRepairObligationStore } from './repair-obligations.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
@@ -1241,6 +1243,8 @@ export interface StepRunResult {
   commandUnresolvedName?: string;
   /** A provider's automatic permission review denied the requested action. */
   permissionDenied?: boolean;
+  /** Every configured candidate was explicitly unavailable before invocation. */
+  providerSetupExhaustion?: ProviderSetupExhaustion;
   /**
    * Set by the runner's dispatch preflight when the step's working directory
    * (the feature worktree) no longer exists. Terminal for this run: no provider
@@ -5592,6 +5596,22 @@ export class Conductor {
         return result;
       };
       this.providerExecution.prepareCandidateSelfHost = async (candidate, runtime, identity) => {
+        // This is a candidate-local setup capability. Check it before opening
+        // a live-boundary window or allocating scratch state so fallback has
+        // no resource ownership to unwind.
+        if (candidate.providerKey === 'codex') {
+          const missing = !runtime.provider.prepareSelfHostAuth
+            || !runtime.provider.resolveSelfHostExecutable
+            || !this.guardrails.provisionProviderHome;
+          if (missing) {
+            throw new ProviderSetupUnavailableError({
+              provider: 'codex',
+              capability: 'self-host-isolation',
+              reason: 'Codex self-host isolation is unavailable for the resolved provider candidate.',
+              recoveryAction: 'Update Codex and the self-host guardrails to provide isolated-home setup.',
+            });
+          }
+        }
         const installed = await this.guardrails.resolveInstalledHarnessRoot();
         const liveCheckout = installed.status === 'ok' ? installed.root : this.projectRoot;
         const codex = candidate.providerKey === 'codex';
@@ -5671,9 +5691,9 @@ export class Conductor {
           const prepareAuth = runtime.provider.prepareSelfHostAuth;
           const resolveExecutable = runtime.provider.resolveSelfHostExecutable;
           const provisionHome = this.guardrails.provisionProviderHome;
-          if (!prepareAuth || !resolveExecutable || !provisionHome) {
-            throw new Error('Codex self-host isolation is unavailable for the resolved provider candidate.');
-          }
+          // The capability check above establishes these values before any
+          // resource acquisition; retain the guard for type narrowing only.
+          if (!prepareAuth || !resolveExecutable || !provisionHome) throw new Error('Self-host capability changed during preparation.');
           const executable = await resolveExecutable.call(runtime.provider);
           const home = await provisionHome({
             provider: { id: 'codex', prepareSelfHostAuth: (context) => prepareAuth.call(runtime.provider, { provider: 'codex', homeDir: context.homeDir }) },
@@ -9337,6 +9357,26 @@ export class Conductor {
             await this.writeHaltMarker(haltReason + '\n', 'mechanical');
             await this.persistPendingStateChanges(state, 'persist conductor transition');
             await this.emitLoopHalt(haltReason);
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
+          }
+
+          // Setup-only exhaustion has not dispatched a provider, so retrying
+          // would only repeat the same verified capability checks.
+          if (result.providerSetupExhaustion) {
+            const diagnostics = result.providerSetupExhaustion.candidates
+              .map((candidate) => `${candidate.provider}: ${candidate.reason} Recovery: ${candidate.recoveryAction}`)
+              .join('\n');
+            const haltReason =
+              `Cannot dispatch '${step.name}': every configured provider is unavailable during setup.\n${diagnostics}\n` +
+              'Complete a listed recovery action, then re-queue this feature.';
+            await this.haltSerialExecution({
+              reason: haltReason,
+              haltClass: 'needs-human',
+              persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
+              surfaceRemediation: true,
+            });
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
