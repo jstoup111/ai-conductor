@@ -9,13 +9,14 @@
 //   - manual-review classification for ambiguous/reverse/cross-repo prose (Task 23)
 //   - writing the edges to the platform / confirm flow (Tasks 24-25)
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   parseDependencyEdges,
   parseDependencyProse,
   createDependencyLinks,
 } from '../../../src/engine/engineer/issue-dep-migration.js';
 import type { DependencyEdge, GhRunner } from '../../../src/engine/engineer/issue-dep-migration.js';
+import { createGuardedGithubOperationRunner } from '../../../src/engine/tracker-client.js';
 
 describe('parseDependencyEdges', () => {
   it('parses "Gated on #217" into a blocked_by edge', () => {
@@ -211,18 +212,32 @@ describe('createDependencyLinks (writer)', () => {
     const gh: GhRunner = async (args, opts) => {
       calls.push({ args: [...args], cwd: opts.cwd });
       const path = args.find((a) => a.includes('/dependencies/blocked_by'));
-      if (!args.includes('-X') && path) {
+      const isPost = (args.includes('-X') && args[args.indexOf('-X') + 1] === 'POST')
+        || (args.includes('--method') && args[args.indexOf('--method') + 1] === 'POST');
+      if (!isPost && path) {
         // GET
         return { stdout: JSON.stringify(existing[path] ?? []) };
       }
       const issuePath = args.find((a) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(a));
-      if (issuePath && !args.includes('-X')) {
+      if (issuePath && !isPost) {
         const n = Number(issuePath.split('/').pop());
         return { stdout: JSON.stringify({ id: 1_000_000 + n, number: n }) };
       }
       return { stdout: '' };
     };
     return { gh, calls };
+  }
+
+  /** The production adapter reaches this fake terminal only after each source issue is authorized. */
+  function authorizedOperations(gh: GhRunner) {
+    return createGuardedGithubOperationRunner(gh, {
+      cwd: '/repo',
+      intake: { authorize: async () => ({}) },
+    });
+  }
+
+  function writerDeps(gh: GhRunner, extra: { dryRun?: boolean } = {}) {
+    return { gh, operations: authorizedOperations(gh), actor: 'alice', cwd: '/repo', ...extra };
   }
 
   const edge: DependencyEdge = {
@@ -234,7 +249,7 @@ describe('createDependencyLinks (writer)', () => {
 
   it('dryRun=true (operator declines): GETs to check, but issues zero POST calls', async () => {
     const { gh, calls } = makeGh({});
-    const results = await createDependencyLinks([edge], { gh, cwd: '/repo', dryRun: true });
+    const results = await createDependencyLinks([edge], writerDeps(gh, { dryRun: true }));
 
     expect(results).toEqual([{ edge, status: 'dry-run' }]);
     expect(calls.every((c) => !c.args.includes('POST'))).toBe(true);
@@ -254,7 +269,7 @@ describe('createDependencyLinks (writer)', () => {
       ],
     });
 
-    const results = await createDependencyLinks([edge, already], { gh, cwd: '/repo' });
+    const results = await createDependencyLinks([edge, already], writerDeps(gh));
 
     expect(results).toEqual([
       { edge, status: 'created' },
@@ -271,9 +286,9 @@ describe('createDependencyLinks (writer)', () => {
 
   it('never issues an edit/close/label/delete mutation — the only write is create-link POST', async () => {
     const { gh, calls } = makeGh({});
-    await createDependencyLinks([edge], { gh, cwd: '/repo' });
+    await createDependencyLinks([edge], writerDeps(gh));
 
-    const mutating = calls.filter((c) => c.args.includes('-X'));
+    const mutating = calls.filter((c) => c.args.includes('POST'));
     expect(mutating.length).toBe(1);
     expect(mutating[0].args).toContain('POST');
     expect(mutating[0].args).not.toContain('PATCH');
@@ -282,6 +297,30 @@ describe('createDependencyLinks (writer)', () => {
     for (const call of calls) {
       expect(call.args.join(' ')).not.toMatch(/\b(edit|close|label|delete)\b/i);
     }
+  });
+
+  it('refused dependency authorization reaches no terminal write and has no raw fallback', async () => {
+    const { gh, calls } = makeGh({});
+    const operations = {
+      run: vi.fn(async () => ({ kind: 'refused' as const, reason: 'explicit-authorization-required' as const })),
+    };
+
+    await expect(createDependencyLinks([edge], {
+      gh,
+      operations,
+      actor: 'alice',
+      cwd: '/repo',
+    })).rejects.toThrow('explicit-authorization-required');
+
+    expect(operations.run).toHaveBeenCalledWith(expect.objectContaining({
+      operation: 'intake.issue.dependency.add',
+      target: { repository: 'acme/app', kind: 'issue', number: 230 },
+      payload: expect.objectContaining({
+        dependency: { repository: 'acme/app', kind: 'issue', number: 217 },
+        dependencyDatabaseId: 1_000_217,
+      }),
+    }));
+    expect(calls.some((call) => call.args.includes('POST'))).toBe(false);
   });
 
   it('Jira-shaped ref (source or target) is skipped non-fatally — no gh API call made', async () => {
@@ -299,7 +338,7 @@ describe('createDependencyLinks (writer)', () => {
       blocked_by: true,
     };
 
-    const results = await createDependencyLinks([jiraSourceEdge, jiraTargetEdge], { gh, cwd: '/repo' });
+    const results = await createDependencyLinks([jiraSourceEdge, jiraTargetEdge], writerDeps(gh));
 
     expect(results).toEqual([]);
     expect(calls.length).toBe(0);
@@ -312,7 +351,7 @@ describe('createDependencyLinks (writer)', () => {
       ],
     });
 
-    const results = await createDependencyLinks([edge], { gh, cwd: '/repo' });
+    const results = await createDependencyLinks([edge], writerDeps(gh));
 
     expect(results).toEqual([{ edge, status: 'already-present' }]);
     expect(calls.some((c) => c.args.includes('POST'))).toBe(false);
@@ -333,7 +372,9 @@ describe('createDependencyLinks (writer)', () => {
     const gh: GhRunner = async (args) => {
       calls.push({ args: [...args] });
       const path = args.find((a) => a.includes('/dependencies/blocked_by'));
-      if (!args.includes('-X') && path) {
+      const isPost = (args.includes('-X') && args[args.indexOf('-X') + 1] === 'POST')
+        || (args.includes('--method') && args[args.indexOf('--method') + 1] === 'POST');
+      if (!isPost && path) {
         const sourceMatch = path.match(/issues\/(\d+)\/dependencies/);
         const sourceRef = `acme/app#${sourceMatch?.[1]}`;
         const targets = [...linked]
@@ -345,7 +386,7 @@ describe('createDependencyLinks (writer)', () => {
       }
       // Plain-issue GET → database id (live contract, #260)
       const issuePath = args.find((a) => /^repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(a));
-      if (issuePath && !args.includes('-X')) {
+      if (issuePath && !isPost) {
         const n = Number(issuePath.split('/').pop());
         return { stdout: JSON.stringify({ id: 1_000_000 + n, number: n }) };
       }
@@ -370,7 +411,7 @@ describe('createDependencyLinks (writer)', () => {
     for (const e of run1Edges) {
       if (e === e2) failNextPost = true;
       try {
-        run1Results.push(...(await createDependencyLinks([e], { gh, cwd: '/repo' })));
+        run1Results.push(...(await createDependencyLinks([e], writerDeps(gh))));
       } catch (err) {
         run1Error = err;
         break;
@@ -383,7 +424,7 @@ describe('createDependencyLinks (writer)', () => {
 
     // Run 2 (re-run, all three edges again): e1 already-present (no POST), e2 and
     // e3 (the ones still missing) get created.
-    const run2Results = await createDependencyLinks([e1, e2, e3], { gh, cwd: '/repo' });
+    const run2Results = await createDependencyLinks([e1, e2, e3], writerDeps(gh));
 
     expect(run2Results).toEqual([
       { edge: e1, status: 'already-present' },
