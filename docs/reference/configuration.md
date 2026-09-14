@@ -1175,9 +1175,9 @@ rename with neither an established target nor a concrete candidate is a valid em
 dispatches neither the test-quality reviewer nor counterfactual execution. Enabled security review still
 runs and participates in the joined verdict. Missing markers, absent plan test paths, and
 an abstract possibility of an unknown dependency do not turn that empty scope into a coverage failure.
-Any unknown or retired rubric
-id under `build_review.rubrics` — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`,
-`wiring` — is accepted as a no-op with a one-time notice naming the retired setting; it never fails
+Under `build_review.rubrics`: Every other id ever accepted is retired: `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring`.
+Any unknown rubric id, and each retired id above, is accepted as a no-op with a one-time notice naming
+the retired setting; it never fails
 configuration loading or halts a run. `security` judges the whole frozen feature diff for concrete,
 changed-hunk-anchored security defects and has no test scope or counterfactual preflight.
 Both behaviors follow `adr-2026-08-22-build-review-opt-in-rubric-container`.

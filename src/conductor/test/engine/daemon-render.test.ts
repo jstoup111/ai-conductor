@@ -549,6 +549,26 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
     expect(stale[0]).toContain('fresh: false');
   });
 
+  it('renders custom-policy selection and failures with their routing context', () => {
+    expect(lines({
+      type: 'build_review_policy_resolved',
+      rubric: 'security',
+      lapId: 'lap-12345678',
+      provider: 'codex',
+      source: 'plugin',
+      pluginId: 'acme:review',
+      bundleDigest: 'digest',
+    })[0]).toContain('security policy resolved: codex plugin/acme:review');
+    expect(lines({
+      type: 'build_review_policy_failed',
+      rubric: 'security',
+      lapId: 'lap-12345678',
+      provider: 'codex',
+      stage: 'containment',
+      reason: 'bubblewrap unavailable',
+    })[0]).toContain('security policy containment failed: bubblewrap unavailable');
+  });
+
   it('renders the patch-equivalent filtered-commit count alongside the base freshness summary', () => {
     expect(lines({
       type: 'build_review_base',
