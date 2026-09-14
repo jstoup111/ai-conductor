@@ -13,7 +13,7 @@ import {
 } from './build-review-adjudication-context.js';
 import { planContractPointers, readActivePlanPath } from './remediation-context-pointers.js';
 import { parsePlanTaskBodies } from './plan-task-parse.js';
-import { orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
+import { authorizeBuildReviewRemediationActionEffects, orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate } from './build-review-aggregate.js';
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop } from './remediation-case-effects.js';
@@ -554,6 +554,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     admittedTaskIds: planContract.admittedTaskContracts?.map((task) => task.id) ?? [],
   });
   if (!graph.ok) return failUnlessAccepted(`invalid remediation judgement ${graph.reason}`, { settleAbsentAttempted: true });
+  // The v2 consistency/escalation gate is an effect authority, not advisory
+  // context: no partial action set survives a blocked or escalated judgement.
+  const authorizedActionRefs = new Set(authorizeBuildReviewRemediationActionEffects({ judgement, validation: graph }));
   for (const proposed of graph.graph.cases) {
     if (proposed.case.disposition !== 'refute') continue;
     const evidence = await resolveRefutationEvidence({ projectRoot: input.projectRoot, refutation: proposed.case.refutation! });
@@ -561,7 +564,8 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   }
   const liveSourceIds = liveSourceIdsFor(resolved);
   const admitted = graph.graph.cases.filter((proposed) =>
-    proposed.sources.some((source) => liveSourceIds.has(source.sourceId)),
+    proposed.sources.some((source) => liveSourceIds.has(source.sourceId)) &&
+    (proposed.case.disposition !== 'act' || authorizedActionRefs.has(proposed.case.caseRef)),
   );
   // Escalations have no effect id and use Task 31's dedicated durable owner
   // stop writer. The general reconciler owns ordinary case/effect transitions;

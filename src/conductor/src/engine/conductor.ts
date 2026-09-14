@@ -12054,8 +12054,12 @@ export class Conductor {
                     },
                     ...(this.buildReviewChargeEffect === undefined ? {} : { chargeEffect: this.buildReviewChargeEffect }),
                     judge: async (context) => {
+                      const requestedMode = typeof context === 'object' && context !== null && 'mode' in context &&
+                        ((context as { mode?: unknown }).mode === 'case-v1' || (context as { mode?: unknown }).mode === 'case-v2')
+                        ? (context as { mode: 'case-v1' | 'case-v2' }).mode
+                        : 'case-v1';
                       const dispatched = await this.stepRunner.run('remediate', state, {
-                        retryReason: `Adjudicate this complete build-review context only; write case-v1 remediation output.\n${JSON.stringify(context)}`,
+                        retryReason: `Adjudicate this complete build-review context only; write ${requestedMode} remediation output.\n${JSON.stringify(context)}`,
                       });
                       if (!dispatched.success) throw new Error('remediate dispatch failed');
                       const judgement = await readRemediationCaseJudgement(this.projectRoot, state.session_started_at);
