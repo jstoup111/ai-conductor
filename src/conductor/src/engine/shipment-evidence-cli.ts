@@ -29,7 +29,14 @@ import {
 } from './pr-labels.js';
 import { specHash } from './shipped-record.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
-import type { GithubMutationExecutionContext } from './tracker-client.js';
+import {
+  createGuardedGithubOperationRunner,
+  type GithubMutationExecutionContext,
+} from './tracker-client.js';
+import {
+  executeGithubOperation,
+  type GithubOperationRunner,
+} from './github-operations.js';
 
 export type ShipmentEvidenceCommand =
   | { kind: 'check'; pr: string; eventPath?: string }
@@ -415,9 +422,15 @@ export function makeProductionRepairPublisher(input: {
   repo?: string;
   remoteGit?: typeof executeRemoteGit;
   remoteMutation?: GithubMutationExecutionContext;
+  /** Guarded mutations; absence refuses rather than falling back to raw gh writes. */
+  operations?: GithubOperationRunner;
 }): ShipmentRepairPublisher {
   const repo = input.repo ?? process.env.GITHUB_REPOSITORY;
   if (!repo) throw new Error('GITHUB_REPOSITORY is required for repair publication');
+  const operations = input.operations ?? createGuardedGithubOperationRunner(input.runGh, {
+    cwd: input.cwd,
+    mutation: input.remoteMutation,
+  });
 
   return {
     ensureRepairBranch: async ({ branch, base }) => {
@@ -465,15 +478,27 @@ export function makeProductionRepairPublisher(input: {
       if (typeof existingUrl === 'string') {
         return readRepairPullRequestHead(input.runGh, input.cwd, existingUrl);
       }
-      const created = await input.runGh(
-        [
-          'pr', 'create', '--base', base, '--head', branch,
-          '--title', `Repair durable shipment record for ${identity}`,
-          '--body', `Record-only repair for implementation PR ${input.implementationPr}. Human review and merge required.`,
-        ],
+      await requireRepairPublicationOperation(operations, {
+        operation: 'pull-request.create',
+        repository: repo,
+        resource: { kind: 'repository' },
+        context: { actor: 'shipment-repair', feature: input.slug },
+        payload: {
+          title: `Repair durable shipment record for ${identity}`,
+          body: `Record-only repair for implementation PR ${input.implementationPr}. Human review and merge required.`,
+          head: branch,
+          base,
+        },
+      });
+      const observed = await input.runGh(
+        ['pr', 'list', '--head', branch, '--base', base, '--state', 'open', '--json', 'url', '--limit', '1'],
         { cwd: input.cwd },
       );
-      return readRepairPullRequestHead(input.runGh, input.cwd, created.stdout.trim());
+      const observedUrl = (JSON.parse(observed.stdout) as Array<{ url?: unknown }>)[0]?.url;
+      if (typeof observedUrl !== 'string') {
+        throw new Error(`repair PR creation did not yield an open PR for ${branch}`);
+      }
+      return readRepairPullRequestHead(input.runGh, input.cwd, observedUrl);
     },
     verifyRepairHead: async ({ headSha }) => evaluateAtCandidateHead(
       input.implementationPr,
@@ -484,15 +509,28 @@ export function makeProductionRepairPublisher(input: {
       input.evaluateEvidence,
     ),
     postStatus: async ({ sha, context, state, description }) => {
-      await input.runGh(
-        [
-          'api', '--method', 'POST', `repos/${repo}/statuses/${sha}`,
-          '-f', `state=${state}`, '-f', `context=${context}`, '-f', `description=${description}`,
-        ],
-        { cwd: input.cwd },
-      );
+      await requireRepairPublicationOperation(operations, {
+        operation: 'commit.status.create',
+        repository: repo,
+        resource: { kind: 'repository' },
+        context: { actor: 'shipment-repair', feature: input.slug },
+        payload: { sha, state, context, description },
+      });
     },
   };
+}
+
+async function requireRepairPublicationOperation(
+  operations: GithubOperationRunner,
+  request: Record<string, unknown>,
+): Promise<void> {
+  const result = await executeGithubOperation(request, operations);
+  if (result.kind === 'refused') {
+    throw new Error(`GitHub operation '${String(request.operation)}' refused: ${result.reason}`);
+  }
+  if (result.kind === 'failed') {
+    throw new Error(`GitHub operation '${result.operation ?? String(request.operation)}' failed: ${result.error}`);
+  }
 }
 
 function remoteFailure(result: Awaited<ReturnType<typeof executeRemoteGit>>): string {

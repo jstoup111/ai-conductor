@@ -103,6 +103,23 @@ function payloadField(request: GithubOperationRequest, field: 'body' | 'label' |
   return value;
 }
 
+function commitStatusPayload(request: GithubOperationRequest): {
+  readonly sha: string;
+  readonly state: 'success' | 'failure';
+  readonly context: string;
+  readonly description: string;
+} {
+  const payload = request.payload;
+  if (!payload
+    || !('sha' in payload) || typeof payload.sha !== 'string'
+    || !('state' in payload) || (payload.state !== 'success' && payload.state !== 'failure')
+    || !('context' in payload) || typeof payload.context !== 'string'
+    || !('description' in payload) || typeof payload.description !== 'string') {
+    throw new Error(`GitHub operation '${request.operation}' is missing its registered commit-status payload.`);
+  }
+  return payload;
+}
+
 /**
  * Translate only the closed operation registry to argv. This is deliberately
  * private: callers submit typed operations, never mutable arbitrary argv.
@@ -173,6 +190,13 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
         '--base', payloadField(request, 'base'),
         ...(request.payload && 'draft' in request.payload && request.payload.draft === true ? ['--draft'] : []),
       ];
+    case 'commit.status.create': {
+      const payload = commitStatusPayload(request);
+      return [
+        'api', '--method', 'POST', `repos/${repository}/statuses/${payload.sha}`,
+        '-f', `state=${payload.state}`, '-f', `context=${payload.context}`, '-f', `description=${payload.description}`,
+      ];
+    }
     case 'label-definition.create':
     case 'label-definition.update': {
       if (request.target.kind !== 'label-definition') throw new Error('Registered label operation has an invalid target.');
