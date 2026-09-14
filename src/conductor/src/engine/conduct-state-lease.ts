@@ -303,34 +303,59 @@ export function createConductStateLease(
     }
     if (ownerIsLive) return { status: 'occupied', ownerPid: owner.pid };
 
-    const claim = `${JSON.stringify({ version: 1, pid, token: `${newToken()}:recovery`, claimedAt: new Date(now()).toISOString() })}\n`;
+    const claimFor = (predecessorToken: string | null): string => `${JSON.stringify({
+      version: 1,
+      pid,
+      token: `${newToken()}:recovery`,
+      claimedAt: new Date(now()).toISOString(),
+      ownerToken: owner.token,
+      predecessorToken,
+    })}\n`;
+    let terminalClaimPath = recoveryClaimPath(leasePath);
+    let terminalClaim = claimFor(null);
     try {
-      await filesystem.writeRecoveryClaim(recoveryClaimPath(leasePath), claim);
+      await filesystem.writeRecoveryClaim(terminalClaimPath, terminalClaim);
     } catch (error) {
       if (isAlreadyHeld(error)) {
-        let serializedClaim: string | null;
-        try {
-          serializedClaim = await filesystem.readRecoveryClaim(recoveryClaimPath(leasePath));
-        } catch (claimReadError) {
-          return {
-            status: 'refused',
-            message: `Unable to recover ${leaseName} lease: recovery claim is unavailable (${errorMessage(claimReadError)})`,
-          };
+        let claimPath = recoveryClaimPath(leasePath);
+        let predecessorToken: string | null = null;
+        while (true) {
+          let serializedClaim: string | null;
+          try {
+            serializedClaim = await filesystem.readRecoveryClaim(claimPath);
+          } catch (claimReadError) {
+            return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claim is unavailable (${errorMessage(claimReadError)})` };
+          }
+          const existingClaim = serializedClaim === null
+            ? { kind: 'invalid' as const }
+            : parseRecoveryClaim(serializedClaim, leasePath);
+          if (existingClaim.kind === 'invalid' ||
+            (existingClaim.kind === 'legacy' && predecessorToken !== null) ||
+            (existingClaim.kind === 'bound' &&
+              (existingClaim.identity.ownerToken !== owner.token ||
+                existingClaim.identity.predecessorToken !== predecessorToken))) {
+            return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claim is invalid or inconsistent` };
+          }
+          try {
+            if (processIsLive(existingClaim.identity.pid)) return { status: 'occupied', ownerPid: owner.pid };
+          } catch (claimLivenessError) {
+            return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claimant liveness is unverifiable (${errorMessage(claimLivenessError)})` };
+          }
+          predecessorToken = existingClaim.identity.token;
+          claimPath = recoverySuccessorClaimPath(leasePath, owner.token, predecessorToken);
+          const successorClaim = claimFor(predecessorToken);
+          try {
+            await filesystem.writeRecoveryClaim(claimPath, successorClaim);
+            terminalClaimPath = claimPath;
+            terminalClaim = successorClaim;
+            break;
+          } catch (successorError) {
+            if (isAlreadyHeld(successorError)) continue;
+            if (isMissing(successorError)) return { status: 'vanished' };
+            return { status: 'refused', message: `Unable to recover ${leaseName} lease: could not claim recovery (${errorMessage(successorError)})` };
+          }
         }
-        const existingClaim = serializedClaim === null
-          ? { kind: 'invalid' as const }
-          : parseRecoveryClaim(serializedClaim, leasePath);
-        if (existingClaim.kind === 'invalid' ||
-          (existingClaim.kind === 'bound' &&
-            (existingClaim.identity.ownerToken !== owner.token ||
-              existingClaim.identity.predecessorToken !== null))) {
-          return {
-            status: 'refused',
-            message: `Unable to recover ${leaseName} lease: recovery claim is invalid or inconsistent`,
-          };
-        }
-        return { status: 'occupied', ownerPid: owner.pid };
-      }
+      } else {
       // The lease directory disappeared between reading its owner and claiming
       // recovery: the owner released it (or a peer recovered it first) while this
       // process was probing liveness. Nothing was stolen and nothing is ambiguous
@@ -338,10 +363,11 @@ export function createConductStateLease(
       // rather than failing an otherwise healthy mutation.
       if (isMissing(error)) return { status: 'vanished' };
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
-      return {
-        status: 'refused',
-        message: `Unable to recover ${leaseName} lease: could not claim recovery (${errorMessage(error)})`,
-      };
+        return {
+          status: 'refused',
+          message: `Unable to recover ${leaseName} lease: could not claim recovery (${errorMessage(error)})`,
+        };
+      }
     }
 
     let confirmedOwner: string;
@@ -349,7 +375,7 @@ export function createConductStateLease(
     try {
       [confirmedOwner, confirmedClaim] = await Promise.all([
         filesystem.readOwner(ownerPath(leasePath)),
-        filesystem.readRecoveryClaim(recoveryClaimPath(leasePath)),
+        filesystem.readRecoveryClaim(terminalClaimPath),
       ]);
     } catch (error) {
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
@@ -358,7 +384,7 @@ export function createConductStateLease(
         message: `Unable to recover ${leaseName} lease: ownership changed during recovery (${errorMessage(error)})`,
       };
     }
-    if (confirmedOwner !== serializedOwner || confirmedClaim !== claim) {
+    if (confirmedOwner !== serializedOwner || confirmedClaim !== terminalClaim) {
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
       return {
         status: 'refused',
@@ -380,9 +406,9 @@ export function createConductStateLease(
     try {
       const [quarantinedOwner, quarantinedClaim] = await Promise.all([
         filesystem.readOwner(ownerPath(quarantinedLeasePath)),
-        filesystem.readRecoveryClaim(recoveryClaimPath(quarantinedLeasePath)),
+        filesystem.readRecoveryClaim(`${quarantinedLeasePath}${terminalClaimPath.slice(leasePath.length)}`),
       ]);
-      if (quarantinedOwner !== serializedOwner || quarantinedClaim !== claim) {
+      if (quarantinedOwner !== serializedOwner || quarantinedClaim !== terminalClaim) {
         reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
         return {
           status: 'refused',
