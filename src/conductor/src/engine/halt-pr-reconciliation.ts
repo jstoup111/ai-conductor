@@ -9,6 +9,7 @@
  */
 
 import type { GhRunner, GitRunner } from './pr-labels.js';
+import type { GithubOperationRunner } from './github-operations.js';
 import {
   makeProductionGh,
   makeProductionGit,
@@ -80,6 +81,13 @@ interface ReconcileOpts {
   projectRoot: string;
   log?: (msg: string) => void;
   runGh?: GhRunner;
+  /**
+   * Guarded mutation seam for this sweep. Reads continue through `runGh`, but
+   * every presentation write receives a fresh target-bound ownership decision.
+   * An absent runner deliberately leaves the legacy read runner unable to
+   * mutate through the PR primitives.
+   */
+  operations?: GithubOperationRunner;
   runGit?: GitRunner;
   cache?: Map<string, PrSweepOutcome>;
 }
@@ -99,8 +107,14 @@ interface ReconcileOpts {
  * - Best-effort / non-throwing (errors logged but never re-thrown)
  * - Returns void
  */
-export async function reconcileHaltPrs({ projectRoot, log, runGh, runGit, cache }: ReconcileOpts): Promise<void> {
+export async function reconcileHaltPrs({ projectRoot, log, runGh, operations, runGit, cache }: ReconcileOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
+  const prRunner = operations === undefined
+    ? gh
+    : Object.assign(
+      async (args: string[], opts: { cwd: string }) => gh(args, opts),
+      operations,
+    );
   const git = runGit ?? makeProductionGit();
   const outcomeCache = cache ?? new Map<string, PrSweepOutcome>();
 
@@ -162,11 +176,11 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, runGit, cache 
               `[halt-pr-reconciliation] ${pr.url} halt resolved (shipped record for ${slug} on ${pr.headRefName}) — clearing`,
             );
           }
-          const clearResult = await cleanupHaltPresentation(gh, projectRoot, pr.url, log);
+          const clearResult = await cleanupHaltPresentation(prRunner, projectRoot, pr.url, log);
           // Supersede the halt comment in place (same marker → edited, never
           // duplicated) so the PR thread no longer reads as blocked.
           await upsertComment(
-            gh,
+            prRunner,
             projectRoot,
             pr.url,
             NEEDS_REMEDIATION_MARKER,
@@ -196,7 +210,7 @@ export async function reconcileHaltPrs({ projectRoot, log, runGh, runGit, cache 
 
         // Non-conforming: call ensureHaltPresentation to heal it
         emit(`[halt-pr-reconciliation] healing ${pr.url}: isDraft=${isDraft}, hasLabel=${hasLabel}`);
-        const result = await ensureHaltPresentation(gh, projectRoot, pr.url, log);
+        const result = await ensureHaltPresentation(prRunner, projectRoot, pr.url, log);
         if (result === 'confirmed') {
           emit(`[halt-pr-reconciliation] ${pr.url} healed (confirmed)`);
           outcomeCache.set(pr.url, 'healed');
