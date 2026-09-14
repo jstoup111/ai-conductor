@@ -15,6 +15,7 @@ import { formatProgressDelta, formatRetryCounter, displayBuildPosition } from '.
 import { formatFeatureUsageTotal } from '../execution/provider-diagnostics.js';
 import { renderedEventTypes } from '../engine/event-sinks.js';
 import { resolveExecutionIdentity } from '../engine/execution-identity.js';
+import { formatGithubOperationRefusal } from '../engine/github-operations.js';
 
 export interface TerminalRendererOptions {
   stateFilePath: string;
@@ -188,6 +189,10 @@ export class TerminalRenderer implements UIRenderer {
         this.region.log(chalk.bold.yellow('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
         this.region.log(chalk.yellow(`  ${event.kind}: ${event.reason}`));
         this.region.log('');
+        break;
+
+      case 'github_operation_refused':
+        this.region.log(chalk.yellow(`  ✋ ${formatGithubOperationRefusal(event)}`));
         break;
 
       case 'step_retry': {
@@ -389,5 +394,5 @@ export class TerminalRenderer implements UIRenderer {
 }
 
 const DEDICATED_EVENT_TYPES = new Set<ConductorEvent['type']>([
-  'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'provider_fallback', 'session_policy', 'rate_limit', 'session_reset', 'credentials_park_progress', 'tier_skip', 'config_skip', 'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached', 'renderer_error', 'pipeline_tail_diagnostic', 'when_skip', 'parallel_started', 'parallel_completed', 'parallel_failure', 'build_progress', 'unattributed_progress', 'build_no_progress', 'pipeline_closeout', 'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
+  'step_started', 'step_completed', 'step_failed', 'step_interrupted', 'github_operation_refused', 'step_retry', 'feature_usage_total', 'test_suite_verification', 'provider_fallback', 'session_policy', 'rate_limit', 'session_reset', 'credentials_park_progress', 'tier_skip', 'config_skip', 'gate_blocked', 'feature_complete', 'dashboard_refresh', 'checkpoint_reached', 'renderer_error', 'pipeline_tail_diagnostic', 'when_skip', 'parallel_started', 'parallel_completed', 'parallel_failure', 'build_progress', 'unattributed_progress', 'build_no_progress', 'pipeline_closeout', 'build_stall', 'gate_verdict', 'kickback', 'loop_halt', 'halt_marker_write_failed', 'loop_converged',
 ]);
