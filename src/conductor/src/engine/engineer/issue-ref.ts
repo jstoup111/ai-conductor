@@ -90,7 +90,8 @@ export interface InjectIssueRefOpts {
 }
 
 /**
- * Append a GitHub linking line to an existing PR body via `gh pr edit`.
+ * Append a GitHub linking line to an existing PR body through the guarded
+ * `pull-request.edit` operation.
  *
  * Contract:
  *   - Unparseable / absent sourceRef → no-op, returns false (FR-5).
@@ -155,6 +156,8 @@ export type CloseIssueOutcome = 'no-source-ref' | 'no-pr-url' | 'attempted';
 /** Dependencies for {@link closeIssueOnImplementationMerge}. */
 export interface CloseIssueOnMergeDeps {
   gh: GhRunner;
+  /** Guarded mutation boundary for the implementation PR body edit. */
+  operations?: GithubOperationRunner;
   /** Originating issue ref carried on the backlog item; undefined for non-intake specs. */
   sourceRef: string | undefined;
   /** The implementation PR URL recorded after the daemon build (from conduct-state). */
@@ -189,6 +192,7 @@ export async function closeIssueOnImplementationMerge(
   }
   await injectIssueRef({
     gh: deps.gh,
+    operations: deps.operations,
     prUrl: deps.prUrl,
     keyword: 'Closes',
     sourceRef: deps.sourceRef,

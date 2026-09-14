@@ -106,7 +106,8 @@ import { makeIsProcessed, resolveEngineVersion } from './engine/shipped-record.j
 import { resolveHarnessVersion } from './engine/version-report.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
-import { createGithubTrackerClient, makeProductionGh } from './engine/tracker-client.js';
+import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh } from './engine/tracker-client.js';
+import { resolveFeatureRemoteMutation } from './engine/remote-git-operations.js';
 import { createDaemonHaltPrOperations } from './engine/daemon-halt-pr-operations.js';
 import { GH_VERSION_FLOOR, probeGhVersion } from './engine/gh-version-floor.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
@@ -1452,11 +1453,24 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // and idempotent — a gh failure or a halted build (no pr_url) never affects
     // the feature outcome.
     const finalState = await readState(stateFilePath);
+    const implementationPrUrl = finalState.ok ? finalState.value.pr_url : undefined;
     const ghRunner = makeProductionGh();
+    const closeIssueMutation = item.sourceRef && implementationPrUrl
+      ? await resolveFeatureRemoteMutation({
+        cwd: wt.path,
+        slug: item.slug,
+        branch: wt.branch,
+        git: (args) => finishPublicationGit(args, { cwd: wt.path }),
+        gh: ghRunner,
+      })
+      : undefined;
     await closeIssueOnImplementationMerge({
       gh: ghRunner,
+      operations: closeIssueMutation
+        ? createGuardedGithubOperationRunner(ghRunner, { cwd: wt.path, mutation: closeIssueMutation })
+        : undefined,
       sourceRef: item.sourceRef,
-      prUrl: finalState.ok ? finalState.value.pr_url : undefined,
+      prUrl: implementationPrUrl,
       cwd: wt.path,
       slug: item.slug,
       log: featureLog,

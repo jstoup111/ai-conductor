@@ -21,7 +21,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openSpecPr } from '../../../src/engine/engineer/handoff.js';
+import { openSpecPr as openSpecPrProduction } from '../../../src/engine/engineer/handoff.js';
 import type { HandoffDeps } from '../../../src/engine/engineer/handoff.js';
 import { readAuthoredKeys } from '../../../src/engine/engineer/authored-ledger.js';
 import type { TargetRepo } from '../../../src/engine/engineer/target.js';
@@ -59,6 +59,72 @@ const noOpGitRunner: NonNullable<HandoffDeps['gitRunner']> = async () => ({
   stdout: '',
   stderr: '',
 });
+
+/**
+ * Model the guarded transports at the test seam. The injected terminal fakes
+ * remain observable, but every remote write first traverses the production
+ * authorization boundary under test.
+ */
+function testPublication(
+  target: TargetRepo,
+  deps: HandoffDeps,
+  options: { created?: boolean } = {},
+): NonNullable<HandoffDeps['publication']> {
+  const repository = /^https:\/\/github\.com\/(.+)\.git$/.exec(target.remote ?? '')?.[1] ?? 'acme/test';
+  const marker = '.docs/intake/test.md';
+  const cwd = deps.worktreePath ?? target.canonicalPath;
+  return {
+    repository,
+    remote: {
+      cwd,
+      config: async () => ({ stdout: target.remote ?? '' }),
+      runRemoteGit: async (args, runnerOptions) => {
+        if (!deps.gitRunner) throw new Error('missing test git runner');
+        return deps.gitRunner(args, runnerOptions);
+      },
+      mutation: {
+        provenance: {
+          repository,
+          defaultBranch: 'main',
+          specBranch: 'spec/test',
+          featureMarker: marker,
+          publication: 'initial',
+        },
+        dependencies: {
+          resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
+          provenanceDiscovery: {
+            readCommittedRecords: async () => [{ path: marker, content: 'Owner: alice\n' }],
+          },
+        },
+      },
+    },
+    operations: {
+      async run(request) {
+        const payload = request.payload as { head?: string; body?: string } | undefined;
+        if (request.operation === 'pull-request.create') {
+          await deps.runner(['pr', 'create', '--head', payload?.head ?? '', '--fill', '--label', 'spec'], { cwd });
+          return options.created === false
+            ? {}
+            : { created: { repository, kind: 'pull-request' as const, number: 42 } };
+        }
+        if (request.operation === 'pull-request.edit') {
+          await deps.runner(
+            ['pr', 'edit', `https://github.com/${repository}/pull/42`, '--body', payload?.body ?? ''],
+            { cwd },
+          );
+        }
+        return {};
+      },
+    },
+  };
+}
+
+function openSpecPr(target: TargetRepo, branch: string, deps: HandoffDeps) {
+  return openSpecPrProduction(target, branch, {
+    ...deps,
+    ...(deps.publication || !target.remote ? {} : { publication: testPublication(target, deps) }),
+  });
+}
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -136,7 +202,7 @@ describe('openSpecPr', () => {
     await openSpecPr(target, branch, deps);
 
     expect(trace).toEqual([
-      { command: 'git', args: ['push', '-u', 'origin', branch], cwd: tempDir },
+      { command: 'git', args: ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`], cwd: tempDir },
       {
         command: 'gh',
         args: ['pr', 'create', '--head', branch, '--fill', '--label', 'spec'],
@@ -169,8 +235,8 @@ describe('openSpecPr', () => {
     }
 
     expect({ errorMessage, trace }).toEqual({
-      errorMessage: 'rejected non-fast-forward: remote branch has diverged',
-      trace: [{ command: 'git', args: ['push', '-u', 'origin', branch] }],
+      errorMessage: 'openSpecPr: guarded push failed: rejected non-fast-forward: remote branch has diverged',
+      trace: [{ command: 'git', args: ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`] }],
     });
   });
 
@@ -228,19 +294,21 @@ describe('openSpecPr', () => {
   it('throws when the runner stdout contains no URL (not silent discard)', async () => {
     const target = makeTarget(tempDir, 'proj');
     const { runner } = makeFakeRunner('Something went wrong, no URL here.');
+    const deps: HandoffDeps = { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } };
 
     await expect(
-      openSpecPr(target, 'spec/bad', { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } }),
-    ).rejects.toThrow(/no PR URL/i);
+      openSpecPr(target, 'spec/bad', { ...deps, publication: testPublication(target, deps, { created: false }) }),
+    ).rejects.toThrow(/did not identify a URL/i);
   });
 
   it('throws when runner stdout is empty (not silent discard)', async () => {
     const target = makeTarget(tempDir, 'proj');
     const { runner } = makeFakeRunner('');
+    const deps: HandoffDeps = { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } };
 
     await expect(
-      openSpecPr(target, 'spec/empty-out', { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } }),
-    ).rejects.toThrow(/no PR URL/i);
+      openSpecPr(target, 'spec/empty-out', { ...deps, publication: testPublication(target, deps, { created: false }) }),
+    ).rejects.toThrow(/did not identify a URL/i);
   });
 });
 
@@ -562,14 +630,15 @@ describe('openSpecPr — no-merge / no-build guarantee (task-26, FR-7)', () => {
   it('[path-C] no-URL throw — no merge call, no build call before throw', async () => {
     const target = makeTarget(tempDir, 't26-nourl');
     const { runner, calls } = makeFakeRunner('gh: something happened, no URL here.');
+    const deps: HandoffDeps = { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } };
 
     await expect(
-      openSpecPr(target, 'spec/t26-nourl', { runner, gitRunner: noOpGitRunner, ledgerOpts: { engineerDir: tempDir } }),
-    ).rejects.toThrow(/no PR URL/i);
+      openSpecPr(target, 'spec/t26-nourl', { ...deps, publication: testPublication(target, deps, { created: false }) }),
+    ).rejects.toThrow(/did not identify a URL/i);
 
-    // Even on the throw path, the recorder captured calls made before the throw.
-    // There must be exactly 1 call (the create attempt) and it must have no merge.
-    expect(calls).toHaveLength(1);
+    // Even on the throw path, the recorder captured both the guarded create
+    // transport and its read-only URL lookup.
+    expect(calls).toHaveLength(2);
     assertNoMergeNoBuild(calls);
 
     // Confirm the one call was pr create, not a retry/merge.
