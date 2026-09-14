@@ -44,6 +44,7 @@ describe('relocated Vitest temporary lifecycle', () => {
     await mkdir(root, { recursive: true });
     const sweeps: string[] = [];
     const removed: string[] = [];
+    const snapshotted: string[] = [];
     let leakedEntry = false;
     await mkdir(original, { recursive: true });
     vi.doMock('./pipeline-leak-guard.js', () => ({ snapshotPipeline: async () => ({ exists: false, entries: new Map() }), diffPipeline: () => ({ added: [], modified: [] }) }));
@@ -53,7 +54,7 @@ describe('relocated Vitest temporary lifecycle', () => {
       writeRunRootOwnerMarker: () => {}, startRunRootHeartbeat: () => ({ stop: () => {} }),
       sweepStaleRunTmpRoots: async (parent: string) => { sweeps.push(parent); return { reaped: [], retained: [], failures: [] }; },
       removeRunTmpRoot: async (path: string) => { removed.push(path); },
-      snapshotTmpdirEntries: async () => ({ exists: true, entries: leakedEntry ? new Set(['bypass-leak']) : new Set<string>() }),
+      snapshotTmpdirEntries: async (path: string) => { snapshotted.push(path); return { exists: true, entries: leakedEntry ? new Set(['bypass-leak']) : new Set<string>() }; },
       diffTmpdirEntries: (_before: unknown, after: { entries: Set<string> }) => ({ stray: [...after.entries], ignored: [] }),
     }));
     vi.doMock('./tmux-leak-guard.js', () => ({ snapshotDaemonSessions: () => ({ sessions: [], failed: false }), sweepStaleDaemonSessions: () => ({ killed: [] }), reapLeakedDaemonSessions: () => ({ killed: [], indeterminate: [] }) }));
@@ -81,7 +82,12 @@ describe('relocated Vitest temporary lifecycle', () => {
     expect(removed).toEqual([]);
     await writeFile(join(original, 'bypass-leak'), 'must survive');
     leakedEntry = true;
-    await expect(teardown()).rejects.toThrow(/bypass-leak/);
+    // Task 8: the leak guard must watch the SAVED original tmpdir — not the
+    // relocated run root or the selected storage parent — before and after.
+    const failure = await teardown().then(() => undefined, (err: unknown) => err as Error);
+    expect(failure?.message).toContain('bypass-leak');
+    expect(failure?.message).toContain(original);
+    expect(snapshotted).toEqual([original, original]);
     expect(existsSync(join(original, 'bypass-leak'))).toBe(true);
     expect(process.env).toMatchObject(callerEnvironment);
     expect(removed).toEqual([]);
