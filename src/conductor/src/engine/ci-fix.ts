@@ -260,9 +260,6 @@ async function evaluateEligibilityGates(
   cfg: HarnessConfig | undefined,
   now: Date,
 ): Promise<EligibilityResult> {
-  if (entry.ciFixNeedsHuman) {
-    return { eligible: false, reason: 'provider setup recovery required (needs-human)' };
-  }
   // Gate 1: Attempts < 2 (cap gate)
   // Task 13: cap reached → ineligible, no counter change
   const attemptCap = 2;

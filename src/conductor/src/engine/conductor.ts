@@ -1311,6 +1311,7 @@ export interface StepRunResult {
 export interface SpotAuditDispatchResult {
   success: boolean;
   output?: string;
+  providerSetupExhaustion?: ProviderSetupExhaustion;
   observedIntervals?: readonly ObservedInterval[];
   authFailure?: boolean;
   authentication?: AuthenticationReadiness;
@@ -1336,6 +1337,9 @@ export function toSpotAuditVerifierResult(
     output: result.output ?? '',
     ...(result.observedIntervals
       ? { observedIntervals: result.observedIntervals }
+      : {}),
+    ...(result.providerSetupExhaustion
+      ? { providerSetupExhaustion: result.providerSetupExhaustion }
       : {}),
     ...(result.authFailure !== undefined ? { authFailure: result.authFailure } : {}),
     ...(result.authentication ? { authentication: result.authentication } : {}),
@@ -13622,6 +13626,9 @@ export class Conductor {
     if (!recommended && this.stepRunner.assessComplexity) {
       try {
         const assessment = await this.stepRunner.assessComplexity();
+        if (typeof assessment !== 'string' && assessment?.providerSetupExhaustion) {
+          return { success: false, providerSetupExhaustion: assessment.providerSetupExhaustion };
+        }
         recommended =
           typeof assessment === 'string'
             ? assessment

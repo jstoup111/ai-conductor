@@ -659,6 +659,12 @@ type RebaseOutcomeKind =
       resumeShape?: RebaseResumeShape;
       /** Git refused before creating rebase state; `--continue` is invalid. */
       startFailure?: boolean;
+    }
+  | {
+      /** Provider setup was refused before a rebase resolver invocation. */
+      kind: 'setup_stop';
+      conflicts: string[];
+      reason: string;
     };
 
 /** A quarantine applies to every outcome after an untracked-collision heal. */
@@ -1418,6 +1424,13 @@ async function resolveRebaseConflictsInner(
     const result = await resolver({ conflicts: ctxConflicts, projectRoot, baseRef: onto });
 
     if (!result.resolved) {
+      if (result.providerSetupExhaustion) {
+        return {
+          kind: 'setup_stop',
+          conflicts,
+          reason: 'every configured provider is unavailable during setup',
+        };
+      }
       // FR-6: resolver gave up — short-circuit, no further attempts.
       return {
         kind: 'conflict_halt',
@@ -1588,7 +1601,7 @@ export async function runGatedRebaseResolution(opts: {
   const resolved = await resolveRebaseConflicts(git, projectRoot, outcome, countingResolver, cap);
   if (onSettled) {
     try {
-      await onSettled(resolved.kind === 'conflict_halt' ? 'exhausted' : 'succeeded');
+      await onSettled(resolved.kind === 'changed' || resolved.kind === 'noop' ? 'succeeded' : 'exhausted');
     } catch {
       /* best-effort */
     }

@@ -692,12 +692,11 @@ export async function fixSession(
   try {
     const attempt = await dispatchFixSession();
     if (attempt?.providerSetupExhaustion) {
-      return {
-        kind: 'park',
-        outputTail: 'Setup repair could not dispatch: every configured provider is unavailable during setup. Complete the provider recovery action, then re-queue this feature.',
-        contractOutcome: 'provider-failure',
-        preservedPaths: [],
-      };
+      return reject(
+        'provider-failure',
+        'Setup repair could not dispatch: every configured provider is unavailable during setup. Complete the provider recovery action, then re-queue this feature.',
+        false,
+      );
     }
   } catch (err) {
     const afterFailure = await repairSnapshot(git);

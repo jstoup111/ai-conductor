@@ -392,6 +392,9 @@ export async function dispatchAttributionVerifier(
         ...(providerResult.authentication
           ? { authentication: providerResult.authentication }
           : {}),
+        ...(providerResult.providerSetupExhaustion
+          ? { providerSetupExhaustion: providerResult.providerSetupExhaustion }
+          : {}),
       }
     : {};
 
