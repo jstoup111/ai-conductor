@@ -1,46 +1,18 @@
 // Covers: task:1
-import { describe, it, expect } from 'vitest';
-import type {
-  AggregateTestSuiteConfig,
-  HarnessConfig,
-  TestSuiteConfig,
-} from '../../src/types/config.js';
+import { expect, it } from 'vitest';
+import { compileTypeFixture } from './compile-type-fixture.js';
 
-describe('TestSuiteConfig type on HarnessConfig', () => {
-  it('declares every aggregate suite field', () => {
-    const testSuite: TestSuiteConfig = {
-      command: 'npm test',
-      working_directory: 'src/conductor',
-      timeout_seconds: 1800,
-      inputs: ['test-support/**'],
-      environment: ['CI', 'DATABASE_URL'],
-    };
-    const config: HarnessConfig = { test_suite: testSuite };
+it('accepts an ordered test_suite.commands list on HarnessConfig', () => {
+  const result = compileTypeFixture('test/types/fixtures/test-suite-commands-positive.fixture.ts');
 
-    expect(config.test_suite).toEqual(testSuite);
-  });
+  expect(result.status, result.stderr).toBe(0);
+});
 
-  it('declares an ordered command list without suite names or runner identifiers', () => {
-    const testSuite: TestSuiteConfig = {
-      commands: [
-        { command: 'npm run test:unit' },
-        {
-          command: 'npm run test:integration',
-          working_directory: 'src/conductor',
-          timeout_seconds: 1800,
-        },
-      ],
-    };
-    const config: HarnessConfig = { test_suite: testSuite };
+it.each([
+  ['suite names', 'test/types/fixtures/test-suite-commands-suite-name-negative.fixture.ts'],
+  ['runner identifiers', 'test/types/fixtures/test-suite-commands-runner-identifier-negative.fixture.ts'],
+])('rejects command entries with %s', (_description, fixture) => {
+  const result = compileTypeFixture(fixture);
 
-    expect(config.test_suite?.commands).toEqual(testSuite.commands);
-  });
-
-  it('admits an ordered command list as an aggregate suite form', () => {
-    const testSuite: AggregateTestSuiteConfig = {
-      commands: [{ command: 'npm run test:unit' }],
-    };
-
-    expect(testSuite.commands).toEqual([{ command: 'npm run test:unit' }]);
-  });
+  expect(result.status, result.stderr).not.toBe(0);
 });
