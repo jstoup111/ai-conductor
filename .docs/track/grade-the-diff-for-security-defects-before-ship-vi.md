@@ -1,0 +1,7 @@
+# Track: Grade the diff for security defects before ship via a build_review security rubric
+
+Track: technical
+
+Scope boundary: A second built-in build_review rubric (`security`), default-off, registered alongside testQuality per the opt-in container ADR. It grades the whole feature diff since merge base for the five classes named in #2034 (committed secrets, injection, authz gaps, unsafe deserialization, path traversal) plus the OWASP Top 10 (2021) categories a diff can concretely evidence: cryptographic failures, security misconfiguration, authentication failures, integrity failures, and SSRF — ten closed classes in all; A04 insecure design, A06 vulnerable components, and A09 logging/monitoring failures are excluded as not gradable from changed hunks. Security findings are exempt from plan-binding (never `beyond`): they always enter the existing adjudicator, which may act (bounded retry work order), defer, or refute. #2034 is recorded as the decision adding `security` to the built-in catalog; #2020's general blocking-authority question stays open. The incidental security bullets in `skills/code-review/SKILL.md` move to the rubric so security has one owner. Excluded: riding #1986's project-declared `custom_rubrics` seam (harness cannot bundle a declaration there), a deterministic secret scanner, default-on behaviour, and any repo-wide audit (that stays with `/assess`).
+
+Internal gate machinery with no new consumer-facing product surface beyond the existing per-rubric config keys; the adjudicator spec set the precedent.
