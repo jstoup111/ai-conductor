@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-14T10:41:06.225Z
 Slug: page-background-intake-past-github-default-30-issu
 Class: needs-human
 Halting step: unknown
