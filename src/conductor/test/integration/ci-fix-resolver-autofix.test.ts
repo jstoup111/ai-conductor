@@ -200,13 +200,8 @@ describe('CF-4: spawn/exec failures are classified, never a bare unclassified Ex
         },
       };
 
-      let threw = false;
-      try {
-        await runCiFix(entry, 'feat/fix', 'hint', { fixRunner }, logger);
-      } catch {
-        threw = true;
-      }
-      expect(threw).toBe(true);
+      const outcome = await runCiFix(entry, 'feat/fix', 'hint', { fixRunner }, logger);
+      expect(outcome).toEqual({ kind: 'failed', stage: 'worktree' });
 
       const combined = logs.join('\n');
       expect(
@@ -219,9 +214,9 @@ describe('CF-4: spawn/exec failures are classified, never a bare unclassified Ex
   }, 20000);
 });
 
-// ── CF-5 / CF-6: startup preflight validates the fix-invocation surface once ─
+// ── Build-provider execution owns readiness; daemon wiring must not veto it ──
 
-describe('CF-5/CF-6: ci-fix startup preflight', () => {
+describe('ci-fix daemon readiness ownership', () => {
   it('ci-fix.ts exports a preflightCiFixInvocation probe', async () => {
     const source = await readFile(CI_FIX_SRC, 'utf-8');
     expect(
@@ -262,20 +257,12 @@ describe('CF-5/CF-6: ci-fix startup preflight', () => {
     expect(probe).toHaveBeenCalledTimes(1);
   });
 
-  it('daemon-cli.ts calls the ci-fix preflight once at startup, not from inside the per-PR dispatch closure', async () => {
+  it('daemon-cli.ts does not install a Claude-only preflight ahead of build-provider execution', async () => {
     const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
-
-    expect(
-      source,
-      'expected daemon-cli.ts to import preflightCiFixInvocation from ./engine/ci-fix.js',
-    ).toMatch(
-      /import\s*\{[^}]*preflightCiFixInvocation[^}]*\}\s*from\s*['"]\.\/engine\/ci-fix\.js['"]/,
-    );
 
     const ciFixBlockMatch = source.match(/ciFix\s*:\s*\{[\s\S]*?\n {10}\},\n/);
     const dispatchBody = ciFixBlockMatch ? ciFixBlockMatch[0] : '';
-    // CF-5: "the probe is not repeated per-PR" — it must not appear inside
-    // the per-PR dispatch closure.
     expect(dispatchBody).not.toMatch(/preflightCiFixInvocation/);
+    expect(dispatchBody).toMatch(/DefaultStepRunner/);
   });
 });
