@@ -1095,6 +1095,10 @@ export class FullSuiteVerifier {
         exitCode: execution.exitCode,
         stdout: execution.stdout,
         stderr: execution.stderr,
+        ...(execution.entries === undefined ? {} : {
+          plannedEntryCount: execution.plannedEntryCount!,
+          entries: execution.entries,
+        }),
         mode: verificationMode,
         selectors: verificationMode === 'scoped' && selection.status === 'SELECTED'
           ? selection.selectors
@@ -1174,12 +1178,12 @@ export class FullSuiteVerifier {
         };
       }
       const testSuite = config.config.test_suite;
-      if (testSuite.command === undefined) {
+      if (testSuite.command === undefined && testSuite.commands === undefined) {
         return {
           inspection: {
             status: 'FAILED',
             reason: 'invalid_config',
-            message: 'Project config must declare test_suite.command for aggregate verification',
+            message: 'Project config must declare test_suite.command or test_suite.commands for aggregate verification',
           },
           testSuite,
         };
@@ -1335,6 +1339,11 @@ function buildFailEvidence(
     durationMs: execution.durationMs,
     stdout: execution.stdout,
     stderr: execution.stderr,
+    ...(execution.entries === undefined ? {} : {
+      plannedEntryCount: execution.plannedEntryCount!,
+      failedEntryIndex: execution.failedEntryIndex!,
+      entries: execution.entries,
+    }),
   };
   if (execution.reason === 'signal') {
     return {
@@ -1546,7 +1555,7 @@ function buildPreflightFailEvidence(
     reason,
     fingerprint: null,
     provenanceHeadSha: null,
-    command: testSuite?.command ?? null,
+    command: testSuite?.command ?? testSuite?.commands?.[0]?.command ?? null,
     workingDirectory: null,
     startedAt: timestamp,
     endedAt: timestamp,

@@ -9,6 +9,7 @@ import {
 } from './full-suite-fingerprint.js';
 
 export const FULL_SUITE_EVIDENCE_VERSION = 4 as const;
+export const FULL_SUITE_LIST_EVIDENCE_VERSION = 5 as const;
 export const FULL_SUITE_EVIDENCE_PATH = '.pipeline/test-suite-evidence.json';
 export const FULL_SUITE_DIAGNOSTIC_LIMIT = 16_384;
 export const FULL_SUITE_TRUNCATION_MARKER = '\n...[output truncated]...\n';
@@ -30,7 +31,7 @@ type FullSuiteNonSignalFailureReason = Exclude<FullSuiteFailureReason, 'signal'>
  * version bump rolls through the suite. Persistence always stamps v4 and
  * readers never treat v3 as current.
  */
-type FullSuiteEvidenceWriteVersion = typeof FULL_SUITE_EVIDENCE_VERSION | 3;
+type FullSuiteEvidenceWriteVersion = typeof FULL_SUITE_EVIDENCE_VERSION | typeof FULL_SUITE_LIST_EVIDENCE_VERSION | 3;
 
 export type FullSuiteEvidenceMode = 'aggregate' | 'scoped';
 
@@ -75,6 +76,15 @@ export interface FullSuitePassEvidence {
   exitCode: 0;
   stdout: string;
   stderr: string;
+  /** v5 aggregate-list proof; omitted for scalar and scoped compatibility. */
+  plannedEntryCount?: number;
+  entries?: FullSuiteEvidenceAttempt[];
+}
+
+export interface FullSuiteEvidenceAttempt {
+  index: number;
+  result: 'passed' | 'failed';
+  durationMs: number;
 }
 
 interface FullSuiteFailEvidenceBase {
@@ -90,6 +100,9 @@ interface FullSuiteFailEvidenceBase {
   durationMs: number;
   stdout: string;
   stderr: string;
+  plannedEntryCount?: number;
+  failedEntryIndex?: number;
+  entries?: FullSuiteEvidenceAttempt[];
 }
 
 export type FullSuiteFailEvidence = FullSuiteFailEvidenceBase &
@@ -270,11 +283,22 @@ function isSelectors(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(isNonEmptyString);
 }
 
+function hasValidListShape(value: Record<string, unknown>, pass: boolean): boolean {
+  const hasAny = value.plannedEntryCount !== undefined || value.entries !== undefined || value.failedEntryIndex !== undefined;
+  if (!hasAny) return value.version === FULL_SUITE_EVIDENCE_VERSION;
+  if (value.version !== FULL_SUITE_LIST_EVIDENCE_VERSION || !Number.isInteger(value.plannedEntryCount) || (value.plannedEntryCount as number) < 1 || !Array.isArray(value.entries)) return false;
+  const entries = value.entries as unknown[];
+  if (entries.length < 1 || entries.length > (value.plannedEntryCount as number)) return false;
+  if (!entries.every((entry, index) => isRecord(entry) && entry.index === index && (entry.result === 'passed' || entry.result === 'failed') && Number.isFinite(entry.durationMs) && (entry.durationMs as number) >= 0)) return false;
+  if (pass) return entries.length === value.plannedEntryCount && entries.every((entry) => (entry as Record<string, unknown>).result === 'passed') && value.failedEntryIndex === undefined;
+  return Number.isInteger(value.failedEntryIndex) && value.failedEntryIndex === entries.length - 1 && (entries.at(-1) as Record<string, unknown>).result === 'failed';
+}
+
 function isPassEvidence(
   value: Record<string, unknown>,
 ): value is Record<string, unknown> & FullSuitePassEvidence {
   return (
-    value.version === FULL_SUITE_EVIDENCE_VERSION &&
+    (value.version === FULL_SUITE_EVIDENCE_VERSION || value.version === FULL_SUITE_LIST_EVIDENCE_VERSION) &&
     value.outcome === 'PASS' &&
     value.reason === 'exit_zero' &&
     isNonEmptyString(value.fingerprint) &&
@@ -288,6 +312,7 @@ function isPassEvidence(
     isNullableBoundedNonEmptyString(value.command) &&
     isNullableBoundedNonEmptyString(value.workingDirectory) &&
     value.exitCode === 0 &&
+    hasValidListShape(value, true) &&
     hasValidCommonFields(value)
   );
 }
@@ -304,7 +329,7 @@ function isFailEvidence(
       (value.exitCode === null ||
         (Number.isInteger(value.exitCode) && value.exitCode !== 0));
   return (
-    value.version === FULL_SUITE_EVIDENCE_VERSION &&
+    (value.version === FULL_SUITE_EVIDENCE_VERSION || value.version === FULL_SUITE_LIST_EVIDENCE_VERSION) &&
     value.outcome === 'FAIL' &&
     typeof reason === 'string' &&
     FAILURE_REASONS.has(reason as FullSuiteFailureReason) &&
@@ -314,6 +339,7 @@ function isFailEvidence(
     isNullableBoundedNonEmptyString(value.command) &&
     isNullableBoundedNonEmptyString(value.workingDirectory) &&
     hasValidTermination &&
+    hasValidListShape(value, false) &&
     hasValidCommonFields(value)
   );
 }
@@ -339,7 +365,7 @@ export async function writeFullSuiteEvidence(
       : sanitizeFullSuiteDiagnosticOutput(evidence.workingDirectory, secretValues) || null;
     const persisted: FullSuiteEvidence = {
       ...evidence,
-      version: FULL_SUITE_EVIDENCE_VERSION,
+      version: evidence.entries === undefined ? FULL_SUITE_EVIDENCE_VERSION : FULL_SUITE_LIST_EVIDENCE_VERSION,
       ...(evidence.outcome === 'PASS'
         ? {
             mode: evidence.mode ?? 'aggregate',
@@ -395,7 +421,7 @@ export async function readFullSuiteEvidence(
   if (!isRecord(parsed)) return { usable: false, reason: 'corrupt' };
   if (
     typeof parsed.version === 'number' &&
-    parsed.version !== FULL_SUITE_EVIDENCE_VERSION
+    parsed.version !== FULL_SUITE_EVIDENCE_VERSION && parsed.version !== FULL_SUITE_LIST_EVIDENCE_VERSION
   ) {
     return { usable: false, reason: 'unsupported_version' };
   }

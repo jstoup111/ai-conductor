@@ -526,6 +526,13 @@ function normalizeSuiteConfig(
 ): string {
   const normalized = {
     command: testSuite.command,
+    // Ordered effective declaration is part of the unbudgetable project
+    // configuration identity; changing a later suite must invalidate proof.
+    commands: testSuite.commands?.map((entry) => ({
+      command: entry.command,
+      working_directory: entry.working_directory ?? null,
+      timeout_seconds: entry.timeout_seconds ?? null,
+    })) ?? null,
     working_directory: workingDirectory,
     timeout_seconds: testSuite.timeout_seconds ?? null,
     inputs: sortedUnique(normalizedInputs),
