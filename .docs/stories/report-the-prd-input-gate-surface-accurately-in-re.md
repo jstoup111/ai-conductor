@@ -6,7 +6,7 @@ Track: technical
 
 Tier: S
 
-Approved by the operator on 2026-09-06 (delegated). Scope is the preserved and invalidated gate-decision event payloads emitted after a file-changing rebase. Gate preserve/invalidate decisions, event field names, and the delta the engine feeds the classifier are unchanged.
+Approved by the operator on 2026-09-06 (delegated). Scope is the preserved and invalidated gate-decision event payloads emitted after a file-changing rebase. Relevant changes to the active feature’s review inputs also invalidate those reviews. Unrelated features’ documents do not trigger reruns; event field names and the ordinary code/test invalidation policy are unchanged.
 
 ## Story 1: A PRD-input gate explains its own preservation and invalidation
 
@@ -43,15 +43,21 @@ As a maintainer adding a future gate surface kind, I want the payload projection
 
 #### Negative Paths
 
-- Given a delta matrix covering feature runtime, foreign runtime, feature test, document input, and empty deltas, when gates are classified and their payloads projected, then every preserved gate reports an empty considered delta, every invalidated gate reports non-empty matched paths, and each gate's preserve or invalidate decision is the one the classifier produced before this change.
+- Given a delta matrix covering feature runtime, foreign runtime, feature test, document input, and empty deltas, when gates are classified and their payloads projected, then every preserved gate reports an empty considered delta, every invalidated gate reports non-empty matched paths, and classification and emitted explanations agree.
 - Given a rebase outcome whose feature surface is uncomputable, when the emitter runs, then it still emits only the pre-verified preservation with its uncomputable declaration and invents no classification-derived payload.
 
 ### Done When
 
 - [ ] A projection test proves the projection's kind set is exactly the kind set the gate surface map uses, with no fallback branch serving an unnamed kind.
 - [ ] Across the delta matrix, every preserved gate event carries an empty considered delta and every invalidated gate event carries non-empty matched paths.
-- [ ] The existing classification expectations for the delta matrix pass unchanged, the drift-budget preserved event still carries its basis, and the uncomputable-surface path still emits only the pre-verified preservation.
+- [ ] The existing code/test classification expectations pass unchanged, the drift-budget preserved event still carries its basis, and the uncomputable-surface path still emits only the pre-verified preservation.
 
 ## Negative-category review
 
-Invalid and out-of-scope input is covered by the document path outside the declared prefixes and by the empty delta in the matrix. Data integrity is covered by the requirement that a payload agree with its own classification for every kind and that prior decisions are unchanged. Dependency unavailability is covered by the uncomputable feature surface, which is the emitter's only degraded input; partial failure is covered by the drift-budget preservation retaining its distinct basis alongside ordinary preservation. The change is pure in-process path arithmetic over values already computed: it opens no file, no socket, no queue, no datastore, and no transaction, so timeout, permission, concurrency, resource-exhaustion, cascade-deletion, and idempotency categories are inapplicable. Existing rebase-outcome and gate-verdict tests remain authoritative for the surrounding kickback behavior.
+Invalid and out-of-scope input is covered by unrelated feature documents and paths outside the declared prefixes. Verdicts and event payloads must agree. Existing code/test and uncomputable-surface behavior remains covered by the rebase tests. Active document resolution reuses existing artifact readers; real local-Git tests cover relevant, unrelated, and conflicting document changes.
+
+## Document-change recovery
+
+- A real rebase changing the active feature’s stories or PRD reruns the affected PRD and coverage reviews. Plan/coherence changes also invalidate coverage binding, including task Done when edits.
+- A document-only change leaves BUILD and aggregate test proof intact; unrelated feature documents leave existing approvals intact.
+- Normal finish and conflict-resolution recovery use the same relevant-document rules and report the paths that caused invalidation.

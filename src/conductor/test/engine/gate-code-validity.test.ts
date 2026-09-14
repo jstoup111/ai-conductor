@@ -396,6 +396,25 @@ describe('gateVerdictStillValid', () => {
     },
   );
 
+  it.each([
+    ['.docs/stories/referenced-story.md', 'rerun'],
+    ['.docs/plans/active.md', 'preserve'],
+    ['.docs/coherence/active.md', 'preserve'],
+    ['.docs/stories/foreign.md', 'preserve'],
+  ])('prd_audit resume scopes review inputs at %s to the active plan', async (path, expected) => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const plan = '**Stories:** .docs/stories/referenced-story.md\n';
+    const baseline = await commit(s, {
+      '.docs/plans/active.md': plan,
+      '.docs/stories/referenced-story.md': '# original criteria\n',
+      '.pipeline/conduct-state.json': JSON.stringify({ feature_desc: 'active' }),
+    }, 'approved inputs');
+    await commit(s, { [path]: path.includes('/plans/') ? `${plan}Updated Done when.\n` : 'updated input\n' }, 'input update');
+
+    expect(await gateVerdictStillValid({ projectRoot: s.repo, git: s.git }, 'prd_audit', baseline)).toBe(expected);
+  });
+
   it('feature-codetest (build_review): returns preserve when the delta touches only a FOREIGN runtime path', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);
