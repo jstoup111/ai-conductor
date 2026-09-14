@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-14T21:17:01.149Z
 Slug: one-transient-failure-in-a-validation-group-member
 Class: needs-human
 Halting step: prd_audit
