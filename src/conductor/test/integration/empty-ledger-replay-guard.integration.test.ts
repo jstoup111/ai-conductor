@@ -55,7 +55,10 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  // Git can briefly continue writing object files after the final commit (for
+  // example, from auto-GC). Node retries this documented ENOTEMPTY teardown
+  // race only when maxRetries is configured.
+  await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe('empty-ledger replay guard (Task 14, final): 24 shipped specs, empty .daemon/processed', () => {
