@@ -137,8 +137,47 @@ describe('GitHub invocation audit', () => {
 
   it('allows the guarded adapter but rejects raw GitHub HTTP clients elsewhere', () => {
     const source = "import { Octokit } from '@octokit/rest'; new Octokit();";
-    expect(auditGithubInvocationSource('engine/tracker-client.ts', source)).toEqual([]);
+    expect(auditGithubInvocationSource('engine/tracker-client.ts', source)[0]).toMatchObject({ message: 'unapproved raw GitHub HTTP client invocation outside guarded adapter' });
     expect(auditGithubInvocationSource('engine/bypass.ts', source)[0]).toMatchObject({ message: 'unapproved raw GitHub HTTP client invocation outside guarded adapter' });
+  });
+
+  it('permits only the actual production gh transport call, not its whole adapter file', () => {
+    const productionTransport = [
+      "import { execFile as execFileCb } from 'node:child_process';",
+      "import { promisify } from 'node:util';",
+      'const execFileP = promisify(execFileCb);',
+      'function makeProductionGh(args: string[]) { return execFileP(\'gh\', args); }',
+    ].join('\n');
+    const trackerBypass = [
+      "import { execFile } from 'node:child_process';",
+      "await execFile('gh', ['pr', 'create']);",
+    ].join('\n');
+    const remoteBypass = [
+      "import { execFile } from 'node:child_process';",
+      "await execFile('git', ['push', 'origin', 'main']);",
+    ].join('\n');
+    const guardedRemoteTransport = [
+      'async function executeRemoteGit(args: string[], dependencies: any) {',
+      '  await dependencies.runRemoteGit([...args], { cwd: dependencies.cwd });',
+      '}',
+    ].join('\n');
+    const remoteRunnerBypass = [
+      'async function unrelated(dependencies: any) {',
+      "  await dependencies.runRemoteGit(['push', 'origin', 'main'], { cwd: dependencies.cwd });",
+      '}',
+    ].join('\n');
+
+    expect(auditGithubInvocationSource('engine/tracker-client.ts', productionTransport)).toEqual([]);
+    expect(auditGithubInvocationSource('engine/tracker-client.ts', trackerBypass)).toEqual([
+      expect.objectContaining({ line: 2, message: 'direct GitHub mutation outside guarded adapter' }),
+    ]);
+    expect(auditGithubInvocationSource('engine/remote-git-operations.ts', remoteBypass)).toEqual([
+      expect.objectContaining({ line: 2, message: 'direct remote Git mutation outside executeRemoteGit' }),
+    ]);
+    expect(auditGithubInvocationSource('engine/remote-git-operations.ts', guardedRemoteTransport)).toEqual([]);
+    expect(auditGithubInvocationSource('engine/remote-git-operations.ts', remoteRunnerBypass)).toEqual([
+      expect.objectContaining({ line: 2, message: 'direct remote Git mutation outside executeRemoteGit' }),
+    ]);
   });
 
   it('scans runtime only and emits a diagnostic for its actual executable site', async () => {
