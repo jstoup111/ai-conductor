@@ -15,7 +15,11 @@ describe('production FINISH coordinator wiring', () => {
 
     for (const source of [foreground, daemon]) {
       expect(source).toContain('createProductionFinishPublicationCoordinator');
+      expect(source).toContain('createProvenanceGuardedFinishPresentationRepair');
       expect(source).toMatch(/new Conductor\(\{[\s\S]*?finishPublication:\s*createProductionFinishPublicationCoordinator\(/);
+      expect(source).toMatch(
+        /repairPresentation:\s*createProvenanceGuardedFinishPresentationRepair\(\{[\s\S]*?git:\s*finishPublicationGit,[\s\S]*?gh:\s*finishPublicationGh/,
+      );
     }
 
     expect(foreground).toMatch(

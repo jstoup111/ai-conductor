@@ -55,7 +55,7 @@ import {
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import {
   Conductor,
-  createFinishPresentationRepair,
+  createProvenanceGuardedFinishPresentationRepair,
   type OperatorParkedTermination,
 } from './engine/conductor.js';
 import { createProductionAcceptanceRedExec } from './engine/acceptance-red-runner.js';
@@ -1325,6 +1325,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const auditWriter = new AuditTrailWriter(wt.path);
     auditWriter.subscribe(featureEvents);
 
+    const finishPublicationGit = makeFinishPublicationGit();
+    const finishPublicationGh = makeProductionGh();
     const conductor = new Conductor({
       stateFilePath,
       stateStore,
@@ -1343,11 +1345,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         projectRoot: wt.path,
         stateFilePath,
         baseBranch,
-        git: makeFinishPublicationGit(),
-        gh: makeProductionGh(),
-        repairPresentation: createFinishPresentationRepair({
+        git: finishPublicationGit,
+        gh: finishPublicationGh,
+        repairPresentation: createProvenanceGuardedFinishPresentationRepair({
           projectRoot: wt.path,
-          gh: makeProductionGh(),
+          git: finishPublicationGit,
+          gh: finishPublicationGh,
+          baseBranch,
           log: featureLog,
         }),
         observeReleaseReadiness: createProductionReleaseReadinessObserver({

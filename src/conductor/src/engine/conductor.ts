@@ -482,6 +482,8 @@ export function createFinishPresentationRepair(input: {
   projectRoot: string;
   gh: GhRunner;
   operations?: GithubOperationRunner;
+  /** Live CLI roots require every presentation mutation to use operations. */
+  requireGuardedOperations?: boolean;
   log?: (message: string) => void;
   restoreReleaseMetadata?: (prUrl: string) => Promise<void>;
 }): (request: { prUrl: string; state: ConductState; mode?: 'capture-only' | 'full' }) => Promise<void> {
@@ -503,7 +505,14 @@ export function createFinishPresentationRepair(input: {
     } catch { /* optional body evidence */ }
     try {
       const haltReason = await readFile(join(cwd, '.pipeline/halt-user-input-required'), 'utf8').catch(() => null);
-      await postHaltHistoryComment({ gh, cwd, prUrl, haltReason, log: repairLog });
+      const outcome = await postHaltHistoryComment({
+        gh, cwd, prUrl, haltReason,
+        ...(input.requireGuardedOperations ? { operations: input.operations } : {}),
+        log: repairLog,
+      });
+      if (input.requireGuardedOperations && outcome === 'refused') {
+        throw new Error('guarded halt-history repair refused');
+      }
     } catch (error) { repairLog(`[conductor-repair] postHaltHistoryComment failed: ${error}`); }
     if (mode === 'capture-only') return;
     try {
@@ -517,8 +526,49 @@ export function createFinishPresentationRepair(input: {
     } catch (error) { repairLog(`[conductor-repair] bodyFloor failed: ${error}`); throw error; }
     await input.restoreReleaseMetadata?.(prUrl);
     try {
-      await ensureShipReady(gh, cwd, prUrl, repairLog);
+      const outcome = await ensureShipReady(
+        gh, cwd, prUrl, repairLog, undefined,
+        input.requireGuardedOperations ? input.operations : undefined,
+      );
+      if (input.requireGuardedOperations && outcome === 'refused') {
+        throw new Error('guarded ready-for-review repair refused');
+      }
     } catch (error) { repairLog(`[conductor-repair] ensureShipReady failed: ${error}`); throw error; }
+  };
+}
+
+/**
+ * Compose FINISH presentation repair at a live CLI root.  The guarded runner
+ * is deliberately resolved for each repair attempt: its authorization reads
+ * the current committed owner evidence when a mutation is requested, rather
+ * than retaining a decision from coordinator construction.
+ */
+export function createProvenanceGuardedFinishPresentationRepair(input: {
+  projectRoot: string;
+  git: GitRunner;
+  gh: GhRunner;
+  baseBranch: string;
+  log?: (message: string) => void;
+}): (request: { prUrl: string; state: ConductState }) => Promise<void> {
+  return async ({ prUrl, state }) => {
+    const publication = await createShipDraftPublicationDependencies({
+      cwd: input.projectRoot,
+      branch: state.worktree_branch,
+      baseBranch: input.baseBranch,
+      featureDesc: state.feature_desc,
+      git: input.git,
+      gh: input.gh,
+    });
+    if (!publication) {
+      throw new Error('guarded finish presentation repair unavailable: committed feature provenance could not be resolved');
+    }
+    await createFinishPresentationRepair({
+      projectRoot: input.projectRoot,
+      gh: input.gh,
+      operations: publication.operations,
+      requireGuardedOperations: true,
+      log: input.log,
+    })({ prUrl, state });
   };
 }
 
