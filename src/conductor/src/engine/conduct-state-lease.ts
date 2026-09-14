@@ -468,6 +468,11 @@ export function createConductStateLease(
         filesystem.readRecoveryClaim(terminalClaimPath),
       ]);
     } catch (error) {
+      // The owner record or the terminal claim disappeared before authority was
+      // confirmed: the generation was released or replaced under this contender.
+      // Nothing was moved, so it is a retryable race under the same deadline
+      // (ADR decision 4), not a refusal.
+      if (isMissing(error)) return { status: 'vanished' };
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
       return {
         status: 'refused',

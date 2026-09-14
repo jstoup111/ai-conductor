@@ -418,6 +418,41 @@ describe('conduct-state lease', () => {
     if (result.ok) await expect(result.handle.release()).resolves.toEqual({ ok: true });
   });
 
+  it('retries when the owner record vanishes before recovery confirms its authority', async () => {
+    const statePath = '/worktree/vanished-owner-confirmation/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared, pid: 101, newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    let claimWritten = false;
+    let vanished = false;
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async writeRecoveryClaim(path, contents): Promise<void> {
+        await shared.writeRecoveryClaim(path, contents);
+        claimWritten = true;
+      },
+      async readOwner(path): Promise<string> {
+        if (claimWritten && !vanished) {
+          // The dead owner's generation is released between the recovery claim
+          // and the pre-quarantine identity confirmation.
+          vanished = true;
+          await shared.releaseDirectory(`${statePath}.lease`);
+          throw Object.assign(new Error(`ENOENT: no such file or directory, open '${path}'`), { code: 'ENOENT' });
+        }
+        return shared.readOwner(path);
+      },
+    };
+
+    const result = await createConductStateLease(statePath, {
+      filesystem, pid: 404, newToken: () => 'reacquired', processIsLive: () => false,
+    }).acquire();
+
+    expect({ ok: result.ok, vanished, quarantined: shared.hasDirectory(`${statePath}.lease`) }).toEqual({ ok: true, vanished: true, quarantined: true });
+    if (result.ok) await expect(result.handle.release()).resolves.toEqual({ ok: true });
+  });
+
   it('lets a losing recoverer acquire after the elected successor releases', async () => {
     const statePath = '/worktree/dead-root-contenders/.pipeline/conduct-state.json';
     const shared = sharedLeaseFilesystem();
