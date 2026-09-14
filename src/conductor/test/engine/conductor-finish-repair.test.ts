@@ -15,6 +15,30 @@ import { tmpdir } from 'os';
 // never forks real git processes even if featureDesc were set.
 vi.mock('execa', () => ({ execa: vi.fn() }));
 
+// The production completion context derives its operation guard through these
+// seams. Keep the fixture on that path while replacing only process/user-config
+// boundaries, so every presentation mutation is exercised through the guard.
+vi.mock('../../src/engine/pr-labels.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/pr-labels.js')>();
+  return {
+    ...actual,
+    makeProductionGit: () => async (args: string[]) => {
+      if (args.join(' ') === 'config --get remote.origin.url') {
+        return { stdout: 'https://github.com/example/repo.git\n' };
+      }
+      if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
+      return { stdout: '' };
+    },
+  };
+});
+vi.mock('../../src/engine/owner-gate/machine-identity.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/owner-gate/machine-identity.js')>();
+  return {
+    ...actual,
+    readMachineOwnerConfig: vi.fn(async () => ({ spec_owner: 'alice' })),
+  };
+});
+
 const repairFailure = vi.hoisted(() => ({ enabled: false }));
 vi.mock('../../src/engine/halt-pr-rehabilitation.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/halt-pr-rehabilitation.js')>();
@@ -27,7 +51,7 @@ vi.mock('../../src/engine/halt-pr-rehabilitation.js', async (importOriginal) => 
   };
 });
 
-import { Conductor } from '../../src/engine/conductor.js';
+import { Conductor as ProductionConductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
@@ -35,6 +59,17 @@ import { HALT_PR_BANNER_LINES, NEEDS_REMEDIATION_BODY_MARKER } from '../../src/e
 import { HALT_HISTORY_COMMENT_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
+
+class Conductor extends ProductionConductor {
+  constructor(options: ConstructorParameters<typeof ProductionConductor>[0]) {
+    super({
+      baseBranch: 'main',
+      featureDesc: 'test feature',
+      worktreeBranch: 'feat/test-feature',
+      ...options,
+    });
+  }
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
