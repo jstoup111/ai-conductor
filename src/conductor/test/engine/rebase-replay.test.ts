@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { compareReplayTree, type ReplayIdentity } from '../../src/engine/rebase-replay.js';
+import { captureReplayIdentity, compareReplayTree, type ReplayIdentity } from '../../src/engine/rebase-replay.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 
 const identity: ReplayIdentity = {
@@ -41,5 +41,21 @@ describe('compareReplayTree', () => {
     ['malformed tree', identity, [{ exitCode: 0, stdout: 'not-an-object\n' }, { exitCode: 0, stdout: 'e'.repeat(40) }]],
   ] as const)('fails closed for %s', async (_name, replay, results) => {
     await expect(compareReplayTree(scripted(results), replay)).resolves.toMatchObject({ kind: 'unproved' });
+  });
+});
+
+describe('captureReplayIdentity', () => {
+  it('retains the target object captured before replay instead of resolving a mutable ref afterward', async () => {
+    const target = 'c'.repeat(40);
+    const completed = 'd'.repeat(40);
+    const git = scripted([{ exitCode: 0, stdout: `${completed}\n` }]);
+
+    await expect(captureReplayIdentity(git, 'a'.repeat(40), 'b'.repeat(40), target))
+      .resolves.toEqual({
+        preRebaseHead: 'a'.repeat(40),
+        mergeBase: 'b'.repeat(40),
+        target,
+        completedHead: completed,
+      });
   });
 });
