@@ -135,6 +135,12 @@ export interface BuildReviewCoordinationInput {
   readonly preflight: () => Promise<TautologyPreflightResult>;
   /** Resolved once per dispatch by the caller; never read from the environment here (D6). */
   readonly engineIdentity: BuildReviewCoordinationEngineIdentity;
+  /**
+   * Production candidate dispatch resolves its cache identity only after a
+   * provider has prepared.  Keep the coordinator cache seam for callers that
+   * do not have that lifecycle boundary (and for its focused contract tests).
+   */
+  readonly useCandidateCache?: boolean;
   readonly readCache: (
     branch: BuildReviewDispatchableRubric,
     projection: BuildReviewRubricProjection,
@@ -608,11 +614,82 @@ export async function coordinateBuildReviewRubrics(
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "cache-read-failed", excerpt: detail });
       continue;
     }
-    // Cache identity includes the resolved provider/model.  Candidate
-    // preparation owns lookup and writes; a coordinator cannot safely choose
-    // a preferred-provider key before that boundary exists.
-    await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
-    misses.push(branch);
+    // Cache identity includes the resolved provider/model. Production
+    // candidate preparation owns lookup and writes; the legacy coordinator
+    // seam remains a complete cache boundary for callers without that
+    // lifecycle context.
+    if (input.useCandidateCache) {
+      await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
+      misses.push(branch);
+      continue;
+    }
+    const engineIdentity: BuildReviewEngineIdentity = {
+      engineStamp: input.engineIdentity.engineStamp,
+      skillDigest: skillDigest.digest,
+    };
+    const policyFingerprint = fingerprintBuildReviewRubricPolicy(branch.policy);
+    const semanticIdentity = builtinCacheIdentity(branch, projection, input.engineIdentity, skillDigest.digest);
+    let candidate: BuildReviewCacheEntryCandidate | undefined;
+    try {
+      candidate = await input.readCache(branch, projection, policyFingerprint, semanticIdentity);
+    } catch {
+      resolved.set(branch.rubric, infrastructure(branch.rubric, "cache-read-failed"));
+      await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "cache-read-failed" });
+      continue;
+    }
+    const cache = classifyBuildReviewCacheLookup(candidate, {
+      rubric: branch.rubric,
+      contractVersion: projection.contractVersion,
+      projectionVersion: projection.projectionVersion,
+      projectionDigest: projection.digest,
+      policyFingerprint,
+      engineIdentity,
+      semanticIdentity,
+      lapId: input.lapId,
+      snapshotDigest: projection.snapshotDigest,
+    });
+    if (cache.kind === "miss" && (cache.reason === "engine-version-mismatch" || cache.reason === "skill-digest-mismatch")) {
+      await input.emit?.({
+        type: "build_review_cache_discarded",
+        rubric: branch.rubric,
+        lapId: input.lapId,
+        reason: cache.reason,
+        ...(cache.cachedEngineStamp === undefined ? {} : { cachedEngineStamp: cache.cachedEngineStamp }),
+        currentEngineStamp: input.engineIdentity.engineStamp,
+      });
+    }
+    const cachedResult = cache.kind === "hit"
+      ? validateBuildReviewDispatchedResult(cache.hit.result, branch.rubric, projection)
+      : undefined;
+    if (cache.kind === "hit" && cachedResult) {
+      let result: BuildReviewJudgedResult | undefined;
+      try {
+        result = validWrittenArtifact(await input.writeArtifact({
+          rubric: branch.rubric,
+          lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest,
+          result: cachedResult,
+          provenance: cache.hit.provenance,
+        }), branch.rubric, projection);
+        resolved.set(branch.rubric, result
+          ? { kind: "cache-hit", rubric: branch.rubric, result }
+          : infrastructure(branch.rubric, "artifact-write-failed"));
+        await input.emit?.(result
+          ? { type: "build_review_cache_hit", rubric: branch.rubric, lapId: input.lapId }
+          : { type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "artifact-write-failed" });
+      } catch {
+        resolved.set(branch.rubric, infrastructure(branch.rubric, "artifact-write-failed"));
+        await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "artifact-write-failed" });
+      }
+      if (result) {
+        await input.emit?.({ type: "build_review_rubric_result", rubric: branch.rubric, lapId: input.lapId, verdict: result.verdict });
+        await emitScopeSummary(input.emit, input);
+        await emitScopeIncomplete(input.emit, result, input.lapId);
+      }
+    } else {
+      await input.emit?.({ type: "build_review_rubric_started", rubric: branch.rubric, lapId: input.lapId });
+      misses.push(branch);
+    }
   }
 
   const dispatched = await runAuxiliaryGroupBranches(misses.map((branch) => ({ memberId: branch.rubric, policy: branch })), input.config.maxParallel,
@@ -647,6 +724,25 @@ export async function coordinateBuildReviewRubrics(
           return { rubric, branch: infrastructure(rubric, "artifact-write-failed") };
         }
         if (!written) return { rubric, branch: infrastructure(rubric, "artifact-write-failed") };
+        if (!input.useCandidateCache) {
+          const skillDigest = input.engineIdentity.skillDigests[rubric];
+          if (skillDigest?.kind !== "resolved") return { rubric, branch: infrastructure(rubric, "cache-write-failed") };
+          try {
+            await input.writeCache({
+              version: 2,
+              rubric,
+              contractVersion: projection.contractVersion,
+              projectionVersion: projection.projectionVersion,
+              projectionDigest: projection.digest,
+              policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
+              engineIdentity: { engineStamp: input.engineIdentity.engineStamp, skillDigest: skillDigest.digest },
+              semanticIdentity: builtinCacheIdentity(branch, projection, input.engineIdentity, skillDigest.digest),
+              result: written,
+            });
+          } catch {
+            return { rubric, branch: infrastructure(rubric, "cache-write-failed") };
+          }
+        }
         return { rubric, branch: { kind: "dispatched", rubric, result: written } as BuildReviewCoordinatedBranch };
       } catch {
         return { rubric, branch: infrastructure(rubric, "provider-error") };
