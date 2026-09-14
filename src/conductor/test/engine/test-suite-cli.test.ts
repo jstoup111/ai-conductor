@@ -116,6 +116,40 @@ describe('test-suite CLI adapter', () => {
     },
   );
 
+  it('prints the verifier list-failure description alongside ordinal guidance', async () => {
+    const cli = await import('../../src/engine/test-suite-cli.js');
+    const output: string[] = [];
+    const exitCode = await cli.dispatchTestSuiteCommand({ kind: 'run' }, {
+      verifier: {
+        inspect: async () => ({ status: 'STALE' as const, reason: 'missing' as const }),
+        recordPreservation: async () => {},
+        ensure: async () => ({
+          status: 'FAILED' as const,
+          reason: 'signal' as const,
+          message: 'Suite #2/3 (index 1) failed: command npm run integration; directory packages/integration; duration 42ms; signal SIGTERM; 1 unexecuted.',
+          evidence: {
+            ...PASS_EVIDENCE,
+            version: 5 as const,
+            outcome: 'FAIL' as const,
+            reason: 'signal' as const,
+            fingerprint: null,
+            provenanceHeadSha: null,
+            exitCode: null,
+            signal: 'SIGTERM' as const,
+            plannedEntryCount: 3,
+            failedEntryIndex: 1,
+            entries: [{ index: 0, result: 'passed' as const, durationMs: 1, command: 'npm run test:unit', workingDirectory: 'packages/unit', exitCode: 0, signal: null, terminationReason: null, stdout: 'unit passed', stderr: '' }, { index: 1, result: 'failed' as const, durationMs: 42, command: 'npm run test:integration', workingDirectory: 'packages/integration', exitCode: null, signal: 'SIGTERM' as const, terminationReason: 'signal' as const, stdout: '', stderr: 'terminated' }],
+          },
+        }),
+      },
+      print: (line) => output.push(line),
+    });
+    expect({ exitCode, output: output.join('\n') }).toEqual({
+      exitCode: 1,
+      output: expect.stringContaining('Suite #2/3 (index 1) failed'),
+    });
+  });
+
   it.each([
     ['missing_config', 'Project config must declare test_suite'],
     ['invalid_config', 'test_suite.command must be a non-empty string'],

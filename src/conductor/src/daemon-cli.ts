@@ -2622,6 +2622,11 @@ function buildReviewLapTag(lapId: string): string {
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
+    case 'test_suite_verification':
+      if (event.executionSummary) {
+        log(`${dot} test suite ${event.executionSummary.attemptedEntryCount}/${event.executionSummary.plannedEntryCount}: ${event.executionSummary.entries.map((entry) => `#${entry.index + 1} ${entry.result} (${entry.durationMs}ms)`).join(', ')}`);
+      }
+      break;
     case 'setup_repair': {
       const rejection = event.disposition === 'rejected'
         ? ` (${event.reason}${event.quarantineRef ? `; ${event.quarantineRef}` : ''})`

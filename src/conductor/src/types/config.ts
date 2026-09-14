@@ -427,9 +427,17 @@ export interface TestSuiteVerificationConfig {
   drift_budget: Record<TestSuiteDriftCategory, TestSuiteDriftBudgetBound>;
 }
 
+/** A command entry in an ordered aggregate test suite sequence. */
+export interface TestSuiteCommandConfig {
+  command: string;
+  working_directory?: string;
+  timeout_seconds?: number;
+}
+
 /** Project-owned aggregate test operation used by full-suite verification. */
 export interface TestSuiteConfig {
   command?: string;
+  commands?: TestSuiteCommandConfig[];
   scoped_command?: string;
   working_directory?: string;
   timeout_seconds?: number;
@@ -438,7 +446,10 @@ export interface TestSuiteConfig {
   verification?: TestSuiteVerificationConfig;
 }
 
-export type AggregateTestSuiteConfig = TestSuiteConfig & { command: string };
+export type AggregateTestSuiteConfig = TestSuiteConfig & (
+  | { command: string }
+  | { commands: TestSuiteCommandConfig[] }
+);
 
 export interface HarnessConfig {
   harness_version?: string;

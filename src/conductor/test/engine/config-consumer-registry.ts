@@ -259,6 +259,10 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   // The verifier resolves the test-suite block before selecting aggregate or
   // scoped execution and applying the configured drift budget.
   'test_suite.verification': consumer(FULL_SUITE_VERIFIER),
+  'test_suite.commands': consumer(FULL_SUITE_EXECUTOR),
+  'test_suite.commands[].command': consumer(FULL_SUITE_EXECUTOR),
+  'test_suite.commands[].working_directory': consumer(FULL_SUITE_EXECUTOR),
+  'test_suite.commands[].timeout_seconds': consumer(FULL_SUITE_EXECUTOR),
   'test_suite.verification.mode': consumer(FULL_SUITE_VERIFIER),
   'test_suite.verification.drift_budget': consumer(FULL_SUITE_VERIFIER),
 

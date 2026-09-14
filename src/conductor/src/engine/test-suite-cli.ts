@@ -76,8 +76,14 @@ export async function dispatchTestSuiteCommand(
     const freshness = result.freshness === undefined
       ? ''
       : ` freshness=${result.freshness.reason}`;
+    const failedEntry = result.evidence?.failedEntryIndex;
+    const listDetail = failedEntry === undefined || failedEntry === null ? '' :
+      ` entry #${failedEntry + 1}/${result.evidence?.plannedEntryCount} failed; `;
+    const failureDescription = result.evidence?.entries === undefined ? '' : `${result.message} `;
     await print(
       `FAILED: full test suite evidence=${result.reason}${freshness}. ` +
+        listDetail +
+        failureDescription +
         `${FAILURE_GUIDANCE[result.reason]} ` +
         'Return to /tdd or /pipeline, fix the failure, then rerun ai-conductor test-suite.',
       true,

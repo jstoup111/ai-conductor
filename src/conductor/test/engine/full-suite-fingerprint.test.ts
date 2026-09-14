@@ -145,6 +145,26 @@ describe('fingerprintFullSuiteInputs', () => {
     expect((await fingerprint(repo)).digest).toBe((await fingerprint(repo)).digest);
   });
 
+  it('keeps the scalar configuration fingerprint golden while distinguishing a declared list', async () => {
+    const repo = await makeRepo({ 'src/main.ts': 'export const value = 1;\n' });
+    const scalar = await fingerprint(repo);
+    const list = await fingerprint(repo, { ...DEFAULT_TEST_SUITE, command: undefined, commands: [{ command: 'npm test' }] });
+    expect(scalar.categoryFingerprints.project_config).toBe('b535a7d4b0cb0d38646f892ab080442e09e9244e739fa8b507be82f0d12fc6c7');
+    expect(list.digest).not.toBe(scalar.digest);
+  });
+
+  it('refuses fingerprinting when a later list entry directory has disappeared', async () => {
+    const repo = await makeRepo({ 'src/main.ts': 'main\n', 'packages/later/.keep': '' });
+    await rm(join(repo, 'packages/later'), { recursive: true, force: true });
+    await expect(fingerprintResult(repo, {
+      command: undefined,
+      commands: [{ command: 'npm test' }, { command: 'npm run later', working_directory: 'packages/later' }],
+    })).resolves.toMatchObject({
+      ok: false,
+      reason: { code: 'invalid_input', path: 'test_suite.commands[1].working_directory' },
+    });
+  });
+
   it('includes tracked file paths', async () => {
     const repo = await makeRepo({ 'src/old.ts': 'same content\n' });
     const before = await fingerprint(repo);

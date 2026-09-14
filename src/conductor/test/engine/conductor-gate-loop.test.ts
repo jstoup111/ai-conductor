@@ -128,6 +128,28 @@ describe('Conductor test-suite member evidence events', () => {
     ]);
   });
 
+  it('projects executed list summaries to their declared public fields', async () => {
+    const { emitted } = await runTestSuiteStep({
+      status: 'EXECUTED',
+      freshness: { status: 'STALE', reason: 'source_changed' },
+      evidence: {
+        plannedEntryCount: 1,
+        entries: [{
+          index: 0, result: 'passed', durationMs: 12,
+          command: 'private command', workingDirectory: '/private/path',
+          exitCode: 0, signal: null, terminationReason: null,
+          stdout: 'private output', stderr: 'private error',
+        }],
+      } as never,
+    });
+    const summary = (emitted[0] as { executionSummary: { entries: Array<Record<string, unknown>> } }).executionSummary;
+
+    expect({ entries: summary.entries, keys: Object.keys(summary.entries[0]!).sort() }).toEqual({
+      entries: [{ index: 0, result: 'passed', durationMs: 12 }],
+      keys: ['durationMs', 'index', 'result'],
+    });
+  });
+
   it('emits the preserved-within-budget verdict with its drift categories', async () => {
     const categories = { source: 3 };
     const { emitted } = await runTestSuiteStep(

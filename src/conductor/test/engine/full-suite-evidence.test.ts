@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   FULL_SUITE_DIAGNOSTIC_LIMIT,
   FULL_SUITE_EVIDENCE_VERSION,
+  FULL_SUITE_LIST_EVIDENCE_VERSION,
   FULL_SUITE_TRUNCATION_MARKER,
   readFullSuiteEvidence,
   sanitizeFullSuiteDiagnosticOutput,
@@ -90,6 +91,84 @@ afterEach(async () => {
 });
 
 describe('full-suite evidence', () => {
+  it('round-trips complete v5 list attempts and zero-attempt preflight failure', async () => {
+    const projectRoot = await makeProject();
+    const listPass: FullSuitePassEvidence = {
+      ...PASS_EVIDENCE,
+      version: FULL_SUITE_LIST_EVIDENCE_VERSION,
+      command: null,
+      workingDirectory: null,
+      plannedEntryCount: 2,
+      entries: [
+        { index: 0, result: 'passed', durationMs: 10, command: 'npm run test:unit', workingDirectory: 'packages/unit', exitCode: 0, signal: null, terminationReason: null, stdout: 'unit passed', stderr: '' },
+        { index: 1, result: 'passed', durationMs: 20, command: 'npm run test:integration', workingDirectory: 'packages/integration', exitCode: 0, signal: null, terminationReason: null, stdout: 'integration passed', stderr: '' },
+      ],
+    };
+    const preflight: FullSuiteFailEvidence = {
+      ...FAIL_EVIDENCE,
+      version: FULL_SUITE_LIST_EVIDENCE_VERSION,
+      command: null,
+      workingDirectory: null,
+      plannedEntryCount: 2,
+      failedEntryIndex: null,
+      entries: [],
+    };
+    await writeFullSuiteEvidence(projectRoot, listPass);
+    const pass = await readFullSuiteEvidence(projectRoot);
+    await writeFullSuiteEvidence(projectRoot, preflight);
+    const fail = await readFullSuiteEvidence(projectRoot);
+    expect({ pass, fail }).toEqual({
+      pass: { usable: true, evidence: listPass },
+      fail: { usable: false, reason: 'not_pass', evidence: preflight },
+    });
+  });
+
+  it.each([
+    {
+      name: 'two failed attempts',
+      mutate: (entries: Record<string, unknown>[]) => [
+        { ...entries[0]!, result: 'failed', exitCode: 7, terminationReason: 'nonzero_exit' },
+        { ...entries[1]!, result: 'failed', exitCode: 8, terminationReason: 'nonzero_exit' },
+      ],
+    },
+    {
+      name: 'a signal failure without its signal',
+      mutate: (entries: Record<string, unknown>[]) => [
+        entries[0]!,
+        { ...entries[1]!, result: 'failed', exitCode: null, signal: null, terminationReason: 'signal' },
+      ],
+    },
+  ])('rejects v5 evidence with $name', async ({ mutate }) => {
+    const projectRoot = await makeProject();
+    const entries = [
+      { index: 0, result: 'passed', durationMs: 10, command: 'npm run unit', workingDirectory: 'packages/unit', exitCode: 0, signal: null, terminationReason: null, stdout: '', stderr: '' },
+      { index: 1, result: 'passed', durationMs: 20, command: 'npm run integration', workingDirectory: 'packages/integration', exitCode: 0, signal: null, terminationReason: null, stdout: '', stderr: '' },
+    ];
+    await writePersisted(projectRoot, {
+      ...PASS_EVIDENCE,
+      version: FULL_SUITE_LIST_EVIDENCE_VERSION,
+      command: null,
+      workingDirectory: null,
+      plannedEntryCount: 2,
+      entries: mutate(entries),
+    });
+
+    await expect(readFullSuiteEvidence(projectRoot)).resolves.toEqual({ usable: false, reason: 'corrupt' });
+  });
+
+  it('rejects scalar command and directory fields on v5 PASS evidence', async () => {
+    const projectRoot = await makeProject();
+    await writePersisted(projectRoot, {
+      ...PASS_EVIDENCE,
+      version: FULL_SUITE_LIST_EVIDENCE_VERSION,
+      command: 'npm test',
+      workingDirectory: 'packages/unit',
+      plannedEntryCount: 1,
+      entries: [{ index: 0, result: 'passed', durationMs: 10, command: 'npm test', workingDirectory: 'packages/unit', exitCode: 0, signal: null, terminationReason: null, stdout: '', stderr: '' }],
+    });
+
+    await expect(readFullSuiteEvidence(projectRoot)).resolves.toEqual({ usable: false, reason: 'corrupt' });
+  });
   it('round-trips optional worktree cleanliness on PASS and FAIL evidence', async () => {
     const projectRoot = await makeProject();
     const passEvidence: FullSuitePassEvidence = {
@@ -556,6 +635,47 @@ describe('full-suite evidence', () => {
           stderr: '',
         },
       },
+    });
+  });
+
+  it('redacts entry fields and gives the shared diagnostic budget to the failed attempt first', async () => {
+    const projectRoot = await makeProject();
+    const secret = 'entry-secret-940';
+    const evidence: FullSuiteFailEvidence = {
+      ...FAIL_EVIDENCE,
+      version: FULL_SUITE_LIST_EVIDENCE_VERSION,
+      command: 'npm test',
+      workingDirectory: 'packages/failing',
+      plannedEntryCount: 2,
+      failedEntryIndex: 1,
+      entries: [
+        { index: 0, result: 'passed', durationMs: 10, command: `unit ${secret}`, workingDirectory: `packages/${secret}`, exitCode: 0, signal: null, terminationReason: null, stdout: `earlier ${secret}`, stderr: `earlier error ${secret}` },
+        { index: 1, result: 'failed', durationMs: 20, command: `integration ${secret}`, workingDirectory: `packages/${secret}`, exitCode: 7, signal: null, terminationReason: 'nonzero_exit', stdout: `failed-start-${secret}${'x'.repeat(FULL_SUITE_DIAGNOSTIC_LIMIT * 2)}-failed-end`, stderr: `failed error ${secret}` },
+      ],
+    };
+
+    await writeFullSuiteEvidence(projectRoot, evidence, [secret]);
+    const persisted = JSON.parse(await readFile(
+      join(projectRoot, '.pipeline/test-suite-evidence.json'), 'utf8',
+    )) as FullSuiteFailEvidence;
+    const attempts = persisted.entries!;
+    const diagnosticBytes = attempts.reduce(
+      (total, entry) => total + Buffer.byteLength(entry.stdout, 'utf8') + Buffer.byteLength(entry.stderr, 'utf8'),
+      0,
+    );
+
+    expect({
+      leaked: JSON.stringify(persisted).includes(secret),
+      diagnosticBytes,
+      failedMarked: attempts[1]!.stdout.includes(FULL_SUITE_TRUNCATION_MARKER),
+      failedRetainedFirst: attempts[1]!.stdout.startsWith('failed-start-'),
+      earlierAllocatedAfterFailure: attempts[0]!.stdout,
+    }).toEqual({
+      leaked: false,
+      diagnosticBytes: FULL_SUITE_DIAGNOSTIC_LIMIT,
+      failedMarked: true,
+      failedRetainedFirst: true,
+      earlierAllocatedAfterFailure: '',
     });
   });
 

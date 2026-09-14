@@ -193,6 +193,7 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
 ] satisfies Array<ConductorEvent['type']>;
 
 const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
+  'test_suite_verification',
   'build_review_cache_discarded',
   'build_review_rubric_started',
   'build_review_rubric_result',

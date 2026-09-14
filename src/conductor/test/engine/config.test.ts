@@ -1,10 +1,22 @@
-// Covers: task:1, task:2, task:2.1, task:3, task:9
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+// Covers: task:1, task:2, task:2.1, task:3, task:4, task:5, task:9
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+
+const userConfigFixture = vi.hoisted(() => ({ path: '' }));
+
+vi.mock('../../src/engine/user-config.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/user-config.js')>();
+  return {
+    ...actual,
+    readUserConfig: (path?: string) => actual.readUserConfig(path ?? userConfigFixture.path),
+  };
+});
+
 import {
   loadConfig,
+  loadMergedConfig,
   validateConfig,
   DEPRECATED_BUILD_REVIEW_RUBRIC_IDS,
   disabledStepNames,
@@ -26,6 +38,7 @@ describe('config', () => {
   });
 
   afterEach(async () => {
+    userConfigFixture.path = '';
     await rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -1179,6 +1192,241 @@ steps:
   });
 
   describe('test_suite config block', () => {
+    it('loads and preserves ordered command entries without suite names or runner identifiers', async () => {
+      const commands = [
+        { command: 'npm run test:unit' },
+        {
+          command: 'npm run test:integration',
+          working_directory: 'src/conductor',
+          timeout_seconds: 1800,
+        },
+      ];
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  commands:\n    - command: npm run test:unit\n    - command: npm run test:integration\n      working_directory: src/conductor\n      timeout_seconds: 1800\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.test_suite?.commands).toEqual(commands);
+    });
+
+    it.each([
+      [
+        'accepts omitted and finite positive entry timeouts',
+        'test_suite:\n  commands:\n    - command: npm run test:unit\n    - command: npm run test:integration\n      timeout_seconds: 45\n',
+        [
+          { command: 'npm run test:unit' },
+          { command: 'npm run test:integration', timeout_seconds: 45 },
+        ],
+      ],
+      ['rejects a zero entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: 0\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+      ['rejects a negative entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: -1\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+      ['rejects a YAML NaN entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: .nan\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+      ['rejects a YAML positive infinity entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: .inf\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+      ['rejects a YAML negative infinity entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: -.inf\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+      ['rejects a string entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: slow\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+      ['rejects a null entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: null\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+    ])('%s', async (_name, yaml, expected) => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), yaml);
+
+      const result = await loadConfig(tmpDir);
+
+      if (expected instanceof RegExp) {
+        expect(result.ok ? '' : result.error.message).toMatch(expected);
+        return;
+      }
+      expect(result.ok && result.config.test_suite?.commands).toEqual(expected);
+    });
+
+    it('rejects an absolute working directory in a command entry with its index', () => {
+      const result = validateConfig(
+        {
+          test_suite: {
+            commands: [{ command: 'npm test', working_directory: '/tmp/outside-project' }],
+          },
+        },
+        tmpDir,
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'test_suite.commands[0].working_directory must be a relative path within the project root',
+        },
+      });
+    });
+
+    it('rejects a parent escape in a command entry with its index', () => {
+      const result = validateConfig(
+        {
+          test_suite: {
+            commands: [{ command: 'npm test', working_directory: '../outside-project' }],
+          },
+        },
+        tmpDir,
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'test_suite.commands[0].working_directory must be a relative path within the project root',
+        },
+      });
+    });
+
+    it('rejects an outward symlink in a command entry with its index', async () => {
+      const outside = await mkdtemp(join(tmpdir(), 'config-outside-'));
+      try {
+        await symlink(outside, join(tmpDir, 'outward-link'));
+
+        const result = validateConfig(
+          {
+            test_suite: {
+              commands: [{ command: 'npm test', working_directory: 'outward-link' }],
+            },
+          },
+          tmpDir,
+        );
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: 'test_suite.commands[0].working_directory must be a relative path within the project root',
+          },
+        });
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      ['an empty list', 'test_suite:\n  commands: []\n', /test_suite\.commands/],
+      ['a non-array list', 'test_suite:\n  commands: npm test\n', /test_suite\.commands/],
+      ['a null entry', 'test_suite:\n  commands:\n    - null\n', /test_suite\.commands.*\[0\]/],
+      ['a string entry', 'test_suite:\n  commands:\n    - npm test\n', /test_suite\.commands.*\[0\]/],
+      ['an array entry', 'test_suite:\n  commands:\n    - [npm, test]\n', /test_suite\.commands.*\[0\]/],
+      ['an entry missing command', 'test_suite:\n  commands:\n    - {}\n', /test_suite\.commands.*\[0\].*command/],
+      ['an entry with a blank command', 'test_suite:\n  commands:\n    - command: "   "\n', /test_suite\.commands.*\[0\].*command/],
+      ['an entry with a non-string command', 'test_suite:\n  commands:\n    - command: 42\n', /test_suite\.commands.*\[0\].*command/],
+      ['an entry with an unknown key', 'test_suite:\n  commands:\n    - command: npm test\n      retries: 2\n', /test_suite\.commands.*\[0\].*retries/],
+    ])('rejects commands with %s', async (_name, yaml, message) => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), yaml);
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { type: 'validation_error', message: expect.stringMatching(message) },
+      });
+    });
+
+    it('rejects scalar command and commands in the same project declaration', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  commands:\n    - command: npm run test:unit\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(/test_suite.*command.*commands|test_suite.*commands.*command/),
+        },
+      });
+    });
+
+    it('rejects scalar command and commands together after ordinary user/project merging', async () => {
+      const home = await mkdtemp(join(tmpdir(), 'config-user-'));
+      try {
+        userConfigFixture.path = join(home, '.ai-conductor', 'config.yml');
+        await mkdir(join(home, '.ai-conductor'), { recursive: true });
+        await writeFile(
+          userConfigFixture.path,
+          'test_suite:\n  commands:\n    - command: npm run test:unit\n',
+        );
+        await writeFile(
+          join(tmpDir, '.ai-conductor', 'config.yml'),
+          'test_suite:\n  command: npm test\n',
+        );
+
+        const result = await loadMergedConfig(tmpDir);
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: expect.stringMatching(/test_suite.*command.*commands|test_suite.*commands.*command/),
+          },
+        });
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    });
+
+    it('replaces a user command list with the ordered project list without concatenation', async () => {
+      const home = await mkdtemp(join(tmpdir(), 'config-user-'));
+      try {
+        userConfigFixture.path = join(home, '.ai-conductor', 'config.yml');
+        await mkdir(join(home, '.ai-conductor'), { recursive: true });
+        await writeFile(
+          userConfigFixture.path,
+          'test_suite:\n  commands:\n    - command: npm run test:obsolete\n',
+        );
+        await writeFile(
+          join(tmpDir, '.ai-conductor', 'config.yml'),
+          'test_suite:\n  commands:\n    - command: npm run test:unit\n    - command: npm run test:integration\n',
+        );
+
+        const result = await loadMergedConfig(tmpDir);
+
+        expect(result).toMatchObject({
+          ok: true,
+          config: {
+            test_suite: {
+              commands: [
+                { command: 'npm run test:unit' },
+                { command: 'npm run test:integration' },
+              ],
+            },
+          },
+        });
+      } finally {
+        await rm(home, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      [
+        'a scalar aggregate command',
+        'test_suite:\n  command: npm test\n  scoped_command: npx vitest run {selectors}\n',
+        { command: 'npm test' },
+      ],
+      [
+        'an aggregate command list',
+        'test_suite:\n  commands:\n    - command: npm run test:unit\n  scoped_command: npx vitest run {selectors}\n',
+        { commands: [{ command: 'npm run test:unit' }] },
+      ],
+    ])('loads %s alongside scoped_command', async (_name, yaml, aggregate) => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), yaml);
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.test_suite).toMatchObject({
+        ...aggregate,
+        scoped_command: 'npx vitest run {selectors}',
+      });
+    });
+
     it('resolves aggregate verification with an all-none drift budget', async () => {
       await writeFile(
         join(tmpDir, '.ai-conductor', 'config.yml'),
@@ -1439,12 +1687,30 @@ steps:
       expect(result.config.test_suite?.scoped_command).toBe('npx vitest run {selectors}');
     });
 
-    it('accepts a scoped-only test_suite declaration', () => {
-      const result = validateConfig({
-        test_suite: { scoped_command: 'npx vitest run {selectors}' },
-      });
+    it('loads an unchanged scalar-only test_suite declaration', async () => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), 'test_suite:\n  command: npm test\n');
+
+      const result = await loadConfig(tmpDir);
 
       expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.test_suite?.command).toBe('npm test');
+      expect(result.config.test_suite?.commands).toBeUndefined();
+    });
+
+    it('loads an unchanged scoped-only test_suite declaration', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  scoped_command: npx vitest run {selectors}\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.test_suite?.scoped_command).toBe('npx vitest run {selectors}');
+      expect(result.config.test_suite?.command).toBeUndefined();
+      expect(result.config.test_suite?.commands).toBeUndefined();
     });
 
     it('rejects a scoped_command template without the selector placeholder', async () => {

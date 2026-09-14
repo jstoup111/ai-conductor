@@ -91,6 +91,10 @@ const ARCHITECTURE_REVIEW_AS_BUILT_DEFAULTS = {
   remediation: { enabled: true },
 } as const;
 const BUILD_REVIEW_RUBRIC_IDS = ['testQuality'] as const;
+/** Keys accepted on each member of test_suite.commands. */
+export const TEST_SUITE_COMMAND_ENTRY_KEYS = [
+  'command', 'working_directory', 'timeout_seconds',
+] as const;
 /** Accepted config-key universe used by the consumer-registry coverage gate. */
 export const CONFIG_CONSUMER_KEY_SETS = {
   top: [
@@ -129,7 +133,8 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'architecture_review_as_built.remediation': ['enabled'],
   'architecture_review_as_built.checks': ['tiers'],
   assess: ['stale_after_days', 'stale_after_commits'],
-  test_suite: ['command', 'scoped_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment', 'verification'],
+  test_suite: ['command', 'commands', 'scoped_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment', 'verification'],
+  'test_suite.commands[]': TEST_SUITE_COMMAND_ENTRY_KEYS,
   'test_suite.verification': ['mode', 'drift_budget'],
   build_progress: ['poll_seconds', 'quiet_minutes', 'heartbeat_minutes', 'enabled'],
   provider_stream: ['min_interval_ms'],
@@ -1726,10 +1731,14 @@ function validateTestSuiteBlock(
     }
   }
 
-  if (raw.command === undefined && raw.scoped_command === undefined) {
+  if (
+    raw.command === undefined &&
+    raw.commands === undefined &&
+    raw.scoped_command === undefined
+  ) {
     return {
       type: 'validation_error',
-      message: 'test_suite.command or test_suite.scoped_command must be configured',
+      message: 'test_suite.command, test_suite.commands, or test_suite.scoped_command must be configured',
     };
   }
 
@@ -1738,6 +1747,67 @@ function validateTestSuiteBlock(
       type: 'validation_error',
       message: 'test_suite.command must be a non-empty string',
     };
+  }
+
+  if (raw.command !== undefined && raw.commands !== undefined) {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.command and test_suite.commands cannot both be configured',
+    };
+  }
+
+  if (raw.commands !== undefined) {
+    if (!Array.isArray(raw.commands) || raw.commands.length === 0) {
+      return {
+        type: 'validation_error',
+        message: 'test_suite.commands must be a non-empty array',
+      };
+    }
+
+    const allowedCommandKeys = new Set<string>(TEST_SUITE_COMMAND_ENTRY_KEYS);
+    for (const [index, entry] of raw.commands.entries()) {
+      if (!isPlainObject(entry)) {
+        return {
+          type: 'validation_error',
+          message: `test_suite.commands[${index}] must be an object`,
+        };
+      }
+
+      for (const key of Object.keys(entry)) {
+        if (!allowedCommandKeys.has(key)) {
+          return {
+            type: 'validation_error',
+            message: `Unknown key in test_suite.commands[${index}]: "${key}"`,
+          };
+        }
+      }
+
+      if (typeof entry.command !== 'string' || entry.command.trim() === '') {
+        return {
+          type: 'validation_error',
+          message: `test_suite.commands[${index}].command must be a non-empty string`,
+        };
+      }
+
+      if (
+        entry.timeout_seconds !== undefined &&
+        (typeof entry.timeout_seconds !== 'number' ||
+          !Number.isFinite(entry.timeout_seconds) ||
+          entry.timeout_seconds <= 0)
+      ) {
+        return {
+          type: 'validation_error',
+          message: `test_suite.commands[${index}].timeout_seconds must be a finite positive number`,
+        };
+      }
+
+      const workingDirectoryError = validateTestSuiteWorkingDirectory(
+        entry.working_directory,
+        projectRoot,
+        `test_suite.commands[${index}].working_directory`,
+      );
+      if (workingDirectoryError) return workingDirectoryError;
+    }
   }
 
   if (raw.scoped_command !== undefined) {
@@ -1755,30 +1825,12 @@ function validateTestSuiteBlock(
     }
   }
 
-  if (raw.working_directory !== undefined) {
-    if (typeof raw.working_directory !== 'string') {
-      return {
-        type: 'validation_error',
-        message: 'test_suite.working_directory must be a relative path within the project root',
-      };
-    }
-    const root = resolvePath(projectRoot ?? '.');
-    const resolvedDirectory = resolvePath(root, raw.working_directory);
-    const relativeDirectory = relative(root, resolvedDirectory);
-    if (
-      isAbsolute(raw.working_directory) ||
-      relativeDirectory === '..' ||
-      relativeDirectory.startsWith(`..${sep}`) ||
-      isAbsolute(relativeDirectory) ||
-      (projectRoot !== undefined &&
-        existingRealPathEscapesRoot(projectRoot, resolvedDirectory))
-    ) {
-      return {
-        type: 'validation_error',
-        message: 'test_suite.working_directory must be a relative path within the project root',
-      };
-    }
-  }
+  const workingDirectoryError = validateTestSuiteWorkingDirectory(
+    raw.working_directory,
+    projectRoot,
+    'test_suite.working_directory',
+  );
+  if (workingDirectoryError) return workingDirectoryError;
 
   if (
     raw.timeout_seconds !== undefined &&
@@ -1815,6 +1867,37 @@ function validateTestSuiteBlock(
     raw.verification = resolveTestSuiteVerification(raw.verification);
   }
 
+  return null;
+}
+
+function validateTestSuiteWorkingDirectory(
+  workingDirectory: unknown,
+  projectRoot: string | undefined,
+  field: string,
+): ConfigError | null {
+  if (workingDirectory === undefined) return null;
+  if (typeof workingDirectory !== 'string') {
+    return {
+      type: 'validation_error',
+      message: `${field} must be a relative path within the project root`,
+    };
+  }
+  const root = resolvePath(projectRoot ?? '.');
+  const resolvedDirectory = resolvePath(root, workingDirectory);
+  const relativeDirectory = relative(root, resolvedDirectory);
+  if (
+    isAbsolute(workingDirectory) ||
+    relativeDirectory === '..' ||
+    relativeDirectory.startsWith(`..${sep}`) ||
+    isAbsolute(relativeDirectory) ||
+    (projectRoot !== undefined &&
+      existingRealPathEscapesRoot(projectRoot, resolvedDirectory))
+  ) {
+    return {
+      type: 'validation_error',
+      message: `${field} must be a relative path within the project root`,
+    };
+  }
   return null;
 }
 

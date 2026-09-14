@@ -12,6 +12,8 @@ import {
 } from './config.js';
 import {
   FULL_SUITE_EVIDENCE_VERSION,
+  FULL_SUITE_LIST_EVIDENCE_VERSION,
+  FULL_SUITE_DIAGNOSTIC_LIMIT,
   readFullSuiteEvidence,
   sanitizeFullSuiteDiagnosticOutput,
   writeFullSuiteEvidence,
@@ -963,7 +965,13 @@ export class FullSuiteVerifier {
     } = this.options;
 
     try {
-      const resolved = inspection === undefined
+      // An inspection supplied by an execution-owning caller is also its record of
+      // pre-lock drift. Do not mutate or replace that object. A stale result, though,
+      // cannot decide whether to execute after waiting for another verifier: that
+      // verifier may have published a current PASS while this caller waited.
+      const resolved = inspection === undefined || (
+        inspection.status !== 'CURRENT' && inspection.status !== 'PRESERVED_WITHIN_BUDGET'
+      )
         ? await this.resolveInspection()
         : this.resolvedInspections.get(inspection) ?? await this.resolveInspection();
       if (!('context' in resolved)) {
@@ -1022,15 +1030,32 @@ export class FullSuiteVerifier {
       const secretValues = declaredEnvironmentValues(testSuite, environment);
       const verificationMode = testSuite.verification?.mode ?? 'aggregate';
       const selection = resolved.context.selection;
-      const execution = verificationMode === 'scoped' && selection.status === 'SELECTED'
-        ? await executeScopedFullSuite({
-          projectRoot,
-          testSuite,
-          environment,
-          selectors: selection.selectors,
-          runner: this.options.scopedRunner,
-        })
-        : await execute({ projectRoot, testSuite, environment });
+      let execution: FullSuiteExecutionResult;
+      try {
+        execution = verificationMode === 'scoped' && selection.status === 'SELECTED'
+          ? await executeScopedFullSuite({
+            projectRoot,
+            testSuite,
+            environment,
+            selectors: selection.selectors,
+            runner: this.options.scopedRunner,
+          })
+          : await execute({ projectRoot, testSuite, environment });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unable to resolve full-suite command entries';
+        if (testSuite.commands === undefined || !/^test_suite\.commands\[\d+\]\.working_directory/.test(message)) throw error;
+        const evidence = buildPreflightFailEvidence('preflight_failed', message, testSuite);
+        try {
+          await writeEvidence(projectRoot, evidence, secretValues);
+          const persisted = await readEvidence(projectRoot);
+          if (!persisted.usable && persisted.reason === 'not_pass' && persisted.evidence !== undefined) {
+            return { status: 'FAILED', reason: 'preflight_failed', message, freshness, evidence: persisted.evidence };
+          }
+        } catch {
+          // Preserve the outer catch for genuine persistence faults.
+        }
+        return { status: 'FAILED', reason: 'internal_error', message: 'Unable to persist full-suite preflight FAIL evidence', freshness };
+      }
       if (!execution.ok) {
         const evidence = buildFailEvidence(fingerprint, execution, worktreeClean);
         try {
@@ -1066,14 +1091,11 @@ export class FullSuiteVerifier {
             freshness,
           };
         }
-        const sanitizedDiagnostic = sanitizeFullSuiteDiagnosticOutput(
-          execution.stderr || execution.stdout,
-          secretValues,
-        );
+        const message = buildExecutionFailureMessage(execution, secretValues);
         return {
           status: 'FAILED',
           reason: execution.reason,
-          message: sanitizedDiagnostic || 'Full test suite failed',
+          message,
           freshness,
           evidence: persisted.evidence,
         };
@@ -1087,14 +1109,18 @@ export class FullSuiteVerifier {
         categoryFingerprints: fingerprint.categoryFingerprints,
         provenanceHeadSha: fingerprint.headSha,
         ...(worktreeClean === undefined ? {} : { worktreeClean }),
-        command: execution.command,
-        workingDirectory: execution.cwd,
+        command: execution.entries === undefined ? execution.command : null,
+        workingDirectory: execution.entries === undefined ? execution.cwd : null,
         startedAt: execution.startedAt,
         endedAt: execution.endedAt,
         durationMs: execution.durationMs,
         exitCode: execution.exitCode,
         stdout: execution.stdout,
         stderr: execution.stderr,
+        ...(execution.entries === undefined ? {} : {
+          plannedEntryCount: execution.plannedEntryCount!,
+          entries: execution.entries,
+        }),
         mode: verificationMode,
         selectors: verificationMode === 'scoped' && selection.status === 'SELECTED'
           ? selection.selectors
@@ -1174,12 +1200,12 @@ export class FullSuiteVerifier {
         };
       }
       const testSuite = config.config.test_suite;
-      if (testSuite.command === undefined) {
+      if (testSuite.command === undefined && testSuite.commands === undefined) {
         return {
           inspection: {
             status: 'FAILED',
             reason: 'invalid_config',
-            message: 'Project config must declare test_suite.command for aggregate verification',
+            message: 'Project config must declare test_suite.command or test_suite.commands for aggregate verification',
           },
           testSuite,
         };
@@ -1328,13 +1354,18 @@ function buildFailEvidence(
     fingerprint: fingerprint.digest,
     provenanceHeadSha: fingerprint.headSha,
     ...(worktreeClean === undefined ? {} : { worktreeClean }),
-    command: execution.command,
-    workingDirectory: execution.cwd,
+    command: execution.entries === undefined ? execution.command : execution.command,
+    workingDirectory: execution.entries === undefined ? execution.cwd : execution.cwd,
     startedAt: execution.startedAt,
     endedAt: execution.endedAt,
     durationMs: execution.durationMs,
     stdout: execution.stdout,
     stderr: execution.stderr,
+    ...(execution.entries === undefined ? {} : {
+      plannedEntryCount: execution.plannedEntryCount!,
+      failedEntryIndex: execution.failedEntryIndex!,
+      entries: execution.entries,
+    }),
   };
   if (execution.reason === 'signal') {
     return {
@@ -1540,13 +1571,14 @@ function buildPreflightFailEvidence(
   testSuite?: TestSuiteConfig,
 ): FullSuiteFailEvidence {
   const timestamp = new Date().toISOString();
+  const listDeclaration = testSuite?.commands !== undefined;
   return {
-    version: FULL_SUITE_EVIDENCE_VERSION,
+    version: listDeclaration ? FULL_SUITE_LIST_EVIDENCE_VERSION : FULL_SUITE_EVIDENCE_VERSION,
     outcome: 'FAIL',
     reason,
     fingerprint: null,
     provenanceHeadSha: null,
-    command: testSuite?.command ?? null,
+    command: listDeclaration ? null : testSuite?.command ?? null,
     workingDirectory: null,
     startedAt: timestamp,
     endedAt: timestamp,
@@ -1555,7 +1587,41 @@ function buildPreflightFailEvidence(
     signal: null,
     stdout: '',
     stderr: message,
+    ...(listDeclaration ? {
+      plannedEntryCount: testSuite.commands!.length,
+      failedEntryIndex: null,
+      entries: [],
+    } : {}),
   };
+}
+
+function buildExecutionFailureMessage(
+  execution: FullSuiteExecutionFailure,
+  secretValues: readonly string[],
+): string {
+  if (execution.entries === undefined || execution.failedEntryIndex === undefined) {
+    return sanitizeFullSuiteDiagnosticOutput(execution.stderr || execution.stdout, secretValues) || 'Full test suite failed';
+  }
+  const attempt = execution.entries[execution.failedEntryIndex]!;
+  const command = boundedMessagePart(execution.command, secretValues);
+  const directory = boundedMessagePart(attempt.workingDirectory, secretValues);
+  const termination = attempt.signal !== null
+    ? `signal ${attempt.signal}`
+    : attempt.exitCode !== null
+      ? `exit code ${attempt.exitCode}`
+      : `reason ${attempt.terminationReason ?? execution.reason}`;
+  const header = `Suite #${attempt.index + 1}/${execution.plannedEntryCount} (index ${attempt.index}) failed: command ${command}; directory ${directory}; duration ${attempt.durationMs}ms; ${termination}; ${execution.plannedEntryCount! - attempt.index - 1} unexecuted.`;
+  const diagnostic = sanitizeFullSuiteDiagnosticOutput(execution.stderr || execution.stdout, secretValues);
+  if (diagnostic === '') return header;
+  const available = FULL_SUITE_DIAGNOSTIC_LIMIT - Buffer.byteLength(header, 'utf8') - 1;
+  return available <= 0 ? header : `${header}\n${Buffer.from(diagnostic, 'utf8').subarray(0, available).toString('utf8')}`;
+}
+
+function boundedMessagePart(value: string, secretValues: readonly string[]): string {
+  const sanitized = sanitizeFullSuiteDiagnosticOutput(value, secretValues);
+  const maximumBytes = 2_048;
+  const bytes = Buffer.from(sanitized, 'utf8');
+  return bytes.length <= maximumBytes ? sanitized : `${bytes.subarray(0, maximumBytes - 22).toString('utf8')}...[output truncated]...`;
 }
 
 function declaredEnvironmentValues(

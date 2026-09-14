@@ -121,7 +121,7 @@ export const EVENT_SINKS = {
   group_member_step: { render: false, persist: false, audit: false, otel: false },
   // A gate's verdict must outlive the run so recovery can reconstruct it from the ledger.
   gate_verdict: { render: true, persist: true, audit: true, otel: true },
-  test_suite_verification: { render: false, persist: true, audit: false, otel: false },
+  test_suite_verification: { render: true, persist: true, audit: false, otel: false },
   build_member_evidence_reused: { render: true, persist: true, audit: false, otel: false },
   build_member_evidence_recomputed: { render: true, persist: true, audit: false, otel: false },
   kickback: { render: true, persist: true, audit: true, otel: true },
