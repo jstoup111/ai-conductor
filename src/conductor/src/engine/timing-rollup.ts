@@ -95,7 +95,7 @@ function collectExecutionEvidence(
     && step !== undefined
     && (stepKey !== undefined && evidence.openExecutions.has(stepKey) || 'activeInterval' in event);
   const terminalKind =
-    event.type === 'step_completed' || event.type === 'step_failed' || refusalClosesStep
+    event.type === 'step_completed' || event.type === 'step_failed' || event.type === 'step_interrupted' || refusalClosesStep
       ? 'step'
       : event.type === 'parallel_completed'
         || (event.type === 'parallel_failure' && event.terminal !== false)

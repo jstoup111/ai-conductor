@@ -680,7 +680,7 @@ describe('as-built SHIP routing', () => {
     }
     const events = new ConductorEventEmitter();
     const observed: ConductorEvent[] = [];
-    for (const type of ['step_started', 'step_completed', 'step_failed', 'kickback', 'loop_halt'] as const) {
+    for (const type of ['step_started', 'step_completed', 'step_failed', 'step_interrupted', 'kickback', 'loop_halt'] as const) {
       events.on(type, (event) => { observed.push(event); });
     }
     const runner: StepRunner = {
@@ -744,12 +744,12 @@ describe('as-built SHIP routing', () => {
     );
     const terminals = observed.filter(
       (event) =>
-        (event.type === 'step_completed' || event.type === 'step_failed') &&
+        (event.type === 'step_completed' || event.type === 'step_failed' || event.type === 'step_interrupted') &&
         event.step === 'architecture_review_as_built',
     );
     const terminalIndex = observed.findIndex(
       (event) =>
-        (event.type === 'step_completed' || event.type === 'step_failed') &&
+        (event.type === 'step_completed' || event.type === 'step_failed' || event.type === 'step_interrupted') &&
         event.step === 'architecture_review_as_built',
     );
     const nextIndex = observed.findIndex((event) => event.type === nextType);

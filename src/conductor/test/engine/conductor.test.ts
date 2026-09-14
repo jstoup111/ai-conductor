@@ -1798,9 +1798,9 @@ describe('engine/conductor', () => {
         .map((line) => JSON.parse(line));
       const starts = records.filter((record) => record.type === 'step_started');
       const terminals = records.filter(
-        (record) => record.type === 'step_completed' || record.type === 'step_failed',
+        (record) => record.type === 'step_completed' || record.type === 'step_failed' || record.type === 'step_interrupted',
       );
-      const terminalIndex = records.findIndex((record) => record.type === 'step_failed');
+      const terminalIndex = records.findIndex((record) => record.type === 'step_interrupted');
       const haltIndex = records.findIndex((record) => record.type === 'loop_halt');
 
       expect({ starts: starts.length, terminals: terminals.length, terminalBeforeHalt: terminalIndex < haltIndex }).toEqual({
@@ -3115,8 +3115,8 @@ describe('engine/conductor', () => {
         .trim()
         .split('\n')
         .map((line) => JSON.parse(line));
-      const terminal = records.find((record) => record.type === 'step_failed');
-      expect(terminal).toMatchObject({ type: 'step_failed', step: 'build' });
+      const terminal = records.find((record) => record.type === 'step_interrupted');
+      expect(terminal).toMatchObject({ type: 'step_interrupted', step: 'build' });
       expect(terminal.activeInterval).toEqual({ startedAtMs: 1_000, durationMs: 25 });
     } finally {
       persister.stop();
@@ -3153,7 +3153,7 @@ describe('engine/conductor', () => {
       expect(records).toEqual([
         expect.objectContaining({ type: 'step_started', step: 'build' }),
         expect.objectContaining({
-          type: 'step_failed',
+          type: 'step_interrupted',
           step: 'build',
           activeInterval: { startedAtMs: 1_000, durationMs: 25 },
         }),
@@ -3266,11 +3266,11 @@ describe('engine/conductor', () => {
         .split('\n')
         .map((line) => JSON.parse(line));
       const terminals = records.filter((record) =>
-        record.type === 'step_completed' || record.type === 'step_failed',
+        record.type === 'step_completed' || record.type === 'step_failed' || record.type === 'step_interrupted',
       );
       expect(terminals).toEqual([
         expect.objectContaining({
-          type: 'step_failed',
+          type: 'step_interrupted',
           step: 'build',
           activeInterval: { startedAtMs: 1_000, durationMs: 25 },
         }),
@@ -3319,7 +3319,7 @@ describe('engine/conductor', () => {
         .split('\n')
         .map((line) => JSON.parse(line));
       expect(records).toContainEqual(expect.objectContaining({
-        type: 'step_failed',
+        type: 'step_interrupted',
         step: 'build',
         activeInterval: { startedAtMs: 1_000, durationMs: 25 },
       }));
@@ -11134,7 +11134,7 @@ describe('engine/conductor', () => {
         .split('\n')
         .map((line) => JSON.parse(line));
       expect(records).toContainEqual(expect.objectContaining({
-        type: 'step_failed',
+        type: 'step_interrupted',
         step: 'prd',
         activeInterval: { startedAtMs: 1_000, durationMs: 25 },
       }));

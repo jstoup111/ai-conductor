@@ -100,6 +100,7 @@ const eventSequences: Partial<Record<ConductorEvent['type'], ConductorEvent[]>> 
   step_started: [{ type: 'step_started', step: 'build', index: 0 }],
   step_completed: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_completed', step: 'build', status: 'done' }],
   step_failed: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 }],
+  step_interrupted: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_interrupted', step: 'build', reason: 'controlled shutdown' }],
   step_refused: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_refused', step: 'build', kind: 'needs-human', reason: 'operator required' }],
   group_member_step: [{ type: 'group_member_step', member: 'build', skill: 'build', phase: 'result', outcome: 'completed' }],
   provider_attempt: [{ type: 'provider_attempt', step: 'build', provider: 'claude', outcome: 'success', invoked: true, tokenUsage: { input: 10, output: 2, costUsd: 0.25 } }],

@@ -1096,6 +1096,37 @@ describe('Task 10: truthful refusal span closure', () => {
     expect(span.status.code).toBe(0);
     expect(span.attributes['conductor.step.status']).toBe('interrupted');
   });
+
+  it('ends an interrupted member span at its already-observed settlement boundary', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const base = Date.now();
+    let now = base;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const execution = {
+      executionId: 'interrupted-member',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'review' },
+    };
+    try {
+      vis.start(emitter);
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
+      now = base + 100;
+      await emitter.emit({
+        type: 'group_member_step', member: 'review', skill: 'build', phase: 'result',
+        outcome: 'interrupted', executionContext: execution,
+      });
+      now = base + 10_000;
+      await emitter.emit({
+        type: 'step_interrupted', step: 'build', reason: 'controlled shutdown', executionContext: execution,
+      });
+      await emitter.emit({ type: 'feature_complete' });
+      await vis.stop();
+
+      const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'configured:validation/review')!;
+      expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(base + 100);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
 });
 
 // ── T20: Incomplete-span close (unit-level coverage for FR-9) ─────────────────

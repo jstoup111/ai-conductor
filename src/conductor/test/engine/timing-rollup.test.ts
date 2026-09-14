@@ -214,6 +214,23 @@ describe('computeTimingRollup', () => {
     expect(rollup.state).not.toBe('partial');
   });
 
+  it('closes a serial step execution on its catchable interruption', async () => {
+    const directory = await writeFeatureEvents([
+      { type: 'step_started', step: 'build' },
+      {
+        type: 'step_interrupted',
+        step: 'build',
+        reason: 'controlled shutdown',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
+      },
+    ]);
+
+    expect(await computeTimingRollup(directory)).toMatchObject({
+      state: 'measured',
+      activeMs: 100,
+    });
+  });
+
   it('leaves a validation-group member refusal nonterminal until the group closes', async () => {
     // The member never opened `step:<member>` — the group owns
     // `parallel:<entry>` — so its refusal closes nothing and is not a terminal
