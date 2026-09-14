@@ -519,7 +519,7 @@ To clear a halt safely, use the procedure in
 | `git-hooks/` | `prepare-commit-msg`, `commit-msg` | Wired via the worktree-local `core.hooksPath` |
 | `events.jsonl` | The run event log | Append-only, no rotation — see below |
 | `pipeline-events.jsonl` | Pipeline-owned closeout timing events | Separate single-writer ledger — see below |
-| `composer-events.jsonl` | Compose-loop-owned events (`land_gate_rejected`), written at the target repository root | Separate single-writer ledger, same schema as `events.jsonl` |
+| `composer-events.jsonl` | Compose-loop-owned events (`land_gate_rejected`), written at the target repository root | Separate single-writer ledger, same schema as `events.jsonl`; merged by the run report |
 | `audit-trail/events.jsonl` | A separate ledger with a different shape | See below |
 | `otel.jsonl` | OTLP-JSON, one batch per line | Default file-transport target. Off unless the `otel:` config block is present. For daemon runs, each feature writes its own worktree `.pipeline/otel.jsonl`. Append-only, unbounded |
 | `conduct.log` | Session narrative | Written only by the legacy bash CLI; `ai-conductor` never writes it. Read by `rate-limit-wait.sh` |
@@ -743,7 +743,7 @@ persist to this file; see [`live_containment`](configuration.md#harness_self_hos
 `land_gate_rejected` records a failed `engineer land` attempt with its closed gate identifier,
 bounded reason, project, worktree path, and optional source reference. The command writes it to the
 target repository's `.pipeline/composer-events.jsonl` (a compose-loop-owned sibling ledger, per adr-2026-08-08 D2), rather than the disposable per-idea worktree ledger,
-so rejection history remains available after that worktree is removed.
+so rejection history remains available after that worktree is removed. The run report merges this ledger with `events.jsonl` by timestamp and renders per-gate counts and latest reasons.
 
 The remediation adjudication events are the durable lifecycle trace for post-join `build_review`
 handling. They identify the lap, case, and effect where applicable; they persist only to

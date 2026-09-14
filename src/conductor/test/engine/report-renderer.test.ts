@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:5
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -66,6 +66,38 @@ describe('report-renderer', () => {
   it('renders absent build-review data safely', async () => {
     await writeFile(eventsPath, '', 'utf8');
     expect(renderReport(eventsPath)).toContain('## Build Review Metrics\nNo build-review metrics recorded');
+  });
+
+  it('merges compose-owned land-gate rejections by timestamp and renders their per-gate counts and latest reasons', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'step_started', step: 'build' }, ts: '2026-01-01T00:00:02.000Z' },
+      { event: { type: 'land_gate_rejected', gate: 'stories-not-approved', reason: 'latest stories reason' }, ts: '2026-01-01T00:00:04.000Z' },
+    ]), 'utf8');
+    await writeFile(join(tempDir, 'composer-events.jsonl'), makeLines([
+      { event: { type: 'land_gate_rejected', gate: 'coherence', reason: 'coherence reason' }, ts: '2026-01-01T00:00:01.000Z' },
+      { event: { type: 'land_gate_rejected', gate: 'stories-not-approved', reason: 'older stories reason' }, ts: '2026-01-01T00:00:03.000Z' },
+    ]), 'utf8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toMatch(/## Land-Gate Rejections[\s\S]*coherence\s+1\s+coherence reason[\s\S]*stories-not-approved\s+2\s+latest stories reason/);
+    expect(report.indexOf('coherence')).toBeLessThan(report.indexOf('stories-not-approved'));
+  });
+
+  it('leaves existing report sections unchanged when the sibling ledger is missing, empty, or partially malformed', async () => {
+    const primary = makeLines([
+      { event: { type: 'step_completed', step: 'build' }, ts: '2026-01-01T00:00:00.000Z' },
+    ]);
+    await writeFile(eventsPath, primary, 'utf8');
+    const withoutSibling = renderReport(eventsPath);
+
+    await writeFile(join(tempDir, 'composer-events.jsonl'), 'not json\n', 'utf8');
+    expect(renderReport(eventsPath)).toBe(withoutSibling);
+
+    await writeFile(join(tempDir, 'composer-events.jsonl'), `not json\n${makeLines([
+      { event: { type: 'land_gate_rejected', gate: 'coherence', reason: 'recorded' }, ts: '2026-01-01T00:00:01.000Z' },
+    ])}`, 'utf8');
+    expect(renderReport(eventsPath)).toContain('coherence');
   });
 
   it('renders an explicit empty Kickbacks state for an empty ledger', async () => {
