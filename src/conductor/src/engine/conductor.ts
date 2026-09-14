@@ -13437,7 +13437,8 @@ export class Conductor {
     if (getStepStatus(state, 'build') === 'done') {
       const buildEvidence = await preVerify('build');
       if (!buildEvidence.done) {
-        const reason = `completed BUILD evidence is unavailable after rebase: ${buildEvidence.reason ?? 'completion predicate did not confirm the recorded BUILD'}`;
+        const completionReason = 'reason' in buildEvidence ? buildEvidence.reason : undefined;
+        const reason = `completed BUILD evidence is unavailable after rebase: ${completionReason ?? 'completion predicate did not confirm the recorded BUILD'}`;
         await this.writeHaltMarker(`${reason}\nRecover .pipeline task evidence before resuming; do not redispatch completed BUILD blindly.\n`, 'needs-human');
         return { success: false, output: reason };
       }
