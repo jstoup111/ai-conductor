@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   FULL_SUITE_DIAGNOSTIC_LIMIT,
   FULL_SUITE_EVIDENCE_VERSION,
+  FULL_SUITE_LIST_EVIDENCE_VERSION,
   FULL_SUITE_TRUNCATION_MARKER,
   readFullSuiteEvidence,
   sanitizeFullSuiteDiagnosticOutput,
@@ -90,6 +91,37 @@ afterEach(async () => {
 });
 
 describe('full-suite evidence', () => {
+  it('round-trips complete v5 list attempts and zero-attempt preflight failure', async () => {
+    const projectRoot = await makeProject();
+    const listPass: FullSuitePassEvidence = {
+      ...PASS_EVIDENCE,
+      version: FULL_SUITE_LIST_EVIDENCE_VERSION,
+      command: null,
+      workingDirectory: null,
+      plannedEntryCount: 2,
+      entries: [
+        { index: 0, result: 'passed', durationMs: 10, workingDirectory: 'packages/unit', exitCode: 0, signal: null, terminationReason: null },
+        { index: 1, result: 'passed', durationMs: 20, workingDirectory: 'packages/integration', exitCode: 0, signal: null, terminationReason: null },
+      ],
+    };
+    const preflight: FullSuiteFailEvidence = {
+      ...FAIL_EVIDENCE,
+      version: FULL_SUITE_LIST_EVIDENCE_VERSION,
+      command: null,
+      workingDirectory: null,
+      plannedEntryCount: 2,
+      failedEntryIndex: null,
+      entries: [],
+    };
+    await writeFullSuiteEvidence(projectRoot, listPass);
+    const pass = await readFullSuiteEvidence(projectRoot);
+    await writeFullSuiteEvidence(projectRoot, preflight);
+    const fail = await readFullSuiteEvidence(projectRoot);
+    expect({ pass, fail }).toEqual({
+      pass: { usable: true, evidence: listPass },
+      fail: { usable: false, reason: 'not_pass', evidence: preflight },
+    });
+  });
   it('round-trips optional worktree cleanliness on PASS and FAIL evidence', async () => {
     const projectRoot = await makeProject();
     const passEvidence: FullSuitePassEvidence = {

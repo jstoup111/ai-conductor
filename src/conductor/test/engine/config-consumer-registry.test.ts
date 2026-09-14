@@ -45,6 +45,7 @@ describe('config consumer registry', () => {
       'architecture_review_as_built.checks',
       'assess',
       'test_suite',
+      'test_suite.commands[]',
       'test_suite.verification',
       'build_progress',
       'provider_stream',
@@ -79,6 +80,17 @@ describe('config consumer registry', () => {
       'test_suite.verification.drift_budget': {
         consumer: 'src/conductor/src/engine/full-suite-verifier.ts',
       },
+    });
+  });
+
+  it('derives nested command-entry validation and registry coverage from one key set', () => {
+    expect(CONFIG_CONSUMER_KEY_SETS['test_suite.commands[]']).toEqual([
+      'command', 'working_directory', 'timeout_seconds',
+    ]);
+    expect(configConsumerRegistry).toMatchObject({
+      'test_suite.commands[].command': { consumer: 'src/conductor/src/engine/full-suite-executor.ts' },
+      'test_suite.commands[].working_directory': { consumer: 'src/conductor/src/engine/full-suite-executor.ts' },
+      'test_suite.commands[].timeout_seconds': { consumer: 'src/conductor/src/engine/full-suite-executor.ts' },
     });
   });
 

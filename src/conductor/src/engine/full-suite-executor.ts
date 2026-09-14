@@ -67,6 +67,10 @@ export interface FullSuiteExecutionAttempt {
   index: number;
   result: 'passed' | 'failed';
   durationMs: number;
+  workingDirectory: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  terminationReason: FullSuiteExecutionFailure['reason'] | null;
 }
 
 type FullSuiteExecutionFailureDetails =
@@ -365,7 +369,10 @@ export async function executeFullSuite(
         timeoutMs,
       });
       const ended = clock();
-      attempts.push({ index, result: 'passed', durationMs: ended.getTime() - started.getTime() });
+      attempts.push({
+        index, result: 'passed', durationMs: ended.getTime() - started.getTime(),
+        workingDirectory: cwd, exitCode: 0, signal: null, terminationReason: null,
+      });
       if (index !== entries.length - 1) continue;
       return {
         ok: true, command, cwd,
@@ -377,7 +384,11 @@ export async function executeFullSuite(
       const failure = errorRecord(error);
       const classification = classifyFailure(failure);
       const ended = clock();
-      attempts.push({ index, result: 'failed', durationMs: ended.getTime() - started.getTime() });
+      attempts.push({
+        index, result: 'failed', durationMs: ended.getTime() - started.getTime(),
+        workingDirectory: cwd, exitCode: classification.exitCode,
+        signal: classification.signal, terminationReason: classification.reason,
+      });
       return {
         ok: false, ...classification, command, cwd,
         startedAt: aggregateStarted.toISOString(), endedAt: ended.toISOString(),

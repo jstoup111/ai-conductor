@@ -28,6 +28,7 @@ import {
 } from 'node:path';
 import { execa } from 'execa';
 import type { TestSuiteConfig } from '../types/config.js';
+import { resolveFullSuiteCommandEntries } from './full-suite-commands.js';
 
 export type FullSuiteFingerprintIndeterminateCode =
   | 'git_enumeration_failed'
@@ -526,21 +527,24 @@ function normalizeSuiteConfig(
 ): string {
   const normalized = {
     command: testSuite.command,
-    // Ordered effective declaration is part of the unbudgetable project
-    // configuration identity; changing a later suite must invalidate proof.
-    commands: testSuite.commands?.map((entry) => ({
-      command: entry.command,
-      working_directory: entry.working_directory ?? null,
-      timeout_seconds: entry.timeout_seconds ?? null,
-    })) ?? null,
     working_directory: workingDirectory,
     timeout_seconds: testSuite.timeout_seconds ?? null,
     inputs: sortedUnique(normalizedInputs),
     environment: sortedUnique(testSuite.environment ?? []),
   };
-  if (testSuite.verification?.mode !== 'scoped') return JSON.stringify(normalized);
-  return JSON.stringify({
+  // Omit this key for scalar declarations so their historic v4 identity is
+  // byte-for-byte stable. A declared list remains ordered configuration.
+  const normalizedWithCommands = testSuite.commands === undefined ? normalized : {
     ...normalized,
+    commands: testSuite.commands.map((entry) => ({
+      command: entry.command,
+      working_directory: entry.working_directory ?? null,
+      timeout_seconds: entry.timeout_seconds ?? null,
+    })),
+  };
+  if (testSuite.verification?.mode !== 'scoped') return JSON.stringify(normalizedWithCommands);
+  return JSON.stringify({
+    ...normalizedWithCommands,
     scoped_command: testSuite.scoped_command,
     selectors: sortedUnique(scopedSelectors),
   });
@@ -615,6 +619,19 @@ async function calculateFingerprint(
     projectRoot,
     testSuite.working_directory,
   );
+  if (testSuite.commands !== undefined) {
+    try {
+      resolveFullSuiteCommandEntries({ ...testSuite, project_root: projectRoot });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to resolve test-suite command directory';
+      const path = message.match(/^(test_suite\.commands\[\d+\]\.working_directory)/)?.[1];
+      return fail(
+        'invalid_input',
+        message,
+        path,
+      );
+    }
+  }
 
   const [headSha, trackedOutput, untrackedOutput, requiredPaths, environmentDigest] =
     await Promise.all([

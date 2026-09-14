@@ -12,7 +12,7 @@ import {
   writeFullSuiteEvidence,
   type FullSuitePassEvidence,
 } from '../../src/engine/full-suite-evidence.js';
-import type { FullSuiteExecutionResult } from '../../src/engine/full-suite-executor.js';
+import { executeFullSuite, type FullSuiteExecutionResult } from '../../src/engine/full-suite-executor.js';
 import {
   inspectFullSuiteRecoveryClaim,
   deriveFullSuiteScopedSelection,
@@ -4063,6 +4063,44 @@ describe('FullSuiteVerifier', () => {
     expect({ result: result.status, executions }).toEqual({
       result: 'EXECUTED',
       executions: 1,
+    });
+  });
+
+  it('writes v5 zero-attempt evidence and names a later missing entry directory before any launch', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-list-preflight-'));
+    scratches.push(projectRoot);
+    await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+    await mkdir(join(projectRoot, 'packages/first'), { recursive: true });
+    await writeFile(join(projectRoot, '.ai-conductor/config.yml'), [
+      'test_suite:',
+      '  commands:',
+      '    - command: npm run first',
+      '      working_directory: packages/first',
+      '    - command: npm run later',
+      '      working_directory: packages/missing',
+      '',
+    ].join('\n'));
+    let launches = 0;
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({ ok: true, fingerprint: {
+        digest: 'list-preflight', headSha: 'head', categoryFingerprints: CATEGORY_FINGERPRINTS,
+      } }),
+      execute: async (options) => executeFullSuite({
+        ...options,
+        runner: async () => {
+          launches += 1;
+          return { exitCode: 0, stdout: '', stderr: '' };
+        },
+      }),
+    }).ensure();
+    expect({ result, launches }).toMatchObject({
+      result: {
+        status: 'FAILED', reason: 'preflight_failed',
+        message: expect.stringContaining('test_suite.commands[1].working_directory'),
+        evidence: { version: 5, plannedEntryCount: 2, failedEntryIndex: null, entries: [] },
+      },
+      launches: 0,
     });
   });
 });

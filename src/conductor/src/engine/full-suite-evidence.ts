@@ -77,7 +77,7 @@ export interface FullSuitePassEvidence {
   stdout: string;
   stderr: string;
   /** v5 aggregate-list proof; omitted for scalar and scoped compatibility. */
-  plannedEntryCount?: number;
+  plannedEntryCount?: number | null;
   entries?: FullSuiteEvidenceAttempt[];
 }
 
@@ -85,6 +85,10 @@ export interface FullSuiteEvidenceAttempt {
   index: number;
   result: 'passed' | 'failed';
   durationMs: number;
+  workingDirectory: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  terminationReason: FullSuiteFailureReason | null;
 }
 
 interface FullSuiteFailEvidenceBase {
@@ -100,8 +104,8 @@ interface FullSuiteFailEvidenceBase {
   durationMs: number;
   stdout: string;
   stderr: string;
-  plannedEntryCount?: number;
-  failedEntryIndex?: number;
+  plannedEntryCount?: number | null;
+  failedEntryIndex?: number | null;
   entries?: FullSuiteEvidenceAttempt[];
 }
 
@@ -286,12 +290,29 @@ function isSelectors(value: unknown): value is string[] {
 function hasValidListShape(value: Record<string, unknown>, pass: boolean): boolean {
   const hasAny = value.plannedEntryCount !== undefined || value.entries !== undefined || value.failedEntryIndex !== undefined;
   if (!hasAny) return value.version === FULL_SUITE_EVIDENCE_VERSION;
-  if (value.version !== FULL_SUITE_LIST_EVIDENCE_VERSION || !Number.isInteger(value.plannedEntryCount) || (value.plannedEntryCount as number) < 1 || !Array.isArray(value.entries)) return false;
+  if (value.version !== FULL_SUITE_LIST_EVIDENCE_VERSION ||
+    !Array.isArray(value.entries) ||
+    (value.plannedEntryCount !== null &&
+      (!Number.isInteger(value.plannedEntryCount) || (value.plannedEntryCount as number) < 1))) return false;
   const entries = value.entries as unknown[];
-  if (entries.length < 1 || entries.length > (value.plannedEntryCount as number)) return false;
-  if (!entries.every((entry, index) => isRecord(entry) && entry.index === index && (entry.result === 'passed' || entry.result === 'failed') && Number.isFinite(entry.durationMs) && (entry.durationMs as number) >= 0)) return false;
-  if (pass) return entries.length === value.plannedEntryCount && entries.every((entry) => (entry as Record<string, unknown>).result === 'passed') && value.failedEntryIndex === undefined;
-  return Number.isInteger(value.failedEntryIndex) && value.failedEntryIndex === entries.length - 1 && (entries.at(-1) as Record<string, unknown>).result === 'failed';
+  const plannedEntryCount = value.plannedEntryCount as number | null;
+  if (entries.length > (plannedEntryCount ?? 0)) return false;
+  if (!entries.every((entry, index) => {
+    if (!isRecord(entry) || entry.index !== index ||
+      (entry.result !== 'passed' && entry.result !== 'failed') ||
+      !Number.isFinite(entry.durationMs) || (entry.durationMs as number) < 0 ||
+      !isNullableBoundedNonEmptyString(entry.workingDirectory) ||
+      (entry.exitCode !== null && (!Number.isInteger(entry.exitCode))) ||
+      (entry.signal !== null && (typeof entry.signal !== 'string' || !VALID_SIGNALS.has(entry.signal))) ||
+      (entry.terminationReason !== null &&
+        (typeof entry.terminationReason !== 'string' || !FAILURE_REASONS.has(entry.terminationReason as FullSuiteFailureReason)))) return false;
+    return entry.result === 'passed'
+      ? entry.exitCode === 0 && entry.signal === null && entry.terminationReason === null
+      : entry.terminationReason !== null;
+  })) return false;
+  if (pass) return plannedEntryCount !== null && entries.length === plannedEntryCount && entries.every((entry) => (entry as Record<string, unknown>).result === 'passed') && value.failedEntryIndex === undefined;
+  if (entries.length === 0) return value.failedEntryIndex === null && (plannedEntryCount === null || plannedEntryCount >= 1);
+  return plannedEntryCount !== null && Number.isInteger(value.failedEntryIndex) && value.failedEntryIndex === entries.length - 1 && (entries.at(-1) as Record<string, unknown>).result === 'failed';
 }
 
 function isPassEvidence(
@@ -363,6 +384,10 @@ export async function writeFullSuiteEvidence(
     const workingDirectory = evidence.workingDirectory === null
       ? null
       : sanitizeFullSuiteDiagnosticOutput(evidence.workingDirectory, secretValues) || null;
+    const entries = evidence.entries?.map((entry) => ({
+      ...entry,
+      workingDirectory: sanitizeFullSuiteDiagnosticOutput(entry.workingDirectory, secretValues) || '[redacted]',
+    }));
     const persisted: FullSuiteEvidence = {
       ...evidence,
       version: evidence.entries === undefined ? FULL_SUITE_EVIDENCE_VERSION : FULL_SUITE_LIST_EVIDENCE_VERSION,
@@ -375,6 +400,7 @@ export async function writeFullSuiteEvidence(
         : {}),
       command,
       workingDirectory,
+      ...(entries === undefined ? {} : { entries }),
       stdout: sanitizeFullSuiteDiagnosticOutput(evidence.stdout, secretValues),
       stderr: sanitizeFullSuiteDiagnosticOutput(evidence.stderr, secretValues),
     };

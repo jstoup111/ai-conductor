@@ -91,6 +91,10 @@ const ARCHITECTURE_REVIEW_AS_BUILT_DEFAULTS = {
   remediation: { enabled: true },
 } as const;
 const BUILD_REVIEW_RUBRIC_IDS = ['testQuality'] as const;
+/** Keys accepted on each member of test_suite.commands. */
+export const TEST_SUITE_COMMAND_ENTRY_KEYS = [
+  'command', 'working_directory', 'timeout_seconds',
+] as const;
 /** Accepted config-key universe used by the consumer-registry coverage gate. */
 export const CONFIG_CONSUMER_KEY_SETS = {
   top: [
@@ -130,6 +134,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'architecture_review_as_built.checks': ['tiers'],
   assess: ['stale_after_days', 'stale_after_commits'],
   test_suite: ['command', 'commands', 'scoped_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment', 'verification'],
+  'test_suite.commands[]': TEST_SUITE_COMMAND_ENTRY_KEYS,
   'test_suite.verification': ['mode', 'drift_budget'],
   build_progress: ['poll_seconds', 'quiet_minutes', 'heartbeat_minutes', 'enabled'],
   provider_stream: ['min_interval_ms'],
@@ -1759,7 +1764,7 @@ function validateTestSuiteBlock(
       };
     }
 
-    const allowedCommandKeys = new Set(['command', 'working_directory', 'timeout_seconds']);
+    const allowedCommandKeys = new Set<string>(TEST_SUITE_COMMAND_ENTRY_KEYS);
     for (const [index, entry] of raw.commands.entries()) {
       if (!isPlainObject(entry)) {
         return {

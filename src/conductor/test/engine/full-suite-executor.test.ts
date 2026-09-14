@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -77,6 +77,41 @@ describe('executeFullSuite', () => {
     });
 
     expect(forwardedTimeout).toBe(DEFAULT_FULL_SUITE_TIMEOUT_MS);
+  });
+
+  it('records each list attempt with its effective directory and termination metadata', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-list-attempts-'));
+    await Promise.all([
+      mkdir(join(projectRoot, 'packages/unit'), { recursive: true }),
+      mkdir(join(projectRoot, 'packages/integration'), { recursive: true }),
+    ]);
+    const times = [
+      new Date('2026-09-13T12:00:00.000Z'), new Date('2026-09-13T12:00:00.010Z'),
+      new Date('2026-09-13T12:00:00.020Z'), new Date('2026-09-13T12:00:00.030Z'),
+    ];
+    try {
+      const result = await executeFullSuite({
+        projectRoot,
+        testSuite: { commands: [
+          { command: 'npm run unit', working_directory: 'packages/unit' },
+          { command: 'npm run integration', working_directory: 'packages/integration' },
+        ] },
+        runner: async (command) => {
+          if (command === 'npm run unit') return { exitCode: 0, stdout: '', stderr: '' };
+          throw Object.assign(new Error('integration failed'), { exitCode: 7, stdout: '', stderr: '' });
+        },
+        clock: () => times.shift()!,
+      });
+      expect(result).toMatchObject({
+        ok: false, failedEntryIndex: 1, plannedEntryCount: 2,
+        entries: [
+          { index: 0, result: 'passed', workingDirectory: join(projectRoot, 'packages/unit'), exitCode: 0, signal: null, terminationReason: null },
+          { index: 1, result: 'failed', workingDirectory: join(projectRoot, 'packages/integration'), exitCode: 7, signal: null, terminationReason: 'nonzero_exit' },
+        ],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 
   it('executes quoted arguments through the default command-string runner', async () => {
