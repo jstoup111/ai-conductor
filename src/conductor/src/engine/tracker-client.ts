@@ -426,18 +426,6 @@ class GhParseError extends Error {
   }
 }
 
-async function runOrThrow(
-  runner: GhRunner,
-  args: string[],
-  opts: { cwd: string },
-): Promise<{ stdout: string }> {
-  try {
-    return await runner(args, opts);
-  } catch (err) {
-    throw new GhRunnerError(args, err);
-  }
-}
-
 function parseJsonOrThrow<T>(operation: string, stdout: string): T {
   try {
     return JSON.parse(stdout) as T;
@@ -527,7 +515,12 @@ async function runTrackerRead(
     context: { actor: 'tracker-client' },
   }, {
     async run() {
-      const response = await runOrThrow(runner, args, { cwd });
+      let response: { stdout: string };
+      try {
+        response = await runner(args, { cwd });
+      } catch (err) {
+        throw new GhRunnerError(args, err);
+      }
       stdout = response.stdout;
       return {};
     },
@@ -615,7 +608,12 @@ export function createGithubTrackerClient(
       // remains a read-only machine-identity seam until the operation registry
       // admits an account target; it never carries mutation authority.
       if (!options.repository) {
-        const { stdout } = await runOrThrow(runner, ['api', 'user', '--jq', '.login'], { cwd });
+        let stdout: string;
+        try {
+          ({ stdout } = await runner(['api', 'user', '--jq', '.login'], { cwd }));
+        } catch (err) {
+          throw new GhRunnerError(['api', 'user', '--jq', '.login'], err);
+        }
         return stdout.trim();
       }
       const stdout = await runTrackerRead(

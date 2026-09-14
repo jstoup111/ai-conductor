@@ -20,22 +20,6 @@ export interface GithubInvocationAuditSite {
 
 /** Raw remote transports live only behind these guarded seams. */
 const APPROVED_TRANSPORT_ADAPTERS = new Set(['engine/tracker-client.ts', 'engine/remote-git-operations.ts']);
-/**
- * Runtime GhRunner boundaries already classified by their owning operation
- * composition.  This deliberately lists files, never globs: a new runner
- * invocation is an audit finding until its owner is added with a caller proof.
- * `tracker-client.ts` is the only raw feature-mutation transport; the remaining
- * entries are legacy registered-operation/read compositions retained while
- * their owning migrations route their requests through that transport.
- */
-const APPROVED_INJECTED_GH_BOUNDARIES = new Set([
-  'daemon-cli.ts',
-  'engine/backlog-priority.ts',
-  'engine/engineer/issue-dep-migration.ts',
-  'engine/gate-writeback.ts',
-  'intake-file-cli.ts',
-  'engine/tracker-client.ts',
-]);
 const PROCESS_MODULE = /^(?:node:)?child_process$/;
 const GITHUB_HTTP_MODULE = /^(?:@octokit\/|octokit(?:$|\/)|github(?:$|\/)|node-fetch$|undici$)/;
 const PROCESS_FACTORY_NAMES = new Set(['exec', 'execFile', 'spawn', 'execSync', 'execFileSync', 'spawnSync']);
@@ -79,9 +63,6 @@ export const SHIPPED_MUTATION_OPERATION_CALLER_PROOFS = {
 
 function normalizedFile(file: string): string { return file.split(sep).join('/').replace(/^.*?\/src\//, ''); }
 function approved(file: string): boolean { return APPROVED_TRANSPORT_ADAPTERS.has(normalizedFile(file)); }
-function approvedInjectedRunnerBoundary(file: string): boolean {
-  return APPROVED_INJECTED_GH_BOUNDARIES.has(normalizedFile(file));
-}
 function location(sourceFile: ts.SourceFile, node: ts.Node): { line: number; column: number } {
   const value = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
   return { line: value.line + 1, column: value.character + 1 };
@@ -130,7 +111,12 @@ function typeReferenceName(node: ts.TypeNode | undefined): string | undefined {
  * a helper to invoke it with mutable argv would bypass the typed operation
  * boundary even though no child-process import appears in that helper.
  */
-function injectedGhRunnerNames(parsed: ts.SourceFile): Set<string> {
+interface InjectedGhRunners {
+  readonly names: ReadonlySet<string>;
+  readonly properties: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
+function injectedGhRunnerNames(parsed: ts.SourceFile): InjectedGhRunners {
   const runnerTypes = new Set(['GhRunner']);
   const runners = new Set<string>();
   const runnerProperties = new Map<string, Set<string>>();
@@ -232,17 +218,88 @@ function injectedGhRunnerNames(parsed: ts.SourceFile): Set<string> {
     ts.forEachChild(node, classify);
   };
   classify(parsed);
-  return runners;
+  return { names: runners, properties: runnerProperties };
 }
 
 function directGhInvocation(
   node: ts.CallExpression,
-  runnerNames: ReadonlySet<string>,
+  runners: InjectedGhRunners,
 ): boolean {
-  if (ts.isIdentifier(node.expression)) return runnerNames.has(node.expression.text);
-  return ts.isPropertyAccessExpression(node.expression)
-    && node.expression.expression.kind === ts.SyntaxKind.ThisKeyword
-    && runnerNames.has(node.expression.name.text);
+  if (ts.isIdentifier(node.expression)) return runners.names.has(node.expression.text);
+  if (!ts.isPropertyAccessExpression(node.expression)) return false;
+  if (node.expression.expression.kind === ts.SyntaxKind.ThisKeyword) return runners.names.has(node.expression.name.text);
+  return ts.isIdentifier(node.expression.expression)
+    && runners.properties.get(node.expression.expression.text)?.has(node.expression.name.text) === true;
+}
+
+function enclosingFunctionName(node: ts.Node): string | undefined {
+  for (let current: ts.Node | undefined = node.parent; current; current = current.parent) {
+    if (ts.isFunctionDeclaration(current) && current.name) return current.name.text;
+  }
+  return undefined;
+}
+
+function enclosingCase(node: ts.Node): string | undefined {
+  for (let current: ts.Node | undefined = node.parent; current; current = current.parent) {
+    if (ts.isCaseClause(current)) return text(current.expression);
+  }
+  return undefined;
+}
+
+function namedProperty(node: ts.PropertyName): string | undefined {
+  return ts.isIdentifier(node) || ts.isStringLiteralLike(node) ? node.text : undefined;
+}
+
+function enclosingObjectProperty(node: ts.Node): string | undefined {
+  for (let current: ts.Node | undefined = node.parent; current; current = current.parent) {
+    if (ts.isPropertyAssignment(current) || ts.isMethodDeclaration(current)) return namedProperty(current.name);
+  }
+  return undefined;
+}
+
+function ghApiPostHead(node: ts.CallExpression): boolean {
+  const head = argvHead(node.arguments[0]);
+  return head?.[0] === 'api'
+    && (head[1] === '--method' || head[1] === '-X')
+    && /^(?:POST|PUT|PATCH|DELETE)$/i.test(head[2] ?? '');
+}
+
+/**
+ * Approved calls are structural, never file-wide.  Each accepted mutation is
+ * either the canonical guarded adapter or a closed operation callback whose
+ * case/property fixes its one registered operation. Literal mutations remain
+ * findings in read-forwarding helpers and every other callback.
+ */
+function guardedMutationRunnerCall(node: ts.CallExpression): boolean {
+  if (enclosingFunctionName(node) === 'createGuardedGithubOperationRunner') return true;
+  const operation = enclosingCase(node);
+  if (enclosingFunctionName(node) === 'createIntakeFilingOperations') {
+    if (operation === 'issue.create') return argvHead(node.arguments[0])?.[0] === 'issue' && argvHead(node.arguments[0])?.[1] === 'create';
+    if (operation === 'issue.label.add') return (ts.isCallExpression(node.arguments[0])
+      && ts.isIdentifier(node.arguments[0].expression)
+      && node.arguments[0].expression.text === 'restAddLabelArgs') || ghApiPostHead(node);
+    return operation === 'issue.dependency.add' && ghApiPostHead(node);
+  }
+  if (enclosingFunctionName(node) === 'createDependencyLinks') return ghApiPostHead(node);
+  if (enclosingFunctionName(node) === 'makeProductionRepairPublisher') {
+    const property = enclosingObjectProperty(node);
+    return (property === 'findOrCreateRepairPullRequest' && argvHead(node.arguments[0])?.[0] === 'pr' && argvHead(node.arguments[0])?.[1] === 'create')
+      || (property === 'postStatus' && ghApiPostHead(node));
+  }
+  return false;
+}
+
+/** Dynamic runner forwarding is safe only inside an explicitly typed read or adapter seam. */
+function guardedDynamicRunnerForwarding(node: ts.CallExpression): boolean {
+  const owner = enclosingFunctionName(node);
+  if (owner === 'createGuardedGithubOperationRunner') return true;
+  if (owner === 'runTrackerRead' || owner === 'graphqlPage' || owner === 'runTrackerIssueOperation') return true;
+  if (owner !== 'guardedPrRunner') return false;
+  const declaration = node.parent.parent;
+  return ts.isVariableDeclaration(declaration)
+    && ts.isIdentifier(declaration.name)
+    && declaration.name.text === 'read'
+    && declaration.type !== undefined;
 }
 
 /**
@@ -297,13 +354,15 @@ export function auditGithubInvocationSource(file: string, source: string): Githu
     }
     if (ts.isCallExpression(node)) {
       const called = ts.isIdentifier(node.expression) ? node.expression.text : undefined;
-      if (directGhInvocation(node, injectedRunners) && !approvedInjectedRunnerBoundary(file)) {
+      if (directGhInvocation(node, injectedRunners)) {
         const directArgs = argv(node.arguments[0]);
         const directHead = argvHead(node.arguments[0]);
-        if (!directArgs && !directHead && !readOnlyRunnerForwarding(node, readOnlyFactories)) {
-          findings.push(report(parsed, file, node, 'unresolvable mutable GitHub command forwarding outside guarded adapter'));
-        } else if (directHead && ghMutation(directHead)) {
+        if (directHead && ghMutation(directHead) && !guardedMutationRunnerCall(node)) {
           findings.push(report(parsed, file, node, 'direct injected GitHub mutation outside guarded adapter'));
+        } else if (!directArgs && !directHead
+          && !readOnlyRunnerForwarding(node, readOnlyFactories)
+          && !guardedDynamicRunnerForwarding(node)) {
+          findings.push(report(parsed, file, node, 'unresolvable mutable GitHub command forwarding outside guarded adapter'));
         }
       }
       if (called && rawGithubImports.has(called) && !approved(file)) findings.push(report(parsed, file, node, 'unapproved raw GitHub HTTP client invocation outside guarded adapter'));
