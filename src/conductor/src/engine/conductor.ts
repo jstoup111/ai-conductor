@@ -8221,7 +8221,7 @@ export class Conductor {
               try {
                 await this.commitStateChanges(state, `fail ${step.name} validation group`, {
                   ...retainedSiblings,
-                  [step.name]: 'failed',
+                  [noVerdictMember.name]: 'failed',
                   last_step: step.name,
                 });
               } catch (err) {

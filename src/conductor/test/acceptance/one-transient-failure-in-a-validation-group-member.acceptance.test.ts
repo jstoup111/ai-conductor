@@ -263,6 +263,42 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
+  it('retains passing members when prd_audit produces no verdict', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'validation-prd-no-verdict-retention-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedValidators(dir, statePath);
+      const firstRoundCalls: StepName[] = [];
+      const firstRound = new Conductor({
+        stateFilePath: statePath, events: new ConductorEventEmitter(), projectRoot: dir,
+        mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 1, fromStep: 'manual_test',
+        stepRunner: { run: vi.fn(async (step: StepName) => {
+          firstRoundCalls.push(step);
+          if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          if (step === 'prd_audit') throw new Error('prd audit runner crashed before its verdict');
+          if (step === 'architecture_review_as_built') {
+            await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# Review\n\nVerdict: APPROVED\n');
+          }
+          return { success: true } as StepRunResult;
+        }) },
+      });
+      await firstRound.run();
+      expect(firstRoundCalls).toEqual(expect.arrayContaining([
+        'manual_test', 'prd_audit', 'architecture_review_as_built',
+      ]));
+
+      const halted = await readState(statePath);
+      if (!halted.ok) throw halted.error;
+      const haltedState = halted.value as Record<string, unknown>;
+      expect([haltedState.manual_test, haltedState.validation__manual_test]).toEqual(['done', 'done']);
+      expect(haltedState.prd_audit).toBe('failed');
+      expect(haltedState.validation__prd_audit).not.toBe('done');
+      expect([haltedState.architecture_review_as_built, haltedState.validation__architecture_review_as_built])
+        .toEqual(['done', 'done']);
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain('prd_audit');
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
   it('does not retain a passing sibling when its verdict-run-identity handshake fails', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'validation-handshake-retention-'));
     const statePath = join(dir, 'conduct-state.json');
