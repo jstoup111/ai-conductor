@@ -430,6 +430,48 @@ Relevant existing facts (evidence):
 >     data point carries the custom keys and that a colliding custom key does not replace `project`;
 >     a test asserts that with no `attributes` block every exported Resource and data point is
 >     byte-identical to today's.
+> **Amended 2026-09-14 by #2528 (feature-scoped complexity tier):** Decision 10 admits `tier`
+> as a data-point label on the three **step** instruments only, and the #1940 amendment's closure
+> of the label set plus Decision 12's "single sanctioned extension" clause together leave every
+> **feature-scoped** instrument without it. Operators therefore cannot group feature cost,
+> shipments, halts, run outcomes, or feature duration by S/M/L without joining step series or
+> inferring tier from step-duration counts on the dashboard. One decision extends the contract;
+> every earlier decision stands, and Decision 12's disjointness rule is unaffected because `tier`
+> is a conductor-owned key that `otel.attributes` can never supply.
+>
+> 14. **The complexity tier is a data-point label on every feature-scoped instrument, carried
+>     by the feature events that already describe the feature.** `tier` (`S|M|L`) joins the
+>     existing attribute set on `conductor.feature.dispatches`, `conductor.feature.halts`,
+>     `conductor.run.outcomes`, `conductor.feature.shipped`, `conductor.feature.duration.wall`,
+>     `conductor.feature.duration.active`, `conductor.feature.cost`, `conductor.feature.step.cost`,
+>     and `conductor.feature.step.tokens`. It travels as an optional `tier` field on the five
+>     events that already describe the feature — `feature_dispatch_started`,
+>     `feature_dispatch_ended`, `feature_shipped`, `feature_usage_total`, and
+>     `feature_cost_snapshot` — by the same additive-field path Decision 11 sanctioned for
+>     `step_completed`/`step_failed`; no new event type, no new instrument, no parallel channel,
+>     and no listener-side inference from step series. Each event has exactly one production emit
+>     site, so the per-emit-site objection recorded in
+>     adr-2026-08-11-halt-events-ride-the-persisted-spine (thirty `loop_halt` sites) does not
+>     apply: `feature_dispatch_started`, `feature_dispatch_ended`, and `feature_shipped` read
+>     `BacklogItem.tier` in `daemon-runner.ts`, which `daemon-backlog.ts` already parses from the
+>     committed `.docs/complexity/<stem>.md` marker; `feature_usage_total` reads
+>     `state.complexity_tier` at its `finish`-close site; and `feature_cost_snapshot` reuses the
+>     `tier` already stamped on the `step_completed`/`step_failed` whose terminal delivery
+>     triggers it. Every source descends from that one committed marker, so feature and step
+>     series for the same dispatch never disagree. **Unresolved is absent:** the raw `undefined`
+>     is carried through and the attribute is omitted — never the `?? 'L'` (or `?? 'M'`) policy
+>     defaults the conductor uses for step skipping — and a test proves the data point carries no
+>     `tier` key rather than `tier="L"`. `MetricsRecorder` threads `tier` per feature method
+>     rather than through the identity seam, so instruments outside this list (`memory.setup`,
+>     `gate.verdicts`, `gate.kickbacks`, `pipeline.closeout.duration`, the `daemon.*` gauges) are
+>     unchanged. Growth bound: `tier` is a closed three-value set that varies within a worker
+>     process, so it is a genuine ×3 multiplier on the instruments above; because each is already
+>     keyed by `feature` and a feature holds one tier per dispatch, the label partitions existing
+>     series and mints none for a feature whose tier is resolved before its first feature event.
+>     A feature re-tiered between dispatches (only possible through a DECIDE amendment, since
+>     `.docs/` is sealed during BUILD) legitimately appears once per tier it has held; the
+>     cumulative `feature.cost` gauge's earlier-tier series stops updating and retains its last
+>     value, which the configuration reference documents as the honest record of a real re-tier.
 
 ## Consequences
 
