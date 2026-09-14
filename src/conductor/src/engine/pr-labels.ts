@@ -57,6 +57,12 @@ function prTarget(url: string): { repository: string; kind: 'pull-request'; numb
   return { repository: ref.repo, kind: 'pull-request', number: Number(ref.number) };
 }
 
+function issueTarget(url: string): { repository: string; kind: 'issue'; number: number } | null {
+  const ref = parseIssueRef(url);
+  if (!ref || !/\/issues\/\d+(?:$|[?#])/.test(url) || !Number.isSafeInteger(Number(ref.number)) || Number(ref.number) < 1) return null;
+  return { repository: ref.repo, kind: 'issue', number: Number(ref.number) };
+}
+
 function refused(
   operation: GithubOperationName,
   reason: 'invalid-target' | 'explicit-authorization-required',
@@ -710,17 +716,17 @@ export async function upsertComment(
  * `issueUrl` must be a `github.com/.../issues/N` URL. Swallows all errors.
  */
 export async function issueComment(
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   issueUrl: string,
   body: string,
   log?: (msg: string) => void,
-): Promise<void> {
-  try {
-    await runGh(['issue', 'comment', issueUrl, '--body', body], { cwd });
-  } catch (err) {
-    log?.(`[pr-labels] issueComment(${issueUrl}) error: ${err}`);
-  }
+): Promise<PrMutationResult> {
+  const target = issueTarget(issueUrl);
+  if (!target) return refused('issue.comment.create', 'invalid-target');
+  const result = await runMutation(runGh, 'issue.comment.create', target.repository, target, { body });
+  if (result.kind === 'failed') log?.(`[pr-labels] issueComment(${issueUrl}) error: ${result.error}`);
+  return result;
 }
 
 /**
@@ -730,7 +736,7 @@ export async function issueComment(
  * failure-terminal basis, else create). Best-effort / non-throwing.
  */
 export async function upsertIssueComment(
-  runGh: GhRunner = makeProductionGh(),
+  runGh: PrRunner = makeProductionGh(),
   cwd: string,
   issueUrl: string,
   marker: string,
@@ -738,6 +744,11 @@ export async function upsertIssueComment(
   log?: (msg: string) => void,
 ): Promise<void> {
   const taggedBody = `${marker}\n${body}`;
+
+  if (typeof runGh !== 'function') {
+    log?.(`[pr-labels] upsertIssueComment(${issueUrl}) requires a read-capable guarded runner`);
+    return;
+  }
 
   let matchedUrl: string | undefined;
   try {
@@ -756,21 +767,21 @@ export async function upsertIssueComment(
   if (matchedUrl) {
     const ref = parseCommentUrl(matchedUrl);
     if (ref) {
-      try {
-        await runGh(
-          [
-            'api',
-            '--method',
-            'PATCH',
-            `repos/${ref.owner}/${ref.repo}/issues/comments/${ref.commentId}`,
-            '-f',
-            `body=${taggedBody}`,
-          ],
-          { cwd },
-        );
-      } catch (err) {
+      const target = issueTarget(issueUrl);
+      if (!target || target.repository !== `${ref.owner}/${ref.repo}`) {
+        log?.(`[pr-labels] upsertIssueComment(${issueUrl}) invalid issue target`);
+        return;
+      }
+      const result = await runMutation(
+        runGh,
+        'issue.comment.update',
+        target.repository,
+        target,
+        { commentId: ref.commentId, body: taggedBody },
+      );
+      if (result.kind !== 'executed') {
         log?.(
-          `[pr-labels] upsertIssueComment(${issueUrl}) PATCH failed: ${err} — leaving existing comment as-is`,
+          `[pr-labels] upsertIssueComment(${issueUrl}) update failed — leaving existing comment as-is`,
         );
       }
       return;
