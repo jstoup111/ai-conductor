@@ -419,24 +419,34 @@ export function createConductStateLease(
       };
     }
 
+    let quarantinedOwner: string;
+    let quarantinedClaim: string | null;
     try {
-      const [quarantinedOwner, quarantinedClaim] = await Promise.all([
+      [quarantinedOwner, quarantinedClaim] = await Promise.all([
         filesystem.readOwner(ownerPath(quarantinedLeasePath)),
         filesystem.readRecoveryClaim(`${quarantinedLeasePath}${terminalClaimPath.slice(leasePath.length)}`),
       ]);
-      if (quarantinedOwner !== serializedOwner || quarantinedClaim !== terminalClaim) {
-        reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
-        return {
-          status: 'refused',
-          message: `Unable to recover ${leaseName} lease: ownership changed during recovery`,
-        };
-      }
+    } catch (error) {
+      reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
+      return {
+        status: 'refused',
+        message: `Unable to recover ${leaseName} lease: quarantine identity confirmation failed (${errorMessage(error)})`,
+      };
+    }
+    if (quarantinedOwner !== serializedOwner || quarantinedClaim !== terminalClaim) {
+      reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
+      return {
+        status: 'refused',
+        message: `Unable to recover ${leaseName} lease: quarantine identity confirmation failed`,
+      };
+    }
+    try {
       await filesystem.releaseDirectory(quarantinedLeasePath);
     } catch (error) {
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
       return {
         status: 'refused',
-        message: `Unable to recover ${leaseName} lease: could not finalize recovery (${errorMessage(error)})`,
+        message: `Unable to recover ${leaseName} lease: quarantine cleanup failed (${errorMessage(error)})`,
       };
     }
 
