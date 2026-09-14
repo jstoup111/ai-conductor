@@ -34,7 +34,7 @@ import { execa } from 'execa';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
-import { Conductor, createFinishPresentationRepair } from './engine/conductor.js';
+import { Conductor, createProvenanceGuardedFinishPresentationRepair } from './engine/conductor.js';
 import { createProductionAcceptanceRedExec } from './engine/acceptance-red-runner.js';
 import {
   createProductionFinishPublicationCoordinator,
@@ -1532,6 +1532,8 @@ async function main(): Promise<void> {
   const finishPublicationBaseBranch =
     (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main';
 
+  const finishPublicationGit = makeProductionGit();
+  const finishPublicationGh = makeProductionGh();
   const conductor = new Conductor({
     stateFilePath,
     stepRunner,
@@ -1552,11 +1554,13 @@ async function main(): Promise<void> {
       projectRoot,
       stateFilePath,
       baseBranch: finishPublicationBaseBranch,
-      git: makeProductionGit(),
-      gh: makeProductionGh(),
-      repairPresentation: createFinishPresentationRepair({
+      git: finishPublicationGit,
+      gh: finishPublicationGh,
+      repairPresentation: createProvenanceGuardedFinishPresentationRepair({
         projectRoot,
-        gh: makeProductionGh(),
+        git: finishPublicationGit,
+        gh: finishPublicationGh,
+        baseBranch: finishPublicationBaseBranch,
       }),
       observeReleaseReadiness: createProductionReleaseReadinessObserver({
         projectRoot,

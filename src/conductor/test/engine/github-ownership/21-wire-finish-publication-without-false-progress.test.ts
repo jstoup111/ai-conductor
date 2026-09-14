@@ -1,6 +1,17 @@
 // Covers: task:21
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const machineOwner = vi.hoisted(() => ({ id: 'alice' }));
+vi.mock('../../../src/engine/owner-gate/machine-identity.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/owner-gate/machine-identity.js')>();
+  return {
+    ...actual,
+    readMachineOwnerConfig: vi.fn(async () => ({ spec_owner: machineOwner.id })),
+  };
+});
+afterEach(() => { machineOwner.id = 'alice'; });
+
+import { createProvenanceGuardedFinishPresentationRepair } from '../../../src/engine/conductor.js';
 import { openShipDraftPr } from '../../../src/engine/ship-draft-pr.js';
 import type { GithubMutationExecutionContext } from '../../../src/engine/tracker-client.js';
 
@@ -27,6 +38,49 @@ function mutation(): GithubMutationExecutionContext {
 }
 
 describe('finish publication guarded draft boundary', () => {
+  it('resolves fresh committed provenance for live presentation repair and refuses without a ready fallback', async () => {
+    let draft = true;
+    const gh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            title: 'feat: owned', body: '## Why\n\nOwned', isDraft: draft, labels: [], comments: [],
+          }),
+        };
+      }
+      if (args[0] === 'pr' && args[1] === 'ready') {
+        draft = false;
+        return { stdout: '' };
+      }
+      throw new Error(`unexpected gh command: ${args.join(' ')}`);
+    });
+    const git = vi.fn(async (args: string[]) => {
+      if (args.join(' ') === 'config --get remote.origin.url') {
+        return { stdout: `https://github.com/${REPOSITORY}.git\n` };
+      }
+      if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
+      throw new Error(`unexpected git command: ${args.join(' ')}`);
+    });
+    const repair = createProvenanceGuardedFinishPresentationRepair({
+      projectRoot: '/fixture', git, gh, baseBranch: 'main',
+    });
+    const request = {
+      prUrl: `https://github.com/${REPOSITORY}/pull/42`,
+      state: { feature_desc: 'owned', worktree_branch: BRANCH },
+    };
+
+    await expect(repair(request)).resolves.toBeUndefined();
+    expect(git).toHaveBeenCalledWith(['show', `${BRANCH}:.docs/intake/owned.md`], { cwd: '/fixture' });
+    expect(gh).toHaveBeenCalledWith(['pr', 'ready', '42', '-R', REPOSITORY], { cwd: '/fixture' });
+
+    draft = true;
+    machineOwner.id = 'bob';
+    await expect(repair(request)).rejects.toThrow('guarded ready-for-review repair refused');
+    expect(git).toHaveBeenCalledTimes(4);
+    expect(gh.mock.calls.filter(([args]) => args[0] === 'pr' && args[1] === 'ready')).toHaveLength(1);
+  });
+
   it('publishes an authorized explicit ref and creates the draft through guarded transports', async () => {
     const remoteGit = vi.fn().mockResolvedValue({
       kind: 'executed',
