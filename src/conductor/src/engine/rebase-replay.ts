@@ -64,17 +64,16 @@ export async function captureReplayIdentity(
   git: GitRunner,
   preRebaseHead: string,
   mergeBase: string,
-  targetRef: string,
+  target: string,
 ): Promise<ReplayIdentity | undefined> {
   try {
-    const [target, completed] = await Promise.all([
-      git(['rev-parse', targetRef]),
-      git(['rev-parse', 'HEAD']),
-    ]);
+    const completed = await git(['rev-parse', 'HEAD']);
     const identity = {
       preRebaseHead: preRebaseHead.trim(),
       mergeBase: mergeBase.trim(),
-      target: target.exitCode === 0 ? target.stdout.trim() : '',
+      // This must be the object captured before replay, not a ref resolved
+      // afterwards: the base ref may move while the replay is in progress.
+      target: target.trim(),
       completedHead: completed.exitCode === 0 ? completed.stdout.trim() : '',
     };
     return validObject(identity.preRebaseHead) && validObject(identity.mergeBase) &&

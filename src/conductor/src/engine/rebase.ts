@@ -936,9 +936,10 @@ export async function performRebase(
   // classification and evidence translation can use the original commit.
   const preTree = (await git(['rev-parse', 'HEAD'])).stdout.trim();
   const mergeBase = (await git(['merge-base', 'HEAD', base.ref])).stdout.trim();
+  const target = (await git(['rev-parse', base.ref])).stdout.trim();
   const attachReplayIdentity = async (outcome: RebaseOutcome): Promise<RebaseOutcome> => {
     if (outcome.kind !== 'changed' && outcome.kind !== 'noop') return outcome;
-    const replay = await captureReplayIdentity(git, preTree, mergeBase, base.ref);
+    const replay = await captureReplayIdentity(git, preTree, mergeBase, target);
     return replay === undefined ? outcome : { ...outcome, replay };
   };
   const translateCompletedRebase = async (): Promise<void> => {
