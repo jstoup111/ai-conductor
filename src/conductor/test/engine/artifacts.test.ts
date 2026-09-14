@@ -4586,6 +4586,32 @@ describe('engine/artifacts', () => {
       expect(c.summary).toContain('FR-1 (impl-gap)');
     });
 
+    it('resolves the citing plan by feature slug when the corpus holds several plans', async () => {
+      // A multi-plan corpus with no recorded activePlanPath resolves only by
+      // the feature slug. Dropping it rejected every citing row as "plan could
+      // not be resolved" and routed a valid audit to a needs-decide halt.
+      await createFile(
+        '.docs/plans/other-feature.md',
+        '### Task 1: Unrelated work\n\n**Files:** src/other.ts\n',
+      );
+      await createFile(
+        '.docs/plans/my-feature.md',
+        '### Task 1: Existing work\n\n**Files:** src/example.ts\n',
+      );
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n**PRD:** none\n\n' +
+          '| Criterion | Grade | Plan task | PRD: | Evidence |\n' +
+          '| --- | --- | --- | --- | --- |\n' +
+          '| S1.1 | FIXABLE | 1 | FR-1 | Missing guard |\n',
+      );
+
+      const c = await classifyPrdAuditGaps(dir, undefined, undefined, undefined, 'my-feature');
+
+      expect(c.kind).toBe('impl-only');
+      expect(c.summary).not.toContain('could not be resolved');
+    });
+
     it('refuses to route a blocking row whose citation names an absent plan task', async () => {
       await createFile(
         '.docs/plans/citation-authority.md',

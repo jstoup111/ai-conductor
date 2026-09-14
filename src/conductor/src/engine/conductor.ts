@@ -10034,6 +10034,7 @@ export class Conductor {
                     state.session_started_at,
                     lastPrdAuditRunId,
                     this.config,
+                    state.feature_desc,
                   );
                   prdAuditNonClean = cls.kind !== 'clean';
                 }
@@ -10102,6 +10103,7 @@ export class Conductor {
                   state.session_started_at,
                   lastPrdAuditRunId,
                   this.config,
+                  state.feature_desc,
                 );
                 if (cls.kind !== 'clean') break;
               }
@@ -11590,6 +11592,7 @@ export class Conductor {
                 state.session_started_at,
                 lastPrdAuditRunId,
                 this.config,
+                state.feature_desc,
               );
               if (cls.kind === 'impl-only' && prdAuditSelfHeals < prdAuditRemediationLapCap) {
                 prdAuditSelfHeals++;
