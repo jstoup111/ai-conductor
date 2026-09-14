@@ -28,7 +28,7 @@ import {
   type GitRunner,
 } from './pr-labels.js';
 import { specHash } from './shipped-record.js';
-import { executeRemoteGit } from './remote-git-operations.js';
+import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
 import type { GithubMutationExecutionContext } from './tracker-client.js';
 
 export type ShipmentEvidenceCommand =
@@ -228,6 +228,15 @@ async function publishRecordOnlyRepair(input: {
     evidence,
     expectedRecord,
   });
+  const remoteMutation = plan.kind === 'repair'
+    ? await resolveFeatureRemoteMutation({
+      cwd: input.cwd,
+      slug: input.slug,
+      branch: `shipment-repair/${plan.identity}`,
+      git: (args) => input.runGit(args, { cwd: input.cwd }),
+      gh: input.runGh,
+    })
+    : undefined;
   return publishShipmentRepair(plan, makeProductionRepairPublisher({
     cwd: input.cwd,
     implementationPr: input.implementationPr,
@@ -236,6 +245,7 @@ async function publishRecordOnlyRepair(input: {
     runGit: input.runGit,
     evaluateEvidence: input.evaluateEvidence,
     repo: input.repo,
+    remoteMutation,
   }));
 }
 

@@ -5,7 +5,9 @@ import {
   type RemoteGitConfigReader,
   type RemoteGitDestination,
 } from './remote-git-targets.js';
-import type { GithubMutationExecutionContext } from './tracker-client.js';
+import type { GhRunner, GithubMutationExecutionContext } from './tracker-client.js';
+import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
+import { resolveDaemonOwner } from './owner-gate/identity.js';
 
 /** The only injectable boundary permitted to perform an already-authorized Git write. */
 export interface RemoteGitCommandRunner {
@@ -31,6 +33,63 @@ export type RemoteGitExecutionResult =
     readonly target?: RemoteGitDestination;
   }
   | { readonly kind: 'failed'; readonly error: string; readonly targets: readonly RemoteGitDestination[] };
+
+/** Read-only Git seam used to build fresh committed ownership evidence. */
+export interface FeatureMutationGitReader {
+  (args: string[]): Promise<{ readonly stdout: string }>;
+}
+
+/**
+ * Resolve context for an existing feature branch. This creates no permission:
+ * executeRemoteGit still resolves identity and committed ownership per target.
+ */
+export async function resolveFeatureRemoteMutation(input: {
+  readonly cwd: string;
+  readonly slug: string;
+  readonly branch: string;
+  readonly git: FeatureMutationGitReader;
+  readonly gh: GhRunner;
+}): Promise<GithubMutationExecutionContext | undefined> {
+  const featureMarker = `.docs/intake/${input.slug}.md`;
+  const destination = input.branch.startsWith('refs/')
+    ? input.branch
+    : `refs/heads/${input.branch}`;
+  const targets = await resolveRemoteGitTargets(
+    ['push', 'origin', `HEAD:${destination}`],
+    input.git,
+  );
+  if (targets.kind !== 'resolved' || targets.targets.length !== 1) return undefined;
+
+  let defaultBranch: string;
+  try {
+    const { stdout } = await input.git(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+    const match = /^refs\/remotes\/origin\/(.+)$/.exec(stdout.trim());
+    if (!match) return undefined;
+    defaultBranch = `origin/${match[1]}`;
+  } catch {
+    return undefined;
+  }
+
+  return {
+    provenance: {
+      repository: targets.targets[0].repository,
+      defaultBranch,
+      specBranch: input.branch,
+      featureMarker,
+      publication: 'merged',
+    },
+    dependencies: {
+      resolveMachineOwner: async () =>
+        resolveDaemonOwner(await readMachineOwnerConfig(), input.gh, input.cwd),
+      provenanceDiscovery: {
+        readCommittedRecords: async ({ ref }) => {
+          const { stdout } = await input.git(['show', `${ref}:${featureMarker}`]);
+          return [{ path: featureMarker, content: stdout }];
+        },
+      },
+    },
+  };
+}
 
 function messageFor(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
