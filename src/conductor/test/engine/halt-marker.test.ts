@@ -58,12 +58,12 @@ describe('writeHaltMarker', () => {
     expect(contents).toContain('needs-human');
   });
 
-  it('commits a record and emits its outcome for a needs-human halt', async () => {
+  it('commits a record and emits its push-refusal outcome for a needs-human halt', async () => {
     ({ worktree: root, repositoryRoot } = await makeFeatureRepository());
     const emitter = new ConductorEventEmitter();
-    const emitted: Array<{ type: string; path: string; slug?: string; haltClass?: string }> = [];
-    emitter.on('halt_record_written', (event) => {
-      if (event.type === 'halt_record_written') emitted.push(event);
+    const emitted: Array<{ type: string; path: string; reason?: string }> = [];
+    emitter.on('halt_record_push_failed', (event) => {
+      if (event.type === 'halt_record_push_failed') emitted.push(event);
     });
 
     await expect(writeHaltMarker(root, 'operator decision required\n', 'needs-human', emitter)).resolves.toEqual({
@@ -74,10 +74,9 @@ describe('writeHaltMarker', () => {
     await expect(readFile(join(root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
     await expect(readFile(join(root, '.docs', 'halted', 'operator-decision.md'), 'utf8')).resolves.toContain('Status: halted');
     expect(emitted).toEqual([expect.objectContaining({
-      type: 'halt_record_written',
+      type: 'halt_record_push_failed',
       path: '.docs/halted/operator-decision.md',
-      slug: 'operator-decision',
-      haltClass: 'needs-human',
+      reason: 'invalid-target',
     })]);
   });
 

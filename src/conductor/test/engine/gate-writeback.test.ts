@@ -16,11 +16,18 @@ import {
   OWNER_GATED_LABEL,
 } from '../../src/engine/gate-writeback.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type { GithubOperationRequest, GithubOperationRunner } from '../../src/engine/github-operations.js';
 
 // ── Fake runner factory ───────────────────────────────────────────────────────
 
-function fakeGh(responses: Array<{ stdout: string } | Error>): { gh: GhRunner; calls: string[][] } {
+function fakeGh(responses: Array<{ stdout: string } | Error>): {
+  gh: GhRunner;
+  calls: string[][];
+  operations: GithubOperationRequest[];
+  runner: GhRunner & GithubOperationRunner;
+} {
   const calls: string[][] = [];
+  const operations: GithubOperationRequest[] = [];
   let idx = 0;
   const gh: GhRunner = async (args) => {
     calls.push([...args]);
@@ -29,7 +36,13 @@ function fakeGh(responses: Array<{ stdout: string } | Error>): { gh: GhRunner; c
     if (response instanceof Error) throw response;
     return response;
   };
-  return { gh, calls };
+  const runner: GhRunner & GithubOperationRunner = Object.assign(gh, {
+    async run(request: GithubOperationRequest) {
+      operations.push(request);
+      return {};
+    },
+  });
+  return { gh, calls, operations, runner };
 }
 
 const PR_URL = 'https://github.com/acme/repo/pull/7';
@@ -44,32 +57,34 @@ const SPEC = {
 
 describe('gate-writeback (Task 17)', () => {
   describe('ensureGatedPrLabel', () => {
-    it('ensures the owner-gated label exists and adds it to the PR (REST)', async () => {
-      const { gh, calls } = fakeGh([{ stdout: '' }, { stdout: '' }]);
-      await ensureGatedPrLabel(SPEC, PR_URL, gh, '/repo');
+    it('adds the pre-existing owner-gated label through the guarded operation seam', async () => {
+      const { runner, calls, operations } = fakeGh([]);
+      await ensureGatedPrLabel(SPEC, PR_URL, runner, '/repo');
 
-      expect(calls[0]).toEqual(['label', 'create', OWNER_GATED_LABEL, '--color', expect.any(String), '--force']);
-      expect(calls[1].join(' ')).toContain('POST');
-      expect(calls[1].join(' ')).toContain('labels[]=owner-gated');
+      expect(calls).toEqual([]);
+      expect(operations).toEqual([expect.objectContaining({
+        operation: 'pull-request.label.add',
+        payload: { label: OWNER_GATED_LABEL },
+      })]);
     });
 
-    it('is idempotent: 10 repeated calls each issue exactly one ensure + one add call, never throwing', async () => {
-      const { gh, calls } = fakeGh(Array(40).fill({ stdout: '' }));
+    it('is idempotent: 10 repeated calls each issue one guarded label association, never throwing', async () => {
+      const { runner, operations } = fakeGh([]);
       for (let i = 0; i < 10; i++) {
-        await ensureGatedPrLabel(SPEC, PR_URL, gh, '/repo');
+        await ensureGatedPrLabel(SPEC, PR_URL, runner, '/repo');
       }
-      expect(calls.length).toBe(20);
+      expect(operations).toHaveLength(10);
     });
   });
 
   describe('upsertGatedMarkerComment', () => {
     it('creates a new marker comment carrying slug, reason, remedy, and owner name', async () => {
-      const { gh, calls } = fakeGh([{ stdout: JSON.stringify({ comments: [] }) }, { stdout: '' }]);
-      await upsertGatedMarkerComment(SPEC, PR_URL, gh, '/repo');
+      const { runner, operations } = fakeGh([{ stdout: JSON.stringify({ comments: [] }) }]);
+      await upsertGatedMarkerComment(SPEC, PR_URL, runner, '/repo');
 
-      const commentCall = calls.find((c) => c[0] === 'pr' && c[1] === 'comment');
-      expect(commentCall).toBeDefined();
-      const body = commentCall![commentCall!.indexOf('--body') + 1];
+      const comment = operations.find((request) => request.operation === 'pull-request.comment.create');
+      expect(comment).toBeDefined();
+      const body = (comment!.payload as { body: string }).body;
       expect(body).toContain(OWNER_GATED_MARKER);
       expect(body).toContain(SPEC.slug);
       expect(body).toContain(SPEC.reason);
@@ -92,21 +107,21 @@ describe('gate-writeback (Task 17)', () => {
             }),
           };
         }
-        if (args[0] === 'pr' && args[1] === 'comment') {
-          created++;
-          const idx = args.indexOf('--body');
-          existingBody = args[idx + 1];
-          return { stdout: '' };
-        }
-        if (args[0] === 'api' && args.includes('PATCH')) {
-          patched++;
-          return { stdout: '' };
-        }
         return { stdout: '' };
       };
+      const runner: GhRunner & GithubOperationRunner = Object.assign(gh, {
+        async run(request: GithubOperationRequest) {
+          if (request.operation === 'pull-request.comment.create') {
+            created++;
+            existingBody = (request.payload as { body: string }).body;
+          }
+          if (request.operation === 'pull-request.comment.update') patched++;
+          return {};
+        },
+      });
 
       for (let i = 0; i < 10; i++) {
-        await upsertGatedMarkerComment(SPEC, PR_URL, gh, '/repo');
+        await upsertGatedMarkerComment(SPEC, PR_URL, runner, '/repo');
       }
 
       expect(created).toBe(1);
@@ -128,23 +143,24 @@ describe('gate-writeback (Task 17)', () => {
             }),
           };
         }
-        if (args[0] === 'pr' && args[1] === 'comment') {
-          created++;
-          const idx = args.indexOf('--body');
-          existingBody = args[idx + 1];
-          existingUrl = `${PR_URL}#issuecomment-1`;
-          return { stdout: '' };
-        }
-        if (args[0] === 'api' && args.includes('PATCH')) {
-          patched++;
-          const fArg = args.find((a) => a.startsWith('body='));
-          const body = fArg ? fArg.slice('body='.length) : '';
-          existingBody = body;
-          patchedBodies.push(body);
-          return { stdout: '' };
-        }
         return { stdout: '' };
       };
+      const runner: GhRunner & GithubOperationRunner = Object.assign(gh, {
+        async run(request: GithubOperationRequest) {
+          const body = (request.payload as { body: string }).body;
+          if (request.operation === 'pull-request.comment.create') {
+            created++;
+            existingBody = body;
+            existingUrl = `${PR_URL}#issuecomment-1`;
+          }
+          if (request.operation === 'pull-request.comment.update') {
+            patched++;
+            existingBody = body;
+            patchedBodies.push(body);
+          }
+          return {};
+        },
+      });
 
       // This case originally alternated between two `reason` values. `GatedReason`
       // has since been narrowed to the single member 'other-owner' — un-owned specs
@@ -169,11 +185,11 @@ describe('gate-writeback (Task 17)', () => {
       };
 
       // Pass 1: gated to alice — creates the comment.
-      await upsertGatedMarkerComment(ownedByAlice, PR_URL, gh, '/repo');
+      await upsertGatedMarkerComment(ownedByAlice, PR_URL, runner, '/repo');
       // Pass 2: transitions to bob — same comment, body updated.
-      await upsertGatedMarkerComment(ownedByBob, PR_URL, gh, '/repo');
+      await upsertGatedMarkerComment(ownedByBob, PR_URL, runner, '/repo');
       // Pass 3: transitions back to alice — still same comment.
-      await upsertGatedMarkerComment(ownedByAlice, PR_URL, gh, '/repo');
+      await upsertGatedMarkerComment(ownedByAlice, PR_URL, runner, '/repo');
 
       expect(created).toBe(1);
       expect(patched).toBe(2);
@@ -189,7 +205,7 @@ describe('gate-writeback (Task 17)', () => {
       // and the final state matches the last-applied entry.
       for (let i = 0; i < 10; i++) {
         const spec = i % 2 === 0 ? ownedByBob : ownedByAlice;
-        await upsertGatedMarkerComment(spec, PR_URL, gh, '/repo');
+        await upsertGatedMarkerComment(spec, PR_URL, runner, '/repo');
       }
       expect(created).toBe(1);
       expect(existingBody).toContain('alice');
@@ -199,18 +215,17 @@ describe('gate-writeback (Task 17)', () => {
 
   describe('announceGatedPr (orchestrator)', () => {
     it('composes ensureGatedPrLabel + upsertGatedMarkerComment for a newly gated spec', async () => {
-      const { gh, calls } = fakeGh([
+      const { gh, operations, runner } = fakeGh([
         { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) }, // prMergeState
-        { stdout: '' }, // ensureLabel
-        { stdout: '' }, // addLabel
         { stdout: JSON.stringify({ comments: [] }) }, // upsertComment lookup
-        { stdout: '' }, // create comment
       ]);
 
-      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo' });
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, operations: runner, cwd: '/repo' });
 
-      expect(calls.some((c) => c.join(' ').includes('labels[]=owner-gated'))).toBe(true);
-      expect(calls.some((c) => c.join(' ').includes(OWNER_GATED_MARKER))).toBe(true);
+      expect(operations).toEqual([
+        expect.objectContaining({ operation: 'pull-request.label.add', payload: { label: OWNER_GATED_LABEL } }),
+        expect.objectContaining({ operation: 'pull-request.comment.create', payload: { body: expect.stringContaining(OWNER_GATED_MARKER) } }),
+      ]);
     });
 
     it('never throws even when gh errors on every call', async () => {
@@ -234,20 +249,19 @@ describe('gate-writeback (Task 17)', () => {
     // ── Task 19: write-back failure semantics (S6 NP-1..NP-5) ──────────────
 
     it('FR-8: announces (label + comment) when the target PR is already MERGED', async () => {
-      const { gh, calls } = fakeGh([
+      const { gh, operations, runner } = fakeGh([
         { stdout: JSON.stringify({ state: 'MERGED', mergeable: 'UNKNOWN', statusCheckRollup: [], labels: [] }) }, // prMergeState
-        { stdout: '' }, // ensureLabel
-        { stdout: '' }, // addLabel
         { stdout: JSON.stringify({ comments: [] }) }, // upsertComment lookup
-        { stdout: '' }, // create comment
       ]);
 
-      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo' });
+      await announceGatedPr(SPEC, PR_URL, { runGh: gh, operations: runner, cwd: '/repo' });
 
       // The owner gate runs only on already-merged specs, so a MERGED PR
       // must still be labeled/commented — it was never announced while open.
-      expect(calls.some((c) => c.join(' ').includes('labels[]=owner-gated'))).toBe(true);
-      expect(calls.some((c) => c.join(' ').includes(OWNER_GATED_MARKER))).toBe(true);
+      expect(operations.map((request) => request.operation)).toEqual([
+        'pull-request.label.add',
+        'pull-request.comment.create',
+      ]);
     });
 
     it('NP-1: skips silently when the target PR is already CLOSED', async () => {
@@ -354,20 +368,28 @@ describe('gate-writeback (Task 17)', () => {
 
     it('NP-2: gh non-zero on the merge-state lookup is logged once and does not retry or throw', async () => {
       let ghCalls = 0;
+      const operations: GithubOperationRequest[] = [];
       const gh: GhRunner = async () => {
         ghCalls++;
         throw new Error('gh: rate limited');
       };
       const logs: string[] = [];
 
-      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedPr(SPEC, PR_URL, {
+        runGh: gh,
+        operations: { run: async (request) => { operations.push(request); return {}; } },
+        cwd: '/repo',
+        log: (m) => logs.push(m),
+      });
 
       // prMergeState's error yields a non-terminal sentinel (UNKNOWN), so
-      // label/comment are still attempted (each swallowing its own error):
-      // 1 (prMergeState) + 2 (ensureGatedPrLabel) + 2 (upsertComment: failed
-      // lookup, then a create fallback) = 5 total gh calls, no retries piled
-      // on top of any single failing call.
-      expect(ghCalls).toBe(5);
+      // Guarded mutations never use the read runner: one failed merge-state
+      // lookup is followed by exactly one label and one comment operation.
+      expect(ghCalls).toBe(2);
+      expect(operations.map((request) => request.operation)).toEqual([
+        'pull-request.label.add',
+        'pull-request.comment.create',
+      ]);
       expect(logs.filter((m) => m.includes('rate limited')).length).toBeGreaterThan(0);
     });
 
@@ -379,9 +401,6 @@ describe('gate-writeback (Task 17)', () => {
         if (args[0] === 'pr' && args[1] === 'view' && args.some((a) => a.startsWith('state,mergeable,statusCheckRollup,labels'))) {
           return { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) };
         }
-        if (args[0] === 'label' || (args[0] === 'api' && args.includes('POST'))) {
-          return { stdout: '' };
-        }
         if (args[0] === 'pr' && args[1] === 'view' && args.includes('comments')) {
           return {
             stdout: JSON.stringify({
@@ -389,18 +408,30 @@ describe('gate-writeback (Task 17)', () => {
             }),
           };
         }
-        if (args[0] === 'api' && args.includes('PATCH')) {
-          throw new Error('PATCH failed: 500');
-        }
         throw new Error(`unexpected call: ${args.join(' ')}`);
       };
       const logs: string[] = [];
+      const operations: GithubOperationRequest[] = [];
 
-      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: (m) => logs.push(m) });
+      await announceGatedPr(SPEC, PR_URL, {
+        runGh: gh,
+        operations: {
+          run: async (request) => {
+            operations.push(request);
+            if (request.operation === 'pull-request.comment.update') throw new Error('PATCH failed: 500');
+            return {};
+          },
+        },
+        cwd: '/repo',
+        log: (m) => logs.push(m),
+      });
 
-      // No 'pr comment' create call fired as a fallback after the PATCH failed.
+      // A failed guarded update never falls back to a create.
+      expect(operations.map((request) => request.operation)).toEqual([
+        'pull-request.label.add',
+        'pull-request.comment.update',
+      ]);
       expect(calls.find((c) => c[0] === 'pr' && c[1] === 'comment')).toBeUndefined();
-      expect(logs.some((m) => m.includes('PATCH failed'))).toBe(true);
     });
 
     it('NP-4: no PR found (falsy prUrl) skips with a notice and makes zero gh calls', async () => {
@@ -539,18 +570,16 @@ describe('gate-writeback (Task 17)', () => {
 
       // Pass 2: same slug, same shared warnedSkips Set, but now a real PR
       // exists. Dedup must guard only the log line, never the announce work.
-      const { gh: realGh, calls: realCalls } = fakeGh([
+      const { gh: realGh, operations, runner } = fakeGh([
         { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) }, // prMergeState
-        { stdout: '' }, // ensureLabel
-        { stdout: '' }, // addLabel
         { stdout: JSON.stringify({ comments: [] }) }, // upsertComment lookup
-        { stdout: '' }, // create comment
       ]);
-      await announceGatedPr(SPEC, PR_URL, { runGh: realGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(SPEC, PR_URL, { runGh: realGh, operations: runner, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
 
-      expect(realCalls.some((c) => c[0] === 'label' && c[1] === 'create')).toBe(true);
-      expect(realCalls.some((c) => c.join(' ').includes('labels[]=owner-gated'))).toBe(true);
-      expect(realCalls.some((c) => c[0] === 'pr' && c[1] === 'comment')).toBe(true);
+      expect(operations.map((request) => request.operation)).toEqual([
+        'pull-request.label.add',
+        'pull-request.comment.create',
+      ]);
     });
 
     it('NP-9v: a default-verbosity-suppressed no-PR skip never blocks a later real announcement for the same slug', async () => {
@@ -567,18 +596,16 @@ describe('gate-writeback (Task 17)', () => {
       // Pass 2: same slug, same shared warnedSkips Set, but now a real PR
       // exists. Suppressing the earlier skip's log must never block the
       // real announce work (label ensure+add, comment upsert).
-      const { gh: realGh, calls: realCalls } = fakeGh([
+      const { gh: realGh, operations, runner } = fakeGh([
         { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) }, // prMergeState
-        { stdout: '' }, // ensureLabel
-        { stdout: '' }, // addLabel
         { stdout: JSON.stringify({ comments: [] }) }, // upsertComment lookup
-        { stdout: '' }, // create comment
       ]);
-      await announceGatedPr(SPEC, PR_URL, { runGh: realGh, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
+      await announceGatedPr(SPEC, PR_URL, { runGh: realGh, operations: runner, cwd: '/repo', log: (m) => logs.push(m), warnedSkips });
 
-      expect(realCalls.some((c) => c[0] === 'label' && c[1] === 'create')).toBe(true);
-      expect(realCalls.some((c) => c.join(' ').includes('labels[]=owner-gated'))).toBe(true);
-      expect(realCalls.some((c) => c[0] === 'pr' && c[1] === 'comment')).toBe(true);
+      expect(operations.map((request) => request.operation)).toEqual([
+        'pull-request.label.add',
+        'pull-request.comment.create',
+      ]);
     });
 
     it('Task 6: verbose:true with a falsy prUrl re-surfaces exactly one no-PR notice', async () => {
@@ -621,33 +648,33 @@ describe('gate-writeback (Task 17)', () => {
     });
 
     it('NP-5: a label-add race (conflict error) is swallowed and the comment still lands', async () => {
-      const calls: string[][] = [];
       const gh: GhRunner = async (args) => {
-        calls.push([...args]);
         if (args[0] === 'pr' && args[1] === 'view' && args.some((a) => a.startsWith('state,mergeable,statusCheckRollup,labels'))) {
           return { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) };
-        }
-        if (args[0] === 'label') {
-          return { stdout: '' };
-        }
-        if (args[0] === 'api' && args.includes('POST')) {
-          // Simulate a concurrent labeler winning the race.
-          throw new Error('422 Label already exists / conflict');
         }
         if (args[0] === 'pr' && args[1] === 'view' && args.includes('comments')) {
           return { stdout: JSON.stringify({ comments: [] }) };
         }
-        if (args[0] === 'pr' && args[1] === 'comment') {
-          return { stdout: '' };
-        }
         return { stdout: '' };
       };
+      const operations: GithubOperationRequest[] = [];
 
-      await announceGatedPr(SPEC, PR_URL, { runGh: gh, cwd: '/repo', log: () => {} });
+      await announceGatedPr(SPEC, PR_URL, {
+        runGh: gh,
+        operations: {
+          run: async (request) => {
+            operations.push(request);
+            if (request.operation === 'pull-request.label.add') throw new Error('422 Label already exists / conflict');
+            return {};
+          },
+        },
+        cwd: '/repo',
+        log: () => {},
+      });
 
-      const commentCall = calls.find((c) => c[0] === 'pr' && c[1] === 'comment');
-      expect(commentCall).toBeDefined();
-      const body = commentCall![commentCall!.indexOf('--body') + 1];
+      const comment = operations.find((request) => request.operation === 'pull-request.comment.create');
+      expect(comment).toBeDefined();
+      const body = (comment!.payload as { body: string }).body;
       expect(body).toContain(OWNER_GATED_MARKER);
     });
   });
