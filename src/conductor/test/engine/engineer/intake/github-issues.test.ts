@@ -11,8 +11,24 @@ import { mkdtemp, rm, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createGithubIssuesAdapter, type GhRunner } from '../../../../src/engine/engineer/intake/github-issues.js';
+import {
+  createGithubIssuesAdapter as createGithubIssuesAdapterImpl,
+  type GhRunner,
+  type GithubIssuesDeps,
+} from '../../../../src/engine/engineer/intake/github-issues.js';
 import { createLedger } from '../../../../src/engine/engineer/intake/ledger.js';
+
+// These tests cover report()'s cwd and failure behavior. Authorization is
+// exercised independently by the ownership suite, so inject its approved seam
+// here rather than letting an unrelated machine identity decide the outcome.
+const authorizedIntake = { authorize: async () => ({}) };
+
+function createGithubIssuesAdapter(deps: GithubIssuesDeps) {
+  return createGithubIssuesAdapterImpl({
+    ...deps,
+    intakeAuthorization: deps.intakeAuthorization ?? authorizedIntake,
+  });
+}
 
 let dir: string;
 beforeEach(async () => {

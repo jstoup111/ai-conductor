@@ -55,6 +55,7 @@ async function makeAdapter(state: FakeGhState, repos: Array<{ name: string; path
     ledger,
     now: clock.now,
     newId: clock.id,
+    resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
   });
   return { adapter, ledger };
 }
@@ -260,6 +261,7 @@ describe('FR-36/38 write-back comments + label, idempotent', () => {
       gh,
       registry: fakeRegistry([{ name: 'o/a', path: join(dir, 'a') }]),
       ledger: createLedger(join(dir, 'ledger.json')),
+      resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
     });
     await adapter.report('o/a#1', 'routed', { repo: 'o/target' });
     await adapter.report('o/a#1', 'done', { prUrl: 'https://x/pr/9' });
@@ -277,6 +279,7 @@ describe('FR-36/38 write-back comments + label, idempotent', () => {
       gh,
       registry: fakeRegistry([{ name: 'o/a', path: join(dir, 'a') }]),
       ledger: createLedger(join(dir, 'ledger.json')),
+      resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
     });
     await adapter.report('o/a#1', 'done', { prUrl: 'https://x/pr/9' });
     await adapter.report('o/a#1', 'done', { prUrl: 'https://x/pr/9' });
@@ -296,6 +299,7 @@ describe('FR-37 write-back is non-fatal', () => {
       gh: failingGh,
       registry: fakeRegistry([{ name: 'o/a', path: join(dir, 'a') }]),
       ledger: createLedger(join(dir, 'ledger.json')),
+      resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
     });
     await expect(adapter.report('o/a#1', 'done', { prUrl: 'https://x/pr/9' })).resolves.not.toThrow();
   });
@@ -307,10 +311,14 @@ describe('FR-39/40 re-eligibility + churn guard', () => {
     state.issuesByRepo = {
       'o/a': [{ repo: 'o/a', number: 1, title: 'A', body: 'a', labels: ['engineer:handled'] }],
     };
-    state.prs = { 'https://x/pr/9': { url: 'https://x/pr/9', state: 'CLOSED', mergedAt: null } };
+    state.prs = {
+      'https://github.com/o/a/pull/9': {
+        url: 'https://github.com/o/a/pull/9', state: 'CLOSED', mergedAt: null,
+      },
+    };
     const { adapter, ledger } = await makeAdapter(state, [{ name: 'o/a', path: join(dir, 'a') }]);
     await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
-    await ledger.transition('github-issues', 'o/a#1', 'done', { prUrl: 'https://x/pr/9' });
+    await ledger.transition('github-issues', 'o/a#1', 'done', { prUrl: 'https://github.com/o/a/pull/9' });
     const envs = await adapter.poll();
     expect(envs.map((e: any) => e.sourceRef)).toContain('o/a#1');
   });
@@ -321,11 +329,13 @@ describe('FR-39/40 re-eligibility + churn guard', () => {
       'o/a': [{ repo: 'o/a', number: 1, title: 'A', body: 'a', labels: ['engineer:handled'] }],
     };
     state.prs = {
-      'https://x/pr/9': { url: 'https://x/pr/9', state: 'MERGED', mergedAt: '2026-06-27T01:00:00Z' },
+      'https://github.com/o/a/pull/9': {
+        url: 'https://github.com/o/a/pull/9', state: 'MERGED', mergedAt: '2026-06-27T01:00:00Z',
+      },
     };
     const { adapter, ledger } = await makeAdapter(state, [{ name: 'o/a', path: join(dir, 'a') }]);
     await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
-    await ledger.transition('github-issues', 'o/a#1', 'done', { prUrl: 'https://x/pr/9' });
+    await ledger.transition('github-issues', 'o/a#1', 'done', { prUrl: 'https://github.com/o/a/pull/9' });
     expect(await adapter.poll()).toEqual([]);
   });
 });

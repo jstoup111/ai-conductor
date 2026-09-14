@@ -49,6 +49,7 @@ describe('C3 adapter never mutates registered repo working trees', () => {
         { name: 'o/b', path: repoB },
       ]),
       ledger: createLedger(join(dir, 'ledger.json')),
+      resolveActor: async () => ({ resolved: true as const, id: 'alice' }),
     });
 
     await adapter.poll();
