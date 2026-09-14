@@ -12,7 +12,12 @@ import {
   HALT_PR_BANNER_SENTINEL,
   NEEDS_REMEDIATION_BODY_MARKER,
 } from '../../../src/engine/pr-labels.js';
-import type { GithubOperationRequest, GithubOperationRunner } from '../../../src/engine/github-operations.js';
+import type {
+  GithubOperationRequest,
+  GithubOperationRunner,
+  GithubOperationRunnerRefusal,
+  GithubOperationRunnerResponse,
+} from '../../../src/engine/github-operations.js';
 import type { GhRunner } from '../../../src/engine/tracker-client.js';
 
 const CWD = '/fake/worktree';
@@ -35,14 +40,17 @@ function fakePresentation(options: { refuse?: boolean } = {}): {
   const operations: GithubOperationRunner = {
     run: vi.fn(async (request) => {
       writes.push(request);
-      if (options.refuse) return { kind: 'refused' as const, reason: 'other-owner' as const };
+      const result: GithubOperationRunnerResponse | GithubOperationRunnerRefusal = options.refuse
+        ? { kind: 'refused', reason: 'other-owner' }
+        : {};
+      if (options.refuse) return result;
       if (request.operation === 'pull-request.label.remove') state.labels = [];
       if (request.operation === 'pull-request.ready') state.isDraft = false;
       if (request.operation === 'pull-request.edit' && request.payload) {
         if ('title' in request.payload && request.payload.title) state.title = request.payload.title;
         if ('body' in request.payload && request.payload.body) state.body = request.payload.body;
       }
-      return {};
+      return result;
     }),
   };
   return { gh, operations, writes, state };
