@@ -40,6 +40,15 @@ export type ConductStateLeaseAcquireResult =
   | { ok: true; handle: ConductStateLeaseHandle }
   | { ok: false; kind: ConductStateLeaseFailureKind; message: string };
 
+type ConductStateLeaseBlocker =
+  | { kind: 'owner' | 'claimant'; pid: number }
+  | { kind: 'initializing' | 'changed' }
+  | { kind: 'dead_owner' | 'unresolved_recovery'; pid: number };
+
+type ConductStateLeaseRecoveryTimeoutBlocker =
+  | { kind: 'claimant'; pid: number }
+  | { kind: 'dead_owner' | 'unresolved_recovery'; pid: number };
+
 export interface ConductStateLease {
   acquire(): Promise<ConductStateLeaseAcquireResult>;
 }
@@ -269,7 +278,7 @@ export function createConductStateLease(
     // misclassify a healthy concurrent writer as an ambiguous lease.
     | { status: 'initializing' }
     | { status: 'vanished' }
-    | { status: 'timeout'; blocker: { kind: 'dead_owner' | 'unresolved_recovery'; pid: number } }
+    | { status: 'timeout'; blocker: ConductStateLeaseRecoveryTimeoutBlocker }
     | { status: 'refused'; message: string }
   > {
     let serializedOwner: string;
@@ -292,6 +301,57 @@ export function createConductStateLease(
       };
     }
 
+    const observeRecoveryBlockerAtDeadline = async (): Promise<
+      | { status: 'timeout'; blocker: ConductStateLeaseRecoveryTimeoutBlocker }
+      | { status: 'refused'; message: string }
+    > => {
+      let lastObservedBlocker: ConductStateLeaseRecoveryTimeoutBlocker = {
+        kind: 'dead_owner', pid: owner.pid,
+      };
+      let claimPath = recoveryClaimPath(leasePath);
+      let predecessorToken: string | null = null;
+      let currentOwnerRoot = false;
+      const visitedClaimTokens = new Set<string>();
+
+      while (true) {
+        let serializedClaim: string | null;
+        try {
+          serializedClaim = await filesystem.readRecoveryClaim(claimPath);
+        } catch (error) {
+          return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claim read failed (${errorMessage(error)})` };
+        }
+        if (serializedClaim === null) return { status: 'timeout', blocker: lastObservedBlocker };
+
+        const existingClaim = parseRecoveryClaim(serializedClaim, leasePath);
+        if (!currentOwnerRoot && existingClaim.kind === 'bound' &&
+          existingClaim.identity.ownerToken !== owner.token &&
+          existingClaim.identity.predecessorToken === null && predecessorToken === null) {
+          claimPath = recoverySuccessorClaimPath(leasePath, owner.token, null);
+          currentOwnerRoot = true;
+          continue;
+        }
+        if (existingClaim.kind === 'invalid' ||
+          (existingClaim.kind === 'legacy' && predecessorToken !== null) ||
+          (existingClaim.kind === 'bound' &&
+            (existingClaim.identity.ownerToken !== owner.token ||
+              existingClaim.identity.predecessorToken !== predecessorToken)) ||
+          visitedClaimTokens.has(existingClaim.identity.token)) {
+          return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claim is invalid or inconsistent` };
+        }
+        visitedClaimTokens.add(existingClaim.identity.token);
+        try {
+          if (processIsLive(existingClaim.identity.pid)) {
+            return { status: 'timeout', blocker: { kind: 'claimant', pid: existingClaim.identity.pid } };
+          }
+        } catch (error) {
+          return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claimant liveness is unverifiable (${errorMessage(error)})` };
+        }
+        lastObservedBlocker = { kind: 'unresolved_recovery', pid: existingClaim.identity.pid };
+        predecessorToken = existingClaim.identity.token;
+        claimPath = recoverySuccessorClaimPath(leasePath, owner.token, predecessorToken);
+      }
+    };
+
     let ownerIsLive: boolean;
     try {
       ownerIsLive = processIsLive(owner.pid);
@@ -303,7 +363,7 @@ export function createConductStateLease(
       };
     }
     if (ownerIsLive) return { status: 'occupied', blocker: { kind: 'owner', pid: owner.pid } };
-    if (now() >= deadline) return { status: 'timeout', blocker: { kind: 'dead_owner', pid: owner.pid } };
+    if (now() >= deadline) return observeRecoveryBlockerAtDeadline();
 
     const claimFor = (predecessorToken: string | null): string => `${JSON.stringify({
       version: 1,
@@ -315,6 +375,7 @@ export function createConductStateLease(
     })}\n`;
     let terminalClaimPath = recoveryClaimPath(leasePath);
     let terminalClaim = claimFor(null);
+    let lastObservedBlocker: ConductStateLeaseRecoveryTimeoutBlocker = { kind: 'dead_owner', pid: owner.pid };
     try {
       await filesystem.writeRecoveryClaim(terminalClaimPath, terminalClaim);
     } catch (error) {
@@ -324,7 +385,7 @@ export function createConductStateLease(
         let currentOwnerRoot = false;
         const visitedClaimTokens = new Set<string>();
         while (true) {
-          if (now() >= deadline) return { status: 'timeout', blocker: { kind: 'unresolved_recovery', pid: owner.pid } };
+          if (now() >= deadline) return { status: 'timeout', blocker: lastObservedBlocker };
           let serializedClaim: string | null;
           try {
             serializedClaim = await filesystem.readRecoveryClaim(claimPath);
@@ -373,8 +434,9 @@ export function createConductStateLease(
           } catch (claimLivenessError) {
             return { status: 'refused', message: `Unable to recover ${leaseName} lease: recovery claimant liveness is unverifiable (${errorMessage(claimLivenessError)})` };
           }
+          lastObservedBlocker = { kind: 'unresolved_recovery', pid: existingClaim.identity.pid };
           if (now() >= deadline) {
-            return { status: 'timeout', blocker: { kind: 'unresolved_recovery', pid: existingClaim.identity.pid } };
+            return { status: 'timeout', blocker: lastObservedBlocker };
           }
           predecessorToken = existingClaim.identity.token;
           claimPath = recoverySuccessorClaimPath(leasePath, owner.token, predecessorToken);
@@ -405,7 +467,7 @@ export function createConductStateLease(
       }
     }
 
-    if (now() >= deadline) return { status: 'timeout', blocker: { kind: 'unresolved_recovery', pid } };
+    if (now() >= deadline) return { status: 'timeout', blocker: lastObservedBlocker };
 
     let confirmedOwner: string;
     let confirmedClaim: string | null;
@@ -483,10 +545,7 @@ export function createConductStateLease(
         acquiredAt: new Date(startedAt).toISOString(),
       };
       const serializedOwner = `${JSON.stringify(owner)}\n`;
-      let blocker: {
-        kind: 'owner' | 'claimant' | 'initializing' | 'changed' | 'dead_owner' | 'unresolved_recovery';
-        pid?: number;
-      } | undefined;
+      let blocker: ConductStateLeaseBlocker | undefined;
       const deadline = startedAt + waitTimeoutMs;
 
       const timeoutMessage = (): string => {

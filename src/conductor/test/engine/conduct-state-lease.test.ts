@@ -884,7 +884,7 @@ describe('conduct-state lease', () => {
     await held.handle.release();
   });
 
-  it('does not reuse a live recovery claimant after the next observation proves the owner dead', async () => {
+  it('identifies a live recovery claimant when the deadline expires behind recovery contention', async () => {
     const statePath = '/worktree/recovery-claimant-timeout/.pipeline/conduct-state.json';
     const filesystem = sharedLeaseFilesystem();
     const held = await createConductStateLease(statePath, {
@@ -912,7 +912,7 @@ describe('conduct-state lease', () => {
     expect(result).toEqual({
       ok: false,
       kind: 'timeout',
-      message: 'Unable to acquire intake ledger lease within 5ms; dead owner pid 101 could not be recovered',
+      message: 'Unable to acquire intake ledger lease within 5ms; recovery claimant pid 202 is live',
     });
   });
 
@@ -944,6 +944,109 @@ describe('conduct-state lease', () => {
       message: 'Unable to acquire intake ledger lease within 5ms; dead owner pid 101 could not be recovered',
     });
     await held.handle.release();
+  });
+
+  it('reports a claimant that appears after a live owner dies during the wait', async () => {
+    const statePath = '/worktree/live-owner-then-claimant/.pipeline/conduct-state.json';
+    const filesystem = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem, pid: 101, newToken: () => 'owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    let now = 0;
+    let ownerIsLive = true;
+
+    const result = await createConductStateLease(statePath, {
+      filesystem,
+      label: 'intake ledger',
+      pid: 303,
+      newToken: () => 'contender',
+      now: () => now,
+      wait: async (milliseconds) => {
+        ownerIsLive = false;
+        now += milliseconds;
+        await filesystem.writeRecoveryClaim(`${statePath}.lease/recovery.json`, JSON.stringify({
+          version: 1, pid: 202, token: 'live-claimant', claimedAt: '1970-01-01T00:00:00.000Z',
+          ownerToken: 'owner', predecessorToken: null,
+        }));
+      },
+      waitTimeoutMs: 5,
+      retryDelayMs: 5,
+      processIsLive: (candidatePid) => candidatePid === 101 ? ownerIsLive : candidatePid === 202,
+    }).acquire();
+
+    expect(result).toEqual({
+      ok: false,
+      kind: 'timeout',
+      message: 'Unable to acquire intake ledger lease within 5ms; recovery claimant pid 202 is live',
+    });
+  });
+
+  it('reports the dead owner when claim election reaches the deadline before the first claim read', async () => {
+    const statePath = '/worktree/dead-owner-claim-election-deadline/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared, pid: 101, newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    let now = 0;
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async writeRecoveryClaim(): Promise<void> {
+        now = 5;
+        throw Object.assign(new Error('already held'), { code: 'EEXIST' });
+      },
+    };
+
+    await expect(createConductStateLease(statePath, {
+      filesystem,
+      label: 'intake ledger',
+      now: () => now,
+      processIsLive: () => false,
+      waitTimeoutMs: 5,
+      newToken: () => 'contender',
+    }).acquire()).resolves.toEqual({
+      ok: false,
+      kind: 'timeout',
+      message: 'Unable to acquire intake ledger lease within 5ms; dead owner pid 101 could not be recovered',
+    });
+  });
+
+  it('reports the last dead claimant when successor creation reaches the deadline', async () => {
+    const statePath = '/worktree/dead-claimant-successor-deadline/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared, pid: 101, newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    await shared.writeRecoveryClaim(`${statePath}.lease/recovery.json`, JSON.stringify({
+      version: 1, pid: 202, token: 'dead-claimant', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'dead-owner', predecessorToken: null,
+    }));
+    let now = 0;
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async writeRecoveryClaim(path, contents): Promise<void> {
+        if (path.endsWith('/recovery.json')) {
+          throw Object.assign(new Error('already held'), { code: 'EEXIST' });
+        }
+        await shared.writeRecoveryClaim(path, contents);
+        now = 5;
+      },
+    };
+
+    await expect(createConductStateLease(statePath, {
+      filesystem,
+      label: 'intake ledger',
+      now: () => now,
+      processIsLive: () => false,
+      waitTimeoutMs: 5,
+      newToken: () => 'contender',
+    }).acquire()).resolves.toEqual({
+      ok: false,
+      kind: 'timeout',
+      message: 'Unable to acquire intake ledger lease within 5ms; recovery claimant pid 202 is unresolved',
+    });
   });
 
   it.each([
