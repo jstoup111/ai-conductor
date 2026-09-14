@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-14T20:14:45.874Z
 Slug: run-the-harness-integrity-suite-in-build-s-test-su
 Class: needs-human
 Halting step: unknown
