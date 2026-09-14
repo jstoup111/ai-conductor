@@ -3,7 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
-import { haltRecordPath, recordHalt } from '../../src/engine/halt-record.js';
+import { haltRecordPath, recordHalt, type HaltRecordRemoteOptions } from '../../src/engine/halt-record.js';
+import type { RemoteGitExecutionResult, RemoteGitOperationDependencies } from '../../src/engine/remote-git-operations.js';
 
 const scratchRoots: string[] = [];
 const input = {
@@ -28,13 +29,13 @@ describe('recordHalt', () => {
     const worktree = await makeFeatureRepository();
     const before = await commitCount(worktree);
 
-    await expect(recordHalt(worktree, input)).resolves.toEqual({ kind: 'written' });
+    await expect(recordHalt(worktree, input, successfulRemote())).resolves.toEqual({ kind: 'written' });
 
     await expect(readFile(join(worktree, haltRecordPath(input.slug)), 'utf8')).resolves.toContain('Status: halted');
     expect(await commitCount(worktree)).toBe(before + 1);
     expect(await changedPathsAtHead(worktree)).toEqual([haltRecordPath(input.slug)]);
 
-    await expect(recordHalt(worktree, input)).resolves.toEqual({ kind: 'noop' });
+    await expect(recordHalt(worktree, input, successfulRemote())).resolves.toEqual({ kind: 'noop' });
     expect(await commitCount(worktree)).toBe(before + 1);
   });
 
@@ -43,19 +44,19 @@ describe('recordHalt', () => {
     const unrelated = 'unrelated.txt';
     await writeFile(join(worktree, unrelated), 'keep this dirty\n');
 
-    await expect(recordHalt(worktree, input)).resolves.toEqual({ kind: 'written' });
+    await expect(recordHalt(worktree, input, successfulRemote())).resolves.toEqual({ kind: 'written' });
 
     expect(await changedPathsAtHead(worktree)).toEqual([haltRecordPath(input.slug)]);
     expect(await statusPaths(worktree)).toContain(` M ${unrelated}`);
   });
 
-  it('pushes the committed record to its configured bare remote', async () => {
+  it('sends the committed record through the injected remote mutation boundary', async () => {
     const worktree = await makeFeatureRepository();
-    const remote = await remoteUrl(worktree);
+    const pushes: string[][] = [];
 
-    await expect(recordHalt(worktree, input)).resolves.toEqual({ kind: 'written' });
+    await expect(recordHalt(worktree, input, successfulRemote(pushes))).resolves.toEqual({ kind: 'written' });
 
-    await expect(readRemoteFile(remote, input.branch, haltRecordPath(input.slug))).resolves.toContain('Status: halted');
+    expect(pushes).toEqual([['push', 'origin', `HEAD:refs/heads/${input.branch}`]]);
   });
 
   it('retains the local record commit when no remote is configured', async () => {
@@ -72,11 +73,9 @@ describe('recordHalt', () => {
 
   it('retains the local record commit when its remote rejects the push', async () => {
     const worktree = await makeFeatureRepository();
-    const remote = await remoteUrl(worktree);
-    await writeFile(join(remote, 'hooks', 'pre-receive'), '#!/bin/sh\necho push rejected >&2\nexit 1\n', { mode: 0o755 });
     const before = await commitCount(worktree);
 
-    const result = await recordHalt(worktree, input);
+    const result = await recordHalt(worktree, input, failingRemote('push rejected'));
     expect(result).toMatchObject({ kind: 'pushFailed' });
     if (result.kind === 'pushFailed') expect(result.reason).not.toBe('');
     expect(await commitCount(worktree)).toBe(before + 1);
@@ -132,4 +131,19 @@ async function readRemoteFile(remote: string, branch: string, path: string): Pro
 async function remoteUrl(worktree: string): Promise<string> {
   const { stdout } = await execa('git', ['remote', 'get-url', 'origin'], { cwd: worktree });
   return stdout;
+}
+
+function successfulRemote(pushes: string[][] = []): HaltRecordRemoteOptions {
+  return {
+    remoteGit: async (args: readonly string[], _dependencies: RemoteGitOperationDependencies): Promise<RemoteGitExecutionResult> => {
+      pushes.push([...args]);
+      return { kind: 'executed', targets: [] };
+    },
+  };
+}
+
+function failingRemote(error: string): HaltRecordRemoteOptions {
+  return {
+    remoteGit: async (): Promise<RemoteGitExecutionResult> => ({ kind: 'failed', error, targets: [] }),
+  };
 }
