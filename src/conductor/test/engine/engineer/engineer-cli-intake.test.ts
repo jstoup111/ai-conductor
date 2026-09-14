@@ -38,6 +38,9 @@ function makeGh(
         ),
       };
     }
+    if (args[0] === 'issue' && args[1] === 'view' && args.includes('assignees')) {
+      return { stdout: JSON.stringify({ assignees: [{ login: 'test-owner' }] }) };
+    }
     return { stdout: '' };
   };
   return { gh, calls };
@@ -78,6 +81,7 @@ function captureOut() {
     engineerDir,
     print: (s) => out.push(s),
     printErr: (s) => err.push(s),
+    intakeResolveActor: async () => ({ resolved: true, id: 'test-owner' }),
     ...extra,
   });
   return { out, err, opts };
@@ -166,8 +170,11 @@ describe('engineer forget (T23, FR-40)', () => {
     );
     expect(code).toBe(0);
     expect(calls).toEqual([
+      ['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees'],
       ['issue', 'comment', '1', '-R', 'o/a', '--body', expect.stringContaining('o/a#2')],
+      ['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees'],
       ['issue', 'close', '1', '-R', 'o/a'],
+      ['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees'],
       ['api', '--method', 'DELETE', 'repos/o/a/issues/1/labels/engineer%3Ahandled'],
     ]);
     expect(await ledger.known('github-issues', 'o/a#1')).toBe(false);
@@ -193,6 +200,7 @@ describe('engineer forget (T23, FR-40)', () => {
 
     expect(await ledger.known('github-issues', 'o/a#1')).toBe(false);
     expect(calls).toEqual([
+      ['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees'],
       ['api', '--method', 'DELETE', 'repos/o/a/issues/1/labels/engineer%3Ahandled'],
     ]);
   });
@@ -212,6 +220,7 @@ describe('engineer forget (T23, FR-40)', () => {
     expect(code).not.toBe(0);
     expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
     expect(calls).toEqual([
+      ['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees'],
       ['issue', 'comment', '1', '-R', 'o/a', '--body', expect.any(String)],
     ]);
     expect(err.join('\n')).toContain('o/a#1');
@@ -233,7 +242,9 @@ describe('engineer forget (T23, FR-40)', () => {
     expect(code).not.toBe(0);
     expect(await ledger.known('github-issues', 'o/a#1')).toBe(true);
     expect(calls).toEqual([
+      ['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees'],
       ['issue', 'comment', '1', '-R', 'o/a', '--body', expect.any(String)],
+      ['issue', 'view', '1', '-R', 'o/a', '--json', 'assignees'],
       ['issue', 'close', '1', '-R', 'o/a'],
     ]);
     expect(err.join('\n')).toMatch(/close (?:the )?issue by hand/i);
