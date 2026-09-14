@@ -529,7 +529,21 @@ export function createConductStateLease(
                 if (await filesystem.readOwner(ownerPath(leasePath)) !== serializedOwner) {
                   return { ok: false, message: `${leaseTitle} lease ownership was lost before release` };
                 }
-                if (await filesystem.readRecoveryClaim(recoveryClaimPath(leasePath)) !== null) {
+                const serializedRootClaim = await filesystem.readRecoveryClaim(recoveryClaimPath(leasePath));
+                const rootClaim = serializedRootClaim === null
+                  ? null
+                  : parseRecoveryClaim(serializedRootClaim, leasePath);
+                const currentOwnerAuthorityPath = recoverySuccessorClaimPath(leasePath, owner.token, null);
+                const serializedCurrentOwnerClaim = rootClaim?.kind === 'bound' &&
+                  rootClaim.identity.ownerToken !== owner.token
+                  ? await filesystem.readRecoveryClaim(currentOwnerAuthorityPath)
+                  : null;
+                const currentOwnerClaim = serializedCurrentOwnerClaim === null
+                  ? null
+                  : parseRecoveryClaim(serializedCurrentOwnerClaim, leasePath);
+                if (rootClaim?.kind === 'legacy' || rootClaim?.kind === 'invalid' ||
+                  (rootClaim?.kind === 'bound' && rootClaim.identity.ownerToken === owner.token) ||
+                  currentOwnerClaim !== null) {
                   return { ok: false, message: `${leaseTitle} lease recovery is in progress` };
                 }
                 await filesystem.releaseDirectory(leasePath);

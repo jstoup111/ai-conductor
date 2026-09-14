@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -33,7 +34,7 @@ import {
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/state.js';
 
-// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, S3.3, S3.5, task:1, task:2, task:3, task:4
+// Covers: S1.1, S1.2, S1.3, S2.1, S2.2, S3.2, S3.3, S3.5, S3.6, task:1, task:2, task:3, task:4, task:5
 
 const temporaryDirectories: string[] = [];
 
@@ -420,6 +421,137 @@ describe('conduct-state lease', () => {
       currentAuthorityPaths: [expect.any(String)],
     });
     if (recovered.ok) await recovered.handle.release();
+  });
+
+  it('releases a replacement owner after a delayed contender leaves its foreign claim', async () => {
+    const statePath = '/worktree/replacement-release/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const oldOwner = await createConductStateLease(statePath, {
+      filesystem: shared,
+      pid: 101,
+      newToken: () => 'old-owner',
+    }).acquire();
+    if (!oldOwner.ok) throw new Error(oldOwner.message);
+
+    let resumeOldClaim: (() => void) | undefined;
+    const oldClaimMayResume = new Promise<void>((resolve) => { resumeOldClaim = resolve; });
+    let oldClaimStarted: (() => void) | undefined;
+    const oldClaimHasStarted = new Promise<void>((resolve) => { oldClaimStarted = resolve; });
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async writeRecoveryClaim(path, contents): Promise<void> {
+        if (path.endsWith('/recovery.json')) {
+          oldClaimStarted?.();
+          await oldClaimMayResume;
+        }
+        await shared.writeRecoveryClaim(path, contents);
+      },
+    };
+    let now = 0;
+    const delayed = createConductStateLease(statePath, {
+      filesystem,
+      pid: 202,
+      newToken: () => 'delayed-contender',
+      now: () => now,
+      wait: async (milliseconds) => { now += milliseconds; },
+      waitTimeoutMs: 1,
+      retryDelayMs: 1,
+      processIsLive: (candidatePid) => candidatePid === 303,
+    }).acquire();
+    await oldClaimHasStarted;
+    await oldOwner.handle.release();
+    const replacement = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 303,
+      newToken: () => 'replacement-owner',
+    }).acquire();
+    if (!replacement.ok) throw new Error(replacement.message);
+    resumeOldClaim?.();
+    const delayedResult = await delayed;
+    const released = await replacement.handle.release();
+    const laterOwner = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 404,
+      newToken: () => 'later-owner',
+    }).acquire();
+
+    expect({
+      delayedKind: delayedResult.ok ? undefined : delayedResult.kind,
+      released,
+      laterAcquired: laterOwner.ok,
+    }).toEqual({
+      delayedKind: 'timeout',
+      released: { ok: true },
+      laterAcquired: true,
+    });
+    if (laterOwner.ok) await laterOwner.handle.release();
+  });
+
+  it.each([
+    ['an unbound legacy claim', (statePath: string) => [[`${statePath}.lease/recovery.json`, {
+      version: 1, pid: 202, token: 'legacy-claim', claimedAt: '1970-01-01T00:00:00.000Z',
+    }]]],
+    ['a current-generation root claim', (statePath: string) => [[`${statePath}.lease/recovery.json`, {
+      version: 1, pid: 202, token: 'current-claim', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'current-owner', predecessorToken: null,
+    }]]],
+    ['a current-generation authority path behind a foreign root', (statePath: string) => [[
+      `${statePath}.lease/recovery.json`, {
+        version: 1, pid: 202, token: 'foreign-claim', claimedAt: '1970-01-01T00:00:00.000Z',
+        ownerToken: 'previous-owner', predecessorToken: null,
+      },
+    ], [`${statePath}.lease/recovery.${createHash('sha256').update(JSON.stringify(['current-owner', null])).digest('hex')}.json`, {
+      version: 1, pid: 303, token: 'current-claim', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'current-owner', predecessorToken: null,
+    }]]],
+  ])('refuses release while %s is authoritative', async (_case, claimFactory) => {
+    const statePath = '/worktree/release-authority/.pipeline/conduct-state.json';
+    const filesystem = sharedLeaseFilesystem();
+    const acquired = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 101,
+      newToken: () => 'current-owner',
+    }).acquire();
+    if (!acquired.ok) throw new Error(acquired.message);
+    const claims = claimFactory(statePath);
+    for (const [path, claim] of claims) await filesystem.writeRecoveryClaim(path, JSON.stringify(claim));
+
+    const released = await acquired.handle.release();
+
+    expect({ released, stillHeld: filesystem.hasDirectory(`${statePath}.lease`) }).toEqual({
+      released: { ok: false, message: 'Conduct-state lease recovery is in progress' },
+      stillHeld: true,
+    });
+  });
+
+  it('refuses release without deleting a changed owner generation', async () => {
+    const statePath = '/worktree/release-changed-owner/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    let ownerChanged = false;
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async readOwner(path): Promise<string> {
+        if (!ownerChanged) return shared.readOwner(path);
+        return JSON.stringify({
+          version: 1, pid: 202, token: 'replacement-owner', acquiredAt: '1970-01-01T00:00:00.000Z',
+        });
+      },
+    };
+    const acquired = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 101,
+      newToken: () => 'original-owner',
+    }).acquire();
+    if (!acquired.ok) throw new Error(acquired.message);
+    ownerChanged = true;
+
+    expect({
+      released: await acquired.handle.release(),
+      stillHeld: shared.hasDirectory(`${statePath}.lease`),
+    }).toEqual({
+      released: { ok: false, message: 'Conduct-state lease ownership was lost before release' },
+      stillHeld: true,
+    });
   });
 
   it.each([
