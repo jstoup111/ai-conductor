@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-14T16:46:48.188Z
 Slug: reliable-disk-backed-test-temporary-storage-for-co
 Class: needs-human
 Halting step: unknown
