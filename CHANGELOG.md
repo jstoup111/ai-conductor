@@ -11,7 +11,11 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.2.1] - 2026-09-14
+## [1.3.0] - 2026-09-14
+
+### Added
+
+- Projects can run ordered aggregate test suites with per-suite directory and timeout settings. ([implementation PR #2536](https://github.com/jstoup111/ai-conductor/pull/2536)).
 
 ### Fixed
 
