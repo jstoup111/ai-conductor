@@ -1,4 +1,4 @@
-// Covers: Task: 32
+// Covers: task:32
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
