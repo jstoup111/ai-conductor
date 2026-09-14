@@ -1209,9 +1209,7 @@ export async function dispatchEngineer(
       let handoffResult: Awaited<ReturnType<typeof openSpecPr>>;
       try {
         const publication = opts.handoffPublication
-          ?? (opts.gh === undefined && opts.git === undefined
-            ? initialSpecPublication(target, branch, worktree, gh, git)
-            : undefined);
+          ?? initialSpecPublication(target, branch, worktree, gh, git);
         handoffResult = await openSpecPr(target, branch, {
           gitRunner: git,
           runner: async (args, runnerOpts) => {
@@ -1225,7 +1223,7 @@ export async function dispatchEngineer(
           // Link the spec PR to its issue with a non-closing `Refs` (does not
           // close — the daemon's implementation PR closes it on merge).
           sourceRef,
-          ...(publication === undefined ? {} : { publication }),
+          publication,
         });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
