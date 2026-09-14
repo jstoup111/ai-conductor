@@ -105,7 +105,17 @@ export class SpanManager {
       this.openSteps.delete(identity.correlationKey);
     }
 
-    const span = this.tracer.startSpan(identity.subjectLabel, {}, this.runCtx);
+    // Explicit executions can freeze at a later member-settlement event. Give
+    // those spans the same wall-clock origin as that frozen end; otherwise
+    // the SDK's monotonic start clock and the engine's wall-clock timestamp
+    // form an invalid duration pair. Legacy context-free spans retain the SDK
+    // clock because they have no separate settlement boundary.
+    const startTimeMs = Date.now();
+    const span = this.tracer.startSpan(
+      identity.subjectLabel,
+      event.executionContext === undefined ? {} : { startTime: startTimeMs },
+      this.runCtx,
+    );
     // Set index and step name now; status + retryCount set at close.
     span.setAttribute('conductor.step', identity.subjectLabel);
     span.setAttribute('conductor.step.index', event.index);
@@ -118,7 +128,7 @@ export class SpanManager {
       span,
       index: event.index,
       retryCount: 0,
-      startTimeMs: Date.now(),
+      startTimeMs,
       subjectLabel: identity.subjectLabel,
     });
   }
