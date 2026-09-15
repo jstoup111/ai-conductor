@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-15T19:21:01.260Z
 Slug: skip-registered-projects-whose-path-is-missing-ins
 Class: needs-human
 Halting step: build
