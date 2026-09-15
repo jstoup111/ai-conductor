@@ -252,6 +252,91 @@ describe('engine/conductor', () => {
     },
   );
 
+  // Covers: task:4
+  it.each([
+    { type: 'step_completed' as const, tier: 'L' as const, event: { status: 'done' as const } },
+    { type: 'step_failed' as const, tier: 'M' as const, event: { error: 'failed', retryCount: 0 } },
+  ])('carries the closing $type tier into its feature cost snapshot', async ({ type, tier, event }) => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events);
+    const snapshots: Extract<ConductorEvent, { type: 'feature_cost_snapshot' }>[] = [];
+    events.on('feature_cost_snapshot', (emitted) => {
+      if (emitted.type === 'feature_cost_snapshot') snapshots.push(emitted);
+    });
+    persister.start();
+
+    try {
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events,
+      });
+      const executionEvents = conductor as unknown as {
+        emitExecutionEvent(event: ConductorEvent): Promise<void>;
+      };
+
+      await executionEvents.emitExecutionEvent({ type: 'step_started', step: 'build', index: 0 });
+      await executionEvents.emitExecutionEvent({ type, step: 'build', tier, ...event });
+
+      expect(snapshots).toEqual([expect.objectContaining({ tier })]);
+    } finally {
+      persister.stop();
+    }
+  });
+
+  // Covers: task:4
+  it('omits tier from a cost snapshot when its closing step has no tier', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events);
+    const snapshots: Extract<ConductorEvent, { type: 'feature_cost_snapshot' }>[] = [];
+    events.on('feature_cost_snapshot', (emitted) => {
+      if (emitted.type === 'feature_cost_snapshot') snapshots.push(emitted);
+    });
+    persister.start();
+
+    try {
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events,
+      });
+      const executionEvents = conductor as unknown as {
+        emitExecutionEvent(event: ConductorEvent): Promise<void>;
+      };
+
+      await executionEvents.emitExecutionEvent({ type: 'step_started', step: 'build', index: 0 });
+      await executionEvents.emitExecutionEvent({ type: 'step_completed', step: 'build', status: 'done' });
+
+      expect(Object.hasOwn(snapshots[0]!, 'tier')).toBe(false);
+    } finally {
+      persister.stop();
+    }
+  });
+
+  // Covers: task:4
+  it('suppresses the tiered cost snapshot when the ledger read fails without changing the terminal verdict', async () => {
+    const snapshots: Extract<ConductorEvent, { type: 'feature_cost_snapshot' }>[] = [];
+    const terminals: Extract<ConductorEvent, { type: 'step_completed' }>[] = [];
+    events.on('feature_cost_snapshot', (emitted) => {
+      if (emitted.type === 'feature_cost_snapshot') snapshots.push(emitted);
+    });
+    events.on('step_completed', (emitted) => {
+      if (emitted.type === 'step_completed') terminals.push(emitted);
+    });
+    const conductor = new Conductor({
+      projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events,
+    });
+    const executionEvents = conductor as unknown as {
+      emitExecutionEvent(event: ConductorEvent): Promise<void>;
+    };
+
+    await executionEvents.emitExecutionEvent({ type: 'step_started', step: 'build', index: 0 });
+    await executionEvents.emitExecutionEvent({
+      type: 'step_completed', step: 'build', status: 'done', tier: 'L',
+    });
+
+    expect({ snapshots, terminals }).toEqual({
+      snapshots: [],
+      terminals: [expect.objectContaining({ status: 'done', tier: 'L' })],
+    });
+  });
+
   describe('existing-task remediation admission', () => {
     it('resolves bound ids from the active plan through the shared resolver', () => {
       const result = resolveExistingTaskBindingsForAdmission(
