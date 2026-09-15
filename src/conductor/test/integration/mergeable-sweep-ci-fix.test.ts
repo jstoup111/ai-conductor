@@ -16,7 +16,7 @@
  * own tests once that seam is fixed.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -24,6 +24,7 @@ import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sw
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import { isEligibleForCiFix } from '../../src/engine/ci-fix.js';
+import { classifyCiContextFailure } from '../../src/engine/daemon-ci-fix.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
 
 type Check = {
@@ -113,6 +114,46 @@ describe('mergeable-sweep native CI state + bounded CI-fix dispatch', () => {
 
   afterEach(async () => {
     await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['auth', { readFailure: { kind: 'runner', error: new Error('401 unauthorized') } }, 'auth'],
+    ['permission', { readFailure: { kind: 'runner', error: new Error('403 forbidden') } }, 'permission'],
+    ['timeout', { readFailure: { kind: 'runner', error: new Error('timed out') } }, 'timeout'],
+    ['api', { readFailure: { kind: 'runner', error: new Error('upstream unavailable') } }, 'api'],
+    ['malformed context', { contextFailure: { kind: 'invalid-rollup' } }, 'malformed-context'],
+    ['empty failed context', { readFailure: { kind: 'runner', error: new Error() } }, 'api'],
+  ] as const)('emits %s context diagnostics without provider dispatch or reserving an attempt', async (_label, failure, reason) => {
+    const prUrl = 'https://github.com/acme/widget/pull/1';
+    const priorTimestamp = '2026-07-01T00:00:00.000Z';
+    await enrollWatch(projectRoot, {
+      prUrl, slug: 'widget', repoCwd: projectRoot, ciFixAttempts: 1, lastCiFixAt: priorTimestamp,
+    });
+    const state: PrMergeState = {
+      state: 'UNKNOWN', mergeable: 'UNKNOWN', hasFailingOrPendingChecks: false,
+      labels: [], checksOutcome: 'failed', statusCheckRollup: [], ...failure,
+    };
+    const diagnostics: string[] = [];
+    const dispatch = vi.fn();
+
+    await sweepMergeableLabels({
+      projectRoot,
+      tracker: { readPullRequestMergeState: async () => state },
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch,
+        diagnostic: async (_entry, selectedState) => {
+          diagnostics.push(classifyCiContextFailure(selectedState));
+        },
+      },
+    });
+
+    expect(diagnostics).toEqual([reason]);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(await readEntries(projectRoot)).toMatchObject([{
+      ciFixAttempts: 1, lastCiFixAt: priorTimestamp,
+    }]);
   });
 
   it('TR-2 happy: relies on failed native checks and removes a legacy ci-failed label', async () => {
@@ -302,6 +343,107 @@ describe('mergeable-sweep native CI state + bounded CI-fix dispatch', () => {
     const [persisted] = await readEntries(projectRoot);
     expect(persisted.ciFixAttempts).toBe(1);
     expect(persisted.lastCiFixAt).toBeDefined();
+  });
+
+  it.each([
+    ['not-started', async () => ({ kind: 'not-started' as const }), true],
+    ['branch-gone', async () => ({ kind: 'branch-gone' as const }), true],
+    ['noop', async () => ({ kind: 'noop' as const }), false],
+    ['failed', async () => ({ kind: 'failed' as const, stage: 'provider' as const }), false],
+    ['published', async () => ({ kind: 'published' as const }), false],
+    ['unknown result', async () => undefined, false],
+    ['thrown dispatch', async () => { throw new Error('ambiguous dispatch failure'); }, false],
+  ])('reconciles the reservation only for direct %s proof', async (_name, dispatch, refunds) => {
+    const prUrl = 'https://github.com/acme/widget/pull/1';
+    const priorTimestamp = '2026-07-01T00:00:00.000Z';
+    await enrollWatch(projectRoot, {
+      prUrl,
+      slug: 'widget',
+      repoCwd: projectRoot,
+      ciFixAttempts: 1,
+      lastCiFixAt: priorTimestamp,
+      ciFailureDetected: true,
+    });
+    const calls: GhCall[] = [];
+    const observedAtDispatch: WatchEntry[] = [];
+
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: makeGh({ [prUrl]: { checks: FAILED_CHECKS } }, calls),
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async (reserved) => {
+          observedAtDispatch.push({ ...reserved });
+          return dispatch();
+        },
+        now: () => new Date('2026-07-08T12:00:00.000Z'),
+      },
+    });
+
+    expect(observedAtDispatch).toMatchObject([{
+      ciFixAttempts: 2,
+      lastCiFixAt: '2026-07-08T12:00:00.000Z',
+      ciFailureDetected: true,
+    }]);
+    const [persisted] = await readEntries(projectRoot);
+    expect(persisted).toMatchObject({
+      ciFixAttempts: refunds ? 1 : 2,
+      lastCiFixAt: refunds ? priorTimestamp : '2026-07-08T12:00:00.000Z',
+      ciFailureDetected: true,
+    });
+  });
+
+  it('refunds an absent prior timestamp without erasing this sweep’s failure detection', async () => {
+    const prUrl = 'https://github.com/acme/widget/pull/1';
+    await enrollWatch(projectRoot, { prUrl, slug: 'widget', repoCwd: projectRoot });
+
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: makeGh({ [prUrl]: { checks: FAILED_CHECKS } }, []),
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async () => ({ kind: 'not-started' }),
+        now: () => new Date('2026-07-08T12:00:00.000Z'),
+      },
+    });
+
+    const [persisted] = await readEntries(projectRoot);
+    expect(persisted).toMatchObject({ ciFixAttempts: 0, ciFailureDetected: true });
+    expect(persisted.lastCiFixAt).toBeUndefined();
+  });
+
+  it('leaves local publication charged until a later remote-green sweep resets it', async () => {
+    const prUrl = 'https://github.com/acme/widget/pull/1';
+    await enrollWatch(projectRoot, {
+      prUrl, slug: 'widget', repoCwd: projectRoot, ciFixAttempts: 1,
+      lastCiFixAt: '2026-07-01T00:00:00.000Z', ciFailureDetected: true,
+    });
+
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: makeGh({ [prUrl]: { checks: FAILED_CHECKS } }, []),
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async () => ({ kind: 'published' }),
+        now: () => new Date('2026-07-08T12:00:00.000Z'),
+      },
+    });
+    expect((await readEntries(projectRoot))[0]).toMatchObject({
+      ciFixAttempts: 2,
+      ciFailureDetected: true,
+    });
+
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: makeGh({ [prUrl]: { checks: GREEN_CHECKS } }, []),
+    });
+    expect((await readEntries(projectRoot))[0]).toMatchObject({
+      ciFixAttempts: 0,
+      ciFailureDetected: false,
+    });
   });
 
   it('TR-3 happy: dispatches at most once per tick — a second eligible failed entry is deferred', async () => {

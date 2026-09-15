@@ -113,3 +113,24 @@ describe('createGithubTrackerClient.findIssueByEffectMarker', () => {
     });
   });
 });
+
+describe('createGithubTrackerClient.readPullRequestMergeState', () => {
+  it('uses the single typed PR-view operation and preserves classified runner failures', async () => {
+    const calls: string[][] = [];
+    const runner: GhRunner = async (args) => {
+      calls.push(args);
+      throw new Error('upstream unavailable');
+    };
+
+    const state = await createGithubTrackerClient(runner).readPullRequestMergeState(
+      'https://github.com/acme/widget/pull/7',
+      '/worktree',
+    );
+
+    expect(calls).toEqual([[
+      'pr', 'view', 'https://github.com/acme/widget/pull/7',
+      '--json', 'state,mergeable,statusCheckRollup,labels,isDraft',
+    ]]);
+    expect(state).toMatchObject({ state: 'UNKNOWN', readFailure: { kind: 'runner' } });
+  });
+});

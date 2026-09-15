@@ -34,6 +34,31 @@ describe('tracker-client: canonical GhRunner + guarded makeProductionGh', () => 
     );
     expect(execFileSpy).not.toHaveBeenCalled();
   });
+
+  it('forwards caller timeout and capture limits to the process boundary without changing defaults', async () => {
+    const noRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
+    vi.mocked(execFileSpy).mockImplementationOnce(((
+      _file: string,
+      _args: readonly string[] | null | undefined,
+      _options: unknown,
+      callback: ((error: unknown, stdout: unknown, stderr: unknown) => void) | undefined,
+    ) => {
+      callback?.(null, 'ok', '');
+      return undefined as never;
+    }) as unknown as typeof execFileSpy);
+
+    try {
+      await expect(makeProductionGh()(['run', 'view', '7'], {
+        cwd: '/repo', timeout: 10_000, maxBuffer: 65_536,
+      })).resolves.toMatchObject({ stdout: expect.any(String) });
+      expect(execFileSpy).toHaveBeenLastCalledWith('gh', ['run', 'view', '7'], {
+        cwd: '/repo', timeout: 10_000, maxBuffer: 65_536,
+      }, expect.any(Function));
+    } finally {
+      process.env.AI_CONDUCTOR_NO_REAL_EXEC = noRealExec;
+    }
+  });
 });
 
 function mockProductionGhFailure(input: { code: number; stderr: string; message: string }): void {
@@ -193,6 +218,19 @@ describe('createGithubTrackerClient — loud error semantics', () => {
 });
 
 describe('createGithubTrackerClient — read ops argv parity', () => {
+  it('reads a PR head ref and forwards bounded failed-log options through the canonical runner', async () => {
+    const { runner, calls } = fakeRunner(JSON.stringify({ headRefName: 'feature/repair' }));
+    const client = createGithubTrackerClient(runner);
+    await expect(client.getPullRequestHeadRef('https://github.com/acme/repo/pull/7', '/worktree')).resolves.toBe('feature/repair');
+    expect(calls[0]).toEqual({ args: ['pr', 'view', 'https://github.com/acme/repo/pull/7', '--json', 'headRefName'], opts: { cwd: '/worktree' } });
+
+    const logRunner: GhRunner = async (args, opts) => {
+      calls.push({ args, opts });
+      return { stdout: 'failed log' };
+    };
+    await expect(createGithubTrackerClient(logRunner).viewWorkflowRunFailedLog('acme/repo', '41', '/worktree', { timeout: 10_000, maxBuffer: 65_536 })).resolves.toBe('failed log');
+    expect(calls.at(-1)).toEqual({ args: ['run', 'view', '41', '--repo', 'acme/repo', '--log-failed'], opts: { cwd: '/worktree', timeout: 10_000, maxBuffer: 65_536 } });
+  });
   it('getIssueLabels: matches backlog-priority.ts:335 `gh api repos/<owner>/<repo>/issues/<n>`', async () => {
     const { runner, calls } = fakeRunner(
       JSON.stringify({ labels: [{ name: 'bug' }, { name: 'p1' }] }),

@@ -26,14 +26,15 @@ import {
   ensureLabel,
   addLabel,
   removeLabel,
-  prMergeState,
   isMergeable,
   upsertComment,
   type PrMergeState,
 } from './pr-labels.js';
+import { createGithubTrackerClient, type TrackerClient } from './tracker-client.js';
 import type { ConductorEvent } from '../types/events.js';
 import type { FeatureWorktree } from './daemon-runner.js';
 import { shippedRecordOnMain } from './shipped-record-on-main.js';
+import type { CiFixOutcome } from './ci-fix.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
 
@@ -260,7 +261,12 @@ export interface CiFixDispatchOpts {
    * (AC3) — the git work itself happens inside this callback.
    * Returns the outcome kind so the sweep can reset the counter on success.
    */
-  dispatch: (entry: WatchEntry) => Promise<{ kind: 'green-verified' | 'needs-human' } | void>;
+  dispatch: (
+    entry: WatchEntry,
+    state: PrMergeState,
+  ) => Promise<CiFixOutcome | { kind: 'green-verified' | 'needs-human' } | void>;
+  /** Best-effort observation for selected-state failures before dispatch. */
+  diagnostic?: (entry: WatchEntry, state: PrMergeState) => void | Promise<void>;
   /** Clock override for tests; defaults to `new Date()`. */
   now?: () => Date;
 }
@@ -269,6 +275,8 @@ export interface SweepOpts {
   projectRoot: string;
   log?: (msg: string) => void;
   runGh?: GhRunner;
+  /** Typed PR-state reader; raw gh remains scoped to legacy label mutations. */
+  tracker?: Pick<TrackerClient, 'readPullRequestMergeState'>;
   /** Task 17: optional autoresolve dispatch, run once per tick after the label pass. */
   autoresolve?: AutoresolveDispatchOpts;
   /** Task 10: optional CI fix dispatch, run once per tick after the label pass. */
@@ -300,6 +308,7 @@ export async function sweepMergeableLabels({
   projectRoot,
   log,
   runGh,
+  tracker,
   autoresolve,
   ciFix,
   teardownWorktree,
@@ -308,6 +317,7 @@ export async function sweepMergeableLabels({
   onEvent,
 }: SweepOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
+  const prStateTracker = tracker ?? createGithubTrackerClient(gh);
   const git = makeProductionGit();
   const probe =
     shippedRecordProbe ??
@@ -330,7 +340,7 @@ export async function sweepMergeableLabels({
 
     for (const entry of entries) {
       try {
-        const state = await prMergeState(gh, entry.repoCwd, entry.prUrl, log);
+        const state = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
 
         // GitHub checks are authoritative for CI state. Retire the redundant
         // custom label whenever a reconciliation read finds it on a PR.
@@ -405,6 +415,9 @@ export async function sweepMergeableLabels({
         // FR-15: UNKNOWN state (transient read/fetch error) → log + skip this
         // iteration; keep the entry so it is retried on the next sweep cycle.
         if (state.state === 'UNKNOWN') {
+          if ((state.readFailure || state.contextFailure) && ciFix?.enabled) {
+            try { await ciFix.diagnostic?.(entry, state); } catch { /* observational */ }
+          }
           log?.(`[mergeable-sweep] skipping ${entry.prUrl} (could not read state)`);
           logDisposition(
             log,
@@ -454,7 +467,7 @@ export async function sweepMergeableLabels({
           // detection read above and this point in the sweep. Racing an
           // escalation comment onto an already-resolved PR is pure noise, so
           // prune the entry and skip the label/comment/event work entirely.
-          const freshState = await prMergeState(gh, entry.repoCwd, entry.prUrl, log);
+          const freshState = await prStateTracker.readPullRequestMergeState(entry.prUrl, entry.repoCwd, log);
           if (
             freshState.state === 'MERGED' ||
             freshState.state === 'CLOSED' ||
@@ -651,20 +664,25 @@ export async function sweepMergeableLabels({
 
         dispatched = true;
         const now = ciFix.now ? ciFix.now() : new Date();
+        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
+        // The label pass may have set ciFailureDetected since this candidate
+        // was collected. Reserve from that current survivor so a later refund
+        // cannot discard the observed failure transition.
+        const current = idx >= 0 ? survivors[idx] : entry;
         const updated: WatchEntry = {
-          ...entry,
-          ciFixAttempts: (entry.ciFixAttempts ?? 0) + 1,
+          ...current,
+          ciFixAttempts: (current.ciFixAttempts ?? 0) + 1,
           lastCiFixAt: now.toISOString(),
           ciFailureDetected: true,
         };
-        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
         if (idx >= 0) survivors[idx] = updated;
 
         try {
-          const dispatchResult = await ciFix.dispatch(updated);
-          if (dispatchResult?.kind === 'green-verified') {
-            survivors[idx] = { ...updated, ciFixAttempts: 0 };
-          } else if (dispatchResult?.kind === 'needs-human') {
+          const dispatchResult = await ciFix.dispatch(updated, state);
+          // Only an affirmative pre-provider refusal can restore the exact
+          // reservation. A local publication is not GitHub green; remote green
+          // is reconciled by the normal state transition on a later sweep.
+          if (dispatchResult?.kind === 'needs-human') {
             survivors[idx] = { ...updated, ciFixAttempts: entry.ciFixAttempts ?? 0 };
             try {
               await ensureLabel(gh, entry.repoCwd, 'needs-remediation', 'B60205', log);
@@ -680,6 +698,17 @@ export async function sweepMergeableLabels({
             } catch (err) {
               log?.(`[mergeable-sweep] ciFix setup-recovery marker error for ${entry.prUrl}: ${err}`);
             }
+          } else if (dispatchResult?.kind === 'not-started' || dispatchResult?.kind === 'branch-gone') {
+            survivors[idx] = {
+              // Preserve the state transition from the label pass (notably a
+              // newly detected CI failure), while refunding only the fields
+              // this reservation changed.
+              ...current,
+              ciFixAttempts: entry.ciFixAttempts,
+              ...(entry.lastCiFixAt === undefined
+                ? { lastCiFixAt: undefined }
+                : { lastCiFixAt: entry.lastCiFixAt }),
+            };
           }
         } catch (err) {
           // Task 11: dispatch error is logged but not propagated (AC1b)

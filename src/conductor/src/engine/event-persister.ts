@@ -4,9 +4,62 @@ import {
   epochAnchoredMonotonicClock,
   type IntervalClock,
 } from '../execution/observed-interval.js';
-import type { ConductorEvent } from '../types/index.js';
+import type {
+  CiRepairDiagnosticDisposition,
+  CiRepairDiagnosticReason,
+  CiRepairDiagnosticStage,
+  ConductorEvent,
+} from '../types/index.js';
 import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
 import { persistedEventTypes } from './event-sinks.js';
+
+const MAX_CI_REPAIR_DIAGNOSTIC_BYTES = 8_192;
+const CI_REPAIR_STAGES = new Set<CiRepairDiagnosticStage>(['context', 'log-enrichment', 'branch', 'readiness', 'execution', 'guard', 'verification', 'publication']);
+const CI_REPAIR_REASONS = new Set<CiRepairDiagnosticReason>(['auth', 'permission', 'timeout', 'api', 'capability', 'malformed-context', 'missing-context', 'missing-branch', 'log-unavailable', 'context-truncated', 'provider-unavailable', 'readiness-degraded', 'flag-invalid', 'spawn-env', 'unknown', 'guard-refused', 'verification-failed', 'publication-refused', 'verified-publication']);
+const CI_REPAIR_DISPOSITIONS = new Set<CiRepairDiagnosticDisposition>(['deferred', 'degraded', 'failed', 'published']);
+
+/** Bound untrusted attribution; raw output and hints are not event fields. */
+export function boundCiRepairDiagnostic(event: ConductorEvent): ConductorEvent {
+  if (event.type !== 'ci_repair_diagnostic') return event;
+  const truncate = (value: string, max: number) => {
+    if (Buffer.byteLength(value, 'utf8') <= max) return value;
+    const marker = '[truncated]';
+    let result = '';
+    for (const char of value) {
+      if (Buffer.byteLength(result + char + marker, 'utf8') > max) break;
+      result += char;
+    }
+    return result + marker;
+  };
+  const safePrUrl = (value: string): string => {
+    try {
+      const url = new URL(value);
+      return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash
+        ? truncate(url.toString(), 2_048)
+        : '[invalid]';
+    } catch { return '[invalid]'; }
+  };
+  let bounded: ConductorEvent = {
+    ...event,
+    slug: /^[A-Za-z0-9._-]+$/.test(event.slug) ? truncate(event.slug, 512) : '[invalid]',
+    prUrl: safePrUrl(event.prUrl),
+    stage: CI_REPAIR_STAGES.has(event.stage) ? event.stage : 'execution',
+    reason: CI_REPAIR_REASONS.has(event.reason) ? event.reason : 'unknown',
+    disposition: CI_REPAIR_DISPOSITIONS.has(event.disposition) ? event.disposition : 'failed',
+    // Provider identity is attribution, not diagnostic text. Never preserve a
+    // prefix of an oversized value: a malformed adapter could otherwise place
+    // a credential in that prefix. Known production identities are tiny.
+    ...(event.provider === undefined ? {} : {
+      provider: /^[A-Za-z0-9._-]+$/.test(event.provider)
+        ? (Buffer.byteLength(event.provider, 'utf8') <= 64 ? event.provider : '[truncated]')
+        : 'unknown',
+    }),
+  };
+  if (Buffer.byteLength(JSON.stringify(bounded), 'utf8') > MAX_CI_REPAIR_DIAGNOSTIC_BYTES) {
+    bounded = { ...bounded, provider: '[truncated]' };
+  }
+  return bounded;
+}
 
 /**
  * Thrown when EventPersister cannot append to the event log file.
@@ -122,7 +175,7 @@ export class EventPersister {
             durationMs: Math.max(0, lifecycleNow - lifecycleStartedAt),
           };
       const record = JSON.stringify({
-        ...event,
+        ...boundCiRepairDiagnostic(event),
         ...(lifecycleInterval
           ? { observedIntervals: [...(lifecycleEvent?.observedIntervals ?? []), lifecycleInterval] }
           : {}),

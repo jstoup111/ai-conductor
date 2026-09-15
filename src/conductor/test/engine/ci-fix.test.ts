@@ -1,3 +1,4 @@
+// Covers: task:2
 /**
  * Tests for ci-fix.ts (Task 15–16: RETRY hint builder).
  *
@@ -7,155 +8,188 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   buildCiFixHint,
+  enrichCiFixHint,
+  CI_FIX_HINT_MAX_BYTES,
+  CI_FIX_METADATA_MAX_BYTES,
   isEligibleForCiFix,
   nonTerminalCheckNames,
   runCiFix,
   productionCiFixRunner,
 } from '../../src/engine/ci-fix.js';
-import type { GhRunner } from '../../src/engine/pr-labels.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/**
- * Create a fake GhRunner that returns check results and run logs.
- *
- * When `gh pr checks --json` is called, returns the `prChecks` response.
- * When `gh run view --log-failed` is called, returns the `runLogs` response.
- * Can optionally throw on specific commands.
- */
-function makeFakeGhForHints(options: {
-  prChecks: { stdout: string };
-  runLogs?: { stdout: string };
-  throwOnRunView?: boolean;
-}): GhRunner {
-  return async (args) => {
-    // gh pr checks <url> --json
-    if (args[0] === 'pr' && args[1] === 'checks' && args[args.length - 1] === '--json') {
-      return options.prChecks;
-    }
-
-    // gh run view <run-id> --log-failed
-    if (args[0] === 'run' && args[1] === 'view' && args.includes('--log-failed')) {
-      if (options.throwOnRunView) {
-        throw new Error('gh run view failed');
-      }
-      return options.runLogs || { stdout: '' };
-    }
-
-    return { stdout: '' };
-  };
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('ci-fix: buildCiFixHint', () => {
-  const PR_URL = 'https://github.com/foo/bar/pull/42';
-  const CWD = '/fake/repo';
-
-  it('happy path: returns check name + log excerpt from one failed check', async () => {
-    const prChecks = {
-      stdout: JSON.stringify({
-        checkSuites: [
-          {
-            checkRuns: [
-              {
-                name: 'unit-tests',
-                conclusion: 'FAILURE',
-                detailsUrl: 'https://github.com/foo/bar/runs/123',
-              },
-            ],
-          },
-        ],
-      }),
-    };
-
-    const runLogs = {
-      stdout: `FAILED: unit-tests
-line 1 of error
-line 2 of error
-line 3 of error
-line 4 of error
-line 5 of error
-line 6 of error
-line 7 of error
-line 8 of error
-line 9 of error
-line 10 of error`,
-    };
-
-    const gh = makeFakeGhForHints({ prChecks, runLogs });
-    const hint = await buildCiFixHint(gh, CWD, PR_URL);
-
-    expect(hint).toContain('unit-tests');
-    expect(hint).toContain('line 1 of error');
-    expect(hint).toContain('line 2 of error');
-    // Should have bounded length, might not include all lines
-    expect(hint.length).toBeLessThan(1000);
+  const selectedState = (rollup: NonNullable<PrMergeState['statusCheckRollup']>): PrMergeState => ({
+    state: 'OPEN',
+    mergeable: 'MERGEABLE',
+    hasFailingOrPendingChecks: true,
+    labels: [],
+    checksOutcome: 'failed',
+    statusCheckRollup: rollup,
   });
 
-  it('degradation: gh run view throws → hint contains check name + link, non-empty, no throw', async () => {
-    const prChecks = {
-      stdout: JSON.stringify({
-        checkSuites: [
-          {
-            checkRuns: [
-              {
-                name: 'lint-check',
-                conclusion: 'FAILURE',
-                detailsUrl: 'https://github.com/foo/bar/runs/456',
-              },
-            ],
-          },
-        ],
-      }),
-    };
+  it('selects terminal failed check runs and external statuses from the supplied snapshot', () => {
+    const result = buildCiFixHint(selectedState([
+      { kind: 'check-run', name: 'unit', conclusion: 'FAILURE', detailsUrl: 'https://example.test/runs/1' },
+      { kind: 'check-run', name: 'timeout', conclusion: 'TIMED_OUT' },
+      { kind: 'check-run', name: 'cancelled', conclusion: 'CANCELLED' },
+      { kind: 'check-run', name: 'action', conclusion: 'ACTION_REQUIRED' },
+      { kind: 'check-run', name: 'startup', conclusion: 'STARTUP_FAILURE' },
+      { kind: 'check-run', name: 'stale', conclusion: 'STALE' },
+      { kind: 'status-context', context: 'deploy/external', state: 'FAILURE', targetUrl: 'https://ci.example.test/deploy' },
+      { kind: 'status-context', context: 'security/external', state: 'ERROR' },
+    ]));
 
-    const gh = makeFakeGhForHints({ prChecks, throwOnRunView: true });
-    const hint = await buildCiFixHint(gh, CWD, PR_URL);
-
-    // Hint must be non-empty
-    expect(hint).toBeTruthy();
-    expect(hint.length).toBeGreaterThan(0);
-    // Must contain check name
-    expect(hint).toContain('lint-check');
-    // Must contain the link
-    expect(hint).toContain('https://github.com/foo/bar/runs/456');
+    expect(result).toEqual({
+      kind: 'ready',
+      hint: expect.stringContaining('unit'),
+    });
+    if (result.kind !== 'ready') throw new Error('expected usable CI context');
+    for (const expected of ['timeout', 'cancelled', 'action', 'startup', 'stale', 'deploy/external', 'security/external']) {
+      expect(result.hint).toContain(expected);
+    }
+    expect(result.hint).toContain('https://example.test/runs/1');
+    expect(result.hint).toContain('https://ci.example.test/deploy');
   });
 
-  it('degradation: no run link present → hint contains check name, non-empty, no throw', async () => {
-    const prChecks = {
-      stdout: JSON.stringify({
-        checkSuites: [
-          {
-            checkRuns: [
-              {
-                name: 'test-suite',
-                conclusion: 'FAILURE',
-                // No detailsUrl
-              },
-            ],
-          },
-        ],
-      }),
+  it('excludes successful terminal entries and preserves a failed name with no link', () => {
+    const result = buildCiFixHint(selectedState([
+      { kind: 'check-run', name: 'failed-without-link', conclusion: 'FAILURE' },
+      { kind: 'check-run', name: 'success', conclusion: 'SUCCESS' },
+      { kind: 'check-run', name: 'neutral', conclusion: 'NEUTRAL' },
+      { kind: 'check-run', name: 'skipped', conclusion: 'SKIPPED' },
+    ]));
+
+    if (result.kind !== 'ready') throw new Error('expected usable CI context');
+    expect(result.hint).toContain('failed-without-link');
+    expect(result.hint).not.toContain('success');
+    expect(result.hint).not.toContain('neutral');
+    expect(result.hint).not.toContain('skipped');
+    expect(result.hint).not.toMatch(/https?:\/\//);
+  });
+
+  it('labels an unnamed failed entry by its rollup index without inventing a URL', () => {
+    const result = buildCiFixHint(selectedState([
+      { kind: 'check-run', name: 'green', conclusion: 'SUCCESS' },
+      { kind: 'check-run', conclusion: 'FAILURE' },
+    ]));
+
+    expect(result).toEqual({
+      kind: 'ready',
+      hint: expect.stringContaining('(unnamed check #2)'),
+    });
+    if (result.kind !== 'ready') throw new Error('expected usable CI context');
+    expect(result.hint).not.toMatch(/https?:\/\//);
+  });
+
+  it('returns a concrete context error for unreadable, malformed, or empty failed context', () => {
+    const unreadable: PrMergeState = {
+      ...selectedState([]),
+      readFailure: { kind: 'runner', error: new Error('GitHub unavailable') },
+    };
+    const malformed: PrMergeState = {
+      ...selectedState([]),
+      contextFailure: { kind: 'invalid-rollup-entry', index: 2 },
     };
 
-    const gh = makeFakeGhForHints({ prChecks });
-    const hint = await buildCiFixHint(gh, CWD, PR_URL);
+    expect(buildCiFixHint(unreadable)).toEqual({ kind: 'context-error', reason: 'read-failure' });
+    expect(buildCiFixHint(malformed)).toEqual({ kind: 'context-error', reason: 'malformed-context' });
+    expect(buildCiFixHint(selectedState([
+      { kind: 'check-run', name: 'green', conclusion: 'SUCCESS' },
+      { kind: 'status-context', context: 'neutral', state: 'SUCCESS' },
+    ]))).toEqual({ kind: 'context-error', reason: 'empty-failure-context' });
+  });
 
-    // Hint must be non-empty
-    expect(hint).toBeTruthy();
-    expect(hint.length).toBeGreaterThan(0);
-    // Must contain check name
-    expect(hint).toContain('test-suite');
+  it('keeps metadata within its UTF-8 budget while explicitly accounting for omitted failed entries', () => {
+    const result = buildCiFixHint(selectedState(Array.from({ length: 70 }, (_, index) => ({
+      kind: 'check-run' as const,
+      name: `check-${index}-${'😀'.repeat(100)}`,
+      conclusion: 'FAILURE',
+      detailsUrl: `https://example.test/${index}/${'x'.repeat(2_100)}`,
+    }))));
+
+    if (result.kind !== 'ready') throw new Error('expected required hint');
+    expect(Buffer.byteLength(result.hint, 'utf8')).toBeLessThanOrEqual(CI_FIX_METADATA_MAX_BYTES);
+    expect(result.hint).toContain('[truncated]');
+    expect(result.hint).toContain('[link omitted: too long]');
+    expect(result.hint).toMatch(/failed check entries omitted/);
+    expect(result.hint).not.toContain('�');
+  });
+});
+
+describe('ci-fix: optional bounded log enrichment', () => {
+  const state: PrMergeState = {
+    state: 'OPEN', mergeable: 'MERGEABLE', hasFailingOrPendingChecks: true,
+    labels: [], checksOutcome: 'failed', statusCheckRollup: [
+      { kind: 'check-run', name: 'one', conclusion: 'FAILURE', detailsUrl: 'https://github.com/acme/repo/actions/runs/7/jobs/1' },
+      { kind: 'check-run', name: 'two', conclusion: 'FAILURE', detailsUrl: 'https://github.com/acme/repo/actions/runs/7/jobs/2' },
+      { kind: 'check-run', name: 'three', conclusion: 'FAILURE', detailsUrl: 'https://github.com/acme/repo/actions/runs/8/jobs/3' },
+    ],
+  };
+
+  it('deduplicates workflow runs, forwards bounded runner options, and degrades without dropping required context', async () => {
+    const calls: Array<{ args: string[]; opts: any }> = [];
+    const tracker = { viewWorkflowRunFailedLog: vi.fn(async (repo: string, run: string, _cwd: string, opts: any) => {
+      calls.push({ args: [repo, run], opts });
+      if (run === '8') throw new Error('denied');
+      return 'useful failure excerpt';
+    }) } as any;
+    const required = buildCiFixHint(state);
+    if (required.kind !== 'ready') throw new Error('expected required hint');
+    const result = await enrichCiFixHint(required.hint, state, tracker, '/repo');
+    expect(calls).toHaveLength(2);
+    expect(calls[0].opts).toMatchObject({ timeout: 10_000, maxBuffer: 65_536 });
+    expect(result.hint).toContain('one');
+    expect(result.hint).toContain('https://github.com/acme/repo/actions/runs/7/jobs/1');
+    expect(result.degradations).toContain('log-unavailable');
+  });
+
+  it('never splits UTF-8 or exceeds the total hint budget', async () => {
+    const required = buildCiFixHint(state);
+    if (required.kind !== 'ready') throw new Error('expected required hint');
+    const result = await enrichCiFixHint(required.hint, state, { viewWorkflowRunFailedLog: async () => '😀'.repeat(20_000) } as any, '/repo');
+    expect(Buffer.byteLength(result.hint, 'utf8')).toBeLessThanOrEqual(CI_FIX_HINT_MAX_BYTES);
+    expect(result.hint).toContain('[context truncated]');
+    expect(result.hint).not.toContain('�');
+  });
+
+  it('reads at most three failed workflow runs, never reads successful or unresolvable links, and marks omitted enrichment', async () => {
+    const calls: string[][] = [];
+    const expanded: PrMergeState = {
+      ...state,
+      statusCheckRollup: [
+        ...Array.from({ length: 4 }, (_, index) => ({
+          kind: 'check-run' as const, name: `failed-${index}`, conclusion: 'FAILURE',
+          detailsUrl: `https://github.com/acme/repo/actions/runs/${index + 1}/jobs/1`,
+        })),
+        { kind: 'check-run', name: 'green', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/acme/repo/actions/runs/99/jobs/1' },
+        { kind: 'check-run', name: 'external', conclusion: 'FAILURE', detailsUrl: 'https://ci.example.test/build/5' },
+      ],
+    };
+    const required = buildCiFixHint(expanded);
+    if (required.kind !== 'ready') throw new Error('expected required hint');
+    const result = await enrichCiFixHint(required.hint, expanded, { viewWorkflowRunFailedLog: async (repo: string, run: string) => {
+      calls.push([repo, run]);
+      return '😀'.repeat(4_000);
+    } } as any, '/repo');
+
+    expect(calls).toHaveLength(3);
+    expect(calls.flat()).not.toContain('99');
+    expect(result.hint).toContain('[log enrichment omitted for 1 workflow runs]');
+    expect(result.hint).not.toContain('�');
+    expect(result.degradations).toContain('context-truncated');
   });
 });
 
@@ -637,14 +671,14 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       const fixRunner = {
         run: async ({ worktreePath }: { worktreePath: string }) => {
           execSync(`git commit --allow-empty -m "ci fix commit"`, { cwd: worktreePath });
-          return { kind: 'changed' as const };
+          return { kind: 'session-completed' as const };
         },
       };
 
       const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
 
       // Verify the result
-      expect(result.kind).toBe('changed');
+      expect(result.kind).toBe('published');
 
       // Verify worktree was cleaned up
       const worktreePath = join(repoPath, '.worktrees', `ci-fix-${SLUG}`);
@@ -685,8 +719,8 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         threwError = true;
       }
 
-      // Verify it threw
-      expect(threwError).toBe(true);
+      // Resolver failures are conservative and still clean up.
+      expect(threwError).toBe(false);
 
       // Verify worktree was still cleaned up despite the throw
       const worktreePath = join(repoPath, '.worktrees', `ci-fix-${SLUG}`);
@@ -766,13 +800,161 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       const result = await runCiFix(entry, branch, hint, { fixRunner, verify }, logger);
       expect(verify).toHaveBeenCalledOnce();
 
-      expect(result.kind).toBe('changed');
+      expect(result.kind).toBe('published');
 
       // The push landed on origin: the bare repo's feat/fix ref carries the new commit
       const originLog = execSync(`git log --format=%s feat/fix`, { cwd: originPath }).toString();
       expect(originLog).toContain('ci fix commit');
 
       expect(logs.some((l) => l.includes('refreshed'))).toBe(true);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('reports publication failure when a concurrent remote update refuses the lease, preserving that update', async () => {
+    const { repoPath, originPath, cleanup } = await createFixtureRepo();
+    const outsiderPath = join(tmpdir(), `ci-fix-outsider-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    try {
+      // This independent clone owns the competing update.  It is deliberately
+      // pushed from the configured verifier: runCiFix has already fetched the
+      // old remote ref and completed guards, but its lease push has not run.
+      execSync(`git clone -q "${originPath}" "${outsiderPath}"`);
+      execSync('git checkout -q feat/fix', { cwd: outsiderPath });
+      execSync('git config user.email "outsider@example.com"', { cwd: outsiderPath });
+      execSync('git config user.name "Concurrent Operator"', { cwd: outsiderPath });
+
+      const order: string[] = [];
+      const competingFile = join(outsiderPath, 'operator-repair.txt');
+      const fixRunner = {
+        run: async ({ worktreePath }: { worktreePath: string }) => {
+          order.push('provider');
+          execSync('git commit --allow-empty -m "ci fix commit"', { cwd: worktreePath });
+          return { kind: 'session-completed' as const };
+        },
+      };
+      const verify = vi.fn(async () => {
+        order.push('verifier');
+        await writeFile(competingFile, 'preserve this competing repair\n');
+        execSync('git add operator-repair.txt', { cwd: outsiderPath });
+        execSync('git commit -m "operator repair"', { cwd: outsiderPath });
+        execSync('git push origin feat/fix', { cwd: outsiderPath });
+        order.push('competing-push');
+        return 0;
+      });
+
+      const result = await runCiFix(
+        { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 },
+        'feat/fix', 'hint', { fixRunner, verify }, () => {},
+      );
+
+      expect(result).toEqual({ kind: 'failed', stage: 'publication' });
+      expect(verify).toHaveBeenCalledOnce();
+      expect(order).toEqual(['provider', 'verifier', 'competing-push']);
+
+      // The refused lease must leave the competing remote commit untouched.
+      const remoteHead = execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim();
+      const competingHead = execSync('git rev-parse HEAD', { cwd: outsiderPath }).toString().trim();
+      expect(remoteHead).toBe(competingHead);
+      expect(execSync('git log -1 --format=%s feat/fix', { cwd: originPath }).toString().trim())
+        .toBe('operator repair');
+      expect(execSync('git show feat/fix:operator-repair.txt', { cwd: originPath }).toString())
+        .toBe('preserve this competing repair\n');
+    } finally {
+      await rm(outsiderPath, { recursive: true, force: true });
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('session completion without a committed HEAD change is a noop and never verifies or publishes', async () => {
+    const { repoPath, originPath, cleanup } = await createFixtureRepo();
+    try {
+      const beforeSha = execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim();
+      const verify = vi.fn(async () => 0);
+      const fixRunner = { run: async () => ({ kind: 'session-completed' as const }) };
+
+      const result = await runCiFix(
+        { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 },
+        'feat/fix', 'hint', { fixRunner, verify }, () => {},
+      );
+
+      expect(result).toEqual({ kind: 'noop' });
+      expect(verify).not.toHaveBeenCalled();
+      expect(execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim()).toBe(beforeSha);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('uncommitted-only session edits are a noop and never verify or publish', async () => {
+    const { repoPath, originPath, cleanup } = await createFixtureRepo();
+    try {
+      const beforeSha = execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim();
+      const verify = vi.fn(async () => 0);
+      const fixRunner = {
+        run: async ({ worktreePath }: { worktreePath: string }) => {
+          await writeFile(join(worktreePath, 'uncommitted-repair.txt'), 'repair');
+          return { kind: 'session-completed' as const };
+        },
+      };
+
+      const result = await runCiFix(
+        { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 },
+        'feat/fix', 'hint', { fixRunner, verify }, () => {},
+      );
+
+      expect(result).toEqual({ kind: 'noop' });
+      expect(verify).not.toHaveBeenCalled();
+      expect(execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim()).toBe(beforeSha);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('a provider failure remains failed even when the provider changed committed HEAD', async () => {
+    const { repoPath, originPath, cleanup } = await createFixtureRepo();
+    try {
+      const beforeSha = execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim();
+      const verify = vi.fn(async () => 0);
+      const fixRunner = {
+        run: async ({ worktreePath }: { worktreePath: string }) => {
+          execSync('git commit --allow-empty -m "untrusted provider commit"', { cwd: worktreePath });
+          return { kind: 'failed' as const };
+        },
+      };
+
+      const result = await runCiFix(
+        { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 },
+        'feat/fix', 'hint', { fixRunner, verify }, () => {},
+      );
+
+      expect(result).toEqual({ kind: 'failed', stage: 'provider' });
+      expect(verify).not.toHaveBeenCalled();
+      expect(execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim()).toBe(beforeSha);
+    } finally {
+      await cleanup();
+    }
+  }, REAL_GIT_TIMEOUT_MS);
+
+  it('an affirmative no-start remains not-started and never verifies or publishes', async () => {
+    const { repoPath, originPath, cleanup } = await createFixtureRepo();
+    try {
+      const beforeSha = execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim();
+      const verify = vi.fn(async () => 0);
+      const fixRunner = { run: async () => ({
+        kind: 'not-started' as const,
+        actualProvider: 'codex',
+        reason: 'provider-unavailable' as const,
+      }) };
+
+      const result = await runCiFix(
+        { prUrl: PR_URL, slug: SLUG, repoCwd: repoPath, ciFixAttempts: 0 },
+        'feat/fix', 'hint', { fixRunner, verify }, () => {},
+      );
+
+      expect(result).toEqual({ kind: 'not-started', provider: 'codex', reason: 'provider-unavailable' });
+      expect(verify).not.toHaveBeenCalled();
+      expect(execSync('git rev-parse feat/fix', { cwd: originPath }).toString().trim()).toBe(beforeSha);
     } finally {
       await cleanup();
     }
@@ -830,8 +1012,8 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         logger,
       );
 
-      // Attempt stays consumed: the outcome remains 'changed' even though nothing published
-      expect(result.kind).toBe('changed');
+      // Attempt stays consumed, but the failed verifier is explicit.
+      expect(result).toEqual({ kind: 'failed', stage: 'verification' });
 
       const afterSha = execSync(`git rev-parse feat/fix`, { cwd: originPath }).toString().trim();
       expect(afterSha).toBe(beforeSha);
@@ -870,7 +1052,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
 
       const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
 
-      expect(result.kind).toBe('changed');
+      expect(result).toEqual({ kind: 'failed', stage: 'guard' });
 
       const afterSha = execSync(`git rev-parse feat/fix`, { cwd: originPath }).toString().trim();
       expect(afterSha).toBe(beforeSha);
@@ -911,7 +1093,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
 
       // Verify callback ran (stale worktree was cleaned)
       expect(callbackRan).toBe(true);
-      expect(result.kind).toBe('changed');
+      expect(result.kind).toBe('noop');
 
       // Verify worktree cleaned up again
       const worktreeExists = execSync(`git worktree list --porcelain 2>/dev/null | grep -q "${worktreePath}" && echo "yes" || echo "no"`).toString().trim();
@@ -944,7 +1126,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
       };
 
       const result = await runCiFix(entry, branch, hint, { fixRunner, verify: async () => 0 }, logger);
-      expect(result.kind).toBe('changed');
+      expect(result.kind).toBe('published');
 
       // Primary checkout must be fully clean — no staged/unstaged/untracked pollution.
       const status = execSync(`git status --porcelain`, { cwd: repoPath }).toString();
@@ -988,7 +1170,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
 
       const result = await runCiFix(entry, 'feat/fix', 'hint', { fixRunner, liveness: { worktreeLifecycle } }, () => {});
 
-      expect(result.kind).toBe('noop');
+      expect(result.kind).toBe('not-started');
       expect(observed).toEqual(['worktree-present']);
       expect(queueDepth).toBe(0);
       expect(existsSync(worktreePath)).toBe(false);
@@ -1020,7 +1202,7 @@ describe('ci-fix: runCiFix resolver worktree lifecycle (Task 17)', () => {
         liveness: { isFeatureInFlight: async () => claimed, log: (m) => logs.push(m) },
       }, () => {});
 
-      expect(result.kind).toBe('noop');
+      expect(result.kind).toBe('not-started');
       expect(existsSync(worktreePath)).toBe(true);
       expect(logs.some((line) => line.includes('worktree removal refused') && line.includes(SLUG) && line.includes('active work claim'))).toBe(true);
       execSync(`git worktree remove --force "${worktreePath}"`, { cwd: repoPath });
@@ -1146,7 +1328,7 @@ describe('ci-fix: productionCiFixRunner honors AI_CONDUCTOR_NO_REAL_EXEC against
       dispatcher: fakeDispatcher,
     });
 
-    expect(outcome).toEqual({ kind: 'noop' });
+    expect(outcome).toEqual({ kind: 'not-started' });
     expect(calls).toHaveLength(0);
   });
 });

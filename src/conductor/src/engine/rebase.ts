@@ -1,7 +1,7 @@
 import { execa } from 'execa';
 import { writeFile, readFile, access, mkdir, rename } from 'node:fs/promises';
 import { join, isAbsolute, relative, basename, resolve, dirname } from 'node:path';
-import type { StepName } from '../types/index.js';
+import type { CiRepairDiagnosticReason, StepName } from '../types/index.js';
 import { writeVerdict, type GateVerdict } from './gate-verdicts.js';
 import { writeHaltMarker } from './halt-marker.js';
 import type { HaltMarkerWriteResult } from './halt-marker.js';
@@ -1104,7 +1104,13 @@ export type SetupFailureResolver = (ctx: SetupFailureContext) => Promise<SetupFa
 
 // ── CI failure resolution (ci-fix resolver autofix) ─────────────────────────
 
-export type CiFailureAttempt = { attempted: true } & ProviderAttributionMetadata;
+/** A repair session result.  Session completion is deliberately not proof that
+ * it produced a commit, passed verification, or was published. */
+export type CiFailureAttempt = (
+  | { kind: 'not-started'; reason?: CiRepairDiagnosticReason }
+  | { kind: 'failed'; reason?: CiRepairDiagnosticReason }
+  | { kind: 'session-completed' }
+) & ProviderAttributionMetadata;
 export interface CiFailureContext { worktreePath: string; prUrl: string; hint: string; slug: string }
 export type CiFailureResolver = (ctx: CiFailureContext) => Promise<CiFailureAttempt>;
 

@@ -65,6 +65,15 @@ function makeFakeTracker(opts: { failIssueCreate?: boolean } = {}) {
     async viewPullRequest() {
       throw new Error('not used in this test');
     },
+    async getPullRequestHeadRef() {
+      throw new Error('not used in this test');
+    },
+    async viewWorkflowRunFailedLog() {
+      throw new Error('not used in this test');
+    },
+    async readPullRequestMergeState() {
+      throw new Error('not used in this test');
+    },
     async createLabel() {
       throw new Error('not used in this test');
     },

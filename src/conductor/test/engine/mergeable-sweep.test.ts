@@ -1394,10 +1394,10 @@ describe('sweepMergeableLabels — Task 11: bump-before-dispatch crash safety', 
     expect(dispatchCalls[0].ciFixAttempts).toBe(1);
     expect(dispatchCalls[0].lastCiFixAt).toBe('2026-07-08T12:00:00.000Z');
 
-    // Registry should reflect bumped values (reset because dispatch returned 'green-verified')
+    // A local dispatch result is not remote GitHub-green evidence.
     const result = await readWatch(tmpDir);
     expect(result).toHaveLength(1);
-    expect(result[0].ciFixAttempts).toBe(0); // reset because of green-verified outcome
+    expect(result[0].ciFixAttempts).toBe(1);
   });
 
   it('rewrites registry with bumped attempts and timestamp even when dispatch throws', async () => {
@@ -1453,6 +1453,37 @@ describe('sweepMergeableLabels — Task 11: bump-before-dispatch crash safety', 
 
     // Should not throw
     await expect(sweepPromise).resolves.toBeUndefined();
+  });
+});
+
+describe('sweepMergeableLabels — selected-state diagnostic and refund', () => {
+  it('reports malformed selected context without dispatching or consuming the reservation', async () => {
+    const { gh } = makeFakeGh({
+      [PR_URL]: { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: { bad: true }, labels: [] }) },
+    });
+    const original = { ...entry(), ciFixAttempts: 1, lastCiFixAt: '2026-07-01T00:00:00.000Z', ciFailureDetected: true };
+    await enrollWatch(tmpDir, original);
+    const diagnostic = vi.fn();
+    const dispatch = vi.fn(async () => undefined);
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, ciFix: {
+      enabled: true, isEligible: async () => ({ eligible: true }), dispatch, diagnostic,
+    } });
+    expect(diagnostic).toHaveBeenCalledTimes(1);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(await readWatch(tmpDir)).toEqual([original]);
+  });
+
+  it('restores exact attempts and cooldown after an affirmative no-start', async () => {
+    const { gh } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [{ status: 'COMPLETED', conclusion: 'FAILURE' }], []),
+    });
+    const original = { ...entry(), ciFixAttempts: 1, lastCiFixAt: '2026-07-01T00:00:00.000Z', ciFailureDetected: true };
+    await enrollWatch(tmpDir, original);
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, ciFix: {
+      enabled: true, isEligible: async () => ({ eligible: true }), dispatch: async () => ({ kind: 'not-started' }),
+      now: () => new Date('2026-07-08T12:00:00.000Z'),
+    } });
+    expect(await readWatch(tmpDir)).toEqual([original]);
   });
 });
 

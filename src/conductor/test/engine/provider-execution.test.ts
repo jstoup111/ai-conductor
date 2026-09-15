@@ -1,4 +1,4 @@
-// Covers: task:2, task:4
+// Covers: task:2, task:4, task:5
 import { describe, expect, it, vi } from 'vitest';
 import type {
   InvokeOptions,
@@ -554,25 +554,37 @@ describe('executeProviderCandidates', () => {
       },
     });
 
-    expect({
-      calls: invoke.mock.calls,
-      success: result.success,
-      output: result.output,
-      attempt: result.attempts[0],
-    }).toMatchObject({
-      calls: [],
+    expect(result).toMatchObject({
       success: false,
-      output: expect.stringMatching(
-        /Provider custom.*synchronous spawn-permit capability.*Recovery action/i,
-      ),
-      attempt: {
-        provider: 'custom',
-        invoked: false,
-        reason: expect.stringMatching(
-          /synchronous spawn-permit capability.*Recovery action/i,
-        ),
-      },
+      executionDisposition: 'not-started',
     });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('marks cached provider unavailability as not started without invoking the provider', async () => {
+    const cachedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'cached provider must not invoke',
+      exitCode: 0,
+    }));
+    const cachedRuntime = runtime('codex', { invoke: cachedInvoke });
+    cachedRuntime.runWideUnavailable = { reason: 'Codex is unavailable from an earlier attempt.' };
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      preferredProvider: 'codex',
+      runtimes: new ProviderRuntimeSet([cachedRuntime]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('cached-session')),
+      options: { prompt: 'Build.', cwd: '/workspace/feature' },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      executionDisposition: 'not-started',
+    });
+    expect(cachedInvoke).not.toHaveBeenCalled();
   });
 
   it('invokes a custom provider that synchronously consumes its declared lifecycle spawn permit', async () => {
@@ -633,6 +645,43 @@ describe('executeProviderCandidates', () => {
       },
     });
     expect(spawnPermit).toHaveBeenCalledOnce();
+    expect(result).not.toHaveProperty('executionDisposition');
+  });
+
+  it('marks required safety-boundary refusal as not started before invoking the candidate', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'provider must not run after safety refusal',
+      exitCode: 0,
+    }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      preferredProvider: 'codex',
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('safety-refusal-session')),
+      options: { prompt: 'Build safely.', cwd: '/workspace/feature' },
+      withCandidateSafety: createCandidateSafetyBoundary({
+        protections: () => [{
+          name: 'workspace-isolation',
+          criticality: 'required',
+          classification: 'required',
+          applicability: 'applicable',
+          state: 'missing',
+        }],
+      }),
+    });
+
+    expect({ calls: invoke.mock.calls, result }).toMatchObject({
+      calls: [],
+      result: {
+        success: false,
+        permissionDenied: true,
+        executionDisposition: 'not-started',
+      },
+    });
   });
 
   it('applies and tears down an isolated self-host context only for the resolved Codex candidate', async () => {
@@ -693,6 +742,48 @@ describe('executeProviderCandidates', () => {
     });
   });
 
+  it('keeps an ambiguous self-host preparation outcome conservative', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'provider ran after ambiguous preparation',
+      exitCode: 0,
+    }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('ambiguous-preparation-session')),
+      options: { prompt: 'build', cwd: '/workspace' },
+      prepareCandidateSelfHost: async () => undefined,
+    });
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(result).not.toHaveProperty('executionDisposition');
+  });
+
+  it('strips contradictory no-start evidence from a successful provider result', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'provider completed',
+      exitCode: 0,
+      executionDisposition: 'not-started',
+    }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('contradictory-success-session')),
+      options: { prompt: 'build', cwd: '/workspace' },
+    });
+
+    expect(result).toMatchObject({ success: true, actualProvider: 'codex' });
+    expect(result).not.toHaveProperty('executionDisposition');
+  });
+
   it('passes the candidate stream observer to the normal provider invocation', async () => {
     const observer = { onProviderStream: vi.fn(), close: vi.fn() };
     const invoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
@@ -702,7 +793,7 @@ describe('executeProviderCandidates', () => {
     }));
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
 
-    await executeProviderCandidates({
+    const result = await executeProviderCandidates({
       step: 'build',
       configuredProviders: ['codex'],
       runtimes: new ProviderRuntimeSet([
@@ -717,6 +808,7 @@ describe('executeProviderCandidates', () => {
     });
 
     expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ streamConsumer: observer }));
+    expect(result).not.toHaveProperty('executionDisposition');
   });
 
   it('supplies no stream consumer to an interactive dispatch', async () => {
@@ -1951,6 +2043,7 @@ describe('executeProviderCandidates', () => {
         output:
           `All configured providers are unavailable for step build: codex (${missingReason}, cached unavailable).`,
         exitCode: 127,
+        executionDisposition: 'not-started',
         preferredProvider: 'codex',
         attempts: [
           {
@@ -1966,6 +2059,111 @@ describe('executeProviderCandidates', () => {
         providerSetupExhaustion: { candidates: [{ provider: 'codex', capability: 'cached-provider-availability', reason: missingReason, recoveryAction: 'Restore the provider availability, then re-queue this feature.' }] },
       },
     });
+  });
+
+  it('retains no-start proof only when every unavailable provider and model result is affirmative', async () => {
+    const unavailable = (executionDisposition?: 'not-started'): InvokeResult => ({
+      success: false,
+      output: 'unavailable',
+      exitCode: 1,
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+      providerUnavailableReason: 'unavailable',
+      ...(executionDisposition ? { executionDisposition } : {}),
+    });
+    const refused = (): InvokeResult => unavailable('not-started');
+    const run = async (first: InvokeResult, second: InvokeResult, refuseFirst = false) => {
+      const firstInvoke = vi.fn(async (): Promise<InvokeResult> => first);
+      const secondInvoke = vi.fn(async (): Promise<InvokeResult> => second);
+      const telemetryError = vi.fn(async (): Promise<void> => {
+        throw new Error('telemetry is observational');
+      });
+      const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+      const result = await executeProviderCandidates({
+        step: 'build',
+        configuredProviders: ['codex', 'claude'],
+        preferredProvider: 'codex',
+        runtimes: new ProviderRuntimeSet([
+          runtime('codex', { invoke: firstInvoke }),
+          runtime('claude', { invoke: secondInvoke }),
+        ]),
+        sessions: new ProviderSessionScope(vi.fn().mockReturnValue('fallback-session')),
+        options: { prompt: 'Build.', cwd: '/workspace' },
+        onAttempt: async () => {
+          throw new Error('attempt telemetry is observational');
+        },
+        onTelemetryError: telemetryError,
+        withCandidateSafety: async ({ providerKey }, invoke) =>
+          refuseFirst || providerKey === 'claude' ? refused() : invoke(),
+      });
+
+      return { result, firstInvoke, secondInvoke, telemetryError };
+    };
+
+    const allRefused = await run(unavailable(), unavailable(), true);
+    const unknownThenRefused = await run(unavailable(), unavailable());
+
+    expect({
+      allRefused: {
+        calls: [allRefused.firstInvoke, allRefused.secondInvoke].map((invoke) => invoke.mock.calls.length),
+        executionDisposition: allRefused.result.executionDisposition,
+        attempts: allRefused.result.attempts?.map(({ provider }) => provider),
+      },
+      unknownThenRefused: {
+        calls: [unknownThenRefused.firstInvoke, unknownThenRefused.secondInvoke].map((invoke) => invoke.mock.calls.length),
+        executionDisposition: unknownThenRefused.result.executionDisposition,
+        attempts: unknownThenRefused.result.attempts?.map(({ provider }) => provider),
+      },
+      telemetryErrors: [allRefused.telemetryError, unknownThenRefused.telemetryError]
+        .map((handler) => handler.mock.calls.length),
+    }).toEqual({
+      allRefused: {
+        calls: [0, 0],
+        executionDisposition: 'not-started',
+        attempts: ['codex', 'claude'],
+      },
+      unknownThenRefused: {
+        calls: [1, 0],
+        executionDisposition: undefined,
+        attempts: ['codex', 'claude'],
+      },
+      telemetryErrors: [2, 2],
+    });
+  });
+
+  it('retains no-start proof across native model fallback only when every unavailable model is affirmative', async () => {
+    const unavailableModel = (executionDisposition?: 'not-started'): InvokeResult => ({
+      success: false,
+      output: 'model unavailable',
+      exitCode: 1,
+      modelUnavailable: true,
+      ...(executionDisposition ? { executionDisposition } : {}),
+    });
+    const run = async (first: InvokeResult, second: InvokeResult) => {
+      const invoke = vi.fn()
+        .mockResolvedValueOnce(first)
+        .mockResolvedValueOnce(second);
+      const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+      const result = await executeProviderCandidates({
+        step: 'build',
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', { invoke })]),
+        sessions: new ProviderSessionScope(vi.fn().mockReturnValue('model-fallback-session')),
+        modelOverride: 'primary',
+        modelFallbackLadder: ['primary', 'fallback'],
+        options: { prompt: 'Build.', cwd: '/workspace' },
+      });
+      return { result, models: invoke.mock.calls.map(([options]) => options.model) };
+    };
+
+    const allRefused = await run(unavailableModel('not-started'), unavailableModel('not-started'));
+    const attemptedThenRefused = await run(unavailableModel(), unavailableModel('not-started'));
+
+    expect(allRefused.models).toEqual(['primary', 'fallback']);
+    expect(allRefused.result).toMatchObject({ executionDisposition: 'not-started' });
+    expect(attemptedThenRefused.models).toEqual(['primary', 'fallback']);
+    expect(attemptedThenRefused.result).not.toHaveProperty('executionDisposition');
   });
 
   it('advances only after complete native model exhaustion and retries that provider on a later step', async () => {

@@ -15,6 +15,9 @@ import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import * as eventPersisterModule from '../../src/engine/event-persister.js';
+import { startDaemonEventPersistence } from '../../src/engine/event-persister.js';
+import { renderDaemonEvent } from '../../src/daemon-cli.js';
+import { ciRepairOutcomeDiagnostic } from '../../src/engine/daemon-ci-fix.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { InvokeOptions, LLMProvider } from '../../src/execution/llm-provider.js';
 import type {
@@ -456,6 +459,75 @@ describe('daemon feature provider-event persistence', () => {
       rebaseUsesFeatureBus: true,
       depsForwardsScope: true,
       depsForwardsFeatureBus: true,
+    });
+  });
+
+  it('persists and renders bounded CI repair diagnostics on the root bus after a reader restart', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'daemon-ci-repair-events-'));
+    roots.push(root);
+    const events = new ConductorEventEmitter();
+    const persistence = startDaemonEventPersistence(root, events);
+    const rendered: string[] = [];
+    events.on('ci_repair_diagnostic', (event) => renderDaemonEvent(event, (line) => rendered.push(line)));
+
+    await events.emit({
+      type: 'ci_repair_diagnostic',
+      prUrl: 'https://github.com/acme/widget/pull/7',
+      slug: 'widget',
+      stage: 'readiness',
+      reason: 'provider-unavailable',
+      disposition: 'deferred',
+      provider: 'codex',
+    });
+    // A failing renderer is an observational subscriber and cannot make emit
+    // reject or prevent the persisted event from being available to a reader.
+    events.on('ci_repair_diagnostic', () => { throw new Error('renderer unavailable'); });
+    await expect(events.emit(ciRepairOutcomeDiagnostic(
+      { prUrl: 'https://github.com/acme/widget/pull/7', slug: 'widget', repoCwd: root },
+      { kind: 'published', provider: 'claude' },
+    ))).resolves.toBeUndefined();
+    persistence.stop();
+
+    const read = async () => (await readFile(join(root, '.daemon', 'events.jsonl'), 'utf-8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as ConductorEvent);
+    const firstReader = await read();
+    const restartedReader = await read();
+    expect(firstReader).toEqual(restartedReader);
+    const diagnostics = firstReader.filter((event): event is Extract<ConductorEvent, { type: 'ci_repair_diagnostic' }> => event.type === 'ci_repair_diagnostic');
+    expect(diagnostics.map((event) => [event.type, event.slug, event.stage, event.reason, event.provider])).toEqual([
+      ['ci_repair_diagnostic', 'widget', 'readiness', 'provider-unavailable', 'codex'],
+      ['ci_repair_diagnostic', 'widget', 'publication', 'verified-publication', 'claude'],
+    ]);
+    expect(rendered.join('\n')).toContain('readiness/provider-unavailable (deferred)');
+  });
+
+  it('bounds oversized CI-repair attribution and excludes credential-bearing URL text', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'daemon-ci-repair-bound-'));
+    roots.push(root);
+    const events = new ConductorEventEmitter();
+    const persistence = startDaemonEventPersistence(root, events);
+    const secret = 'credential-that-must-not-persist';
+
+    await events.emit({
+      type: 'ci_repair_diagnostic',
+      prUrl: `https://github.com/acme/widget/pull/7?access_token=${secret}`,
+      slug: 'a'.repeat(20_000),
+      stage: 'execution',
+      reason: 'unknown',
+      disposition: 'failed',
+      provider: secret.repeat(50),
+    });
+    persistence.stop();
+
+    const line = (await readFile(join(root, '.daemon', 'events.jsonl'), 'utf-8')).trim();
+    expect(Buffer.byteLength(line, 'utf8')).toBeLessThanOrEqual(8_192);
+    expect(line).not.toContain(secret);
+    expect(line).toContain('[truncated]');
+    const persisted = JSON.parse(line) as ConductorEvent;
+    expect(persisted).toMatchObject({
+      type: 'ci_repair_diagnostic',
+      prUrl: '[invalid]',
+      provider: '[truncated]',
     });
   });
 });

@@ -1,3 +1,4 @@
+// Covers: task:5
 import { describe, it, expect, vi } from "vitest";
 import { ModelAvailability, DEFAULT_MODEL_FALLBACK_LADDER } from "../../src/engine/model-availability";
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from "../../src/engine/provider-model-policy.js";
@@ -623,6 +624,50 @@ describe("ModelAvailability", () => {
       expect(avail.dead.has("fable")).toBe(true);
       expect(avail.dead.has("opus")).toBe(true);
       expect(avail.dead.has("sonnet")).toBe(true);
+    });
+
+    it.each([
+      {
+        name: 'every unavailable model was affirmatively refused',
+        dispositions: ['not-started', 'not-started', 'not-started'] as const,
+        preservesNoStart: true,
+      },
+      {
+        name: 'the first unavailable model has unknown start disposition',
+        dispositions: [undefined, 'not-started', 'not-started'] as const,
+        preservesNoStart: false,
+      },
+      {
+        name: 'an intermediate unavailable model was attempted or unknown',
+        dispositions: ['not-started', undefined, 'not-started'] as const,
+        preservesNoStart: false,
+      },
+    ])('retains no-start proof only when $name', async ({ dispositions, preservesNoStart }) => {
+      const avail = new ModelAvailability(claudeLadder);
+      const { provider, invokeCalls } = fakeProvider(
+        Object.fromEntries(claudeLadder.map((model, index) => [
+          model,
+          {
+            ...modelUnavailable(),
+            ...(dispositions[index] ? { executionDisposition: dispositions[index] } : {}),
+          },
+        ])),
+      );
+
+      const result = await avail.invokeWithLadder(provider, {
+        prompt: 'hi',
+        sessionId: 's1',
+        resume: false,
+        model: claudeLadder[0],
+      });
+
+      expect({
+        invokedModels: invokeCalls.map((call) => call.model),
+        executionDisposition: result.executionDisposition,
+      }).toEqual({
+        invokedModels: claudeLadder,
+        executionDisposition: preservesNoStart ? 'not-started' : undefined,
+      });
     });
   });
 

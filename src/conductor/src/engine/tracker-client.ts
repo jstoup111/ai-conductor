@@ -11,6 +11,7 @@
 
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
+import type { PrMergeState } from './pr-labels.js';
 
 const execFileP = promisify(execFileCb);
 const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
@@ -20,7 +21,7 @@ const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
  */
 export type GhRunner = (
   args: string[],
-  opts: { cwd: string },
+  opts: { cwd: string; timeout?: number; maxBuffer?: number },
 ) => Promise<{ stdout: string }>;
 
 /** A `gh` command requested a JSON field that this installed CLI does not support. */
@@ -63,12 +64,13 @@ export function assertRealExecAllowed(bin: string): void {
 
 /** Construct the real gh runner used in production. */
 export function makeProductionGh(): GhRunner {
-  return async (args: string[], opts: { cwd: string }) => {
+  return async (args: string[], opts: { cwd: string; timeout?: number; maxBuffer?: number }) => {
     assertRealExecAllowed('gh');
     try {
       const result = await execFileP('gh', args, {
         cwd: opts.cwd,
-        maxBuffer: GH_STDOUT_MAX_BUFFER,
+        maxBuffer: opts.maxBuffer ?? GH_STDOUT_MAX_BUFFER,
+        timeout: opts.timeout,
       });
       return { stdout: String(result.stdout) };
     } catch (cause) {
@@ -136,6 +138,21 @@ export interface TrackerClient {
   upsertIssueComment(repo: string, issueRef: string, body: string, cwd: string): Promise<void>;
   /** `gh pr view <url> --json state,mergedAt` — PR state + merge timestamp for reopen checks. */
   viewPullRequest(url: string, cwd: string): Promise<{ state?: string; mergedAt?: string | null }>;
+  /** `gh pr view <url> --json headRefName` — source branch for CI repair. */
+  getPullRequestHeadRef(prUrl: string, cwd: string): Promise<string>;
+  /** `gh run view <run> --repo <repo> --log-failed` — bounded failed-log enrichment. */
+  viewWorkflowRunFailedLog(
+    repo: string,
+    runId: string,
+    cwd: string,
+    opts: { timeout: number; maxBuffer: number },
+  ): Promise<string>;
+  /** Read and classify the merge state/check rollup for a watched pull request. */
+  readPullRequestMergeState(
+    prUrl: string,
+    cwd: string,
+    log?: (message: string) => void,
+  ): Promise<PrMergeState>;
   /** `gh label create <name> -R <repo>` — create a label (idempotent; caller swallows "already exists"). */
   createLabel(repo: string, name: string, cwd: string): Promise<void>;
   /** `gh api --method DELETE repos/<repo>/issues/<number>/labels/<name>` — remove a label via REST. */
@@ -361,6 +378,29 @@ export function createGithubTrackerClient(runner: GhRunner): EffectMarkerTracker
         cwd,
       });
       return parseJsonOrThrow('viewPullRequest', stdout || '{}');
+    },
+
+    async getPullRequestHeadRef(prUrl, cwd) {
+      const { stdout } = await runOrThrow(runner, ['pr', 'view', prUrl, '--json', 'headRefName'], { cwd });
+      const data = parseJsonOrThrow<{ headRefName?: unknown }>('getPullRequestHeadRef', stdout || '{}');
+      return typeof data.headRefName === 'string' ? data.headRefName.trim() : '';
+    },
+
+    async viewWorkflowRunFailedLog(repo, runId, cwd, opts) {
+      const { stdout } = await runOrThrow(
+        runner,
+        ['run', 'view', runId, '--repo', repo, '--log-failed'],
+        { cwd, ...opts },
+      );
+      return stdout;
+    },
+
+    async readPullRequestMergeState(prUrl, cwd, log) {
+      // Keep parsing and sentinel classification single-sourced in pr-labels.
+      // A dynamic import avoids making that legacy PR helper's tracker import
+      // an eager runtime cycle.
+      const { prMergeState } = await import('./pr-labels.js');
+      return prMergeState(runner, cwd, prUrl, log);
     },
 
     async createLabel(repo, name, cwd) {

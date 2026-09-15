@@ -42,7 +42,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = join(__dirname, '../../src');
 const CI_FIX_SRC = join(SRC_DIR, 'engine/ci-fix.ts');
 const STEP_RUNNERS_SRC = join(SRC_DIR, 'engine/step-runners.ts');
-const DAEMON_CLI_SRC = join(SRC_DIR, 'daemon-cli.ts');
 
 async function grepSrcTree(pattern: RegExp): Promise<string[]> {
   // Repo-wide search restricted to src/ (production code) — mirrors CF-3's own
@@ -87,39 +86,10 @@ describe('CF-1: resolver dispatches via the StepRunner path, not claude --fix-se
     expect(body).toMatch(/cwd\s*:/);
   });
 
-  it('daemon-cli.ts no longer wires productionCiFixRunner directly into the ci-fix dispatch', async () => {
-    const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
-
-    // Anchor specifically on the `ciFix: { ... }` block (there are two
-    // sibling `dispatch:` blocks in this sweepMergeableLabels call —
-    // `autoresolve` and `ciFix` — so an unanchored match can grab the wrong
-    // one).
-    const ciFixBlockMatch = source.match(/ciFix\s*:\s*\{[\s\S]*?\n {10}\},\n/);
-    expect(
-      ciFixBlockMatch,
-      'expected to find the ciFix: { ... } opts block in daemon-cli.ts',
-    ).toBeTruthy();
-    const dispatchBody = ciFixBlockMatch ? ciFixBlockMatch[0] : source;
-
-    // The bare production exec-based runner must be gone from the dispatch
-    // call site; the dispatch must instead route through resolveCiFailure
-    // (directly, or via a StepRunner constructed inline — mirrors the
-    // `new DefaultStepRunner(...)` + `.resolveRebaseConflict(ctx)` pattern
-    // already used for rebase resolution dispatch in this same file).
-    expect(dispatchBody).not.toMatch(/fixRunner\s*:\s*productionCiFixRunner/);
-    expect(dispatchBody).toMatch(/resolveCiFailure/);
-  });
-
-  it('daemon ci-fix resolver carries the selected provider model policy', async () => {
-    const source = await readFile(DAEMON_CLI_SRC, 'utf8');
-    const marker = source.indexOf(
-      'featureDesc: `ci-fix-resolution-${ctx.entry.slug}`',
-    );
-    const constructorStart = source.lastIndexOf('new DefaultStepRunner(', marker);
-    const constructorEnd = source.indexOf('});', marker);
-
-    expect(source.slice(constructorStart, constructorEnd)).toContain('modelPolicy');
-  });
+  // The real daemon callback is exercised through its injectable production
+  // seam in daemon-cli-ci-fix-wiring.test.ts. That test carries the selected
+  // rollup through branch preparation, bounded enrichment, and a fake repair
+  // provider, rather than inferring delivery from daemon-cli source text.
 });
 
 // ── CF-2 (happy): no-op fix leaves the branch untouched, no false green ──────
@@ -200,13 +170,8 @@ describe('CF-4: spawn/exec failures are classified, never a bare unclassified Ex
         },
       };
 
-      let threw = false;
-      try {
-        await runCiFix(entry, 'feat/fix', 'hint', { fixRunner }, logger);
-      } catch {
-        threw = true;
-      }
-      expect(threw).toBe(true);
+      const outcome = await runCiFix(entry, 'feat/fix', 'hint', { fixRunner }, logger);
+      expect(outcome).toEqual({ kind: 'failed', stage: 'worktree' });
 
       const combined = logs.join('\n');
       expect(
@@ -219,9 +184,9 @@ describe('CF-4: spawn/exec failures are classified, never a bare unclassified Ex
   }, 20000);
 });
 
-// ── CF-5 / CF-6: startup preflight validates the fix-invocation surface once ─
+// ── Build-provider execution owns readiness; daemon wiring must not veto it ──
 
-describe('CF-5/CF-6: ci-fix startup preflight', () => {
+describe('ci-fix daemon readiness ownership', () => {
   it('ci-fix.ts exports a preflightCiFixInvocation probe', async () => {
     const source = await readFile(CI_FIX_SRC, 'utf-8');
     expect(
@@ -262,20 +227,4 @@ describe('CF-5/CF-6: ci-fix startup preflight', () => {
     expect(probe).toHaveBeenCalledTimes(1);
   });
 
-  it('daemon-cli.ts calls the ci-fix preflight once at startup, not from inside the per-PR dispatch closure', async () => {
-    const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
-
-    expect(
-      source,
-      'expected daemon-cli.ts to import preflightCiFixInvocation from ./engine/ci-fix.js',
-    ).toMatch(
-      /import\s*\{[^}]*preflightCiFixInvocation[^}]*\}\s*from\s*['"]\.\/engine\/ci-fix\.js['"]/,
-    );
-
-    const ciFixBlockMatch = source.match(/ciFix\s*:\s*\{[\s\S]*?\n {10}\},\n/);
-    const dispatchBody = ciFixBlockMatch ? ciFixBlockMatch[0] : '';
-    // CF-5: "the probe is not repeated per-PR" — it must not appear inside
-    // the per-PR dispatch closure.
-    expect(dispatchBody).not.toMatch(/preflightCiFixInvocation/);
-  });
 });
