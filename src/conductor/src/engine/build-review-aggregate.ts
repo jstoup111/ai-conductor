@@ -11,7 +11,7 @@ import {
   type BuildReviewRubricResult,
   type BuildReviewScopeIncompleteFault,
 } from './build-review-domain.js';
-import { isRegisteredRubric } from './build-review-registry.js';
+import { BUILD_REVIEW_RUBRIC_IDS, isRegisteredRubric } from './build-review-registry.js';
 import { isRetiredBuildReviewRubric } from './build-review-dispositions.js';
 import {
   matchesBuildReviewDisposition,
@@ -23,7 +23,7 @@ import {
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 
 const AGGREGATE_VERSION = 'v1' as const;
-const RUBRICS = ['testQuality'] as const;
+const RUBRICS = BUILD_REVIEW_RUBRIC_IDS;
 const RETIRED_REASON_PREFIX = new RegExp(`^\\[(${DEPRECATED_BUILD_REVIEW_RUBRIC_IDS.join('|')})\\]`);
 
 type Coverage = 'judged' | 'skipped' | 'infrastructure-failure' | 'scope-incomplete';
