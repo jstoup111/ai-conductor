@@ -23,6 +23,7 @@ import {
   type BuildReviewInfrastructureFailureReason,
 } from "../../src/engine/build-review-domain.js";
 import { fingerprintBuildReviewRubricPolicy } from "../../src/engine/build-review-registry.js";
+import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import type {
   ResolvedBuildReviewConfig,
@@ -54,6 +55,14 @@ function config(testQualityEnabled: boolean, securityEnabled = false): ResolvedB
       testQuality: { ...policy, enabled: testQualityEnabled },
       security: { ...policy, enabled: securityEnabled, effort: 'high' },
     },
+  } as unknown as ResolvedBuildReviewConfig;
+}
+
+function configWithSecurityModel(model: string): ResolvedBuildReviewConfig {
+  const resolved = config(false, true);
+  return {
+    ...resolved,
+    rubrics: { ...resolved.rubrics, security: { ...policy, enabled: true, model, effort: "high" } },
   } as unknown as ResolvedBuildReviewConfig;
 }
 
@@ -453,6 +462,78 @@ function securityBranch(result: Awaited<ReturnType<typeof coordinateBuildReviewR
 }
 
 describe("build-review coordinator: security envelope", () => {
+  it("serves an identical security judgement from cache without dispatching and emits the cache-hit occurrence", async () => {
+    const frozenInputs = inputs();
+    const lapId = parseBuildReviewLapId("lap-current")!;
+    const projection = deriveBuildReviewRubricProjections({
+      lapId,
+      inputs: frozenInputs,
+      testQuality: { changedTestSelectors: [], unresolvedMarkers: [], revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" } },
+    }).security;
+    const emit = vi.fn(async () => undefined);
+    const dispatchModel = vi.fn(async () => ({ findings: [] }));
+    const input = coordinationInput(false, {
+      config: config(false, true),
+      inputs: frozenInputs,
+      engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "resolved", digest: "sha256:security-skill" } } },
+      readCache: vi.fn(async (_branch, currentProjection, policyFingerprint) => ({
+        version: 1, rubric: "security", contractVersion: "v3", projectionVersion: "v3",
+        projectionDigest: currentProjection.digest, policyFingerprint,
+        engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:security-skill" },
+        result: { kind: "judged", rubric: "security", contractVersion: "v3", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },
+      }) as never),
+      dispatchModel,
+      emit,
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(dispatchModel).not.toHaveBeenCalled();
+    expect(input.writeCache).not.toHaveBeenCalled();
+    expect(securityBranch(result)).toMatchObject({ kind: "cache-hit", rubric: "security", result: { verdict: "PASS" } });
+    expect(emit).toHaveBeenCalledWith({ type: "build_review_cache_hit", rubric: "security", lapId });
+    expect(emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "build_review_rubric_started", rubric: "security" }));
+  });
+
+  it.each([
+    ["model policy", configWithSecurityModel("opus"), { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "resolved" as const, digest: "sha256:security-skill" } } }, "sha256:old-policy"],
+    ["skill digest", config(false, true), { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "resolved" as const, digest: "sha256:security-skill-edited" } } }, undefined],
+  ])("dispatches security after a changed %s misses cache identity", async (_change, currentConfig, engineIdentity, cachedPolicyFingerprint) => {
+    const dispatchModel = vi.fn(async () => ({ findings: [] }));
+    const input = coordinationInput(false, {
+      config: currentConfig,
+      engineIdentity,
+      readCache: vi.fn(async (_branch, projection, policyFingerprint) => ({
+        version: 1, rubric: "security", contractVersion: "v3", projectionVersion: "v3", projectionDigest: projection.digest,
+        policyFingerprint: cachedPolicyFingerprint ?? policyFingerprint,
+        engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:security-skill" },
+        result: { kind: "judged", rubric: "security", contractVersion: "v3", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },
+      }) as never),
+      dispatchModel,
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(dispatchModel).toHaveBeenCalledOnce();
+    expect(securityBranch(result)).toMatchObject({ kind: "dispatched", rubric: "security" });
+  });
+
+  it("fails closed when the security skill cannot be read, without cache or provider writes", async () => {
+    const dispatchModel = vi.fn(async () => ({ findings: [] }));
+    const input = coordinationInput(false, {
+      config: config(false, true),
+      engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "unavailable", path: "skills/build-review-security/SKILL.md" } } },
+      dispatchModel,
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(securityBranch(result)).toMatchObject({ kind: "infrastructure-failure", rubric: "security", reason: "cache-read-failed" });
+    expect(input.readCache).not.toHaveBeenCalled();
+    expect(dispatchModel).not.toHaveBeenCalled();
+    expect(input.writeCache).not.toHaveBeenCalled();
+  });
+
   it("stamps a security finding with the projection-owned envelope and derived failure verdict", async () => {
     const securityHash = `sha256:${"a".repeat(64)}`;
     const result = await coordinateBuildReviewRubrics(coordinationInput(false, {
