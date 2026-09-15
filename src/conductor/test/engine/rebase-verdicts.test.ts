@@ -85,6 +85,19 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
     });
   });
 
+  it('writes a non-publishable rebase operation before downstream gate effects', async () => {
+    await applyRebaseVerdicts(projectRoot, changed, false, async (step) => {
+      if (step === 'build') {
+        const rebase = await readVerdict(projectRoot, 'rebase');
+        expect(rebase?.rebaseOperation).toMatchObject({
+          status: 'applying',
+          transition: { preserved: [], invalidated: [], reverified: [] },
+        });
+      }
+      return { done: false };
+    });
+  });
+
   it('invalidates test_suite when its mechanical pre-verification throws', async () => {
     const preVerified: string[] = [];
 

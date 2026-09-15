@@ -1733,6 +1733,30 @@ export async function applyRebaseVerdicts(
     return { satisfied: false, kickedBack: [], reverified: [] };
   }
 
+  // A completed file-changing rebase is a cross-file operation.  Publish its
+  // `applying` fence before pre-verification or any downstream gate record is
+  // touched, so an interruption cannot expose a mixture of old PASS evidence
+  // and new rebase effects as eligible for finish.  The shared transition
+  // replaces this provisional descriptor with the exact decision and marks it
+  // applied only after its state batch and gate records agree.
+  const provisionalReplay: ReplayEvidence | undefined = outcome.kind === 'changed'
+    ? {
+        preRebaseHead: outcome.replay?.preRebaseHead ?? '',
+        mergeBase: outcome.replay?.mergeBase ?? '',
+        target: outcome.replay?.target ?? '',
+        completedHead: outcome.replay?.completedHead ?? '',
+        expectedTree: '',
+      }
+    : undefined;
+  const provisionalOperation = provisionalReplay === undefined
+    ? undefined
+    : {
+        id: `preparing-${createHash('sha256').update(JSON.stringify(provisionalReplay)).digest('hex')}`,
+        status: 'applying' as const,
+        transition: { preserved: [], invalidated: [], reverified: [] },
+        replay: provisionalReplay,
+      };
+
   // rebase gate is satisfied (branch now current with base).
   const satisfiedVerdict: GateVerdict = {
     satisfied: true,
@@ -1748,6 +1772,7 @@ export async function applyRebaseVerdicts(
           ? 'rebased onto base (code changed — feature surface F uncomputable, fail-closed to legacy invalidate-all)'
           : 'rebased onto base (code changed — downstream re-verify)',
     checkedAt: Date.now(),
+    ...(provisionalOperation === undefined ? {} : { rebaseOperation: provisionalOperation }),
   };
   await writeVerdict(projectRoot, 'rebase', satisfiedVerdict);
 
