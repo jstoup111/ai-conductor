@@ -265,6 +265,73 @@ describe('Task 5: operator attributes at the metrics identity seam', () => {
   });
 });
 
+// Covers: task:8
+describe('Task 8: tier remains feature-scoped', () => {
+  it('reserves tier for feature points without adding it to identity attributes', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const recorder = new MetricsRecorder(provider.getMeter('task-8-containment'), {
+      project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+    }, { tier: 'X' });
+
+    try {
+      recorder.onFeatureShipped('M');
+      recorder.onMemorySetup({ type: 'memory_setup', before: 'missing', canonical: 'created', ts: 1 });
+      recorder.onGateVerdict('build', 'pass');
+      recorder.onKickback('build_review', 'pipeline');
+      recorder.onPipelineCloseout({ type: 'pipeline_closeout', obligation: 'simplify', startedAt: 1, endedAt: 2, ts: 2 });
+      recorder.onDaemonBacklog({
+        type: 'daemon_backlog_snapshot',
+        counts: { eligible: 1, waiting: 0, blocked: 0, gated: 0, parked: 0 },
+        oldestAgeSeconds: {}, slots: { busy: 1, free: 0 }, inFlight: [],
+        blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false }, pollDurationMs: 1,
+      });
+      recorder.onFeatureShipped();
+      recorder.onFeatureShipped('S');
+      await provider.forceFlush();
+
+      const points = (name: string) => exporter.getMetrics()
+        .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
+        .filter((metric) => metric.descriptor.name === name)
+        .flatMap((metric) => metric.dataPoints);
+      const attributes = (name: string, project: string) => points(name)
+        .find((point) => point.attributes.project === project)?.attributes;
+      const customShipped = points('conductor.feature.shipped').map((point) => point.attributes);
+      const nonFeatureNames = [
+        'conductor.memory.setup', 'conductor.gate.verdicts', 'conductor.gate.kickbacks',
+        'conductor.pipeline.closeout.duration',
+      ];
+      const customUntiered = customShipped.find((attrs) => !Object.hasOwn(attrs, 'tier'));
+      const customTiered = customShipped.find((attrs) => attrs.tier === 'S');
+
+      expect({
+        featureShipped: attributes('conductor.feature.shipped', 'test-project'),
+        nonFeaturePointsAreUntiered: nonFeatureNames.every((name) => points(name)
+          .every((point) => !Object.hasOwn(point.attributes, 'tier'))),
+        daemonPointsAreUntiered: exporter.getMetrics()
+          .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
+          .filter((metric) => metric.descriptor.name.startsWith('conductor.daemon.'))
+          .every((metric) => metric.dataPoints.every((point) => !Object.hasOwn(point.attributes, 'tier'))),
+        customUntiered,
+        customTiered,
+        tierAddsExactlyOneKey: customUntiered !== undefined && customTiered !== undefined
+          && JSON.stringify(Object.keys(customTiered).sort()) === JSON.stringify([...Object.keys(customUntiered), 'tier'].sort()),
+      }).toEqual({
+        featureShipped: { tier: 'M', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        nonFeaturePointsAreUntiered: true,
+        daemonPointsAreUntiered: true,
+        customUntiered: { project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        customTiered: { tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        tierAddsExactlyOneKey: true,
+      });
+    } finally {
+      await provider.shutdown();
+    }
+  });
+});
+
 // Covers: task:5
 describe('Task 5: feature activity and outcome tier attributes', () => {
   it('adds a supplied tier to all six feature activity and outcome points', async () => {
