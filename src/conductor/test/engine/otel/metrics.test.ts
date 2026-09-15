@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:8, task:10, task:11
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:10, task:11
 /**
  * Covers: task:1, task:2, task:3, task:4, task:10
  * metrics.test.ts — unit tests for MetricsRecorder through MetricsListener.
@@ -964,6 +964,60 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
     } finally { await provider.shutdown(); }
   });
 
+  it('projects event tier onto every feature cost point and omits it when absent', async () => {
+    const { exporter, provider, recorder } = await makeRecorder();
+    try {
+      recorder.onFeatureCostSnapshot({ ...snapshot, tier: 'M' });
+      recorder.onFeatureUsageTotal({
+        type: 'feature_usage_total', dispatches: 1, meteredDispatches: 1, unmeteredDispatches: 0,
+        costUsd: 2, inputTokens: 1, outputTokens: 1, tier: 'S',
+      });
+      recorder.onFeatureCostSnapshot({
+        ...snapshot,
+        costUsd: 4,
+        costComplete: false,
+        byDimension: [{ step: 'untiered', costUsd: 4 }],
+        tokensByDimension: [{ step: 'untiered', tokens: { input: 200 } }],
+      });
+      recorder.onFeatureUsageTotal({
+        type: 'feature_usage_total', dispatches: 1, meteredDispatches: 1, unmeteredDispatches: 0,
+        costUsd: 5, inputTokens: 1, outputTokens: 1,
+      });
+      recorder.onFeatureCostSnapshot({ ...snapshot, costUsd: Number.NaN, tier: 'M' });
+      await provider.forceFlush();
+
+      const points = (name: string) => findMetric(exporter, name)?.dataPoints.map(({ value, attributes }) => ({ value, attributes }));
+      expect({
+        featureCost: points('conductor.feature.cost'),
+        featureStepCost: points('conductor.feature.step.cost'),
+        featureStepTokens: points('conductor.feature.step.tokens'),
+      }).toEqual({
+        featureCost: expect.arrayContaining([
+          expect.objectContaining({ value: 3.5, attributes: expect.objectContaining({ cost_complete: true, tier: 'M' }) }),
+          expect.objectContaining({ value: 2, attributes: expect.objectContaining({ cost_complete: true, tier: 'S' }) }),
+          expect.objectContaining({
+            value: 4,
+            attributes: {
+              cost_complete: false,
+              project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+            },
+          }),
+          expect.objectContaining({ value: 5, attributes: expect.not.objectContaining({ tier: expect.anything() }) }),
+        ]),
+        featureStepCost: expect.arrayContaining([
+          expect.objectContaining({ value: 1.5, attributes: expect.objectContaining({ tier: 'M' }) }),
+          expect.objectContaining({ value: 2, attributes: expect.objectContaining({ tier: 'M' }) }),
+          expect.objectContaining({ value: 4, attributes: expect.not.objectContaining({ tier: expect.anything() }) }),
+        ]),
+        featureStepTokens: expect.arrayContaining([
+          expect.objectContaining({ value: 150, attributes: expect.objectContaining({ tier: 'M' }) }),
+          expect.objectContaining({ value: 15, attributes: expect.objectContaining({ tier: 'M' }) }),
+          expect.objectContaining({ value: 200, attributes: expect.not.objectContaining({ tier: expect.anything() }) }),
+        ]),
+      });
+    } finally { await provider.shutdown(); }
+  });
+
   it('records incomplete totals, omits optional model, and retains an unchanged gauge value', async () => {
     const { exporter, provider, recorder } = await makeRecorder();
     try {
@@ -1007,6 +1061,7 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
       recorder.onFeatureCostSnapshot({
         ...snapshot,
         costUsd: Number.NaN,
+        tier: 'M',
         byDimension: [{ step: 'build', costUsd: 1.5 }],
       });
       await provider.forceFlush();
