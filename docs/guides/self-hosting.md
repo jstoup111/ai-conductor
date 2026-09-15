@@ -23,7 +23,7 @@ behind a single decision:
 | Sandbox build env | Runs the build step under a throwaway `CLAUDE_CONFIG_DIR` pointing at the build worktree's own `skills/` and `hooks/` |
 | Live-boundary fingerprint | Fails the run if the live checkout or unrelated provider state changes mid-build |
 | Version approval gate | Halts at finish unless the VERSION change is approved |
-| Release artifact gate | Halts at finish on an integrity, changelog, or migration failure |
+| Release artifact gate | Halts at finish when a required migration block or waiver is absent or invalid |
 | Build auth | Uses a daemon-owned OAuth token rather than the operator's live credentials |
 
 Activation is decided once per daemon, against the main repo root, by
@@ -434,9 +434,9 @@ closed — the freeze resolves to no value, and the gate falls through to signal
 HALT exactly as if no freeze were declared. A freeze still never approves an actual bump: if the
 worktree's own `VERSION` differs from the tracked value, the gate HALTs as usual.
 
-**Release artifact.** Runs the integrity suite (`test/test_harness_integrity.sh`, 120s timeout), then
-the changelog and migration-block check, then waiver evaluation. It HALTs on the **first** failure —
-later sub-gates are not consulted. A missing script, a timeout, and a non-zero exit are all HALTs.
+**Release artifact.** Evaluates the migration-block requirement and any waiver. It HALTs on the first
+failure. The BUILD `test_suite` gate owns `test/test_harness_integrity.sh` together with the conductor
+test suite before SHIP.
 
 The migration requirement fires when the change set touches a breaking surface, or when the change
 set cannot be determined at all (fail-closed). Waivers live in `.docs/release-waivers/` and must be

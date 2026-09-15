@@ -347,8 +347,6 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
         changedFiles: async () => [
           { status: 'M', path: 'src/conductor/src/engine/self-host/release-gate.ts' },
         ],
-        access: async () => {},
-        exec: async () => ({ code: 0, timedOut: false }),
       }),
     );
     const { guardrails } = makeGuardrails({ releaseGate });

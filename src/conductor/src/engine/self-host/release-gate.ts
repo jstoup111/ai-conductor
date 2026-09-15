@@ -1,82 +1,15 @@
-// self-host/release-gate.ts — ReleaseArtifactGate (TR-8/10).
+// self-host/release-gate.ts — ReleaseArtifactGate (TR-10).
 //
-// Two fail-closed sub-gates a harness self-build must clear at finish before a
+// One fail-closed sub-gate a harness self-build must clear at finish before a
 // PR opens (adr-2026-06-30-halt-based-release-gates):
-//   1. TR-8  integrity suite  — `test/test_harness_integrity.sh` must exit 0
-//              (missing script or timeout → HALT, never a silent pass).
-//   2. TR-10 migration block  — a breaking surface requires a runnable
+//   TR-10 migration block  — a breaking surface requires a runnable
 //              PR-metadata block that `bin/migrate` can execute.
 // Every failure writes a distinct HALT reason; uncertainty errs toward HALT.
 
-import { execa } from 'execa';
-import { access as fsAccess, constants } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isRunnableMigrationBlock, type ReleaseDisposition } from '../release-metadata.js';
 import { writeSelfHostHalt, type GateVerdict } from './gate-halt.js';
 import type { HaltMarkerWriteResult } from '../halt-marker.js';
-
-export const INTEGRITY_SCRIPT = 'test/test_harness_integrity.sh';
-export const DEFAULT_INTEGRITY_TIMEOUT_MS = 120_000;
-
-// ── TR-8: integrity suite ────────────────────────────────────────────────────
-
-export interface IntegrityExec {
-  /** Run the integrity suite rooted at `harnessRoot`, bounded by `timeoutMs`. */
-  (harnessRoot: string, timeoutMs: number): Promise<{ code: number; timedOut: boolean }>;
-}
-
-export const realIntegrityExec: IntegrityExec = async (harnessRoot, timeoutMs) => {
-  const r = await execa('bash', [join(harnessRoot, INTEGRITY_SCRIPT)], {
-    cwd: harnessRoot,
-    reject: false,
-    timeout: timeoutMs,
-  });
-  return { code: typeof r.exitCode === 'number' ? r.exitCode : 1, timedOut: Boolean(r.timedOut) };
-};
-
-export interface IntegrityOptions {
-  harnessRoot: string;
-  timeoutMs?: number;
-  access?: (path: string, mode: number) => Promise<void>;
-  exec?: IntegrityExec;
-}
-
-/**
- * Run the integrity suite. Fail-closed: a missing script HALTs (never treated as
- * a pass), a timeout is a failure (never an indefinite block), and any non-zero
- * exit HALTs naming the failure.
- */
-export async function runIntegritySuite(opts: IntegrityOptions): Promise<GateVerdict> {
-  const access = opts.access ?? ((p, m) => fsAccess(p, m));
-  const scriptPath = join(opts.harnessRoot, INTEGRITY_SCRIPT);
-  try {
-    await access(scriptPath, constants.F_OK);
-  } catch {
-    return {
-      ok: false,
-      reason:
-        `harness integrity suite not found: ${scriptPath} (self-host release gate) — ` +
-        'refusing to open a PR without running it.',
-    };
-  }
-  const exec = opts.exec ?? realIntegrityExec;
-  const { code, timedOut } = await exec(opts.harnessRoot, opts.timeoutMs ?? DEFAULT_INTEGRITY_TIMEOUT_MS);
-  if (timedOut) {
-    return {
-      ok: false,
-      reason:
-        'harness integrity suite timed out (self-host release gate) — treated as failure, ' +
-        'not an indefinite block.',
-    };
-  }
-  if (code !== 0) {
-    return {
-      ok: false,
-      reason: `harness integrity suite failed (exit ${code}) (self-host release gate).`,
-    };
-  }
-  return { ok: true };
-}
 
 // ── TR-10: migration block for breaking surfaces ─────────────────────────────
 
@@ -303,15 +236,11 @@ export interface ReleaseGateOptions {
   /** The build's changed files (git name-status), or null if undeterminable. */
   changedFiles: () => Promise<ChangedFile[] | null>;
   writeHalt?: (projectRoot: string, reason: string) => Promise<void | HaltMarkerWriteResult>;
-  timeoutMs?: number;
-  access?: (path: string, mode: number) => Promise<void>;
-  exec?: IntegrityExec;
 }
 
 /**
- * Run both sub-gates in order, HALTing on the FIRST failure with that
- * gate's distinct reason (later gates are not consulted once one HALTs). Returns
- * the verdict; the caller must not open a PR when `verdict.ok` is false.
+ * Run the migration sub-gate, HALTing on failure with its distinct reason.
+ * Returns the verdict; the caller must not open a PR when `verdict.ok` is false.
  */
 export async function runReleaseArtifactGate(opts: ReleaseGateOptions): Promise<GateVerdict> {
   const writeHalt = opts.writeHalt ?? writeSelfHostHalt;
@@ -322,16 +251,6 @@ export async function runReleaseArtifactGate(opts: ReleaseGateOptions): Promise<
     }
     return verdict;
   };
-
-  const integrity = await runIntegritySuite({
-    harnessRoot: opts.harnessRoot,
-    timeoutMs: opts.timeoutMs,
-    access: opts.access,
-    exec: opts.exec,
-  });
-  if (!integrity.ok) {
-    return halt(integrity);
-  }
 
   const changedFiles = await opts.changedFiles();
   const surfaces = classifyBreakingSurfaces(changedFiles);

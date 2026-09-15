@@ -4,7 +4,6 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  runIntegritySuite,
   classifyBreakingSurfaces,
   evaluateMigration,
   hasRunnableMigrationBlock,
@@ -12,62 +11,7 @@ import {
 } from '../../../src/engine/self-host/release-gate.js';
 import { parseReleaseDisposition } from '../../../src/engine/release-metadata.js';
 
-// Phase 5 (TR-8/10): the ReleaseArtifactGate — integrity suite and Migration
-// block. Both fail-closed: an absent/unknown input HALTs, never silently passes.
-
-describe('runIntegritySuite (TR-8)', () => {
-  let root: string;
-  beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'rg-int-'));
-  });
-  afterEach(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
-
-  it('exit 0 → pass', async () => {
-    const v = await runIntegritySuite({
-      harnessRoot: root,
-      access: async () => {},
-      exec: async () => ({ code: 0, timedOut: false }),
-    });
-    expect(v).toEqual({ ok: true });
-  });
-
-  it('non-zero exit → HALT naming the failing suite', async () => {
-    const v = await runIntegritySuite({
-      harnessRoot: root,
-      access: async () => {},
-      exec: async () => ({ code: 2, timedOut: false }),
-    });
-    expect(v.ok).toBe(false);
-    if (v.ok) return;
-    expect(v.reason).toMatch(/integrity suite failed/i);
-  });
-
-  it('missing script → fail-closed HALT (not a silent pass)', async () => {
-    const v = await runIntegritySuite({
-      harnessRoot: root,
-      access: async () => {
-        throw new Error('ENOENT');
-      },
-      exec: async () => ({ code: 0, timedOut: false }), // would pass — must not be reached
-    });
-    expect(v.ok).toBe(false);
-    if (v.ok) return;
-    expect(v.reason).toMatch(/not found|missing/i);
-  });
-
-  it('timeout → treated as failure (HALT), not an indefinite block', async () => {
-    const v = await runIntegritySuite({
-      harnessRoot: root,
-      access: async () => {},
-      exec: async () => ({ code: 0, timedOut: true }),
-    });
-    expect(v.ok).toBe(false);
-    if (v.ok) return;
-    expect(v.reason).toMatch(/timed out/i);
-  });
-});
+// Phase 5 (TR-10): the release-artifact migration gate. Unknown inputs halt.
 
 describe('classifyBreakingSurfaces + evaluateMigration (TR-10)', () => {
   it('non-breaking changes → migration not required', () => {
@@ -147,7 +91,7 @@ describe('hasRunnableMigrationBlock — matches bin/migrate contract', () => {
   });
 });
 
-describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/10)', () => {
+describe('runReleaseArtifactGate — composed migration gate (TR-10)', () => {
   let projectRoot: string;
   let harnessRoot: string;
   beforeEach(async () => {
@@ -184,8 +128,6 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/10)',
       },
       releaseMetadata,
       changedFiles: async () => [{ status: 'M', path: 'bin/conduct' }],
-      access: async () => {},
-      exec: async () => ({ code: 0, timedOut: false }),
     });
 
     expect(v).toEqual({ ok: true });
@@ -215,61 +157,23 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/10)',
     expect(() => parseReleaseDisposition(body)).toThrow('Invalid release disposition: Migration');
   });
 
-  it('both sub-gates satisfied → pass, no HALT', async () => {
+  it('a non-breaking change passes without an integrity script or HALT', async () => {
     const v = await runReleaseArtifactGate({
       projectRoot,
       harnessRoot,
       readText: async () => GOOD_CHANGELOG,
       changedFiles: async () => [{ status: 'M', path: 'src/conductor/src/engine/x.ts' }],
-      access: async () => {},
-      exec: async () => ({ code: 0, timedOut: false }),
     });
     expect(v.ok).toBe(true);
     expect(existsSync(join(projectRoot, '.pipeline', 'HALT'))).toBe(false);
   });
 
-  it('integrity failure → HALT written, later gates not consulted', async () => {
-    let changelogRead = false;
-    const v = await runReleaseArtifactGate({
-      projectRoot,
-      harnessRoot,
-      readText: async () => {
-        changelogRead = true;
-        return GOOD_CHANGELOG;
-      },
-      changedFiles: async () => [],
-      access: async () => {},
-      exec: async () => ({ code: 1, timedOut: false }),
-    });
-    expect(v.ok).toBe(false);
-    expect(existsSync(join(projectRoot, '.pipeline', 'HALT'))).toBe(true);
-    expect(changelogRead).toBe(false); // short-circuits on the first failing gate
-  });
-
-  it('default emitter-less integrity HALT surfaces a failed marker write without throwing', async () => {
-    await expect(
-      runReleaseArtifactGate({
-        projectRoot: '/dev/null',
-        harnessRoot,
-        readText: async () => GOOD_CHANGELOG,
-        changedFiles: async () => [],
-        access: async () => {},
-        exec: async () => ({ code: 1, timedOut: false }),
-      }),
-    ).resolves.toMatchObject({
-      ok: false,
-      reason: expect.stringMatching(/HALT marker write failed: .*ENOTDIR/i),
-    });
-  });
-
-  it('integrity ok and empty [Unreleased] with non-breaking changes → pass without HALT', async () => {
+  it('an empty [Unreleased] with non-breaking changes passes without HALT', async () => {
     const v = await runReleaseArtifactGate({
       projectRoot,
       harnessRoot,
       readText: async () => `## [Unreleased]\n\n## [0.99.18]\n- old\n`,
       changedFiles: async () => [],
-      access: async () => {},
-      exec: async () => ({ code: 0, timedOut: false }),
     });
     expect(v.ok).toBe(true);
     expect(existsSync(join(projectRoot, '.pipeline', 'HALT'))).toBe(false);
@@ -281,8 +185,6 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/10)',
       harnessRoot,
       readText: async () => `## [Unreleased]\n\n## [0.99.18]\n- old\n`,
       changedFiles: async () => [{ status: 'M', path: 'bin/conduct' }],
-      access: async () => {},
-      exec: async () => ({ code: 0, timedOut: false }),
     });
     expect(v.ok).toBe(false);
     const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf-8');
@@ -295,8 +197,6 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/10)',
       harnessRoot,
       readText: async () => `## [Unreleased]\n\n## [0.99.18]\n- old\n`,
       changedFiles: async () => null,
-      access: async () => {},
-      exec: async () => ({ code: 0, timedOut: false }),
     });
     expect(v.ok).toBe(false);
     const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf-8');
@@ -313,8 +213,6 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/10)',
         { status: 'M', path: 'bin/conduct' },
         { status: 'A', path: '.docs/release-waivers/internal-conduct.md' },
       ],
-      access: async () => {},
-      exec: async () => ({ code: 0, timedOut: false }),
     });
 
     expect(v).toEqual({ ok: true });
@@ -326,8 +224,6 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/10)',
       harnessRoot,
       readText: async () => 'Waives: bin/conduct CLI\n\nRationale: This command edit is internal-only.\n',
       changedFiles: async () => [{ status: 'M', path: 'bin/conduct' }],
-      access: async () => {},
-      exec: async () => ({ code: 0, timedOut: false }),
     });
 
     expect(v.ok).toBe(false);
@@ -344,8 +240,6 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/10)',
         { status: 'M', path: 'bin/conduct' },
         { status: 'A', path: '.docs/release-waivers/internal-conduct.md' },
       ],
-      access: async () => {},
-      exec: async () => ({ code: 0, timedOut: false }),
     });
 
     expect(v.ok).toBe(false);
@@ -363,8 +257,6 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/10)',
         { status: 'M', path: 'hooks/claude/rtk-rewrite.sh' },
         { status: 'A', path: '.docs/release-waivers/internal-conduct.md' },
       ],
-      access: async () => {},
-      exec: async () => ({ code: 0, timedOut: false }),
     });
 
     expect(v.ok).toBe(false);
@@ -380,8 +272,6 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/10)',
         throw new Error('uncertain changes must not evaluate waivers');
       },
       changedFiles: async () => null,
-      access: async () => {},
-      exec: async () => ({ code: 0, timedOut: false }),
     });
 
     expect(v.ok).toBe(false);

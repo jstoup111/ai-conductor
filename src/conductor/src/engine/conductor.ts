@@ -5813,12 +5813,12 @@ export class Conductor {
   }
 
   /**
-   * The self-host finish gates (TR-7/8/9/10), run BEFORE the `finish` step is
+   * The self-host finish gates (TR-7/10), run BEFORE the `finish` step is
    * dispatched because the auto-mode finish prompt opens the PR itself — a gate
    * that fires after finish would be too late. On the first failure the gate
    * primitive has already written `.pipeline/HALT`; this returns the verdict so
    * the caller parks the feature without dispatching finish (no PR). Reads the
-   * VERSION/CHANGELOG/integrity artifacts of the build worktree (`projectRoot`),
+   * VERSION and release-metadata artifacts of the build worktree (`projectRoot`),
    * which IS the harness being shipped.
    */
   private async runSelfHostFinishGates(branch?: string): Promise<GateVerdict> {
@@ -8483,12 +8483,12 @@ export class Conductor {
           }
         }
 
-        // Self-host release gates (TR-7/8/9/10): a harness self-build must clear
+        // Self-host release gates (TR-7/10): a harness self-build must clear
         // the VERSION-approval and release-artifact gates BEFORE `finish` runs,
         // because the auto-mode finish prompt opens the PR itself. A failing gate
         // has already written `.pipeline/HALT`; park the feature (no PR) instead
         // of dispatching finish. The daemon never opens a PR with an unapproved
-        // bump or a failing integrity/CHANGELOG/migration state, and never merges.
+        // bump or a failing migration state, and never merges.
         if (this.isSelfBuild() && step.name === 'finish') {
           const verdict = await this.runSelfHostFinishGates(state.worktree_branch);
           if (!verdict.ok) {

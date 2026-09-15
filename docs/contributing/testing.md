@@ -400,7 +400,7 @@ execute smoke tests.
 
 40 `.sh` files live under `test/`. Only six ever execute:
 
-- `test/test_harness_integrity.sh`, run by CI and by the self-host release gate. See
+- `test/test_harness_integrity.sh`, run by CI and by the BUILD `test_suite` gate. See
   [validation](validation.md).
 - `test/test_ci_detect_docs_only.sh` and `test/test_provider_skill_contracts.sh`, executed by the
   integrity suite as checks 13 and 14.
@@ -445,14 +445,17 @@ from `.ai-conductor/config.yml`:
 
 ```yaml
 test_suite:
-  command: npm test
-  working_directory: src/conductor
+  commands:
+    - command: npm test
+      working_directory: src/conductor
+    - command: test/test_harness_integrity.sh
+      working_directory: .
   timeout_seconds: 1800
 ```
 
-The `--slowTestThreshold=1800000` in the npm script matches that 1800-second budget, suppressing
-slow-test warnings that would otherwise fire on every long run. The ordinary suite is expected to finish
-under five minutes; a healthy run is roughly two to three.
+The entries run in order, so the integrity suite runs only after the conductor suite passes. The
+`--slowTestThreshold=1800000` in the npm script matches that 1800-second budget, suppressing slow-test
+warnings that would otherwise fire on every long run.
 
 For where `test_suite` sits in the flow and what happens when it fails, see
 [steps](../reference/steps.md) and [gates](../explanation/gates.md).

@@ -10,8 +10,8 @@
  * across the full waiver flow described by the stories — not the isolated
  * `parseWaiver`/`findWaiverPaths`/`evaluateWaiver` units, which get their own
  * coverage in `test/engine/self-host/release-gate.test.ts` during /pipeline.
- * TR-8 (integrity) and TR-9 (changelog) are stubbed to pass trivially so each
- * spec isolates TR-10's waiver behavior.
+ * The composed gate is migration-only, so each spec isolates TR-10's waiver
+ * behavior without process stubs.
  *
  * Canonical waiver format pinned here (not fully specified by the ADR/stories
  * beyond "a `Waives:` list of canonical surface names + non-empty rationale"):
@@ -75,8 +75,6 @@ describe('runReleaseArtifactGate — TR-10 migration-gate waiver (acceptance)', 
       harnessRoot,
       readText: readTextSeam(),
       changedFiles: async () => changedFiles,
-      access: async () => {},
-      exec: async () => ({ code: 0, timedOut: false }),
     });
   }
 
@@ -144,6 +142,14 @@ describe('runReleaseArtifactGate — TR-10 migration-gate waiver (acceptance)', 
     expect(reason).toMatch(/```bash migration```|migration block/i);
     expect(reason).toMatch(new RegExp(WAIVER_PATH.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     expect(reason).toMatch(/internal-only|no consumer-visible/i);
+  });
+
+  it('breaking surface without a migration block or fresh waiver halts in a harness root without an integrity script', async () => {
+    expect(existsSync(join(harnessRoot, 'test', 'test_harness_integrity.sh'))).toBe(false);
+    waiverContent = null;
+    const v = await run([{ status: 'M', path: 'bin/conduct' }]);
+    expect(v.ok).toBe(false);
+    expect(await haltReason(projectRoot)).toMatch(/migration block required/i);
   });
 
   it('uncertain change set (null) with a well-formed waiver ON DISK — still HALT, fail-closed, reason omits the waiver option', async () => {

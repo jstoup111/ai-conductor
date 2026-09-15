@@ -126,10 +126,10 @@ an empty candidate set is ignored and produces no release.
 
 ## The self-host release gate
 
-`src/conductor/src/engine/self-host/release-gate.ts` composes two fail-closed sub-gates that a harness
+`src/conductor/src/engine/self-host/release-gate.ts` runs the fail-closed migration sub-gate that a harness
 self-build must clear at finish, **before a PR opens**. `runReleaseArtifactGate` HALTs on the first
-failure with that gate's distinct reason and does not consult later gates; the caller must not open a PR
-when the verdict is not ok. Each failure writes `.pipeline/HALT`.
+failure with its distinct reason; the caller must not open a PR when the verdict is not ok. Each failure
+writes `.pipeline/HALT`. The BUILD `test_suite` gate owns the integrity suite before SHIP.
 
 ### Where the gate reads release metadata from
 
@@ -153,18 +153,7 @@ is the build's base branch. The lookup stays fail-closed and deliberately narrow
 A closed or merged PR is never adopted: `finish` flips and rewrites the PR it is handed, and neither is
 a live draft. The HALT reason names the branch and base that found nothing.
 
-### Sub-gate 1: the integrity suite
-
-Runs `test/test_harness_integrity.sh` with a 120-second default budget. All three failure modes HALT and
-none can be mistaken for a pass:
-
-| Condition | Reason |
-| --- | --- |
-| Script not found | "refusing to open a PR without running it" |
-| Timed out | "treated as failure, not an indefinite block" |
-| Non-zero exit | HALT naming the exit code |
-
-### Sub-gate 2: the migration block
+### Migration block sub-gate
 
 A change touching a canonical breaking surface requires a runnable migration block in the
 implementation PR's release metadata — the `## Migration` section of the PR body, parsed into
@@ -233,7 +222,7 @@ the consumer project, with `HARNESS_DIR` exported; invoke harness files through
 
 Blocks must not force-remove a Git worktree or branch (`git worktree remove --force`, `git branch -D`),
 and must not start, stop, restart, or kill a daemon. Print an instruction for the operator to take a
-daemon lifecycle action instead. `test/test_harness_integrity.sh` rejects these forms before release and
+daemon lifecycle action instead. `test/test_harness_integrity.sh` rejects these forms during BUILD and
 reports the offending line and contract clause.
 
 ## Waivers
