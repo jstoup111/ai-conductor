@@ -157,4 +157,18 @@ describe('module header caller claims', () => {
       consumers: ['src/engine/consumer.ts'],
     }]);
   });
+
+  it('leaves truthful, out-of-scope, and same-basename claims unflagged', () => {
+    const violations = findHeaderCallerClaimViolations(new Map([
+      ['src/engine/truthful-module.ts', '// Nothing imports this module.\nexport const truthful = 1;\n'],
+      ['src/engine/truthful-symbol.ts', '// Nothing invokes `unreferenced` yet.\nexport function unreferenced() {}\n'],
+      ['src/engine/below-block.ts', 'export const active = true;\n// This module is inert — nothing imports it.\n'],
+      ['src/engine/no-comment.ts', 'export const noComment = true;\n'],
+      ['src/engine/one/claimant.ts', '// No importers.\nexport const value = 1;\n'],
+      ['src/engine/two/claimant.ts', 'export const value = 2;\n'],
+      ['src/engine/consumer.ts', "import { value } from './two/claimant.js';\nvoid value;\n"],
+    ]));
+
+    expect(violations).toEqual([]);
+  });
 });
