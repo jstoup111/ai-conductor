@@ -717,7 +717,7 @@ export type ConductorEvent =
   /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
   | CredentialParkProgressEvent
   | FinishPublicationEvent
-  | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number }
+  | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number; tier?: ComplexityTier }
   | { type: 'dashboard_refresh' }
   | {
       type: 'protected_artifact_rebaseline';
@@ -1081,6 +1081,7 @@ export type ConductorEvent =
       type: 'loop_halt';
       step?: StepName;
       reason: string;
+      tier?: ComplexityTier;
       /** Present when an external BUILD action classifies its own terminal halt. */
       haltClass?: 'plan-gap';
       /**

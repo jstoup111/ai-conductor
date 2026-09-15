@@ -1,4 +1,4 @@
-// Covers: task:2, task:5, task:6, task:7, task:8
+// Covers: task:2, task:5, task:6, task:7, task:8, task:9
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -70,6 +70,122 @@ function resourceAttributes(exporter: InMemoryMetricExporter): Record<string, un
 }
 
 describe('MetricsListener dispatch dimensions', () => {
+  it('keeps the terminal-event tier for complete and halt outcomes before daemon dispatch-end', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const emitter = new ConductorEventEmitter();
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      undefined,
+      'feature',
+    );
+    listener.start(emitter);
+
+    try {
+      await emitter.emit({ type: 'feature_complete', tier: 'M' });
+      await emitter.emit({ type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete', tier: 'L' });
+      await emitter.emit({ type: 'loop_halt', reason: 'halted', tier: 'S' });
+      await emitter.emit({
+        type: 'feature_dispatch_ended', slug: 'feature', outcome: 'halted', haltClass: 'mechanical', step: 'build', tier: 'L',
+      });
+      await provider.forceFlush();
+
+      expect({
+        outcomes: attributesForInstrument(exporter, 'conductor.run.outcomes'),
+        halts: attributesForInstrument(exporter, 'conductor.feature.halts'),
+      }).toEqual({
+        outcomes: [
+          { outcome: 'complete', tier: 'M', project: 'project', worker: 'worker', feature: 'feature' },
+          { outcome: 'halted', tier: 'S', project: 'project', worker: 'worker', feature: 'feature' },
+        ],
+        halts: [{ haltClass: 'mechanical', step: 'build', tier: 'L', project: 'project', worker: 'worker', feature: 'feature' }],
+      });
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
+  });
+
+  it('records resolved interactive terminal-only outcomes without dispatch-end', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const completeEmitter = new ConductorEventEmitter();
+    const haltEmitter = new ConductorEventEmitter();
+    const completeListener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      undefined,
+      'interactive-complete',
+    );
+    const haltListener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      undefined,
+      'interactive-halt',
+    );
+    completeListener.start(completeEmitter);
+    haltListener.start(haltEmitter);
+
+    try {
+      await completeEmitter.emit({ type: 'feature_complete', tier: 'M' });
+      await haltEmitter.emit({ type: 'loop_halt', reason: 'interactive halt', tier: 'S' });
+      await provider.forceFlush();
+
+      expect(attributesForInstrument(exporter, 'conductor.run.outcomes')).toEqual([
+        { outcome: 'complete', tier: 'M', project: 'project', worker: 'worker', feature: 'interactive-complete' },
+        { outcome: 'halted', tier: 'S', project: 'project', worker: 'worker', feature: 'interactive-halt' },
+      ]);
+    } finally {
+      completeListener.stop();
+      haltListener.stop();
+      await provider.shutdown();
+    }
+  });
+
+  it('replays tierless historical terminal events through the event persister and listener', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'metrics-listener-legacy-terminal-'));
+    const eventsPath = join(directory, 'events.jsonl');
+    const persisterEmitter = new ConductorEventEmitter();
+    const persister = new EventPersister(eventsPath, persisterEmitter);
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const completeEmitter = new ConductorEventEmitter();
+    const haltEmitter = new ConductorEventEmitter();
+    const completeListener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), undefined, 'legacy-complete',
+    );
+    const haltListener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }), undefined, 'legacy-halt',
+    );
+    persister.start();
+    completeListener.start(completeEmitter);
+    haltListener.start(haltEmitter);
+
+    try {
+      await persisterEmitter.emit({ type: 'feature_complete' });
+      await persisterEmitter.emit({ type: 'loop_halt', reason: 'legacy halt' });
+      const historical = (await readFile(eventsPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as ConductorEvent);
+      await completeEmitter.emit(historical[0]!);
+      await haltEmitter.emit(historical[1]!);
+      await provider.forceFlush();
+
+      expect(attributesForInstrument(exporter, 'conductor.run.outcomes')).toEqual([
+        { outcome: 'complete', project: 'project', worker: 'worker', feature: 'legacy-complete' },
+        { outcome: 'halted', project: 'project', worker: 'worker', feature: 'legacy-halt' },
+      ]);
+    } finally {
+      persister.stop();
+      completeListener.stop();
+      haltListener.stop();
+      await provider.shutdown();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('replays a tierless historical dispatch-end record through the event persister and listener', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'metrics-listener-legacy-event-'));
     const eventsPath = join(directory, 'events.jsonl');

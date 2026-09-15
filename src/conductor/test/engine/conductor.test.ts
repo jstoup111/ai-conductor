@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:11
+// Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { execFile as execFileCb } from 'child_process';
@@ -94,6 +94,8 @@ import {
   readKickbackLedger,
   } from '../../src/engine/kickback-ledger.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
+import { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { appendTimingSection, renderShippedRecord } from '../../src/engine/shipped-record.js';
 import { deriveEffectiveBuildReviewVerdict, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
@@ -119,6 +121,12 @@ import type {
   InvokeResult,
   LLMProvider,
 } from '../../src/execution/llm-provider.js';
+import {
+  AggregationTemporality,
+  InMemoryMetricExporter,
+  MeterProvider,
+  PeriodicExportingMetricReader,
+} from '@opentelemetry/sdk-metrics';
 
 const NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER: GroupBranchLifecycleObserver = {
   onAdmitted: () => undefined,
@@ -208,6 +216,99 @@ describe('engine/conductor', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  // Covers: task:9
+  it('preserves conductor terminal tiers through the metrics listener before daemon dispatch-end', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('conductor-terminal-tier'), { project: 'project', worker: 'worker' }),
+      undefined,
+      'feature',
+    );
+    listener.start(events);
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events });
+
+    try {
+      await (conductor as unknown as {
+        completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
+      }).completeRun({ complexity_tier: 'M' }, 'complete\n');
+      await events.emit({ type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete', tier: 'L' });
+      (conductor as unknown as { haltState: ConductState }).haltState = { complexity_tier: 'S' };
+      await (conductor as unknown as { emitLoopHalt(reason: string): Promise<void> }).emitLoopHalt('halted');
+      await events.emit({
+        type: 'feature_dispatch_ended', slug: 'feature', outcome: 'halted', haltClass: 'mechanical', step: 'build', tier: 'L',
+      });
+      await provider.forceFlush();
+
+      const outcomes = exporter.getMetrics()
+        .flatMap((batch) => batch.scopeMetrics)
+        .flatMap((scope) => scope.metrics)
+        .filter((metric) => metric.descriptor.name === 'conductor.run.outcomes')
+        .flatMap((metric) => metric.dataPoints as Array<{ attributes: Record<string, unknown> }>)
+        .map((point) => point.attributes);
+      expect(outcomes).toEqual([
+        { outcome: 'complete', tier: 'M', project: 'project', worker: 'worker', feature: 'feature' },
+        { outcome: 'halted', tier: 'S', project: 'project', worker: 'worker', feature: 'feature' },
+      ]);
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
+  });
+
+  // Covers: task:9
+  it('omits tier from unresolved completion and an early halt', async () => {
+    const terminalEvents: Array<Extract<ConductorEvent, { type: 'feature_complete' | 'loop_halt' }>> = [];
+    events.on('feature_complete', (event) => terminalEvents.push(event));
+    const haltEvents = new ConductorEventEmitter();
+    haltEvents.on('loop_halt', (event) => terminalEvents.push(event));
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const completionListener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('conductor-terminal-tier'), { project: 'project', worker: 'worker' }), undefined, 'unresolved-complete',
+    );
+    const haltListener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('conductor-terminal-tier'), { project: 'project', worker: 'worker' }), undefined, 'early-halt',
+    );
+    completionListener.start(events);
+    haltListener.start(haltEvents);
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events });
+    const haltConductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events: haltEvents });
+
+    try {
+      await (conductor as unknown as {
+        completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
+      }).completeRun({}, 'complete\n');
+      await (haltConductor as unknown as { emitLoopHalt(reason: string): Promise<void> }).emitLoopHalt('early halt');
+      await provider.forceFlush();
+
+      const outcomes = exporter.getMetrics()
+        .flatMap((batch) => batch.scopeMetrics)
+        .flatMap((scope) => scope.metrics)
+        .filter((metric) => metric.descriptor.name === 'conductor.run.outcomes')
+        .flatMap((metric) => metric.dataPoints as Array<{ attributes: Record<string, unknown> }>)
+        .map((point) => point.attributes);
+      expect({
+        eventTiers: terminalEvents.map((event) => Object.hasOwn(event, 'tier')),
+        outcomes,
+      }).toEqual({
+        eventTiers: [false, false],
+        outcomes: [
+          { outcome: 'complete', project: 'project', worker: 'worker', feature: 'unresolved-complete' },
+          { outcome: 'halted', project: 'project', worker: 'worker', feature: 'early-halt' },
+        ],
+      });
+    } finally {
+      completionListener.stop();
+      haltListener.stop();
+      await provider.shutdown();
+    }
   });
 
   // Covers: task:3

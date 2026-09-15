@@ -83,7 +83,7 @@ export class MetricsListener {
       const identity = listener.identityFor(retry, retry.step);
       if (identity) listener.feature(retry)?.onRetry(identity.metricLabel, stepDimensionsFrom(retry));
     },
-    feature_complete: (listener, event) => listener.closeFeature(event as OtelEvent, 'complete'),
+    feature_complete: (listener, event) => listener.closeFeature(event as Extract<OtelEvent, { type: 'feature_complete' }>, 'complete'),
     build_stall: (listener, event) => listener.recorder.onStall((event as Extract<OtelEvent, { type: 'build_stall' }>).reason),
     build_progress: () => {},
     build_no_progress: () => {},
@@ -96,7 +96,7 @@ export class MetricsListener {
       const kickback = event as Extract<OtelEvent, { type: 'kickback' }>;
       listener.feature(kickback)?.onKickback(kickback.from, kickback.to);
     },
-    loop_halt: (listener, event) => listener.closeFeature(event as OtelEvent, 'halted'),
+    loop_halt: (listener, event) => listener.closeFeature(event as Extract<OtelEvent, { type: 'loop_halt' }>, 'halted'),
   };
 
   start(emitter: ConductorEventEmitter): void {
@@ -126,11 +126,14 @@ export class MetricsListener {
       ?? (('slug' in event && typeof event.slug === 'string') ? event.slug : undefined)
       ?? this.featureName;
   }
-  private closeFeature(event: OtelEvent, outcome: 'complete' | 'halted'): void {
+  private closeFeature(
+    event: Extract<OtelEvent, { type: 'feature_complete' | 'loop_halt' }>,
+    outcome: 'complete' | 'halted',
+  ): void {
     const metric = this.feature(event);
     const slug = this.featureOf(event);
     if (metric && (!slug || !this.terminal.has(slug))) {
-      metric.onRunClose(outcome);
+      metric.onRunClose(outcome, event.tier);
       if (slug) this.terminal.add(slug);
     }
   }

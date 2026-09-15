@@ -5760,6 +5760,7 @@ export class Conductor {
       prUrl: state.pr_url,
       featureDesc: state.feature_desc,
       sessionStartedAt: state.session_started_at,
+      ...(state.complexity_tier === undefined ? {} : { tier: state.complexity_tier }),
     });
     // The daemon classifies a run solely by .pipeline/DONE vs .pipeline/HALT.
     // Interactive runs intentionally leave no daemon marker.
@@ -5785,6 +5786,7 @@ export class Conductor {
       ...(step ? { step } : {}),
       reason,
       prUrl,
+      ...(this.haltState.complexity_tier === undefined ? {} : { tier: this.haltState.complexity_tier }),
     });
   }
 
