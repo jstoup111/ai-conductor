@@ -64,14 +64,17 @@ describe('mergeability-first daemon finish', () => {
     await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
     await mkdir(join(repo, 'src'), { recursive: true });
     await writeFile(join(repo, 'README.md'), '# base\n');
-    await writeFile(join(repo, '.docs', 'plans', 'feature.md'), '# Approved plan\n');
+    await writeFile(
+      join(repo, '.docs', 'plans', 'feature.md'),
+      '# Approved plan\n\n### Task 1: Implement feature\n',
+    );
     await git('add', '.');
     await git('commit', '-m', 'initial base');
 
     await git('checkout', '-b', 'feature/mergeable');
     await writeFile(
       join(repo, '.docs', 'plans', 'feature.md'),
-      '# Approved plan\n\nImplementation ready.\n',
+      '# Approved plan\n\n### Task 1: Implement feature\n\nImplementation ready.\n',
     );
     await writeFile(join(repo, 'src', 'feature.ts'), 'export const feature = true;\n');
     await git('add', '.');
@@ -87,6 +90,12 @@ describe('mergeability-first daemon finish', () => {
     await git('add', baseAdvance.path);
     await git('commit', '-m', 'advance base without conflict');
     await git('checkout', 'feature/mergeable');
+    // A recorded BUILD completion must carry the same task-status authority
+    // production verifies before a file-changing rebase can continue.
+    await writeFile(
+      join(repo, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
+    );
 
     return { featureHead, featureCommits };
   }

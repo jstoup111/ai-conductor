@@ -55,6 +55,11 @@ async function seedPreRebaseState(
   repo: string,
   overrides: Record<string, unknown> = {},
 ): Promise<void> {
+  await mkdir(join(repo, '.pipeline'), { recursive: true });
+  await writeFile(
+    join(repo, '.pipeline', 'task-status.json'),
+    JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
+  );
   const state: ConductState = { feature_desc: 'feat' };
   for (const s of ALL_STEPS) {
     if (s.name === 'rebase') break;
@@ -88,6 +93,8 @@ async function buildCleanRepo(baseAdvancePath = 'c.md'): Promise<{
   await g(['config', 'user.email', 't@t.com']);
   await g(['config', 'user.name', 'T']);
   await writeFile(join(repo, 'a.ts'), 'base\n');
+  await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
+  await writeFile(join(repo, '.docs', 'plans', 'feat.md'), '# Plan\n\n### Task 1: Build feature\n');
   await g(['add', '.']);
   await g(['commit', '-q', '-m', 'init']);
 
@@ -118,6 +125,8 @@ async function buildConflictRepo(): Promise<{
   await g(['config', 'user.email', 't@t.com']);
   await g(['config', 'user.name', 'T']);
   await writeFile(join(repo, 'a.ts'), 'base\n');
+  await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
+  await writeFile(join(repo, '.docs', 'plans', 'feat.md'), '# Plan\n\n### Task 1: Build feature\n');
   await g(['add', '.']);
   await g(['commit', '-q', '-m', 'init']);
 
