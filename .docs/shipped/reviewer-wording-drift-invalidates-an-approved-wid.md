@@ -4,25 +4,6 @@ spec_hash: 338e54518d90310e28faeda1b7e1c393f2fd3ac2c3c8eeee5bd60f490393c531
 pr: https://github.com/jstoup111/ai-conductor/pull/2479
 shipped: 2026-09-15
 engine_version: 20260914T211543Z-5da62d0036d1
-findings:
-  - gate: architecture_review_as_built
-    finding: AB-1
-    class: REMEDIABLE
-    governing_clause: "adr-2026-09-07-durable-prd-widening-decision-reconciliation D3"
-    outcome: remediated
-    summary: "Modern capture accepts a changed rendered criterion instead of rejecting every immutable-offer edit with a named defect."
-  - gate: architecture_review_as_built
-    finding: AB-2
-    class: REMEDIABLE
-    governing_clause: "adr-2026-09-07-durable-prd-widening-decision-reconciliation D4"
-    outcome: remediated
-    summary: "V1 migration discards authored timestamps and can collapse later story-criterion summaries onto the first source snapshot."
-  - gate: architecture_review_as_built
-    finding: AB-3
-    class: REMEDIABLE
-    governing_clause: "adr-2026-09-07-durable-prd-widening-decision-reconciliation D4"
-    outcome: remediated
-    summary: "Migration runs before fenced-clear capture and can silently treat a newer opposite legacy decision as replay of older migrated authority."
 ---
 
 ## Cost
@@ -42,7 +23,7 @@ providers:
 
 ## Time
 state: partial
-reason: open-executions:parallel:prd_audit,step:finish
+reason: open-executions:parallel:prd_audit
 
 ## Build Review
 laps_to_pass: 1
