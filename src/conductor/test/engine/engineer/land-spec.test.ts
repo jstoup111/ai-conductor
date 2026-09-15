@@ -1823,6 +1823,13 @@ describe('landSpec Done-when validation', () => {
           '(engine-appended: the engine wrote this remediation block; fix the engine rather than re-authoring the plan)',
       },
       {
+        name: 'a bare-writer engine-appended task only',
+        tasks: ['### Task rem-foo: Engine remediation'],
+        expectedViolations:
+          'plan task rem-foo has no Done when: block ' +
+          '(engine-appended: the engine wrote this remediation block; fix the engine rather than re-authoring the plan)',
+      },
+      {
         name: 'hand-authored tasks only',
         tasks: ['### Task 17: Hand-authored task'],
         expectedViolations: 'plan task 17 has no Done when: block',

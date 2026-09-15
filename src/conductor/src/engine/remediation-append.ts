@@ -37,20 +37,12 @@ export type CriterionBoundRemediationGap = RemediationGap & {
 /** H9 id grammar — must stay in lockstep with autoheal.ts TASK_ID_PATTERN. */
 const ID_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
 
-/** True when an id has the `rem-<gate-source>-<gap-task-id>` shape minted here. */
+/** True when an id has the `rem-<source>` shape accepted by either engine writer. */
 export function isEngineAppendedRemediationTaskId(id: string): boolean {
   const body = id.slice('rem-'.length);
   return id.startsWith('rem-')
-    && !body.startsWith('-')
-    && !body.endsWith('-')
-    && ID_SEGMENT_RE.test(body)
-    && [...body].some((character, index) => (
-      character === '-'
-      && index > 0
-      && index < body.length - 1
-      && body[index - 1] !== '-'
-      && body[index + 1] !== '-'
-    ));
+    && body !== ''
+    && ID_SEGMENT_RE.test(body);
 }
 
 export interface AppendRemediationResult {
