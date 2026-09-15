@@ -24,7 +24,6 @@ import {
   makeProductionGh,
   makeProductionGit,
   addLabel,
-  ensureLabel,
   removeLabel,
   isMergeable,
   upsertComment,
@@ -618,6 +617,7 @@ export async function sweepMergeableLabels({
     if (autoresolve?.enabled) {
       let dispatched = false;
       for (const { entry, state } of conflictingCandidates) {
+        const entryGh = runnerForEntry(gh, entry, operations);
         const elig = await autoresolve.isEligible(entry, state);
         if (!elig.eligible) continue;
 
@@ -643,10 +643,9 @@ export async function sweepMergeableLabels({
         } else if (dispatchResult?.kind === 'setup-stop') {
           survivors[idx] = { ...updated, resolveAttempts: entry.resolveAttempts ?? 0 };
           try {
-            await ensureLabel(gh, entry.repoCwd, 'needs-remediation', 'B60205', log);
-            await addLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+            await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
             await upsertComment(
-              gh,
+              entryGh,
               entry.repoCwd,
               entry.prUrl,
               '<!-- conductor:rebase-setup -->',
@@ -669,6 +668,7 @@ export async function sweepMergeableLabels({
     if (ciFix?.enabled) {
       let dispatched = false;
       for (const { entry, state } of failedCandidates) {
+        const entryGh = runnerForEntry(gh, entry, operations);
         const elig = await ciFix.isEligible(entry, state);
         if (!elig.eligible) continue;
 
@@ -700,10 +700,9 @@ export async function sweepMergeableLabels({
           if (dispatchResult?.kind === 'needs-human') {
             survivors[idx] = { ...updated, ciFixAttempts: entry.ciFixAttempts ?? 0 };
             try {
-              await ensureLabel(gh, entry.repoCwd, 'needs-remediation', 'B60205', log);
-              await addLabel(gh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
+              await addLabel(entryGh, entry.repoCwd, entry.prUrl, 'needs-remediation', log);
               await upsertComment(
-                gh,
+                entryGh,
                 entry.repoCwd,
                 entry.prUrl,
                 '<!-- conductor:ci-fix-setup -->',

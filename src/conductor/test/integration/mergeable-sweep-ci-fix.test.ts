@@ -102,18 +102,26 @@ function makeGh(
   };
   const operations: GithubOperationRunner = {
     async run(request: GithubOperationRequest): Promise<GithubOperationRunnerResponse> {
-      if (request.target.kind !== 'pull-request') {
-        throw new Error(`unexpected target: ${request.target.kind}`);
+      if (request.operation === 'pull-request.label.remove' || request.operation === 'pull-request.label.add') {
+        if (request.target.kind !== 'pull-request') {
+          throw new Error(`unexpected target: ${request.target.kind}`);
+        }
+        const label = request.payload && 'label' in request.payload ? request.payload.label : undefined;
+        if (typeof label !== 'string') throw new Error('missing label payload');
+        await gh(
+          request.operation === 'pull-request.label.remove'
+            ? [
+                'api', '--method', 'DELETE',
+                `repos/${request.target.repository}/issues/${request.target.number}/labels/${encodeURIComponent(label)}`,
+              ]
+            : [
+                'api', '--method', 'POST',
+                `repos/${request.target.repository}/issues/${request.target.number}/labels`,
+                '-f', `labels[]=${label}`,
+              ],
+          { cwd: '/fixture' },
+        );
       }
-      if (request.operation !== 'pull-request.label.remove') {
-        throw new Error(`unexpected operation: ${request.operation}`);
-      }
-      const label = request.payload && 'label' in request.payload ? request.payload.label : undefined;
-      if (typeof label !== 'string') throw new Error('missing label payload');
-      await gh([
-        'api', '--method', 'DELETE',
-        `repos/${request.target.repository}/issues/${request.target.number}/labels/${encodeURIComponent(label)}`,
-      ], { cwd: '/fixture' });
       return {};
     },
   };
@@ -646,6 +654,7 @@ describe('mergeable-sweep native CI state + bounded CI-fix dispatch', () => {
     await sweepMergeableLabels({
       projectRoot,
       runGh: gh,
+      operations: { run: gh.run.bind(gh) },
       ciFix: {
         enabled: true,
         isEligible: async () => ({ eligible: true }),
