@@ -67,6 +67,7 @@ async function writeRegistry(repos: Array<{ name: string }>): Promise<void> {
     status: 'registered',
     registeredAt: '2026-06-27T00:00:00.000Z',
   }));
+  await Promise.all(records.map((record) => mkdir(record.path, { recursive: true })));
   await writeFile(registryPath, JSON.stringify(records, null, 2), 'utf-8');
 }
 
