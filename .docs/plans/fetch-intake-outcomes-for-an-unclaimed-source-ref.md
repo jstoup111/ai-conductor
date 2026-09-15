@@ -52,8 +52,11 @@ Tests follow this repository's test-design rules. The command-level cases drive 
 4. Add the two precedence cases to the same file — one with a persisted claim record and one with an explicit body argument — asserting the injected runner records zero issue-view invocations.
 5. Run the focused test file through the repository's scoped runner, run the typecheck target that covers test files, and commit the focused change.
 
+> **Amended 2026-09-15 by #1340:** James Stoup approved the sanitized-outcome interpretation for Task 1's completion criterion below. The staged file retains the source reference and Desired-outcome bullets from the sanitized projection: ordinary bullet text is preserved, while instruction-like content is neutralized under approved `adr-2026-09-06-inbound-intake-trust-boundary` D2 and D8. Raw byte-verbatim preservation does not apply to neutralized content. The existing command-level ordinary-body and directive-shaped-body fixtures own this proof; no new implementation task is required.
+
 **Done when:**
 1. Driving the worktree subcommand with a source ref, no claim record, and no body argument writes the staged outcomes file, whose reference line is the supplied ref and whose bullets are the injected issue body's Desired-outcome bullets verbatim.
+
 2. The claim-record precedence case and the explicit-body precedence case each stage their own body and record zero issue-view invocations on the injected runner.
 3. Every tracker access in the changed code path goes through the canonical tracker seam constructed over the injected runner, so no test reaches a real process or network.
 
@@ -116,6 +119,8 @@ Tests follow this repository's test-design rules. The command-level cases drive 
 
 ## Coverage Check
 
+> **Amended 2026-09-15 by #1340:** The historical Story 1 happy-path row below now maps to the accepted sanitized-projection criterion and Task 1's amended completion criterion. Its quoted "verbatim" wording applies only to ordinary, non-neutralized bullet text; directive-shaped content must appear only in its neutralized form. All other coverage mappings remain unchanged.
+
 | Criterion | Task id(s) | Done when quote | Disposition |
 | --- | --- | --- | --- |
 | Story 1 happy: Given a source ref with no persisted claim record and no explicit body argument, when the per-idea worktree is created, then the worktree carries a staged outcomes file naming that ref and every verbatim Desired-outcome bullet of the referenced issue. | 1 | "Driving the worktree subcommand with a source ref, no claim record, and no body argument writes the staged outcomes file, whose reference line is the supplied ref and whose bullets are the injected issue body's Desired-outcome bullets verbatim." | diff-local |
@@ -140,6 +145,9 @@ Task 1 -> Task 3
 Task 4
 
 ### Task rem-as-built-rem-ab1-1: src/conductor/src/engine/engineer-cli.ts:945-954 — pass the fetched issue body through sanitizeInboundText (imported from engineer/intake/sanitize-inbound.js, WorkRef from engineer/source-ref.js parseWorkRef on the source ref) before assigning resolvedBody, so staging receives the armored projection and raw tracker text is never retained; keep a 404/null/throw leaving resolvedBody undefined (plan Task 2 Done-when 1-2 and Task 3 Done-when 1 preserved). Reconcile src/conductor/src/engine/engineer/outcome-staging.ts:77-81 so an armored successfully-fetched body that is empty or has no Desired-outcome section still stages a zero-bullet layer with its Source-Ref (Story 3 resolved-empty negative path, test at engineer-cli-claim-record.test.ts:217 stays green) without changing the claimed-path and outcome-staging.test.ts expectations. Update the unclaimed-fetch expectation at src/conductor/test/engine/engineer/engineer-cli-claim-record.test.ts:122-160 to the armored staged form (bullets still verbatim, plan Task 1 Done-when 1) and add an assertion that an injected issue body containing an injection-lookalike line is neutralized in the staged file; prove RED against the current raw path first.
+
+> **Amended 2026-09-15 by #1340:** The task title's parenthetical "bullets still verbatim" is superseded by Task 1's sanitized-projection criterion above. The neutralization assertion is required behavior, not an exception or a conflict to repair away. This resolves PG-1 without weakening the approved trust boundary or adding BUILD work.
+
 **Gate:** as-built
 **Rationale:** engineer-cli.ts:945-954 assigns raw tracker.getIssueBody output to resolvedBody and hands it to staging (worktree-authoring.ts:117-124), bypassing the sanitizeInboundText armor that the approved D8 boundary requires and that the claimed path already applies (github-issues.ts:86-98); the approved architecture stays authoritative and the fix is determinable, so this is conforming implementation drift routed to build, admitted by plan Task 1 Step 3 (the fallback itself). Coverage preserved: Task 1 Done-when 1-3 (unclaimed fetch stages the Desired-outcome bullets, claim-record and explicit-body precedence with zero issue-view calls), Task 2 Done-when 1-2 (lookup failure, 404, unparseable ref stage nothing), Task 3 Done-when 1 (single unresolved diagnostic), and the Story 3 negative path at engineer-cli-claim-record.test.ts:217 (a successfully fetched empty or bulletless body still stages a zero-bullet layer with no diagnostic). Matched counterpart: outcome-staging.ts:77-81 returns null for armored text lacking a Desired-outcome section, which would silently regress that empty/bulletless-fetch criterion once the fetched body is armored, so the same task must reconcile it. Sibling sweep: the only other raw tracker-body-to-staging path is none — the claim path (engineer-cli.ts:934-940) already reads the sanitized envelope text, and file-issue.ts:151 sanitizes before writing; no excluded sites.
 **Governing clause:** adr-2026-09-06-inbound-intake-trust-boundary D8

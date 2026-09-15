@@ -16,7 +16,7 @@ As an operator pointing the composer loop at a specific issue, I want the outcom
 
 #### Happy Path
 
-- Given a source ref with no persisted claim record and no explicit body argument, when the per-idea worktree is created, then the worktree carries a staged outcomes file naming that ref and every verbatim Desired-outcome bullet of the referenced issue.
+- Given a source ref with no persisted claim record and no explicit body argument, when the per-idea worktree is created, then the worktree carries a staged outcomes file naming that ref and the Desired-outcome bullets from its sanitized projection: ordinary bullet text is preserved, while instruction-like content is neutralized under the approved intake trust-boundary rules.
 - Given a persisted claim record or an explicit body argument for the same ref, when the per-idea worktree is created, then that body is staged and no issue lookup is performed.
 
 #### Negative Paths
@@ -26,7 +26,7 @@ As an operator pointing the composer loop at a specific issue, I want the outcom
 
 ### Done When
 
-- [ ] A command-level fixture with an injected tracker runner and no claim record produces a staged outcomes file whose reference line and bullet list match the injected issue body.
+- [ ] Command-level fixtures with an injected tracker runner and no claim record produce a staged outcomes file with the supplied source reference, preserve ordinary Desired-outcome bullet text, and neutralize instruction-like content without retaining its raw form.
 - [ ] A claim-record fixture and an explicit-body fixture each record zero issue-view invocations on the injected runner.
 - [ ] Lookup-failure, issue-not-found, and unparseable-reference fixtures each exit zero with the worktree directory present and no staged outcomes file.
 
