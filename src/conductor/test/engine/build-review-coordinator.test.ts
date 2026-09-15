@@ -70,7 +70,7 @@ const disabledSecurityBranch = { kind: 'skipped', rubric: 'security', reason: 'd
 
 function inputs(): BuildReviewFrozenInputs {
   const sourceContent = {
-    diff: "diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts",
+    diff: "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -0,0 +1 @@\n+const command = request.input\ndiff --git a/test/a.test.ts b/test/a.test.ts",
     planBody: "# Plan\n",
     repairContext: [],
     removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
@@ -535,7 +535,7 @@ describe("build-review coordinator: security envelope", () => {
   });
 
   it("stamps a security finding with the projection-owned envelope and derived failure verdict", async () => {
-    const securityHash = `sha256:${"a".repeat(64)}`;
+    const securityHash = `sha256:${createHash("sha256").update("const command = request.input").digest("hex")}`;
     const result = await coordinateBuildReviewRubrics(coordinationInput(false, {
       config: config(false, true),
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "resolved", digest: "sha256:security-skill" } } },

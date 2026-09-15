@@ -53,17 +53,25 @@ describe('build-review domain', () => {
     ]);
   });
 
-  it('accepts security content-region anchors only for a changed file', () => {
+  it('accepts security content-region anchors only for a projected changed content region', () => {
     const anchor = { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request-derived shell command' } };
-    const references = { changedTests: [], changedPaths: ['src/auth.ts'], planTasks: [] };
+    const references = buildReviewFindingReferenceContext({
+      rubric: 'security', changedFiles: [{ path: 'src/auth.ts', changeKind: 'modified', hunks: [
+        { oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: HASH },
+        { oldStart: 8, oldCount: 1, newStart: 8, newCount: 1, contentHash: HASH },
+      ] }],
+    } as unknown as BuildReviewRubricProjection);
 
     expect(parseBuildReviewFindingAnchor(anchor, references)).toEqual(anchor);
+    expect(parseBuildReviewFindingAnchor({ ...anchor, locus: { ...anchor.locus, occurrence: 1 } }, references)).toBeDefined();
+    expect(parseBuildReviewFindingAnchor({ ...anchor, locus: { ...anchor.locus, occurrence: 2 } }, references)).toBeUndefined();
+    expect(parseBuildReviewFindingAnchor({ ...anchor, locus: { ...anchor.locus, contentHash: `sha256:${'b'.repeat(64)}` } }, references)).toBeUndefined();
   });
 
   it('rejects coordinate fields from a security content-region anchor', () => {
     const anchor = { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request-derived shell command', line: 42 } };
 
-    expect(parseBuildReviewFindingAnchor(anchor, { changedTests: [], changedPaths: ['src/auth.ts'], planTasks: [] })).toBeUndefined();
+    expect(parseBuildReviewFindingAnchor(anchor, { changedTests: [], changedContentRegions: [{ path: 'src/auth.ts', contentHash: HASH, display: 'added command' }], changedPaths: ['src/auth.ts'], planTasks: [] })).toBeUndefined();
   });
 
   it('names the content-region grammar when a security anchor has coordinate fields', () => {
@@ -73,7 +81,7 @@ describe('build-review domain', () => {
       findings: [{ concernKind: 'injection', summary: 'Shell command includes request input.', evidenceLocations: ['src/auth.ts:8'], anchor: { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request input', line: 8 } } }],
     };
 
-    expect(describeBuildReviewJudgedResultRejection(result, 'security', expected, { changedTests: [], changedPaths: ['src/auth.ts'], planTasks: [] })).toContain('content-region reference');
+    expect(describeBuildReviewJudgedResultRejection(result, 'security', expected, { changedTests: [], changedContentRegions: [{ path: 'src/auth.ts', contentHash: HASH, display: 'added command' }], changedPaths: ['src/auth.ts'], planTasks: [] })).toContain('content-region reference');
   });
 
   it('renders the security provider shape as findings only', () => {
@@ -87,8 +95,9 @@ describe('build-review domain', () => {
       findings: [{ concernKind: 'other', summary: 'Unrecognized concern.', evidenceLocations: ['src/other.ts:1'], anchor: { rubric: 'security', locus: { path: 'src/other.ts', contentHash: HASH, display: 'other' } } }],
     };
 
-    expect(describeBuildReviewJudgedResultRejection(result, 'security', expected, { changedTests: [], changedPaths: ['src/auth.ts'], planTasks: [] })).toContain('one of "committed-secret"');
-    expect(describeBuildReviewJudgedResultRejection({ ...result, findings: [{ ...result.findings[0], concernKind: 'injection' }] }, 'security', expected, { changedTests: [], changedPaths: ['src/auth.ts'], planTasks: [] })).toContain("frozen input's changedFiles");
+    const references = { changedTests: [], changedContentRegions: [{ path: 'src/auth.ts', contentHash: HASH, display: 'added command' }], changedPaths: ['src/auth.ts'], planTasks: [] };
+    expect(describeBuildReviewJudgedResultRejection(result, 'security', expected, references)).toContain('one of "committed-secret"');
+    expect(describeBuildReviewJudgedResultRejection({ ...result, findings: [{ ...result.findings[0], concernKind: 'injection' }] }, 'security', expected, references)).toContain('projected changed content region');
   });
 
   it('retains optional integer confidence and rejects values outside 0 through 100', () => {
@@ -540,6 +549,7 @@ describe('build-review domain', () => {
           { path: 'test/widget.test.ts', contentHash: titleHash('widget > persists state'), display: 'widget > persists state' },
           { path: 'test/loader.test.ts', contentHash: titleHash('test/loader.test.ts'), display: 'test/loader.test.ts changed test' },
         ],
+        changedContentRegions: [],
         changedPaths: ['src/widget.ts', 'test/widget.test.ts'],
         planTasks: [],
       });
