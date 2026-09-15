@@ -108,6 +108,7 @@ describe('acceptance: a loop halt reaches the persisted event spine (#1477)', ()
       type: 'loop_halt',
       reason: haltReason,
       step: 'manual_test',
+      tier: 'M',
       ts: expect.any(String),
     });
     expect(haltRecord).not.toHaveProperty('prUrl');
