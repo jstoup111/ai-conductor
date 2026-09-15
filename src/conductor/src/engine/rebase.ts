@@ -1686,7 +1686,7 @@ async function applicableOriginalPass(
   const completion = await checkGateCompletion(projectRoot, gate);
   if (!completion.done) return undefined;
 
-  return verdict;
+  return verdict!;
 }
 
 /**
@@ -1821,19 +1821,18 @@ export async function applyRebaseVerdicts(
   const replayComparison = git && outcome.replay
     ? await compareReplayTree(git, outcome.replay)
     : undefined;
+  const replayPartition = outcome.featureSurface !== undefined && replayComparison
+    ? classifyReplayGateInvalidation(delta, outcome.featureSurface, ranManualTest, replayComparison, outcome.documentInputs)
+    : undefined;
   const partition = outcome.featureSurface !== undefined
-    ? replayComparison
-      ? classifyReplayGateInvalidation(delta, outcome.featureSurface, ranManualTest, replayComparison, outcome.documentInputs)
-      : classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
+    ? replayPartition ?? classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
     : undefined;
   const applicablePreservations = new Set<StepName>();
   const preservedCandidates: RebasePreservedCandidate[] = [];
   // Only the replay classifier has immutable candidate provenance. The legacy
   // path retains its existing gate-selection behavior but cannot mint bounded
   // replay authority from a path-only preservation.
-  const replayCandidates = replayComparison && partition !== undefined
-    ? partition.candidates
-    : [];
+  const replayCandidates = replayPartition?.candidates ?? [];
   if (partition !== undefined) {
     for (const gate of partition.preserved as StepName[]) {
       const original = await applicableOriginalPass(projectRoot, gate);

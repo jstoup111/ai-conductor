@@ -139,7 +139,7 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
 
   // ── Test 1 ───────────────────────────────────────────────────────────────
 
-  it('resolver resolves conflict → no HALT written, resolver was called, succeeded event emitted', async () => {
+  it('resolver resolves conflict → completed-BUILD evidence recovery HALTs when no evidence exists', async () => {
     let resolverCalled = false;
     let succeededEmitted = false;
 
@@ -174,9 +174,14 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     // Resolver was called exactly once
     expect(resolverCalled).toBe(true);
 
-    // HALT file NOT written (conflict was resolved)
+    // Conflict resolution succeeded, but the fixture intentionally has no
+    // completed BUILD evidence. A completed file-changing rebase must stop
+    // for recovery instead of blindly reopening the completed task list.
     const haltExists = await access(join(repo, '.pipeline/HALT')).then(() => true, () => false);
-    expect(haltExists).toBe(false);
+    expect(haltExists).toBe(true);
+    await expect(readFile(join(repo, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+      'completed BUILD evidence is unavailable after rebase',
+    );
 
     // rebase_resolution_succeeded event was emitted
     expect(succeededEmitted).toBe(true);

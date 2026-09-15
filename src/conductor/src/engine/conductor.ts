@@ -14472,7 +14472,10 @@ export class Conductor {
     // stop for recovery rather than silently dispatching BUILD as though the
     // completed work had merely become stale.  A prior ordinary repair has
     // already moved BUILD out of `done`, and keeps its existing owner.
-    if (getStepStatus(state, 'build') === 'done') {
+    // Rebase-start refusals and completed-rebase acceptance rejections own
+    // their specific recovery notes. Completed BUILD evidence is relevant
+    // only after a successful, file-changing rebase reaches continuation.
+    if (outcome.kind === 'changed' && getStepStatus(state, 'build') === 'done') {
       const buildEvidence = await preVerify('build');
       if (!buildEvidence.done) {
         const completionReason = 'reason' in buildEvidence ? buildEvidence.reason : undefined;
