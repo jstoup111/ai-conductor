@@ -88,6 +88,10 @@ build_review:
       llm_provider: claude
       model: opus
       effort: high
+    # Self-host opt-in only: consumer projects retain the shipped default-off
+    # security policy unless they enable it in their own config.
+    security:
+      enabled: true
 
 # Native pre-SHIP aggregate verification. The ordered commands run the conductor
 # test suite and this repository's harness-integrity suite in one BUILD gate.

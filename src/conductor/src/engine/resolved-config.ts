@@ -18,6 +18,7 @@ import {
 } from './provider-model-policy.js';
 import { escalateAttempt } from './escalation.js';
 import { normalizeProviderSelection } from './provider-selection.js';
+import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
 
 // Legacy aliases retained for existing consumers. New resolution accepts a
 // provider policy explicitly, so these never participate in provider-aware
@@ -688,8 +689,6 @@ const DEFAULT_BUILD_REVIEW_ENABLED = true;
 const DEFAULT_BUILD_REVIEW_ADJUDICATION_ENABLED = true;
 const DEFAULT_SCOPE_CONTAINMENT_ENFORCED = false;
 const DEFAULT_BUILD_REVIEW_MAX_PARALLEL = 1;
-const BUILD_REVIEW_RUBRIC_IDS: readonly BuildReviewRubricId[] = ['testQuality'];
-
 /** Concrete execution policy for one independently-dispatched review rubric. */
 export interface ResolvedBuildReviewRubricPolicy {
   enabled: boolean;
