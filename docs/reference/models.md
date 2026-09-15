@@ -220,7 +220,7 @@ against. Skill pins themselves remain Claude-scoped — see [Skill pins](#skill-
 | --- | --- | --- |
 | `verify-claims` | inherits caller | inherits Codex session/spawned-agent config |
 | `domain-reviewer` | sonnet (<50-line diff), opus (≥50-line diff) | inherits Codex session/spawned-agent config |
-| `evaluator` | sonnet (value objects, pure functions, config, infra) / opus (concurrency, state mutation, security, auth, finance) | inherits Codex session/spawned-agent config |
+| `evaluator` | sonnet (default) / fable (concurrency, state mutation, security, auth, money) | inherits Codex session/spawned-agent config |
 | `code-review` | opus | inherits Codex session/spawned-agent config |
 | `debugging` | opus | inherits Codex session/spawned-agent config |
 | `simplify` | sonnet | inherits Codex session/spawned-agent config |
