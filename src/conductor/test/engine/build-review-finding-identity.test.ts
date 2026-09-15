@@ -1,4 +1,4 @@
-// Covers: task:11
+// Covers: task:6, task:11
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
@@ -32,7 +32,22 @@ function finding(locus: Record<string, unknown> = {}, rest: Record<string, unkno
   };
 }
 
+function securityFinding(rest: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    rubric: 'security', contractVersion: 'v3', concernKind: 'injection',
+    anchor: { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH_A, display: 'request-derived shell command' } },
+    ...rest,
+  };
+}
+
 describe('build-review finding identity', () => {
+  it('gives security findings the same identity when only display evidence changes', () => {
+    const first = canonicalizeBuildReviewFindingIdentity(securityFinding({ summary: 'Shell command includes request input.', evidenceLocations: ['src/auth.ts:8'] }));
+    const drifted = canonicalizeBuildReviewFindingIdentity(securityFinding({ summary: 'Reworded.', evidenceLocations: ['src/auth.ts:42'], anchor: { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH_A, display: 'different display' } } }));
+
+    expect(drifted).toEqual(first);
+  });
+
   it('sorts the complete identity payload before hashing and exposes the exact canonical JSON', () => {
     const identity = canonicalizeBuildReviewFindingIdentity({
       anchor: { locus: { display: 'widget persists state', contentHash: HASH_A, path: 'test/widget.test.ts' }, rubric: 'testQuality' },
