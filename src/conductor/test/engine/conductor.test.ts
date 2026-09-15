@@ -210,6 +210,56 @@ describe('engine/conductor', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  // Covers: task:3
+  it.each([
+    { complexityTier: 'S' as const, expectedTier: 'S' as const },
+    { complexityTier: undefined, expectedTier: undefined },
+  ])(
+    'emits feature_usage_total with the raw finish-close tier $expectedTier',
+    async ({ complexityTier, expectedTier }) => {
+      const state: ConductState = {};
+      for (const step of ALL_STEPS) {
+        if (step.name === 'finish') break;
+        state[step.name] = 'done';
+      }
+      Object.assign(state, {
+        ...(complexityTier !== undefined && { complexity_tier: complexityTier }),
+        build_review: 'skipped',
+        manual_test: 'skipped',
+        prd_audit: 'skipped',
+        architecture_review_as_built: 'skipped',
+        rebase: 'skipped',
+      });
+      await writeState(statePath, state);
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+
+      const usageTotals: Extract<ConductorEvent, { type: 'feature_usage_total' }>[] = [];
+      events.on('feature_usage_total', (event) => {
+        if (event.type === 'feature_usage_total') usageTotals.push(event);
+      });
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        fromStep: 'finish',
+        mode: 'auto',
+        daemon: true,
+        maxRetries: 1,
+        verifyArtifacts: false,
+      });
+
+      await conductor.run();
+
+      expect(usageTotals).toHaveLength(1);
+      expect(usageTotals[0]?.tier).toBe(expectedTier);
+      if (expectedTier === undefined) {
+        expect(Object.hasOwn(usageTotals[0]!, 'tier')).toBe(false);
+        expect(usageTotals[0]?.tier).not.toBe('L');
+      }
+    },
+  );
+
   describe('existing-task remediation admission', () => {
     it('resolves bound ids from the active plan through the shared resolver', () => {
       const result = resolveExistingTaskBindingsForAdmission(
