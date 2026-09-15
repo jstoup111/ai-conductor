@@ -45,6 +45,10 @@ describe('build-review finding identity', () => {
     const first = canonicalizeBuildReviewFindingIdentity(securityFinding({ summary: 'Shell command includes request input.', evidenceLocations: ['src/auth.ts:8'] }));
     const drifted = canonicalizeBuildReviewFindingIdentity(securityFinding({ summary: 'Reworded.', evidenceLocations: ['src/auth.ts:42'], anchor: { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH_A, display: 'different display' } } }));
 
+    expect(first).toMatchObject({
+      id: /^sha256:[a-f0-9]{64}$/,
+      canonicalPayload: { rubric: 'security', concernKind: 'injection' },
+    });
     expect(drifted).toEqual(first);
   });
 
