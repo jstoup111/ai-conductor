@@ -887,7 +887,7 @@ describe('runTaskDone', () => {
   });
 
   describe('plan gap — an unsatisfiable Done when check halts without appending work', () => {
-    it('writes a classified halt naming the task and check, preserves the plan, and emits loop_halt', async () => {
+    it('writes a classified halt naming the task and check, preserves the plan, and emits loop_halt with its resolved tier', async () => {
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
       const planPath = join(dir, 'plan.md');
       const plan = [
@@ -902,7 +902,7 @@ describe('runTaskDone', () => {
       await fsPromises.writeFile(planPath, plan, 'utf-8');
       await fsPromises.writeFile(
         join(dir, '.pipeline', 'engine-state.json'),
-        JSON.stringify({ activePlanPath: 'plan.md' }),
+        JSON.stringify({ activePlanPath: 'plan.md', complexity_tier: 'M' }),
         'utf-8',
       );
       await fsPromises.writeFile(join(dir, '.pipeline', 'task-status.json'), status, 'utf-8');
@@ -948,9 +948,40 @@ describe('runTaskDone', () => {
         expect.objectContaining({
           type: 'loop_halt',
           haltClass: 'plan-gap',
+          tier: 'M',
           reason: expect.stringContaining('The approved plan has no authorized way'),
         }),
       ]);
+    });
+
+    it('omits the tier own-property when persisted state cannot resolve it', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(join(dir, 'plan.md'), [
+        '### Task 7: Deliver the bounded behavior',
+        '**Done when:**',
+        '- The approved behavior can be verified without widening the plan.',
+        '',
+      ].join('\n'), 'utf-8');
+      await fsPromises.writeFile(
+        join(dir, '.pipeline', 'engine-state.json'),
+        JSON.stringify({ activePlanPath: 'plan.md', complexity_tier: 'unknown' }),
+        'utf-8',
+      );
+      await fsPromises.writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '7', name: 'Task 7', status: 'in_progress' }] }),
+        'utf-8',
+      );
+      await fsPromises.writeFile(join(dir, '.pipeline', 'current-task'), '7', 'utf-8');
+
+      await expect(dispatchTaskCommand({
+        kind: 'done', id: '7', planGap: { index: 1, reason: 'No approved path.' },
+      }, dir)).resolves.toBe(1);
+
+      const [event] = (await fsPromises.readFile(join(dir, '.pipeline', 'pipeline-events.jsonl'), 'utf-8'))
+        .trim().split('\n').map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(event).toMatchObject({ type: 'loop_halt', haltClass: 'plan-gap' });
+      expect(Object.prototype.hasOwnProperty.call(event, 'tier')).toBe(false);
     });
   });
 });
