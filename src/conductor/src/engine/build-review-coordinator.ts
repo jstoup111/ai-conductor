@@ -133,7 +133,8 @@ export interface BuildReviewCoordinationInput {
   readonly inputs: BuildReviewFrozenInputs;
   readonly lapId: BuildReviewLapId;
   /** Test seam for an engine-held projection corruption at branch settlement. */
-  readonly projections?: BuildReviewRubricProjections;
+  /** Legacy test seams may override one projection; unset members use the engine-derived projection. */
+  readonly projections?: Partial<BuildReviewRubricProjections>;
   readonly preflight: () => Promise<TautologyPreflightResult>;
   /** Resolved once per dispatch by the caller; never read from the environment here (D6). */
   readonly engineIdentity: BuildReviewCoordinationEngineIdentity;
@@ -555,9 +556,10 @@ export async function coordinateBuildReviewRubrics(
       runnerSelectors: [], changedTestSelectors: [], unresolvedMarkers, revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
     },
   });
-  const projections = (input.projections ?? derivedProjections) as Readonly<
-    Record<BuildReviewRubricId, BuildReviewRubricProjection>
-  >;
+  const projections: Readonly<Record<BuildReviewRubricId, BuildReviewRubricProjection>> = {
+    ...derivedProjections,
+    ...input.projections,
+  };
   const resolved = new Map<BuildReviewRubricId, BuildReviewCoordinatedBranch>();
   const misses: BuildReviewDispatchableRubric[] = [];
 
