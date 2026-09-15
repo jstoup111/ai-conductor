@@ -127,7 +127,7 @@ verdict layer, so they can be strict without disturbing the linear walk.
 | `plan` | a plan that does not cover the feature's stories, scoped to this feature's plan and stories |
 | `build` | tasks reported complete without work — task rows are re-seeded and re-derived from the plan each evaluation, so a forged row fails; a task carrying `Done when:` checks additionally must show each check true before it closes, and a check the approved plan cannot make true is reported as a plan gap rather than repaired off-plan |
 | `acceptance_specs` | acceptance specs that never ran — proof is required that this feature's specs executed *and failed*, so a collection error or a skipped spec cannot pass for RED |
-| `build_review` | an incomplete build — a container of individually opt-in rubrics (currently only `testQuality`, off by default) judged from the diff rather than self-reports; an empty rubric set is a PASS with nothing dispatched |
+| `build_review` | an incomplete build — a container of individually opt-in rubrics (`testQuality` and `security`, both off by default) judged from the diff rather than self-reports; an empty rubric set is a PASS with nothing dispatched |
 | `test_suite` | a stale green — the fingerprint is re-inspected every time, so the evidence file's existence can never satisfy it |
 | `manual_test` | a whitewashed retest — after a recorded FAIL, HEAD must have moved before an all-PASS attempt is accepted |
 | `prd_audit` | a partial or malformed audit report passing as complete — exactly one graded verdict row (`PASS`, `FIXABLE`, `PLAN_GAP`, or `OVER_SCOPE`) is required for every acceptance criterion across the feature's stories; a `FIXABLE` naming no plan task blocks. A cited `Plan task` is resolved against the ids the active plan actually declares — an id the plan does not carry is rejected by name, and a report whose active plan cannot be resolved at all is rejected fail-closed rather than having its citations taken on trust. A finding without an owning criterion is a unique `NC.<n>` `OVER_SCOPE` row in `## Findings without an owning criterion`; its visible-scope operator decision is valid only for the same evidence summary. Invalid or duplicate rows are rejected individually while valid siblings remain routable, but any rejected row blocks with its diagnostic. Only the `## Verdict Table` section's story rows count as verdicts, so a prior-cycle history table cannot block an all-`PASS` audit. An unresolvable or unreadable criterion set also blocks fail-closed |
@@ -424,8 +424,8 @@ exhausted-mechanical-allowance HALT when the current lap has no readable diagnos
 ### Where a `build_review` FAIL goes
 
 `build_review` no longer judges plan conformance, outcome delivery, or mechanism soundness (FR-1): the
-`scope`, `completeness`, and `rootCause` rubrics are retired, and the container ships only `testQuality`,
-off by default. A `testQuality` finding — a test that could pass against a stub of the behavior it claims
+`scope`, `completeness`, and `rootCause` rubrics are retired. The container ships `testQuality` and
+`security`, both off by default. A `testQuality` finding — a test that could pass against a stub of the behavior it claims
 to cover — is a local diff defect the builder can fix in place, so a `build_review` FAIL routes straight
 to `build`; there is no remediation-planner branch for a `build_review` FAIL. The questions the retired
 rubrics used to ask now live at SHIP:
@@ -531,7 +531,7 @@ different engine build or edited rubric skill text is discarded (miss reasons
 `build_review_cache_discarded` event in `events.jsonl`, the daemon log, and the audit trail.
 
 Each rubric has a closed engine-owned finding vocabulary, repeated in its provider-facing skill contract:
-`testQuality` uses `test-insensitive`. The parser normalizes harmless casing and underscore variation
+`testQuality` uses `test-insensitive`; `security` uses its ten security concern kinds. The parser normalizes harmless casing and underscore variation
 before validation. A value outside the rubric's vocabulary is rejected and receives the bounded
 repair/rerun path below; it cannot become a new finding identity or burn a kickback.
 

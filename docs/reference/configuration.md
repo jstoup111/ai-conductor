@@ -1097,7 +1097,7 @@ block is normalized in place; the resolved value is written back (`config.ts:111
 | `build_review.adjudication.enabled` | boolean | `true` | Strict nested rollout switch for post-join remediation adjudication |
 | `build_review.scopeContainmentEnforced` | boolean | `false` | Works |
 | `build_review.maxParallel` | integer | `4` | Must be between 1 and 4 |
-| `build_review.rubrics` | object | `testQuality` off | Closed canonical map: `testQuality` only. Every other id ever accepted — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring` — is retired: it warns and is silently ignored rather than rejecting the config |
+| `build_review.rubrics` | object | `testQuality`, `security` off | Closed canonical map: `testQuality` and `security`. Every other id ever accepted — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring` — is retired: it warns and is silently ignored rather than rejecting the config |
 
 Normalization contract:
 
@@ -1119,11 +1119,11 @@ opting a project out of the replacement authority.
 config key is the only off switch. When disabled, the step is marked `skipped` and a `config_skip` event
 is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved once per pass.
 
-`testQuality` accepts `enabled`, `llm_provider`, `model`, `effort`, `model_fallback_ladder`,
+`testQuality` and `security` accept `enabled`, `llm_provider`, `model`, `effort`, `model_fallback_ladder`,
 `max_retries`, `escalate`, and `min_confidence`. `min_confidence` is an integer from 0 through 100 and
 defaults to `0`; scored findings below it are reported as suppressed rather than failing the gate or
 remaining actionable through `build-review findings` / `build-review accept`. Unscored findings are
-never suppressed. `testQuality` is off by default. When enabled, the engine derives a frozen,
+never suppressed. Both rubrics are off by default. When enabled, `testQuality` derives a frozen,
 feature-local typed scope from the graded diff, the active plan and stories, and established `Covers`
 bindings; it does not admit every declaration in a marked file. A production-only refactor, move, or
 rename with neither an established target nor a concrete candidate is a valid empty-scope PASS and
@@ -1132,8 +1132,9 @@ an abstract possibility of an unknown dependency do not turn that empty scope in
 Any unknown or retired rubric
 id under `build_review.rubrics` — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`,
 `wiring` — is accepted as a no-op with a one-time notice naming the retired setting; it never fails
-configuration loading or halts a run
-(`adr-2026-08-22-build-review-opt-in-rubric-container`).
+configuration loading or halts a run. `security` judges the whole frozen feature diff for concrete,
+changed-hunk-anchored security defects and has no test scope or counterfactual preflight.
+Both behaviors follow `adr-2026-08-22-build-review-opt-in-rubric-container`.
 
 An ambiguous changed marker association or identified changed setup/helper that affects an opted-in test
 is a concrete candidate, not an automatically in-scope test. The existing test-quality reviewer resolves

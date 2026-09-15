@@ -6,7 +6,7 @@ nav_order: 7
 
 # Skills
 
-The catalog of all 36 skills: 31 under `skills/` and 5 repository-local ones under `.agents/skills/`.
+The catalog of all 37 skills: 32 under `skills/` and 5 repository-local ones under `.agents/skills/`.
 For each, the frontmatter, the engine step that invokes it, what it reads, what it writes, and whether
 it blocks.
 
@@ -58,7 +58,7 @@ activation boundary: the active lifecycle/caller state that qualifies, plus near
 not. A generic feature, change, plan, review, bug, or question is not sufficient by itself. Explicit
 operator invocation remains available regardless of these implicit-selection boundaries.
 
-The 18 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-test-quality`, `code-review`, `composer`, `conduct`,
+The 19 explicit-only shipped skills are `assess`, `bootstrap`, `build-review-security`, `build-review-test-quality`, `code-review`, `composer`, `conduct`,
 `daemon-triage`, `engineer`, `finish`, `manual-test`, `memory`, `pipeline`, `prd-audit`, `rebase`,
 `remediate`, `pr`, `tdd`, and `writing-system-tests`. The five repository-local skills are also
 explicit-only: `event-spine`, `maintain-documentation`, `release-disposition`, `scope-check`, and
