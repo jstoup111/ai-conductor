@@ -864,7 +864,14 @@ export async function resumeRebaseFirst(opts: {
   // the ordinary repair route below.
   try {
     const rawState = JSON.parse(await readFile(join(opts.worktreePath, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<string, unknown>;
-    if (rawState.build === 'done') {
+    // A paused or unresolved rebase owns its own recovery path.  BUILD
+    // evidence is relevant only after an actual completed rebase; checking it
+    // while the resolver is still paused would hide the rebase refusal and
+    // leave its state unrecorded.
+    if (
+      rawState.build === 'done' &&
+      (outcome.kind === 'changed' || outcome.kind === 'noop' || outcome.kind === 'mergeable_skip')
+    ) {
       const buildEvidence = await preVerify('build');
       if (!buildEvidence.done) {
         await writeHalt(

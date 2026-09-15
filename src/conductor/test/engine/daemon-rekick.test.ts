@@ -1279,13 +1279,12 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     expect(halt).not.toContain('git rebase --continue');
   });
 
-  // Task 12: Rekick call site ships capability-absent (fail-closed).
-  // When a play-forward rebase touches code paths, the gates whose surface the
-  // delta hits (build, manual_test) get unconditionally invalidated kickback
-  // verdicts WITHOUT preVerify capability, preserving fail-closed default.
+  // A completed replay carries the explicit selective decision.  It may
+  // re-open affected review gates, but never rewinds completed authoring or
+  // BUILD merely because they precede a pending verification gate.
   // build_review is surface-scoped ('feature-codetest') and a foreign-only
   // delta preserves it.
-  it('play-forward rebase with changed code paths → unconditionally fail-closed (no preVerify)', async () => {
+  it('play-forward rebase with changed code paths keeps BUILD out of the selective review transition', async () => {
     await initTestRepo(dir);
     await git('config', 'commit.gpgsign', 'false');
     await mkdir(join(dir, 'src'), { recursive: true });
@@ -1323,14 +1322,11 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     expect(res).toBe('rebased');
     expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
 
-    // Crucial assertion: verdicts are UNCONDITIONALLY kicked back (fail-closed),
-    // NOT reverified via preVerify capability. The rekick call site deliberately
-    // omits preVerify, per ADR.
+    // BUILD is not a review surface and this fixture has no completed-BUILD
+    // authority to recover.  The rebase must not invent a BUILD kickback just
+    // because a downstream review needs verification.
     const build = await readVerdict(dir, 'build');
-    expect(build?.satisfied).toBe(false);
-    expect(build?.kickback?.from).toBe('rebase');
-    // Verify no preVerify-based reverification marker
-    expect(build?.reason).not.toContain('re-verified mechanically');
+    expect(build).toBeNull();
 
     // build_review is 'feature-codetest': the base advance added
     // src/base-code.ts, foreign to this feature's surface, so the diff it
@@ -2593,7 +2589,7 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     expect((await readVerdict(dir, 'build_review'))?.satisfied).toBe(false);
   });
 
-  it('kicks the build gate back when a plan task has no Task: trailer (fail-closed)', async () => {
+  it('does not reopen BUILD when a non-completed plan has no Task: trailer', async () => {
     await initFeatureRepo(['1', '2'], ['1']);
     await advanceBaseWithCode();
 
@@ -2606,11 +2602,10 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
 
     expect(res).toBe('rebased');
     const build = await readVerdict(dir, 'build');
-    expect(build?.satisfied).toBe(false);
-    expect(build?.kickback?.from).toBe('rebase');
+    expect(build).toBeNull();
   });
 
-  it('kicks the build gate back when the pre-verify throws (fail-closed)', async () => {
+  it('does not reopen BUILD when non-completed pre-verification throws', async () => {
     await initFeatureRepo(['1', '2'], ['1', '2']);
     await advanceBaseWithCode();
 
@@ -2625,8 +2620,7 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     });
 
     const build = await readVerdict(dir, 'build');
-    expect(build?.satisfied).toBe(false);
-    expect(build?.kickback?.from).toBe('rebase');
+    expect(build).toBeNull();
   });
 });
 
