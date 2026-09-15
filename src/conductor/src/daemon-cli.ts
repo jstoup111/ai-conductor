@@ -2330,15 +2330,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           projectRoot,
           log,
           tracker,
-          operations: (entry) => {
-            const target = parseIssueRef(entry.prUrl);
-            if (!target) return undefined;
-            return haltPrOperations({
-              number: Number(target.number),
-              url: entry.prUrl,
-              headRefName: `feat/daemon-${entry.slug}`,
-            });
-          },
           teardownWorktree: deps.teardownWorktree,
           canRemoveWorktree,
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING
@@ -2534,6 +2525,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               }
               return outcome;
             },
+          },
+          operations: (entry) => {
+            const target = parseIssueRef(entry.prUrl);
+            if (!target) return undefined;
+            return haltPrOperations({
+              number: Number(target.number),
+              url: entry.prUrl,
+              headRefName: `feat/daemon-${entry.slug}`,
+            });
           },
         });
       },
