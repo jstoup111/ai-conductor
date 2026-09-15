@@ -29,7 +29,7 @@ export const DURATION_BUCKET_BOUNDARIES_MS = [
 ];
 
 /** Labels owned by Conductor rather than an operator-supplied attribute map. */
-export const RESERVED_CONDUCTOR_LABEL_KEYS = ['project', 'worker', 'feature', 'step'] as const;
+export const RESERVED_CONDUCTOR_LABEL_KEYS = ['project', 'worker', 'feature', 'step', 'tier'] as const;
 
 export interface DispatchDimensions {
   model?: string;
@@ -169,7 +169,7 @@ export class MetricsRecorder {
 
   onFeatureCostSnapshot(event: Extract<ConductorEvent, { type: 'feature_cost_snapshot' }>): void {
     if (!Number.isFinite(event.costUsd)) return;
-    const tierAttrs = event.tier === undefined ? {} : { tier: event.tier };
+    const tierAttrs: Record<string, string> = event.tier === undefined ? {} : { tier: event.tier };
     this.instruments.featureCostGauge.record(event.costUsd, this.withIdentity({ cost_complete: event.costComplete, ...tierAttrs }));
     for (const bucket of event.byDimension) {
       if (!Number.isFinite(bucket.costUsd)) continue;
