@@ -6033,8 +6033,10 @@ describe('engine/conductor', () => {
       expect(evidence.lastResolvedCount).toBe(CEILING);
     });
 
-    it('reports refunded build retries against their reused fixed slot and progress allowance', async () => {
+    it.each([false, true])('reports refunded build retries without changing dispatch (selfHost=%s)', async (selfHost) => {
       await seedToBuild();
+      const tokenPath = join(dir, 'retry-test-token');
+      await writeFile(tokenPath, 'fixture-token');
       const TOTAL = 4;
       const CEILING = 3;
       let progress = 0;
@@ -6043,6 +6045,7 @@ describe('engine/conductor', () => {
       const retryEvents: Array<Extract<ConductorEvent, { type: 'step_retry' }>> = [];
 
       const runner: StepRunner = {
+        selfHostRunId: () => 'retry-reporting-fixture',
         run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
           if (step === 'build') {
             buildCalls++;
@@ -6070,10 +6073,20 @@ describe('engine/conductor', () => {
         projectRoot: dir,
         mode: 'auto',
         daemon: true,
+        selfHost,
+        selfHostGuardrails: {
+          resolveHarnessRoot: vi.fn().mockResolvedValue(dir),
+          resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok', root: dir }),
+          relink: vi.fn(),
+          provisionSandbox: vi.fn(async () => ({ configDir: dir, childEnv: () => process.env, teardown: async () => {} })),
+          versionGate: vi.fn().mockResolvedValue({ ok: true }),
+          releaseGate: vi.fn().mockResolvedValue({ ok: true }),
+        } as any,
         verifyArtifacts: true,
         maxRetries: 3,
         fromStep: 'build',
         config: {
+          harness_self_host: { build_auth: { mode: 'daemon-token', token_path: tokenPath } },
           build_progress_halt: { enabled: true, attempt_ceiling: CEILING, dispatch_ceiling: 20 },
         } as HarnessConfig,
       });
@@ -6082,6 +6095,13 @@ describe('engine/conductor', () => {
 
       expect(retryEvents).toHaveLength(3);
       expect(dispatches).toHaveLength(4);
+      if (selfHost) {
+        expect(dispatches).toEqual(Array.from({ length: 4 }, () => ({ model: undefined, effort: undefined })));
+        for (const event of retryEvents) {
+          expect(event).not.toHaveProperty('escalatedModel');
+          expect(event).not.toHaveProperty('escalatedEffort');
+        }
+      }
       expect(retryEvents.map((event) => ({
         model: event.escalatedModel, effort: event.escalatedEffort,
       }))).toEqual(dispatches.slice(1));

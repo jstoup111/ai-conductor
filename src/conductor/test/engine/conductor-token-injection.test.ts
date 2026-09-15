@@ -133,7 +133,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     expect(observedTokens[0]).toBe('tok-injected-v1');
   });
 
-  it('hands a self-host build retry the escalated model and effort its step_retry annotation names', async () => {
+  it.each([true, false])('reports only dispatched retry overrides (selfHost=%s)', async (selfHost) => {
     const dispatches: Array<{ attempt?: number; model?: string; effort?: string }> = [];
     let buildCalls = 0;
     const runner: StepRunner = {
@@ -142,7 +142,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
         if (step === 'build') {
           buildCalls++;
           dispatches.push({ attempt: options?.attempt, model: options?.modelOverride, effort: options?.effortOverride });
-          if (buildCalls === 1) return { success: false, error: 'first attempt failed' };
+          if (buildCalls === 1) return { success: false, output: 'first attempt failed' };
         }
         return { success: true };
       }),
@@ -168,7 +168,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
       fromStep: 'build',
       mode: 'auto',
       daemon: true,
-      selfHost: true,
+      selfHost,
       maxRetries: 3,
       selfHostGuardrails: mockGuardrails as any,
       config: selfHostConfig(),
@@ -178,10 +178,19 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
 
     expect(retryEvents).toHaveLength(1);
     expect(dispatches).toHaveLength(2);
-    expect(dispatches[1]).toEqual({
-      attempt: 2, model: retryEvents[0].escalatedModel, effort: retryEvents[0].escalatedEffort,
-    });
-    expect(dispatches[1].effort ?? dispatches[1].model).toBeDefined();
+    if (selfHost) {
+      expect(dispatches).toEqual([
+        { attempt: undefined, model: undefined, effort: undefined },
+        { attempt: undefined, model: undefined, effort: undefined },
+      ]);
+      expect(retryEvents[0]).not.toHaveProperty('escalatedModel');
+      expect(retryEvents[0]).not.toHaveProperty('escalatedEffort');
+    } else {
+      expect(dispatches[1]).toEqual({
+        attempt: 2, model: retryEvents[0].escalatedModel, effort: retryEvents[0].escalatedEffort,
+      });
+      expect(dispatches[1].effort ?? dispatches[1].model).toBeDefined();
+    }
   });
 
   it('restores parent env after stepRunner.run() when token was previously unset', async () => {

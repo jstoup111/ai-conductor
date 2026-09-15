@@ -5963,29 +5963,12 @@ export class Conductor {
      * stamp carry one value on the self-host path too (D1).
      */
     verdictRunId?: string,
-    /**
-     * Retry-as-escalation per-attempt overrides (adr-2026-07-05 decision 6):
-     * the self-host path must hand the runner the same `(attempt, model,
-     * effort)` the ordinary path does, so the `step_retry` annotation names
-     * what the next dispatch actually receives.
-     */
-    escalation: Pick<StepRunOptions, 'attempt' | 'escalate' | 'modelOverride' | 'effortOverride'> = {},
   ): Promise<StepRunResult> {
+    const identityOption = verdictRunId ? { runId: verdictRunId } : {};
     const selfHostConfig = resolveSelfHostConfig(this.config);
     const stepSelection =
       this.config.steps?.[name]?.llm_provider ?? this.config.llm_provider;
     const preferredBuildProvider = normalizeProviderSelection(stepSelection)[0];
-    // Codex's self-host lifecycle owns its retry identity.  It still needs the
-    // concrete escalation overrides so the next invocation matches the
-    // `step_retry` annotation, but forwarding the generic retry-rung fields
-    // makes an auth park/resume look like a consumed generic retry (#905).
-    const runnerEscalation = preferredBuildProvider === 'codex'
-      ? {
-          modelOverride: escalation.modelOverride,
-          effortOverride: escalation.effortOverride,
-        }
-      : escalation;
-    const identityOption = { ...runnerEscalation, ...(verdictRunId ? { runId: verdictRunId } : {}) };
     const sh = selfHostConfig;
 
     // Compatibility runners do not have ProviderExecutionContext and therefore
@@ -9514,6 +9497,12 @@ export class Conductor {
             await this.clearFinishReleaseMetadataSnapshot();
           }
 
+          // Native gates and the finish coordinator precede the self-host
+          // branch below. Only that branch omits generic escalation overrides.
+          const usesSelfBuildDispatch = this.isSelfBuild() &&
+            (step.name === 'build' || (this.providerExecution !== undefined && ['BUILD', 'SHIP'].includes(phaseForStep(step.name)))) &&
+            step.name !== 'test_suite' && step.name !== 'rebase' &&
+            !(step.name === 'finish' && this.finishPublication);
           let result: StepRunResult;
           if (protectedArtifactIssue) {
             buildWatcher?.stop();
@@ -9625,7 +9614,7 @@ export class Conductor {
                               modelOverride: esc.model,
                               effortOverride: esc.effort,
                             })
-                        : this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))))
+                        : usesSelfBuildDispatch
                           ? await this.runSelfBuildDispatch(
                               step.name,
                               state,
@@ -9638,12 +9627,6 @@ export class Conductor {
                               isVerdictRunIdentityStep(step.name)
                                 ? this.currentRunId
                                 : undefined,
-                              {
-                                attempt,
-                                escalate: resolved.escalate,
-                                modelOverride: esc.model,
-                                effortOverride: esc.effort,
-                              },
                             )
                           : step.name === 'prd_audit'
                             ? await (async () => {
@@ -10461,7 +10444,7 @@ export class Conductor {
                 ...(result.actualProvider !== undefined && { provider: result.actualProvider }),
                 ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
                 ...(step.name === 'build' && { resolvedBefore: resolvedTasksBefore }),
-                ...(resolved.escalate && {
+                ...(resolved.escalate && !usesSelfBuildDispatch && {
                   escalatedModel: escNext.model,
                   escalatedEffort: escNext.effort,
                 }),
@@ -11290,7 +11273,7 @@ export class Conductor {
                     progressAttempt: progressAttempts,
                     progressAttemptCeiling,
                   }),
-                  ...(resolved.escalate && {
+                  ...(resolved.escalate && !usesSelfBuildDispatch && {
                     escalatedModel: escNext.model,
                     escalatedEffort: escNext.effort,
                   }),
