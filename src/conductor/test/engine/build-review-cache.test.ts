@@ -11,6 +11,7 @@ import {
 import { engineContentStamp } from "../../src/engine/engine-version-id.js";
 import { coordinateBuildReviewRubrics } from "../../src/engine/build-review-coordinator.js";
 import { parseBuildReviewLapId } from "../../src/engine/build-review-domain.js";
+import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
 
 function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
@@ -32,6 +33,23 @@ function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
       verdict: "PASS",
     },
   };
+}
+
+function securityEntry(overrides: Partial<BuildReviewCacheEntry> = {}): BuildReviewCacheEntry {
+  return {
+    ...entry(),
+    rubric: "security",
+    result: {
+      kind: "judged",
+      rubric: "security",
+      lapId: "lap-a" as never,
+      snapshotDigest: "snapshot-a",
+      contractVersion: "v3",
+      findings: [],
+      verdict: "PASS",
+    },
+    ...overrides,
+  } as BuildReviewCacheEntry;
 }
 
 function memoryFilesystem(files: Record<string, string> = {}): BuildReviewCacheFilesystem & {
@@ -263,6 +281,53 @@ describe("build-review semantic cache", () => {
     expect(dispatchModel).not.toHaveBeenCalled();
     expect(coordination.kind === "ready" ? coordination.branches.find((branch) => branch.rubric === "testQuality") : undefined)
       .toMatchObject({ kind: "cache-hit", result: { lapId: "lap-current", snapshotDigest: "sha256:snapshot-current" } });
+  });
+
+  it("keeps a security projection digest stable when identical hunk content is rebased", () => {
+    const frozenInputs = {
+      diff: "diff --git a/src/auth.ts b/src/auth.ts\n@@ -1 +1 @@\n-const enabled = false;\n+const enabled = true;\n",
+      planBody: "# Plan\n", mergeBase: "base", baseRef: "origin/main", baseKind: "remote", trackingRefSha: "base", remoteHeadSha: "base", fresh: true,
+      repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, testSuiteProof: { provenanceHeadSha: "head", outcome: "PASS" },
+      sourceSnapshot: { digest: "sha256:snapshot", contentDigest: "sha256:content", baseRef: "origin/main", mergeBase: "base", headSha: "head-before", diff: "diff --git a/src/auth.ts b/src/auth.ts\n@@ -1 +1 @@\n-const enabled = false;\n+const enabled = true;\n", planBody: "# Plan\n", repairContext: [], acceptedWidenings: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, testQuality: { inScopeTests: [], unresolvedMarkers: [] } },
+    } as unknown as BuildReviewFrozenInputs;
+    const projectionSource = {
+      inputs: frozenInputs,
+      testQuality: { changedTestSelectors: [], revertedProductionManifest: [], preflight: { classification: "not-requested" } },
+    } as unknown as Parameters<typeof deriveBuildReviewRubricProjections>[0];
+
+    const before = deriveBuildReviewRubricProjections({ ...projectionSource, lapId: parseBuildReviewLapId("lap-before")! }).security;
+    const after = deriveBuildReviewRubricProjections({
+      ...projectionSource,
+      lapId: parseBuildReviewLapId("lap-after")!,
+      inputs: { ...frozenInputs, sourceSnapshot: { ...frozenInputs.sourceSnapshot, headSha: "head-after" } },
+    }).security;
+
+    expect(before.changedFiles).toEqual(after.changedFiles);
+    expect(before.digest).toBe(after.digest);
+  });
+
+  it("requires matching security policy and skill identities before reuse", () => {
+    const cached = securityEntry();
+    const request = {
+      rubric: "security" as const,
+      contractVersion: "v3" as const,
+      projectionVersion: "v3" as const,
+      projectionDigest: cached.projectionDigest,
+      policyFingerprint: cached.policyFingerprint,
+      engineIdentity: cached.engineIdentity,
+      lapId: "lap-current" as never,
+      snapshotDigest: "snapshot-current",
+    };
+
+    expect([
+      classifyBuildReviewCacheLookup(cached, request).kind,
+      classifyBuildReviewCacheLookup(cached, { ...request, policyFingerprint: "sha256:model-changed" }),
+      classifyBuildReviewCacheLookup(cached, { ...request, engineIdentity: { ...request.engineIdentity, skillDigest: "sha256:skill-edited" } }),
+    ]).toEqual([
+      "hit",
+      { kind: "miss", reason: "policy-fingerprint-mismatch" },
+      { kind: "miss", reason: "skill-digest-mismatch", cachedEngineStamp: "8e7daae72ad7" },
+    ]);
   });
 
   it("classifies every unsafe cache identity and non-judged outcome as a conservative miss", () => {

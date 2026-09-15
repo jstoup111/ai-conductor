@@ -1,4 +1,4 @@
-// Covers: task:11
+// Covers: task:6, task:11
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
@@ -45,6 +45,69 @@ function titleHash(text: string): string {
 }
 
 describe('build-review domain', () => {
+  it('keeps the security concern vocabulary closed to the approved ten kinds', () => {
+    expect(BUILD_REVIEW_FINDING_VOCABULARIES.security.concernKinds).toEqual([
+      'committed-secret', 'injection', 'broken-access-control', 'path-traversal',
+      'unsafe-deserialization', 'cryptographic-failure', 'security-misconfiguration',
+      'authentication-failure', 'integrity-failure', 'ssrf',
+    ]);
+  });
+
+  it('accepts security content-region anchors only for a projected changed content region', () => {
+    const anchor = { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request-derived shell command' } };
+    const references = buildReviewFindingReferenceContext({
+      rubric: 'security', changedFiles: [{ path: 'src/auth.ts', changeKind: 'modified', hunks: [
+        { oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: HASH },
+        { oldStart: 8, oldCount: 1, newStart: 8, newCount: 1, contentHash: HASH },
+      ] }],
+    } as unknown as BuildReviewRubricProjection);
+
+    expect(parseBuildReviewFindingAnchor(anchor, references)).toEqual(anchor);
+    expect(parseBuildReviewFindingAnchor({ ...anchor, locus: { ...anchor.locus, occurrence: 1 } }, references)).toBeDefined();
+    expect(parseBuildReviewFindingAnchor({ ...anchor, locus: { ...anchor.locus, occurrence: 2 } }, references)).toBeUndefined();
+    expect(parseBuildReviewFindingAnchor({ ...anchor, locus: { ...anchor.locus, contentHash: `sha256:${'b'.repeat(64)}` } }, references)).toBeUndefined();
+  });
+
+  it('rejects coordinate fields from a security content-region anchor', () => {
+    const anchor = { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request-derived shell command', line: 42 } };
+
+    expect(parseBuildReviewFindingAnchor(anchor, { changedTests: [], changedContentRegions: [{ path: 'src/auth.ts', contentHash: HASH, display: 'added command' }], changedPaths: ['src/auth.ts'], planTasks: [] })).toBeUndefined();
+  });
+
+  it('names the content-region grammar when a security anchor has coordinate fields', () => {
+    const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
+    const result = {
+      kind: 'judged', rubric: 'security', ...expected, contractVersion: 'v3',
+      findings: [{ concernKind: 'injection', summary: 'Shell command includes request input.', evidenceLocations: ['src/auth.ts:8'], anchor: { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request input', line: 8 } } }],
+    };
+
+    expect(describeBuildReviewJudgedResultRejection(result, 'security', expected, { changedTests: [], changedContentRegions: [{ path: 'src/auth.ts', contentHash: HASH, display: 'added command' }], changedPaths: ['src/auth.ts'], planTasks: [] })).toContain('content-region reference');
+  });
+
+  it('renders duplicate security-region occurrences into each provider prompt shape', () => {
+    const providerShape = renderBuildReviewProviderPayloadShape('security');
+    const judgedShape = renderBuildReviewJudgedResultShape('security');
+
+    expect(providerShape).not.toContain('scopeResolutions');
+    for (const shape of [providerShape, judgedShape]) {
+      expect(shape).toContain('occurrence?: integer');
+      expect(shape).toContain('0-based ordinal among equal-content regions in this path');
+      expect(shape).toContain('omit when unique or first');
+    }
+  });
+
+  it('diagnoses an out-of-vocabulary security concern and an anchor outside frozen input', () => {
+    const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
+    const result = {
+      kind: 'judged', rubric: 'security', ...expected, contractVersion: 'v3',
+      findings: [{ concernKind: 'other', summary: 'Unrecognized concern.', evidenceLocations: ['src/other.ts:1'], anchor: { rubric: 'security', locus: { path: 'src/other.ts', contentHash: HASH, display: 'other' } } }],
+    };
+
+    const references = { changedTests: [], changedContentRegions: [{ path: 'src/auth.ts', contentHash: HASH, display: 'added command' }], changedPaths: ['src/auth.ts'], planTasks: [] };
+    expect(describeBuildReviewJudgedResultRejection(result, 'security', expected, references)).toContain('one of "committed-secret"');
+    expect(describeBuildReviewJudgedResultRejection({ ...result, findings: [{ ...result.findings[0], concernKind: 'injection' }] }, 'security', expected, references)).toContain('projected changed content region');
+  });
+
   it('retains optional integer confidence and rejects values outside 0 through 100', () => {
     for (const confidence of [0, 72, 100]) {
       expect(parseBuildReviewJudgedResult(judged([finding({ confidence })]))?.findings[0]?.confidence).toBe(confidence);
@@ -198,7 +261,7 @@ describe('build-review domain', () => {
       'findings[0].anchor.rubric must be "testQuality"',
       'findings[0].anchor.locus must be a content-region reference {"path", "contentHash", "display", "occurrence"?}',
     ].join('; '));
-    expect(describe(envelope([valid]), { changedTests: [], changedTestRegions: [{ ...locus, path: 'test/other.test.ts' }], changedPaths: [], planTasks: [] })).toBe(
+    expect(describe(envelope([valid]), { changedTests: [], changedTestRegions: [{ ...locus, path: 'test/other.test.ts' }], changedContentRegions: [], changedPaths: [], planTasks: [] })).toBe(
       'findings[0].anchor.locus must reference a projected in-scope content region (path, contentHash, and occurrence must match one)',
     );
     expect(describe(envelope([valid, { ...valid, summary: 'Reworded.' }]))).toBe(
@@ -216,7 +279,7 @@ describe('build-review domain', () => {
     const envelope = (scopeResolutions: unknown) => judged([], { scopeResolutions });
     const describe = (scopeResolutions: unknown) => describeBuildReviewJudgedResultRejection(
       envelope(scopeResolutions), 'testQuality', expected,
-      { changedTests: [], changedTestRegions: [], changedPaths: [], planTasks: [] }, scopeContext,
+      { changedTests: [], changedTestRegions: [], changedContentRegions: [], changedPaths: [], planTasks: [] }, scopeContext,
     );
     const resolved = {
       candidateId: 'bound-target', status: 'resolved', sourceRegion,
@@ -494,6 +557,7 @@ describe('build-review domain', () => {
           { path: 'test/widget.test.ts', contentHash: titleHash('widget > persists state'), display: 'widget > persists state' },
           { path: 'test/loader.test.ts', contentHash: titleHash('test/loader.test.ts'), display: 'test/loader.test.ts changed test' },
         ],
+        changedContentRegions: [],
         changedPaths: ['src/widget.ts', 'test/widget.test.ts'],
         planTasks: [],
       });

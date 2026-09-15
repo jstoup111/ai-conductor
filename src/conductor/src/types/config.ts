@@ -1,4 +1,5 @@
 import type { ComplexityTier, EnforcementLevel, StepName, Phase } from './steps.js';
+import type { BUILD_REVIEW_RUBRIC_IDS } from '../engine/build-review-registry.js';
 
 /**
  * Claude's native reasoning effort levels — set per invocation via
@@ -686,7 +687,7 @@ export interface MergeableAutoresolveConfig {
 }
 
 /** The closed set of independently-executed build-review rubric branches. */
-export type BuildReviewRubricId = 'testQuality';
+export type BuildReviewRubricId = (typeof BUILD_REVIEW_RUBRIC_IDS)[number];
 
 /** Optional execution overrides for one build-review rubric branch. */
 export interface BuildReviewRubricConfig {

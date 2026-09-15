@@ -36,6 +36,7 @@ import type { BuildReviewFrozenInputs } from "./build-review-inputs.js";
 import { buildReviewScopeCandidateIdentityKey } from "./build-review-scope-identity.js";
 import {
   deriveBuildReviewRubricProjections,
+  isTestQualityProjection,
   type BuildReviewRubricProjections,
   type BuildReviewRubricProjection,
   type BuildReviewTestQualityProjectionInput,
@@ -54,6 +55,7 @@ import { canonicalizeBuildReviewFindingSet } from "./build-review-finding-identi
 
 const BUILD_REVIEW_RUBRICS = BUILD_REVIEW_RUBRIC_IDS;
 const TEST_QUALITY_RUBRIC: BuildReviewRubricId = "testQuality";
+const REVIEWER_SUPPLIED_ENVELOPE_FIELDS = ["kind", "rubric", "contractVersion", "lapId", "snapshotDigest", "verdict"] as const;
 
 /** A rubric that passed deterministic pre-dispatch classification. */
 export interface BuildReviewDispatchableRubric {
@@ -131,7 +133,8 @@ export interface BuildReviewCoordinationInput {
   readonly inputs: BuildReviewFrozenInputs;
   readonly lapId: BuildReviewLapId;
   /** Test seam for an engine-held projection corruption at branch settlement. */
-  readonly projections?: BuildReviewRubricProjections;
+  /** Legacy test seams may override one projection; unset members use the engine-derived projection. */
+  readonly projections?: Partial<BuildReviewRubricProjections>;
   readonly preflight: () => Promise<TautologyPreflightResult>;
   /** Resolved once per dispatch by the caller; never read from the environment here (D6). */
   readonly engineIdentity: BuildReviewCoordinationEngineIdentity;
@@ -242,6 +245,9 @@ export function stampBuildReviewDispatchedCandidate(
   const source = typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)
     ? candidate as Record<string, unknown>
     : undefined;
+  const reviewerSuppliedEnvelopeFields = rubric !== 'security' || source === undefined
+    ? []
+    : REVIEWER_SUPPLIED_ENVELOPE_FIELDS.filter((field) => Object.hasOwn(source, field));
   return {
     kind: "judged",
     rubric,
@@ -249,6 +255,7 @@ export function stampBuildReviewDispatchedCandidate(
     lapId: projection.lapId,
     snapshotDigest: projection.snapshotDigest,
     findings: stampResolvedCandidateFindingAnchors(source, projection),
+    ...(reviewerSuppliedEnvelopeFields.length === 0 ? {} : { reviewerSuppliedEnvelopeFields }),
     ...(source?.scopeResolutions === undefined ? {} : { scopeResolutions: source.scopeResolutions }),
     // The relocation audit is provider-owned EVIDENCE, not an envelope field:
     // the test-quality contract validates it as typed evidence, the
@@ -311,6 +318,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
  * second provider call participate in candidate settlement.
  */
 export function buildReviewCandidateScopeResolutionContext(projection: BuildReviewRubricProjection): BuildReviewCandidateScopeResolutionContext {
+  if (!isTestQualityProjection(projection)) return { candidates: [] };
   const scope = record(projection.testScope);
   const rawCandidates = Array.isArray(scope?.candidates) ? scope.candidates : [];
   const evidence = Array.isArray(scope?.evidence) ? scope.evidence : [];
@@ -395,6 +403,7 @@ export function validateBuildReviewDispatchedResult(
 ): BuildReviewJudgedResult | undefined {
   const scopeContext = buildReviewCandidateScopeResolutionContext(projection);
   const source = record(candidate);
+  if (rubric === 'security' && Array.isArray(source?.reviewerSuppliedEnvelopeFields)) return undefined;
   const scopeResolutions = source?.scopeResolutions === undefined
     ? (scopeContext.candidates.length === 0 ? [] : undefined)
     : parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext);
@@ -421,6 +430,9 @@ export function describeBuildReviewDispatchedResultRejection(
 ): string {
   const scopeContext = buildReviewCandidateScopeResolutionContext(projection);
   const source = record(candidate);
+  if (rubric === 'security' && Array.isArray(source?.reviewerSuppliedEnvelopeFields)) {
+    return `provider payload must not supply engine-owned envelope field(s): ${source.reviewerSuppliedEnvelopeFields.map(String).join(', ')}`;
+  }
   const scopeResolutions = source?.scopeResolutions === undefined
     ? (scopeContext.candidates.length === 0 ? [] : undefined)
     : parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext);
@@ -544,7 +556,10 @@ export async function coordinateBuildReviewRubrics(
       runnerSelectors: [], changedTestSelectors: [], unresolvedMarkers, revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
     },
   });
-  const projections = input.projections ?? derivedProjections;
+  const projections: Readonly<Record<BuildReviewRubricId, BuildReviewRubricProjection>> = {
+    ...derivedProjections,
+    ...input.projections,
+  };
   const resolved = new Map<BuildReviewRubricId, BuildReviewCoordinatedBranch>();
   const misses: BuildReviewDispatchableRubric[] = [];
 

@@ -1,4 +1,4 @@
-// Covers: task:10
+// Covers: task:1, task:10
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -11,11 +11,18 @@ import {
 import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-config.js';
 
 describe('engine/build-review-registry', () => {
-  it('registers only the test-quality rubric with its versioned execution descriptor', () => {
-    expect(BUILD_REVIEW_RUBRIC_IDS).toEqual(['testQuality']);
+  it('registers the test-quality and security rubrics with their versioned execution descriptors', () => {
+    expect(BUILD_REVIEW_RUBRIC_IDS).toEqual(['testQuality', 'security']);
     expect(BUILD_REVIEW_RUBRIC_REGISTRY).toEqual({
       testQuality: {
         skillName: 'build-review-test-quality',
+        contractVersion: 'v3',
+        projectionVersion: 'v3',
+        cachePolicy: 'content-addressed',
+        prerequisite: 'none',
+      },
+      security: {
+        skillName: 'build-review-security',
         contractVersion: 'v3',
         projectionVersion: 'v3',
         cachePolicy: 'content-addressed',
@@ -26,11 +33,14 @@ describe('engine/build-review-registry', () => {
     expect(Object.values(BUILD_REVIEW_RUBRIC_REGISTRY).every(Object.isFrozen)).toBe(true);
   });
 
-  it('recognizes only registered rubrics', () => {
+  it('recognizes registered rubrics and resolves their descriptors', () => {
     expect(isRegisteredRubric('testQuality')).toBe(true);
-    expect(isRegisteredRubric('completeness')).toBe(false);
+    expect(isRegisteredRubric('security')).toBe(true);
     expect(getBuildReviewRubricDescriptor('testQuality')).toBe(
       BUILD_REVIEW_RUBRIC_REGISTRY.testQuality,
+    );
+    expect(getBuildReviewRubricDescriptor('security')).toBe(
+      BUILD_REVIEW_RUBRIC_REGISTRY.security,
     );
   });
 

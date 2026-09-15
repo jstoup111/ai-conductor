@@ -30,6 +30,7 @@ import { validateWhenSyntax } from './when-expression.js';
 import type { PluginRegistry } from './plugin-registry.js';
 import { FALLBACK_RETRIES } from './resolved-config.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
+import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
 
 export type ConfigError = {
   type: 'missing' | 'parse_error' | 'version_mismatch' | 'validation_error';
@@ -90,7 +91,6 @@ const ARCHITECTURE_REVIEW_AS_BUILT_DEFAULTS = {
   max_remediation_laps: 1,
   remediation: { enabled: true },
 } as const;
-const BUILD_REVIEW_RUBRIC_IDS = ['testQuality'] as const;
 /** Keys accepted on each member of test_suite.commands. */
 export const TEST_SUITE_COMMAND_ENTRY_KEYS = [
   'command', 'working_directory', 'timeout_seconds',
