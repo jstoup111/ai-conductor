@@ -29,7 +29,7 @@ function judgedSecurityFixture(path: string, concernKind?: string) {
   for (const finding of findings) {
     expect(parseBuildReviewFindingConcernKind(finding.concernKind, 'security')).toBe(finding.concernKind);
     expect(parseBuildReviewFindingAnchor(finding.anchor, {
-      changedTests: [], changedPaths: [path], planTasks: [],
+      changedTests: [], changedContentRegions: [locus], changedPaths: [path], planTasks: [],
     })).toEqual(finding.anchor);
     expect(Number.isInteger(finding.confidence)).toBe(true);
   }
@@ -56,7 +56,11 @@ describe('build-review rubric skill catalog', () => {
     expect(content).toMatch(/^enforcement: gating$/m);
     expect(content).toMatch(/^phase: build$/m);
     expect(content).toMatch(/\*\*Closed vocabulary:\*\* `committed-secret`, `injection`, `broken-access-control`, `path-traversal`, `unsafe-deserialization`, `cryptographic-failure`, `security-misconfiguration`, `authentication-failure`, `integrity-failure`, `ssrf`\./);
-    expect(content).toMatch(/\*\*Reference grammar:\*\* `anchor\.locus` is a `content-region` reference\./);
+    expect(content).toMatch(/\*\*Reference grammar:\*\* `anchor\.locus` is a `content-region` reference:/);
+    expect(content).toContain('`{ path, contentHash, display, occurrence? }`');
+    expect(content).toContain('0-based ordinal among\nequal-content regions in one path');
+    expect(content).toContain('Omit it for a unique region or the first equal-content region');
+    expect(content).toContain('`1` for the second region');
   });
 
   it('keeps representative security judgements anchored to their introducing hunks', () => {

@@ -89,7 +89,12 @@ finding; an empty array means no Security concern was found.
       "evidenceLocations": ["path:line"],
       "anchor": {
         "rubric": "security",
-        "locus": { "path": "string", "contentHash": "sha256:string", "display": "string" }
+        "locus": {
+          "path": "string",
+          "contentHash": "sha256:string",
+          "display": "string",
+          "occurrence": "optional non-negative integer"
+        }
       }
     }
   ]
@@ -98,7 +103,10 @@ finding; an empty array means no Security concern was found.
 
 **Closed vocabulary:** `committed-secret`, `injection`, `broken-access-control`, `path-traversal`, `unsafe-deserialization`, `cryptographic-failure`, `security-misconfiguration`, `authentication-failure`, `integrity-failure`, `ssrf`.
 
-**Reference grammar:** `anchor.locus` is a `content-region` reference.
+**Reference grammar:** `anchor.locus` is a `content-region` reference:
+`{ path, contentHash, display, occurrence? }`. `occurrence` is the 0-based ordinal among
+equal-content regions in one path. Omit it for a unique region or the first equal-content region;
+for each later duplicate, supply its ordinal (for example, `1` for the second region).
 
 Each finding has a `concernKind` from the closed vocabulary, a nested `security` anchor, an
 actionable summary, and concrete evidence locations. `confidence` is a required integer from 0
