@@ -16551,6 +16551,20 @@ describe('appendRemediationTasks', () => {
     expect(content).not.toContain('### Task rem-test-1:');
   });
 
+  it('separates a bare remediation task from plan content without a final newline', async () => {
+    const planPath = join(dir, 'plan.md');
+    await writeFile(planPath, '# Implementation Plan\n\n## Tasks');
+
+    const result = await appendRemediationTasks(dir, planPath, [
+      { id: 'rem-test-no-final-newline', title: 'Repair the terminal plan boundary' },
+    ]);
+
+    expect(result).toEqual({ success: true, appendedIds: ['rem-test-no-final-newline'] });
+    const content = await readFile(planPath, 'utf-8');
+    expect(content).toContain('## Tasks\n\n### Task rem-test-no-final-newline:');
+    expect(validatePlanDoneWhen(content)).toEqual([]);
+  });
+
   describe('idempotent upsert semantics', () => {
     it('append task with id rem-fr10-1 → exists in plan', async () => {
       const planPath = join(dir, 'plan.md');

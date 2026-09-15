@@ -14458,6 +14458,9 @@ export async function appendRemediationTasks(
 
   // Append tasks that don't have duplicates
   let updated = planContent;
+  if (tasksToAppend.length > 0 && updated !== '' && !updated.endsWith('\n')) {
+    updated += '\n\n';
+  }
   for (const task of tasksToAppend) {
     const checks = buildRemediationDoneWhenChecks(
       task.finalId,
