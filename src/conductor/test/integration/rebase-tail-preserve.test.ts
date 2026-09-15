@@ -287,8 +287,8 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     await conductorWith(runCountingRunner(counts)).run();
 
     // Unproved replay conservatively re-runs the affected judged gates.
-    expect(counts.prd_audit).toBe(1);
-    expect(counts.architecture_review_as_built).toBe(1);
+    expect(counts.prd_audit).toBe(2);
+    expect(counts.architecture_review_as_built).toBe(2);
 
     // Re-run gates: the foreign runtime delta touches their surface, so each
     // must have been re-dispatched a second time after the rebase kickback.

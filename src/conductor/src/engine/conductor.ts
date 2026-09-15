@@ -14475,7 +14475,7 @@ export class Conductor {
     // Rebase-start refusals and completed-rebase acceptance rejections own
     // their specific recovery notes. Completed BUILD evidence is relevant
     // only after a successful, file-changing rebase reaches continuation.
-    if (this.verifyArtifacts && outcome.kind === 'changed' && getStepStatus(state, 'build') === 'done') {
+    if (outcome.kind === 'changed' && getStepStatus(state, 'build') === 'done') {
       const buildEvidence = await preVerify('build');
       if (!buildEvidence.done) {
         const completionReason = 'reason' in buildEvidence ? buildEvidence.reason : undefined;

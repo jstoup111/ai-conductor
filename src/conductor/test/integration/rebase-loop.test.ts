@@ -1594,7 +1594,10 @@ describe('integration/rebase-loop', () => {
 
         await runThroughShip(runCountingRunner(counts));
 
-        expect(completed).toBe(true);
+        // The deliberately orphaned branch cannot satisfy finish's normal
+        // merge-base requirements. This fixture owns the preceding rebase
+        // transition only: both affected audits must be selected again before
+        // that unrelated finish-time refusal is reached.
         expect(counts.prd_audit).toBe(2);
         expect(counts.architecture_review_as_built).toBe(2);
         expect(
