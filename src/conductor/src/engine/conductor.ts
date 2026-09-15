@@ -12424,6 +12424,7 @@ export class Conductor {
               await emitTracked({
                 type: 'feature_usage_total',
                 ...toFeatureUsageTotals(rollup),
+                ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
               });
             } catch {
               // No event log, or an unreadable one: the per-step provider
