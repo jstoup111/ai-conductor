@@ -1811,6 +1811,68 @@ describe('landSpec Done-when validation', () => {
     expect(existsSync(dir)).toBe(true);
   });
 
+  it('attributes only engine-appended Done-when violations to the engine before committing', async () => {
+    const dir = await seedValidWorktree();
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+    const cases = [
+      {
+        name: 'an engine-appended task only',
+        tasks: ['### Task rem-test-17: Engine remediation'],
+        expectedViolations:
+          'plan task rem-test-17 has no Done when: block ' +
+          '(engine-appended: the engine wrote this remediation block; fix the engine rather than re-authoring the plan)',
+      },
+      {
+        name: 'a bare-writer engine-appended task only',
+        tasks: ['### Task rem-foo: Engine remediation'],
+        expectedViolations:
+          'plan task rem-foo has no Done when: block ' +
+          '(engine-appended: the engine wrote this remediation block; fix the engine rather than re-authoring the plan)',
+      },
+      {
+        name: 'an empty-suffix engine-appended task only',
+        tasks: ['### Task rem-: Engine remediation'],
+        expectedViolations:
+          'plan task rem- has no Done when: block ' +
+          '(engine-appended: the engine wrote this remediation block; fix the engine rather than re-authoring the plan)',
+      },
+      {
+        name: 'hand-authored tasks only',
+        tasks: ['### Task 17: Hand-authored task'],
+        expectedViolations: 'plan task 17 has no Done when: block',
+      },
+      {
+        name: 'one engine-appended and one hand-authored task',
+        tasks: [
+          '### Task rem-test-17: Engine remediation',
+          '### Task 17: Hand-authored task',
+        ],
+        expectedViolations:
+          'plan task rem-test-17 has no Done when: block ' +
+          '(engine-appended: the engine wrote this remediation block; fix the engine rather than re-authoring the plan); ' +
+          'plan task 17 has no Done when: block',
+      },
+    ];
+
+    for (const scenario of cases) {
+      await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), [
+        '# Implementation Plan: dep bump',
+        '',
+        '**Stories:** .docs/stories/dep-bump.md',
+        '',
+        ...scenario.tasks.flatMap((task) => [task, '']),
+      ].join('\n'));
+
+      const refusal = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh })
+        .then(() => null, (error: Error) => error);
+
+      expect(refusal, scenario.name).toBeInstanceOf(Error);
+      const message = refusal!.message;
+      expect(message).toBe(`landSpec: ${scenario.expectedViolations}`);
+      expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+    }
+  });
+
   it('lands a plan whose tasks have two well-formed Done-when criteria', async () => {
     const dir = await seedValidWorktree();
     await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), [
