@@ -49,6 +49,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { renderDaemonEvent } from '../../src/daemon-cli.js';
 import type { ConductorEvent, ConductState, StepName } from '../../src/types/index.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
+import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
 
 const execFile = promisify(execFileCb);
 
@@ -150,6 +151,39 @@ const realGit: GitRunner = async (args, options) => {
   return { stdout: String(stdout) };
 };
 
+/** The controlled local remote models Git transport; ownership resolution sees its GitHub identity. */
+function ownershipAwareGit(runner: GitRunner): GitRunner {
+  return async (args, options) => {
+    if (args[0] === 'config' && args[1] === '--get' && args[2] === 'remote.origin.url') {
+      return { stdout: 'git@github.com:owner/repo.git\n' };
+    }
+    return runner(args, options);
+  };
+}
+
+const ownershipGh = async (args: string[]) =>
+  args[0] === 'api' && args[1] === 'user'
+    ? { stdout: 'alice\n' }
+    : { stdout: '{}' };
+
+function ownershipMutation(): GithubMutationExecutionContext {
+  return {
+    provenance: {
+      repository: 'owner/repo',
+      defaultBranch: 'origin/main',
+      specBranch: 'main',
+      featureMarker: '.docs/intake/feat.md',
+      publication: 'merged',
+    },
+    dependencies: {
+      resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
+      provenanceDiscovery: {
+        readCommittedRecords: async () => [{ path: '.docs/intake/feat.md', content: 'Owner: alice\n' }],
+      },
+    },
+  };
+}
+
 async function seedPushedTrackingBranch(): Promise<string> {
   remoteDir = await mkdtemp(join(tmpdir(), 'feature-usage-remote-'));
   await execFile('git', ['init', '--bare', '-q', '-b', 'main', remoteDir], { cwd: dir });
@@ -164,9 +198,11 @@ async function seedCommittedShippedRecord(): Promise<void> {
   await git(['config', 'user.name', 'Test']);
   await mkdir(join(dir, '.docs/plans'), { recursive: true });
   await mkdir(join(dir, '.docs/stories'), { recursive: true });
+  await mkdir(join(dir, '.docs/intake'), { recursive: true });
   await writeFile(join(dir, 'README.md'), 'seed\n');
   await writeFile(join(dir, '.docs/plans/feat.md'), '# Plan\n');
   await writeFile(join(dir, '.docs/stories/feat.md'), '# Stories\n**Status:** Accepted\n');
+  await writeFile(join(dir, '.docs/intake/feat.md'), 'Owner: alice\n');
   await git(['add', 'README.md', '.docs']);
   await git(['commit', '-q', '-m', 'merge spec: feat']);
   await createProtectedArtifactSeal({
@@ -236,8 +272,9 @@ async function runMeteredFinish(
     fromStep: 'finish',
     maxRetries: 1,
     escalateBuildFailure: async () => ({}),
-    git: gitRunner,
-    gh: async () => ({ stdout: '{}' }),
+    git: ownershipAwareGit(gitRunner),
+    gh: ownershipGh,
+    postFinishRemoteMutation: ownershipMutation(),
     shipmentEvidence: async (input) => ({
       kind: 'valid',
       slug: input.slug,
@@ -391,8 +428,9 @@ describe('acceptance: finish logs the whole-feature usage total', () => {
       fromStep: 'finish',
       maxRetries: 1,
       escalateBuildFailure: async () => ({}),
-      git: tracingGit,
-      gh: async () => ({ stdout: '{}' }),
+      git: ownershipAwareGit(tracingGit),
+      gh: ownershipGh,
+      postFinishRemoteMutation: ownershipMutation(),
       shipmentEvidence: async (input) => {
         observedCandidates.push(input.candidateCommit);
         trace.push(`verify:${input.candidateCommit}`);

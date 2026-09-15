@@ -28,6 +28,9 @@
 import { describe, it, expect } from 'vitest';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import { escalateBuildFailure } from '../../src/engine/build-failure-escalation.js';
+import type { GithubMutationExecutionContext } from '../../src/engine/tracker-client.js';
+import { createGuardedGithubOperationRunner } from '../../src/engine/tracker-client.js';
+import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
 
 const PR_LABELS_MOD = '../../src/engine/pr-labels.js';
 const RECONCILE_MOD = '../../src/engine/halt-pr-reconciliation.js';
@@ -36,6 +39,24 @@ const NEEDS_REMEDIATION_MARKER = '<!-- conductor:needs-remediation -->';
 const PR_URL = 'https://github.com/owner/repo/pull/301';
 const PR_URL_2 = 'https://github.com/owner/repo/pull/302';
 const PR_URL_3 = 'https://github.com/owner/repo/pull/303';
+
+function ownershipMutation(branch = 'feat/halt-flow'): GithubMutationExecutionContext {
+  return {
+    provenance: {
+      repository: 'owner/repo',
+      defaultBranch: 'origin/main',
+      specBranch: branch,
+      featureMarker: '.docs/intake/halt-flow.md',
+      publication: 'merged',
+    },
+    dependencies: {
+      resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
+      provenanceDiscovery: {
+        readCommittedRecords: async () => [{ path: '.docs/intake/halt-flow.md', content: 'Owner: alice\n' }],
+      },
+    },
+  };
+}
 
 async function loadEnsureHaltPresentation() {
   const mod = await import(PR_LABELS_MOD);
@@ -63,6 +84,7 @@ async function loadReconcileHaltPrs() {
     projectRoot: string;
     log?: (msg: string) => void;
     runGh: GhRunner;
+    operations?: GithubOperationRunner;
   }) => Promise<void>;
 }
 
@@ -82,14 +104,19 @@ interface FakePr {
 function makeGhStore(prs: FakePr[]) {
   const calls: string[][] = [];
   const byUrl = new Map(prs.map((p) => [p.url, p]));
-  const find = (url: string): FakePr => {
-    const pr = byUrl.get(url);
-    if (!pr) throw new Error(`fake gh: unknown PR ${url}`);
+  let haltFlowCreated = false;
+  const find = (ref: string): FakePr => {
+    const pr = byUrl.get(ref) ?? prs.find((candidate) => String(candidate.number) === ref);
+    if (!pr) throw new Error(`fake gh: unknown PR ${ref}`);
     return pr;
   };
 
   const gh: GhRunner = (async (args: string[]) => {
     calls.push([...args]);
+
+    if (args[0] === 'api' && args[1] === 'user') {
+      return { stdout: 'alice\n' };
+    }
 
     // `gh pr list --json number,url,body,isDraft,labels --state open ...`
     if (args[0] === 'pr' && args[1] === 'list') {
@@ -109,6 +136,13 @@ function makeGhStore(prs: FakePr[]) {
     // `gh pr view <url> --json isDraft,labels,body[,state,mergeable,statusCheckRollup]`
     if (args[0] === 'pr' && args[1] === 'view') {
       const url = args[2];
+      if (url === 'feat/halt-flow') {
+        return {
+          stdout: JSON.stringify(haltFlowCreated
+            ? { url: PR_URL, state: 'OPEN' }
+            : { state: 'CLOSED' }),
+        };
+      }
       const pr = find(url);
       return {
         stdout: JSON.stringify({
@@ -124,13 +158,13 @@ function makeGhStore(prs: FakePr[]) {
 
     // `gh pr create ...` — escalation's findOrCreatePr path; treat as a fresh PR.
     if (args[0] === 'pr' && args[1] === 'create') {
+      haltFlowCreated = true;
       return { stdout: PR_URL };
     }
 
     // `gh pr ready --undo <url>` (draft) / `gh pr ready <url>` (undraft).
     if (args[0] === 'pr' && args[1] === 'ready') {
-      const url = args[args.length - 1];
-      const pr = find(url);
+      const pr = find(args[2]);
       pr.isDraft = args.includes('--undo');
       return { stdout: '' };
     }
@@ -152,8 +186,7 @@ function makeGhStore(prs: FakePr[]) {
 
     // `gh pr edit <url> --body <body>` — body marker add/strip.
     if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
-      const url = args[2];
-      const pr = find(url);
+      const pr = find(args[2]);
       pr.body = args[args.indexOf('--body') + 1];
       return { stdout: '' };
     }
@@ -177,6 +210,7 @@ describe('acceptance: halt-PR presentation reliability (ai-conductor#274)', () =
         if (args[0] === 'symbolic-ref') return { stdout: 'refs/remotes/origin/main\n' };
         if (args[0] === 'merge-base') return { stdout: 'deadbeef\n' };
         if (args[0] === 'rev-list') return { stdout: '3\n' };
+        if (args[0] === 'config') return { stdout: 'git@github.com:owner/repo.git\n' };
         return { stdout: '' };
       }) as never;
 
@@ -185,6 +219,7 @@ describe('acceptance: halt-PR presentation reliability (ai-conductor#274)', () =
       failureReason: 'retries exhausted',
       runGit,
       runGh: gh,
+      remoteMutation: ownershipMutation(),
     });
 
     expect(result.prUrl).toBe(PR_URL);
@@ -233,7 +268,14 @@ describe('acceptance: halt-PR presentation reliability (ai-conductor#274)', () =
 
     const { gh, calls } = makeGhStore([broken, conforming, unmarkedReady]);
 
-    await reconcileHaltPrs({ projectRoot: '/repo', runGh: gh });
+    await reconcileHaltPrs({
+      projectRoot: '/repo',
+      runGh: gh,
+      operations: createGuardedGithubOperationRunner(gh, {
+        cwd: '/repo',
+        mutation: ownershipMutation(),
+      }),
+    });
 
     // Broken PR healed.
     expect(broken.isDraft).toBe(true);

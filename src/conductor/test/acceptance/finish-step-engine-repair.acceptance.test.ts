@@ -49,6 +49,7 @@ import {
 import { NEEDS_REMEDIATION_BODY_MARKER } from '../../src/engine/pr-labels.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
+import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
 
 const PR_URL = 'https://github.com/owner/repo/pull/499';
 const SOURCE_REF = 'owner/repo#499';
@@ -167,6 +168,32 @@ describe('acceptance: reused halt PR is kicked back once for a real /pr body, th
       isDraft: true,
       body: `Some PR description\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
     });
+    const operations: GithubOperationRunner = {
+      async run(request) {
+        if (request.operation === 'pull-request.comment.create') {
+          const body = request.payload && 'body' in request.payload && typeof request.payload.body === 'string'
+            ? request.payload.body
+            : '';
+          await gh(['pr', 'comment', PR_URL, '--body', body], { cwd: dir });
+          return {};
+        }
+        if (request.operation === 'pull-request.label.remove') {
+          await gh(['api', '--method', 'DELETE', 'repos/owner/repo/issues/499/labels/needs-remediation'], { cwd: dir });
+          return {};
+        }
+        if (request.operation === 'pull-request.ready') {
+          await gh(['pr', 'ready', PR_URL], { cwd: dir });
+          return {};
+        }
+        if (request.operation === 'pull-request.edit') {
+          const payload = request.payload as { body?: string; title?: string } | undefined;
+          if (payload?.body !== undefined) await gh(['pr', 'edit', PR_URL, '--body', payload.body], { cwd: dir });
+          if (payload?.title !== undefined) await gh(['pr', 'edit', PR_URL, '--title', payload.title], { cwd: dir });
+          return {};
+        }
+        return {};
+      },
+    };
 
     // The NOT-YET-EXISTING repair seam: `ctx.repairFinishPr`. Composes exactly
     // what Task 9 will compose in conductor.ts (rehabilitateHaltPr +
@@ -180,9 +207,9 @@ describe('acceptance: reused halt PR is kicked back once for a real /pr body, th
     ): Promise<void> => {
       repairCallCount++;
       repairModes.push(opts.mode);
-      await postHaltHistoryComment({ gh, cwd: dir, prUrl });
+      await postHaltHistoryComment({ gh, operations, cwd: dir, prUrl });
       if (opts.mode === 'capture-only') return;
-      await rehabilitateHaltPr({ gh, cwd: dir, prUrl, sourceRef: SOURCE_REF });
+      await rehabilitateHaltPr({ gh, operations, cwd: dir, prUrl, sourceRef: SOURCE_REF });
       // Stand-in for the not-yet-existing `retitleFloor`: today's
       // rehabilitateHaltPr deliberately never edits the title (Decision 1 vs
       // Decision 2 split), so the floor must be applied here to prove the

@@ -125,15 +125,15 @@ describe('gate write-back ownership', () => {
       timeline: [
         'GATED widget',
         'remote:pull-request.label.add',
-        'remote:issue.label.add',
+        'remote:intake.issue.label.add',
         'remote:pull-request.label.add',
         'remote:pull-request.comment.update',
-        'remote:issue.label.add',
+        'remote:intake.issue.label.add',
         'remote:intake.issue.comment.create',
       ],
       foreignPrAttempts: [expect.objectContaining({ operation: 'pull-request.label.add' })],
       foreignPrWrites: [],
-      foreignIssueAttempts: [expect.objectContaining({ operation: 'issue.label.add' })],
+      foreignIssueAttempts: [expect.objectContaining({ operation: 'intake.issue.label.add' })],
       foreignIssueWrites: [],
       authorizedWrites: [
         { operation: 'pull-request.label.add', payload: { label: 'owner-gated' } },
@@ -143,7 +143,7 @@ describe('gate write-back ownership', () => {
         },
       ],
       authorizedIssueWrites: [
-        { operation: 'issue.label.add', payload: { label: 'owner-gated' } },
+        { operation: 'intake.issue.label.add', payload: { label: 'owner-gated' } },
         {
           operation: 'intake.issue.comment.create',
           payload: { body: expect.stringContaining(OWNER_GATED_MARKER) },
