@@ -81,6 +81,9 @@ ai-conductor inline --interactive "add a CSV export"
 `ai-conductor inline --auto` is deprecated; use the daemon for unattended work. The `inline` token is
 required for foreground runs — the bare form `ai-conductor "<feature>"` is rejected.
 
+Daemon-managed sessions can run `ai-conductor task start` and `task done` for task attribution;
+completion remains gate-owned. See [task commands](docs/reference/cli.md#ai-conductor-task).
+
 The harness runs on Claude Code and Codex. Select the host with the `llm_provider` config key; an ordered
 array such as `[claude, codex]` acts as a fallback ladder. See
 [Multiprovider](docs/guides/multiprovider.md).
