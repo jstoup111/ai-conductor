@@ -3121,6 +3121,80 @@ describe('engine/conductor', () => {
     }
   });
 
+  it.each(['step_completed', 'step_failed'] as const)(
+    'does not let %s close a non-validation parallel execution',
+    async (type) => {
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+      });
+      const emit = vi.spyOn(events, 'emit');
+      const executionEvents = conductor as unknown as {
+        emitExecutionEvent(event: ConductorEvent): Promise<void>;
+      };
+      await executionEvents.emitExecutionEvent({ type: 'parallel_started', step: 'build', branches: [] });
+      emit.mockClear();
+      const terminal: ConductorEvent = type === 'step_completed'
+        ? { type, step: 'build', status: 'done' }
+        : { type, step: 'build', error: 'late step failure', retryCount: 0 };
+      await executionEvents.emitExecutionEvent(terminal);
+      expect(emit).not.toHaveBeenCalled();
+
+      await conductor.closeOpenExecutionsForShutdown();
+      expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'parallel_failure', step: 'build',
+      }));
+    },
+  );
+
+  it('suppresses a late validation terminal after daemon SIGTERM closed the execution', async () => {
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+    });
+    const timestamps = [1_000, 1_025];
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events, {
+      nowMs: () => timestamps.shift()!,
+    });
+    persister.start();
+
+    try {
+      const executionEvents = conductor as unknown as {
+        emitExecutionEvent(event: ConductorEvent): Promise<void>;
+      };
+      await executionEvents.emitExecutionEvent({ type: 'step_started', step: 'prd_audit', index: 0 });
+      await conductor.closeOpenExecutionsForShutdown();
+
+      // A validation member is drained like any other step: its late terminal
+      // must not land as a second terminal for the same execution.
+      await executionEvents.emitExecutionEvent({ type: 'step_completed', step: 'prd_audit', status: 'done' });
+      await executionEvents.emitExecutionEvent({
+        type: 'step_failed', step: 'prd_audit', error: 'late validation failure', retryCount: 0,
+      });
+
+      const records = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const terminals = records.filter((record) =>
+        record.type === 'step_completed' || record.type === 'step_failed',
+      );
+      expect(terminals).toEqual([
+        expect.objectContaining({
+          type: 'step_failed',
+          step: 'prd_audit',
+          activeInterval: { startedAtMs: 1_000, durationMs: 25 },
+        }),
+      ]);
+    } finally {
+      persister.stop();
+    }
+  });
+
   it('suppresses a late normal terminal after daemon SIGTERM closed the execution', async () => {
     const conductor = new Conductor({
       projectRoot: dir,
@@ -9234,7 +9308,7 @@ describe('engine/conductor', () => {
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
     const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
 
-    it('a branch that never produces a completion marker (crashed/exhausted retries) halts the group loudly, zero kickback, no remediation.json, no partial join', async () => {
+    it('a branch that never produces a completion marker halts the group without kickback while retaining satisfied siblings', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
 
       const runner: StepRunner = {
@@ -9290,11 +9364,11 @@ describe('engine/conductor', () => {
       const result = await readState(statePath);
       expect(result.ok).toBe(true);
       const state = result.ok ? (result.value as Record<string, unknown>) : {};
-      // No member — including the ones that themselves passed — gets marked
-      // done: no partial join on a no-verdict outcome.
-      expect(state.manual_test).not.toBe('done');
-      expect(state.prd_audit).not.toBe('done');
-      expect(state.architecture_review_as_built).not.toBe('done');
+      // The failed member still blocks the group, but satisfied siblings remain
+      // done so a resume does not discard their validated work.
+      expect(state.manual_test).toBe('failed');
+      expect(state.prd_audit).toBe('done');
+      expect(state.architecture_review_as_built).toBe('done');
     });
 
     it('FAIL verdict + a crashed sibling: same halt path, zero kickback events', async () => {
@@ -9337,6 +9411,9 @@ describe('engine/conductor', () => {
         events,
         fromStep: 'manual_test',
         mode: 'auto',
+        // The FAIL-row retention predicate is artifact-aware. Keep this
+        // no-verdict fixture on that production path rather than bypassing it.
+        verifyArtifacts: true,
       });
 
       await conductor.run();
@@ -9346,6 +9423,11 @@ describe('engine/conductor', () => {
 
       expect(kickbacks.length).toBe(0);
       expect(haltCount).toBeGreaterThan(0);
+      const result = await readState(statePath);
+      if (!result.ok) throw result.error;
+      const state = result.value as Record<string, unknown>;
+      // A successful dispatch with FAIL rows is not a satisfied join member.
+      expect([state.manual_test, state.validation__manual_test]).not.toContain('done');
     });
   });
 

@@ -2182,6 +2182,7 @@ export class Conductor {
     );
   }
 
+
   /** Emit through the existing spine while retaining the conductor's open execution state. */
   private emitExecutionEvent(event: ConductorEvent): Promise<void> {
     const start = event.type === 'step_started'
@@ -2189,10 +2190,6 @@ export class Conductor {
       : event.type === 'parallel_started'
         ? { key: `parallel:${event.step}`, execution: { kind: 'parallel' as const, step: event.step } }
         : undefined;
-    // A refusal normally closes its own step execution. Validation-group
-    // members run inside their entry's parallel execution instead, so their
-    // refusal is deliverable (but non-terminal) while that enclosing window
-    // remains open.
     const terminalKey = event.type === 'step_completed' || event.type === 'step_failed'
       ? `step:${event.step}`
       : event.type === 'step_refused'
@@ -2252,6 +2249,16 @@ export class Conductor {
     });
     this.closingExecutions.set(terminalKey, terminalDelivery);
     return terminalDelivery;
+  }
+
+  /** A width-one validation recheck is group-derived only in auto mode with a retained sibling. */
+  private hasRetainedValidationSibling(step: StepName, state: ConductState): boolean {
+    const group = getGroupForStep(step);
+    return this.mode === 'auto' &&
+      group?.name === 'validation' &&
+      group.members.some((member) =>
+        member !== step && (state as Record<string, unknown>)[`${group.name}__${member}`] === 'done',
+      );
   }
 
   /**
@@ -7789,7 +7796,15 @@ export class Conductor {
           // Only the entry (first dispatchable) member fans out — a
           // non-entry member reaching this code falls through to the
           // ordinary serial dispatch below.
-          if (groupEntryName === step.name && membership.dispatchable.length > 1) {
+          // A retained-sibling retry is still a validation-group join even
+          // when only one member remains dispatchable. Keep its paired
+          // parallel lifecycle events so the rejoin is observable; a normal
+          // width-one validation walk, with no retained sibling, remains
+          // indistinguishable from the serial baseline.
+          if (
+            groupEntryName === step.name &&
+            (membership.dispatchable.length > 1 || this.hasRetainedValidationSibling(step.name, state))
+          ) {
             const preDispatchPark = await stopAtOperatorParkBoundary();
             if (preDispatchPark) {
               return preDispatchPark;
@@ -8157,14 +8172,18 @@ export class Conductor {
               });
             }
 
-            const allGreen = outcomes.every((outcome, idx) => {
+            const memberSatisfiedAtJoin = (idx: number): boolean => {
+              const outcome = outcomes[idx];
               if (outcome.kind !== 'verdict' || outcome.verdict !== 'pass') return false;
               if (!this.verifyArtifacts) return true;
               const member = membership.dispatchable[idx]!;
+              if (branchHandshakeFailures.has(member.name)) return false;
               if (!gateVerdicts.get(member.name)?.satisfied) return false;
               if (member.name === 'manual_test' && manualTestFailRows.length > 0) return false;
               return true;
-            });
+            };
+
+            const allGreen = outcomes.every((_, idx) => memberSatisfiedAtJoin(idx));
 
             // Task 18: a `no-verdict` outcome means a branch exhausted its
             // retries without ever producing a completion marker — an
@@ -8174,9 +8193,10 @@ export class Conductor {
             // FAST, mirroring the credentials/auth HALT pattern elsewhere in
             // this file (~841, ~882) — write the HALT marker, emit
             // `loop_halt`, and never synthesize a remediation plan or emit a
-            // `kickback`. No partial join either: not even siblings that
-            // themselves passed get marked 'done', because the group as a
-            // whole never reached a verdict.
+            // `kickback`. Siblings whose dispatches passed the same joined
+            // satisfaction predicate are retained atomically with the failed
+            // stamping, so a cleared HALT re-dispatches only the member that
+            // failed to produce a verdict.
             const noVerdictIdx = outcomes.findIndex((outcome) => outcome.kind === 'no-verdict');
             if (noVerdictIdx !== -1) {
               const noVerdictOutcome = outcomes[noVerdictIdx] as NoVerdictOutcome;
@@ -8191,19 +8211,31 @@ export class Conductor {
               // retry budget) — a work failure, not a judgement awaiting a
               // human. It keeps `failed` so the refusal lane can never mask a
               // broken validator.
-              await this.commitStateChanges(state, `fail ${step.name} validation group`, {
-                [step.name]: 'failed',
-                last_step: step.name,
-              });
+              const retainedSiblings = Object.fromEntries(
+                membership.dispatchable.flatMap((member, idx) =>
+                  idx !== noVerdictIdx && memberSatisfiedAtJoin(idx)
+                    ? [[member.name, 'done'], [`${builtinGroup.name}__${member.name}`, 'done']]
+                    : [],
+                ),
+              );
+              try {
+                await this.commitStateChanges(state, `fail ${step.name} validation group`, {
+                  ...retainedSiblings,
+                  [noVerdictMember.name]: 'failed',
+                  last_step: step.name,
+                });
+              } catch (err) {
+                (this.log ?? console.warn)(
+                  `[conductor] validation-group halt could not persist satisfied siblings: ` +
+                    `${err instanceof Error ? err.message : String(err)}`,
+                );
+              }
               await this.emitLoopHalt(haltReason);
               await emitTracked({
-                type: 'step_failed',
+                type: 'parallel_failure',
                 step: step.name,
+                branch: noVerdictMember.name,
                 error: haltReason,
-                retryCount: 0,
-                ...(noVerdictOutcome.observedIntervals
-                  ? { observedIntervals: noVerdictOutcome.observedIntervals }
-                  : {}),
               });
               process.off('SIGINT', sigintHandler);
               if (!this.daemon) {
@@ -8953,6 +8985,21 @@ export class Conductor {
             }
             return;
           } finally {
+              // A retained width-one round can halt before its join path
+              // emits a terminal. Close that group-owned execution here so
+              // every exit from the fan-out has exactly one lifecycle end.
+              const groupExecutionKey = `parallel:${step.name}`;
+              if (
+                this.openExecutions.has(groupExecutionKey) &&
+                !this.closingExecutions.has(groupExecutionKey)
+              ) {
+                await emitTracked({
+                  type: 'parallel_failure',
+                  step: step.name,
+                  branch: 'conductor',
+                  error: 'validation group round exited without a join terminal',
+                });
+              }
               // Task 4 (#788): unconditional clear, mirroring the ordinary
               // per-step dispatch's finally — this round is done (all-green,
               // halted, or kicked back) either way.
@@ -9646,43 +9693,39 @@ export class Conductor {
                                 ? this.currentRunId
                                 : undefined,
                             )
-                          : step.name === 'prd_audit'
-                            ? await (async () => {
-                                const recovery = await this.preparePrdWideningBeforeAudit();
-                                if (recovery) return { success: false, output: recovery };
-                                return this.stepRunner.run(step.name, state, {
-                                  ...(this.prdWideningReviewContext
-                                    ? { prdWideningReviewContext: this.prdWideningReviewContext }
-                                    : {}),
-                                  retryReason: retryHint,
-                                  attempt,
-                                  escalate: resolved.escalate,
-                                  modelOverride: esc.model,
-                                  effortOverride: esc.effort,
-                                  ...(dispatchIdentityArmed &&
-                                  this.currentRunId &&
-                                  isVerdictRunIdentityStep(step.name)
-                                    ? { runId: this.currentRunId }
-                                    : {}),
-                                });
-                              })()
-                          : await this.stepRunner.run(step.name, state, {
-                            retryReason: retryHint,
-                            attempt,
-                            escalate: resolved.escalate,
-                            modelOverride: esc.model,
-                            effortOverride: esc.effort,
-                            // D1 scope: only a SHIP-tail verdict gate hands its
-                            // identity to the lifecycle, so that gate's
-                            // `attempt.id` and its sidecar stamp are one value.
-                            // Other steps stamp no identity and keep the
-                            // runner's run-scoped attempt-id format.
-                            ...(dispatchIdentityArmed &&
-                            this.currentRunId &&
-                            isVerdictRunIdentityStep(step.name)
-                              ? { runId: this.currentRunId }
-                              : {}),
-                          }));
+                          : await (async (): Promise<StepRunResult> => {
+                            // PRD widening preparation stays outside the
+                            // runner-throw contract, matching the group
+                            // branch, which prepares before its fan-out.
+                            if (step.name === 'prd_audit') {
+                              const recovery = await this.preparePrdWideningBeforeAudit();
+                              if (recovery) return { success: false, output: recovery };
+                            }
+                            try {
+                              return await this.stepRunner.run(step.name, state, {
+                                ...(step.name === 'prd_audit' && this.prdWideningReviewContext
+                                  ? { prdWideningReviewContext: this.prdWideningReviewContext }
+                                  : {}),
+                                retryReason: retryHint,
+                                attempt,
+                                escalate: resolved.escalate,
+                                modelOverride: esc.model,
+                                effortOverride: esc.effort,
+                                // D1 scope: only a SHIP-tail verdict gate hands its
+                                // identity to the lifecycle, so that gate's
+                                // `attempt.id` and its sidecar stamp are one value.
+                                // Other steps stamp no identity and keep the
+                                // runner's run-scoped attempt-id format.
+                                ...(dispatchIdentityArmed &&
+                                this.currentRunId &&
+                                isVerdictRunIdentityStep(step.name)
+                                  ? { runId: this.currentRunId }
+                                  : {}),
+                              });
+                            } catch (error) {
+                              throw error;
+                            }
+                          })());
             if (result.operatorParkedBeforeDispatch) {
               const queuedPark = await stopAtOperatorParkBoundary(true);
               if (queuedPark) return queuedPark;
@@ -13045,7 +13088,7 @@ export class Conductor {
           // next step, and a step that re-opened an upstream gate (kickback)
           // routes the loop back to plan/stories. Upstream of build → null →
           // the for loop's normal linear i++ (front half untouched).
-          let advance: Awaited<ReturnType<typeof this.advanceTail>>;
+          let advance: number | null | 'halt';
           try {
             advance = await this.advanceTail(
               step,
