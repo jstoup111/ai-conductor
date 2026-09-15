@@ -42,7 +42,7 @@ const policy: ResolvedBuildReviewRubricPolicy = {
   min_confidence: 0,
 };
 
-function config(testQualityEnabled: boolean): ResolvedBuildReviewConfig {
+function config(testQualityEnabled: boolean, securityEnabled = false): ResolvedBuildReviewConfig {
   // The test-quality config key is introduced after the legacy resolved type.
   // The coordinator's registry, not that retired type, owns runnable membership.
   return {
@@ -50,9 +50,14 @@ function config(testQualityEnabled: boolean): ResolvedBuildReviewConfig {
     perTaskFloor: true,
     scopeContainmentEnforced: false,
     maxParallel: 1,
-    rubrics: { testQuality: { ...policy, enabled: testQualityEnabled } },
+    rubrics: {
+      testQuality: { ...policy, enabled: testQualityEnabled },
+      security: { ...policy, enabled: securityEnabled, effort: 'high' },
+    },
   } as unknown as ResolvedBuildReviewConfig;
 }
+
+const disabledSecurityBranch = { kind: 'skipped', rubric: 'security', reason: 'disabled' } as const;
 
 function inputs(): BuildReviewFrozenInputs {
   const sourceContent = {
@@ -116,7 +121,7 @@ describe("build-review coordinator: registered dispatch", () => {
         kind: 'infrastructure-failure',
         reason: 'invalid-provider-result',
         providerSetupExhaustion: { candidates: [{ provider: 'codex' }] },
-      }],
+      }, disabledSecurityBranch],
     });
     expect(JSON.stringify(result)).not.toContain('findings');
   });
@@ -149,6 +154,12 @@ describe("build-review coordinator: registered dispatch", () => {
     expect(emit).toHaveBeenCalledWith({
       type: "build_review_rubric_skipped",
       rubric: "testQuality",
+      lapId: "lap-current",
+      reason: "disabled",
+    });
+    expect(emit).toHaveBeenCalledWith({
+      type: "build_review_rubric_skipped",
+      rubric: "security",
       lapId: "lap-current",
       reason: "disabled",
     });
@@ -273,7 +284,7 @@ describe("build-review coordinator: registered dispatch", () => {
     );
     expect(result).toMatchObject({
       kind: "ready",
-      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result" }],
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result" }, disabledSecurityBranch],
     });
   });
 
@@ -336,7 +347,7 @@ describe("build-review coordinator: registered dispatch", () => {
 
     expect(classifyBuildReviewRubricBranches(config(true), [])).toMatchObject({
       kind: "ready",
-      branches: [{ rubric: "testQuality", skillName: "build-review-test-quality" }],
+      branches: [{ rubric: "testQuality", skillName: "build-review-test-quality" }, disabledSecurityBranch],
     });
     expect(dispatchModel).toHaveBeenCalledTimes(1);
     expect(dispatchModel).toHaveBeenCalledWith(
@@ -344,6 +355,51 @@ describe("build-review coordinator: registered dispatch", () => {
       expect.objectContaining({ rubric: "testQuality" }),
     );
     expect(result).toMatchObject({ kind: "ready" });
+  });
+
+  it('classifies enabled security as dispatchable and an omitted security policy as disabled', () => {
+    expect(classifyBuildReviewRubricBranches(config(false, true), [])).toMatchObject({
+      kind: 'ready',
+      branches: [
+        { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+        { rubric: 'security', skillName: 'build-review-security', policy: expect.objectContaining({ enabled: true, effort: 'high' }) },
+      ],
+    });
+
+    const absentSecurity = config(false) as unknown as { rubrics: Record<string, unknown> };
+    delete absentSecurity.rubrics.security;
+    expect(classifyBuildReviewRubricBranches(absentSecurity as ResolvedBuildReviewConfig, [])).toEqual({
+      kind: 'passed', verdict: 'PASS', reason: 'build_review_no_rubrics',
+      branches: [
+        { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+        disabledSecurityBranch,
+      ],
+    });
+  });
+
+  it('dispatches only security when it is the only enabled rubric', async () => {
+    const dispatchModel = vi.fn(async () => ({ findings: [] }));
+    const input = coordinationInput(false, {
+      config: config(false, true),
+      engineIdentity: { engineStamp: '8e7daae72ad7', skillDigests: { security: { kind: 'resolved', digest: 'sha256:security-skill' } } },
+      dispatchModel,
+    });
+
+    const result = await coordinateBuildReviewRubrics(input);
+
+    expect(input.preflight).not.toHaveBeenCalled();
+    expect(dispatchModel).toHaveBeenCalledTimes(1);
+    expect(dispatchModel).toHaveBeenCalledWith(
+      expect.objectContaining({ rubric: 'security', skillName: 'build-review-security' }),
+      expect.objectContaining({ rubric: 'security' }),
+    );
+    expect(result).toMatchObject({
+      kind: 'ready',
+      branches: [
+        { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+        { kind: 'infrastructure-failure', rubric: 'security', reason: expect.any(String) },
+      ],
+    });
   });
 });
 
@@ -513,10 +569,11 @@ describe("build-review coordinator: frozen fan-out", () => {
       emit,
     }));
 
-    expect(result).toMatchObject({ kind: "ready", branches: [{ kind: "dispatched", rubric: "testQuality" }] });
-    // A disabled rubric is dropped at classification, so no skip occurrence is reachable.
+    expect(result).toMatchObject({ kind: "ready", branches: [{ kind: "dispatched", rubric: "testQuality" }, disabledSecurityBranch] });
+    // Disabled rubrics settle before cache, preflight, or provider work.
     expect(emit.mock.calls.map(([event]) => event)).toEqual([
       { type: "build_review_rubric_started", rubric: "testQuality", lapId: "lap-current" },
+      { type: "build_review_rubric_skipped", rubric: "security", lapId: "lap-current", reason: "disabled" },
       { type: "build_review_rubric_result", rubric: "testQuality", lapId: "lap-current", verdict: "PASS" },
       {
         type: 'build_review_scope_summary', rubric: 'testQuality', lapId: 'lap-current',
@@ -596,11 +653,13 @@ describe("build-review coordinator: frozen fan-out", () => {
     expect(input.writeArtifact).not.toHaveBeenCalled();
     expect(result).toEqual({
       kind: "ready",
-      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason, detail }],
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason, detail }, disabledSecurityBranch],
     });
     expect(emit.mock.calls.map(([event]) => event)).toEqual([{
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current",
       reason, excerpt: detail,
+    }, {
+      type: "build_review_rubric_skipped", rubric: "security", lapId: "lap-current", reason: "disabled",
     }]);
   });
 
@@ -686,6 +745,8 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
     expect(testQualityBranch(result)).toEqual({ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-provider-result" });
     expect(emit.mock.calls.map(([event]) => event)).toEqual([{
       type: "build_review_rubric_started", rubric: "testQuality", lapId: "lap-current",
+    }, {
+      type: "build_review_rubric_skipped", rubric: "security", lapId: "lap-current", reason: "disabled",
     }, {
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "invalid-provider-result",
     }]);
@@ -1193,13 +1254,15 @@ describe("build-review coordinator: engine-held rubric isolation", () => {
 
     expect(result).toEqual({
       kind: "ready",
-      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "projection-rubric-mismatch" }],
+      branches: [{ kind: "infrastructure-failure", rubric: "testQuality", reason: "projection-rubric-mismatch" }, disabledSecurityBranch],
     });
     expect(input.readCache).not.toHaveBeenCalled();
     expect(input.dispatchModel).not.toHaveBeenCalled();
     expect(input.writeArtifact).not.toHaveBeenCalled();
     expect(emit.mock.calls.map(([event]) => event)).toEqual([{
       type: "build_review_rubric_infrastructure_failure", rubric: "testQuality", lapId: "lap-current", reason: "projection-rubric-mismatch",
+    }, {
+      type: "build_review_rubric_skipped", rubric: "security", lapId: "lap-current", reason: "disabled",
     }]);
   });
 });
