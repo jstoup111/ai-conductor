@@ -1,4 +1,4 @@
-// Covers: task:2, task:5, task:6
+// Covers: task:6, task:2, task:5
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -255,6 +255,68 @@ describe('MetricsListener dispatch dimensions', () => {
       expect(attributesFor(exporter, 'conductor.step.duration', 'plan')).toEqual({ step: 'plan', ...identity });
       expect(attributesFor(exporter, 'conductor.step.retries', 'plan')).toEqual({ step: 'plan', ...identity });
       expect(attributesFor(exporter, 'conductor.step.retries', 'finish')).toEqual({ step: 'finish', ...identity });
+    } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
+  });
+
+  it('projects feature-event tiers to activity and outcome points without inferring absent tiers', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const emitter = new ConductorEventEmitter();
+    let now = 100;
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+      () => now,
+    );
+    listener.start(emitter);
+
+    try {
+      await emitter.emit({ type: 'feature_dispatch_started', slug: 'tiered', kind: 'fresh', tier: 'M' });
+      await emitter.emit({
+        type: 'feature_dispatch_ended', slug: 'tiered', outcome: 'halted', haltClass: 'mechanical', step: 'build', tier: 'L',
+      });
+      now = 125;
+      await emitter.emit({
+        type: 'feature_shipped', slug: 'tiered', runStartedAt: 100, active: { state: 'exact', activeMs: 20 }, tier: 'S',
+      });
+      now = 150;
+      await emitter.emit({
+        type: 'feature_shipped', slug: 'partial', runStartedAt: 100, active: { state: 'partial' }, tier: 'S',
+      });
+
+      await emitter.emit({ type: 'feature_dispatch_started', slug: 'untiered', kind: 'fresh' });
+      await emitter.emit({
+        type: 'feature_dispatch_ended', slug: 'untiered', outcome: 'halted', haltClass: 'mechanical', step: 'build',
+      });
+      await emitter.emit({
+        type: 'feature_shipped', slug: 'untiered', runStartedAt: 100, active: { state: 'exact', activeMs: 20 },
+      });
+      await provider.forceFlush();
+
+      const tiered = (name: string) => attributesForInstrument(exporter, name).filter((attributes) => attributes.tier !== undefined);
+      const untiered = (name: string) => attributesForInstrument(exporter, name).filter((attributes) => attributes.feature === 'untiered');
+      expect(tiered('conductor.feature.dispatches')).toEqual([{ kind: 'fresh', tier: 'M', project: 'project', worker: 'worker', feature: 'tiered' }]);
+      expect(tiered('conductor.feature.halts')).toEqual([{ haltClass: 'mechanical', step: 'build', tier: 'L', project: 'project', worker: 'worker', feature: 'tiered' }]);
+      expect(tiered('conductor.run.outcomes')).toEqual([{ outcome: 'halted', tier: 'L', project: 'project', worker: 'worker', feature: 'tiered' }]);
+      expect(tiered('conductor.feature.shipped')).toEqual([
+        { tier: 'S', project: 'project', worker: 'worker', feature: 'tiered' },
+        { tier: 'S', project: 'project', worker: 'worker', feature: 'partial' },
+      ]);
+      expect(tiered('conductor.feature.duration.wall')).toEqual([
+        { tier: 'S', project: 'project', worker: 'worker', feature: 'tiered' },
+        { tier: 'S', project: 'project', worker: 'worker', feature: 'partial' },
+      ]);
+      expect(tiered('conductor.feature.duration.active')).toEqual([{ tier: 'S', project: 'project', worker: 'worker', feature: 'tiered' }]);
+      expect(untiered('conductor.feature.dispatches')).toEqual([{ kind: 'fresh', project: 'project', worker: 'worker', feature: 'untiered' }]);
+      expect(untiered('conductor.feature.halts')).toEqual([{ haltClass: 'mechanical', step: 'build', project: 'project', worker: 'worker', feature: 'untiered' }]);
+      expect(untiered('conductor.run.outcomes')).toEqual([{ outcome: 'halted', project: 'project', worker: 'worker', feature: 'untiered' }]);
+      expect(untiered('conductor.feature.shipped')).toEqual([{ project: 'project', worker: 'worker', feature: 'untiered' }]);
+      expect(untiered('conductor.feature.duration.wall')).toEqual([{ project: 'project', worker: 'worker', feature: 'untiered' }]);
+      expect(untiered('conductor.feature.duration.active')).toEqual([{ project: 'project', worker: 'worker', feature: 'untiered' }]);
     } finally {
       listener.stop();
       await provider.shutdown();
