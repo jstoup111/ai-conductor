@@ -5971,11 +5971,21 @@ export class Conductor {
      */
     escalation: Pick<StepRunOptions, 'attempt' | 'escalate' | 'modelOverride' | 'effortOverride'> = {},
   ): Promise<StepRunResult> {
-    const identityOption = { ...escalation, ...(verdictRunId ? { runId: verdictRunId } : {}) };
     const selfHostConfig = resolveSelfHostConfig(this.config);
     const stepSelection =
       this.config.steps?.[name]?.llm_provider ?? this.config.llm_provider;
     const preferredBuildProvider = normalizeProviderSelection(stepSelection)[0];
+    // Codex's self-host lifecycle owns its retry identity.  It still needs the
+    // concrete escalation overrides so the next invocation matches the
+    // `step_retry` annotation, but forwarding the generic retry-rung fields
+    // makes an auth park/resume look like a consumed generic retry (#905).
+    const runnerEscalation = preferredBuildProvider === 'codex'
+      ? {
+          modelOverride: escalation.modelOverride,
+          effortOverride: escalation.effortOverride,
+        }
+      : escalation;
+    const identityOption = { ...runnerEscalation, ...(verdictRunId ? { runId: verdictRunId } : {}) };
     const sh = selfHostConfig;
 
     // Compatibility runners do not have ProviderExecutionContext and therefore
