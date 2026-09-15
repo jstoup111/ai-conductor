@@ -26,6 +26,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Provider fallbacks now skip candidates that cannot complete required setup and retain clear recovery guidance. ([implementation PR #2538](https://github.com/jstoup111/ai-conductor/pull/2538)).
 - PRD widening decisions now remain valid when reviewer wording changes. ([implementation PR #2479](https://github.com/jstoup111/ai-conductor/pull/2479)).
 - Daemon-managed sessions can run required task attribution commands without hitting the conductor session guard. ([implementation PR #2569](https://github.com/jstoup111/ai-conductor/pull/2569)).
+- Self-host dispatches wait in the queue without exhausting provider startup retries while a root refresh is pending. ([implementation PR #2571](https://github.com/jstoup111/ai-conductor/pull/2571)).
 
 ## [1.2.0] - 2026-09-14
 
