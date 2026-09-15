@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-15T11:10:22.108Z
 Slug: print-only-applicable-resume-steps-in-the-self-hos
 Class: needs-human
 Halting step: prd_audit
