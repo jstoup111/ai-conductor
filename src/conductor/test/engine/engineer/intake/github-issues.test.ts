@@ -1,4 +1,4 @@
-// Covers: task:1, task:5
+// Covers: task:1, task:3, task:5
 // Unit: github-issues adapter — report() cwd resolution (#290).
 // The adapter must NEVER consult process.cwd() when choosing the working
 // directory for a `gh` call. cwd must come from (1) the poll-cache, (2) a
@@ -480,6 +480,41 @@ describe('poll() invalid repository targets', () => {
       envelopes: [],
       calls: 0,
       logs: [`github-issues: skipping o/a: missing path ${missingPath}`],
+    });
+  });
+
+  it('reports a missing registration once, re-arms after restore, and skips GitHub until the path returns', async () => {
+    const repoPath = join(dir, 'missing-then-restored');
+    const logs: string[] = [];
+    let listingCalls = 0;
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'issue' && args[1] === 'list') {
+        listingCalls += 1;
+        return { stdout: JSON.stringify([{ number: 1, title: 'Captured after restore', body: 'body' }]) };
+      }
+      return { stdout: '' };
+    };
+    const adapter = createGithubIssuesAdapter({
+      gh,
+      registry: { list: async () => [{ name: 'o/a', path: repoPath }] },
+      ledger: createLedger(join(dir, 'ledger.json')),
+      log: (message) => logs.push(message),
+    });
+
+    await adapter.poll();
+    await adapter.poll();
+    await mkdir(repoPath);
+    const captured = await adapter.poll();
+    await rm(repoPath, { recursive: true });
+    await adapter.poll();
+
+    expect({ listingCalls, logs, captured: captured.map(({ sourceRef }) => sourceRef) }).toEqual({
+      listingCalls: 1,
+      logs: [
+        `github-issues: skipping o/a: missing path ${repoPath}`,
+        `github-issues: skipping o/a: missing path ${repoPath}`,
+      ],
+      captured: ['o/a#1'],
     });
   });
 
