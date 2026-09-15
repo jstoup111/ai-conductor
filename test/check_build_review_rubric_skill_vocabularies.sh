@@ -68,6 +68,10 @@ const RUBRICS: Record<string, { referenceFields: string[]; fixed: Record<string,
     referenceFields: ['locus'],
     fixed: {},
   },
+  security: {
+    referenceFields: ['locus'],
+    fixed: {},
+  },
 };
 const SPECIMENS: Record<string, unknown> = { OBJ, PATH, GARBAGE };
 const BASELINE_CANDIDATES = ['OBJ', 'PATH', 'TASK'];
@@ -169,8 +173,8 @@ check_vocabulary_drift() {
     return 1
   fi
 
-  for rubric in testQuality; do
-    skill_file="$harness_dir/skills/build-review-test-quality/SKILL.md"
+  for rubric in testQuality security; do
+    skill_file="$harness_dir/skills/build-review-$(rubric_skill_name "$rubric")/SKILL.md"
     if [ ! -f "$skill_file" ]; then
       echo "missing vocabulary source for ${rubric}: ${skill_file}" >&2
       return 1
@@ -204,8 +208,8 @@ check_reference_grammar_drift() {
     return 1
   fi
 
-  for rubric in testQuality; do
-    skill_file="$harness_dir/skills/build-review-test-quality/SKILL.md"
+  for rubric in testQuality security; do
+    skill_file="$harness_dir/skills/build-review-$(rubric_skill_name "$rubric")/SKILL.md"
     if [ ! -r "$skill_file" ]; then
       echo "could not read build-review ${rubric} reference grammar contract: ${skill_file}" >&2
       return 1
@@ -253,6 +257,14 @@ check_reference_grammar_drift() {
   done
 }
 
+rubric_skill_name() {
+  case "$1" in
+    testQuality) printf '%s' test-quality ;;
+    security) printf '%s' security ;;
+    *) return 1 ;;
+  esac
+}
+
 fixture_dir=$(mktemp -d)
 fixture_domain="$fixture_dir/build-review-domain.ts"
 fixture_harness="$fixture_dir/harness"
@@ -265,6 +277,13 @@ cat >"$fixture_domain" <<'EOF'
 export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
   testQuality: Object.freeze({
     concernKinds: Object.freeze(['test-insensitive']),
+  }),
+  security: Object.freeze({
+    concernKinds: Object.freeze([
+      'committed-secret', 'injection', 'broken-access-control', 'path-traversal',
+      'unsafe-deserialization', 'cryptographic-failure', 'security-misconfiguration',
+      'authentication-failure', 'integrity-failure', 'ssrf',
+    ]),
   }),
 });
 
@@ -281,13 +300,13 @@ function parseContentRegionReference(value: unknown): unknown {
 }
 export function parseBuildReviewFindingAnchor(value: Record<string, unknown>): unknown {
   const source = value;
-  return source.rubric === 'testQuality'
+  return source.rubric === 'testQuality' || source.rubric === 'security'
     ? parseContentRegionReference(source.locus)
     : undefined;
 }
 EOF
 
-for rubric in test-quality; do
+for rubric in test-quality security; do
   mkdir -p "$fixture_harness/skills/build-review-$rubric"
 done
 
@@ -295,6 +314,10 @@ printf '%s\n' '**Closed vocabulary:** `test-insensitive`' \
   >"$fixture_harness/skills/build-review-test-quality/SKILL.md"
 printf '\n%s\n' '**Reference grammar:** `anchor.locus` is a `content-region` reference.' \
   >>"$fixture_harness/skills/build-review-test-quality/SKILL.md"
+printf '%s\n' '**Closed vocabulary:** `committed-secret`, `injection`, `broken-access-control`, `path-traversal`, `unsafe-deserialization`, `cryptographic-failure`, `security-misconfiguration`, `authentication-failure`, `integrity-failure`, `ssrf`' \
+  >"$fixture_harness/skills/build-review-security/SKILL.md"
+printf '\n%s\n' '**Reference grammar:** `anchor.locus` is a `content-region` reference.' \
+  >>"$fixture_harness/skills/build-review-security/SKILL.md"
 
 # The aligned fixture must pass both checks before any drift scenario runs.
 if ! check_vocabulary_drift "$fixture_domain" "$fixture_harness" >/dev/null; then
@@ -348,6 +371,33 @@ else
   echo "$fixture_output" >&2
   failures=1
 fi
+
+run_vocabulary_drift_fixture() {
+  local label=$1 domain=$2 harness=$3 expected_rubric=$4 expected_member=$5
+  local fixture_output
+  if fixture_output=$(check_vocabulary_drift "$domain" "$harness" 2>&1); then
+    echo "known gap: vocabulary guard accepts ${label}" >&2
+    failures=1
+  elif grep -Fq "$expected_rubric" <<<"$fixture_output" && grep -Fq "$expected_member" <<<"$fixture_output"; then
+    echo "rubric vocabulary guard rejects ${label}"
+  else
+    echo "rubric vocabulary guard rejected ${label} without the required diagnostic" >&2
+    echo "$fixture_output" >&2
+    failures=1
+  fi
+}
+
+fixture_skill_extra_harness="$fixture_dir/harness-skill-extra"
+cp -R "$fixture_harness" "$fixture_skill_extra_harness"
+sed -i 's/`ssrf`/`ssrf`, `unknown-security-kind`/' "$fixture_skill_extra_harness/skills/build-review-security/SKILL.md"
+run_vocabulary_drift_fixture \
+  'a skill-side extra security vocabulary member' "$fixture_domain" "$fixture_skill_extra_harness" security unknown-security-kind
+
+fixture_engine_extra_domain="$fixture_dir/build-review-domain-engine-extra.ts"
+cp "$fixture_domain" "$fixture_engine_extra_domain"
+sed -i "s/'ssrf',/'ssrf', 'unknown-security-kind',/" "$fixture_engine_extra_domain"
+run_vocabulary_drift_fixture \
+  'an engine-side extra security vocabulary member' "$fixture_engine_extra_domain" "$fixture_harness" security unknown-security-kind
 
 if ! check_vocabulary_drift "$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts" "$HARNESS_DIR"; then
   failures=1
