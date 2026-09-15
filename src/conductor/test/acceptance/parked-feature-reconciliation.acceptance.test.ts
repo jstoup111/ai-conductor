@@ -368,6 +368,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   __resetResolveCacheForTests();
+  vi.unstubAllEnvs();
   // Git may finish packing objects immediately after the final child process
   // exits; retry recursive removal so that teardown race cannot mask the
   // acceptance assertion.
@@ -996,22 +997,36 @@ describe('parked-feature reconciliation acceptance (rem-adr-006): the production
     const repairBranch = `shipment-repair/1060/${slug}`;
     const repairPr = 'https://github.com/acme/repo/pull/2000';
     await seedParkedFeature(slug, { merged: true, record: false });
+    // Repair publication is an owned feature mutation. Seed the committed
+    // owner evidence on main and a machine-scoped matching identity; the
+    // local bare remote remains only the injected terminal Git transport.
+    await writeRepoFile(`.docs/intake/${slug}.md`, 'Owner: test-owner\n');
+    await git(['add', '-A']);
+    await git(['commit', '-q', '-m', `chore: stamp ${slug} owner`]);
+    await git(['push', '-q', 'origin', 'main']);
+    await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+    await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'spec_owner: test-owner\n');
+    vi.stubEnv('HOME', projectRoot);
 
     // Actions supplies GITHUB_REPOSITORY; a long-running daemon does not, so
     // the adapter must resolve the repository from `gh` itself.
     vi.stubEnv('GITHUB_REPOSITORY', '');
 
     const ghCalls: string[][] = [];
+    let repairCreated = false;
     const gh: GhRunner = async (args, opts) => {
       ghCalls.push(args);
       const json = (value: unknown) => ({ stdout: JSON.stringify(value) });
       const has = (flag: string, value: string) => args[args.indexOf(flag) + 1] === value;
 
+      if (args[0] === 'api' && args[1] === 'user') return { stdout: 'test-owner\n' };
       if (args[0] === 'repo' && args[1] === 'view') return json({ nameWithOwner: 'acme/repo' });
       if (args[0] === 'pr' && args[1] === 'list' && args.includes('--state') && has('--state', 'merged')) {
         return json([{ url: implementationPr }]);
       }
-      if (args[0] === 'pr' && args[1] === 'list') return json([]); // no open repair PR yet
+      if (args[0] === 'pr' && args[1] === 'list') {
+        return json(repairCreated ? [{ url: repairPr }] : []);
+      }
       if (args[0] === 'pr' && args[1] === 'view' && args[2] === implementationPr) {
         if (has('--json', 'mergedAt')) return json({ mergedAt: '2026-07-27T10:11:12Z' });
         return json({
@@ -1024,7 +1039,10 @@ describe('parked-feature reconciliation acceptance (rem-adr-006): the production
       if (args[0] === 'pr' && args[1] === 'view' && args[2] === repairPr) {
         return json({ url: repairPr, headRefOid: await git(['rev-parse', 'HEAD'], opts.cwd) });
       }
-      if (args[0] === 'pr' && args[1] === 'create') return { stdout: `${repairPr}\n` };
+      if (args[0] === 'pr' && args[1] === 'create') {
+        repairCreated = true;
+        return { stdout: `${repairPr}\n` };
+      }
       // The repair branch does not exist on the remote yet.
       if (args[0] === 'api' && args[1]?.startsWith('repos/')) throw new Error('gh: HTTP 404');
       if (args[0] === 'api') return { stdout: '' }; // status POST
@@ -1033,9 +1051,18 @@ describe('parked-feature reconciliation acceptance (rem-adr-006): the production
 
     const { detect, dispatch } = await loadReconcileVerb();
     const out: string[] = [];
+    const guardedGit: GitRunner = async (args, opts) => {
+      if (args.join(' ') === 'config --get remote.origin.url') {
+        return { stdout: 'https://github.com/acme/repo.git\n' };
+      }
+      if (args.join(' ') === 'symbolic-ref refs/remotes/origin/HEAD') {
+        return { stdout: 'refs/remotes/origin/main\n' };
+      }
+      return realGit(args, opts);
+    };
     const code = await dispatch(
       detect(['node', 'conduct', 'daemon', 'reconcile-parked', slug]) as { kind: string; slug: string },
-      { cwd: projectRoot, out: (line) => out.push(line), runGit: realGit, runGh: gh },
+      { cwd: projectRoot, out: (line) => out.push(line), runGit: guardedGit, runGh: gh },
     );
 
     // Cleanup is correctly refused and deferred — the record still is not on main.

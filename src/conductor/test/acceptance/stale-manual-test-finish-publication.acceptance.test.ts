@@ -251,6 +251,24 @@ describe('stale SHIP evidence at FINISH converges through the production coordin
         baseBranch: 'main',
         git,
         gh,
+        // The production coordinator has no raw PR-write fallback. This
+        // fixture owns an already-authorized PR and models that exact guarded
+        // boundary while keeping GitHub itself fake.
+        operations: {
+          run: async (request) => {
+            if (request.operation === 'pull-request.ready') {
+              pullRequest = { ...pullRequest, isDraft: false };
+            }
+            if (request.operation === 'pull-request.edit' && request.payload) {
+              pullRequest = {
+                ...pullRequest,
+                ...(typeof request.payload.title === 'string' ? { title: request.payload.title } : {}),
+                ...(typeof request.payload.body === 'string' ? { body: request.payload.body } : {}),
+              };
+            }
+            return {};
+          },
+        },
         acquireInteractiveIntent: async () => 'pr',
         observeReleaseReadiness: async () => {
           if (manualTestRuns === 0) publicationObservedBeforeValidation = true;

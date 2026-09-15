@@ -13,8 +13,8 @@
  * unwired even if that helper's unit tests pass.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Conductor } from '../../src/engine/conductor.js';
@@ -101,17 +101,17 @@ function githubFake(pr: FakePr) {
       return { stdout: JSON.stringify(view) };
     }
 
-    if (args[0] === 'api' && args[2] === 'DELETE') {
+    if (args[0] === 'api' && args.includes('DELETE')) {
       pr.labels = pr.labels.filter((label) => label !== 'needs-remediation');
       return { stdout: '' };
     }
 
-    if (args[0] === 'api' && args[2] === 'POST' && /\/labels$/.test(args[3] ?? '')) {
+    if (args[0] === 'api' && args.includes('POST') && args.some((arg) => /\/labels$/.test(arg))) {
       if (!pr.labels.includes('needs-remediation')) pr.labels.push('needs-remediation');
       return { stdout: '' };
     }
 
-    if (args[0] === 'api' && args[2] === 'PATCH') {
+    if (args[0] === 'api' && args.includes('PATCH')) {
       const bodyArg = args.find((arg) => arg.startsWith('body='));
       if (bodyArg) pr.comments[0].body = bodyArg.slice('body='.length);
       return { stdout: '' };
@@ -155,10 +155,14 @@ describe('halt PR rehabilitation across daemon re-dispatch and reconciliation', 
   beforeEach(async () => {
     projectRoot = await mkdtemp(join(tmpdir(), 'halt-pr-rehabilitation-acceptance-'));
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+    await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'spec_owner: test-owner\n');
+    vi.stubEnv('HOME', projectRoot);
     stateFilePath = join(projectRoot, '.pipeline', 'conduct-state.json');
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await rm(projectRoot, { recursive: true, force: true });
   });
 
@@ -196,6 +200,10 @@ describe('halt PR rehabilitation across daemon re-dispatch and reconciliation', 
     };
     const git: GitRunner = async (args) => {
       if (args[0] === 'cat-file') throw new Error('no shipped record: feature is still building');
+      if (args.join(' ') === 'config --get remote.origin.url') {
+        return { stdout: 'https://github.com/acme/widgets.git\n' };
+      }
+      if (args[0] === 'show') return { stdout: 'Owner: test-owner\n' };
       return { stdout: '' };
     };
 
@@ -223,8 +231,10 @@ describe('halt PR rehabilitation across daemon re-dispatch and reconciliation', 
     expect(stateSeenByBuild!.labels).not.toContain('needs-remediation');
     expect(stateSeenByBuild!.body).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
     expect(stateSeenByBuild!.isDraft).toBe(true);
-    expect(stateSeenByBuild!.comments).toHaveLength(1);
-    expect(stateSeenByBuild!.comments[0].body).toMatch(/resolved/i);
+    // Guarded resume repair preserves the original halt history and adds a
+    // distinct, authorized resolution note.
+    expect(stateSeenByBuild!.comments).toHaveLength(2);
+    expect(stateSeenByBuild!.comments.some((comment) => /resolved/i.test(comment.body))).toBe(true);
 
     const sweepStart = calls.length;
     await reconcileHaltPrs({ projectRoot, runGh: gh, runGit: git });

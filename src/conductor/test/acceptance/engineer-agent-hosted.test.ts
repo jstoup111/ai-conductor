@@ -470,7 +470,7 @@ describe('dispatchEngineer({kind:"land"})', () => {
 describe('dispatchEngineer({kind:"handoff"})', () => {
   it('gh pr create runs in the worktree, PR reported, worktree removed on success (FR-4/FR-5)', async () => {
     const idea = 'add csv export';
-    await writeRegistry([makeRecord(repoPath, 'target-repo', 'https://example.invalid/repo.git')]);
+    await writeRegistry([makeRecord(repoPath, 'target-repo', 'https://github.com/test-owner/target-repo.git')]);
     const worktree = await worktreeWithDocs(repoPath, idea);
 
     const { dispatchEngineer } = await import('../../src/engine/engineer-cli.js');
@@ -488,11 +488,23 @@ describe('dispatchEngineer({kind:"handoff"})', () => {
       if (args[0] === 'pr' && args[1] === 'create') {
         return { stdout: 'https://example.invalid/repo/pull/42' };
       }
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ url: 'https://github.com/test-owner/target-repo/pull/42' }) };
+      }
       return { stdout: '' };
     };
     const launchCalls: string[] = [];
     const fakeLaunch = (p: string) => { launchCalls.push(p); };
-    const fakeGit = async () => ({ stdout: '' });
+    // The handoff now resolves the remote target and re-reads the committed
+    // owner marker before its fake transport can publish. Keep those read-only
+    // answers faithful while retaining the injected write boundary below.
+    const fakeGit = async (args: string[]) => {
+      if (args.join(' ') === 'config --get remote.origin.url') {
+        return { stdout: 'https://github.com/test-owner/target-repo.git\n' };
+      }
+      if (args[0] === 'show') return { stdout: 'Owner: test-owner\n' };
+      return { stdout: '' };
+    };
 
     const handoffOut: string[] = [];
     const code = await dispatchEngineer(
