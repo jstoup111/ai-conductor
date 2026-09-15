@@ -36,6 +36,7 @@ import type { BuildReviewFrozenInputs } from "./build-review-inputs.js";
 import { buildReviewScopeCandidateIdentityKey } from "./build-review-scope-identity.js";
 import {
   deriveBuildReviewRubricProjections,
+  isTestQualityProjection,
   type BuildReviewRubricProjections,
   type BuildReviewRubricProjection,
   type BuildReviewTestQualityProjectionInput,
@@ -311,6 +312,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
  * second provider call participate in candidate settlement.
  */
 export function buildReviewCandidateScopeResolutionContext(projection: BuildReviewRubricProjection): BuildReviewCandidateScopeResolutionContext {
+  if (!isTestQualityProjection(projection)) return { candidates: [] };
   const scope = record(projection.testScope);
   const rawCandidates = Array.isArray(scope?.candidates) ? scope.candidates : [];
   const evidence = Array.isArray(scope?.evidence) ? scope.evidence : [];
