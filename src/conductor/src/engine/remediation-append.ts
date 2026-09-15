@@ -68,6 +68,44 @@ function existingTaskTitles(planText: string): Map<string, string> {
   return map;
 }
 
+function collapseToOneLine(value: string | number | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const collapsed = String(value).replace(/\s+/g, ' ').trim();
+  return collapsed === '' ? undefined : collapsed;
+}
+
+/**
+ * Build the completion obligations for an appended remediation task.
+ *
+ * The renderer accepts findings from several tools, so each finding field is
+ * reduced to one physical line before it can become Markdown. This keeps a
+ * malformed multi-line finding from adding unowned plan structure.
+ */
+export function buildRemediationDoneWhenChecks(
+  id: string,
+  gateSource: string,
+  criterion?: string,
+  governingClause?: string,
+  rationale?: string,
+  title?: string,
+): string[] {
+  const normalizedCriterion = collapseToOneLine(criterion);
+  const normalizedClause = collapseToOneLine(governingClause);
+  const primary = normalizedCriterion
+    ?? normalizedClause
+    ?? collapseToOneLine(rationale)
+    ?? collapseToOneLine(title)
+    ?? `Remediation task ${id}`;
+  const checks = [`${primary} is satisfied by this task.`];
+
+  if (normalizedCriterion !== undefined && normalizedClause !== undefined) {
+    checks.push(`${normalizedClause} is satisfied by this task.`);
+  }
+
+  checks.push(`Re-run ${collapseToOneLine(gateSource) ?? gateSource} and confirm task ${id} is complete.`);
+  return checks;
+}
+
 /** Render one appended plan task block. Format parses via parsePlanTaskPaths. */
 function renderTaskBlock(
   id: string,
@@ -78,26 +116,27 @@ function renderTaskBlock(
   parentTask?: number | string,
   governingClause?: string,
 ): string {
+  const normalizedCriterion = collapseToOneLine(criterion);
+  const normalizedParentTask = collapseToOneLine(parentTask);
+  const normalizedClause = collapseToOneLine(governingClause);
+  const checks = buildRemediationDoneWhenChecks(
+    id,
+    gateSource,
+    criterion,
+    governingClause,
+    rationale,
+    title,
+  );
+
   return [
     `### Task ${id}: ${title}`,
     `**Gate:** ${gateSource}`,
     `**Rationale:** ${rationale}`,
-    ...(criterion === undefined || parentTask === undefined
-      ? []
-      : [
-          `**Criterion:** ${criterion}`,
-          `**Parent task:** ${parentTask}`,
-          '**Done when:**',
-          `- ${criterion} is satisfied by this task.`,
-        ]),
-    ...(governingClause === undefined
-      ? []
-      : [
-          `**Governing clause:** ${governingClause}`,
-          ...(parentTask === undefined ? [] : [`**Parent task:** ${parentTask}`]),
-          '**Done when:**',
-          `- ${governingClause} is satisfied by this task.`,
-        ]),
+    ...(normalizedCriterion === undefined ? [] : [`**Criterion:** ${normalizedCriterion}`]),
+    ...(normalizedParentTask === undefined ? [] : [`**Parent task:** ${normalizedParentTask}`]),
+    ...(normalizedClause === undefined ? [] : [`**Governing clause:** ${normalizedClause}`]),
+    '**Done when:**',
+    ...checks.map((check) => `- ${check}`),
     '',
   ].join('\n');
 }
@@ -130,7 +169,7 @@ export function appendRemediationTasks(
     for (const t of gapTasks) {
       const base = sanitizeSegment(t.id !== '' ? t.id : gap.id, 'gap task id');
       const canonical = `rem-${source}-${base}`;
-      const title = t.title.trim() !== '' ? t.title.trim() : gap.rationale.trim();
+      const title = collapseToOneLine(t.title) ?? collapseToOneLine(gap.rationale) ?? '';
 
       const existingTitle = existing.get(canonical);
       if (existingTitle !== undefined && existingTitle === title) {
