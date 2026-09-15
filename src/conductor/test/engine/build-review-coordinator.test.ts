@@ -1,4 +1,4 @@
-// Covers: task:15
+// Covers: task:7, task:15
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -397,7 +397,7 @@ describe("build-review coordinator: registered dispatch", () => {
       kind: 'ready',
       branches: [
         { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
-        { kind: 'infrastructure-failure', rubric: 'security', reason: expect.any(String) },
+        { kind: 'dispatched', rubric: 'security', result: { verdict: 'PASS' } },
       ],
     });
   });
@@ -447,6 +447,64 @@ function testQualityFinding(summary = "The changed test passes against the rever
 function testQualityBranch(result: Awaited<ReturnType<typeof coordinateBuildReviewRubrics>>) {
   return result.kind === "ready" ? result.branches.find((branch) => branch.rubric === "testQuality") : undefined;
 }
+
+function securityBranch(result: Awaited<ReturnType<typeof coordinateBuildReviewRubrics>>) {
+  return result.kind === "ready" ? result.branches.find((branch) => branch.rubric === "security") : undefined;
+}
+
+describe("build-review coordinator: security envelope", () => {
+  it("stamps a security finding with the projection-owned envelope and derived failure verdict", async () => {
+    const securityHash = `sha256:${"a".repeat(64)}`;
+    const result = await coordinateBuildReviewRubrics(coordinationInput(false, {
+      config: config(false, true),
+      engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "resolved", digest: "sha256:security-skill" } } },
+      dispatchModel: vi.fn(async () => ({
+        findings: [{
+        concernKind: "injection",
+        summary: "Request input reaches a shell command.",
+        evidenceLocations: ["src/a.ts:1"],
+        anchor: { rubric: "security", locus: { path: "src/a.ts", contentHash: securityHash, display: "request-derived command" } },
+      }],
+      })),
+    }));
+
+    expect(securityBranch(result)).toMatchObject({
+      kind: "dispatched", rubric: "security", result: {
+        kind: "judged", rubric: "security", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot", verdict: "FAIL",
+      },
+    });
+  });
+
+  it.each([
+    ["kind", { kind: "judged" }],
+    ["verdict", { verdict: "PASS" }],
+    ["rubric", { rubric: "testQuality" }],
+    ["contractVersion", { contractVersion: "v3" }],
+    ["lapId", { lapId: "lap-reviewer" }],
+    ["snapshotDigest", { snapshotDigest: "sha256:reviewer" }],
+  ])("rejects a reviewer-supplied security %s as infrastructure", async (_field, envelope) => {
+    const result = await coordinateBuildReviewRubrics(coordinationInput(false, {
+      config: config(false, true),
+      engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "resolved", digest: "sha256:security-skill" } } },
+      dispatchModel: vi.fn(async () => ({ findings: [], ...envelope })),
+    }));
+
+    expect(securityBranch(result)).toMatchObject({
+      kind: "infrastructure-failure", rubric: "security", reason: "invalid-provider-result",
+      detail: expect.stringContaining("engine-owned envelope field"),
+    });
+  });
+
+  it("maps a security-review refusal to infrastructure rather than an empty pass", async () => {
+    const result = await coordinateBuildReviewRubrics(coordinationInput(false, {
+      config: config(false, true),
+      engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "resolved", digest: "sha256:security-skill" } } },
+      dispatchModel: vi.fn(async () => "I cannot perform a security review."),
+    }));
+
+    expect(securityBranch(result)).toMatchObject({ kind: "infrastructure-failure", rubric: "security", reason: "invalid-provider-result" });
+  });
+});
 
 describe("build-review coordinator: frozen fan-out", () => {
   it('keeps a valid indeterminate scope judgement, its independent finding, and named event evidence without a repair dispatch', async () => {
