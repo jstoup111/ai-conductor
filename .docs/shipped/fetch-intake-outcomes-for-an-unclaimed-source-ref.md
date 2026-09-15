@@ -4,6 +4,13 @@ spec_hash: ac2009c36d11ecc1502e2280734a62f0cb4854580b0eaf24f2977f486d092f59
 pr: https://github.com/jstoup111/ai-conductor/pull/2560
 shipped: 2026-09-15
 engine_version: 20260915T105227Z-df26a1d8ebd1
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-06-inbound-intake-trust-boundary D1"
+    outcome: remediated
+    summary: "The unclaimed-source path receives raw tracker text in `engineer-cli.ts` and sanitizes it per-consumer instead of enforcing the approved adapter-owned choke point."
 ---
 
 ## Cost
