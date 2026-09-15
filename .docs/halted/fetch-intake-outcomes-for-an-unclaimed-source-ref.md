@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-15T12:20:07.197Z
 Slug: fetch-intake-outcomes-for-an-unclaimed-source-ref
 Class: plan-gap
 Halting step: prd_audit
