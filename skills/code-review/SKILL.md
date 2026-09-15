@@ -95,9 +95,9 @@ The evaluator runs three stages in order. Failures in earlier stages block later
 - Is there unnecessary complexity?
 - Are there duplicated patterns that should be extracted?
 - Does error handling follow consistent patterns?
-- If tech-context loaded: stack-specific checks (N+1, security, performance)
+- If tech-context loaded: stack-specific checks (N+1, performance)
 - When a pattern basis is present, flag only a concrete, material departure from its relevant
-  semantic traits that creates a correctness, security, or meaningful maintenance risk. Accept
+  semantic traits that creates a correctness or meaningful maintenance risk. Accept
   documented allowed variation and immaterial implementation differences. Do not block solely for
   the reviewer's preferred abstraction or naming, exact textual copying, or stale file/line
   coordinates.
@@ -112,7 +112,7 @@ The evaluator runs three stages in order. Failures in earlier stages block later
 
 The evaluator is prompted to be **genuinely critical, not performative**:
 
-- Find real issues that would cause bugs, maintenance problems, or security vulnerabilities
+- Find real issues that would cause bugs or maintenance problems
 - Don't nitpick style preferences that don't affect correctness
 - Don't flag things that are intentional trade-offs documented in the plan
 - Do flag things that seem intentional but are actually wrong
