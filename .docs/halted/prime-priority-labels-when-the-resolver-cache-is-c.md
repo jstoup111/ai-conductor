@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-15T11:14:37.113Z
 Slug: prime-priority-labels-when-the-resolver-cache-is-c
 Class: needs-human
 Halting step: prd_audit
