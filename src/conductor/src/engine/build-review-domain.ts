@@ -3,7 +3,10 @@ import { createHash } from 'node:crypto';
 import type { BuildReviewRubricId } from '../types/config.js';
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import { buildReviewScopeCandidateIdentityKey } from './build-review-scope-identity.js';
-import type { BuildReviewRubricProjection } from './build-review-projections.js';
+import type {
+  BuildReviewRubricProjection,
+  TestQualityProjection,
+} from './build-review-projections.js';
 import { isCanonicalBuildReviewRepoRelativePath } from './build-review-scope-source.js';
 
 export type BuildReviewLapId = string & { readonly __brand: 'BuildReviewLapId' };
@@ -26,6 +29,13 @@ export interface BuildReviewFindingReferenceContext { readonly changedTests: rea
 /** Compatibility title fields are authoritative only for projections before typed scope. */
 export function isLegacyBuildReviewTestScope(testScope: unknown): boolean {
   return testScope === undefined;
+}
+
+/** Kept local to avoid making the domain module a runtime projection dependency. */
+function isTestQualityProjection(
+  projection: BuildReviewRubricProjection,
+): projection is TestQualityProjection {
+  return projection.rubric === 'testQuality';
 }
 export interface BuildReviewCandidateScopeSourceRegion { readonly path: string; readonly startLine: number; readonly endLine: number; readonly contentHash: string; readonly display: string; }
 export interface BuildReviewCandidateScopeCandidate { readonly candidateId: string; readonly sourceRegion: BuildReviewCandidateScopeSourceRegion; readonly obligationReferences: readonly string[]; }
@@ -224,7 +234,7 @@ function declaredHeadTestTarget(entry: unknown): {
   return { path, title: titleChain.join(' > '), occurrence: occurrence as number };
 }
 
-function declaredTitleOccurrenceIndex(projection: BuildReviewRubricProjection): DeclaredTitleOccurrenceIndex {
+function declaredTitleOccurrenceIndex(projection: TestQualityProjection): DeclaredTitleOccurrenceIndex {
   const scope = object(projection.testScope);
   const targets = new Map<string, number[]>();
   const candidatesById = new Map<string, { readonly title: string; readonly occurrence: number }>();
@@ -269,7 +279,7 @@ function declaredTitleOccurrenceIndex(projection: BuildReviewRubricProjection): 
   }
   return { targets, candidatesById, candidates };
 }
-function targetRegions(projection: BuildReviewRubricProjection, declaredTitles: DeclaredTitleOccurrenceIndex): readonly BuildReviewContentRegionReference[] | undefined {
+function targetRegions(projection: TestQualityProjection, declaredTitles: DeclaredTitleOccurrenceIndex): readonly BuildReviewContentRegionReference[] | undefined {
   const scope = object(projection.testScope);
   if (!scope || !Array.isArray(scope.targets)) return undefined;
   return scope.targets.flatMap((target) => {
@@ -280,6 +290,9 @@ function targetRegions(projection: BuildReviewRubricProjection, declaredTitles: 
 }
 /** Builds finding authority only from established targets and already-validated resolved candidates. */
 export function buildReviewFindingReferenceContext(projection: BuildReviewRubricProjection, scopeResolutions: readonly BuildReviewCandidateScopeResolution[] = []): BuildReviewFindingReferenceContext {
+  if (!isTestQualityProjection(projection)) {
+    return { changedTests: [], changedPaths: projection.changedFiles.map((file) => file.path), planTasks: [] };
+  }
   const declaredTitles = declaredTitleOccurrenceIndex(projection);
   const targets = targetRegions(projection, declaredTitles);
   const useLegacyTitles = isLegacyBuildReviewTestScope(projection.testScope);
@@ -313,10 +326,11 @@ export function buildReviewFindingReferenceContext(projection: BuildReviewRubric
 function securityRegion(value: unknown): BuildReviewContentRegionReference | undefined {
   const source = object(value);
   const locus = region(value);
-  const allowed = source && (source.occurrence === undefined
+  if (!locus || !source) return undefined;
+  const allowed = source.occurrence === undefined
     ? ['path', 'contentHash', 'display']
-    : ['path', 'contentHash', 'display', 'occurrence']);
-  return locus && source && Object.keys(source).length === allowed.length && Object.keys(source).every((key) => allowed.includes(key)) && /^sha256:[a-f0-9]{64}$/.test(locus.contentHash)
+    : ['path', 'contentHash', 'display', 'occurrence'];
+  return Object.keys(source).length === allowed.length && Object.keys(source).every((key) => allowed.includes(key)) && /^sha256:[a-f0-9]{64}$/.test(locus.contentHash)
     ? locus
     : undefined;
 }

@@ -7,6 +7,7 @@ import {
   canonicalJson,
   deriveBuildReviewRubricProjections,
   deriveChangedFileReferences,
+  isTestQualityProjection,
   projectionDigest,
   type BuildReviewProjectionSource,
   type TestQualityProjection,
@@ -203,6 +204,8 @@ describe('build-review rubric projections', () => {
     expect(first.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(second.digest).toBe(first.digest);
     expect(Object.isFrozen(first)).toBe(true);
+    expect(isTestQualityProjection(first)).toBe(false);
+    expect(isTestQualityProjection(deriveBuildReviewRubricProjections(threeFileSource).testQuality)).toBe(true);
   });
 
   it('keeps the security projection sealed when the post-exclusion frozen diff is empty', () => {

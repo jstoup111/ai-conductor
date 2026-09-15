@@ -116,6 +116,13 @@ export interface SecurityProjection extends CommonProjection<'security'> {}
 
 export type BuildReviewRubricProjection = TestQualityProjection | SecurityProjection;
 
+/** Test-scope fields belong exclusively to the test-quality rubric. */
+export function isTestQualityProjection(
+  projection: BuildReviewRubricProjection,
+): projection is TestQualityProjection {
+  return projection.rubric === 'testQuality';
+}
+
 export type BuildReviewRubricProjections = {
   readonly testQuality: TestQualityProjection;
   readonly security: SecurityProjection;
