@@ -265,6 +265,96 @@ describe('Task 5: operator attributes at the metrics identity seam', () => {
   });
 });
 
+// Covers: task:5
+describe('Task 5: feature activity and outcome tier attributes', () => {
+  it('adds a supplied tier to all six feature activity and outcome points', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const recorder = new MetricsRecorder(provider.getMeter('task-5-tiered'), {
+      project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+    });
+
+    try {
+      recorder.onFeatureDispatch('fresh', 'M');
+      recorder.onFeatureHalt('mechanical', 'build', 'L');
+      recorder.onRunClose('halted', 'L');
+      recorder.onFeatureShipped('S');
+      recorder.onFeatureDuration(12, 9, 'S');
+      await provider.forceFlush();
+
+      const attributes = (name: string) => findMetric(exporter, name)?.dataPoints[0]?.attributes;
+      expect({
+        dispatches: attributes('conductor.feature.dispatches'),
+        halts: attributes('conductor.feature.halts'),
+        outcomes: attributes('conductor.run.outcomes'),
+        shipped: attributes('conductor.feature.shipped'),
+        wall: attributes('conductor.feature.duration.wall'),
+        active: attributes('conductor.feature.duration.active'),
+      }).toEqual({
+        dispatches: { kind: 'fresh', tier: 'M', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        halts: { haltClass: 'mechanical', step: 'build', tier: 'L', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        outcomes: { outcome: 'halted', tier: 'L', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        shipped: { tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        wall: { tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        active: { tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+      });
+    } finally {
+      await provider.shutdown();
+    }
+  });
+
+  it('omits tier from all six feature activity and outcome points when not supplied', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const recorder = new MetricsRecorder(provider.getMeter('task-5-untiered'), {
+      project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+    });
+
+    try {
+      recorder.onFeatureDispatch('fresh');
+      recorder.onFeatureHalt('mechanical', 'build');
+      recorder.onRunClose('halted');
+      recorder.onFeatureShipped();
+      recorder.onFeatureDuration(12, 9);
+      await provider.forceFlush();
+
+      const attributes = (name: string) => findMetric(exporter, name)?.dataPoints[0]?.attributes;
+      for (const name of [
+        'conductor.feature.dispatches', 'conductor.feature.halts', 'conductor.run.outcomes',
+        'conductor.feature.shipped', 'conductor.feature.duration.wall', 'conductor.feature.duration.active',
+      ]) expect(attributes(name)).not.toHaveProperty('tier');
+    } finally {
+      await provider.shutdown();
+    }
+  });
+
+  it('records a tiered wall duration without an active point when active duration is absent', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const recorder = new MetricsRecorder(provider.getMeter('task-5-partial-duration'), {
+      project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+    });
+
+    try {
+      recorder.onFeatureDuration(12, undefined, 'S');
+      await provider.forceFlush();
+
+      expect(findMetric(exporter, 'conductor.feature.duration.wall')?.dataPoints[0]?.attributes).toEqual({
+        tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+      });
+      expect(findMetric(exporter, 'conductor.feature.duration.active')).toBeUndefined();
+    } finally {
+      await provider.shutdown();
+    }
+  });
+});
+
 // ── Shared setup ──────────────────────────────────────────────────────────────
 
 let tempDir: string;

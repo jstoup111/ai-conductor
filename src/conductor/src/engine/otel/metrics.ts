@@ -176,7 +176,10 @@ export class MetricsRecorder {
     this.instruments.closeoutDurationHistogram.record(event.endedAt - event.startedAt, this.withIdentity({ obligation: event.obligation }));
   }
 
-  onRunClose(outcome: RunOutcome): void { this.instruments.runOutcomesCounter.add(1, this.withIdentity({ outcome })); }
+  onRunClose(outcome: RunOutcome, tier?: string): void {
+    const attrs = tier === undefined ? { outcome } : { outcome, tier };
+    this.instruments.runOutcomesCounter.add(1, this.withIdentity(attrs));
+  }
 
   onMemorySetup(event: Extract<ConductorEvent, { type: 'memory_setup' }>): void {
     this.instruments.memorySetupCounter.add(1, this.withIdentity({ before: event.before, canonical: event.canonical }));
@@ -196,12 +199,22 @@ export class MetricsRecorder {
     this.instruments.daemonUpGauge.record(1, this.withIdentity({}));
   }
 
-  onFeatureDispatch(kind: string): void { this.instruments.featureDispatchesCounter.add(1, this.withIdentity({ kind })); }
-  onFeatureHalt(haltClass: string, step: string): void { this.instruments.featureHaltsCounter.add(1, this.withIdentity({ haltClass, step })); }
-  onFeatureShipped(): void { this.instruments.featureShippedCounter.add(1, this.withIdentity({})); }
-  onFeatureDuration(wallMs?: number, activeMs?: number): void {
-    if (typeof wallMs === 'number' && Number.isFinite(wallMs)) this.instruments.featureWallHistogram.record(wallMs, this.withIdentity({}));
-    if (typeof activeMs === 'number' && Number.isFinite(activeMs)) this.instruments.featureActiveHistogram.record(activeMs, this.withIdentity({}));
+  onFeatureDispatch(kind: string, tier?: string): void {
+    const attrs = tier === undefined ? { kind } : { kind, tier };
+    this.instruments.featureDispatchesCounter.add(1, this.withIdentity(attrs));
+  }
+  onFeatureHalt(haltClass: string, step: string, tier?: string): void {
+    const attrs = tier === undefined ? { haltClass, step } : { haltClass, step, tier };
+    this.instruments.featureHaltsCounter.add(1, this.withIdentity(attrs));
+  }
+  onFeatureShipped(tier?: string): void {
+    const attrs = tier === undefined ? {} : { tier };
+    this.instruments.featureShippedCounter.add(1, this.withIdentity(attrs));
+  }
+  onFeatureDuration(wallMs?: number, activeMs?: number, tier?: string): void {
+    const attrs = tier === undefined ? {} : { tier };
+    if (typeof wallMs === 'number' && Number.isFinite(wallMs)) this.instruments.featureWallHistogram.record(wallMs, this.withIdentity(attrs));
+    if (typeof activeMs === 'number' && Number.isFinite(activeMs)) this.instruments.featureActiveHistogram.record(activeMs, this.withIdentity(attrs));
   }
   onGateVerdict(step: string, outcome: 'pass' | 'fail'): void { this.instruments.gateVerdictsCounter.add(1, this.withIdentity({ step, outcome })); }
   onKickback(from: string, to: string): void { this.instruments.gateKickbacksCounter.add(1, this.withIdentity({ from, to })); }
