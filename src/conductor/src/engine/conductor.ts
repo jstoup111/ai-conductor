@@ -2199,11 +2199,11 @@ export class Conductor {
    * Project the durable event ledger after a step closes. This is best-effort:
    * a missing or corrupt ledger must never alter that step's verdict.
    */
-  private async emitFeatureCostSnapshot(): Promise<void> {
+  private async emitFeatureCostSnapshot(tier?: ComplexityTier): Promise<void> {
     try {
       const rollup = await computeCostRollup(this.projectRoot);
       if ((rollup.readErrors ?? 0) > 0) return;
-      await this.events.emit(toFeatureCostSnapshot(rollup));
+      await this.events.emit(toFeatureCostSnapshot(rollup, tier));
     } catch {
       // Per-step provider lines remain the record when the ledger cannot be read.
     }
@@ -3360,7 +3360,7 @@ export class Conductor {
       events: this.events,
       onTerminal: async ({ event }) => {
         if (event.type === 'step_completed' || event.type === 'step_failed') {
-          await this.emitFeatureCostSnapshot();
+          await this.emitFeatureCostSnapshot(event.tier);
         }
       },
     });
