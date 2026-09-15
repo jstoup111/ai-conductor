@@ -727,6 +727,7 @@ export interface ResolvedBuildReviewConfig {
 /** Per-rubric default efforts; explicit rubric or step config overrides. */
 const DEFAULT_RUBRIC_EFFORT: Readonly<Record<BuildReviewRubricId, 'medium' | 'high'>> = {
   testQuality: 'high',
+  security: 'high',
 };
 
 /**
@@ -740,6 +741,7 @@ const DEFAULT_RUBRIC_EFFORT: Readonly<Record<BuildReviewRubricId, 'medium' | 'hi
  */
 const DEFAULT_RUBRIC_ENABLED: Readonly<Record<BuildReviewRubricId, boolean>> = {
   testQuality: false,
+  security: false,
 };
 
 export function resolveBuildReviewConfig(

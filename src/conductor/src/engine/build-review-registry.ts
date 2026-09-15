@@ -16,7 +16,7 @@ export interface BuildReviewRubricDescriptor {
   readonly prerequisite: BuildReviewRubricPrerequisite;
 }
 
-export const BUILD_REVIEW_RUBRIC_IDS = ['testQuality'] as const;
+export const BUILD_REVIEW_RUBRIC_IDS = ['testQuality', 'security'] as const;
 
 type RegisteredBuildReviewRubricId = (typeof BUILD_REVIEW_RUBRIC_IDS)[number];
 
@@ -31,6 +31,13 @@ export const BUILD_REVIEW_RUBRIC_REGISTRY: Readonly<
 > = Object.freeze({
   testQuality: Object.freeze({
     skillName: 'build-review-test-quality',
+    contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
+    projectionVersion: 'v3',
+    cachePolicy: 'content-addressed',
+    prerequisite: 'none',
+  }),
+  security: Object.freeze({
+    skillName: 'build-review-security',
     contractVersion: CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
     projectionVersion: 'v3',
     cachePolicy: 'content-addressed',
