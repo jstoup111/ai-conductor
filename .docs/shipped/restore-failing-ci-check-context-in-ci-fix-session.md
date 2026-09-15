@@ -4,6 +4,37 @@ spec_hash: 04d9c0dd42a261ba6a903d3065ad8620e760eebd54189b469ca0e6d54b7c4f67
 pr: https://github.com/jstoup111/ai-conductor/pull/2534
 shipped: 2026-09-15
 engine_version: 20260914T211543Z-5da62d0036d1
+findings:
+  - gate: architecture_review_as_built
+    finding: AB-1
+    class: REMEDIABLE
+    governing_clause: "adr-2026-09-11-github-operation-ownership D1"
+    outcome: remediated
+    summary: "New CI-repair reads bypass typed tracker operations through an exported raw GitHub argv runner."
+  - gate: architecture_review_as_built
+    finding: AB-2
+    class: REMEDIABLE
+    governing_clause: "Task 6"
+    outcome: remediated
+    summary: "The scalar result path converts affirmative no-start evidence to failed instead of preserving the required direct outcome."
+  - gate: architecture_review_as_built
+    finding: AB-3
+    class: REMEDIABLE
+    governing_clause: "Task 12"
+    outcome: remediated
+    summary: "Production diagnostics suppress aggregate provider refusal and lose required classification/provider attribution on reachable outcomes."
+  - gate: architecture_review_as_built
+    finding: AB-4
+    class: REMEDIABLE
+    governing_clause: "Task 11"
+    outcome: remediated
+    summary: "The exported legacy `buildCiFixHint` overload has no production caller."
+  - gate: architecture_review_as_built
+    finding: AB-5
+    class: REMEDIABLE
+    governing_clause: "Task 11"
+    outcome: remediated
+    summary: "Branch lookup or parse exceptions return an ambiguous result, so the reserved attempt is retained instead of returning proven not-started and restoring it."
 ---
 
 ## Cost
