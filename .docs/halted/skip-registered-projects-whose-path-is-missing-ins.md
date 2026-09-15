@@ -1,25 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-15T19:21:01.260Z
+Status: halted
 Slug: skip-registered-projects-whose-path-is-missing-ins
-Class: needs-human
-Halting step: build
-Phase: BUILD
+Class: plan-gap
+Halting step: prd_audit
+Phase: SHIP
 Branch: feat/daemon-skip-registered-projects-whose-path-is-missing-ins
-Head SHA: ff2f9497cd9ffac58bcb155ab347867406a9ea48
-Halted at: 2026-09-15T11:04:47.341Z
+Head SHA: fd57e7dced03f3dd78ee4b47aa4b6dcff16af903
+Halted at: 2026-09-15T20:12:46.383Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Provider preparation exhausted.
-step: build
-phase: preparing
-attempt: e73a4414-b4b6-45a3-bba9-fe9b6be86f44:build:2
-elapsed_ms: 300000
-recovery_count: 1
+Validation group "prd_audit" halted: as-built review found PLAN_GAP and records `Outcome delivered: no` — the approved plan cannot deliver the stated outcome
 ```
