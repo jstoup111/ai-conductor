@@ -51,6 +51,7 @@ import {
   evaluateCoherenceWaiver,
   type CoherenceWaiverChangedFile,
 } from './coherence-waiver.js';
+import { INTAKE_OUTCOMES_RELATIVE_PATH } from './outcome-staging.js';
 import type { ComplexityTier, Track } from '../../types/index.js';
 
 const NON_NEGATIVE_CRITERION_DISPOSITIONS: ReadonlySet<CriterionDiffLocalityDisposition> =
@@ -1734,6 +1735,13 @@ export async function runCoherenceGate(args: RunCoherenceGateArgs): Promise<void
     adrIds,
   });
   if (!crossCheck.ok) {
+    if (outcomeBullets.length === 0 && /^outcome-\d+$/.test(crossCheck.fabricatedId)) {
+      throw new Error(
+        `landSpec: coherence gate: fabricated-id "${crossCheck.fabricatedId}" cited by ` +
+          `${crossCheck.rowClass} row "${crossCheck.rowId}" — the outcome layer was never staged. ` +
+          `Stage intake outcomes at "${INTAKE_OUTCOMES_RELATIVE_PATH}" before landing.`,
+      );
+    }
     throw new Error(
       `landSpec: coherence gate: fabricated-id "${crossCheck.fabricatedId}" cited by ` +
         `${crossCheck.rowClass} row "${crossCheck.rowId}" — the coherence artifact cites an id ` +

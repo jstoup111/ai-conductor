@@ -44,9 +44,11 @@ export function extractDesiredOutcomeSection(intakeBody: string): string | null 
  * Write `.pipeline/intake-outcomes.md` in the given worktree, carrying the
  * `Source-Ref:` line and the verbatim `## Desired outcome` bullet block.
  *
- * No-op (returns null) when there is no sourceRef or no intakeBody — a
- * chat/CLI-originated idea stages nothing, and no error is raised (Story 1
- * negative path: downstream checks treat the outcome layer as not-required).
+ * No-op (returns null) when there is no sourceRef or the intake body is
+ * unresolved (`null`/`undefined`) — a chat/CLI-originated idea stages nothing,
+ * and no error is raised (Story 1 negative path: downstream checks treat the
+ * outcome layer as not-required). A resolved empty body stages a zero-bullet
+ * outcome layer with its `Source-Ref:`.
  */
 export async function stageIntakeOutcomes(
   worktreePath: string,
@@ -55,7 +57,7 @@ export async function stageIntakeOutcomes(
 ): Promise<string | null> {
   const ref = sourceRef == null ? '' : sourceRef.trim();
   const body = intakeBody == null ? '' : intakeBody;
-  if (ref === '' || body === '') return null;
+  if (ref === '' || intakeBody == null) return null;
 
   const pipelineDir = join(worktreePath, '.pipeline');
   const stagedPath = join(pipelineDir, 'intake-outcomes.md');
@@ -71,12 +73,6 @@ export async function stageIntakeOutcomes(
   const armorLines = openingArmorIndex !== -1 && closingArmorIndex !== -1
     ? { opening: bodyLines[openingArmorIndex], closing: bodyLines[closingArmorIndex] }
     : null;
-  // Tracker-sourced text is armor-delimited. Without an outcomes section it
-  // must not manufacture a staging artifact; explicit CLI bodies retain the
-  // established empty-section behavior for backwards compatibility.
-  if (extractedOutcomes === null && armorLines !== null) {
-    return null;
-  }
   const outcomeSection = extractedOutcomes ?? '## Desired outcome\n';
 
   const contents = armorLines === null
