@@ -73,12 +73,6 @@ export async function stageIntakeOutcomes(
   const armorLines = openingArmorIndex !== -1 && closingArmorIndex !== -1
     ? { opening: bodyLines[openingArmorIndex], closing: bodyLines[closingArmorIndex] }
     : null;
-  // Tracker-sourced text is armor-delimited. Without an outcomes section it
-  // must not manufacture a staging artifact; explicit CLI bodies retain the
-  // established empty-section behavior for backwards compatibility.
-  if (extractedOutcomes === null && armorLines !== null) {
-    return null;
-  }
   const outcomeSection = extractedOutcomes ?? '## Desired outcome\n';
 
   const contents = armorLines === null

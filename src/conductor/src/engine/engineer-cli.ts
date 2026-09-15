@@ -60,6 +60,8 @@ import { createDeliveryGuardedQueue, getIssueState } from './engineer/intake/del
 import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
+import { sanitizeInboundText } from './engineer/intake/sanitize-inbound.js';
+import { parseWorkRef } from './engineer/source-ref.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 import { createGithubTrackerClient, makeProductionGh } from './tracker-client.js';
 import {
@@ -944,14 +946,23 @@ export async function dispatchEngineer(
         // boundary for this deterministic command.
         if (resolvedBody == null) {
           const parsedRef = parseSourceRef(sourceRef);
-          if (parsedRef) {
+          const workRef = parseWorkRef(sourceRef);
+          if (parsedRef && workRef) {
             const tracker = createGithubTrackerClient(gh);
             try {
-              resolvedBody = await tracker.getIssueBody(
+              const fetchedBody = await tracker.getIssueBody(
                 parsedRef.repo,
                 parsedRef.issue,
                 target.canonicalPath,
-              ) ?? undefined;
+              );
+              if (fetchedBody !== null) {
+                const sanitized = sanitizeInboundText([fetchedBody], workRef);
+                resolvedBody = sanitized.text;
+                inbound = {
+                  neutralizations: sanitized.neutralizations,
+                  digest: sanitized.digest,
+                };
+              }
             } catch {
               // Tracker reachability must not prevent offline worktree creation.
               // Leave the body unresolved so staging remains a no-op.
