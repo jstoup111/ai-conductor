@@ -307,6 +307,38 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
   });
 
   describe('cached local scan — return cached bands with zero reader calls', () => {
+    it('primes a cold local scan, then reads only newly joined refs and remembers not-found refs', async () => {
+      const batches: string[][] = [];
+      const reader = async (refs: string[]) => {
+        batches.push([...refs]);
+        return new Map<string, string[] | 'not-found'>(refs.map((ref) => [
+          ref,
+          ref === 'owner/repo#404' ? 'not-found' : ['priority: high'],
+        ]));
+      };
+      const resolver = createPriorityResolver(reader, () => {});
+      const first: BacklogItem[] = [
+        { slug: 'known', sourceRef: 'owner/repo#1' },
+        { slug: 'missing', sourceRef: 'owner/repo#404' },
+      ];
+
+      let result = await resolver.resolve(first, { refresh: false });
+      assertBanded(result);
+      expect(result.bands.get('owner/repo#1')).toBe('high');
+      expect(result.bands.get('owner/repo#404')).toBe('unlabeled');
+      await resolver.resolve(first, { refresh: false });
+
+      result = await resolver.resolve([...first, { slug: 'new', sourceRef: 'owner/repo#2' }], { refresh: false });
+      assertBanded(result);
+      expect(result.bands.get('owner/repo#2')).toBe('high');
+      await resolver.resolve(first, { refresh: false });
+
+      expect(batches).toEqual([
+        ['owner/repo#1', 'owner/repo#404'],
+        ['owner/repo#2'],
+      ]);
+    });
+
     it('resolve with refresh: false uses cache, no reader calls', async () => {
       const callLog: string[] = [];
       const labelMap = new Map<string, string[]>([
@@ -461,6 +493,33 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
   });
 
   describe('outage handling — fail-soft fallback + once-per-outage warning', () => {
+
+    it('a cold local-read outage stays fallback without retrying until a successful refresh recovers it', async () => {
+      const warnings: string[] = [];
+      const batches: string[][] = [];
+      let available = false;
+      const reader = async (refs: string[]) => {
+        batches.push([...refs]);
+        if (!available) throw new Error('transport failure');
+        return new Map<string, string[] | 'not-found'>(refs.map((ref) => [ref, ['priority: high']]));
+      };
+      const resolver = createPriorityResolver(reader, (message) => warnings.push(message));
+      const items: BacklogItem[] = [{ slug: 'feature-1', sourceRef: 'owner/repo#1' }];
+
+      expect((await resolver.resolve(items, { refresh: false })).mode).toBe('fallback');
+      expect((await resolver.resolve(items, { refresh: false })).mode).toBe('fallback');
+      expect((await resolver.resolve(items, { refresh: false })).mode).toBe('fallback');
+      expect(batches).toEqual([['owner/repo#1']]);
+      expect(warnings).toHaveLength(1);
+
+      available = true;
+      expect((await resolver.resolve(items, { refresh: true })).mode).toBe('banded');
+      expect((await resolver.resolve(items, { refresh: false })).mode).toBe('banded');
+
+      available = false;
+      expect((await resolver.resolve(items, { refresh: true })).mode).toBe('fallback');
+      expect(warnings).toHaveLength(2);
+    });
 
   describe('missing/malformed data — 404s and empty labels as data, not outage', () => {
     it('not-found issue (404): reader returns not-found → item gets unlabeled band, others unchanged', async () => {
