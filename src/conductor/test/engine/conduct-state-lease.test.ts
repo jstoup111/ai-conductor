@@ -25,6 +25,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 import {
   createConductStateLease,
+  type ConductStateLeaseAcquireResult,
   type ConductStateLeaseFilesystem,
 } from '../../src/engine/conduct-state-lease.js';
 import {
@@ -379,6 +380,60 @@ describe('conduct-state lease', () => {
     await expect(second).resolves.toMatchObject({ ok: true });
     const acquired = await second;
     if (acquired.ok) await expect(acquired.handle.release()).resolves.toEqual({ ok: true });
+  });
+
+  it('retries when the winner quarantines before a losing contender rereads its successor claim', async () => {
+    const statePath = '/worktree/quarantined-successor-race/.pipeline/conduct-state.json';
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared, pid: 101, newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    await shared.writeRecoveryClaim(`${statePath}.lease/recovery.json`, JSON.stringify({
+      version: 1, pid: 102, token: 'dead-root', claimedAt: '1970-01-01T00:00:00.000Z',
+      ownerToken: 'dead-owner', predecessorToken: null,
+    }));
+    const successor = successorClaimPath(statePath, 'dead-owner', 'dead-root');
+    const firstMayQuarantine = deferred();
+    const firstQuarantined = deferred();
+    const firstSuccessorWritten = deferred();
+    let first: Promise<ConductStateLeaseAcquireResult> | undefined;
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async writeRecoveryClaim(path, contents): Promise<void> {
+        try {
+          await shared.writeRecoveryClaim(path, contents);
+        } catch (error) {
+          if (path === successor && contents.includes('"pid":303')) {
+            // The loser has lost the successor election. Let the winner finish
+            // recovery and release before the loser's next traversal read.
+            firstMayQuarantine.resolve();
+            await firstQuarantined.promise;
+            const winner = await first;
+            if (!winner?.ok) throw new Error(winner?.message ?? 'winner did not acquire');
+            await winner.handle.release();
+          }
+          throw error;
+        }
+        if (path === successor && contents.includes('"pid":202')) firstSuccessorWritten.resolve();
+      },
+      async moveDirectory(path, destination): Promise<void> {
+        await firstMayQuarantine.promise;
+        await shared.moveDirectory(path, destination);
+        firstQuarantined.resolve();
+      },
+    };
+
+    first = createConductStateLease(statePath, {
+      filesystem, pid: 202, newToken: () => 'winner', processIsLive: () => false,
+    }).acquire();
+    await firstSuccessorWritten.promise;
+    const loser = await createConductStateLease(statePath, {
+      filesystem, pid: 303, newToken: () => 'loser', processIsLive: () => false,
+    }).acquire();
+
+    expect(loser).toMatchObject({ ok: true });
+    if (loser.ok) await expect(loser.handle.release()).resolves.toEqual({ ok: true });
   });
 
   it('retries a successor claim that vanishes after EEXIST before recovery uses it', async () => {
