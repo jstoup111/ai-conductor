@@ -84,8 +84,16 @@ describe('build-review domain', () => {
     expect(describeBuildReviewJudgedResultRejection(result, 'security', expected, { changedTests: [], changedContentRegions: [{ path: 'src/auth.ts', contentHash: HASH, display: 'added command' }], changedPaths: ['src/auth.ts'], planTasks: [] })).toContain('content-region reference');
   });
 
-  it('renders the security provider shape as findings only', () => {
-    expect(renderBuildReviewProviderPayloadShape('security')).not.toContain('scopeResolutions');
+  it('renders duplicate security-region occurrences into each provider prompt shape', () => {
+    const providerShape = renderBuildReviewProviderPayloadShape('security');
+    const judgedShape = renderBuildReviewJudgedResultShape('security');
+
+    expect(providerShape).not.toContain('scopeResolutions');
+    for (const shape of [providerShape, judgedShape]) {
+      expect(shape).toContain('occurrence?: integer');
+      expect(shape).toContain('0-based ordinal among equal-content regions in this path');
+      expect(shape).toContain('omit when unique or first');
+    }
   });
 
   it('diagnoses an out-of-vocabulary security concern and an anchor outside frozen input', () => {
