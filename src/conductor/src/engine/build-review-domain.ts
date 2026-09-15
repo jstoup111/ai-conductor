@@ -24,7 +24,7 @@ export interface BuildReviewContentRegionReference { readonly path: string; read
 export type BuildReviewFindingAnchor =
   | { readonly rubric: 'testQuality'; readonly locus: BuildReviewContentRegionReference }
   | { readonly rubric: 'security'; readonly locus: BuildReviewContentRegionReference };
-export interface BuildReviewFindingReferenceContext { readonly changedTests: readonly string[]; readonly changedTestRegions?: readonly BuildReviewContentRegionReference[]; readonly changedPaths: readonly string[]; readonly planTasks: readonly string[]; }
+export interface BuildReviewFindingReferenceContext { readonly changedTests: readonly string[]; readonly changedTestRegions?: readonly BuildReviewContentRegionReference[]; readonly changedContentRegions: readonly BuildReviewContentRegionReference[]; readonly changedPaths: readonly string[]; readonly planTasks: readonly string[]; }
 
 /** Compatibility title fields are authoritative only for projections before typed scope. */
 export function isLegacyBuildReviewTestScope(testScope: unknown): boolean {
@@ -291,7 +291,10 @@ function targetRegions(projection: TestQualityProjection, declaredTitles: Declar
 /** Builds finding authority only from established targets and already-validated resolved candidates. */
 export function buildReviewFindingReferenceContext(projection: BuildReviewRubricProjection, scopeResolutions: readonly BuildReviewCandidateScopeResolution[] = []): BuildReviewFindingReferenceContext {
   if (!isTestQualityProjection(projection)) {
-    return { changedTests: [], changedPaths: projection.changedFiles.map((file) => file.path), planTasks: [] };
+    const changedContentRegions = withOccurrenceOrdinals(projection.changedFiles.flatMap((file) =>
+      file.hunks.map((hunk) => contentRegionReference(file.path, hunk.contentHash, `${file.path}:${hunk.newStart}`)),
+    ));
+    return { changedTests: [], changedContentRegions, changedPaths: projection.changedFiles.map((file) => file.path), planTasks: [] };
   }
   const declaredTitles = declaredTitleOccurrenceIndex(projection);
   const targets = targetRegions(projection, declaredTitles);
@@ -321,7 +324,7 @@ export function buildReviewFindingReferenceContext(projection: BuildReviewRubric
   const changedTestRegions = withOccurrenceOrdinals(targets !== undefined
     ? [...targets, ...resolvedRegions]
     : [...titleRegions, ...resolvedRegions]);
-  return { changedTests: projection.changedTestSelectors, changedTestRegions, changedPaths: projection.changedFiles.map((file) => file.path), planTasks: [] };
+  return { changedTests: projection.changedTestSelectors, changedTestRegions, changedContentRegions: [], changedPaths: projection.changedFiles.map((file) => file.path), planTasks: [] };
 }
 function securityRegion(value: unknown): BuildReviewContentRegionReference | undefined {
   const source = object(value);
@@ -339,7 +342,7 @@ export function parseBuildReviewFindingAnchor(value: unknown, references?: Build
   const locus = source && region(source.locus);
   if (source?.rubric === 'testQuality' && locus && (!references?.changedTestRegions || references.changedTestRegions.some((candidate) => sameRegion(candidate, locus)))) return { rubric: 'testQuality', locus };
   const securityLocus = source?.rubric === 'security' ? securityRegion(source.locus) : undefined;
-  return securityLocus && (!references || references.changedPaths.includes(securityLocus.path))
+  return securityLocus && (!references || references.changedContentRegions.some((candidate) => sameRegion(candidate, securityLocus)))
     ? { rubric: 'security', locus: securityLocus }
     : undefined;
 }
@@ -433,7 +436,7 @@ export function describeBuildReviewJudgedResultRejection(value: unknown, rubric:
       if (anchor.rubric !== rubric) problems.push(`findings[${index}].anchor.rubric must be "${rubric}"`);
       const locus = rubric === 'security' ? securityRegion(anchor.locus) : region(anchor.locus);
       if (!locus) problems.push(`findings[${index}].anchor.locus must be a content-region reference {"path", "contentHash", "display", "occurrence"?}`);
-      else if (rubric === 'security' && references && !references.changedPaths.includes(locus.path)) problems.push(`findings[${index}].anchor.locus path must be one of the frozen input's changedFiles`);
+      else if (rubric === 'security' && references && !references.changedContentRegions.some((candidate) => sameRegion(candidate, locus))) problems.push(`findings[${index}].anchor.locus must reference a projected changed content region (path, contentHash, and occurrence must match one)`);
       else if (rubric === 'testQuality' && references?.changedTestRegions && !references.changedTestRegions.some((candidate) => sameRegion(candidate, locus))) problems.push(`findings[${index}].anchor.locus must reference a projected in-scope content region (path, contentHash, and occurrence must match one)`);
     });
     const duplicates = new Set<string>();
