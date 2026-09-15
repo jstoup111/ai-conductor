@@ -113,7 +113,7 @@ function issueNumber(request: GithubOperationRequest): string {
   return String(request.target.number);
 }
 
-function payloadField(request: GithubOperationRequest, field: 'body' | 'label' | 'title' | 'head' | 'base'): string {
+function payloadField(request: GithubOperationRequest, field: 'body' | 'label' | 'title' | 'head' | 'base' | 'commentId'): string {
   const payload = request.payload;
   const value = payload && (payload as unknown as Record<string, unknown>)[field];
   if (typeof value !== 'string') {
@@ -155,6 +155,13 @@ function ghArgsFor(request: GithubOperationRequest): string[] {
     case 'issue.comment.create':
     case 'intake.issue.comment.create':
       return ['issue', 'comment', issueNumber(request), '-R', repository, '--body', payloadField(request, 'body')];
+    case 'intake.issue.comment.update':
+      return [
+        'api',
+        `repos/${repository}/issues/comments/${payloadField(request, 'commentId')}`,
+        '--method', 'PATCH',
+        '-f', `body=${payloadField(request, 'body')}`,
+      ];
     case 'issue.edit':
       return ['issue', 'edit', issueNumber(request), '--body', payloadField(request, 'body'), '-R', repository];
     case 'issue.close':

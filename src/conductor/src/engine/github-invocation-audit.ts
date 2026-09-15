@@ -49,6 +49,7 @@ export const SHIPPED_MUTATION_OPERATION_CALLER_PROOFS = {
   'pull-request.label.add': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'pull-request.label.remove': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'intake.issue.comment.create': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
+  'intake.issue.comment.update': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'intake.issue.close': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'intake.issue.label.add': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },
   'intake.issue.label.remove': { adapter: 'createGuardedGithubOperationRunner', owner: 'tracker-client.ts' },

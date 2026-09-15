@@ -102,6 +102,62 @@ function isRefused(result: GithubOperationResult | { readonly kind: 'refused'; r
   return result.kind === 'refused';
 }
 
+interface IssueComment {
+  body?: string;
+  url?: string;
+}
+
+function issueCommentId(url: string): string | undefined {
+  return /\/issues\/\d+#issuecomment-(\d+)$/.exec(url)?.[1];
+}
+
+/**
+ * Upsert the Source-Ref issue marker through the intake authorization path.
+ * The issue can be closed, so state is deliberately not part of this lookup.
+ */
+async function upsertGatedIssueMarkerComment(
+  spec: GatedSpecEntry,
+  repository: string,
+  number: number,
+  runGh: GhRunner,
+  operations: GithubOperationRunner,
+  cwd: string,
+  log?: (msg: string) => void,
+): Promise<GithubOperationResult | { readonly kind: 'refused'; readonly reason: string }> {
+  const target = { repository, kind: 'issue' as const, number };
+  const body = `${OWNER_GATED_MARKER}\n${renderCommentBody(spec)}`;
+  let existing: IssueComment | undefined;
+  try {
+    const { stdout } = await runGh(['issue', 'view', `${repository}#${number}`, '--json', 'comments'], { cwd });
+    const parsed = JSON.parse(stdout || '{}') as { comments?: IssueComment[] };
+    existing = parsed.comments?.find((comment) => comment.body?.includes(OWNER_GATED_MARKER));
+  } catch (error) {
+    log?.(`[gate-writeback] issue marker lookup for ${repository}#${number} failed: ${error}`);
+  }
+
+  const commentId = existing?.url ? issueCommentId(existing.url) : undefined;
+  if (existing && commentId) {
+    return await executeGithubOperation({
+      operation: 'intake.issue.comment.update',
+      repository,
+      resource: target,
+      context: { actor: 'gate-writeback' },
+      payload: { commentId, body },
+    }, operations);
+  }
+  if (existing) {
+    // A marker with no canonical comment identity must not be duplicated.
+    return { kind: 'refused', reason: 'invalid-target' };
+  }
+  return await executeGithubOperation({
+    operation: 'intake.issue.comment.create',
+    repository,
+    resource: target,
+    context: { actor: 'gate-writeback' },
+    payload: { body },
+  }, operations);
+}
+
 /**
  * Log a skip notice at most once per (slug, reason) key for the lifetime of
  * the given `warnedSkips` set. Repeated calls with the same key are silent
@@ -309,7 +365,7 @@ export async function announceGatedIssue(
   if (!Number.isSafeInteger(number) || number < 1) return;
   const target = { repository: parsed.repo, kind: 'issue' as const, number };
   const label = await executeGithubOperation({
-    operation: 'issue.label.add',
+    operation: 'intake.issue.label.add',
     repository: parsed.repo,
     resource: target,
     context: { actor: 'gate-writeback' },
@@ -317,13 +373,15 @@ export async function announceGatedIssue(
   }, deps.operations);
   if (isRefused(label)) return;
 
-  const comment = await executeGithubOperation({
-    operation: 'intake.issue.comment.create',
-    repository: parsed.repo,
-    resource: target,
-    context: { actor: 'gate-writeback' },
-    payload: { body: `${OWNER_GATED_MARKER}\n${renderCommentBody(spec)}` },
-  }, deps.operations);
+  const comment = await upsertGatedIssueMarkerComment(
+    spec,
+    parsed.repo,
+    number,
+    deps.runGh ?? makeProductionGh(),
+    deps.operations,
+    deps.cwd,
+    log,
+  );
   if (comment.kind === 'failed') {
     log?.(`[gate-writeback] issue announcement for ${parsed.repo}#${parsed.number} failed: ${comment.error}`);
   }

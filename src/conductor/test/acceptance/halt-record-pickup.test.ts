@@ -17,12 +17,24 @@ import { promisify } from 'node:util';
 import { watchHaltCleared } from '../../src/engine/daemon-deps.js';
 import { writeHaltMarker } from '../../src/engine/halt-marker.js';
 import { writePhaseMarker } from '../../src/engine/phase-marker.js';
+import type { HaltRecordRemoteOptions } from '../../src/engine/halt-record.js';
 
 const execFile = promisify(execFileCallback);
 const SLUG = 'halt-record-pickup';
 const BRANCH = `feat/${SLUG}`;
 const RECORD_PATH = `.docs/halted/${SLUG}.md`;
 const HALT_REASON = 'build review needs an operator decision\nmissing acceptance evidence\n';
+const publishedRecord: HaltRecordRemoteOptions = {
+  mutation: {} as never,
+  git: async (args, options) => {
+    const result = await execFile('git', args, { cwd: options.cwd });
+    return { stdout: result.stdout };
+  },
+  remoteGit: async (args, deps) => {
+    await deps.runRemoteGit([...args], { cwd: deps.cwd });
+    return { kind: 'executed', targets: [] };
+  },
+};
 
 describe('committed halt record operator pickup', () => {
   let root: string;
@@ -76,7 +88,7 @@ describe('committed halt record operator pickup', () => {
     const headAtHalt = await git(['rev-parse', 'HEAD']);
 
     await expect(
-      writeHaltMarker(worktree, HALT_REASON, 'needs-human'),
+      writeHaltMarker(worktree, HALT_REASON, 'needs-human', undefined, publishedRecord),
     ).resolves.toEqual({ status: 'written' });
 
     await execFile('git', ['clone', '-q', '--branch', BRANCH, remote, pickup]);
@@ -97,7 +109,7 @@ describe('committed halt record operator pickup', () => {
       () => {
         cleared = true;
       },
-      { pollIntervalMs: 25 },
+      { pollIntervalMs: 25, recordRemote: publishedRecord },
     );
     await unlink(join(worktree, '.pipeline', 'HALT'));
     await vi.waitFor(() => expect(cleared).toBe(true), { timeout: 2_000 });
