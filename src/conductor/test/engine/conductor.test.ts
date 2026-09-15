@@ -17398,7 +17398,7 @@ describe('post-rebase build closure (Task 11)', () => {
       migrationGrandfather: [],
     }));
 
-    const state = { manual_test: 'skipped' } as ConductState;
+    const state = { build: 'done', manual_test: 'skipped' } as ConductState;
     const git: GitRunner = async (args) => ({
       stdout: args[0] === 'status' ? ' M src/reapplied.ts\n' : '',
     });
@@ -17408,6 +17408,7 @@ describe('post-rebase build closure (Task 11)', () => {
       events,
       projectRoot: dir,
       daemon: true,
+      verifyArtifacts: true,
       git,
     });
     const changed = {
@@ -17425,17 +17426,15 @@ describe('post-rebase build closure (Task 11)', () => {
         await (conductor as any).completionCtx(state),
       );
       await (conductor as any).runRebaseStep(state);
-      const buildVerdict = JSON.parse(
-        await readFile(join(dir, '.pipeline/gates/build.json'), 'utf8'),
-      ) as GateVerdict;
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
 
-      expect({ closure, buildVerdict }).toMatchObject({
+      expect({ closure, halt }).toMatchObject({
         closure: {
           done: false,
           missing: 'uncommitted',
           reason: expect.stringContaining('src/reapplied.ts'),
         },
-        buildVerdict: { satisfied: false },
+        halt: expect.stringContaining('completed BUILD evidence is unavailable after rebase'),
       });
     } finally {
       performRebase.mockReset();

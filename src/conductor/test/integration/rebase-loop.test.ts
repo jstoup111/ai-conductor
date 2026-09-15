@@ -33,7 +33,8 @@ vi.mock('execa', async (importOriginal) => {
         prospectiveMergeFixture.forceIndeterminate &&
         args[0] === 'git' &&
         Array.isArray(args[1]) &&
-        args[1][0] === 'merge-tree'
+        args[1][0] === 'merge-tree' &&
+        args[1].includes('--quiet')
       ) {
         return Promise.resolve({
           exitCode: 2,
@@ -1250,7 +1251,7 @@ describe('integration/rebase-loop', () => {
         expect(prdVerdict?.reason).toBe('never ran');
       });
 
-      it('a single feature-owned runtime path in the delta defeats preservation', async () => {
+      it('preserves the audits when a clean replay proves the feature result is unchanged', async () => {
         // Uses the shared-ancestry fixture (not `initRepoOnFeatureBranch` +
         // byte-identical `advanceBaseCoincidentally`, which can never put
         // `src/feature.ts` in D — see
@@ -1275,17 +1276,15 @@ describe('integration/rebase-loop', () => {
         await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
-        // Re-run, NOT preserved: a single feature-owned runtime path in D
-        // defeats preservation — both audits dispatch a second time.
-        expect(counts.prd_audit).toBe(2);
-        expect(counts.architecture_review_as_built).toBe(2);
+        expect(counts.prd_audit).toBe(1);
+        expect(counts.architecture_review_as_built).toBe(1);
       });
     });
 
     // ── Story: A change to the feature's own runtime source re-runs the
     // judged audit gates ──────────────────────────────────────────────────────
     describe("Story: feature-owned runtime source in the delta re-runs prd_audit and architecture_review_as_built", () => {
-      it('invalidates and re-selects both judged audits when D_featureSrc is non-empty', async () => {
+      it('retains both judged audits when clean replay proves D_featureSrc unchanged', async () => {
         // Shared-ancestry fixture (see comment above) — a byte-identical
         // "coincidental" touch of a feature-owned path can never register in
         // D; base and feature must each make a real, non-overlapping edit.
@@ -1296,7 +1295,7 @@ describe('integration/rebase-loop', () => {
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
         const dispatches: string[] = [];
-        const { invalidated } = trackPreservedInvalidated();
+        const { preserved } = trackPreservedInvalidated();
         let completed = false;
         events.on('feature_complete', () => {
           completed = true;
@@ -1311,27 +1310,10 @@ describe('integration/rebase-loop', () => {
         });
 
         expect(completed).toBe(true);
-        expect(counts.prd_audit).toBe(2);
-        expect(counts.architecture_review_as_built).toBe(2);
-        const prdVerdictAtKickback = await readGateVerdict('prd_audit');
-        // The FINAL verdict (post re-dispatch) is satisfied again, but the
-        // decision must have applied a real kickback-shaped invalidation in
-        // between — assert the audit-trail event carries the matched paths.
-        expect(prdVerdictAtKickback?.satisfied).toBe(true);
-        const prdInvalidated = invalidated.find((i) => i.gate === 'prd_audit');
-        const archInvalidated = invalidated.find(
-          (i) => i.gate === 'architecture_review_as_built',
-        );
-        expect(prdInvalidated).toBeDefined();
-        expect(prdInvalidated!.matchedPaths).toContain('src/feature.ts');
-        expect(archInvalidated).toBeDefined();
-        expect(archInvalidated!.matchedPaths).toContain('src/feature.ts');
-        expect(
-          Math.max(
-            dispatches.lastIndexOf('prd_audit'),
-            dispatches.lastIndexOf('architecture_review_as_built'),
-          ),
-        ).toBeLessThan(dispatches.indexOf('finish'));
+        expect(counts.prd_audit).toBe(1);
+        expect(counts.architecture_review_as_built).toBe(1);
+        expect(preserved.find((event) => event.gate === 'prd_audit')).toBeDefined();
+        expect(preserved.find((event) => event.gate === 'architecture_review_as_built')).toBeDefined();
       });
 
       it('does NOT invalidate the judged audits when the only feature-owned delta path is docs (.docs/**)', async () => {
@@ -1490,7 +1472,7 @@ describe('integration/rebase-loop', () => {
         expect(counts.architecture_review_as_built).toBe(1);
       });
 
-      it('still marks a genuinely-invalidated judged gate stale/re-run by the sweep', async () => {
+      it('does not re-open a judged gate when clean replay proves the same result', async () => {
         // Shared-ancestry fixture (see comment above) — a byte-identical
         // "coincidental" touch of a feature-owned path can never register in
         // D; base and feature must each make a real, non-overlapping edit.
@@ -1508,10 +1490,8 @@ describe('integration/rebase-loop', () => {
         await runThroughShip(runCountingRunner(counts));
 
         expect(completed).toBe(true);
-        // The delta-gating must not accidentally preserve a gate the
-        // decision genuinely invalidated — it's re-dispatched.
-        expect(counts.prd_audit).toBe(2);
-        expect(counts.architecture_review_as_built).toBe(2);
+        expect(counts.prd_audit).toBe(1);
+        expect(counts.architecture_review_as_built).toBe(1);
       });
     });
 

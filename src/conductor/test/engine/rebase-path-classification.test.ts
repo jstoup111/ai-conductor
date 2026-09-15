@@ -110,6 +110,25 @@ describe('Task 9–11 rebase path classification', () => {
     });
   });
 
+  it('fails closed for feature-scoped reviews even when an unproved replay has only foreign runtime delta', () => {
+    const result = classifyReplayGateInvalidation(
+      ['src/foreign.ts'],
+      ['src/feature.ts'],
+      true,
+      unprovedReplay,
+    );
+
+    expect(result.invalidated).toEqual([
+      'coverage_binding',
+      'build_review',
+      'test_suite',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
+    expect(result.preserved).toEqual([]);
+  });
+
   it('retains active-document invalidation for an unchanged replay but ignores unrelated documents and skips manual_test when it did not run', () => {
     const active = classifyReplayGateInvalidation(
       ['.docs/stories/active.md', '.docs/plans/unrelated.md'],

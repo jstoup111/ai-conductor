@@ -318,7 +318,15 @@ export function classifyReplayGateInvalidation(
 
     const preserveUnchangedFeatureContribution = replay.kind === 'unchanged' &&
       isFeatureScopedReview(surface) && activeInputs.length === 0;
-    const decision = preserveUnchangedFeatureContribution || projection.matchedPaths.length === 0
+    // Path projection alone cannot prove that the feature replay itself was
+    // retained. If reconstruction is unavailable, a resolution could have
+    // changed any feature-scoped review input outside the observed upstream
+    // delta. Re-open those reviews rather than leaving an unbound PASS for a
+    // later completion/finish reader to reject.
+    const unprovedFeatureScopedReplay = replay.kind === 'unproved' &&
+      isFeatureScopedReview(surface);
+    const decision = !unprovedFeatureScopedReplay &&
+      (preserveUnchangedFeatureContribution || projection.matchedPaths.length === 0)
       ? 'preserve'
       : 'invalidate';
     (decision === 'preserve' ? preserved : invalidated).push(gate);
