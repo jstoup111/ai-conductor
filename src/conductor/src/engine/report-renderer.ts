@@ -48,6 +48,15 @@ function renderedEventIdentity(event: ParsedEvent): RenderedEventIdentity | unde
   });
 }
 
+function activeIntervalDuration(event: ParsedEvent): number | undefined {
+  const activeInterval = event.activeInterval;
+  return typeof activeInterval === 'object' && activeInterval !== null
+    && 'durationMs' in activeInterval && typeof activeInterval.durationMs === 'number'
+    && Number.isFinite(activeInterval.durationMs)
+    ? activeInterval.durationMs
+    : undefined;
+}
+
 /**
  * Parse a raw events.jsonl string into events, skipping malformed lines
  * (resilient parse). Shared by `renderReport` and the engineer-store's signal
@@ -71,20 +80,30 @@ export function parseEvents(raw: string): ParsedEvent[] {
 
 /** Per-step duration in ms (start→complete). Steps with no completion omitted. */
 export function aggregateDurations(events: ParsedEvent[]): Record<string, number> {
-  const startTimes = new Map<string, number>();
-  const completeTimes = new Map<string, number>();
+  const startTimes = new Map<string, { label: string; at: number }>();
+  const completeTimes = new Map<string, { at: number; activeDurationMs?: number }>();
   for (const evt of events) {
-    if (!evt.step) continue;
+    const identity = renderedEventIdentity(evt);
+    if (!identity) continue;
     if (evt.type === 'step_started') {
-      startTimes.set(evt.step, new Date(evt.ts).getTime());
+      startTimes.set(identity.correlationKey, {
+        label: identity.subjectLabel,
+        at: new Date(evt.ts).getTime(),
+      });
     } else if (evt.type === 'step_completed') {
-      completeTimes.set(evt.step, new Date(evt.ts).getTime());
+      const durationMs = activeIntervalDuration(evt);
+      completeTimes.set(identity.correlationKey, {
+        at: new Date(evt.ts).getTime(),
+        ...(durationMs === undefined ? {} : { activeDurationMs: durationMs }),
+      });
     }
   }
   const out: Record<string, number> = {};
-  for (const [step, startMs] of startTimes.entries()) {
-    const endMs = completeTimes.get(step);
-    if (endMs !== undefined) out[step] = endMs - startMs;
+  for (const [key, start] of startTimes.entries()) {
+    const completed = completeTimes.get(key);
+    if (completed !== undefined) {
+      out[start.label] = completed.activeDurationMs ?? completed.at - start.at;
+    }
   }
   return out;
 }
@@ -121,28 +140,33 @@ export function aggregateRetryHotspots(events: ParsedEvent[]): RetryHotspot[] {
   const retryReasons = new Map<string, Map<string, number>>();
   const maxModel = new Map<string, string>();
   const maxEffort = new Map<string, string>();
+  const labels = new Map<string, string>();
   for (const evt of events) {
-    if (!evt.step || evt.type !== 'step_retry') continue;
-    retryCounts.set(evt.step, (retryCounts.get(evt.step) ?? 0) + 1);
+    if (evt.type !== 'step_retry') continue;
+    const identity = renderedEventIdentity(evt);
+    if (!identity) continue;
+    const key = identity.correlationKey;
+    labels.set(key, identity.subjectLabel);
+    retryCounts.set(key, (retryCounts.get(key) ?? 0) + 1);
     const reason = evt.reason ?? 'unknown';
-    let reasons = retryReasons.get(evt.step);
+    let reasons = retryReasons.get(key);
     if (!reasons) {
       reasons = new Map();
-      retryReasons.set(evt.step, reasons);
+      retryReasons.set(key, reasons);
     }
     reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
 
     // Track the furthest-up rung seen for this step (monotonic ladder).
     const em = typeof evt.escalatedModel === 'string' ? evt.escalatedModel : undefined;
     const ee = typeof evt.escalatedEffort === 'string' ? evt.escalatedEffort : undefined;
-    const higherModel = pickHigher(maxModel.get(evt.step), em, MODEL_TIER_ORDER);
-    if (higherModel !== undefined) maxModel.set(evt.step, higherModel);
-    const higherEffort = pickHigher(maxEffort.get(evt.step), ee, EFFORT_ORDER);
-    if (higherEffort !== undefined) maxEffort.set(evt.step, higherEffort);
+    const higherModel = pickHigher(maxModel.get(key), em, MODEL_TIER_ORDER);
+    if (higherModel !== undefined) maxModel.set(key, higherModel);
+    const higherEffort = pickHigher(maxEffort.get(key), ee, EFFORT_ORDER);
+    if (higherEffort !== undefined) maxEffort.set(key, higherEffort);
   }
   const out: RetryHotspot[] = [];
-  for (const [step, count] of retryCounts.entries()) {
-    const reasons = retryReasons.get(step) ?? new Map<string, number>();
+  for (const [key, count] of retryCounts.entries()) {
+    const reasons = retryReasons.get(key) ?? new Map<string, number>();
     let topReason = '';
     let topCount = 0;
     for (const [r, c] of reasons.entries()) {
@@ -151,9 +175,9 @@ export function aggregateRetryHotspots(events: ParsedEvent[]): RetryHotspot[] {
         topReason = r;
       }
     }
-    const hotspot: RetryHotspot = { step, count, topReason };
-    const em = maxModel.get(step);
-    const ee = maxEffort.get(step);
+    const hotspot: RetryHotspot = { step: labels.get(key) ?? 'unknown', count, topReason };
+    const em = maxModel.get(key);
+    const ee = maxEffort.get(key);
     if (em !== undefined) hotspot.escalatedModel = em;
     if (ee !== undefined) hotspot.escalatedEffort = ee;
     out.push(hotspot);
@@ -447,7 +471,7 @@ interface DurationRow {
 function renderDurations(events: ParsedEvent[]): string {
   // Collect start timestamps by execution correlation key.
   const startTimes = new Map<string, { label: string; at: number }>();
-  const completeTimes = new Map<string, number>();
+  const completeTimes = new Map<string, { at: number; activeDurationMs?: number }>();
 
   for (const evt of events) {
     const identity = renderedEventIdentity(evt);
@@ -455,17 +479,23 @@ function renderDurations(events: ParsedEvent[]): string {
     if (evt.type === 'step_started') {
       startTimes.set(identity.correlationKey, { label: identity.subjectLabel, at: new Date(evt.ts).getTime() });
     } else if (evt.type === 'step_completed') {
-      completeTimes.set(identity.correlationKey, new Date(evt.ts).getTime());
+      const durationMs = activeIntervalDuration(evt);
+      completeTimes.set(identity.correlationKey, {
+        at: new Date(evt.ts).getTime(),
+        ...(durationMs === undefined ? {} : { activeDurationMs: durationMs }),
+      });
     }
   }
 
   // Build rows for all started steps
   const rows: DurationRow[] = [];
   for (const [key, start] of startTimes.entries()) {
-    const endMs = completeTimes.get(key);
+    const completed = completeTimes.get(key);
     rows.push({
       step: start.label,
-      durationMs: endMs !== undefined ? endMs - start.at : null,
+      durationMs: completed !== undefined
+        ? completed.activeDurationMs ?? completed.at - start.at
+        : null,
     });
   }
 

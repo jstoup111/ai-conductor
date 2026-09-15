@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:16
 import { describe, it, expect, beforeEach, afterEach, assert } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, readFile, access } from 'fs/promises';
 import { join } from 'path';
@@ -258,6 +258,41 @@ describe('engine/engineer-store', () => {
       expect(sig.retryHotspots.length).toBeGreaterThanOrEqual(1);
       expect(sig.tokens.input).toBeGreaterThanOrEqual(100);
       expect(sig.durationByStep.build).toBe(5000);
+    });
+
+    it('preserves configured member duration and retry labels through signal assembly', async () => {
+      const mod = await loadEngineerStore();
+      const assembleSignal = requireFn(mod, 'assembleSignal');
+      const member = (executionId: string, name: string) => ({
+        executionId,
+        subject: { kind: 'configured-member', parentGroup: 'validation', member: name },
+      });
+      const eventsPath = join(projectDir, 'configured-members.jsonl');
+      await writeFile(eventsPath, [
+        { type: 'step_started', step: 'validation', executionContext: member('manual-execution', 'manual_test'), ts: '2026-06-25T00:00:00.000Z' },
+        { type: 'step_started', step: 'validation', executionContext: member('audit-execution', 'prd_audit'), ts: '2026-06-25T00:00:01.000Z' },
+        { type: 'step_retry', step: 'validation', executionContext: member('manual-execution', 'manual_test'), reason: 'manual retry', ts: '2026-06-25T00:00:02.000Z' },
+        { type: 'step_completed', step: 'validation', executionContext: member('manual-execution', 'manual_test'), ts: '2026-06-25T00:00:03.000Z' },
+        { type: 'step_retry', step: 'validation', executionContext: member('audit-execution', 'prd_audit'), reason: 'audit retry', ts: '2026-06-25T00:00:04.000Z' },
+        { type: 'step_completed', step: 'validation', executionContext: member('audit-execution', 'prd_audit'), ts: '2026-06-25T00:00:06.000Z' },
+      ].map((event) => JSON.stringify(event)).join('\n') + '\n', 'utf-8');
+
+      const sig = await assembleSignal({
+        eventsPath,
+        outcome: { slug: 'feat-x', status: 'done' },
+        project: 'proj',
+        feature: 'feat-x',
+        runId: 'run-1',
+      });
+
+      expect(sig.durationByStep).toEqual({
+        'configured:validation/manual_test': 3_000,
+        'configured:validation/prd_audit': 5_000,
+      });
+      expect(sig.retryHotspots).toEqual([
+        { step: 'configured:validation/manual_test', count: 1, topReason: 'manual retry' },
+        { step: 'configured:validation/prd_audit', count: 1, topReason: 'audit retry' },
+      ]);
     });
 
     it('produces a record (no throw) when events.jsonl is MISSING', async () => {
