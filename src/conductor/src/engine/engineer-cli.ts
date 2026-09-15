@@ -45,7 +45,12 @@ import { ensureRunning } from './daemon-lock.js';
 import { brainLoopAlive } from './engineer/brain-liveness.js';
 import { CorruptLedgerError, createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
-import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
+import {
+  createGithubIssuesAdapter,
+  fetchSanitizedIssueBody,
+  GITHUB_ISSUES_SOURCE,
+  HANDLED_LABEL,
+} from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
 import { makeProductionGit, restRemoveLabelArgs, type GitRunner } from './pr-labels.js';
 import {
@@ -60,8 +65,6 @@ import { createDeliveryGuardedQueue, getIssueState } from './engineer/intake/del
 import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
-import { sanitizeInboundText } from './engineer/intake/sanitize-inbound.js';
-import { parseWorkRef } from './engineer/source-ref.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 import { createGithubTrackerClient, makeProductionGh } from './tracker-client.js';
 import {
@@ -945,28 +948,15 @@ export async function dispatchEngineer(
         // the canonical tracker seam so the injected runner remains the sole external
         // boundary for this deterministic command.
         if (resolvedBody == null) {
-          const parsedRef = parseSourceRef(sourceRef);
-          const workRef = parseWorkRef(sourceRef);
-          if (parsedRef && workRef) {
-            const tracker = createGithubTrackerClient(gh);
-            try {
-              const fetchedBody = await tracker.getIssueBody(
-                parsedRef.repo,
-                parsedRef.issue,
-                target.canonicalPath,
-              );
-              if (fetchedBody !== null) {
-                const sanitized = sanitizeInboundText([fetchedBody], workRef);
-                resolvedBody = sanitized.text;
-                inbound = {
-                  neutralizations: sanitized.neutralizations,
-                  digest: sanitized.digest,
-                };
-              }
-            } catch {
-              // Tracker reachability must not prevent offline worktree creation.
-              // Leave the body unresolved so staging remains a no-op.
+          try {
+            const fetched = await fetchSanitizedIssueBody(gh, sourceRef, target.canonicalPath);
+            if (fetched) {
+              resolvedBody = fetched.text;
+              inbound = fetched.inbound;
             }
+          } catch {
+            // Tracker reachability must not prevent offline worktree creation.
+            // Leave the body unresolved so staging remains a no-op.
           }
         }
 
