@@ -1641,6 +1641,8 @@ export interface ConductorOptions {
   resolveShipDraftPublicationDependencies?: typeof createShipDraftPublicationDependencies;
   /** Test seam for the guarded SHIP-start remote transport. */
   shipDraftRemoteGit?: typeof executeRemoteGit;
+  /** Test seam for the guarded post-finish shipped-record publication context. */
+  postFinishRemoteMutation?: GithubMutationExecutionContext;
   /** Feature description — used by the engine-run worktree step to name the
    *  worktree/branch when state.feature_desc isn't set yet. */
   featureDesc?: string;
@@ -2372,6 +2374,7 @@ export class Conductor {
   private readonly resolveFeatureCreationMutation: typeof resolveFeatureRemoteMutation;
   private readonly resolveShipDraftPublicationDependencies: typeof createShipDraftPublicationDependencies;
   private readonly shipDraftRemoteGit: typeof executeRemoteGit | undefined;
+  private readonly postFinishRemoteMutation: GithubMutationExecutionContext | undefined;
   private retainedFullSuiteInspection:
     | Awaited<ReturnType<FullSuiteVerifier['inspect']>>
     | undefined;
@@ -3401,6 +3404,7 @@ export class Conductor {
     this.resolveShipDraftPublicationDependencies =
       opts.resolveShipDraftPublicationDependencies ?? createShipDraftPublicationDependencies;
     this.shipDraftRemoteGit = opts.shipDraftRemoteGit;
+    this.postFinishRemoteMutation = opts.postFinishRemoteMutation;
     this.featureDesc = opts.featureDesc;
     this.worktreeBranch = opts.worktreeBranch;
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
@@ -12663,6 +12667,7 @@ export class Conductor {
           pr: state.pr_url,
           log: this.log ?? console.warn,
           gh: this.gh,
+          remoteMutation: this.postFinishRemoteMutation,
         });
       }
     } catch (err) {
