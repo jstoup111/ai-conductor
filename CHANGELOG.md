@@ -25,6 +25,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Vitest runs now keep their temporary storage in a reliable checkout-local location with a configurable override. ([implementation PR #2537](https://github.com/jstoup111/ai-conductor/pull/2537)).
 - Provider fallbacks now skip candidates that cannot complete required setup and retain clear recovery guidance. ([implementation PR #2538](https://github.com/jstoup111/ai-conductor/pull/2538)).
 - PRD widening decisions now remain valid when reviewer wording changes. ([implementation PR #2479](https://github.com/jstoup111/ai-conductor/pull/2479)).
+- Daemon-managed sessions can run required task attribution commands without hitting the conductor session guard. ([implementation PR #2569](https://github.com/jstoup111/ai-conductor/pull/2569)).
 
 ## [1.2.0] - 2026-09-14
 
