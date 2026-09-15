@@ -43,13 +43,13 @@ As an operator, I want to learn that no outcome layer could be staged at the mom
 #### Negative Paths
 
 - Given an idea with no source ref at all, when the per-idea worktree is created, then no missing-outcome diagnostic is emitted and the outcome layer stays not required, exactly as before.
-- Given a source ref whose body resolved but carries no Desired-outcome bullets, when the per-idea worktree is created, then the staging file is written and no missing-outcome diagnostic is emitted.
+- Given a source ref whose body resolved but carries no Desired-outcome bullets, including a successfully fetched empty body, when the per-idea worktree is created, then the staging file is written with that source reference and zero outcome bullets, and no missing-outcome diagnostic is emitted.
 
 ### Done When
 
 - [ ] An unresolvable-reference fixture captures one diagnostic line containing the source ref, the staging file path, and the body argument name.
 - [ ] A no-source-ref fixture captures no missing-outcome diagnostic, exits zero, and writes no staging file.
-- [ ] A resolved-but-bulletless fixture writes the staging file and captures no missing-outcome diagnostic.
+- [ ] Resolved-but-bulletless fixtures, including a successfully fetched empty body, write the staging file with the source reference and zero outcome bullets and capture no missing-outcome diagnostic.
 
 ## Story 3: Distinguish a never-staged outcome layer from a genuinely absent id
 

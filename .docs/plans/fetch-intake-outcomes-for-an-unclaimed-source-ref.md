@@ -27,6 +27,8 @@ Tests follow this repository's test-design rules. The command-level cases drive 
 - The operator's delegate approved Small scope, the technical track, the resolve-then-report design over an immediate refusal, and all three stories on 2026-09-06 (delegated).
 - Verified: the worktree case of `engineer-cli.ts` resolves a by-ref body only from a persisted claim record and leaves it undefined when none exists, so nothing is staged.
 - Verified: the staging writer returns null and writes nothing when the body is empty, and its reader then reports the outcome layer as not required with a null reference.
+
+> **Amended 2026-09-15 by #1340:** James Stoup approved treating a successfully fetched empty body as resolved with zero outcomes. The empty-body no-op above describes pre-change behavior and must not survive on this feature's resolved-body path. Task 3 owns writing the existing staging file with the source reference and zero outcome bullets, without the unresolved-body diagnostic. Failed or not-found lookups remain unresolved and retain their existing diagnostic/no-stage behavior. This resolves as-built AB-3; AB-1 sanitization and AB-2 sanitization-event metadata remain required under the approved intake trust-boundary ADR.
 - Verified: the committed-marker fallback cannot rescue a first land, because that marker is written by land itself.
 - Verified: `land-spec.ts` passes the resolved bullet count into the gate, and the gate's cross-check builds the outcome pool from exactly that count.
 - Verified: `tracker-client.ts` exports `createGithubTrackerClient` and its `TrackerClient` already declares `getIssueBody(repo, issueRef, cwd)` returning a string or null on a 404.
@@ -74,6 +76,9 @@ Tests follow this repository's test-design rules. The command-level cases drive 
 3. A git failure injected into worktree creation still exits non-zero, proving the new handling did not widen into the strict-abort path.
 
 ### Task 3: Report at worktree-creation time that no outcome layer was staged
+
+> **Amended 2026-09-15 by #1340:** The resolved-but-bulletless case below explicitly includes the empty string returned by a successful issue read. Extend Task 3's admitted files to `src/conductor/src/engine/engineer/worktree-authoring.ts` and `src/conductor/src/engine/engineer/outcome-staging.ts` as needed to distinguish unresolved bodies from resolved empty bodies through the existing staging seam. Its existing command-level fixture owns the empty-body proof: source reference retained, zero outcome bullets, and no missing-outcome diagnostic. Preserve all existing non-empty, no-source-ref, lookup-failure, and not-found behavior; do not add a new staging path or a separate implementation task.
+
 **Story:** Story 2
 **Type:** happy-path
 **Files:** src/conductor/src/engine/engineer-cli.ts, src/conductor/test/engine/engineer/engineer-cli-claim-record.test.ts
