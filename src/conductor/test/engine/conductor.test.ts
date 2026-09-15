@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:4, task:5
+// Covers: task:1, task:2, task:3, task:4, task:5
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { execFile as execFileCb } from 'child_process';
@@ -75,6 +75,7 @@ import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
 import { writeFile, mkdir, readFile } from 'fs/promises';
 import { createHash } from 'crypto';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
+import { validatePlanDoneWhen } from '../../src/engine/plan-done-when.js';
 import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
@@ -16567,6 +16568,7 @@ describe('appendRemediationTasks', () => {
 
       const content = await readFile(planPath, 'utf-8');
       expect(content).toContain('### Task rem-fr10-1:');
+      expect(validatePlanDoneWhen(content)).toEqual([]);
     });
 
     it('append same id again → still exactly one instance (no duplicate)', async () => {
@@ -16591,6 +16593,7 @@ describe('appendRemediationTasks', () => {
       const content = await readFile(planPath, 'utf-8');
       const matches = content.match(/### Task rem-fr10-1:/g);
       expect(matches).toHaveLength(1); // Exactly one, not two
+      expect(validatePlanDoneWhen(content)).toEqual([]);
     });
 
     it('attempt to append same id with different content → preserved (not mutated)', async () => {
@@ -16626,6 +16629,7 @@ describe('appendRemediationTasks', () => {
       // A suffixed version should be created for the different content
       const hasSuffixedVersion = /### Task rem-fr10-1-[a-f0-9]{6}:.*Different title for rem-fr10-1/.test(content);
       expect(hasSuffixedVersion).toBe(true);
+      expect(validatePlanDoneWhen(content)).toEqual([]);
     });
 
     it('two separate remediations from different gates with same semantic issue → distinct ids (with suffix)', async () => {
