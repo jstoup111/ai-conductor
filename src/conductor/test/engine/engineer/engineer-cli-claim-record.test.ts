@@ -214,6 +214,28 @@ describe('FR-13: claim → worktree Desired-outcome body threading', () => {
     expect(err).toEqual([]);
   });
 
+  it('stages an empty successfully fetched issue body as a resolved zero-bullet outcome layer', async () => {
+    const { out, err, opts } = captureOpts({
+      gh: async (args) => {
+        if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
+          return { stdout: JSON.stringify({ body: '' }) };
+        }
+        return fakeGh(args);
+      },
+    });
+
+    expect(await dispatchEngineer(
+      { kind: 'worktree', project: 'alpha', idea: 'empty fetched issue', sourceRef: SOURCE_REF },
+      opts,
+    )).toBe(0);
+
+    const { worktreePath } = JSON.parse(out[0]);
+    expect(await readFile(join(worktreePath, '.pipeline', 'intake-outcomes.md'), 'utf8')).toBe(
+      `Source-Ref: ${SOURCE_REF}\n\n## Desired outcome\n\n`,
+    );
+    expect(err).toEqual([]);
+  });
+
   it('degrades to no staging when the injected issue-body read has the not-found shape', async () => {
     const issueViewCalls: string[][] = [];
     const { out, opts } = captureOpts({
@@ -373,7 +395,14 @@ describe('FR-13: claim → worktree Desired-outcome body threading', () => {
 
   it('a missing/corrupt claim record degrades to no body — no throw, no staging', async () => {
     // No claim was ever made for this sourceRef, so no record exists.
-    const { out, opts } = captureOpts();
+    const { out, opts } = captureOpts({
+      gh: async (args) => {
+        if (args[0] === 'issue' && args[1] === 'view' && args.includes('body')) {
+          throw new Error('tracker unavailable');
+        }
+        return fakeGh(args);
+      },
+    });
     const code = await dispatchEngineer(
       { kind: 'worktree', project: 'alpha', idea: 'no record', sourceRef: 'o/a#999' },
       opts,

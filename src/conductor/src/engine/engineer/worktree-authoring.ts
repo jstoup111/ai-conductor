@@ -116,8 +116,10 @@ export async function createEngineerWorktree(
 
   // Task 1 (Story 1 happy path): stage the intake's Desired-outcome bullets into
   // the worktree's gitignored .pipeline/ BEFORE any DECIDE artifact is authored.
-  // No-op for chat/CLI-originated ideas (no sourceRef/body) — Story 1 negative path.
-  if (claim?.sourceRef && claim?.body) {
+  // No-op for chat/CLI-originated ideas and unresolved source bodies — Story 1
+  // negative path. A resolved empty tracker body is still authoritative and
+  // stages the zero-bullet outcome layer.
+  if (claim?.sourceRef && claim.body != null) {
     await stageIntakeOutcomes(worktreePath, claim.sourceRef, claim.body);
   }
 
