@@ -146,10 +146,11 @@ export class MetricsRecorder {
 
   onFeatureCostSnapshot(event: Extract<ConductorEvent, { type: 'feature_cost_snapshot' }>): void {
     if (!Number.isFinite(event.costUsd)) return;
-    this.instruments.featureCostGauge.record(event.costUsd, this.withIdentity({ cost_complete: event.costComplete }));
+    const tierAttrs = event.tier === undefined ? {} : { tier: event.tier };
+    this.instruments.featureCostGauge.record(event.costUsd, this.withIdentity({ cost_complete: event.costComplete, ...tierAttrs }));
     for (const bucket of event.byDimension) {
       if (!Number.isFinite(bucket.costUsd)) continue;
-      const attributes: Record<string, string> = { step: bucket.step };
+      const attributes: Record<string, string> = { step: bucket.step, ...tierAttrs };
       if (bucket.model !== undefined) attributes.model = bucket.model;
       if (bucket.source !== undefined) attributes.source = bucket.source;
       this.instruments.featureStepCostGauge.record(bucket.costUsd, this.withIdentity(attributes));
@@ -158,7 +159,7 @@ export class MetricsRecorder {
       for (const kind of MetricsRecorder.TOKEN_KINDS) {
         const value = bucket.tokens[kind];
         if (typeof value === 'number' && Number.isFinite(value)) {
-          const attributes: Record<string, string> = { step: bucket.step, kind };
+          const attributes: Record<string, string> = { step: bucket.step, kind, ...tierAttrs };
           if (bucket.model !== undefined) attributes.model = bucket.model;
           this.instruments.featureStepTokensGauge.record(value, this.withIdentity(attributes));
         }
@@ -169,6 +170,7 @@ export class MetricsRecorder {
   onFeatureUsageTotal(event: Extract<ConductorEvent, { type: 'feature_usage_total' }>): void {
     if (Number.isFinite(event.costUsd)) this.instruments.featureCostGauge.record(event.costUsd, this.withIdentity({
       cost_complete: event.unmeteredDispatches === 0 && (event.costUnmeteredDispatches ?? 0) === 0,
+      ...(event.tier === undefined ? {} : { tier: event.tier }),
     }));
   }
 
