@@ -37,11 +37,15 @@ export async function checkGateCompletion(
  */
 /** Immutable identity tuple for the exact replay whose result is being retained. */
 export interface ReplayEvidence {
+  /** An unavailable reconstruction is a named conservative result, never an
+   * empty proved tuple.  Legacy records without this field are proved only
+   * when they carry an expected tree. */
+  kind?: 'proved' | 'unproved';
   preRebaseHead: string;
   mergeBase: string;
   target: string;
   completedHead: string;
-  expectedTree: string;
+  expectedTree?: string;
 }
 
 /** The exact original passing evidence a replay preservation continues to use. */
@@ -81,6 +85,20 @@ export interface RebaseOperationRecord {
   status: 'applying' | 'applied';
   transition: RebaseTransitionDescriptor;
   replay: ReplayEvidence;
+}
+
+/** The one structural contract used by both transition writers and finish
+ * readers.  Unproved replay may continue, but cannot retain any review. */
+export function validRebaseOperationRecord(operation: RebaseOperationRecord | undefined): boolean {
+  if (!operation || !operation.id || !operation.transition || !operation.replay) return false;
+  const { transition, replay } = operation;
+  if (![transition.preserved, transition.invalidated, transition.reverified].every(Array.isArray)) return false;
+  const named = [...transition.preserved, ...transition.invalidated, ...transition.reverified];
+  if (new Set(named).size !== named.length) return false;
+  if (![replay.preRebaseHead, replay.mergeBase, replay.target, replay.completedHead]
+    .every((value) => typeof value === 'string' && value.length > 0)) return false;
+  if (replay.kind === 'unproved') return transition.preserved.length === 0 && replay.expectedTree === undefined;
+  return typeof replay.expectedTree === 'string' && replay.expectedTree.length > 0;
 }
 
 export interface GateVerdict {

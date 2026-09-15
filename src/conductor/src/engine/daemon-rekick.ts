@@ -895,9 +895,7 @@ export async function resumeRebaseFirst(opts: {
     preVerify,
     git,
   );
-  const transitionReplay = rebaseVerdict.replay ?? (outcome.kind === 'changed'
-    ? { preRebaseHead: '', mergeBase: '', target: '', completedHead: '', expectedTree: '' }
-    : undefined);
+  const transitionReplay = rebaseVerdict.replay;
   let appliedGateDecision = rebaseVerdict;
   if (transitionReplay) {
     const transition = await applyRebaseTransition({

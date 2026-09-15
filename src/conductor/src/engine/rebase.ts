@@ -1930,7 +1930,9 @@ export async function applyRebaseVerdicts(
           mergeBase: replayComparison.identity.mergeBase,
           target: replayComparison.identity.target,
           completedHead: replayComparison.identity.completedHead,
-          expectedTree: replayComparison.kind === 'unproved' ? '' : replayComparison.expectedTree,
+          ...(replayComparison.kind === 'unproved'
+            ? { kind: 'unproved' as const }
+            : { kind: 'proved' as const, expectedTree: replayComparison.expectedTree }),
         } } : {}),
   };
 }

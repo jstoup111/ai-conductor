@@ -139,4 +139,33 @@ describe('applyRebaseTransition', () => {
       reason: 'newer ordinary judgement',
     });
   });
+
+  it('refuses a persisted same-field conflict without overwriting state or publishing an applied operation', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    const statePath = join(dir, '.pipeline/conduct-state.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(statePath, JSON.stringify({ build_review: 'done' }));
+    await writeVerdict(dir, 'build_review', {
+      satisfied: false, checkedAt: 1, kickback: { from: 'rebase', evidence: 'changed replay' },
+    });
+    const store = createFilesystemConductStateStore(statePath);
+    const applyBatch = store.applyBatch.bind(store);
+    store.applyBatch = async (batch) => {
+      // A concurrent owner changes the exact field after transition snapshot
+      // and before its expected-value mutation reaches persistent storage.
+      await writeFile(statePath, JSON.stringify({ build_review: 'in_progress' }));
+      return applyBatch(batch);
+    };
+
+    const result = await applyRebaseTransition({
+      projectRoot: dir, stateStore: store, operationId: 'conflicted-operation',
+      replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      invalidated: ['build_review'], preserved: [], preservedCandidates: [],
+    });
+
+    expect(result.stateResult).toBe('refused');
+    expect(JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'))).toMatchObject({ build_review: 'in_progress' });
+    expect((await readVerdict(dir, 'rebase'))?.rebaseOperation?.status).not.toBe('applied');
+  });
 });

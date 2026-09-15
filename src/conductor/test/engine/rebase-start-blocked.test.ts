@@ -115,7 +115,7 @@ describe('engine/rebase — refusal before rebase starts', () => {
     }
   });
 
-  it('treats a healed active review-input document delta as changed without invalidating BUILD or aggregate tests', async () => {
+  it('conservatively revalidates aggregate gates for a healed review-input delta whose prior PASS lacks evidence', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rebase-start-blocked-git-'));
     const g = (args: string[]) => execFile('git', args, { cwd: root });
     const planPath = '.docs/plans/document-only-rebase.md';

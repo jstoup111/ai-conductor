@@ -74,7 +74,14 @@ export async function applyRebaseTransition(
   };
   const priorRebase = await readVerdict(options.projectRoot, 'rebase');
   if (priorRebase?.rebaseOperation?.id === operation.id && priorRebase.rebaseOperation.status === 'applied') {
-    return { operation: priorRebase.rebaseOperation, invalidated: options.invalidated, preserved: options.preserved, stateResult: 'already-applied' };
+    const complete = await Promise.all(options.preserved.map(async (gate) =>
+      (await readVerdict(options.projectRoot, gate))?.preservation?.operationId === operation.id));
+    if (complete.every(Boolean)) {
+      return { operation: priorRebase.rebaseOperation, invalidated: options.invalidated, preserved: options.preserved, stateResult: 'already-applied' };
+    }
+    // A prior process exposed an applied descriptor before writing every
+    // preservation effect. Re-open its fence and reconcile below; publication
+    // remains blocked throughout.
   }
 
   // Preservation is authority for the verdict that existed when this replay
@@ -131,14 +138,6 @@ export async function applyRebaseTransition(
     return { operation, invalidated: options.invalidated, preserved: options.preserved, stateResult: 'refused' };
   }
 
-  const applied: RebaseOperationRecord = { ...operation, status: 'applied' };
-  await writeVerdict(options.projectRoot, 'rebase', {
-    satisfied: true,
-    checkedAt: Date.now(),
-    ...(priorRebase?.reason ? { reason: priorRebase.reason } : {}),
-    rebaseOperation: applied,
-  });
-
   // Preserve the original verdict rather than minting a second judge result.
   // The operation id makes this authority usable only with this exact applied
   // replay; an ordinary later verdict replaces this whole record naturally.
@@ -157,10 +156,20 @@ export async function applyRebaseTransition(
         original: original.original,
         replay: options.replay,
         relevantInputIdentities: original.relevantInputIdentities,
-        operationId: applied.id,
+        operationId: operation.id,
       },
     });
   }
+  // Applied is the commit marker: every preservation effect precedes it, so a
+  // restart can safely distinguish a completed operation from an interrupted
+  // one without publishing a half-written pair.
+  const applied: RebaseOperationRecord = { ...operation, status: 'applied' };
+  await writeVerdict(options.projectRoot, 'rebase', {
+    satisfied: true,
+    checkedAt: Date.now(),
+    ...(priorRebase?.reason ? { reason: priorRebase.reason } : {}),
+    rebaseOperation: applied,
+  });
   return {
     operation: applied,
     invalidated: options.invalidated,

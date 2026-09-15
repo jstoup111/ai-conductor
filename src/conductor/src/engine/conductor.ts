@@ -14500,9 +14500,7 @@ export class Conductor {
     // authority and follows the conservative verdict path below.
     // Missing replay identity is an explicit unproved transition, never a
     // reason to resume the old positional rebase rewind.
-    const transitionReplay = verdict.replay ?? (outcome.kind === 'changed'
-      ? { preRebaseHead: '', mergeBase: '', target: '', completedHead: '', expectedTree: '' }
-      : undefined);
+    const transitionReplay = verdict.replay;
     let appliedGateDecision = verdict;
     if (transitionReplay) {
       const transition = await applyRebaseTransition({

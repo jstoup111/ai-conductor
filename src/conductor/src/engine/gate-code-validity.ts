@@ -15,7 +15,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { StepName } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
-import type { GateVerdict, ReplayEvidence } from './gate-verdicts.js';
+import { validRebaseOperationRecord, type GateVerdict, type ReplayEvidence } from './gate-verdicts.js';
 import {
   ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   MANUAL_TEST_CODE_STAMP,
@@ -50,7 +50,7 @@ function sameReplay(left: ReplayEvidence, right: ReplayEvidence): boolean {
     left.mergeBase === right.mergeBase &&
     left.target === right.target &&
     left.completedHead === right.completedHead &&
-    left.expectedTree === right.expectedTree;
+    left.expectedTree === right.expectedTree && left.kind === right.kind;
 }
 
 function relevantInputPath(identity: unknown): string | null {
@@ -90,18 +90,11 @@ export async function rebaseOperationPublicationBlocker(projectRoot: string): Pr
   if (operation.status !== 'applied') {
     return 'rebase transition is still applying; reconcile the persisted rebase operation before publication';
   }
-  const { transition, replay } = operation;
-  if (!nonEmptyString(operation.id) || !transition || !replay ||
-    !Array.isArray(transition.preserved) || !Array.isArray(transition.invalidated) ||
-    !Array.isArray(transition.reverified) ||
-    ![replay.preRebaseHead, replay.mergeBase, replay.target, replay.completedHead, replay.expectedTree]
-      .every(nonEmptyString)) {
+  if (!validRebaseOperationRecord(operation)) {
     return 'rebase transition record is malformed or inconsistent; reconcile it before publication';
   }
+  const { transition } = operation;
   const named = [...transition.preserved, ...transition.invalidated, ...transition.reverified];
-  if (new Set(named).size !== named.length) {
-    return 'rebase transition record has overlapping gate effects; reconcile it before publication';
-  }
   for (const gate of named) {
     const verdict = await persistedVerdict(projectRoot, gate);
     if (!verdict?.satisfied) {
@@ -144,7 +137,7 @@ async function replayBoundAuthorityStillValid(
     const replay = authority.replay;
     if (!nonEmptyString(replay.preRebaseHead) || !nonEmptyString(replay.mergeBase) ||
       !nonEmptyString(replay.target) || !nonEmptyString(replay.completedHead) ||
-      !nonEmptyString(replay.expectedTree)) return false;
+      !nonEmptyString(replay.expectedTree) || replay.kind === 'unproved') return false;
 
     const rebase = await persistedVerdict(ctx.projectRoot, 'rebase');
     const operation = rebase?.rebaseOperation;
