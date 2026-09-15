@@ -5273,6 +5273,44 @@ describe('build_review rubric dispatch: validate-and-repair loop', () => {
     expect(prompt).toContain('content-region');
   });
 
+  it('renders the security prompt from its findings-only projection and vocabulary', async () => {
+    const events = new ConductorEventEmitter();
+    const promptEvents: unknown[] = [];
+    events.on('build_review_rubric_prompt', (event) => { promptEvents.push(event); });
+    const invoke = vi.fn().mockResolvedValue({ success: true, output: validOutput, exitCode: 0 });
+    const runner = new DefaultStepRunner({ invoke }, 'session-1', '/tmp/project', { events, providerKey: 'codex' });
+    const securityProjection = {
+      rubric: 'security', contractVersion: 'v3', projectionVersion: 'v3',
+      lapId, snapshotDigest, contentDigest: 'sha256:content', digest: 'sha256:security-projection',
+      mergeBase: 'base', headSha: 'head',
+      changedFiles: [{ path: 'src/handler.ts', changeKind: 'modified', hunks: [] }],
+    } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
+    const securityBranch = { ...branch, rubric: 'security' as const, skillName: 'build-review-security' };
+
+    await (runner as unknown as {
+      dispatchBuildReviewRubric: (branch: unknown, projection: unknown) => Promise<unknown>;
+    }).dispatchBuildReviewRubric(securityBranch, securityProjection);
+
+    const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
+    expect(prompt).toContain('$build-review-security');
+    expect(prompt).toContain('Build Review Security rubric.');
+    expect(prompt).toContain('committed-secret');
+    expect(prompt).toContain('injection');
+    expect(prompt).toContain('broken-access-control');
+    expect(prompt).toContain('path-traversal');
+    expect(prompt).toContain('unsafe-deserialization');
+    expect(prompt).toContain('cryptographic-failure');
+    expect(prompt).toContain('security-misconfiguration');
+    expect(prompt).toContain('authentication-failure');
+    expect(prompt).toContain('integrity-failure');
+    expect(prompt).toContain('ssrf');
+    expect(prompt).toContain(JSON.stringify(securityProjection));
+    expect(prompt).not.toContain('scopeResolutions');
+    expect(promptEvents).toEqual([expect.objectContaining({
+      type: 'build_review_rubric_prompt', rubric: 'security', lapId,
+    })]);
+  });
+
   it('yields a bounded dispatch-failure report with the raw output excerpt when the repair turn is still bad', async () => {
     const invoke = vi.fn()
       .mockResolvedValueOnce({ success: true, output: incidentShapedOutput, exitCode: 0 })
