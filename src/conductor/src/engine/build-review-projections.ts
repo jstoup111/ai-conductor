@@ -111,10 +111,14 @@ export interface TestQualityProjection extends CommonProjection<'testQuality'> {
   readonly preflight: TestQualityPreflightEvidence;
 }
 
-export type BuildReviewRubricProjection = TestQualityProjection;
+/** Whole-diff, by-reference projection for the security review branch. */
+export interface SecurityProjection extends CommonProjection<'security'> {}
+
+export type BuildReviewRubricProjection = TestQualityProjection | SecurityProjection;
 
 export type BuildReviewRubricProjections = {
   readonly testQuality: TestQualityProjection;
+  readonly security: SecurityProjection;
 };
 
 /** One current-lap reduced-coverage stamp, shared by every reader-facing surface. */
@@ -349,7 +353,7 @@ export function deriveChangedFileReferences(diff: string): readonly ChangedFileR
 }
 
 function common<Rubric extends BuildReviewRubricId>(source: BuildReviewProjectionSource, rubric: Rubric): Omit<CommonProjection<Rubric>, 'digest'> {
-  const descriptor = getBuildReviewRubricDescriptor('testQuality');
+  const descriptor = getBuildReviewRubricDescriptor(rubric);
   const snapshot = source.inputs.sourceSnapshot;
   return {
     rubric,
@@ -392,5 +396,6 @@ export function deriveBuildReviewRubricProjections(source: BuildReviewProjection
     ) as unknown as readonly RevertedProductionFileReference[],
     preflight: source.testQuality.preflight,
   }) as TestQualityProjection;
-  return Object.freeze({ testQuality });
+  const security = seal(common(source, 'security')) as SecurityProjection;
+  return Object.freeze({ testQuality, security });
 }
