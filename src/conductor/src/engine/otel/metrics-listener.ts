@@ -39,7 +39,7 @@ export class MetricsListener {
     daemon_backlog_snapshot: (listener, event) => listener.recorder.onDaemonBacklog(event as Extract<OtelEvent, { type: 'daemon_backlog_snapshot' }>),
     feature_dispatch_started: (listener, event) => {
       const dispatch = event as Extract<OtelEvent, { type: 'feature_dispatch_started' }>;
-      listener.recorder.forFeature(dispatch.slug).onFeatureDispatch(dispatch.kind);
+      listener.recorder.forFeature(dispatch.slug).onFeatureDispatch(dispatch.kind, dispatch.tier);
       listener.dispatchMetering.set(dispatch.slug, new DispatchMeteringTracker());
       listener.latestDispatchDimensions.delete(dispatch.slug);
       listener.terminal.delete(dispatch.slug);
@@ -47,8 +47,8 @@ export class MetricsListener {
     feature_dispatch_ended: (listener, event) => {
       const dispatch = event as Extract<OtelEvent, { type: 'feature_dispatch_ended' }>;
       const metric = listener.recorder.forFeature(dispatch.slug);
-      if (!listener.terminal.has(dispatch.slug)) metric.onRunClose(dispatch.outcome);
-      if (dispatch.outcome === 'halted' && dispatch.haltClass && dispatch.step) metric.onFeatureHalt(dispatch.haltClass, dispatch.step);
+      if (!listener.terminal.has(dispatch.slug)) metric.onRunClose(dispatch.outcome, dispatch.tier);
+      if (dispatch.outcome === 'halted' && dispatch.haltClass && dispatch.step) metric.onFeatureHalt(dispatch.haltClass, dispatch.step, dispatch.tier);
       listener.terminal.delete(dispatch.slug);
       listener.starts.delete(dispatch.slug);
       listener.dispatchMetering.delete(dispatch.slug);
@@ -57,8 +57,8 @@ export class MetricsListener {
     feature_shipped: (listener, event) => {
       const shipped = event as Extract<OtelEvent, { type: 'feature_shipped' }>;
       const metric = listener.recorder.forFeature(shipped.slug);
-      metric.onFeatureShipped();
-      metric.onFeatureDuration(typeof shipped.runStartedAt === 'number' ? Math.max(0, listener.now() - shipped.runStartedAt) : undefined, shipped.active.state === 'exact' ? shipped.active.activeMs : undefined);
+      metric.onFeatureShipped(shipped.tier);
+      metric.onFeatureDuration(typeof shipped.runStartedAt === 'number' ? Math.max(0, listener.now() - shipped.runStartedAt) : undefined, shipped.active.state === 'exact' ? shipped.active.activeMs : undefined, shipped.tier);
     },
     step_started: (listener, event) => {
       const step = event as Extract<OtelEvent, { type: 'step_started' }>;
