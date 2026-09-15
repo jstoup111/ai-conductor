@@ -488,6 +488,10 @@ export function createConductStateLease(
     try {
       await filesystem.moveDirectory(leasePath, quarantinedLeasePath);
     } catch (error) {
+      // The lease directory can disappear after pre-quarantine confirmation but
+      // before the rename begins. Since the rename did not take effect, this
+      // contender has not used recovery authority and can retry safely.
+      if (isMissing(error)) return { status: 'vanished' };
       reportRecovery({ kind: 'refused', statePath, reason: 'ownership_changed' });
       return {
         status: 'refused',

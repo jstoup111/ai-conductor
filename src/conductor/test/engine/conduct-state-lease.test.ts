@@ -1488,6 +1488,45 @@ describe('conduct-state lease', () => {
     });
   });
 
+  it('retries when the dead owner lease disappears before quarantine begins', async () => {
+    const statePath = '/worktree/quarantine-move-vanished/.pipeline/conduct-state.json';
+    const leasePath = `${statePath}.lease`;
+    const shared = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem: shared, pid: 101, newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    let moveAttempts = 0;
+    let releaseCalls = 0;
+    const filesystem: ConductStateLeaseFilesystem = {
+      ...shared,
+      async moveDirectory(path, destination): Promise<void> {
+        moveAttempts += 1;
+        if (moveAttempts === 1) {
+          await shared.releaseDirectory(path);
+          throw Object.assign(new Error('lease disappeared'), { code: 'ENOENT' });
+        }
+        await shared.moveDirectory(path, destination);
+      },
+      async releaseDirectory(path): Promise<void> {
+        releaseCalls += 1;
+        await shared.releaseDirectory(path);
+      },
+    };
+
+    const result = await createConductStateLease(statePath, {
+      filesystem, pid: 202, newToken: () => 'contender', processIsLive: () => false,
+    }).acquire();
+
+    expect({ result, moveAttempts, releaseCalls, leaseHeld: shared.hasDirectory(leasePath) }).toMatchObject({
+      result: { ok: true },
+      moveAttempts: 1,
+      releaseCalls: 0,
+      leaseHeld: true,
+    });
+    if (result.ok) await expect(result.handle.release()).resolves.toEqual({ ok: true });
+  });
+
   it('retains quarantine and replacement when quarantine identity confirmation cannot be read', async () => {
     const statePath = '/worktree/quarantine-confirmation-read-failure/.pipeline/conduct-state.json';
     const leasePath = `${statePath}.lease`;
