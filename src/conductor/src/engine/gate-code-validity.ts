@@ -7,8 +7,9 @@
 // re-dispatch/resume path: a judged gate verdict stamped with the HEAD SHA
 // it was formed against (`codeStamp`, Task 1) should be preserved across
 // re-dispatch if the code hasn't actually changed in that gate's surface
-// since. `artifacts.ts` and `conductor.ts` call `gateVerdictStillValid` when
-// deciding whether a stamped gate verdict remains current.
+// since. `artifacts.ts` calls `gateVerdictStillValid` when deciding whether a
+// stamped gate verdict remains current; `conductor.ts` imports
+// `verdictProducedByRun` for its run-identity checks.
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
