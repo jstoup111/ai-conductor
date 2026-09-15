@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-15T15:25:54.083Z
 Slug: recover-stale-conduct-state-lease-recovery-claims
 Class: needs-human
 Halting step: unknown
