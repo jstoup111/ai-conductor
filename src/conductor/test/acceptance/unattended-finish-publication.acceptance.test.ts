@@ -38,6 +38,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
+import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -89,12 +90,63 @@ interface FinishPublicationEffects {
     baseBranch: string;
     git: (args: string[]) => Promise<{ stdout: string }>;
     gh: (args: string[]) => Promise<{ stdout: string }>;
+    operations?: GithubOperationRunner;
+    remoteGit?: () => Promise<{
+      kind: 'executed';
+      targets: readonly [{ operation: 'remote-ref.push'; repository: string; kind: 'remote-ref'; ref: string }];
+    }>;
   };
   createShippedRecord: () => Promise<void>;
   authorProse: () => Promise<void>;
   dispatchJudgment: () => Promise<{ kind: string; reason?: string }>;
   repairPresentation: () => Promise<void>;
   recordOutcome: () => Promise<void>;
+}
+
+/**
+ * Fixture-owned GitHub operation boundary. The production coordinator receives
+ * the same guarded seam as it does in production; this adapter only models the
+ * controlled third-party response and never permits a raw fallback.
+ */
+function guardedOperations(
+  gh: (args: string[]) => Promise<{ stdout: string }>,
+): GithubOperationRunner {
+  return {
+    async run(request) {
+      if (request.operation === 'pull-request.create') {
+        if (!request.payload || !('head' in request.payload) || !('base' in request.payload)) {
+          throw new Error('missing pull-request creation payload');
+        }
+        await gh(['pr', 'create', '--head', request.payload.head, '--base', request.payload.base]);
+        return {};
+      }
+      if (request.target.kind !== 'pull-request') throw new Error(`unexpected operation: ${request.operation}`);
+      const prUrl = `https://github.com/${request.target.repository}/pull/${request.target.number}`;
+      if (request.operation === 'pull-request.edit') {
+        const body = request.payload && 'body' in request.payload ? request.payload.body : undefined;
+        if (typeof body !== 'string') throw new Error('missing pull-request edit body');
+        await gh(['pr', 'edit', prUrl, '--body', body]);
+        return {};
+      }
+      if (request.operation === 'pull-request.ready') {
+        await gh(['pr', 'ready', prUrl]);
+        return {};
+      }
+      throw new Error(`unexpected operation: ${request.operation}`);
+    },
+  };
+}
+
+function guardedRemoteGit(branch = 'feat/fixture') {
+  return async () => ({
+    kind: 'executed' as const,
+    targets: [{
+      operation: 'remote-ref.push' as const,
+      repository: 'acme/widget',
+      kind: 'remote-ref' as const,
+      ref: `refs/heads/${branch}`,
+    }] as const,
+  });
 }
 
 interface AdvanceFinishPublicationInput {
@@ -153,32 +205,36 @@ function makePublicationFixture(initial: PublicationSnapshot) {
     }
   };
 
-  const effects: FinishPublicationEffects = {
-    establishPr: {
-      cwd: '/fixture',
-      branch: 'feat/fixture',
-      baseBranch: 'main',
-      git: async (args) => {
-        if (args[0] === 'rev-list') return { stdout: '1\n' };
-        return { stdout: '' };
-      },
-      gh: async (args) => {
-        if (args[0] === 'pr' && args[1] === 'view' && args[2] === 'feat/fixture') {
-          if (snapshot.pr.identity === 'one' && snapshot.pr.url) {
-            return { stdout: JSON.stringify({ url: snapshot.pr.url, state: 'OPEN' }) };
-          }
-          throw new Error('no open PR');
-        }
-        if (args[0] === 'pr' && args[1] === 'create') {
-          await mutate('establish-pr', () => {
-            snapshot.pr.identity = 'one';
-            snapshot.pr.url = PR_URL;
-          });
-          return { stdout: `${PR_URL}\n` };
-        }
-        return { stdout: '' };
-      },
+  const establishPr: FinishPublicationEffects['establishPr'] = {
+    cwd: '/fixture',
+    branch: 'feat/fixture',
+    baseBranch: 'main',
+    git: async (args) => {
+      if (args[0] === 'rev-list') return { stdout: '1\n' };
+      return { stdout: '' };
     },
+    gh: async (args) => {
+      if (args[0] === 'pr' && args[1] === 'view' && args[2] === 'feat/fixture') {
+        if (snapshot.pr.identity === 'one' && snapshot.pr.url) {
+          return { stdout: JSON.stringify({ url: snapshot.pr.url, state: 'OPEN' }) };
+        }
+        throw new Error('no open PR');
+      }
+      if (args[0] === 'pr' && args[1] === 'create') {
+        await mutate('establish-pr', () => {
+          snapshot.pr.identity = 'one';
+          snapshot.pr.url = PR_URL;
+        });
+        return { stdout: `${PR_URL}\n` };
+      }
+      return { stdout: '' };
+    },
+    remoteGit: guardedRemoteGit(),
+  };
+  establishPr.operations = guardedOperations(establishPr.gh);
+
+  const effects: FinishPublicationEffects = {
+    establishPr,
     createShippedRecord: () =>
       mutate('create-shipped-record', () => {
         snapshot.shippedRecord = 'valid';
@@ -564,6 +620,8 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
       projectRoot: conductorRoot!,
       stateFilePath: join(pipeline, 'conduct-state.json'),
       baseBranch: 'main', git, gh,
+      operations: guardedOperations(gh),
+      remoteGit: guardedRemoteGit('feat/feature'),
       observeReleaseReadiness: async () => 'present',
       writeShippedRecord: async () => {
         await mkdir(join(conductorRoot!, '.docs', 'shipped'), { recursive: true });
@@ -767,7 +825,7 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
       if (args[0] === 'auth' && args[1] === 'status') return { stdout: '' };
       if (args[0] === 'pr' && args[1] === 'view') {
         if (!pullRequest) throw new Error('no open PR');
-        return { stdout: JSON.stringify(pullRequest) };
+        return { stdout: JSON.stringify({ ...pullRequest, state: 'OPEN' }) };
       }
       if (args[0] === 'pr' && args[1] === 'create') {
         pullRequest = { url: prUrl, title: 'feat: draft publication', body: '<!-- conductor:pr-body-floor -->\n\nDraft opened automatically.', isDraft: true };
@@ -822,6 +880,8 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
         baseBranch: 'main',
         git,
         gh,
+        operations: guardedOperations(gh),
+        remoteGit: guardedRemoteGit('feat/feature'),
         acquireInteractiveIntent: async () => 'pr',
         observeReleaseReadiness: async () => 'present',
         writeShippedRecord: async () => 0,
