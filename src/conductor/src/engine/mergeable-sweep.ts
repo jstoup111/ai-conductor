@@ -24,6 +24,7 @@ import {
   makeProductionGh,
   makeProductionGit,
   addLabel,
+  ensureLabel,
   removeLabel,
   isMergeable,
   upsertComment,
