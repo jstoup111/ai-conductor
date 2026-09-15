@@ -1,4 +1,7 @@
-// Covers: task:5, task:6, task:7, task:8
+// Covers: task:2, task:5, task:6, task:7, task:8
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   AggregationTemporality,
@@ -7,8 +10,10 @@ import {
   PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
 import { MetricsListener } from '../../../src/engine/otel/metrics-listener.js';
 import { MetricsRecorder } from '../../../src/engine/otel/metrics.js';
+import type { ConductorEvent } from '../../../src/types/events.js';
 
 interface MetricPoint {
   attributes: Record<string, unknown>;
@@ -65,6 +70,44 @@ function resourceAttributes(exporter: InMemoryMetricExporter): Record<string, un
 }
 
 describe('MetricsListener dispatch dimensions', () => {
+  it('replays a tierless historical dispatch-end record through the event persister and listener', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'metrics-listener-legacy-event-'));
+    const eventsPath = join(directory, 'events.jsonl');
+    const persisterEmitter = new ConductorEventEmitter();
+    const persister = new EventPersister(eventsPath, persisterEmitter);
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const listenerEmitter = new ConductorEventEmitter();
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('metrics-listener'), { project: 'project', worker: 'worker' }),
+    );
+    persister.start();
+    listener.start(listenerEmitter);
+
+    try {
+      await expect(persisterEmitter.emit({
+        type: 'feature_dispatch_ended', slug: 'legacy-feature', outcome: 'terminated',
+      })).resolves.toBeUndefined();
+      const [line] = (await readFile(eventsPath, 'utf8')).trim().split('\n');
+      const historical = JSON.parse(line) as ConductorEvent;
+
+      expect(historical).not.toHaveProperty('tier');
+      await expect(listenerEmitter.emit(historical)).resolves.toBeUndefined();
+      await provider.forceFlush();
+
+      expect(attributesForInstrument(exporter, 'conductor.run.outcomes')).toContainEqual({
+        outcome: 'terminated', project: 'project', worker: 'worker', feature: 'legacy-feature',
+      });
+    } finally {
+      persister.stop();
+      listener.stop();
+      await provider.shutdown();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('retains the latest complete dispatch dimensions when a step fails', async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     const provider = new MeterProvider({
