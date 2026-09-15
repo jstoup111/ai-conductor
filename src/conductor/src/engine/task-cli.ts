@@ -305,12 +305,16 @@ async function runTaskPlanGap(
 ): Promise<number> {
   const pipelineDir = join(projectRoot, '.pipeline');
   let activePlanPath: string | undefined;
+  let tier: 'S' | 'M' | 'L' | undefined;
   try {
     const state = JSON.parse(
       await readFile(join(pipelineDir, 'engine-state.json'), 'utf-8'),
-    ) as { activePlanPath?: unknown };
+    ) as { activePlanPath?: unknown; complexity_tier?: unknown };
     if (typeof state.activePlanPath === 'string' && state.activePlanPath.trim()) {
       activePlanPath = state.activePlanPath;
+    }
+    if (state.complexity_tier === 'S' || state.complexity_tier === 'M' || state.complexity_tier === 'L') {
+      tier = state.complexity_tier;
     }
   } catch {
     // The diagnostic below gives the operator the actionable missing authority.
@@ -360,6 +364,7 @@ async function runTaskPlanGap(
     reason: haltReason,
     haltClass: 'plan-gap',
     ts: new Date().toISOString(),
+    ...(tier === undefined ? {} : { tier }),
   });
   return 1;
 }

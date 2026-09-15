@@ -406,6 +406,7 @@ export function makeRunFeature(
       await (featureRun?.rootEvents ?? featureRun?.events)?.emit({
         type: 'feature_dispatch_started',
         slug: item.slug,
+        ...(item.tier !== undefined && { tier: item.tier }),
         kind: classifyDispatchKind({ wasExisting: worktree.wasExisting ?? false, rekickSignal: rekick }),
       });
       endDispatch = async (
@@ -415,6 +416,7 @@ export function makeRunFeature(
         dispatchEnded = true;
         const event: Extract<import('../types/events.js').ConductorEvent, { type: 'feature_dispatch_ended' }> = {
           type: 'feature_dispatch_ended', slug: item.slug, outcome,
+          ...(item.tier !== undefined && { tier: item.tier }),
         };
         if (outcome === 'halted') {
           event.haltClass = await readHaltSidecarClassification(worktree!.path);
@@ -428,7 +430,8 @@ export function makeRunFeature(
           ? state.value.run_started_at : undefined;
         const rollup = await computeTimingRollup(worktree!.path);
         await (featureRun?.rootEvents ?? featureRun?.events)?.emit({
-          type: 'feature_shipped', slug: item.slug, ...(runStartedAt === undefined ? {} : { runStartedAt }),
+          type: 'feature_shipped', slug: item.slug, ...(item.tier !== undefined && { tier: item.tier }),
+          ...(runStartedAt === undefined ? {} : { runStartedAt }),
           active: rollup.state === 'measured'
             ? { state: 'exact', activeMs: rollup.activeMs }
             : rollup.state === 'partial'

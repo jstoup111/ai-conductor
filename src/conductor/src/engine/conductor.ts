@@ -2243,7 +2243,7 @@ export class Conductor {
     const terminalDelivery = delivery.then(async () => {
       this.openExecutions.delete(terminalKey);
       if (event.type === 'step_completed' || event.type === 'step_failed') {
-        await this.emitFeatureCostSnapshot();
+        await this.emitFeatureCostSnapshot(event.tier);
       }
     }).finally(() => {
       this.closingExecutions.delete(terminalKey);
@@ -2256,11 +2256,11 @@ export class Conductor {
    * Project the durable event ledger after a step closes. This is best-effort:
    * a missing or corrupt ledger must never alter that step's verdict.
    */
-  private async emitFeatureCostSnapshot(): Promise<void> {
+  private async emitFeatureCostSnapshot(tier?: ComplexityTier): Promise<void> {
     try {
       const rollup = await computeCostRollup(this.projectRoot);
       if ((rollup.readErrors ?? 0) > 0) return;
-      await this.events.emit(toFeatureCostSnapshot(rollup));
+      await this.events.emit(toFeatureCostSnapshot(rollup, tier));
     } catch {
       // Per-step provider lines remain the record when the ledger cannot be read.
     }
@@ -5805,6 +5805,7 @@ export class Conductor {
       prUrl: state.pr_url,
       featureDesc: state.feature_desc,
       sessionStartedAt: state.session_started_at,
+      ...(state.complexity_tier === undefined ? {} : { tier: state.complexity_tier }),
     });
     // The daemon classifies a run solely by .pipeline/DONE vs .pipeline/HALT.
     // Interactive runs intentionally leave no daemon marker.
@@ -5830,6 +5831,7 @@ export class Conductor {
       ...(step ? { step } : {}),
       reason,
       prUrl,
+      ...(this.haltState.complexity_tier === undefined ? {} : { tier: this.haltState.complexity_tier }),
     });
   }
 
@@ -12959,6 +12961,7 @@ export class Conductor {
               await emitTracked({
                 type: 'feature_usage_total',
                 ...toFeatureUsageTotals(rollup),
+                ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
               });
             } catch {
               // No event log, or an unreadable one: the per-step provider

@@ -739,6 +739,15 @@ The `conductor.run.outcomes` counter increments once when an opened root run rea
 terminal paths. Its `outcome` attribute uses the same `complete`, `halted`, and `terminated` taxonomy,
 so dashboards can chart terminal runs without deriving counts from trace-query metrics.
 
+All nine D14 instruments carry an optional raw `tier` label when the producing event
+resolved one: `conductor.feature.dispatches`, `conductor.feature.halts`, `conductor.run.outcomes`,
+`conductor.feature.shipped`, `conductor.feature.duration.wall`, `conductor.feature.duration.active`,
+`conductor.feature.cost`, `conductor.feature.step.cost`, and `conductor.feature.step.tokens`.
+Unresolved tiers are omitted rather than defaulted. Re-tiering creates a new cumulative series while
+the earlier tier's last value remains available. Query cumulative feature totals by both dimensions,
+for example `max by (feature, tier) (...)`; summing those cross-tier series can double-count a
+feature that was re-tiered.
+
 Dispatch metrics use the same projection as the shipped-record cost rollup. Every invoked
 `provider_attempt` contributes one `conductor.step.dispatches` point, including failed attempts; an
 unavailable provider that was never invoked does not. A successful attempt suppresses its matching
@@ -767,7 +776,7 @@ Prometheus commonly normalizes the instruments to `conductor_feature_cost_usd`,
 `conductor_feature_step_cost_usd`, and `conductor_feature_step_tokens`. For example:
 
 ```promql
-max by (feature) (
+max by (feature, tier) (
   last_over_time(conductor_feature_cost_usd{project=~"$project"}[$__range])
 )
 ```

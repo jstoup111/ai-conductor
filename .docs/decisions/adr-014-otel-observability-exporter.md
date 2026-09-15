@@ -473,6 +473,10 @@ Relevant existing facts (evidence):
 >     cumulative `feature.cost` gauge's earlier-tier series stops updating and retains its last
 >     value, which the configuration reference documents as the honest record of a real re-tier.
 
+> **Amended 2026-09-15 by #2528:** James Stoup approved the AB-1 correction: D14 now also admits optional `tier?: ComplexityTier` on the existing `feature_complete` and `loop_halt` events. This supersedes the five-event-only scope above. `completeRun` stamps raw `state.complexity_tier`; the centralized `emitLoopHalt` stamps raw `haltState.complexity_tier`, omitting the key when unresolved (including early halts). These existing helpers are the production terminal emit seams; the earlier thirty-site objection does not describe the current implementation.
+>
+> Existing terminal ownership remains: `feature_complete` or `loop_halt` records `conductor.run.outcomes` with its own event tier through `closeFeature`; the later `feature_dispatch_ended` retains its current duplicate suppression and records its own halt metric. Dispatch-end still records an outcome when no preceding terminal event did. Interactive runs retain terminal outcome reporting without a daemon dispatch-end. No listener cache, inference, new event type, or policy-default tier is introduced. A production-order regression must prove exactly one tier-bearing outcome for completion and halt, plus tierless and interactive cases; an isolated dispatch-end fixture alone is insufficient. The nine-instrument boundary and documented re-tier series split remain mandatory, including a `max by (feature, tier)` last-value query and its historical-tier double-count caveat in the configuration reference.
+
 ## Consequences
 
 **Positive**

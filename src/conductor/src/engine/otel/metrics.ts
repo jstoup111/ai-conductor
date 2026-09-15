@@ -28,7 +28,7 @@ export const DURATION_BUCKET_BOUNDARIES_MS = [
 ];
 
 /** Labels owned by Conductor rather than an operator-supplied attribute map. */
-export const RESERVED_CONDUCTOR_LABEL_KEYS = ['project', 'worker', 'feature', 'step'] as const;
+export const RESERVED_CONDUCTOR_LABEL_KEYS = ['project', 'worker', 'feature', 'step', 'tier'] as const;
 
 export interface DispatchDimensions {
   model?: string;
@@ -146,10 +146,11 @@ export class MetricsRecorder {
 
   onFeatureCostSnapshot(event: Extract<ConductorEvent, { type: 'feature_cost_snapshot' }>): void {
     if (!Number.isFinite(event.costUsd)) return;
-    this.instruments.featureCostGauge.record(event.costUsd, this.withIdentity({ cost_complete: event.costComplete }));
+    const tierAttrs: Record<string, string> = event.tier === undefined ? {} : { tier: event.tier };
+    this.instruments.featureCostGauge.record(event.costUsd, this.withIdentity({ cost_complete: event.costComplete, ...tierAttrs }));
     for (const bucket of event.byDimension) {
       if (!Number.isFinite(bucket.costUsd)) continue;
-      const attributes: Record<string, string> = { step: bucket.step };
+      const attributes: Record<string, string> = { step: bucket.step, ...tierAttrs };
       if (bucket.model !== undefined) attributes.model = bucket.model;
       if (bucket.source !== undefined) attributes.source = bucket.source;
       this.instruments.featureStepCostGauge.record(bucket.costUsd, this.withIdentity(attributes));
@@ -158,7 +159,7 @@ export class MetricsRecorder {
       for (const kind of MetricsRecorder.TOKEN_KINDS) {
         const value = bucket.tokens[kind];
         if (typeof value === 'number' && Number.isFinite(value)) {
-          const attributes: Record<string, string> = { step: bucket.step, kind };
+          const attributes: Record<string, string> = { step: bucket.step, kind, ...tierAttrs };
           if (bucket.model !== undefined) attributes.model = bucket.model;
           this.instruments.featureStepTokensGauge.record(value, this.withIdentity(attributes));
         }
@@ -169,6 +170,7 @@ export class MetricsRecorder {
   onFeatureUsageTotal(event: Extract<ConductorEvent, { type: 'feature_usage_total' }>): void {
     if (Number.isFinite(event.costUsd)) this.instruments.featureCostGauge.record(event.costUsd, this.withIdentity({
       cost_complete: event.unmeteredDispatches === 0 && (event.costUnmeteredDispatches ?? 0) === 0,
+      ...(event.tier === undefined ? {} : { tier: event.tier }),
     }));
   }
 
@@ -176,7 +178,10 @@ export class MetricsRecorder {
     this.instruments.closeoutDurationHistogram.record(event.endedAt - event.startedAt, this.withIdentity({ obligation: event.obligation }));
   }
 
-  onRunClose(outcome: RunOutcome): void { this.instruments.runOutcomesCounter.add(1, this.withIdentity({ outcome })); }
+  onRunClose(outcome: RunOutcome, tier?: string): void {
+    const attrs = tier === undefined ? { outcome } : { outcome, tier };
+    this.instruments.runOutcomesCounter.add(1, this.withIdentity(attrs));
+  }
 
   onMemorySetup(event: Extract<ConductorEvent, { type: 'memory_setup' }>): void {
     this.instruments.memorySetupCounter.add(1, this.withIdentity({ before: event.before, canonical: event.canonical }));
@@ -196,12 +201,22 @@ export class MetricsRecorder {
     this.instruments.daemonUpGauge.record(1, this.withIdentity({}));
   }
 
-  onFeatureDispatch(kind: string): void { this.instruments.featureDispatchesCounter.add(1, this.withIdentity({ kind })); }
-  onFeatureHalt(haltClass: string, step: string): void { this.instruments.featureHaltsCounter.add(1, this.withIdentity({ haltClass, step })); }
-  onFeatureShipped(): void { this.instruments.featureShippedCounter.add(1, this.withIdentity({})); }
-  onFeatureDuration(wallMs?: number, activeMs?: number): void {
-    if (typeof wallMs === 'number' && Number.isFinite(wallMs)) this.instruments.featureWallHistogram.record(wallMs, this.withIdentity({}));
-    if (typeof activeMs === 'number' && Number.isFinite(activeMs)) this.instruments.featureActiveHistogram.record(activeMs, this.withIdentity({}));
+  onFeatureDispatch(kind: string, tier?: string): void {
+    const attrs = tier === undefined ? { kind } : { kind, tier };
+    this.instruments.featureDispatchesCounter.add(1, this.withIdentity(attrs));
+  }
+  onFeatureHalt(haltClass: string, step: string, tier?: string): void {
+    const attrs = tier === undefined ? { haltClass, step } : { haltClass, step, tier };
+    this.instruments.featureHaltsCounter.add(1, this.withIdentity(attrs));
+  }
+  onFeatureShipped(tier?: string): void {
+    const attrs = tier === undefined ? {} : { tier };
+    this.instruments.featureShippedCounter.add(1, this.withIdentity(attrs));
+  }
+  onFeatureDuration(wallMs?: number, activeMs?: number, tier?: string): void {
+    const attrs = tier === undefined ? {} : { tier };
+    if (typeof wallMs === 'number' && Number.isFinite(wallMs)) this.instruments.featureWallHistogram.record(wallMs, this.withIdentity(attrs));
+    if (typeof activeMs === 'number' && Number.isFinite(activeMs)) this.instruments.featureActiveHistogram.record(activeMs, this.withIdentity(attrs));
   }
   onGateVerdict(step: string, outcome: 'pass' | 'fail'): void { this.instruments.gateVerdictsCounter.add(1, this.withIdentity({ step, outcome })); }
   onKickback(from: string, to: string): void { this.instruments.gateKickbacksCounter.add(1, this.withIdentity({ from, to })); }
