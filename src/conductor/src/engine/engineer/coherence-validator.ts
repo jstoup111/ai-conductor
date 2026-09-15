@@ -8,7 +8,7 @@
 // so callers (land-spec.ts, in a later task) can reject with the right named
 // gap instead of a catch-all message.
 //
-// This module is inert until wired into land-spec.ts.
+// `land-spec.ts` consumes this validator through `runCoherenceGate`.
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';

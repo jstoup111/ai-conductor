@@ -10,7 +10,7 @@
 // change set (dynamic, passed in by the caller) — so a waiver can only ever
 // cite a gap id that the validator actually reported, never an invented one.
 //
-// This module is inert until wired into land-spec.ts.
+// `coherence-validator.ts` consumes this module through `evaluateCoherenceWaiver`.
 
 import { join } from 'node:path';
 import type { CoherenceGap } from './coherence-validator.js';
