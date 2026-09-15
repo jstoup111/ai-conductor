@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-15T16:28:21.296Z
 Slug: grade-the-diff-for-security-defects-before-ship-vi
 Class: needs-human
 Halting step: unknown
