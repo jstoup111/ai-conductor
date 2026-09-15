@@ -1,4 +1,4 @@
-// Covers: task:11
+// Covers: task:6, task:11
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
@@ -45,6 +45,52 @@ function titleHash(text: string): string {
 }
 
 describe('build-review domain', () => {
+  it('keeps the security concern vocabulary closed to the approved ten kinds', () => {
+    expect(BUILD_REVIEW_FINDING_VOCABULARIES.security.concernKinds).toEqual([
+      'committed-secret', 'injection', 'broken-access-control', 'path-traversal',
+      'unsafe-deserialization', 'cryptographic-failure', 'security-misconfiguration',
+      'authentication-failure', 'integrity-failure', 'ssrf',
+    ]);
+  });
+
+  it('accepts security content-region anchors only for a changed file', () => {
+    const anchor = { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request-derived shell command' } };
+    const references = { changedTests: [], changedPaths: ['src/auth.ts'], planTasks: [] };
+
+    expect(parseBuildReviewFindingAnchor(anchor, references)).toEqual(anchor);
+  });
+
+  it('rejects coordinate fields from a security content-region anchor', () => {
+    const anchor = { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request-derived shell command', line: 42 } };
+
+    expect(parseBuildReviewFindingAnchor(anchor, { changedTests: [], changedPaths: ['src/auth.ts'], planTasks: [] })).toBeUndefined();
+  });
+
+  it('names the content-region grammar when a security anchor has coordinate fields', () => {
+    const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
+    const result = {
+      kind: 'judged', rubric: 'security', ...expected, contractVersion: 'v3',
+      findings: [{ concernKind: 'injection', summary: 'Shell command includes request input.', evidenceLocations: ['src/auth.ts:8'], anchor: { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request input', line: 8 } } }],
+    };
+
+    expect(describeBuildReviewJudgedResultRejection(result, 'security', expected, { changedTests: [], changedPaths: ['src/auth.ts'], planTasks: [] })).toContain('content-region reference');
+  });
+
+  it('renders the security provider shape as findings only', () => {
+    expect(renderBuildReviewProviderPayloadShape('security')).not.toContain('scopeResolutions');
+  });
+
+  it('diagnoses an out-of-vocabulary security concern and an anchor outside frozen input', () => {
+    const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
+    const result = {
+      kind: 'judged', rubric: 'security', ...expected, contractVersion: 'v3',
+      findings: [{ concernKind: 'other', summary: 'Unrecognized concern.', evidenceLocations: ['src/other.ts:1'], anchor: { rubric: 'security', locus: { path: 'src/other.ts', contentHash: HASH, display: 'other' } } }],
+    };
+
+    expect(describeBuildReviewJudgedResultRejection(result, 'security', expected, { changedTests: [], changedPaths: ['src/auth.ts'], planTasks: [] })).toContain('one of "committed-secret"');
+    expect(describeBuildReviewJudgedResultRejection({ ...result, findings: [{ ...result.findings[0], concernKind: 'injection' }] }, 'security', expected, { changedTests: [], changedPaths: ['src/auth.ts'], planTasks: [] })).toContain("frozen input's changedFiles");
+  });
+
   it('retains optional integer confidence and rejects values outside 0 through 100', () => {
     for (const confidence of [0, 72, 100]) {
       expect(parseBuildReviewJudgedResult(judged([finding({ confidence })]))?.findings[0]?.confidence).toBe(confidence);

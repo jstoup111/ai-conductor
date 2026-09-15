@@ -18,7 +18,9 @@ export type BuildReviewCoordinatorFailureReason = keyof typeof mapBuildReviewCoo
 export function deriveBuildReviewInfrastructureFailureReason(branch: { readonly reason: BuildReviewCoordinatorFailureReason }): BuildReviewInfrastructureFailureReason { return mapBuildReviewCoordinatorFailureReason[branch.reason]; }
 
 export interface BuildReviewContentRegionReference { readonly path: string; readonly contentHash: string; readonly display: string; readonly occurrence?: number; }
-export type BuildReviewFindingAnchor = { readonly rubric: 'testQuality'; readonly locus: BuildReviewContentRegionReference };
+export type BuildReviewFindingAnchor =
+  | { readonly rubric: 'testQuality'; readonly locus: BuildReviewContentRegionReference }
+  | { readonly rubric: 'security'; readonly locus: BuildReviewContentRegionReference };
 export interface BuildReviewFindingReferenceContext { readonly changedTests: readonly string[]; readonly changedTestRegions?: readonly BuildReviewContentRegionReference[]; readonly changedPaths: readonly string[]; readonly planTasks: readonly string[]; }
 
 /** Compatibility title fields are authoritative only for projections before typed scope. */
@@ -58,8 +60,16 @@ export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
     anchorFields: Object.freeze({}),
   }),
   security: Object.freeze({
-    members: Object.freeze([] as readonly string[]),
-    concernKinds: Object.freeze([] as readonly string[]),
+    members: Object.freeze([
+      'committed-secret', 'injection', 'broken-access-control', 'path-traversal',
+      'unsafe-deserialization', 'cryptographic-failure', 'security-misconfiguration',
+      'authentication-failure', 'integrity-failure', 'ssrf',
+    ]),
+    concernKinds: Object.freeze([
+      'committed-secret', 'injection', 'broken-access-control', 'path-traversal',
+      'unsafe-deserialization', 'cryptographic-failure', 'security-misconfiguration',
+      'authentication-failure', 'integrity-failure', 'ssrf',
+    ]),
     anchorFields: Object.freeze({}),
   }),
 });
@@ -300,7 +310,25 @@ export function buildReviewFindingReferenceContext(projection: BuildReviewRubric
     : [...titleRegions, ...resolvedRegions]);
   return { changedTests: projection.changedTestSelectors, changedTestRegions, changedPaths: projection.changedFiles.map((file) => file.path), planTasks: [] };
 }
-export function parseBuildReviewFindingAnchor(value: unknown, references?: BuildReviewFindingReferenceContext): BuildReviewFindingAnchor | undefined { const source = object(value); const locus = source && region(source.locus); return source?.rubric === 'testQuality' && locus && (!references?.changedTestRegions || references.changedTestRegions.some((candidate) => sameRegion(candidate, locus))) ? { rubric: 'testQuality', locus } : undefined; }
+function securityRegion(value: unknown): BuildReviewContentRegionReference | undefined {
+  const source = object(value);
+  const locus = region(value);
+  const allowed = source && (source.occurrence === undefined
+    ? ['path', 'contentHash', 'display']
+    : ['path', 'contentHash', 'display', 'occurrence']);
+  return locus && source && Object.keys(source).length === allowed.length && Object.keys(source).every((key) => allowed.includes(key)) && /^sha256:[a-f0-9]{64}$/.test(locus.contentHash)
+    ? locus
+    : undefined;
+}
+export function parseBuildReviewFindingAnchor(value: unknown, references?: BuildReviewFindingReferenceContext): BuildReviewFindingAnchor | undefined {
+  const source = object(value);
+  const locus = source && region(source.locus);
+  if (source?.rubric === 'testQuality' && locus && (!references?.changedTestRegions || references.changedTestRegions.some((candidate) => sameRegion(candidate, locus)))) return { rubric: 'testQuality', locus };
+  const securityLocus = source?.rubric === 'security' ? securityRegion(source.locus) : undefined;
+  return securityLocus && (!references || references.changedPaths.includes(securityLocus.path))
+    ? { rubric: 'security', locus: securityLocus }
+    : undefined;
+}
 function finding(value: unknown, references?: BuildReviewFindingReferenceContext): BuildReviewFinding | undefined { const source = object(value); const anchor = source && parseBuildReviewFindingAnchor(source.anchor, references); const confidence = source?.confidence; if (!source || !anchor || parseBuildReviewFindingConcernKind(source.concernKind, 'testQuality') === undefined || !text(source.summary) || !Array.isArray(source.evidenceLocations) || source.evidenceLocations.length === 0 || source.evidenceLocations.some((item) => !text(item)) || (confidence !== undefined && (typeof confidence !== 'number' || !Number.isInteger(confidence) || confidence < 0 || confidence > 100))) return undefined; return { concernKind: 'test-insensitive', summary: source.summary, evidenceLocations: Object.freeze([...source.evidenceLocations] as string[]), anchor, ...(confidence === undefined ? {} : { confidence: confidence as number }) }; }
 export function parseBuildReviewJudgedResult(value: unknown, references?: BuildReviewFindingReferenceContext, scopeContext?: BuildReviewCandidateScopeResolutionContext): BuildReviewJudgedResult | undefined { const source = object(value); if (!source || source.kind !== 'judged' || source.rubric !== 'testQuality' || !parseBuildReviewLapId(source.lapId) || !text(source.snapshotDigest) || !parseBuildReviewRubricContractVersion(source.contractVersion) || !Array.isArray(source.findings)) return undefined; const scopeResolutions = source.scopeResolutions === undefined ? undefined : (scopeContext ? parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext) : parsePersistedBuildReviewCandidateScopeResolutions(source.scopeResolutions)); const findings = source.findings.map((entry) => finding(entry, references)); const counterfactualSensitivity = source.counterfactualSensitivity === undefined ? undefined : parseCounterfactualSensitivity(source.counterfactualSensitivity); if (findings.some((entry) => !entry) || (source.scopeResolutions !== undefined && !scopeResolutions) || (scopeContext && scopeContext.candidates.length > 0 && scopeResolutions === undefined) || (source.counterfactualSensitivity !== undefined && !counterfactualSensitivity)) return undefined; return { kind: 'judged', rubric: 'testQuality', lapId: source.lapId as BuildReviewLapId, snapshotDigest: source.snapshotDigest, contractVersion: source.contractVersion as BuildReviewRubricContractVersion, findings: Object.freeze(findings as BuildReviewFinding[]), ...(scopeResolutions === undefined ? {} : { scopeResolutions }), ...(counterfactualSensitivity === undefined ? {} : { counterfactualSensitivity }), verdict: findings.length ? 'FAIL' : 'PASS' }; }
 export function parseBuildReviewSkip(value: unknown): BuildReviewSkip | undefined { const source = object(value); return source?.kind === 'skipped' && source.rubric === 'testQuality' && source.reason === 'disabled' ? { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } : undefined; }
@@ -323,10 +351,11 @@ export function deriveBuildReviewScopeIncompleteFault(result: BuildReviewJudgedR
  * The provider returns only this payload. The dispatch boundary stamps the
  * judged envelope from the frozen projection before validation or persistence.
  */
-export function renderBuildReviewProviderPayloadShape(_rubric: BuildReviewRubricId): string {
+export function renderBuildReviewProviderPayloadShape(rubric: BuildReviewRubricId): string {
+  if (rubric === 'security') return '{ findings: [{ concernKind: "committed-secret" | "injection" | "broken-access-control" | "path-traversal" | "unsafe-deserialization" | "cryptographic-failure" | "security-misconfiguration" | "authentication-failure" | "integrity-failure" | "ssrf", summary: string, evidenceLocations: string[], confidence?: integer (0..100), anchor: { rubric: "security", locus: { path: string, contentHash: "sha256:" + 64 lowercase hex characters, display: string } } }] }';
   return '{ findings: [{ concernKind: "test-insensitive", summary: string, evidenceLocations: string[], confidence?: integer (0..100), anchor: { rubric: "testQuality", locus: { path: string, contentHash: string, display: string } } }], scopeResolutions: [{ candidateId: string, status: "resolved", sourceRegion: { path: string, startLine: number, endLine: number, contentHash: string, display: string }, obligationReferences: string[], associationReason: string } | { candidateId: string, status: "out-of-scope", exclusionReason: string } | { candidateId: string, status: "indeterminate", missingEvidenceReason: string }], counterfactualSensitivity?: "supports" | "indeterminate" | "not-applicable" }';
 }
-export function renderBuildReviewJudgedResultShape(_rubric: BuildReviewRubricId): string { return '{ kind: "judged", rubric: "testQuality", lapId: string, snapshotDigest: string, contractVersion: "v3", findings: [{ concernKind: "test-insensitive", summary: string, evidenceLocations: string[], confidence?: integer (0..100), anchor: { rubric: "testQuality", locus: { path: string, contentHash: string, display: string } } }] }'; }
+export function renderBuildReviewJudgedResultShape(rubric: BuildReviewRubricId): string { return rubric === 'security' ? '{ kind: "judged", rubric: "security", lapId: string, snapshotDigest: string, contractVersion: "v3", findings: [{ concernKind: "committed-secret" | "injection" | "broken-access-control" | "path-traversal" | "unsafe-deserialization" | "cryptographic-failure" | "security-misconfiguration" | "authentication-failure" | "integrity-failure" | "ssrf", summary: string, evidenceLocations: string[], confidence?: integer (0..100), anchor: { rubric: "security", locus: { path: string, contentHash: "sha256:" + 64 lowercase hex characters, display: string } } }] }' : '{ kind: "judged", rubric: "testQuality", lapId: string, snapshotDigest: string, contractVersion: "v3", findings: [{ concernKind: "test-insensitive", summary: string, evidenceLocations: string[], confidence?: integer (0..100), anchor: { rubric: "testQuality", locus: { path: string, contentHash: string, display: string } } }] }'; }
 const MAX_REJECTION_PROBLEMS = 6;
 function candidateScopeResolutionProblems(value: unknown, context: BuildReviewCandidateScopeResolutionContext): readonly string[] {
   const candidates = context.candidates.map(candidateScopeCandidate);
@@ -388,9 +417,10 @@ export function describeBuildReviewJudgedResultRejection(value: unknown, rubric:
       const anchor = object(item.anchor);
       if (!anchor) { problems.push(`findings[${index}].anchor is required: a nested object {"rubric": "${rubric}", "locus": {"path", "contentHash", "display"}} — never flattened top-level fields, and never an alternate name such as "anchors"`); return; }
       if (anchor.rubric !== rubric) problems.push(`findings[${index}].anchor.rubric must be "${rubric}"`);
-      const locus = region(anchor.locus);
+      const locus = rubric === 'security' ? securityRegion(anchor.locus) : region(anchor.locus);
       if (!locus) problems.push(`findings[${index}].anchor.locus must be a content-region reference {"path", "contentHash", "display", "occurrence"?}`);
-      else if (references?.changedTestRegions && !references.changedTestRegions.some((candidate) => sameRegion(candidate, locus))) problems.push(`findings[${index}].anchor.locus must reference a projected in-scope content region (path, contentHash, and occurrence must match one)`);
+      else if (rubric === 'security' && references && !references.changedPaths.includes(locus.path)) problems.push(`findings[${index}].anchor.locus path must be one of the frozen input's changedFiles`);
+      else if (rubric === 'testQuality' && references?.changedTestRegions && !references.changedTestRegions.some((candidate) => sameRegion(candidate, locus))) problems.push(`findings[${index}].anchor.locus must reference a projected in-scope content region (path, contentHash, and occurrence must match one)`);
     });
     const duplicates = new Set<string>();
     const seen = new Set<string>();
