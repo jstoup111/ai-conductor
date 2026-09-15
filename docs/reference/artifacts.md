@@ -184,7 +184,9 @@ the `plan` step, which an autonomous run may not enter.
 When the engine appends remediation tasks to the plan after a `remediate` round, it commits that
 amendment itself (`chore(plan): record appended remediation tasks`) — the appended heading is engine
 bookkeeping, not builder work, and leaving it uncommitted would fail the build step's clean-tree
-completion check. The engine also records every appended task id in
+completion check. Each appended task includes one valid `Done when:` block with two to three
+single-line, nonblank checks: the cited criterion, governing clause, rationale, or title as
+available, plus a check to re-run the gate. The engine also records every appended task id in
 `.pipeline/engine-state.json` (`appendedRemediationTaskIds`), and the build completion predicate
 refuses completion while any recorded id's `### Task <id>` heading is missing from the plan:
 deleting a remediation task never completes it. The guard disarms only when the engine-state file is
