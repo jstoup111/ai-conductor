@@ -1,6 +1,13 @@
 // Covers: task:1
+import { readdir, readFile } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { posix } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const structuralRoot = dirname(fileURLToPath(import.meta.url));
+const conductorRoot = join(structuralRoot, '../..');
+const engineRoot = join(conductorRoot, 'src/engine');
 
 interface HeaderCallerClaimViolation {
   claimantPath: string;
@@ -128,6 +135,25 @@ function findHeaderCallerClaimViolations(
   }));
 }
 
+async function engineSourceFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nested = await Promise.all(entries.map(async (entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return engineSourceFiles(path);
+    return entry.isFile() && entry.name.endsWith('.ts') ? [path] : [];
+  }));
+  return nested.flat();
+}
+
+async function engineSourceMap(): Promise<Map<string, string>> {
+  const paths = await engineSourceFiles(engineRoot);
+  const files = await Promise.all(paths.map(async (path) => [
+    relative(conductorRoot, path),
+    await readFile(path, 'utf8'),
+  ] as const));
+  return new Map(files);
+}
+
 describe('module header caller claims', () => {
   it('reports a module header that claims nothing imports it', () => {
     const violations = findHeaderCallerClaimViolations(new Map([
@@ -170,5 +196,9 @@ describe('module header caller claims', () => {
     ]));
 
     expect(violations).toEqual([]);
+  });
+
+  it('finds no contradicted caller claims in the engine tree', async () => {
+    expect(findHeaderCallerClaimViolations(await engineSourceMap())).toEqual([]);
   });
 });

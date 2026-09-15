@@ -360,6 +360,11 @@ The same test re-reads `vitest.config.ts` and reports
 is `--bare`, commented out, or annotated `// portability-ok: <reason>`. It also flags `.unref()` under
 `src/engine/**` and hardcoded absolute `/tmp/...` string literals — use `os.tmpdir()`.
 
+**`module-header-caller-claims.test.ts`** scans leading comment blocks in `src/engine/**` for explicit
+no-caller claims (`nothing imports`, `no callers`/`no importers`, inert-module claims, and `nothing`
+calling, using, or invoking a backticked identifier). It fails only when a relative import or symbol
+reference contradicts a claim; truthful claims and matching prose below the leading comment block pass.
+
 ## Smoke tests
 
 Smoke tests are excluded from `npm test` by the two globs in `vitest.config.ts`. Run the complete,

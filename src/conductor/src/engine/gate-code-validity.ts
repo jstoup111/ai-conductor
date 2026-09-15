@@ -7,8 +7,8 @@
 // re-dispatch/resume path: a judged gate verdict stamped with the HEAD SHA
 // it was formed against (`codeStamp`, Task 1) should be preserved across
 // re-dispatch if the code hasn't actually changed in that gate's surface
-// since. Nothing calls `gateVerdictStillValid` yet — later tasks (5, 6, 7)
-// wire it into the completion predicates.
+// since. `artifacts.ts` and `conductor.ts` call `gateVerdictStillValid` when
+// deciding whether a stamped gate verdict remains current.
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
