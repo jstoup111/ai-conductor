@@ -250,6 +250,10 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
           log(`github-issues: skipping invalid repository target ${ghRepo}`);
           continue;
         }
+        if (!existsSync(repo.path)) {
+          log(`github-issues: skipping ${ghRepo}: missing path ${repo.path}`);
+          continue;
+        }
         repoPaths.set(ghRepo, repo.path);
 
         let issues: RawIssue[];

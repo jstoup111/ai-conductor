@@ -1,7 +1,7 @@
 // Acceptance: github-issues adapter — capture + write-back + re-eligibility
 // (FR-26/27/28/34/35/36/37/38/39/40; Stories 2,3,4,9,10,11,12,14,15).
 // RED until intake/github-issues.ts exists. All gh access via injected fake (no network).
-// Covers: S6.1, task:10
+// Covers: S6.1, task:1, task:10
 // Covers: S6.4, task:10
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -44,6 +44,7 @@ afterEach(async () => {
 });
 
 async function makeAdapter(state: FakeGhState, repos: Array<{ name: string; path: string }>) {
+  await Promise.all(repos.map(({ path }) => mkdir(path, { recursive: true })));
   const { createGithubIssuesAdapter } = await loadAdapter();
   const { createLedger } = await loadLedger();
   const { gh } = makeFakeGh(state);
