@@ -261,7 +261,7 @@ describe('build-review domain', () => {
       'findings[0].anchor.rubric must be "testQuality"',
       'findings[0].anchor.locus must be a content-region reference {"path", "contentHash", "display", "occurrence"?}',
     ].join('; '));
-    expect(describe(envelope([valid]), { changedTests: [], changedTestRegions: [{ ...locus, path: 'test/other.test.ts' }], changedPaths: [], planTasks: [] })).toBe(
+    expect(describe(envelope([valid]), { changedTests: [], changedTestRegions: [{ ...locus, path: 'test/other.test.ts' }], changedContentRegions: [], changedPaths: [], planTasks: [] })).toBe(
       'findings[0].anchor.locus must reference a projected in-scope content region (path, contentHash, and occurrence must match one)',
     );
     expect(describe(envelope([valid, { ...valid, summary: 'Reworded.' }]))).toBe(
@@ -279,7 +279,7 @@ describe('build-review domain', () => {
     const envelope = (scopeResolutions: unknown) => judged([], { scopeResolutions });
     const describe = (scopeResolutions: unknown) => describeBuildReviewJudgedResultRejection(
       envelope(scopeResolutions), 'testQuality', expected,
-      { changedTests: [], changedTestRegions: [], changedPaths: [], planTasks: [] }, scopeContext,
+      { changedTests: [], changedTestRegions: [], changedContentRegions: [], changedPaths: [], planTasks: [] }, scopeContext,
     );
     const resolved = {
       candidateId: 'bound-target', status: 'resolved', sourceRegion,
