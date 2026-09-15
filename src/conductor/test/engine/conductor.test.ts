@@ -1534,6 +1534,8 @@ describe('engine/conductor', () => {
         attempt: 1,
         reason: expect.stringContaining('infrastructure'),
       })]);
+      expect(retryEvents[0]).not.toHaveProperty('progressAttempt');
+      expect(retryEvents[0]).not.toHaveProperty('progressAttemptCeiling');
       expect((await readKickbackLedger(dir)).gates.test_suite).toEqual(expect.objectContaining({
         count: 1,
         cumulative: 1,
@@ -6029,6 +6031,94 @@ describe('engine/conductor', () => {
 
       const evidence = await createTaskEvidence(dir);
       expect(evidence.lastResolvedCount).toBe(CEILING);
+    });
+
+    it.each([false, true])('reports refunded build retries without changing dispatch (selfHost=%s)', async (selfHost) => {
+      await seedToBuild();
+      const tokenPath = join(dir, 'retry-test-token');
+      await writeFile(tokenPath, 'fixture-token');
+      const TOTAL = 4;
+      const CEILING = 3;
+      let progress = 0;
+      let buildCalls = 0;
+      const dispatches: Array<{ model?: string; effort?: string }> = [];
+      const retryEvents: Array<Extract<ConductorEvent, { type: 'step_retry' }>> = [];
+
+      const runner: StepRunner = {
+        selfHostRunId: () => 'retry-reporting-fixture',
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
+          if (step === 'build') {
+            buildCalls++;
+            dispatches.push({ model: options?.modelOverride, effort: options?.effortOverride });
+            // The first retry consumes a normal fixed-budget slot. Each later
+            // attempt resolves one task, until the existing ceiling halts it.
+            if (buildCalls > 1) {
+              progress++;
+              await writePlanAndStatus(progress, TOTAL);
+            } else {
+              await writePlanAndStatus(0, TOTAL);
+            }
+          }
+          return { success: true };
+        }),
+      };
+      events.on('step_retry', (event) => {
+        if (event.type === 'step_retry') retryEvents.push(event);
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        selfHost,
+        selfHostGuardrails: {
+          resolveHarnessRoot: vi.fn().mockResolvedValue(dir),
+          resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok', root: dir }),
+          relink: vi.fn(),
+          provisionSandbox: vi.fn(async () => ({ configDir: dir, childEnv: () => process.env, teardown: async () => {} })),
+          versionGate: vi.fn().mockResolvedValue({ ok: true }),
+          releaseGate: vi.fn().mockResolvedValue({ ok: true }),
+        } as any,
+        verifyArtifacts: true,
+        maxRetries: 3,
+        fromStep: 'build',
+        config: {
+          harness_self_host: { build_auth: { mode: 'daemon-token', token_path: tokenPath } },
+          build_progress_halt: { enabled: true, attempt_ceiling: CEILING, dispatch_ceiling: 20 },
+        } as HarnessConfig,
+      });
+
+      await conductor.run();
+
+      expect(retryEvents).toHaveLength(3);
+      expect(dispatches).toHaveLength(4);
+      if (selfHost) {
+        expect(dispatches).toEqual(Array.from({ length: 4 }, () => ({ model: undefined, effort: undefined })));
+        for (const event of retryEvents) {
+          expect(event).not.toHaveProperty('escalatedModel');
+          expect(event).not.toHaveProperty('escalatedEffort');
+        }
+      }
+      expect(retryEvents.map((event) => ({
+        model: event.escalatedModel, effort: event.escalatedEffort,
+      }))).toEqual(dispatches.slice(1));
+      expect(retryEvents.every((event) => event.attempt <= event.maxAttempts)).toBe(true);
+      expect(retryEvents[0]).toMatchObject({ step: 'build', attempt: 2, maxAttempts: 3 });
+      expect(retryEvents[0]).not.toHaveProperty('progressAttempt');
+      expect(retryEvents[0]).not.toHaveProperty('progressAttemptCeiling');
+      expect(retryEvents.slice(1)).toEqual([
+        expect.objectContaining({
+          step: 'build', attempt: 2, maxAttempts: 3,
+          progressAttempt: 1, progressAttemptCeiling: CEILING,
+        }),
+        expect.objectContaining({
+          step: 'build', attempt: 2, maxAttempts: 3,
+          progressAttempt: 2, progressAttemptCeiling: CEILING,
+        }),
+      ]);
     });
   });
 

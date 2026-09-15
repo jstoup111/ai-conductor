@@ -122,6 +122,20 @@ describe('TerminalRenderer', () => {
     expect(output).toContain('compile error');
   });
 
+  it('renders step_retry with its progress allowance', async () => {
+    await renderer.handle({
+      type: 'step_retry',
+      step: 'build',
+      attempt: 2,
+      maxAttempts: 3,
+      reason: 'tasks remain',
+      progressAttempt: 2,
+      progressAttemptCeiling: 30,
+    });
+
+    expect(stream.output()).toContain('2/3 (progress allowance: attempt 2 of 30)');
+  });
+
   it('renders provider fallback as a loud warning with complete diagnostics', async () => {
     await renderer.handle({
       type: 'provider_fallback',

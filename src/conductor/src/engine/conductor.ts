@@ -9497,6 +9497,12 @@ export class Conductor {
             await this.clearFinishReleaseMetadataSnapshot();
           }
 
+          // Native gates and the finish coordinator precede the self-host
+          // branch below. Only that branch omits generic escalation overrides.
+          const usesSelfBuildDispatch = this.isSelfBuild() &&
+            (step.name === 'build' || (this.providerExecution !== undefined && ['BUILD', 'SHIP'].includes(phaseForStep(step.name)))) &&
+            step.name !== 'test_suite' && step.name !== 'rebase' &&
+            !(step.name === 'finish' && this.finishPublication);
           let result: StepRunResult;
           if (protectedArtifactIssue) {
             buildWatcher?.stop();
@@ -9608,7 +9614,7 @@ export class Conductor {
                               modelOverride: esc.model,
                               effortOverride: esc.effort,
                             })
-                        : this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))))
+                        : usesSelfBuildDispatch
                           ? await this.runSelfBuildDispatch(
                               step.name,
                               state,
@@ -10438,7 +10444,7 @@ export class Conductor {
                 ...(result.actualProvider !== undefined && { provider: result.actualProvider }),
                 ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
                 ...(step.name === 'build' && { resolvedBefore: resolvedTasksBefore }),
-                ...(resolved.escalate && {
+                ...(resolved.escalate && !usesSelfBuildDispatch && {
                   escalatedModel: escNext.model,
                   escalatedEffort: escNext.effort,
                 }),
@@ -10745,6 +10751,7 @@ export class Conductor {
               // the retry decision below to re-dispatch without consuming
               // the fixed `stepMaxRetries` budget.
               let progressBypassed = false;
+              let progressAttemptCeiling: number | undefined;
               if (step.name === 'build') {
                 const headShaAfterBuild = await currentCommitSha(this.projectRoot);
                 const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
@@ -10819,6 +10826,7 @@ export class Conductor {
                     if (progressAttempts + 1 < bpCeiling) {
                       progressAttempts++;
                       progressBypassed = true;
+                      progressAttemptCeiling = bpCeiling;
                     } else {
                       // T5: absolute attempt-ceiling backstop. This attempt is
                       // still making real forward progress (T4's bypass
@@ -11241,17 +11249,18 @@ export class Conductor {
               if (progressBypassed || attempt < stepMaxRetries) {
                 // #188: same escalation annotation as the dispatch-failure emit
                 // above — the (model, effort) the upcoming attempt will use.
+                const nextAttempt = progressBypassed ? attempt : attempt + 1;
                 const escNext = escalateAttempt(
                   resolved.model,
                   resolved.effort,
-                  attempt + 1,
+                  nextAttempt,
                   resolved.escalate,
                   stepModelPolicy,
                 );
                 await emitTracked({
                   type: 'step_retry',
                   step: step.name,
-                  attempt: attempt + 1,
+                  attempt: nextAttempt,
                   maxAttempts: stepMaxRetries,
                   reason: completion.reason ?? 'completion check failed',
                   ...(result.model !== undefined && { model: result.model }),
@@ -11260,7 +11269,11 @@ export class Conductor {
                   ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
                   resolvedBefore: retryResolvedBefore,
                   resolvedAfter: retryResolvedAfter,
-                  ...(resolved.escalate && {
+                  ...(progressBypassed && progressAttemptCeiling !== undefined && {
+                    progressAttempt: progressAttempts,
+                    progressAttemptCeiling,
+                  }),
+                  ...(resolved.escalate && !usesSelfBuildDispatch && {
                     escalatedModel: escNext.model,
                     escalatedEffort: escNext.effort,
                   }),
