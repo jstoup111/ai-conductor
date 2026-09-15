@@ -52,3 +52,16 @@ Technical track — no `fr` rows. Outcomes staged from jstoup111/ai-conductor#25
 | criterion | Story 5 happy: Given the same recorder, when a `daemon_backlog_snapshot` is recorded, then no `conductor.daemon.*` point carries a `tier` attribute | task-8 | covered | "non-feature points recorded by a tier-carrying feature recorder have no `tier` key" | diff-local |
 | criterion | Story 5 negative: Given a recorder constructed with an `otel.attributes` map containing the key `tier`, when any feature event is recorded, then the custom `tier` value is not present on the point and the conductor-owned tier (or its absence) is what the point carries | task-8 | covered | "stripped by the `RESERVED_CONDUCTOR_LABEL_KEYS` filter" | diff-local |
 | criterion | Story 5 negative: Given a feature event with `tier: 'M'`, when it is recorded, then the exported attribute set for that point is exactly today's set plus `tier` — no other new key appears | task-8 | covered | "attribute key set equals today's set plus exactly `tier`" | diff-local |
+
+> **Amended 2026-09-15 by #2528:** James Stoup approved the terminal-event design correction after AB-1. The original Story 3 mapping above is extended by Task 9; Task 6 proves dispatch-end fallback only, while Task 9 owns the normal conductor-terminal-to-exporter integration proof. These are planned coverage dispositions, with RED/GREEN evidence still required in BUILD.
+
+| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |
+|---|---|---|---|---|
+| story | story-3 | task-5, task-6, task-9 | covered | Task 9 adds terminal producer tier and preserves outcome ownership in actual event order |
+| task | task-9 | story-3 | covered | Concrete AB-1 repair with scoped boundary regression; AB-2 reference correction accompanies it |
+| criterion | Story 3 complete/halt carries resolved run tier | task-9 | covered | Conductor entry through listener/exporter; first outcome bears terminal tier |
+| criterion | Story 3 terminal then dispatch-end records exactly one outcome | task-9 | covered | Production order, no duplicate outcome, applicable halt metric retained |
+| criterion | Story 3 interactive terminal-only reporting | task-9 | covered | Complete and halt without daemon dispatch-end |
+| criterion | Story 3 unresolved state including early halt | task-9 | covered | No tier own-property or exported attribute and no policy default |
+| criterion | Story 3 legacy tierless terminal replay | task-9 | covered | Existing event path accepts old records and exports tierless outcomes |
+| criterion | Story 3 isolated tiered and tierless dispatch-end | task-6, task-9 | covered | Original criteria apply when no terminal predecessor recorded an outcome; retain fallback proof |

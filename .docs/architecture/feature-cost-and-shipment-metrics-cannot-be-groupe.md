@@ -7,6 +7,8 @@ an optional `tier` field on the five feature events that already describe the fe
 through the single event-fed `MetricsListener` projection into `MetricsRecorder`'s feature
 methods. No new instruments, no new event types, no new I/O.
 
+> **Amended 2026-09-15 by #2528:** The original diagram below is supplemented by the terminal sequence below: seven existing events carry tier, including `feature_complete` and `loop_halt`. Dispatch-end is the outcome fallback; a preceding terminal event owns the normal outcome. This corrects the original scope and Legend claim.
+
 ## Diagram
 
 ```mermaid
@@ -116,3 +118,28 @@ query in `docs/reference/configuration.md` will say so.
 |------|--------|--------|
 | 2026-09-14 | Initial generation | DECIDE for #2528 (feature-scoped tier label; approach A) |
 | 2026-09-14 | Plan-update pass: no structural change; plan Tasks 1–8 map onto the (NEW) nodes as drawn | /plan step 8b |
+
+## Approved terminal sequence
+
+> **Amended 2026-09-15 by #2528:** Terminal emitters use the current run state: `completeRun(state)` reads `state.complexity_tier`; `emitLoopHalt` reads `haltState.complexity_tier`. Undefined stays absent. The original five-event component paths remain, with this additional path for normal daemon and interactive outcomes.
+
+```mermaid
+sequenceDiagram
+    participant Run as Conductor run state
+    participant Bus as Existing event spine
+    participant ML as MetricsListener
+    participant MR as MetricsRecorder
+    participant D as Daemon
+    Run->>Bus: feature_complete or loop_halt with optional tier
+    Bus->>ML: Existing terminal subscription
+    ML->>MR: onRunClose(outcome, event.tier)
+    Note over ML: Mark terminal recorded for feature
+    opt Daemon dispatch
+        D->>Bus: feature_dispatch_ended with optional tier
+        Bus->>ML: Existing dispatch-end subscription
+        Note over ML: Suppress duplicate outcome and retain halt metric
+    end
+    Note over Run,MR: Interactive run closes on the terminal event alone
+```
+
+If no terminal event preceded dispatch-end, its existing fallback records the outcome with its own tier. No state lookup or tier cache is added to the listener.

@@ -8,6 +8,8 @@
 
 Adds an optional `tier` field to the five feature events and threads it through the single metrics projection so that nine feature-scoped instruments carry an `S|M|L` label, omitted when unresolved, in 8 tasks.
 
+> **Amended 2026-09-15 by #2528:** The approved AB-1 correction expands the scope to seven existing events and adds Task 9 below. It preserves terminal-event ownership of outcomes and makes Task 9 the sole owner of the complete/halt production-order integration proof. Task 6 remains the dispatch-end fallback proof.
+
 ## Technical Approach
 
 Per adr-014 D14 (amended 2026-09-14) and the approved component diagram:
@@ -19,6 +21,8 @@ Per adr-014 D14 (amended 2026-09-14) and the approved component diagram:
 - **Sequencing.** Task 1 (types + daemon sites) and Task 5 (recorder activity methods) are leaves; Task 2 is a verify-only replay proof on Task 1's shapes; Tasks 3–4 are the in-run emit sites; Task 6 wires the listener on Tasks 1 and 5 and owns the daemon-event→data-point boundary proof; Task 7 threads the cost gauges on Task 1; Task 8 closes containment on Tasks 5 and 7.
 - **Rebase note.** #2414 (`restore-per-member-telemetry-for-validation-groups`) edits `events.ts`, `metrics.ts`, and `metrics-listener.ts` additively at distinct symbols (parent/member step labels). Both are one-directional additive edits; keep this feature's `tier` parameters trailing and re-run the Task 6 and Task 8 attribute-set assertions after any rebase.
 - **Documentation** for the nine instruments' `tier` label and the re-tier query semantics rides the diff in `docs/reference/configuration.md` per architecture-review C4 and is not a plan task.
+
+> **Amended 2026-09-15 by #2528:** The five-event and three-handler statements above are superseded for terminal outcomes: `feature_complete` and `loop_halt` also carry raw run tier, and `closeFeature` passes it to `onRunClose`. No new subscription or channel is required. Task 9 owns the concrete AB-1 behavior repair and the outstanding AB-2 configuration documentation.
 
 ## Prerequisites
 
@@ -202,6 +206,32 @@ None — every touched module exists on main; no new dependency.
 
 **Dependencies:** Task 5, Task 7
 
+### Task 9: Preserve tier on the first terminal outcome in production event order
+**Story:** 3
+**Type:** happy-path
+
+**Steps:**
+1. Establish RED through the conductor entry point wired to the existing bus, `MetricsListener`, and in-memory exporter: exercise complete and halt paths with resolved run tier, followed by the daemon dispatch-end event in its actual order. Assert the first outcome has the terminal event's tier and the final outcome count is exactly one. Keep providers and external services mocked at their adapters.
+2. Add optional `tier?: ComplexityTier` to `feature_complete` and `loop_halt`; stamp raw `state.complexity_tier` in `completeRun` and raw `haltState.complexity_tier` in centralized `emitLoopHalt`. Omit undefined keys, including early halts; do not add policy defaults, extra state reads, or a listener cache.
+3. Narrow `closeFeature` to the terminal event variants as needed and pass the terminal event tier to `onRunClose`. Preserve existing dispatch-end duplicate suppression, fallback outcome recording, and halt metric behavior.
+4. Prove GREEN for complete/halt production order, interactive terminal-only recording, unresolved state and early halt absence, tierless legacy terminal-event replay, and dispatch-end without a predecessor. Reuse adequate existing fallback tests; do not replace real-order coverage with isolated fabricated dispatch-end events.
+5. Correct `docs/reference/configuration.md` for all nine D14 instruments' optional tier labels, unresolved omission, re-tiered cumulative series retaining their old last values, and the `max by (feature, tier)` last-value query with its cross-tier double-count caveat. Commit the behavior, scoped tests, and reference update together.
+
+**Done when:**
+- A conductor-entry regression through the real listener/exporter boundary proves complete and halt each produce one outcome bearing their terminal event's tier before dispatch-end, with no second outcome after dispatch-end; halt metrics still record.
+- Interactive complete/halt without dispatch-end record tiered outcomes; unresolved state and early halts emit no tier own-property and export no tier attribute; legacy tierless terminal records replay successfully; standalone dispatch-end remains an outcome fallback.
+- The configuration reference lists tier on all nine D14 instruments and explains the re-tier last-value query and its historical-tier double counting. Only scoped RED/GREEN checks run here; aggregate validation remains owned by `test_suite`.
+
+**Files:**
+- src/conductor/src/types/events.ts — optional terminal event tier
+- src/conductor/src/engine/conductor.ts — centralized complete/halt emitters
+- src/conductor/src/engine/otel/metrics-listener.ts — terminal outcome tier projection
+- src/conductor/test/engine/conductor.test.ts — conductor-entry terminal-order integration proof and emitter absence cases
+- src/conductor/test/engine/otel/metrics-listener.test.ts — interactive, legacy replay, and fallback permutations where sufficient existing tests are absent
+- docs/reference/configuration.md — nine-instrument labels and re-tier query semantics
+
+**Dependencies:** Task 1, Task 5, Task 6
+
 ## Task Dependency Graph
 
 ```
@@ -212,6 +242,8 @@ Task 1 ─┬─▶ Task 2
         └─▶ Task 7 ──┼─▶ Task 8
 Task 5 ─────────────┘
 ```
+
+> **Amended 2026-09-15 by #2528:** Task 9 depends on Tasks 1, 5, and 6. It extends the graph above; completed Tasks 1–8 remain intact.
 
 ## Integration Points
 
@@ -272,6 +304,8 @@ Task 5 ─────────────┘
 | Story 5 happy: Given the same recorder, when a `daemon_backlog_snapshot` is recorded, then no `conductor.daemon.*` point carries a `tier` attribute | 8 | "non-feature points recorded by a tier-carrying feature recorder have no `tier` key" | diff-local |
 | Story 5 negative: Given a recorder constructed with an `otel.attributes` map containing the key `tier`, when any feature event is recorded, then the custom `tier` value is not present on the point and the conductor-owned tier (or its absence) is what the point carries | 8 | "stripped by the `RESERVED_CONDUCTOR_LABEL_KEYS` filter" | diff-local |
 | Story 5 negative: Given a feature event with `tier: 'M'`, when it is recorded, then the exported attribute set for that point is exactly today's set plus `tier` — no other new key appears | 8 | "attribute key set equals today's set plus exactly `tier`" | diff-local |
+
+> **Amended 2026-09-15 by #2528:** Architecture coverage: D1 still uses existing subscriptions on the same bus, now with seven enriched events; D14 is additionally implemented by Task 9. Story 3 production-order completion/halt, duplicate suppression, interactive terminal-only, unresolved/early halt, and legacy-terminal replay criteria map to Task 9's Done when checks (lower-layer conductor/listener behavioral proof). The original isolated dispatch-end rows remain fallback coverage under Task 6. AB-2 is owned by Task 9's reference update, not waived.
 
 ## Verification
 - [ ] All happy path criteria covered by at least one task
