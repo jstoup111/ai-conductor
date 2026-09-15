@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: kickback-budget
+Resolved at: 2026-09-15T11:28:28.516Z
 Slug: recover-stale-conduct-state-lease-recovery-claims
 Class: needs-human
 Halting step: rebase
