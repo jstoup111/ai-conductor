@@ -69,6 +69,9 @@ sequenceDiagram
   Note over O: operator reviews and merges — daemon never merges
 ```
 
+> **Amended 2026-09-15 by #1775:** James Stoup approved clarifying the historical `clears HALT` arrow above: after addressing the reported gate reason and committing the fix, clear both `.pipeline/HALT` and `.pipeline/HALT.class`. The daemon re-dispatches and re-runs required gates before opening or updating the PR; the operator merges after checks pass. Re-install and `/verify` are not generic recovery steps. The authoritative [current recovery sequence](2026-06-30-harness-self-host-guardrails.md#current-recovery-sequence-approved-2026-09-15) preserves fail-closed gates and human merge ownership.
+
+
 ## Legend
 
 - **[NEW] / «NEW»** — elements introduced by this feature (green fill in Diagram 1).

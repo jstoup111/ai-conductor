@@ -35,6 +35,8 @@ header, an uncertain breaking-surface classification, or an integrity-script tim
 rather than pass. Passing every gate still ends at the standard finish-time HALT for the operator
 to re-install, `/verify`, and **merge** — the daemon never merges (structural test, TR-12).
 
+> **Amended 2026-09-15 by #1775:** James Stoup approved replacing the obsolete re-install and `/verify` resume instructions. For a self-host gate HALT, the operator addresses the reported gate reason in the feature worktree and commits the fix, then clears `.pipeline/HALT` and `.pipeline/HALT.class`. The daemon re-dispatches the feature, re-runs the required gates, and opens or updates its PR. The operator merges only after checks pass; the daemon never merges. Re-installing and running `/verify` are not generic resume prerequisites: the engine owns installation freshness, and no shipped `/verify` command exists. This amendment changes recovery guidance only; it waives no gate or required evidence. It supersedes the re-install/verify clause above while preserving fail-closed behavior and human merge ownership.
+
 > **Amended 2026-09-06 (#658):** No test executes in the finish plane. `ReleaseArtifactGate`'s
 > integrity sub-gate (TR-8) is deleted and harness integrity verification moves to BUILD's
 > `test_suite` verifier for self-host builds.
