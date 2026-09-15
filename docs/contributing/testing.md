@@ -131,7 +131,7 @@ run prints almost nothing.
 | Linter | Config | Scope | Threshold |
 | --- | --- | --- | --- |
 | ESLint (typescript-eslint, type-aware) | `src/conductor/eslint.config.mjs` | `src/**/*.ts` **and** `test/**/*.ts` | `no-floating-promises`, `await-thenable`, `no-misused-promises` (with `checksVoidReturn.arguments` off) |
-| ShellCheck | `test/lint_shell.sh` | `bin/*` (by shebang), `hooks/**/*.sh`, `test/*.sh`, `.github/scripts/*.sh` | `--severity=error` |
+| ShellCheck | `test/lint_shell.sh` | `bin/**` (by shell shebang), `hooks/**/*.sh`, `test/*.sh`, `.github/scripts/*.sh` | `--severity=error` |
 | lychee | `lychee.toml` | `docs/`, `README.md`, `AGENT_INSTRUCTIONS.md`, `src/conductor/README.md` | internal links only (offline) |
 
 The ESLint rule set is deliberately tiny. `strict: true` already covers the ground a stock preset
