@@ -243,8 +243,12 @@ cat .worktrees/<slug>/.pipeline/HALT.class
 ```
 
 It names the logical `step`, `phase: preparing`, attempt id, elapsed milliseconds, and recovery
-count. The timeout applies only before a provider process starts: candidate resolution, session
-setup, or self-host preparation did not complete within
+count. Self-host dispatches waiting for root-mutation admission are queued outside this deadline;
+the daemon log and event ledger distinguish `queued`, `admitted`, and `cancelled` (operator park).
+Queue time consumes no preparation recovery attempt.
+
+After admission, the timeout applies before a provider process starts. It means candidate resolution,
+session setup, or self-host preparation did not complete within
 `provider_preparation_timeout_minutes`. The first expiration already used the one automatic
 replacement; because this is a `needs-human` HALT, the re-kick sweep will not clear it.
 
