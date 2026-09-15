@@ -14,6 +14,12 @@ vi.mock('../../src/engine/build-review-effective.js', async (importOriginal) => 
   })),
 }));
 
+// These fixtures model a cleared operator decision, not an unowned machine.
+vi.mock('../../src/engine/owner-gate/machine-identity.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/owner-gate/machine-identity.js')>(),
+  readMachineOwnerConfig: vi.fn(async () => ({ spec_owner: 'fixture-operator' })),
+}));
+
 import { Conductor, routePrdAuditOverScopeV2, type StepRunner } from '../../src/engine/conductor.js';
 import { AcceptedWideningDecisionStore, renderOverScopeDecisionBlock } from '../../src/engine/accepted-widenings.js';
 import { capturePrdWideningDecisions } from '../../src/engine/prd-widening-capture.js';

@@ -15,6 +15,13 @@ vi.mock('../src/engine/build-review-effective.js', async (importOriginal) => ({
   })),
 }));
 
+// Pre-audit reconciliation needs a machine-scoped operator whenever a fixture
+// contains a cleared decision. Individual no-owner cases override this seam.
+vi.mock('../src/engine/owner-gate/machine-identity.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../src/engine/owner-gate/machine-identity.js')>(),
+  readMachineOwnerConfig: vi.fn(async () => ({ spec_owner: 'fixture-operator' })),
+}));
+
 import {
   Conductor,
   remediationLapCapForGate,

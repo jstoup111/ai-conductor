@@ -14,6 +14,12 @@ vi.mock('../../src/engine/build-review-effective.js', async (importOriginal) => 
   })),
 }));
 
+// Import and rejection events below model operator-cleared history.
+vi.mock('../../src/engine/owner-gate/machine-identity.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/owner-gate/machine-identity.js')>(),
+  readMachineOwnerConfig: vi.fn(async () => ({ spec_owner: 'fixture-operator' })),
+}));
+
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { persistedEventTypes, renderedEventTypes } from '../../src/engine/event-sinks.js';

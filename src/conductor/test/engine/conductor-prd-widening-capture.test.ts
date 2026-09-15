@@ -10,6 +10,13 @@ vi.mock('../../src/engine/build-review-effective.js', async (importOriginal) => 
   })),
 }));
 
+// Capturing an operator-cleared widening exercises the production attribution
+// gate, so this fixture supplies the machine-scoped operator it represents.
+vi.mock('../../src/engine/owner-gate/machine-identity.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/owner-gate/machine-identity.js')>(),
+  readMachineOwnerConfig: vi.fn(async () => ({ spec_owner: 'fixture-operator' })),
+}));
+
 import { Conductor } from '../test-conductor.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
