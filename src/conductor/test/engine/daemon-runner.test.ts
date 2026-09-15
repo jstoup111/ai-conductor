@@ -86,6 +86,8 @@ import { renderShippedRecord, specHash } from '../../src/engine/shipped-record.j
 import { initTestRepo } from '../fixtures/git-repo.js';
 import type { OperatorParkedTermination } from '../../src/engine/conductor.js';
 
+// Covers: task:1
+
 const execFile = promisify(execFileCb);
 
 const ITEM: BacklogItem = { slug: 'feat-x' };
@@ -152,6 +154,77 @@ function deps(
 }
 
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it.each([
+    { item: { slug: 'feature-tiered', tier: 'M' as const }, expectedTier: 'M' },
+    { item: { slug: 'feature-untiered' }, expectedTier: undefined },
+  ])('emits the raw backlog tier on every feature lifecycle event', async ({ item, expectedTier }) => {
+    const events = new ConductorEventEmitter();
+    const emitted: Array<Record<string, unknown>> = [];
+    events.on('feature_dispatch_started', (event) => emitted.push(event as Record<string, unknown>));
+    events.on('feature_dispatch_ended', (event) => emitted.push(event as Record<string, unknown>));
+    events.on('feature_shipped', (event) => emitted.push(event as Record<string, unknown>));
+    const featureDeps = deps({
+      done: true,
+      halted: false,
+      finishChoice: 'pr',
+      prUrl: 'https://github.com/owner/repo/pull/1',
+    });
+    featureDeps.daemon = true;
+    featureDeps.beginFeatureRun = () => ({
+      events: new ConductorEventEmitter(),
+      rootEvents: events,
+      providerExecution: {
+        configuredProviders: [],
+        runtimes: new ProviderRuntimeSet([]),
+        sessions: new ProviderSessionStore(),
+      },
+      stop: () => {},
+    });
+
+    await makeRunFeature(featureDeps)(item);
+
+    expect(emitted.map(({ type, tier }) => ({ type, tier }))).toEqual([
+      { type: 'feature_dispatch_started', tier: expectedTier },
+      { type: 'feature_shipped', tier: expectedTier },
+      { type: 'feature_dispatch_ended', tier: expectedTier },
+    ]);
+    for (const event of emitted) {
+      expect(Object.hasOwn(event, 'tier')).toBe(expectedTier !== undefined);
+    }
+  });
+
+  it.each([
+    { item: { slug: 'halted-tiered', tier: 'M' as const }, expectedTier: 'M' },
+    { item: { slug: 'halted-untiered' }, expectedTier: undefined },
+  ])('emits the raw backlog tier when a dispatch halts', async ({ item, expectedTier }) => {
+    const events = new ConductorEventEmitter();
+    const emitted: Array<Record<string, unknown>> = [];
+    events.on('feature_dispatch_started', (event) => emitted.push(event as Record<string, unknown>));
+    events.on('feature_dispatch_ended', (event) => emitted.push(event as Record<string, unknown>));
+    const featureDeps = deps({ done: false, halted: true, reason: 'needs human' });
+    featureDeps.daemon = true;
+    featureDeps.beginFeatureRun = () => ({
+      events: new ConductorEventEmitter(),
+      rootEvents: events,
+      providerExecution: {
+        configuredProviders: [],
+        runtimes: new ProviderRuntimeSet([]),
+        sessions: new ProviderSessionStore(),
+      },
+      stop: () => {},
+    });
+
+    await makeRunFeature(featureDeps)(item);
+
+    expect(emitted.map(({ type, tier }) => ({ type, tier }))).toEqual([
+      { type: 'feature_dispatch_started', tier: expectedTier },
+      { type: 'feature_dispatch_ended', tier: expectedTier },
+    ]);
+    for (const event of emitted) {
+      expect(Object.hasOwn(event, 'tier')).toBe(expectedTier !== undefined);
+    }
+  });
+
   it('does not write an auto-park marker from the executor', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-auto-park-write-failure-'));
     const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
