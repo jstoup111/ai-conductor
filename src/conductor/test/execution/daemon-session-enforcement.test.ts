@@ -74,6 +74,8 @@ describe('guardDaemonSessionInvocation', () => {
 
   it('allows exactly the session-sanctioned worker subcommands under the marker', () => {
     for (const sanctioned of [
+      argvFor('task', 'start', 'rem-fr10-1'),
+      argvFor('task', 'done', 'rem-fr10-1'),
       argvFor('scoped-run', 'test/foo.test.ts'),
       argvFor('overlap-scan', '--files', 'a,b'),
       argvFor('plan-protected-targets', '.docs/plans/x.md'),
@@ -87,7 +89,6 @@ describe('guardDaemonSessionInvocation', () => {
       expect(guardDaemonSessionInvocation(sanctioned, markedEnv())).toEqual({ allowed: true });
     }
     // The sanctioned set is worker commands only — orchestration verbs stay blocked.
-    expect(guardDaemonSessionInvocation(argvFor('task', 'done', 't1'), markedEnv()).allowed).toBe(false);
     expect(guardDaemonSessionInvocation(argvFor('test-suite'), markedEnv()).allowed).toBe(false);
   });
 

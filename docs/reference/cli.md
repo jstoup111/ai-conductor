@@ -144,7 +144,7 @@ park`/`unpark`/`restart` and `reseal`), corrupting the run that dispatched them;
 started the session owns all conductor operations for it. The only exceptions are the
 session-sanctioned worker commands the harness's own skills and hooks require a session to run —
 `scoped-run`, `overlap-scan`, `plan-protected-targets`, `manual-test-record`, `closeout-event`, and
-`derive-feedback` — which stay available under the marker. There is no config off-switch;
+`derive-feedback`, `scope-check`, and `task` (`start`/`done`) — which stay available under the marker. There is no config off-switch;
 enforcement lives in `src/conductor/src/execution/daemon-session.ts`.
 
 ## `ai-conductor build-review`
