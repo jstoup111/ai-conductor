@@ -7,7 +7,8 @@
 // supplies its own distinct first-line reason (the daemon dashboard surfaces the
 // first non-empty line), so the operator sees exactly which gate parked the
 // build. ADR-005/ADR-010 invariant: the daemon never merges — every self-build
-// ends at a HALT for the operator to re-install, `/verify`, and merge.
+// ends at a HALT for the operator to address the reason, clear both HALT markers,
+// let the daemon re-run the gates and update the PR, then merge it themselves.
 
 import { HALT_MARKER, writeHaltMarker } from '../halt-marker.js';
 import type { HaltMarkerWriteResult } from '../halt-marker.js';
@@ -35,9 +36,9 @@ export async function writeSelfHostHalt(
     `${redactSafetyText(reason)}\n\n` +
     `Harness self-build gate HALT — the daemon never merges (ADR-005/ADR-010).\n` +
     `Resume procedure:\n` +
-    `  1. Address the gate reason above.\n` +
-    `  2. Re-install the harness (bin/install --update) and run /verify.\n` +
-    `  3. rm .pipeline/HALT, then merge the PR yourself.\n`;
+    `  1. Address the gate reason above in this worktree and commit the fix.\n` +
+    `  2. Clear .pipeline/HALT and .pipeline/HALT.class — the daemon re-dispatches the feature, re-runs the gates, and opens or updates the PR.\n` +
+    `  3. Merge the PR yourself once its checks pass.\n`;
   return writeHaltMarker(projectRoot, body, 'needs-human', events);
 }
 

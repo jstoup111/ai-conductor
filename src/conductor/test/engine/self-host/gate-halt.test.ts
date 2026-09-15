@@ -1,3 +1,4 @@
+// Covers: S1.1, S1.2, S1.3
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -26,10 +27,40 @@ describe('writeSelfHostHalt classification', () => {
     expect(cls.trim()).toBe('needs-human');
   });
 
-  it('redacts a safety canary before persisting the HALT body', async () => {
+  it('prints only the self-build resume procedure', async () => {
+    await writeSelfHostHalt(projectRoot, 'release-gate failed: missing artifact');
+
+    const body = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf-8');
+    expect({
+      hasInstallerInstruction: body.includes('bin/install'),
+      hasVerifyInstruction: body.includes('/verify'),
+      numberedSteps: body.split('\n').filter((line) => /^  \d\. /.test(line)),
+    }).toEqual({
+      hasInstallerInstruction: false,
+      hasVerifyInstruction: false,
+      numberedSteps: [
+        '  1. Address the gate reason above in this worktree and commit the fix.',
+        '  2. Clear .pipeline/HALT and .pipeline/HALT.class — the daemon re-dispatches the feature, re-runs the gates, and opens or updates the PR.',
+        '  3. Merge the PR yourself once its checks pass.',
+      ],
+    });
+  });
+
+  it('redacts a safety canary while retaining every resume step', async () => {
     const canary = 'CANARY_SECRET_907';
     await writeSelfHostHalt(projectRoot, `cleanup failed: token=${canary}`);
 
-    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf-8')).resolves.not.toContain(canary);
+    const body = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf-8');
+    expect({
+      hasCanary: body.includes(canary),
+      numberedSteps: body.split('\n').filter((line) => /^  \d\. /.test(line)),
+    }).toEqual({
+      hasCanary: false,
+      numberedSteps: [
+        '  1. Address the gate reason above in this worktree and commit the fix.',
+        '  2. Clear .pipeline/HALT and .pipeline/HALT.class — the daemon re-dispatches the feature, re-runs the gates, and opens or updates the PR.',
+        '  3. Merge the PR yourself once its checks pass.',
+      ],
+    });
   });
 });
