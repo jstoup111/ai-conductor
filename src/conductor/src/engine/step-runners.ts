@@ -2264,7 +2264,10 @@ export class DefaultStepRunner implements StepRunner {
     projection: BuildReviewRubricProjection,
     tier?: ConductState['complexity_tier'],
   ): Promise<unknown> {
-    const label: Record<BuildReviewDispatchableRubric['rubric'], string> = { testQuality: 'Test Quality' };
+    const label: Record<BuildReviewDispatchableRubric['rubric'], string> = {
+      testQuality: 'Test Quality',
+      security: 'Security',
+    };
     const contractShape = renderBuildReviewProviderPayloadShape(branch.rubric);
     const scopeResolutionContext = buildReviewCandidateScopeResolutionContext(projection);
     const rubricPrompt = [

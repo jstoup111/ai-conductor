@@ -57,6 +57,11 @@ export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
     concernKinds: Object.freeze(['test-insensitive']),
     anchorFields: Object.freeze({}),
   }),
+  security: Object.freeze({
+    members: Object.freeze([] as readonly string[]),
+    concernKinds: Object.freeze([] as readonly string[]),
+    anchorFields: Object.freeze({}),
+  }),
 });
 export const COUNTERFACTUAL_SENSITIVITY_VOCABULARY = Object.freeze(['supports', 'indeterminate', 'not-applicable'] as const);
 export type CounterfactualSensitivity = typeof COUNTERFACTUAL_SENSITIVITY_VOCABULARY[number];

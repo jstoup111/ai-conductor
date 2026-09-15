@@ -544,7 +544,9 @@ export async function coordinateBuildReviewRubrics(
       runnerSelectors: [], changedTestSelectors: [], unresolvedMarkers, revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
     },
   });
-  const projections = input.projections ?? derivedProjections;
+  const projections = (input.projections ?? derivedProjections) as Readonly<
+    Record<BuildReviewRubricId, BuildReviewRubricProjection>
+  >;
   const resolved = new Map<BuildReviewRubricId, BuildReviewCoordinatedBranch>();
   const misses: BuildReviewDispatchableRubric[] = [];
 
