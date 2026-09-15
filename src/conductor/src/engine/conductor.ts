@@ -14503,6 +14503,7 @@ export class Conductor {
     const transitionReplay = verdict.replay ?? (outcome.kind === 'changed'
       ? { preRebaseHead: '', mergeBase: '', target: '', completedHead: '', expectedTree: '' }
       : undefined);
+    let appliedGateDecision = verdict;
     if (transitionReplay) {
       const transition = await applyRebaseTransition({
         projectRoot: this.projectRoot,
@@ -14520,6 +14521,15 @@ export class Conductor {
       for (const gate of transition.invalidated) {
         if (state[gate] !== 'skipped') state[gate] = 'pending';
       }
+      // Events describe the durable operation, not the pre-application
+      // classification.  The transition is the only authority that knows
+      // which effects actually became the completed rebase operation.
+      appliedGateDecision = {
+        ...verdict,
+        kickedBack: [...transition.operation.transition.invalidated],
+        reverified: [...transition.operation.transition.reverified],
+        preservedGates: [...transition.operation.transition.preserved],
+      };
     }
 
     // Emit rebase_gate_reverified event for each step that was re-verified
@@ -14536,7 +14546,7 @@ export class Conductor {
     // Task 8: emit rebase_gate_invalidated for each judged gate that
     // classifyGateInvalidation decided to invalidate, with the specific
     // matched delta paths that justified invalidating THAT gate.
-    await emitGateInvalidationEvents(this.events, outcome, ranManualTest, verdict);
+    await emitGateInvalidationEvents(this.events, outcome, ranManualTest, appliedGateDecision);
 
     if (sealRejectionReason) {
       await writeSealHalt(this.projectRoot, sealRejectionReason, this.events);

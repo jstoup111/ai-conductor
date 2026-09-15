@@ -898,6 +898,7 @@ export async function resumeRebaseFirst(opts: {
   const transitionReplay = rebaseVerdict.replay ?? (outcome.kind === 'changed'
     ? { preRebaseHead: '', mergeBase: '', target: '', completedHead: '', expectedTree: '' }
     : undefined);
+  let appliedGateDecision = rebaseVerdict;
   if (transitionReplay) {
     const transition = await applyRebaseTransition({
       projectRoot: opts.worktreePath,
@@ -912,6 +913,14 @@ export async function resumeRebaseFirst(opts: {
       await writeHalt(opts.worktreePath, [], 'rebase continuation state transition was refused; inspect concurrent state updates before resuming', opts.events);
       return 'halted';
     }
+    // Keep spine reporting bound to the exact operation persisted by the
+    // shared transition, rather than the classifier's pre-application view.
+    appliedGateDecision = {
+      ...rebaseVerdict,
+      kickedBack: [...transition.operation.transition.invalidated],
+      reverified: [...transition.operation.transition.reverified],
+      preservedGates: [...transition.operation.transition.preserved],
+    };
   }
   for (const step of rebaseVerdict.reverified) {
     await opts.events.emit({
@@ -928,7 +937,7 @@ export async function resumeRebaseFirst(opts: {
     opts.events,
     outcome,
     opts.ranManualTest,
-    rebaseVerdict,
+    appliedGateDecision,
   );
   // #436: stamp state.rebase = 'done' for clean/noop/changelog-resolved
   // outcomes via the shared helper (no-ops on conflict_halt) — same call

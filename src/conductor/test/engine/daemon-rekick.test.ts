@@ -2532,6 +2532,13 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     expect(judgedGates.size).toBe(invalidated.length + preserved.length);
     expect(new Set(invalidated.map(({ gate }) => gate)).size).toBe(invalidated.length);
     expect(new Set(preserved.map(({ gate }) => gate)).size).toBe(preserved.length);
+    const applied = (await readVerdict(dir, 'rebase'))?.rebaseOperation;
+    expect(new Set(invalidated.map(({ gate }) => gate))).toEqual(
+      new Set((applied?.transition.invalidated ?? []).filter((gate) => gate !== 'build')),
+    );
+    expect(new Set(preserved.map(({ gate }) => gate))).toEqual(
+      new Set(applied?.transition.preserved ?? []),
+    );
   });
 
   it('inspects a budget-preserved test suite once and carries its basis into the preserved event', async () => {
