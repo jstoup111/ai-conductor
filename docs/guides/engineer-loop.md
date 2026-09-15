@@ -190,7 +190,8 @@ Before committing, `land` refuses on any of:
 - an ADR under `.docs/decisions/` whose first declared status is not `APPROVED` or `SUPERSEDED`, or that declares no status at all,
 - an added or changed approved ADR with no citable decision in its `## Decision` section,
 - an empty or stub artifact,
-- uncommitted changes in the worktree outside `.docs/`,
+- uncommitted changes to tracked files at any path, including tracked artifacts under `.docs/`,
+- untracked files outside `.docs/`,
 - an unresolved identity (no `spec_owner` configured and no `gh` login).
 
 `--worktree` is required. `land` never falls back to the primary checkout. On failure the worktree

@@ -2194,6 +2194,80 @@ describe('Task 7: idea-scoped resolution preserves content validation and the di
   });
 });
 
+describe('landSpec dirty-worktree refusal diagnostics', () => {
+  const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+  async function refusalFor(dir: string): Promise<Error> {
+    try {
+      await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
+    } catch (error) {
+      return error instanceof Error ? error : new Error(String(error));
+    }
+    throw new Error('expected landSpec to refuse the dirty worktree');
+  }
+
+  it('labels a modified tracked artifact as a tracked change and leaves the branch unchanged', async () => {
+    const dir = await seedValidWorktree();
+    await git(['add', '.docs'], dir);
+    await git(['commit', '-m', 'seed tracked decide artifacts'], dir);
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES + '\nchanged\n');
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    const error = await refusalFor(dir);
+
+    expect(error.message).toContain(`per-idea worktree at "${dir}" has uncommitted (dirty) changes`);
+    expect(error.message).toContain('Uncommitted changes to tracked files (including under .docs/): M .docs/stories/dep-bump.md');
+    expect(error.message).not.toContain('Untracked files outside .docs/');
+    expect(error.message).not.toContain('changes outside .docs/');
+    expect(error.message).toContain('Commit or discard the tracked changes');
+    expect(error.message).not.toContain('remove or relocate the untracked files');
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+  });
+
+  it('labels an untracked file outside .docs and scopes the remedy to it', async () => {
+    const dir = await seedValidWorktree();
+    await writeFile(join(dir, 'leftover.txt'), 'left behind\n');
+
+    const error = await refusalFor(dir);
+
+    expect(error.message).toContain('Untracked files outside .docs/: ?? leftover.txt');
+    expect(error.message).not.toContain('Uncommitted changes to tracked files');
+    expect(error.message).toContain('remove or relocate the untracked files');
+    expect(error.message).not.toContain('Commit or discard the tracked changes');
+  });
+
+  it('separates mixed tracked and untracked blockers and names both remedies', async () => {
+    const dir = await seedValidWorktree();
+    await git(['add', '.docs'], dir);
+    await git(['commit', '-m', 'seed tracked decide artifacts'], dir);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS + '\nchanged\n');
+    await writeFile(join(dir, 'leftover.txt'), 'left behind\n');
+
+    const error = await refusalFor(dir);
+
+    expect(error.message).toContain('Uncommitted changes to tracked files (including under .docs/): M .docs/plans/dep-bump.md');
+    expect(error.message).toContain('Untracked files outside .docs/: ?? leftover.txt');
+    expect(error.message).toContain('Commit or discard the tracked changes; remove or relocate the untracked files');
+  });
+
+  it('allows untracked artifacts under .docs through the cleanliness guard', async () => {
+    const dir = await seedValidWorktree();
+    const unresolvedGh: GhRunner = async () => {
+      throw new Error('not logged in');
+    };
+    let error: Error | null = null;
+    try {
+      await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh: unresolvedGh });
+    } catch (caught) {
+      error = caught instanceof Error ? caught : new Error(String(caught));
+    }
+
+    expect(error).not.toBeNull();
+    expect(error!.message).not.toMatch(/dirty|uncommitted/i);
+    expect(error!.message).toContain('identity is unresolved');
+  });
+});
+
 // AB-1: landSpec's missing-worktree error is operator guidance — it must name
 // the canonical `compose` verb, not the deprecated `engineer` alias.
 describe('landSpec remediation text uses the canonical compose verb', () => {
