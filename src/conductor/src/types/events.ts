@@ -285,6 +285,7 @@ export type ConductorEvent =
       adr: string;
     }
   | { type: 'build_review_rubric_started'; rubric: string; lapId: string }
+  | { type: 'self_host_dispatch_admission'; step: StepName; state: 'queued' | 'admitted' | 'cancelled' }
   | {
       /** The self-host dispatch was proven contained, so this concurrent drift is not a dispatch leak. */
       type: 'contained_live_checkout_drift';

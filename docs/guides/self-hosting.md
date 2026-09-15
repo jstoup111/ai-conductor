@@ -475,3 +475,14 @@ prints `version:<engine-version-id>` per repo. Compare it against
 **A gate halted and you want to change what runs.** Do not disable a guardrail to get past it. The
 gates are described in [gates](../explanation/gates.md); the validation suite every harness change
 must pass is in [validation](../contributing/validation.md).
+
+### Queued dispatch admission
+
+A self-host dispatch waits behind any pending root refresh before provider preparation begins.
+This queue has no provider startup deadline: waiting does not spend the preparation recovery
+allowance. After admission, candidate resolution, isolated-home setup, and provider startup retain
+the configured preparation timeout. The dispatch reserves the root until it settles, and candidate
+windows remain protected through cleanup, including cleanup after a timeout.
+
+The daemon log and the existing event ledger record `self_host_dispatch_admission` as `queued`,
+`admitted`, or `cancelled`. Parking a feature while it waits prevents launch when its turn arrives.

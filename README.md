@@ -81,6 +81,9 @@ ai-conductor inline --interactive "add a CSV export"
 `ai-conductor inline --auto` is deprecated; use the daemon for unattended work. The `inline` token is
 required for foreground runs — the bare form `ai-conductor "<feature>"` is rejected.
 
+Self-host dispatches wait for root-refresh admission before starting their provider preparation timeout.
+Queued work resumes automatically when the earlier dispatch releases the root.
+
 Daemon-managed sessions can run `ai-conductor task start` and `task done` for task attribution;
 completion remains gate-owned. See [task commands](docs/reference/cli.md#ai-conductor-task).
 

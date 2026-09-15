@@ -66,6 +66,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   coverage_binding_disabled: 'not-audited-by-design',
   config_deprecated_key: 'not-audited-by-design',
   contained_live_checkout_drift: 'not-audited-by-design',
+  self_host_dispatch_admission: 'not-audited-by-design',
   self_host_containment_verdict: 'not-audited-by-design',
   build_review_rubric_started: 'not-audited-by-design',
   build_review_rubric_prompt: 'not-audited-by-design',
@@ -243,6 +244,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     attribution: 'concurrent-operator',
     summary: '1 added, 0 removed, 0 changed: added operator-edit.txt',
   },
+  self_host_dispatch_admission: { type: 'self_host_dispatch_admission', step: 'build', state: 'queued' },
   self_host_containment_verdict: {
     type: 'self_host_containment_verdict',
     contained: true,
