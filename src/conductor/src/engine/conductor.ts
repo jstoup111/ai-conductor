@@ -1805,6 +1805,10 @@ export interface ConductorOptions {
   buildReviewChargeEffect?: typeof chargeBuildReviewEffectInLedger;
   /** Test seam; production resolves fresh committed feature evidence. */
   resolveFeatureCreationMutation?: typeof resolveFeatureRemoteMutation;
+  /** Test seam; production resolves fresh guarded publication dependencies. */
+  resolveShipDraftPublicationDependencies?: typeof createShipDraftPublicationDependencies;
+  /** Test seam for the guarded SHIP-start remote transport. */
+  shipDraftRemoteGit?: typeof executeRemoteGit;
   /** Feature description — used by the engine-run worktree step to name the
    *  worktree/branch when state.feature_desc isn't set yet. */
   featureDesc?: string;
@@ -2478,6 +2482,8 @@ export class Conductor {
   private readonly buildReviewEffectiveResolver?: CompletionContext['buildReviewEffectiveResolver'];
   private readonly buildReviewChargeEffect?: typeof chargeBuildReviewEffectInLedger;
   private readonly resolveFeatureCreationMutation: typeof resolveFeatureRemoteMutation;
+  private readonly resolveShipDraftPublicationDependencies: typeof createShipDraftPublicationDependencies;
+  private readonly shipDraftRemoteGit: typeof executeRemoteGit | undefined;
   private retainedFullSuiteInspection:
     | Awaited<ReturnType<FullSuiteVerifier['inspect']>>
     | undefined;
@@ -2768,7 +2774,7 @@ export class Conductor {
       // fresh guard from this feature's committed ownership before handing the
       // repair its transport. An absent provenance boundary remains a refusal
       // inside the advisory repair; it never re-enables raw gh writes.
-      const publication = await createShipDraftPublicationDependencies({
+      const publication = await this.resolveShipDraftPublicationDependencies({
         cwd: this.projectRoot,
         branch: state.worktree_branch,
         baseBranch: this.baseBranch,
@@ -2864,7 +2870,7 @@ export class Conductor {
 
     // Every production path uses this one sequence. The conductor alone adds
     // its retained release-metadata restore between the body floor and ready.
-    const publication = await createShipDraftPublicationDependencies({
+    const publication = await this.resolveShipDraftPublicationDependencies({
       cwd: this.projectRoot,
       branch: state.worktree_branch ?? this.worktreeBranch,
       baseBranch: this.baseBranch,
@@ -3517,6 +3523,9 @@ export class Conductor {
     this.buildReviewEffectiveResolver = opts.buildReviewEffectiveResolver;
     this.buildReviewChargeEffect = opts.buildReviewChargeEffect;
     this.resolveFeatureCreationMutation = opts.resolveFeatureCreationMutation ?? resolveFeatureRemoteMutation;
+    this.resolveShipDraftPublicationDependencies =
+      opts.resolveShipDraftPublicationDependencies ?? createShipDraftPublicationDependencies;
+    this.shipDraftRemoteGit = opts.shipDraftRemoteGit;
     this.featureDesc = opts.featureDesc;
     this.worktreeBranch = opts.worktreeBranch;
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
@@ -6636,7 +6645,7 @@ export class Conductor {
       return;
     }
 
-    const publication = await createShipDraftPublicationDependencies({
+    const publication = await this.resolveShipDraftPublicationDependencies({
       cwd: this.projectRoot,
       branch: state.worktree_branch,
       baseBranch: this.baseBranch,
@@ -6762,7 +6771,7 @@ export class Conductor {
       if (snapshotReleaseMetadataBlock(before) === snapshot.block) return;
       const merged = mergeReleaseMetadataBlock(before, snapshot.block);
       if (merged === null) throw new Error('captured release metadata is no longer valid');
-      const publication = await createShipDraftPublicationDependencies({
+      const publication = await this.resolveShipDraftPublicationDependencies({
         cwd: this.projectRoot,
         branch: this.worktreeBranch,
         baseBranch: this.baseBranch,
@@ -7783,7 +7792,7 @@ export class Conductor {
         // Advisory: openShipDraftPr never throws and a failure only logs.
         if (step.phase === 'SHIP' && !this.shipDraftPrAttempted) {
           this.shipDraftPrAttempted = true;
-          const publication = await createShipDraftPublicationDependencies({
+          const publication = await this.resolveShipDraftPublicationDependencies({
             cwd: this.projectRoot,
             branch: state.worktree_branch,
             baseBranch: this.baseBranch,
@@ -7800,6 +7809,7 @@ export class Conductor {
             featureDesc: state.feature_desc,
             remoteMutation: publication?.remoteMutation,
             operations: publication?.operations,
+            remoteGit: this.shipDraftRemoteGit,
             log: this.log ?? console.warn,
           });
           if (draftPr.outcome === 'published') {

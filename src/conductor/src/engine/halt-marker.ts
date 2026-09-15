@@ -15,6 +15,7 @@ import {
   isRecordableHaltClass,
   recordHalt,
   type HaltRecordInput,
+  type HaltRecordRemoteOptions,
 } from './halt-record.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
@@ -88,6 +89,7 @@ export async function writeHaltMarker(
   body: string,
   haltClass: HaltClass,
   events?: ConductorEventEmitter,
+  recordRemote?: HaltRecordRemoteOptions,
 ): Promise<HaltMarkerWriteResult> {
   const markerPath = join(projectRoot, HALT_MARKER);
   const haltClassPath = join(projectRoot, HALT_CLASS_MARKER);
@@ -108,7 +110,7 @@ export async function writeHaltMarker(
   try {
     await writeFile(haltClassTempPath, haltClass, 'utf-8');
     await rename(haltClassTempPath, haltClassPath);
-    await writeHaltRecord(projectRoot, body, haltClass, events);
+    await writeHaltRecord(projectRoot, body, haltClass, events, recordRemote);
     return { status: 'written' };
   } catch (error) {
     await unlink(haltClassTempPath).catch(() => {});
@@ -123,6 +125,7 @@ async function writeHaltRecord(
   haltBody: string,
   haltClass: HaltClass,
   events?: ConductorEventEmitter,
+  recordRemote?: HaltRecordRemoteOptions,
 ): Promise<void> {
   if (!isRecordableHaltClass(haltClass)) return;
 
@@ -130,7 +133,7 @@ async function writeHaltRecord(
   const path = haltRecordPath(input.slug);
 
   try {
-    const result = await recordHalt(projectRoot, input);
+    const result = await recordHalt(projectRoot, input, recordRemote);
     if (result.kind === 'written') {
       await events?.emit({ type: 'halt_record_written', path, slug: input.slug, haltClass }).catch(() => {});
     } else if (result.kind === 'failed') {

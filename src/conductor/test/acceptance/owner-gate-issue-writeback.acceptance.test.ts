@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type { GithubOperationRequest, GithubOperationRunner } from '../../src/engine/github-operations.js';
 import { parseSourceRef } from '../../src/engine/engineer/issue-ref.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -27,9 +28,18 @@ interface GatedSpecEntry {
 
 interface GateWritebackDeps {
   runGh?: GhRunner;
+  operations?: GithubOperationRunner;
   cwd: string;
   log?: (msg: string) => void;
   verbose?: boolean;
+}
+
+function allowedOperations(requests: GithubOperationRequest[]): GithubOperationRunner {
+  return { run: async (request) => { requests.push(request); return {}; } };
+}
+
+function issueDeps(gh: GhRunner, requests: GithubOperationRequest[]): GateWritebackDeps {
+  return { runGh: gh, operations: allowedOperations(requests), cwd: '/repo' };
 }
 
 interface GateWritebackModule {
@@ -76,6 +86,7 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
     expect(parseSourceRef('acme/repo#42')).toEqual({ repo: 'acme/repo', number: '42' });
 
     const calls: string[][] = [];
+    const requests: GithubOperationRequest[] = [];
     const gh: GhRunner = async (args) => {
       calls.push([...args]);
       if (args[0] === 'issue' && args[1] === 'view') {
@@ -84,11 +95,11 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
       return { stdout: '' };
     };
 
-    await mod.announceGatedIssue(INDETERMINATE_ENTRY, 'acme/repo#42', { runGh: gh, cwd: '/repo' });
+    await mod.announceGatedIssue(INDETERMINATE_ENTRY, 'acme/repo#42', issueDeps(gh, requests));
 
     const touchedIssue42 = calls.some((c) => c.join(' ').includes('42'));
     expect(touchedIssue42).toBe(true);
-    expect(calls.some((c) => c.join(' ').includes(mod.OWNER_GATED_MARKER))).toBe(true);
+    expect(requests.some((request) => String(request.payload && 'body' in request.payload && request.payload.body).includes(mod.OWNER_GATED_MARKER))).toBe(true);
   });
 
   it('a gated spec with NO intake marker (chat-originated, sourceRef undefined) skips the issue step silently — no gh call, no error', async () => {
@@ -125,17 +136,23 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
   it('the referenced issue is CLOSED: the comment still posts (commenting closed issues is valid)', async () => {
     const mod = await loadGateWriteback();
     let commentPosted = false;
+    const requests: GithubOperationRequest[] = [];
     const gh: GhRunner = async (args) => {
       if (args[0] === 'issue' && args[1] === 'view') {
         return { stdout: JSON.stringify({ state: 'CLOSED', comments: [] }) };
       }
-      if (args[0] === 'issue' && args[1] === 'comment') {
-        commentPosted = true;
-      }
       return { stdout: '' };
     };
 
-    await mod.announceGatedIssue(INDETERMINATE_ENTRY, 'acme/repo#7', { runGh: gh, cwd: '/repo' });
+    const deps = issueDeps(gh, requests);
+    deps.operations = {
+      run: async (request) => {
+        requests.push(request);
+        if (request.operation === 'intake.issue.comment.create') commentPosted = true;
+        return {};
+      },
+    };
+    await mod.announceGatedIssue(INDETERMINATE_ENTRY, 'acme/repo#7', deps);
 
     expect(commentPosted).toBe(true);
   });
@@ -149,8 +166,9 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
       }
       return { stdout: '' };
     };
+    const prRequests: GithubOperationRequest[] = [];
     await expect(
-      mod.announceGatedPr(INDETERMINATE_ENTRY, 'https://github.com/acme/repo/pull/1', { runGh: prGh, cwd: '/repo' }),
+      mod.announceGatedPr(INDETERMINATE_ENTRY, 'https://github.com/acme/repo/pull/1', issueDeps(prGh, prRequests)),
     ).resolves.toBeUndefined();
 
     const issueGh: GhRunner = async (args) => {
@@ -159,11 +177,12 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
       }
       return { stdout: '' };
     };
+    const issueRequests: GithubOperationRequest[] = [];
     // Completing normally (not throwing) is the assertion: a failed issue
     // announcement must never propagate as an unhandled rejection that would
     // abort the pass, and must never "undo" the PR announcement above.
     await expect(
-      mod.announceGatedIssue(INDETERMINATE_ENTRY, 'acme/repo#9', { runGh: issueGh, cwd: '/repo' }),
+      mod.announceGatedIssue(INDETERMINATE_ENTRY, 'acme/repo#9', issueDeps(issueGh, issueRequests)),
     ).resolves.toBeUndefined();
   });
 
@@ -174,6 +193,7 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
 
     let commentCreateCount = 0;
     let patchCount = 0;
+    const requests: GithubOperationRequest[] = [];
     const gh: GhRunner = async (args) => {
       if (args[0] === 'issue' && args[1] === 'view') {
         return {
@@ -182,19 +202,21 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
           }),
         };
       }
-      if (args[0] === 'issue' && args[1] === 'comment') {
-        commentCreateCount++;
-        return { stdout: '' };
-      }
-      if (args[0] === 'api' && args.includes('--method') && args.includes('PATCH')) {
-        patchCount++;
-        return { stdout: '' };
-      }
       return { stdout: '' };
     };
 
     for (let i = 0; i < 10; i++) {
-      await mod.announceGatedIssue(INDETERMINATE_ENTRY, 'acme/repo#42', { runGh: gh, cwd: '/repo' });
+      await mod.announceGatedIssue(INDETERMINATE_ENTRY, 'acme/repo#42', {
+        ...issueDeps(gh, requests),
+        operations: {
+          run: async (request) => {
+            requests.push(request);
+            if (request.operation === 'intake.issue.comment.create') commentCreateCount++;
+            if (request.operation === 'intake.issue.comment.update') patchCount++;
+            return {};
+          },
+        },
+      });
     }
 
     expect(commentCreateCount).toBe(0);
@@ -206,6 +228,7 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
     const markedUrl = 'https://github.com/acme/repo/issues/9#issuecomment-8002';
     const patchBodies: string[] = [];
     let commentCreateCount = 0;
+    const requests: GithubOperationRequest[] = [];
     const gh: GhRunner = async (args) => {
       if (args[0] === 'issue' && args[1] === 'view') {
         return {
@@ -213,14 +236,6 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
             comments: [{ body: `${mod.OWNER_GATED_MARKER}\nold reason`, url: markedUrl }],
           }),
         };
-      }
-      if (args[0] === 'api' && args.includes('--method') && args.includes('PATCH')) {
-        const bodyArg = args.find((a) => a.startsWith('body='));
-        if (bodyArg) patchBodies.push(bodyArg);
-        return { stdout: '' };
-      }
-      if (args[0] === 'issue' && args[1] === 'comment') {
-        commentCreateCount++;
       }
       return { stdout: '' };
     };
@@ -230,7 +245,10 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
       reason: 'other-owner',
       otherOwner: 'bob',
     };
-    await mod.announceGatedIssue(transitioned, 'acme/repo#9', { runGh: gh, cwd: '/repo' });
+    await mod.announceGatedIssue(transitioned, 'acme/repo#9', {
+      ...issueDeps(gh, requests),
+      operations: { run: async () => ({ kind: 'refused' as const, reason: 'other-owner' as const }) },
+    });
 
     // other-owner ⇒ the daemon must not touch another operator's issue: no
     // in-place PATCH of the marker comment and no new comment created.
@@ -242,6 +260,7 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
     const mod = await loadGateWriteback();
     const markedUrl = 'https://github.com/acme/repo/issues/11#issuecomment-8003';
     let createCommentCalls = 0;
+    const requests: GithubOperationRequest[] = [];
     const gh: GhRunner = async (args) => {
       if (args[0] === 'issue' && args[1] === 'view') {
         return {
@@ -250,16 +269,20 @@ describe('owner-gate Source-Ref issue write-back acceptance (Covers: FR-9, FR-10
           }),
         };
       }
-      if (args[0] === 'api' && args.includes('PATCH')) {
-        throw new Error('PATCH failed');
-      }
-      if (args[0] === 'issue' && args[1] === 'comment') {
-        createCommentCalls++;
-      }
       return { stdout: '' };
     };
 
-    await mod.announceGatedIssue(INDETERMINATE_ENTRY, 'acme/repo#11', { runGh: gh, cwd: '/repo' });
+    await mod.announceGatedIssue(INDETERMINATE_ENTRY, 'acme/repo#11', {
+      ...issueDeps(gh, requests),
+      operations: {
+        run: async (request) => {
+          requests.push(request);
+          if (request.operation === 'intake.issue.comment.update') throw new Error('PATCH failed');
+          if (request.operation === 'intake.issue.comment.create') createCommentCalls++;
+          return {};
+        },
+      },
+    });
 
     expect(createCommentCalls).toBe(0);
   });

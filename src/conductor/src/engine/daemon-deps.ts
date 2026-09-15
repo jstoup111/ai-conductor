@@ -4,7 +4,7 @@ import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { HALT_MARKER } from './halt-marker.js';
-import { supersedeHaltRecord } from './halt-record.js';
+import { supersedeHaltRecord, type HaltRecordRemoteOptions } from './halt-record.js';
 import type { BacklogItem } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import type { ProviderExecutionContext } from './provider-execution.js';
@@ -478,9 +478,13 @@ async function exists(p: string): Promise<boolean> {
  * teardown race) — that must never crash the daemon process, so failures are
  * caught, logged loudly to stderr, and swallowed (never rethrown).
  */
-async function appendHaltClearedRecord(worktreePath: string, cause: 'operator' | 'rekick'): Promise<void> {
+async function appendHaltClearedRecord(
+  worktreePath: string,
+  cause: 'operator' | 'rekick',
+  recordRemote?: HaltRecordRemoteOptions,
+): Promise<void> {
   try {
-    await supersedeHaltRecord(worktreePath, basename(worktreePath), cause);
+    await supersedeHaltRecord(worktreePath, basename(worktreePath), cause, recordRemote);
   } catch {
     /* best-effort halt-record supersession */
   }
@@ -532,6 +536,8 @@ export interface WatchHaltClearedOptions {
    * HALT_CLEARED_POLL_INTERVAL_MS.
    */
   pollIntervalMs?: number;
+  /** Test seam for the guarded remote publication of the resolved record. */
+  recordRemote?: HaltRecordRemoteOptions;
 }
 
 /**
@@ -580,7 +586,7 @@ export function watchHaltCleared(
     // happens BEFORE onCleared() fires, so the record always precedes
     // any re-dispatch/dispose race (AC5).
     const cause: 'operator' | 'rekick' = existsSync(clearedPath) ? 'rekick' : 'operator';
-    await appendHaltClearedRecord(worktreePath, cause);
+    await appendHaltClearedRecord(worktreePath, cause, options?.recordRemote);
     onCleared();
   };
 

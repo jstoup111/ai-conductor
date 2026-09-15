@@ -132,6 +132,7 @@ export const GITHUB_OPERATION_REGISTRY = {
   'pull-request.label.add': { access: 'feature-write', targetKinds: ['pull-request'], payload: 'label' },
   'pull-request.label.remove': { access: 'feature-write', targetKinds: ['pull-request'], payload: 'label' },
   'intake.issue.comment.create': { access: 'intake-write', targetKinds: ['issue'], payload: 'body' },
+  'intake.issue.comment.update': { access: 'intake-write', targetKinds: ['issue'], payload: 'comment-update' },
   'intake.issue.close': { access: 'intake-write', targetKinds: ['issue'] },
   'intake.issue.label.add': { access: 'intake-write', targetKinds: ['issue'], payload: 'label' },
   'intake.issue.label.remove': { access: 'intake-write', targetKinds: ['issue'], payload: 'label' },
