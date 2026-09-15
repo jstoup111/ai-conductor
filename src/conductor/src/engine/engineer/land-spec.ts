@@ -72,6 +72,7 @@ import { scanPlanProtectedTargets } from '../plan-protected-targets.js';
 import { validatePlanDoneWhen } from '../plan-done-when.js';
 import { PLAN_TASK_HARD_STOP_BOUNDARY, validatePlanTaskCount } from '../plan-task-count.js';
 import { composeSpecCommitMessage } from './spec-commit-message.js';
+import { isEngineAppendedRemediationTaskId } from '../remediation-append.js';
 
 const execFile = promisify(execFileCb);
 
@@ -278,7 +279,10 @@ export async function landSpec(
         const description = reason === 'missing'
           ? 'no Done when: block'
           : `an invalid Done when: block (${reason})`;
-        return `plan task ${taskId} has ${description}`;
+        const attribution = isEngineAppendedRemediationTaskId(taskId)
+          ? ' (engine-appended: the engine wrote this remediation block; fix the engine rather than re-authoring the plan)'
+          : '';
+        return `plan task ${taskId} has ${description}${attribution}`;
       })
       .join('; ');
     throw new Error(`landSpec: ${violations}`);
