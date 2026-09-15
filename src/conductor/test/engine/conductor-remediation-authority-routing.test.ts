@@ -1,11 +1,21 @@
 // Covers: task:7
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+vi.mock('../../src/engine/build-review-effective.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/engine/build-review-effective.js')>(),
+  resolveBuildReviewFeatureIdentity: vi.fn(async () => ({
+    version: 'v1' as const,
+    repository: '/fixture/repository',
+    feature: 'conductor-remediation-authority-routing',
+  })),
+}));
+
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
+import { AcceptedWideningDecisionStore } from '../../src/engine/accepted-widenings.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -43,14 +53,13 @@ describe('planRemediation implementation-only authority routing', () => {
       '| --- | --- | --- | --- | --- | --- |',
       '| S1.1 | OVER_SCOPE | 1 | none | Accepted scope objection | outside-visible |',
     ].join('\n'), 'utf8');
-    await writeFile(join(projectRoot, '.pipeline/accepted-widenings.json'), JSON.stringify({
-      version: 1,
-      decisions: [{
-        criterion: 'S1.1', summary: 'Accepted scope objection', decision: 'accept',
-        rationale: 'Operator accepted the completed scope.', operator: 'test',
-        decidedAt: '2026-09-06T00:00:00.000Z',
-      }],
-    }), 'utf8');
+    const accepted = await new AcceptedWideningDecisionStore(projectRoot, {
+      version: 1, repository: '/fixture/repository', feature: 'conductor-remediation-authority-routing',
+    }).append({
+      criterion: 'S1.1', authority: 'accept',
+      rationale: 'Operator accepted the completed scope.', operator: 'test',
+    });
+    if (!accepted.ok) throw new Error(`fixture acceptance failed: ${accepted.reason}`);
     let remediationDispatches = 0;
     const conductor = new Conductor({
       stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),

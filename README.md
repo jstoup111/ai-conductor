@@ -157,6 +157,9 @@ review kickback laps are tuning telemetry, not your signal.
 **It got stuck.** Run `/daemon-triage` from a Claude Code or Codex session in the project. It gathers
 the evidence and routes you to the right [runbook](docs/runbooks/index.md).
 
+PRD scope approvals retain their original evidence when reviewer wording changes. To revise a refusal,
+edit only the offered decision and rationale; see [scope-halt recovery](docs/runbooks/stalled-or-stuck-feature.md#over_scope-decision-halt).
+
 [FAQ](docs/guides/faq.md) has the short answers to everything above.
 
 ## Documentation

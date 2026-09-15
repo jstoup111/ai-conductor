@@ -168,6 +168,19 @@ export interface ProviderLifecycleCapability {
   synchronousSpawnPermit: true;
 }
 
+/**
+ * A provider-neutral, engine-owned JSON Schema supplied only when a caller
+ * needs a native constrained terminal response. Adapters own translating this
+ * value to their native CLI/API syntax; the engine never asks a provider to
+ * recover the contract from prose.
+ */
+export type NativeSchemaRequest = Readonly<Record<string, unknown>>;
+
+/** Declares that an adapter can enforce and return a native output schema. */
+export interface ProviderNativeSchemaCapability {
+  nativeOutputSchema: true;
+}
+
 /** The synchronous authority decision made immediately before process creation. */
 export type SpawnPermitDecision =
   | { permitted: true }
@@ -187,6 +200,14 @@ export interface InvokeResult {
   success: boolean;
   output: string;
   exitCode: number;
+  /**
+   * The parsed value from the provider's terminal structured-result envelope.
+   * It remains distinct from human-readable `output`; only an engine-owned
+   * schema request authorizes adapters to populate it.
+   */
+  finalStructuredResult?: unknown;
+  /** A requested native schema could not be enforced by the selected adapter. */
+  nativeSchemaUnsupported?: true;
   /** Engine-observed provider subprocess intervals, separate from provider-reported usage. */
   observedIntervals?: readonly ObservedInterval[];
   rateLimited?: boolean;
@@ -253,6 +274,8 @@ export interface InvokeResult {
 export interface InvokeOptions {
   prompt: string;
   systemPrompt?: string;
+  /** Optional engine-owned JSON Schema for a native constrained terminal response. */
+  nativeSchema?: NativeSchemaRequest;
   sessionId: string;
   resume: boolean;
   /**
@@ -296,6 +319,11 @@ export interface InvokeOptions {
   diagnosticLog?: (message: string) => void;
   /** Set only for the resolved self-host provider candidate. */
   selfHost?: SelfHostInvocation;
+  /**
+   * Engine-owned, feature-invocation scratch home for a native output schema
+   * when this is not a self-host invocation. Provider execution owns teardown.
+   */
+  nativeSchemaScratchHome?: string;
   /**
    * Fired on every observed stdout/stderr activity boundary from the spawned
    * provider subprocess (each streamed JSON event line). Used to drive the
@@ -347,6 +375,8 @@ export interface LLMProvider {
    * at its subprocess creation boundary.
    */
   lifecycleCapability?: ProviderLifecycleCapability;
+  /** Declares native output-schema support; absence is an explicit unsupported capability. */
+  nativeSchemaCapability?: ProviderNativeSchemaCapability;
   invoke(options: InvokeOptions): Promise<InvokeResult>;
   /** Optional so legacy and custom providers need not implement auth recovery. */
   readiness?(): Promise<AuthenticationReadiness>;
