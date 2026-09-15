@@ -902,6 +902,7 @@ export async function resumeRebaseFirst(opts: {
   if (transitionReplay) {
     const transition = await applyRebaseTransition({
       projectRoot: opts.worktreePath,
+      stateFilePath: join(opts.worktreePath, '.pipeline', 'conduct-state.json'),
       stateStore: createFilesystemConductStateStore(join(opts.worktreePath, '.pipeline', 'conduct-state.json')),
       replay: transitionReplay,
       invalidated: rebaseVerdict.kickedBack,

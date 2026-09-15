@@ -78,6 +78,31 @@ describe('applyRebaseTransition', () => {
     expect((await applyRebaseTransition(input)).stateResult).toBe('already-applied');
   });
 
+  it('uses the caller-owned state path instead of assuming the pipeline default', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    const stateFilePath = join(dir, 'conduct-state.json');
+    await writeFile(stateFilePath, JSON.stringify({ build_review: 'done' }));
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeVerdict(dir, 'build_review', {
+      satisfied: false,
+      checkedAt: 1,
+      kickback: { from: 'rebase', evidence: 'changed replay' },
+    });
+
+    const result = await applyRebaseTransition({
+      projectRoot: dir,
+      stateFilePath,
+      stateStore: createFilesystemConductStateStore(stateFilePath),
+      replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      invalidated: ['build_review'],
+      preserved: [],
+      preservedCandidates: [],
+    });
+
+    expect(result.stateResult).toBe('applied');
+  });
+
   it('does not attach an older replay preservation record to a newer ordinary verdict', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
     dirs.push(dir);

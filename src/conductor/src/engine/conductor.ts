@@ -14507,6 +14507,7 @@ export class Conductor {
     if (transitionReplay) {
       const transition = await applyRebaseTransition({
         projectRoot: this.projectRoot,
+        stateFilePath: this.stateFilePath,
         stateStore: this.stateStore,
         replay: transitionReplay,
         invalidated: verdict.kickedBack,

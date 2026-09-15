@@ -29,6 +29,13 @@ export interface RebasePreservedCandidate {
 
 export interface ApplyRebaseTransitionOptions {
   projectRoot: string;
+  /**
+   * The same state file owned by the caller's ConductStateStore.  Production
+   * uses `.pipeline/conduct-state.json`, while isolated callers may inject a
+   * different path; reading a second, derived path would turn that valid
+   * configuration into a false transition conflict.
+   */
+  stateFilePath?: string;
   stateStore: ConductStateStore<ConductState>;
   replay: ReplayEvidence;
   invalidated: readonly StepName[];
@@ -47,7 +54,7 @@ export interface ApplyRebaseTransitionOptions {
 export async function applyRebaseTransition(
   options: ApplyRebaseTransitionOptions,
 ): Promise<AppliedRebaseTransition> {
-  const statePath = join(options.projectRoot, '.pipeline', 'conduct-state.json');
+  const statePath = options.stateFilePath ?? join(options.projectRoot, '.pipeline', 'conduct-state.json');
   const operation: RebaseOperationRecord = {
     // The replay tuple is immutable. Its digest makes a resumed application
     // identify the same cross-file operation instead of reopening gates again.
