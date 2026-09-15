@@ -553,10 +553,16 @@ async function runTrackerIssueOperation(
   payload?: Record<string, unknown>,
 ): Promise<{ readonly stdout: string }> {
   let stdout = '';
+  let runnerError: GhRunnerError | undefined;
   const transport: GhRunner = async (args, transportOptions) => {
-    const result = await runner(args, transportOptions);
-    stdout = result.stdout;
-    return result;
+    try {
+      const result = await runner(args, transportOptions);
+      stdout = result.stdout;
+      return result;
+    } catch (err) {
+      runnerError = new GhRunnerError(args, err);
+      throw runnerError;
+    }
   };
   const result = await executeGithubOperation({
     operation,
@@ -575,6 +581,7 @@ async function runTrackerIssueOperation(
     throw new GithubTrackerOperationRefusalError(operation, result.reason);
   }
   if (result.kind === 'failed') {
+    if (runnerError) throw runnerError;
     throw new Error(`GitHub tracker operation '${operation}' failed: ${result.error}`);
   }
   return { stdout };

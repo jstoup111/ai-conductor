@@ -13,7 +13,10 @@ import {
   createGithubTrackerClient,
   DEFAULT_ASSIGNED_ISSUES_LIMIT,
   type GhRunner,
+  type GithubMutationExecutionContext,
 } from '../src/engine/tracker-client.js';
+import { decodeGithubOperationRequest } from '../src/engine/github-operations.js';
+import { requestExplicitGithubOperationApproval } from '../src/engine/github-operation-approval.js';
 
 describe('tracker-client: canonical GhRunner + guarded makeProductionGh', () => {
   it('typechecks GhRunner, makeProductionGh, assertRealExecAllowed imports', () => {
@@ -161,10 +164,38 @@ function failingRunner(opts: { code?: number; stderr: string; message?: string }
   return { runner, calls };
 }
 
+function ownedMutation(): GithubMutationExecutionContext {
+  return {
+    provenance: {
+      repository: 'owner/repo',
+      defaultBranch: 'main',
+      specBranch: 'spec/fixture',
+      featureMarker: '.docs/specs/fixture.md',
+      publication: 'initial',
+    },
+    dependencies: {
+      resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
+      provenanceDiscovery: {
+        readCommittedRecords: async () => [{
+          path: '.docs/specs/fixture.md',
+          content: 'Owner: alice\n',
+        }],
+      },
+    },
+  };
+}
+
+function ownedClient(runner: GhRunner) {
+  return createGithubTrackerClient(runner, {
+    mutation: ownedMutation(),
+    repository: 'owner/repo',
+  });
+}
+
 describe('createGithubTrackerClient — loud error semantics', () => {
   it('closeIssue: non-zero exit rejection carries argv and stderr', async () => {
     const { runner } = failingRunner({ code: 1, stderr: 'gh: some failure occurred' });
-    const client = createGithubTrackerClient(runner);
+    const client = ownedClient(runner);
 
     await expect(client.closeIssue('owner/repo', '12', '.')).rejects.toMatchObject({
       message: expect.stringContaining('gh: some failure occurred'),
@@ -338,7 +369,7 @@ describe('createGithubTrackerClient — read ops argv parity', () => {
 describe('createGithubTrackerClient — write ops argv parity', () => {
   it('commentOnIssue: matches github-issues.ts:302 `gh issue comment <n> -R <repo> --body <body>`', async () => {
     const { runner, calls } = fakeRunner('');
-    const client = createGithubTrackerClient(runner);
+    const client = ownedClient(runner);
 
     await client.commentOnIssue('owner/repo', 42, 'hello', '.');
 
@@ -352,33 +383,34 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
 
   it('createIssue: matches file-issue.ts:135 `gh issue create --title <t> --body <b> [--repo <r>]`', async () => {
     const { runner, calls } = fakeRunner('https://github.com/owner/repo/issues/9\n');
-    const client = createGithubTrackerClient(runner);
+    const client = ownedClient(runner);
 
     const url = await client.createIssue({ title: 'T', body: 'B', repo: 'owner/repo' }, '.');
 
     expect(calls).toEqual([
       {
-        args: ['issue', 'create', '--title', 'T', '--body', 'B', '--repo', 'owner/repo'],
+        args: ['issue', 'create', '-R', 'owner/repo', '--title', 'T', '--body', 'B'],
         opts: { cwd: '.' },
       },
     ]);
     expect(url).toBe('https://github.com/owner/repo/issues/9');
   });
 
-  it('createIssue: omits --repo when not provided', async () => {
+  it('createIssue: requires a canonical repository instead of inheriting a cwd target', async () => {
     const { runner, calls } = fakeRunner('https://github.com/owner/repo/issues/9\n');
     const client = createGithubTrackerClient(runner);
 
-    await client.createIssue({ title: 'T', body: 'B' }, '.');
+    await expect(client.createIssue({ title: 'T', body: 'B' }, '.')).rejects.toMatchObject({
+      operation: 'issue.create',
+      reason: 'invalid-target',
+    });
 
-    expect(calls).toEqual([
-      { args: ['issue', 'create', '--title', 'T', '--body', 'B'], opts: { cwd: '.' } },
-    ]);
+    expect(calls).toEqual([]);
   });
 
   it('addIssueLabel: matches pr-labels.ts restAddLabelArgs REST POST shape', async () => {
     const { runner, calls } = fakeRunner('');
-    const client = createGithubTrackerClient(runner);
+    const client = ownedClient(runner);
 
     await client.addIssueLabel('owner/repo', 42, 'engineer:handled', '.');
 
@@ -392,7 +424,7 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
 
   it('closeIssue: matches halt-issues-cli.ts closeIssue `gh issue close <ref>` cross-repo targeting', async () => {
     const { runner, calls } = fakeRunner('');
-    const client = createGithubTrackerClient(runner);
+    const client = ownedClient(runner);
 
     await client.closeIssue('owner/repo', '12', '.');
 
@@ -403,7 +435,7 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
 
   it('upsertIssueBody: matches halt-issues-cli.ts upsertIssueBody `gh issue edit <ref> --body <body>` cross-repo targeting', async () => {
     const { runner, calls } = fakeRunner('');
-    const client = createGithubTrackerClient(runner);
+    const client = ownedClient(runner);
 
     await client.upsertIssueBody('owner/repo', '12', 'new body', '.');
 
@@ -414,18 +446,18 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
 
   it('upsertIssueComment: matches halt-issues-cli.ts upsertIssueComment `gh issue comment <ref> --body <body>` cross-repo targeting', async () => {
     const { runner, calls } = fakeRunner('');
-    const client = createGithubTrackerClient(runner);
+    const client = ownedClient(runner);
 
     await client.upsertIssueComment('owner/repo', '12', 'a comment', '.');
 
     expect(calls).toEqual([
-      { args: ['issue', 'comment', '12', '--body', 'a comment', '-R', 'owner/repo'], opts: { cwd: '.' } },
+      { args: ['issue', 'comment', '12', '-R', 'owner/repo', '--body', 'a comment'], opts: { cwd: '.' } },
     ]);
   });
 
   it('viewPullRequest: matches github-issues.ts maybeReopen `gh pr view <url> --json state,mergedAt`', async () => {
     const { runner, calls } = fakeRunner('{"state":"CLOSED","mergedAt":null}');
-    const client = createGithubTrackerClient(runner);
+    const client = ownedClient(runner);
 
     const result = await client.viewPullRequest('https://github.com/o/r/pull/9', '.');
 
@@ -437,7 +469,20 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
 
   it('createLabel: matches github-issues.ts report() `gh label create <name> -R <repo>`', async () => {
     const { runner, calls } = fakeRunner('');
-    const client = createGithubTrackerClient(runner);
+    const decoded = decodeGithubOperationRequest({
+      operation: 'label-definition.create',
+      repository: 'owner/repo',
+      resource: { kind: 'label-definition', name: 'engineer:handled' },
+      context: { actor: 'tracker-client' },
+      payload: { name: 'engineer:handled' },
+    });
+    if (decoded.kind !== 'accepted') throw new Error('fixture request must decode');
+    const approval = await requestExplicitGithubOperationApproval(decoded.request, {
+      mode: 'interactive',
+      confirm: async () => true,
+    });
+    if (approval.kind !== 'approved') throw new Error('fixture approval must succeed');
+    const client = createGithubTrackerClient(runner, { shared: { approval: approval.capability } });
 
     await client.createLabel('owner/repo', 'engineer:handled', '.');
 
@@ -448,7 +493,7 @@ describe('createGithubTrackerClient — write ops argv parity', () => {
 
   it('removeIssueLabel: matches pr-labels.ts restRemoveLabelArgs REST DELETE shape', async () => {
     const { runner, calls } = fakeRunner('');
-    const client = createGithubTrackerClient(runner);
+    const client = ownedClient(runner);
 
     await client.removeIssueLabel('owner/repo', 42, 'engineer:handled', '.');
 
