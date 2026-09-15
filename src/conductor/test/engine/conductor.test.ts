@@ -94,6 +94,8 @@ import {
   readKickbackLedger,
   } from '../../src/engine/kickback-ledger.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { CloseoutEventTail } from '../../src/engine/closeout-tail.js';
+import { dispatchTaskCommand } from '../../src/engine/task-cli.js';
 import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
 import { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
@@ -255,6 +257,71 @@ describe('engine/conductor', () => {
         { outcome: 'halted', tier: 'S', project: 'project', worker: 'worker', feature: 'feature' },
       ]);
     } finally {
+      listener.stop();
+      await provider.shutdown();
+    }
+  });
+
+  // Covers: task:9, rem-ab1-2
+  it('keeps a plan-gap halt tiered when the build tail projects it before the centralized halt', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, 'plan.md'), [
+      '### Task 7: Deliver the bounded behavior',
+      '**Done when:**',
+      '- The approved behavior can be verified without widening the plan.',
+      '',
+    ].join('\n'));
+    await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
+      activePlanPath: 'plan.md', complexity_tier: 'M',
+    }));
+    await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+      tasks: [{ id: '7', name: 'Task 7', status: 'in_progress' }],
+    }));
+    await writeFile(join(dir, '.pipeline', 'current-task'), '7');
+
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const listener = new MetricsListener(
+      new MetricsRecorder(provider.getMeter('conductor-plan-gap-tier'), { project: 'project', worker: 'worker' }),
+      undefined,
+      'feature',
+    );
+    const tail = new CloseoutEventTail({ projectRoot: dir, events });
+    listener.start(events);
+    const buildProvider: StepRunner = {
+      run: async (step) => {
+        expect(step).toBe('build');
+        await expect(dispatchTaskCommand({
+          kind: 'done', id: '7', planGap: { index: 1, reason: 'No approved path.' },
+        }, dir)).resolves.toBe(1);
+        await tail.poll();
+        return { success: false, output: 'plan gap' };
+      },
+    };
+    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: buildProvider, events });
+
+    try {
+      await buildProvider.run('build', { complexity_tier: 'M' });
+      (conductor as unknown as { haltState: ConductState }).haltState = { complexity_tier: 'M' };
+      await (conductor as unknown as { emitLoopHalt(reason: string): Promise<void> }).emitLoopHalt('centralized halt');
+      await events.emit({
+        type: 'feature_dispatch_ended', slug: 'feature', outcome: 'halted', haltClass: 'plan-gap', step: 'build', tier: 'M',
+      });
+      await provider.forceFlush();
+
+      const outcomes = exporter.getMetrics()
+        .flatMap((batch) => batch.scopeMetrics)
+        .flatMap((scope) => scope.metrics)
+        .filter((metric) => metric.descriptor.name === 'conductor.run.outcomes')
+        .flatMap((metric) => metric.dataPoints as Array<{ attributes: Record<string, unknown> }>)
+        .map((point) => point.attributes);
+      expect(outcomes).toEqual([
+        { outcome: 'halted', tier: 'M', project: 'project', worker: 'worker', feature: 'feature' },
+      ]);
+    } finally {
+      tail.stop();
       listener.stop();
       await provider.shutdown();
     }
