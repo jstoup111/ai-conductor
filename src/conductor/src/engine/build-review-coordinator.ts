@@ -55,6 +55,7 @@ import { canonicalizeBuildReviewFindingSet } from "./build-review-finding-identi
 
 const BUILD_REVIEW_RUBRICS = BUILD_REVIEW_RUBRIC_IDS;
 const TEST_QUALITY_RUBRIC: BuildReviewRubricId = "testQuality";
+const REVIEWER_SUPPLIED_ENVELOPE_FIELDS = ["kind", "rubric", "contractVersion", "lapId", "snapshotDigest", "verdict"] as const;
 
 /** A rubric that passed deterministic pre-dispatch classification. */
 export interface BuildReviewDispatchableRubric {
@@ -243,6 +244,9 @@ export function stampBuildReviewDispatchedCandidate(
   const source = typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)
     ? candidate as Record<string, unknown>
     : undefined;
+  const reviewerSuppliedEnvelopeFields = rubric !== 'security' || source === undefined
+    ? []
+    : REVIEWER_SUPPLIED_ENVELOPE_FIELDS.filter((field) => Object.hasOwn(source, field));
   return {
     kind: "judged",
     rubric,
@@ -250,6 +254,7 @@ export function stampBuildReviewDispatchedCandidate(
     lapId: projection.lapId,
     snapshotDigest: projection.snapshotDigest,
     findings: stampResolvedCandidateFindingAnchors(source, projection),
+    ...(reviewerSuppliedEnvelopeFields.length === 0 ? {} : { reviewerSuppliedEnvelopeFields }),
     ...(source?.scopeResolutions === undefined ? {} : { scopeResolutions: source.scopeResolutions }),
     // The relocation audit is provider-owned EVIDENCE, not an envelope field:
     // the test-quality contract validates it as typed evidence, the
@@ -397,6 +402,7 @@ export function validateBuildReviewDispatchedResult(
 ): BuildReviewJudgedResult | undefined {
   const scopeContext = buildReviewCandidateScopeResolutionContext(projection);
   const source = record(candidate);
+  if (rubric === 'security' && Array.isArray(source?.reviewerSuppliedEnvelopeFields)) return undefined;
   const scopeResolutions = source?.scopeResolutions === undefined
     ? (scopeContext.candidates.length === 0 ? [] : undefined)
     : parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext);
@@ -423,6 +429,9 @@ export function describeBuildReviewDispatchedResultRejection(
 ): string {
   const scopeContext = buildReviewCandidateScopeResolutionContext(projection);
   const source = record(candidate);
+  if (rubric === 'security' && Array.isArray(source?.reviewerSuppliedEnvelopeFields)) {
+    return `provider payload must not supply engine-owned envelope field(s): ${source.reviewerSuppliedEnvelopeFields.map(String).join(', ')}`;
+  }
   const scopeResolutions = source?.scopeResolutions === undefined
     ? (scopeContext.candidates.length === 0 ? [] : undefined)
     : parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext);
