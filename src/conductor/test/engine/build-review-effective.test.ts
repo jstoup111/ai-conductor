@@ -83,9 +83,17 @@ describe('live build-review effective resolver', () => {
     expect(deriveEffectiveBuildReviewVerdictWithDispositions(raw, feature, [], [], { security: 60 })).toMatchObject({
       verdict: 'PASS', suppressedFindingIds: [suppressed.id], unresolvedFindingIds: [],
     });
-    const unscored = structuredClone(raw);
-    if (unscored.results.security.kind !== 'judged') throw new Error('security fixture must be judged');
-    delete unscored.results.security.findings[0].confidence;
+    if (raw.results.security.kind !== 'judged') throw new Error('security fixture must be judged');
+    const unscored = {
+      ...raw,
+      results: {
+        ...raw.results,
+        security: {
+          ...raw.results.security,
+          findings: raw.results.security.findings.map(({ confidence: _confidence, ...finding }) => finding),
+        },
+      },
+    };
     expect(deriveEffectiveBuildReviewVerdictWithDispositions(unscored, feature, [], [], { security: 60 })).toMatchObject({
       verdict: 'FAIL', suppressedFindingIds: [], unresolvedFindingIds: [suppressed.id],
     });

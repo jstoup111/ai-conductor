@@ -62,6 +62,16 @@ function currentAggregate() {
 }
 
 describe('build-review raw aggregate', () => {
+  it('normalizes omitted default-off security at the join boundary while the persisted parser stays exhaustive', () => {
+    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: judged() } });
+
+    expect(aggregate.results.security).toEqual({ kind: 'skipped', rubric: 'security', reason: 'disabled' });
+    expect(parseBuildReviewAggregate({
+      ...aggregate,
+      results: { testQuality: aggregate.results.testQuality },
+    })).toBeUndefined();
+  });
+
   it('joins security findings into the failure verdict and adjudication sources', () => {
     const securityFinding: BuildReviewFinding = {
       concernKind: 'committed-secret', summary: 'A credential is committed to the diff.', evidenceLocations: ['src/config.ts:12'],
