@@ -524,13 +524,13 @@ describe('build-review findings CLI', () => {
 
     expect(machine).toHaveBeenCalledWith(JSON.stringify({
       feature: 'review-rubrics', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', rawVerdict: 'PASS', verdict: 'PASS',
-      acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], acceptedDispositions: [],
+      acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: ['security'], infrastructureFailureRubrics: [], acceptedDispositions: [],
       cases: [],
     }));
     expect(JSON.parse(machine.mock.calls[0]![0])).not.toHaveProperty('lastMechanicalFault');
     expect(human).toHaveBeenCalledWith([
       'Build review findings: review-rubrics', 'Lap: lap-current', 'Raw verdict: PASS', 'Effective verdict: PASS',
-      'Accepted findings: none', 'Operator dispositions: none', 'Autonomous case outcomes: none', 'Unresolved findings: none', 'Skipped rubrics: none', 'Infrastructure failures: none',
+      'Accepted findings: none', 'Operator dispositions: none', 'Autonomous case outcomes: none', 'Unresolved findings: none', 'Skipped rubrics: security', 'Infrastructure failures: none',
     ].join('\n'));
   });
 

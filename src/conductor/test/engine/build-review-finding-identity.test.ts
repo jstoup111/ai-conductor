@@ -115,7 +115,7 @@ describe('build-review finding identity', () => {
     const first = { path: 'test/widget.test.ts', contentHash: HASH_A, display: 'first assertion' };
     const sibling = { ...first, occurrence: 1, display: 'unrelated sibling assertion' };
     const references: BuildReviewFindingReferenceContext = {
-      changedTests: ['test/widget.test.ts'], changedTestRegions: [first], changedPaths: ['test/widget.test.ts'], planTasks: [],
+      changedTests: ['test/widget.test.ts'], changedTestRegions: [first], changedContentRegions: [], changedPaths: ['test/widget.test.ts'], planTasks: [],
     };
 
     expect(canonicalizeBuildReviewFindingIdentity(finding(sibling), references)).toBeUndefined();

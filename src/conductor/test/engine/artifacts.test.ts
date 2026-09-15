@@ -5648,7 +5648,7 @@ Task 1 → Task 2
         verdictFreshness: { outcome: 'preserved_surface_miss' },
       });
       expect(effectiveResolver).toHaveBeenCalledWith(dir, expect.anything(), {
-        minConfidence: { testQuality: 70 },
+        minConfidence: { testQuality: 70, security: 0 },
       });
       expect(result.staleLap).toBeUndefined();
     });
