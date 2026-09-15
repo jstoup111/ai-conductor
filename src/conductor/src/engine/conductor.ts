@@ -6008,7 +6008,7 @@ export class Conductor {
       if (!match) return undefined;
       await this.makeRetainedShipPrPresentable(
         match.url,
-        { worktree_branch: head },
+        { worktree_branch: head, feature_desc: this.featureDesc },
         undefined,
       );
       this.shipDraftPrUrl = match.url;

@@ -22,6 +22,8 @@ import {
 import { makeGitRunner } from './rebase.js';
 import { execa } from 'execa';
 import { dispatchTestSuiteCommand } from './test-suite-cli.js';
+import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';
+import { makeProductionGh, type GithubMutationExecutionContext } from './tracker-client.js';
 
 /**
  * Classify a ci-fix resolver error into a coarse category so logs and
@@ -443,6 +445,10 @@ export async function runCiFix(
     fixRunner: CiFixRunner;
     verify?: (worktreePath: string) => Promise<number>;
     liveness?: ResolveWorktreeLiveness;
+    /** Production supplies its gh transport; tests may inject proven authority. */
+    gh?: GhRunner;
+    remoteMutation?: GithubMutationExecutionContext;
+    remoteGit?: typeof executeRemoteGit;
   },
   logger?: (msg: string) => void,
 ): Promise<CiFixOutcome> {
@@ -531,7 +537,21 @@ export async function runCiFix(
         return fixOutcome;
       }
 
-      const pushResult = await pushRefreshedBranch(git, branch, log);
+      const remoteMutation = deps.remoteMutation ?? await resolveFeatureRemoteMutation({
+        cwd: worktreePath,
+        slug,
+        branch,
+        git: async (args) => {
+          const result = await git(args);
+          if (result.exitCode !== 0) throw new Error(result.stderr || result.stdout || 'git read failed');
+          return { stdout: result.stdout };
+        },
+        gh: deps.gh ?? makeProductionGh(),
+      });
+      const pushResult = await pushRefreshedBranch(git, branch, log, {
+        remoteGit: deps.remoteGit,
+        mutation: remoteMutation,
+      });
       if (!pushResult.pushed) {
         log(`${prUrl}: ci-fix lease push failed: ${pushResult.reason}`);
         logOutcome(log, prUrl, 'ci-fix-lease-push', 'escalated');

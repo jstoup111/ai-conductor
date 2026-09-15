@@ -15,7 +15,12 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+vi.mock('../../src/engine/owner-gate/machine-identity.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/owner-gate/machine-identity.js')>();
+  return { ...actual, readMachineOwnerConfig: vi.fn(async () => ({ spec_owner: 'alice' })) };
+});
 
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
@@ -66,6 +71,7 @@ function makeGh(rowsByQuery: Record<string, PrRow[]>): {
     if (args[1] === 'view') {
       return { stdout: JSON.stringify({ body: BODY }) };
     }
+    if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
     return { stdout: '{}' };
   };
   return { gh, calls };
@@ -81,6 +87,7 @@ function makeHaltedPrGh(): {
     body: `${HALT_PR_BANNER_SENTINEL}\n${NEEDS_REMEDIATION_BODY_MARKER}`,
   };
   const gh: GhRunner = async (args) => {
+    if (args[0] === 'api' && args[1] === 'user') return { stdout: 'alice\n' };
     if (args[1] === 'list') {
       return { stdout: JSON.stringify([{ url: PR_URL, state: 'OPEN' }]) };
     }
@@ -121,7 +128,7 @@ describe('retained SHIP draft PR identity', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  function makeConductor(gh: GhRunner, opts: { worktreeBranch?: string } = {}): Conductor {
+  function makeConductor(gh: GhRunner, opts: { worktreeBranch?: string; featureDesc?: string } = {}): Conductor {
     return new Conductor({
       stateFilePath: join(dir, 'conduct-state.json'),
       stepRunner: noopRunner,
@@ -135,6 +142,11 @@ describe('retained SHIP draft PR identity', () => {
       } as never,
       runGh: gh,
       gh,
+      git: async (args) => {
+        if (args[0] === 'config') return { stdout: 'https://github.com/acme/repo.git\n' };
+        if (args[0] === 'show') return { stdout: 'Owner: alice\n' };
+        return { stdout: '' };
+      },
       log: () => {},
       ...opts,
     });
@@ -212,7 +224,7 @@ describe('retained SHIP draft PR identity', () => {
         { url: 'https://github.com/acme/repo/pull/901', state: 'MERGED' },
       ],
     });
-    const conductor = makeConductor(gh, { worktreeBranch: BRANCH });
+    const conductor = makeConductor(gh, { worktreeBranch: BRANCH, featureDesc: 'e2e-smoke-step' });
     const resolve = (conductor as unknown as {
       resolveRetainedShipDraftPrUrl(branch: string): Promise<string | undefined>;
     }).resolveRetainedShipDraftPrUrl.bind(conductor);
@@ -245,7 +257,7 @@ describe('retained SHIP draft PR identity', () => {
 
   it('repairs a retained placeholder before returning its resolved identity', async () => {
     const { gh, presentation } = makeHaltedPrGh();
-    const conductor = makeConductor(gh, { worktreeBranch: BRANCH });
+    const conductor = makeConductor(gh, { worktreeBranch: BRANCH, featureDesc: 'e2e-smoke-step' });
 
     const result = await (conductor as unknown as {
       resolveRetainedShipDraftPrUrl(branch: string): Promise<string | undefined>;

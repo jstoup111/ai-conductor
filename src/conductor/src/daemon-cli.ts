@@ -2537,6 +2537,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                     fixRunner: {
                       run: (opts) => productionCiFixRunner.run({ ...opts, dispatcher: ciFixDispatcher }),
                     },
+                    gh: ghRunner,
                     liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
                   },
                   log,

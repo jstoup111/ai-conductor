@@ -51,6 +51,16 @@ function isGuardedRunner(runner: PrRunner): runner is GithubOperationRunner {
   return 'run' in runner && typeof (runner as { run?: unknown }).run === 'function';
 }
 
+/**
+ * Combine the historical read transport with the typed mutation boundary.
+ * Keeping this adapter here makes composition sites unable to manufacture a
+ * raw write-capable runner: mutations in this module always select `.run`.
+ */
+export function guardedPrRunner(runGh: GhRunner, operations: GithubOperationRunner): PrRunner {
+  const read: GhRunner = (args, opts) => runGh(args, opts);
+  return Object.assign(read, { run: operations.run.bind(operations) });
+}
+
 function prTarget(url: string): { repository: string; kind: 'pull-request'; number: number } | null {
   const ref = parseIssueRef(url);
   if (!ref || !Number.isSafeInteger(Number(ref.number)) || Number(ref.number) < 1) return null;
