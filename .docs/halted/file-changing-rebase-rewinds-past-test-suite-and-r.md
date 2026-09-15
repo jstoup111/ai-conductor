@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: kickback-budget
+Resolved at: 2026-09-15T11:28:27.826Z
 Slug: file-changing-rebase-rewinds-past-test-suite-and-r
 Class: needs-human
 Halting step: build
