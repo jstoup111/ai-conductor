@@ -61,6 +61,9 @@ Fourteen TDD tasks add `security` as the second built-in, default-off member of 
 1. Write failing tests in `config.test.ts` and `resolved-config.test.ts`: a config omitting `security` resolves `enabled: false`, `effort: 'high'`, `min_confidence: 0`; `enabled: "yes"` fails validation with a message naming `build_review.rubrics.security.enabled` and `boolean`; `effort: extreme` fails naming the key and the allowed set.
 2. Run `npx vitest run test/engine/config.test.ts test/engine/resolved-config.test.ts` and observe RED.
 3. Extend `validateBuildReviewRubrics` normalization so every registry member is materialized `enabled: false` unless set; add `security: false` to `DEFAULT_RUBRIC_ENABLED` and `security: 'high'` to `DEFAULT_RUBRIC_EFFORT`; keep the `build_review.rubrics` consumer-registry key set unchanged. Enable `security` for this repository in `.ai-conductor/config.yml` beside `testQuality` (repo-only half of the change).
+
+> **Amended 2026-09-15 by operator approval (James Stoup, interactive halt recovery):** Self-host activation is deferred to a separate follow-up after this rubric implementation ships and the running engine recognizes `security`. This feature omits the `security` key from `.ai-conductor/config.yml`; all consumer opt-in behavior and default-off tests remain required. The current daemon rejects an unknown rubric key before `test_suite` starts, even when that key is disabled.
+
 4. Run the same command and observe GREEN.
 5. Commit with message: `feat(build-review): resolve the security rubric policy default-off`.
 
@@ -68,6 +71,8 @@ Fourteen TDD tasks add `security` as the second built-in, default-off member of 
 - `resolveBuildReviewConfig` on a config that omits `security` yields `rubrics.security.enabled === false` and `effort === 'high'`, as asserted by the resolved-config test.
 - `validateConfig` rejects `build_review.rubrics.security.enabled: "yes"` and `effort: extreme` with errors that name the offending key, as asserted by the config test.
 - `.ai-conductor/config.yml` declares `build_review.rubrics.security.enabled: true` for self-host builds, and the shipped default remains off.
+
+> **Amended 2026-09-15 by operator approval (James Stoup, interactive halt recovery):** Self-host activation is deferred to a separate follow-up after this rubric implementation ships and the running engine recognizes `security`. This feature omits the `security` key from `.ai-conductor/config.yml`; all consumer opt-in behavior and default-off tests remain required. The current daemon rejects an unknown rubric key before `test_suite` starts, even when that key is disabled.
 
 **Files:** `src/conductor/src/engine/config.ts`; `src/conductor/src/engine/resolved-config.ts`; `.ai-conductor/config.yml`; `src/conductor/test/engine/config.test.ts`; `src/conductor/test/engine/resolved-config.test.ts`
 
@@ -419,3 +424,12 @@ Task 14 (independent)
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
+
+## Deferred follow-up: activate security review for self-host builds
+
+Approved by James Stoup on 2026-09-15 as a separate change after #2034 ships.
+
+- Prerequisite: the rubric implementation is merged and the running self-host daemon uses an engine whose registry accepts `security`.
+- Deliverable: enable `build_review.rubrics.security.enabled: true` in this repository’s `.ai-conductor/config.yml`.
+- Verification: the running engine accepts the configuration and an enabled self-host lap dispatches the security rubric; shipped consumer defaults stay off.
+- This activation is intentionally excluded from the current feature’s completion criteria.

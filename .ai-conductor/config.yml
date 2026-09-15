@@ -88,10 +88,6 @@ build_review:
       llm_provider: claude
       model: opus
       effort: high
-    # Self-host opt-in only: consumer projects retain the shipped default-off
-    # security policy unless they enable it in their own config.
-    security:
-      enabled: true
 
 # Native pre-SHIP aggregate verification. The project-owned npm script runs
 # Vitest's test/**/*.test.ts inclusion, covering ordinary and acceptance tests
