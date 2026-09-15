@@ -365,14 +365,15 @@ describe('inbound issue text remains sanitized through poll → claim → worktr
     expect(await filesContaining(engineerDir, rawDirective)).toEqual([]);
   });
 
-  it('does not stage an outcomes file when the sanitized issue has no Desired outcome section', async () => {
+  it('stages a zero-bullet outcomes layer when the sanitized issue has no Desired outcome section', async () => {
     const { worktreePath } = await pollClaimAndCreateWorktree(
       ['## Observed', 'Neutral evidence only.', '', '## Hypotheses', '- A possible cause.'].join('\n'),
       'Investigate neutral evidence',
     );
 
-    await expect(
-      readFile(join(worktreePath, '.pipeline', 'intake-outcomes.md'), 'utf8'),
-    ).rejects.toMatchObject({ code: 'ENOENT' });
+    const staged = await readFile(join(worktreePath, '.pipeline', 'intake-outcomes.md'), 'utf8');
+    expect(staged).toMatch(
+      /^Source-Ref: owner\/repo#12\n\n<<< INBOUND sourceRef=owner\/repo#12 digest=[a-f0-9]{64} >>>\n## Desired outcome\n\n<<< END INBOUND >>>\n$/,
+    );
   });
 });
