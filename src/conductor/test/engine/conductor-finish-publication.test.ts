@@ -923,7 +923,7 @@ describe('Conductor FINISH publication routing', () => {
   it('routes a production accepted judgment through FINISH progress without a needs-human HALT', async () => {
     const pipeline = join(dir, '.pipeline');
     const productionStatePath = join(pipeline, 'conduct-state.json');
-    const prUrl = 'https://example.test/pr/17';
+    const prUrl = 'https://github.com/acme/repo/pull/17';
     let pullRequest = {
       url: prUrl,
       title: 'feat: draft publication',
@@ -987,6 +987,21 @@ describe('Conductor FINISH publication routing', () => {
           return { stdout: '' };
         }
         throw new Error(`unexpected gh command: ${args.join(' ')}`);
+      },
+      operations: {
+        run: async (request) => {
+          if (request.operation === 'pull-request.ready') {
+            pullRequest = { ...pullRequest, isDraft: false };
+          }
+          if (request.operation === 'pull-request.edit' && request.payload) {
+            pullRequest = {
+              ...pullRequest,
+              ...(typeof request.payload.title === 'string' ? { title: request.payload.title } : {}),
+              ...(typeof request.payload.body === 'string' ? { body: request.payload.body } : {}),
+            };
+          }
+          return {};
+        },
       },
       observeReleaseReadiness: async () => 'present',
       recordFinish: async () => {

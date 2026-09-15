@@ -2477,6 +2477,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               if (!ciFixEnabled) return;
               const dispatchCiFix = createDaemonCiFixDispatch({
                 tracker: createGithubTrackerClient(makeProductionGh()),
+                // Feature-scoped transport: pin gh to the entry's repo so the remote
+                // mutation guard resolves against the feature's repository.
+                gh: (args, opts) => makeProductionGh()(args, { ...opts, cwd: entry.repoCwd }),
                 liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
                 log,
                 diagnostic: async ({ stage, reason, provider }) => {

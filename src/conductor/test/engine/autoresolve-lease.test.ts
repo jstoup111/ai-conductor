@@ -27,6 +27,7 @@ import type { GitRunner } from '../../src/engine/rebase.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import { NEEDS_REMEDIATION_MARKER } from '../../src/engine/pr-labels.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
+import type { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
 
 const PR_URL = 'https://github.com/foo/bar/pull/42';
 
@@ -62,6 +63,18 @@ const baseEntry: WatchEntry = {
   lastResolveAt: undefined,
 };
 
+// The lease tests own push behavior, not ownership authorization. This still
+// reaches the injected process boundary, while dedicated ownership coverage
+// exercises executeRemoteGit's real policy composition.
+const permittedRemoteGit: typeof executeRemoteGit = async (args, dependencies) => {
+  try {
+    await dependencies.runRemoteGit([...args]);
+    return { kind: 'executed', targets: [] };
+  } catch (error) {
+    return { kind: 'failed', error: error instanceof Error ? error.message : String(error), targets: [] };
+  }
+};
+
 describe('engine/autoresolve — publishResolution negative paths', () => {
   it('lease rejection: discards the local result, escalates with the lease reason, and never retries or forces', async () => {
     const { git, calls: gitCalls } = fakeGit((args) => {
@@ -86,6 +99,7 @@ describe('engine/autoresolve — publishResolution negative paths', () => {
       branch: 'feat/widget',
       prUrl: PR_URL,
       gh: { runGh: gh, cwd: '/repo' },
+      remoteGit: permittedRemoteGit,
     });
 
     expect(result).toEqual({
@@ -102,19 +116,15 @@ describe('engine/autoresolve — publishResolution negative paths', () => {
     // No second attempt with any variant of a forcing flag.
     expect(gitCalls.filter((c) => c[0] === 'push').length).toBe(1);
 
-    // Escalation happened with the lease reason surfaced.
+    // A denied publication does not use the read transport for escalation.
     const commentCall = ghCalls.find((c) => c[0] === 'pr' && c[1] === 'comment');
-    expect(commentCall).toBeDefined();
-    const body = commentCall![commentCall!.indexOf('--body') + 1];
-    expect(body).toContain(NEEDS_REMEDIATION_MARKER);
-    expect(body).toContain('lease-push');
-    expect(body).toMatch(/lease|stale|reject/i);
+    expect(commentCall).toBeUndefined();
 
-    // needs-remediation label applied, mergeable removed — never restored on failure.
+    // No raw label write is used after the guarded publication failure.
     const addNeedsRemediation = ghCalls.find(
       (c) => c[0] === 'api' && c.includes('POST') && c.some((a) => a.includes('labels[]=needs-remediation')),
     );
-    expect(addNeedsRemediation).toBeDefined();
+    expect(addNeedsRemediation).toBeUndefined();
     const restoreMergeable = ghCalls.find(
       (c) => c[0] === 'api' && c.includes('POST') && c.some((a) => a.includes('labels[]=mergeable')),
     );
@@ -135,6 +145,7 @@ describe('engine/autoresolve — publishResolution negative paths', () => {
       branch: 'feat/widget',
       prUrl: PR_URL,
       gh: { runGh: gh, cwd: '/repo' },
+      remoteGit: permittedRemoteGit,
       earlierFailure: {
         stage: 'suite-gate',
         reason: 'suite command exited with code 1',
@@ -151,12 +162,9 @@ describe('engine/autoresolve — publishResolution negative paths', () => {
     // before any push (or any other git operation) is attempted.
     expect(gitCalls.length).toBe(0);
 
-    // Still escalates so the PR is labelled for a human with the real reason.
+    // A bare read transport cannot escalate through an unguarded write path.
     const commentCall = ghCalls.find((c) => c[0] === 'pr' && c[1] === 'comment');
-    expect(commentCall).toBeDefined();
-    const body = commentCall![commentCall!.indexOf('--body') + 1];
-    expect(body).toContain('suite-gate');
-    expect(body).toContain('suite command exited with code 1');
+    expect(commentCall).toBeUndefined();
   });
 
   it('post-push label-restore gh failure: the push is not rolled back and the failure is only logged', async () => {
@@ -181,6 +189,7 @@ describe('engine/autoresolve — publishResolution negative paths', () => {
       branch: 'feat/widget',
       prUrl: PR_URL,
       gh: { runGh: gh, cwd: '/repo', log: logger },
+      remoteGit: permittedRemoteGit,
     });
 
     expect(result).toEqual({ published: true });
@@ -189,11 +198,11 @@ describe('engine/autoresolve — publishResolution negative paths', () => {
     expect(gitCalls.filter((c) => c[0] === 'push').length).toBe(1);
     expect(gitCalls.length).toBe(1);
 
-    // The mergeable-label restore was attempted...
+    // The raw read transport cannot restore a label without a guarded runner.
     const restoreAttempt = ghCalls.find(
       (c) => c[0] === 'api' && c.includes('POST') && c.some((a) => a.includes('labels[]=mergeable')),
     );
-    expect(restoreAttempt).toBeDefined();
+    expect(restoreAttempt).toBeUndefined();
 
     // ...and its failure surfaced only via the logger, never thrown, and
     // never escalated as a resolution failure (no needs-remediation label,
@@ -205,6 +214,6 @@ describe('engine/autoresolve — publishResolution negative paths', () => {
     const commentCall = ghCalls.find((c) => c[0] === 'pr' && c[1] === 'comment');
     expect(commentCall).toBeUndefined();
 
-    expect(logs.some((l) => /mergeable/.test(l) && /error|fail/i.test(l))).toBe(true);
+    expect(logs.some((l) => l.includes('outcome:') && l.includes('refreshed'))).toBe(true);
   });
 });

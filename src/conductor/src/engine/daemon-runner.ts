@@ -16,6 +16,7 @@ import {
   removeLabel,
   setReady,
   cleanupHaltPresentation,
+  guardedPrRunner,
   makeProductionGh,
   type GhRunner,
 } from './pr-labels.js';
@@ -372,10 +373,7 @@ export function makeRunFeature(
           : undefined;
         const cleanupRunner = operations === undefined
           ? gh
-          : Object.assign(
-              async (args: string[], opts: { cwd: string }) => gh(args, opts),
-              operations,
-            );
+          : guardedPrRunner(gh, operations);
         const result = await cleanup(
           cleanupRunner,
           deps.projectRoot,
