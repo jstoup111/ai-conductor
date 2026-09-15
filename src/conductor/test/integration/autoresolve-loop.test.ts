@@ -34,12 +34,26 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
+import type { GithubOperationRequest } from '../../src/engine/github-operations.js';
+import type { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
 
 const execFile = promisify(execFileCb);
 
 const PR_URL = 'https://github.com/acme/repo/pull/42';
 /** Attempt cap shared by the sweep configurations under test. */
 const ATTEMPT_CAP = 3;
+
+// These integration tests exercise local Git and autoresolve orchestration.
+// Ownership itself is covered at the guarded-operation boundary, so local bare
+// remotes use a fixture-owned permitted transport.
+const permittedRemoteGit: typeof executeRemoteGit = async (args, dependencies) => {
+  try {
+    await dependencies.runRemoteGit([...args]);
+    return { kind: 'executed', targets: [] };
+  } catch (error) {
+    return { kind: 'failed', error: error instanceof Error ? error.message : String(error), targets: [] };
+  }
+};
 
 describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
   let origin: string;
@@ -67,7 +81,7 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
   });
 
   function fakeGhFor(labelCalls: string[][], commentBodies: string[]) {
-    return async (args: string[]) => {
+    const gh = async (args: string[]) => {
       if (args[0] === 'api' && args.includes('--method')) {
         labelCalls.push(args);
         return { stdout: '{}' };
@@ -81,6 +95,18 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
       }
       return { stdout: '' };
     };
+    return Object.assign(gh, {
+      run: async (request: GithubOperationRequest) => {
+        if (request.operation === 'pull-request.label.remove') {
+          labelCalls.push(['api', '--method', 'DELETE', `repos/${request.target.repository}/issues/${request.target.number}/labels/${request.payload!.label}`]);
+        } else if (request.operation === 'pull-request.label.add') {
+          labelCalls.push(['api', '--method', 'POST', `repos/${request.target.repository}/issues/${request.target.number}/labels`, '-f', `labels[]=${request.payload!.label}`]);
+        } else if (request.operation === 'pull-request.comment.create') {
+          commentBodies.push(request.payload!.body);
+        }
+        return {};
+      },
+    });
   }
 
   it.each([
@@ -113,11 +139,14 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     let verifiedTip: string | undefined;
     const remoteTip = async () => (await execFile('git', ['rev-parse', 'refs/heads/feat/widget'], { cwd: origin })).stdout.trim();
 
+    const gh = fakeGhFor([], []);
     const outcome = await resolveConflictingPr(
       { prUrl: PR_URL, slug: 'widget', repoCwd: dir }, 'feat/widget',
       { enabled: true, suiteCommand: 'test', cooldownMinutes: 60, attemptCap: ATTEMPT_CAP },
       {
-        runGh: fakeGhFor([], []),
+        runGh: gh,
+        operations: gh,
+        remoteGit: permittedRemoteGit,
         runSuite: async (cwd) => {
           suiteCalls++;
           expect(await remoteTip()).toBe(before);
@@ -180,12 +209,15 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     let resolverCalls = 0;
     let suiteCalls = 0;
 
+    const gh = fakeGhFor(labelCalls, commentBodies);
     const outcome = await autoresolve.resolveConflictingPr(
       { prUrl: PR_URL, slug: 'widget', repoCwd: dir },
       'feat/widget',
       { enabled: true, suiteCommand: 'true', cooldownMinutes: 60, attemptCap: ATTEMPT_CAP },
       {
-        runGh: fakeGhFor(labelCalls, commentBodies),
+        runGh: gh,
+        operations: gh,
+        remoteGit: permittedRemoteGit,
         runSuite: async (_projectRoot: string) => {
           suiteCalls++;
           return { exitCode: 0, durationMs: 5, configured: true };
@@ -239,12 +271,15 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     const logLines: string[] = [];
     let resolverCalls = 0;
 
+    const gh = fakeGhFor(labelCalls, commentBodies);
     const outcome = await autoresolve.resolveConflictingPr(
       { prUrl: PR_URL, slug: 'widget', repoCwd: dir },
       'feat/widget',
       { enabled: true, suiteCommand: 'true', cooldownMinutes: 60, attemptCap: 1 },
       {
-        runGh: fakeGhFor(labelCalls, commentBodies),
+        runGh: gh,
+        operations: gh,
+        remoteGit: permittedRemoteGit,
         runSuite: async (_projectRoot: string) => ({ exitCode: 0, durationMs: 1, configured: true }),
         resolver: async () => {
           resolverCalls++;
@@ -309,12 +344,15 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     const commentBodies: string[] = [];
     const logLines: string[] = [];
 
+    const gh = fakeGhFor(labelCalls, commentBodies);
     const outcome = await autoresolve.resolveConflictingPr(
       { prUrl: PR_URL, slug: 'widget', repoCwd: dir },
       'feat/widget',
       { enabled: true, suiteCommand: 'npm test', cooldownMinutes: 60, attemptCap: 3 },
       {
-        runGh: fakeGhFor(labelCalls, commentBodies),
+        runGh: gh,
+        operations: gh,
+        remoteGit: permittedRemoteGit,
         runSuite: async (_projectRoot: string) => ({ exitCode: 1, durationMs: 42, configured: true }),
         resolver: async ({ projectRoot }: { projectRoot: string }) => {
           await writeFile(

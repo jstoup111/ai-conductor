@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { escalate } from '../../src/engine/autoresolve.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import { NEEDS_REMEDIATION_MARKER } from '../../src/engine/pr-labels.js';
+import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
 
 const PR_URL = 'https://github.com/foo/bar/pull/42';
 
@@ -26,7 +27,7 @@ const PR_URL = 'https://github.com/foo/bar/pull/42';
  */
 function fakeGh(
   handler: (args: string[]) => { stdout: string } | Error,
-): { gh: GhRunner; calls: string[][] } {
+): { gh: GhRunner; calls: string[][]; operations: GithubOperationRunner } {
   const calls: string[][] = [];
   const gh: GhRunner = async (args, _opts) => {
     calls.push([...args]);
@@ -34,12 +35,41 @@ function fakeGh(
     if (result instanceof Error) throw result;
     return result;
   };
-  return { gh, calls };
+  const operations: GithubOperationRunner = {
+    run: async (request) => {
+      const repo = request.target.repository;
+      const number = request.target.kind === 'pull-request' ? String(request.target.number) : '';
+      let args: string[];
+      switch (request.operation) {
+        case 'pull-request.label.remove':
+          args = ['api', '--method', 'DELETE', `repos/${repo}/issues/${number}/labels/${request.payload!.label}`];
+          break;
+        case 'pull-request.label.add':
+          args = ['api', '--method', 'POST', `repos/${repo}/issues/${number}/labels`, '-f', `labels[]=${request.payload!.label}`];
+          break;
+        case 'pull-request.comment.create':
+          args = ['pr', 'comment', String(request.target.number), '--repo', repo, '--body', request.payload!.body];
+          break;
+        case 'pull-request.comment.update':
+          args = ['api', '--method', 'PATCH', `repos/${repo}/issues/comments/${request.payload!.commentId}`, '-f', `body=${request.payload!.body}`];
+          break;
+        default:
+          throw new Error(`unexpected operation ${request.operation}`);
+      }
+      try {
+        await gh(args, { cwd: '/repo' });
+        return {};
+      } catch (error) {
+        return { kind: 'failed', error: error instanceof Error ? error.message : String(error) };
+      }
+    },
+  };
+  return { gh, calls, operations };
 }
 
 describe('engine/autoresolve — escalate', () => {
   it('happy path: removes mergeable label, adds needs-remediation label, posts marker-tagged comment', async () => {
-    const { gh, calls } = fakeGh((args) => {
+    const { gh, calls, operations } = fakeGh((args) => {
       if (args[0] === 'pr' && args[1] === 'view') {
         return { stdout: JSON.stringify({ comments: [] }) };
       }
@@ -49,6 +79,7 @@ describe('engine/autoresolve — escalate', () => {
 
     await escalate(PR_URL, 'tier2-resolve', 'rebase resolver could not resolve conflicts', {
       runGh: gh,
+      operations,
       cwd: '/repo',
     });
 
@@ -77,7 +108,7 @@ describe('engine/autoresolve — escalate', () => {
 
   it('posts through upsertComment: a second escalation on the same PR edits the existing comment, never creating a second one', async () => {
     const existingCommentUrl = `${PR_URL}#issuecomment-999`;
-    const { gh, calls } = fakeGh((args) => {
+    const { gh, calls, operations } = fakeGh((args) => {
       if (args[0] === 'pr' && args[1] === 'view') {
         return {
           stdout: JSON.stringify({
@@ -92,6 +123,7 @@ describe('engine/autoresolve — escalate', () => {
 
     await escalate(PR_URL, 'suite-gate', 'suite failed with exit code 1', {
       runGh: gh,
+      operations,
       cwd: '/repo',
     });
 
@@ -111,7 +143,7 @@ describe('engine/autoresolve — escalate', () => {
   });
 
   it('label call failure: comment is still attempted, escalate does not throw', async () => {
-    const { gh, calls } = fakeGh((args) => {
+    const { gh, calls, operations } = fakeGh((args) => {
       if (args[0] === 'api' && args.includes('DELETE')) {
         return new Error('label DELETE failed: 404');
       }
@@ -125,7 +157,7 @@ describe('engine/autoresolve — escalate', () => {
     });
 
     await expect(
-      escalate(PR_URL, 'tier2-resolve', 'label failure scenario', { runGh: gh, cwd: '/repo' }),
+      escalate(PR_URL, 'tier2-resolve', 'label failure scenario', { runGh: gh, operations, cwd: '/repo' }),
     ).resolves.not.toThrow();
 
     const commentCall = calls.find((c) => c[0] === 'pr' && c[1] === 'comment');
@@ -133,7 +165,7 @@ describe('engine/autoresolve — escalate', () => {
   });
 
   it('comment failure with label success: escalate does not throw and does not retry/create a fallback comment', async () => {
-    const { gh, calls } = fakeGh((args) => {
+    const { gh, calls, operations } = fakeGh((args) => {
       if (args[0] === 'pr' && args[1] === 'view') {
         return new Error('lookup failed: network error');
       }
@@ -145,7 +177,7 @@ describe('engine/autoresolve — escalate', () => {
     });
 
     await expect(
-      escalate(PR_URL, 'tier2-resolve', 'comment failure scenario', { runGh: gh, cwd: '/repo' }),
+      escalate(PR_URL, 'tier2-resolve', 'comment failure scenario', { runGh: gh, operations, cwd: '/repo' }),
     ).resolves.not.toThrow();
 
     // Label calls were attempted (the gate) despite the later comment failure
