@@ -132,7 +132,8 @@ async function replayBoundAuthorityStillValid(
       !nonEmptyString(authority.original.attemptId) ||
       !nonEmptyString(authority.original.runId) ||
       !nonEmptyString(authority.operationId) ||
-      !Array.isArray(authority.relevantInputIdentities)) return false;
+      !Array.isArray(authority.relevantInputIdentities) ||
+      authority.relevantInputIdentities.length === 0) return false;
 
     const replay = authority.replay;
     if (!nonEmptyString(replay.preRebaseHead) || !nonEmptyString(replay.mergeBase) ||

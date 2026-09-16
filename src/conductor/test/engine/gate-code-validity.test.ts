@@ -1,4 +1,6 @@
 /**
+ * Covers: task:2, task:7
+ *
  * Task 2 (gate-step-completion-validates-against-code-state-, #817): unit
  * tests for `gateVerdictStillValid`, the shared re-dispatch decision helper.
  *
@@ -245,6 +247,11 @@ describe('gateVerdictStillValid', () => {
     await expect(validity()).resolves.toBe('rerun');
 
     await writeApplied({ ...preservation, original: { ...preservation.original, attemptId: '' } });
+    await expect(validity()).resolves.toBe('rerun');
+
+    // An empty list was emitted by the earlier writer's active-input slice.
+    // It cannot explain that every current review input remains unchanged.
+    await writeApplied({ ...preservation, relevantInputIdentities: [] });
     await expect(validity()).resolves.toBe('rerun');
 
     await writeApplied(preservation, 'applying');
