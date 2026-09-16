@@ -401,10 +401,18 @@ export function createProductionFinishPublicationCoordinator(
             // malformed verdicts without manufacturing state.
             observeImplementationEvidence: async () => {
               const verdicts = await readAllVerdicts(deps.projectRoot);
-              return gateSatisfied('build_review', state, verdicts)
-                && gateSatisfied('test_suite', state, verdicts)
-                ? 'present'
-                : 'missing';
+              const buildReviewSatisfied = gateSatisfied('build_review', state, verdicts);
+              const testSuiteSatisfied = gateSatisfied('test_suite', state, verdicts);
+              if (buildReviewSatisfied && testSuiteSatisfied) return { state: 'present' };
+              if (!buildReviewSatisfied && !testSuiteSatisfied) {
+                return {
+                  state: 'missing',
+                  unsatisfiedMembers: ['build_review', 'test_suite'],
+                };
+              }
+              return !buildReviewSatisfied
+                ? { state: 'missing', unsatisfiedMembers: ['build_review'] }
+                : { state: 'missing', unsatisfiedMembers: ['test_suite'] };
             },
             observeShipEvidence: async () =>
               stepDone(state, 'manual_test') && stepDone(state, 'architecture_review_as_built')
