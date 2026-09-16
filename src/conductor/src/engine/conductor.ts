@@ -235,6 +235,7 @@ import { canonicalTaskId } from './autoheal.js';
 import { verdictProducedByRun } from './gate-code-validity.js';
 import {
   appendRemediationTasks as appendCriterionBoundRemediationTasks,
+  buildRemediationDoneWhenChecks,
   type CriterionBoundRemediationGap,
 } from './remediation-append.js';
 import {
@@ -15063,9 +15064,24 @@ export async function appendRemediationTasks(
 
   // Append tasks that don't have duplicates
   let updated = planContent;
+  if (tasksToAppend.length > 0 && updated !== '' && !updated.endsWith('\n')) {
+    updated += '\n\n';
+  }
   for (const task of tasksToAppend) {
-    const taskHeader = `### Task ${task.finalId}: ${task.title}\n`;
-    updated += taskHeader;
+    const checks = buildRemediationDoneWhenChecks(
+      task.finalId,
+      'remediation',
+      undefined,
+      undefined,
+      undefined,
+      task.title,
+    );
+    updated += [
+      `### Task ${task.finalId}: ${task.title}`,
+      '**Done when:**',
+      ...checks.map((check) => `- ${check}`),
+      '',
+    ].join('\n');
   }
 
   // Write plan atomically using temp file + rename pattern
