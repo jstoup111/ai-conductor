@@ -2,6 +2,8 @@
 
 Track: technical
 
+> **Amended 2026-09-11 by operator approval for #1628:** Target-disappearance errors are explicitly outside both the stable-identifier requirement and the recording contract. Preserve their existing rejection, retained-worktree, and no-write behavior. The operator approved this story exception rather than adding an identifier for a scenario outside the intended operating scope. All other target-resolved rejections retain the existing gate-identification and event requirements.
+
 Scope boundary: Small fix for #1628, approved by the operator on 2026-09-06 (delegated). Give every land-time rejection a stable gate identifier, add one `ConductorEvent` member for a land-gate rejection, and emit it from the spec-landing command's failure path onto the target repository's persisted event ledger. Historical backfill of past rejections, a precision report or dashboard, rejection recording for any other command, and any change to what the gates themselves accept or reject are outside this slice.
 
 This is internal engine and observability tooling, not a product surface; acceptance criteria live in technical stories rather than a PRD.

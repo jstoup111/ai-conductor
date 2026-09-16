@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import type { TokenUsage } from '../execution/llm-provider.js';
 import { EFFORT_ORDER, MODEL_TIER_ORDER } from './escalation.js';
 
@@ -264,7 +265,7 @@ export function renderReport(eventsJsonlPath: string): string {
     throw new ReportError(eventsJsonlPath, err);
   }
 
-  const events: ParsedEvent[] = parseEvents(raw);
+  const events = mergeComposerEvents(eventsJsonlPath, parseEvents(raw));
 
   const sections: string[] = [];
   sections.push(renderDurations(events));
@@ -272,9 +273,59 @@ export function renderReport(eventsJsonlPath: string): string {
   sections.push(renderTokenSpend(events));
   sections.push(renderOperatorParkBoundaries(events));
   sections.push(renderKickbacks(events));
+  const landGateRejections = renderLandGateRejections(events);
+  if (landGateRejections !== undefined) sections.push(landGateRejections);
   sections.push(renderBuildReviewMetrics(events));
 
   return sections.join('\n\n');
+}
+
+/**
+ * The compose loop is a distinct process, so its events use a sibling
+ * single-writer ledger. Report readers merge the common schema by timestamp.
+ */
+function mergeComposerEvents(eventsJsonlPath: string, primaryEvents: ParsedEvent[]): ParsedEvent[] {
+  let composerEvents: ParsedEvent[] = [];
+  try {
+    composerEvents = parseEvents(readFileSync(join(dirname(eventsJsonlPath), 'composer-events.jsonl'), 'utf-8'));
+  } catch {
+    // The sibling ledger is optional; a missing or unreadable one changes no existing report output.
+  }
+  return [...primaryEvents, ...composerEvents].sort((left, right) => left.ts.localeCompare(right.ts));
+}
+
+interface LandGateRejectionRow {
+  gate: string;
+  count: number;
+  latestReason: string;
+}
+
+/** Per-gate landing rejections, preserving first occurrence order in the merged stream. */
+function renderLandGateRejections(events: ParsedEvent[]): string | undefined {
+  const rows = new Map<string, LandGateRejectionRow>();
+  for (const event of events) {
+    if (event.type !== 'land_gate_rejected' || typeof event.gate !== 'string') continue;
+    const row = rows.get(event.gate) ?? {
+      gate: event.gate,
+      count: 0,
+      latestReason: '',
+    };
+    row.count++;
+    row.latestReason = typeof event.reason === 'string' ? event.reason : 'unknown';
+    rows.set(event.gate, row);
+  }
+  if (rows.size === 0) return undefined;
+
+  const lines = [
+    '## Land-Gate Rejections',
+    '',
+    padRow(['Gate', 'Count', 'Latest Reason']),
+    padRow(['----', '-----', '-------------']),
+  ];
+  for (const row of rows.values()) {
+    lines.push(padRow([row.gate, String(row.count), row.latestReason]));
+  }
+  return lines.join('\n');
 }
 
 function renderKickbacks(events: ParsedEvent[]): string {
