@@ -443,7 +443,11 @@ set cannot be determined at all (fail-closed). Waivers live in `.docs/release-wa
 fresh in the same diff. See [releases](../contributing/releases.md) for the canonical surface names,
 the waiver format, and when a waiver is the wrong answer.
 
-Both gates write `.pipeline/HALT` with a distinct first line and a shared resume procedure.
+Both gates write `.pipeline/HALT` with a distinct first line and a shared resume procedure. To
+resume, address that reason in the feature worktree and commit the fix, then clear both
+`.pipeline/HALT` and `.pipeline/HALT.class`. The daemon re-dispatches the feature, re-runs the
+gates, and opens or updates its PR. Merge the PR yourself after its checks pass; re-installing the
+harness and running `/verify` are not generic resume prerequisites.
 
 ## Troubleshooting
 

@@ -74,6 +74,9 @@ sequenceDiagram
   Note over H: operator never merges autonomously
 ```
 
+> **Amended 2026-09-15 by #1775:** Operator-approved recovery replaces the historical `HALT for manual re-install, verify, merge` arrow above. The operator fixes the gate reason and commits, clears both `.pipeline/HALT` and `.pipeline/HALT.class`, and lets the daemon re-dispatch and re-run required gates before opening or updating the PR. The operator merges after checks pass. The daemon never merges. See the current recovery sequence below.
+
+
 ## Diagram 3 — Sequence: finish-time release gates (HALT-based)
 
 ```mermaid
@@ -103,6 +106,31 @@ sequenceDiagram
   F->>H: HALT to re-install, run verify, then merge
   O-->>F: manual merge, never autonomous
 ```
+
+> **Amended 2026-09-15 by #1775:** James Stoup approved the current recovery sequence below in place of the historical re-install/verify resume arrow above. Required gates remain fail-closed, and PR merge remains an operator action. This amendment concerns recovery instructions; integrity verification remains owned by BUILD under the ADR's #658 amendment.
+
+### Current recovery sequence (approved 2026-09-15)
+
+```mermaid
+sequenceDiagram
+  participant O as Operator
+  participant W as Feature worktree
+  participant D as Daemon
+  participant G as Required gates
+  participant PR as Pull request
+  O->>W: Address gate reason and commit fix
+  O->>W: Clear .pipeline/HALT and .pipeline/HALT.class
+  D->>W: Re-dispatch feature
+  D->>G: Re-run required gates
+  alt required gates pass
+    D->>PR: Open or update PR
+    O->>PR: Merge after checks pass
+  else a gate blocks
+    G-->>W: Remain blocked with gate-specific recovery
+  end
+  Note over D,PR: Daemon never merges
+```
+
 
 ## Legend
 
