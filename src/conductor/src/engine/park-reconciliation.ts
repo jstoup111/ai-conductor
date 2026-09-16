@@ -521,11 +521,15 @@ export async function reconcileParkedFeatures(
 
   for (const [slug, candidate] of candidates) {
     let retainedReason: WorktreeReclaimRetainedReason | undefined;
+    // The new retention guards protect candidates discovered from the worktree
+    // registry.  Park markers predate this enumeration path and retain their
+    // established reconciliation contract: their marker is the authority and
+    // they are classified/repaired even when a stale worktree HALT remains.
     if (registeredWorktrees === null) retainedReason = 'listing-unavailable';
-    else if (opts.isFeatureInFlight?.(slug)) retainedReason = 'in-flight';
-    else if (slug.startsWith('engineer-') || slug.startsWith('resolve-')) retainedReason = 'foreign-lifecycle';
-    else if (!SINGLE_SLUG.test(slug)) retainedReason = 'invalid-slug';
-    else {
+    else if (!candidate.parked && opts.isFeatureInFlight?.(slug)) retainedReason = 'in-flight';
+    else if (!candidate.parked && (slug.startsWith('engineer-') || slug.startsWith('resolve-'))) retainedReason = 'foreign-lifecycle';
+    else if (!candidate.parked && !SINGLE_SLUG.test(slug)) retainedReason = 'invalid-slug';
+    else if (!candidate.parked) {
       try {
         await access(join(opts.projectRoot, '.worktrees', slug, '.pipeline', 'HALT'));
         retainedReason = 'halted';
@@ -544,7 +548,13 @@ export async function reconcileParkedFeatures(
       classification = 'unclassified';
       retainedByReason[retainedReason]++;
     } else {
-      const evidence = await gatherMergeEvidence(runGit, opts.projectRoot, slug, prefetched, candidate.branch);
+      const evidence = await gatherMergeEvidence(
+        runGit,
+        opts.projectRoot,
+        slug,
+        prefetched,
+        candidate.branch,
+      );
       if (evidence === null) {
       classification = 'unclassified';
       } else if (isMerged(evidence)) {
@@ -637,7 +647,7 @@ export async function reconcileParkedFeatures(
     if (classification === 'orphan') counts.orphaned++;
     else if (classification === 'unclassified') counts.skipped++;
     else counts.parked++;
-    opts.cache?.set(slug, classification);
+    if (candidate.parked) opts.cache?.set(slug, classification);
   }
 
   const refusalSignature = Object.entries(refusedByReason)
@@ -675,7 +685,10 @@ export async function reconcileParkedFeatures(
     if (opts.cache) sweepSummarySignatures.set(opts.cache, signature);
   }
   if (opts.cache) {
-    const live = new Set(candidates.keys());
+    // The cache backs parked-marker reporting. Enumerated worktrees have no
+    // marker lifecycle, so retaining their old classification after removal
+    // would make a later parked sweep report phantom state.
+    const live = new Set(parkedSlugs);
     for (const slug of opts.cache.keys()) if (!live.has(slug)) opts.cache.delete(slug);
   }
 
@@ -758,7 +771,13 @@ export async function reconcileMergedPark(
     }
   }
 
-  const requiresRecord = opts.branch === undefined || opts.branch.startsWith('feat/daemon-');
+  // Existing parked feature branches use the historical `feature/<slug>`
+  // namespace and remain record-gated.  The newly enumerated, non-daemon
+  // branches are independently ancestry-proven and intentionally do not need
+  // a shipped record; daemon setup branches stay record-gated by contract.
+  const requiresRecord = opts.branch === undefined ||
+    opts.branch.startsWith('feature/') ||
+    opts.branch.startsWith('feat/daemon-');
   if (requiresRecord && !evidence.shippedRecordOnMain) {
     let prUrl: string | undefined;
     for (const head of evidence.branches) {
