@@ -1,4 +1,4 @@
-// Covers: task:1, task:19
+// Covers: task:1, task:2, task:19
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -145,6 +145,46 @@ describe('conduct-ts config init verification flags', () => {
     expect(command).not.toBeNull();
     expect(await dispatchRegistry(command!)).not.toBe(0);
     expect(error).toHaveBeenCalledWith(expect.stringMatching(new RegExp(allowed)));
+    await expect(readFile(join(projectRoot, '.ai-conductor', 'config.yml'))).rejects.toThrow();
+  });
+
+  it.each([
+    ['empty', ''],
+    ['multi-line', 'a\nb'],
+  ])('rejects a %s test-suite command without creating a config', async (_shape, commandValue) => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const command = detectRegistryCommand([
+      'node',
+      'conduct-ts',
+      'config',
+      'init',
+      '--test-suite-command',
+      commandValue,
+    ]);
+
+    expect(command).not.toBeNull();
+    expect(await dispatchRegistry(command!)).toBe(1);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('--test-suite-command'));
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/non-empty.*single line/i));
+    await expect(readFile(join(projectRoot, '.ai-conductor', 'config.yml'))).rejects.toThrow();
+  });
+
+  it('rejects an unknown config-init flag without creating a config', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const command = detectRegistryCommand([
+      'node',
+      'conduct-ts',
+      'config',
+      'init',
+      '--frobnicate',
+      'x',
+    ]);
+
+    expect(command).not.toBeNull();
+    expect(await dispatchRegistry(command!)).toBe(1);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('unsupported flag --frobnicate'),
+    );
     await expect(readFile(join(projectRoot, '.ai-conductor', 'config.yml'))).rejects.toThrow();
   });
 

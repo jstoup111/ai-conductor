@@ -179,6 +179,7 @@ interface ConfigInitOptions {
   testSuiteMode?: string;
   testSuiteDriftBudget?: string;
   testSuiteCommand?: string;
+  unknownFlags?: string[];
   hasVerificationFlags?: boolean;
 }
 
@@ -190,6 +191,13 @@ interface TestSuiteVerificationSelection {
 function resolveVerificationSelection(
   options: ConfigInitOptions,
 ): TestSuiteVerificationSelection | string {
+  if (
+    options.testSuiteCommand !== undefined &&
+    (options.testSuiteCommand.trim().length === 0 ||
+      /[\r\n]/.test(options.testSuiteCommand))
+  ) {
+    return 'invalid --test-suite-command: must be non-empty and single line';
+  }
   if (
     options.testSuiteMode !== undefined &&
     !TEST_SUITE_VERIFICATION_MODES.includes(
@@ -299,6 +307,11 @@ async function runConfigInit(
   options: ConfigInitOptions = {},
   projectRoot = process.cwd(),
 ): Promise<number> {
+  if ((options.unknownFlags?.length ?? 0) > 0) {
+    console.error(`conduct config init: unsupported flag ${options.unknownFlags![0]}`);
+    return 1;
+  }
+
   const verification = options.hasVerificationFlags
     ? resolveVerificationSelection(options)
     : undefined;
@@ -405,6 +418,7 @@ export type RegistryDispatch =
       testSuiteMode?: string;
       testSuiteDriftBudget?: string;
       testSuiteCommand?: string;
+      unknownFlags?: string[];
       hasVerificationFlags?: boolean;
     };
 
@@ -438,6 +452,7 @@ export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
     let testSuiteMode: string | undefined;
     let testSuiteDriftBudget: string | undefined;
     let testSuiteCommand: string | undefined;
+    const unknownFlags: string[] = [];
     let hasVerificationFlags = false;
     for (let i = 2; i < args.length; i++) {
       const arg = args[i];
@@ -459,6 +474,8 @@ export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
       } else if (arg.startsWith('--test-suite-command=')) {
         hasVerificationFlags = true;
         testSuiteCommand = arg.slice('--test-suite-command='.length);
+      } else if (arg.startsWith('--')) {
+        unknownFlags.push(arg);
       }
     }
     return {
@@ -466,6 +483,7 @@ export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
       testSuiteMode,
       testSuiteDriftBudget,
       testSuiteCommand,
+      ...(unknownFlags.length > 0 ? { unknownFlags } : {}),
       hasVerificationFlags,
     };
   }
@@ -480,6 +498,7 @@ export async function dispatchRegistry(d: RegistryDispatch): Promise<number> {
       testSuiteMode: d.testSuiteMode,
       testSuiteDriftBudget: d.testSuiteDriftBudget,
       testSuiteCommand: d.testSuiteCommand,
+      unknownFlags: d.unknownFlags,
       hasVerificationFlags: d.hasVerificationFlags,
     });
   }
