@@ -55,7 +55,6 @@ import { canonicalizeBuildReviewFindingSet } from "./build-review-finding-identi
 
 const BUILD_REVIEW_RUBRICS = BUILD_REVIEW_RUBRIC_IDS;
 const TEST_QUALITY_RUBRIC: BuildReviewRubricId = "testQuality";
-const REVIEWER_SUPPLIED_ENVELOPE_FIELDS = ["kind", "rubric", "contractVersion", "lapId", "snapshotDigest", "verdict"] as const;
 
 /** A rubric that passed deterministic pre-dispatch classification. */
 export interface BuildReviewDispatchableRubric {
@@ -245,9 +244,6 @@ export function stampBuildReviewDispatchedCandidate(
   const source = typeof candidate === "object" && candidate !== null && !Array.isArray(candidate)
     ? candidate as Record<string, unknown>
     : undefined;
-  const reviewerSuppliedEnvelopeFields = rubric !== 'security' || source === undefined
-    ? []
-    : REVIEWER_SUPPLIED_ENVELOPE_FIELDS.filter((field) => Object.hasOwn(source, field));
   return {
     kind: "judged",
     rubric,
@@ -255,7 +251,6 @@ export function stampBuildReviewDispatchedCandidate(
     lapId: projection.lapId,
     snapshotDigest: projection.snapshotDigest,
     findings: stampResolvedCandidateFindingAnchors(source, projection),
-    ...(reviewerSuppliedEnvelopeFields.length === 0 ? {} : { reviewerSuppliedEnvelopeFields }),
     ...(source?.scopeResolutions === undefined ? {} : { scopeResolutions: source.scopeResolutions }),
     // The relocation audit is provider-owned EVIDENCE, not an envelope field:
     // the test-quality contract validates it as typed evidence, the
@@ -403,7 +398,6 @@ export function validateBuildReviewDispatchedResult(
 ): BuildReviewJudgedResult | undefined {
   const scopeContext = buildReviewCandidateScopeResolutionContext(projection);
   const source = record(candidate);
-  if (rubric === 'security' && Array.isArray(source?.reviewerSuppliedEnvelopeFields)) return undefined;
   const scopeResolutions = source?.scopeResolutions === undefined
     ? (scopeContext.candidates.length === 0 ? [] : undefined)
     : parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext);
@@ -430,9 +424,6 @@ export function describeBuildReviewDispatchedResultRejection(
 ): string {
   const scopeContext = buildReviewCandidateScopeResolutionContext(projection);
   const source = record(candidate);
-  if (rubric === 'security' && Array.isArray(source?.reviewerSuppliedEnvelopeFields)) {
-    return `provider payload must not supply engine-owned envelope field(s): ${source.reviewerSuppliedEnvelopeFields.map(String).join(', ')}`;
-  }
   const scopeResolutions = source?.scopeResolutions === undefined
     ? (scopeContext.candidates.length === 0 ? [] : undefined)
     : parseBuildReviewCandidateScopeResolutions(source.scopeResolutions, scopeContext);
@@ -479,7 +470,9 @@ export async function coordinateBuildReviewRubrics(
     ? inScopeTests.length > 0
     : (typedScope?.targets?.length ?? 0) > 0;
   const hasConcreteCandidates = (typedScope?.candidates?.length ?? 0) > 0;
-  if (input.config.enabled && testQualityPolicy?.enabled && !hasEstablishedTargets && !hasConcreteCandidates) {
+  const emptyTestQualityScope = !hasEstablishedTargets && !hasConcreteCandidates;
+  const otherRubricEnabled = BUILD_REVIEW_RUBRICS.some((rubric) => rubric !== TEST_QUALITY_RUBRIC && input.config.rubrics[rubric]?.enabled);
+  if (input.config.enabled && testQualityPolicy?.enabled && emptyTestQualityScope && !otherRubricEnabled) {
     // An empty scope is still a settled scope assessment: publish its counts and
     // unresolved reasons on the same event as every judged settlement, so a
     // production-only refactor or pure move is observable rather than silent.
@@ -521,7 +514,7 @@ export async function coordinateBuildReviewRubrics(
     (branch) => !("kind" in branch) && branch.rubric === TEST_QUALITY_RUBRIC,
   );
   let preflight: TautologyPreflightResult | undefined;
-  if (testQualityEnabled) {
+  if (testQualityEnabled && !emptyTestQualityScope) {
     try {
       preflight = await input.preflight();
     } catch {
@@ -567,6 +560,12 @@ export async function coordinateBuildReviewRubrics(
     if ("kind" in branch) {
       resolved.set(branch.rubric, branch);
       await input.emit?.({ type: "build_review_rubric_skipped", rubric: branch.rubric, lapId: input.lapId, reason: branch.reason });
+      continue;
+    }
+    if (branch.rubric === TEST_QUALITY_RUBRIC && emptyTestQualityScope) {
+      resolved.set(branch.rubric, { kind: "skipped", rubric: branch.rubric, reason: "test_quality_empty_scope" });
+      await input.emit?.({ type: "build_review_rubric_skipped", rubric: branch.rubric, lapId: input.lapId, reason: "test_quality_empty_scope" });
+      await emitScopeSummary(input.emit, input);
       continue;
     }
     const projection = projections[branch.rubric];

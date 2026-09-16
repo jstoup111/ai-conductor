@@ -1127,7 +1127,8 @@ never suppressed. Both rubrics are off by default. When enabled, `testQuality` d
 feature-local typed scope from the graded diff, the active plan and stories, and established `Covers`
 bindings; it does not admit every declaration in a marked file. A production-only refactor, move, or
 rename with neither an established target nor a concrete candidate is a valid empty-scope PASS and
-dispatches neither the reviewer nor counterfactual execution. Missing markers, absent plan test paths, and
+dispatches neither the test-quality reviewer nor counterfactual execution. Enabled security review still
+runs and participates in the joined verdict. Missing markers, absent plan test paths, and
 an abstract possibility of an unknown dependency do not turn that empty scope into a coverage failure.
 Any unknown or retired rubric
 id under `build_review.rubrics` — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`,

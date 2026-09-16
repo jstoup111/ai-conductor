@@ -103,3 +103,5 @@ This is a technical-track specification with no PRD, so FR rows are omitted. The
 - **Advisory overlap:** `origin/spec/daemon-self-host-guardrails` shares the three config files with Tasks 1–2; a rebase watchpoint, not a conflict.
 
 **Verdict:** PASS. Ready for composer land/handoff pending operator review.
+
+> **Amended 2026-09-16 by operator approval (James Stoup, interactive halt recovery for #2568):** Task 7 and the Story 3 envelope criterion retain their mapping, but their rejection wording above is superseded by adr-2026-08-19 D4 and the corrected story/plan: reviewer envelope fields are ignored; the engine stamps authoritative metadata and derives the verdict from validated findings. The coordinator tests prove this behavior.

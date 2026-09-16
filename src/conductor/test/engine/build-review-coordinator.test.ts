@@ -540,6 +540,7 @@ describe("build-review coordinator: security envelope", () => {
       config: config(false, true),
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "resolved", digest: "sha256:security-skill" } } },
       dispatchModel: vi.fn(async () => ({
+        verdict: "PASS", rubric: "testQuality", lapId: "reviewer", snapshotDigest: "reviewer", contractVersion: "invalid", kind: "invalid",
         findings: [{
         concernKind: "injection",
         summary: "Request input reaches a shell command.",
@@ -563,7 +564,7 @@ describe("build-review coordinator: security envelope", () => {
     ["contractVersion", { contractVersion: "v3" }],
     ["lapId", { lapId: "lap-reviewer" }],
     ["snapshotDigest", { snapshotDigest: "sha256:reviewer" }],
-  ])("rejects a reviewer-supplied security %s as infrastructure", async (_field, envelope) => {
+  ])("ignores a reviewer-supplied security %s and stamps engine authority", async (_field, envelope) => {
     const result = await coordinateBuildReviewRubrics(coordinationInput(false, {
       config: config(false, true),
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "resolved", digest: "sha256:security-skill" } } },
@@ -571,9 +572,32 @@ describe("build-review coordinator: security envelope", () => {
     }));
 
     expect(securityBranch(result)).toMatchObject({
-      kind: "infrastructure-failure", rubric: "security", reason: "invalid-provider-result",
-      detail: expect.stringContaining("engine-owned envelope field"),
+      kind: "dispatched", rubric: "security", result: { kind: "judged", rubric: "security", contractVersion: "v3", lapId: "lap-current", snapshotDigest: "sha256:snapshot", verdict: "PASS" },
     });
+  });
+
+  it.each(['scopeResolutions', 'relocationAudit', 'counterfactualSensitivity'])("rejects test-quality evidence %s on security results", async (field) => {
+    const result = await coordinateBuildReviewRubrics(coordinationInput(false, {
+      config: config(false, true),
+      engineIdentity: { engineStamp: "engine", skillDigests: { security: { kind: "resolved", digest: "security" } } },
+      dispatchModel: vi.fn(async () => ({ findings: [], [field]: field === 'counterfactualSensitivity' ? 'supports' : [] })),
+    }));
+    expect(securityBranch(result)).toMatchObject({ kind: 'infrastructure-failure', reason: 'invalid-provider-result', detail: expect.stringContaining(field) });
+  });
+
+  it("continues security review when enabled test quality has no targets", async () => {
+    const frozen = inputs();
+    const input = coordinationInput(true, {
+      config: config(true, true),
+      inputs: { ...frozen, sourceSnapshot: { ...frozen.sourceSnapshot, testQuality: { inScopeTests: [], counterfactualFileSelectors: [], unresolvedMarkers: [] } } },
+      engineIdentity: { engineStamp: "engine", skillDigests: { security: { kind: "resolved", digest: "security" } } },
+      dispatchModel: vi.fn(async () => ({ findings: [{ concernKind: 'injection', summary: 'Untrusted shell input', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'security', locus: { path: 'src/a.ts', contentHash: `sha256:${createHash('sha256').update('const command = request.input').digest('hex')}`, display: 'command' } } }] })),
+    });
+    const result = await coordinateBuildReviewRubrics(input);
+    expect(input.preflight).not.toHaveBeenCalled();
+    expect(input.dispatchModel).toHaveBeenCalledTimes(1);
+    expect(securityBranch(result)).toMatchObject({ kind: 'dispatched', result: { verdict: 'FAIL' } });
+    expect(result).toMatchObject({ kind: 'ready', branches: [ { kind: 'skipped', rubric: 'testQuality', reason: 'test_quality_empty_scope' }, { rubric: 'security' } ] });
   });
 
   it("maps a security-review refusal to infrastructure rather than an empty pass", async () => {

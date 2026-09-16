@@ -53,6 +53,25 @@ describe('build-review domain', () => {
     ]);
   });
 
+  it.each(['scopeResolutions', 'relocationAudit', 'counterfactualSensitivity'])('rejects persisted security evidence field %s', (field) => {
+    const payload = judged([], { rubric: 'security', [field]: field === 'counterfactualSensitivity' ? 'supports' : [] });
+    expect(parseBuildReviewJudgedResult(payload)).toBeUndefined();
+    expect(describeBuildReviewJudgedResultRejection(payload, 'security', { lapId: 'lap-1', snapshotDigest: 'sha256:abc' })).toContain(field);
+  });
+
+  it('renders the engine concern vocabulary in both security schemas', () => {
+    for (const render of [renderBuildReviewProviderPayloadShape, renderBuildReviewJudgedResultShape]) {
+      const members = render('security').split('concernKind: ')[1]!.split(', summary:')[0]!.split(' | ').map((member) => JSON.parse(member));
+      expect(members).toEqual(BUILD_REVIEW_FINDING_VOCABULARIES.security.concernKinds);
+    }
+  });
+
+  it('round-trips empty scope only as a test-quality skip', () => {
+    const skipped = { kind: 'skipped', rubric: 'testQuality', reason: 'test_quality_empty_scope' };
+    expect(parseBuildReviewSkip(skipped)).toEqual(skipped);
+    expect(parseBuildReviewSkip({ ...skipped, rubric: 'security' })).toBeUndefined();
+  });
+
   it('accepts security content-region anchors only for a projected changed content region', () => {
     const anchor = { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request-derived shell command' } };
     const references = buildReviewFindingReferenceContext({

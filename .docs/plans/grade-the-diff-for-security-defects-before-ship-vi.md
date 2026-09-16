@@ -160,6 +160,8 @@ Fourteen TDD tasks add `security` as the second built-in, default-off member of 
 **Dependencies:** Task 1
 
 ### Task 7: Stamp the security envelope and refuse reviewer-supplied identity
+
+> **Amended 2026-09-16 by operator approval (James Stoup, interactive halt recovery for #2568):** Follow adr-2026-08-19-engine-stamped-rubric-judged-result-envelope D4. The title, step 1, and Done when rejection requirement below are superseded: ignore all reviewer-supplied envelope fields, stamp engine-owned metadata, and derive the verdict from validated findings. Envelope echoes never trigger repair or dispatch failure. Invalid security findings and test-quality-only evidence remain rejected. The coordinator tests own this boundary proof.
 **Story:** 3 (S3.1, S3.6, S3.8)
 **Type:** negative-path
 
