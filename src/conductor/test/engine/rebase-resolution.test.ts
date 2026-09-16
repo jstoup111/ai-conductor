@@ -109,6 +109,28 @@ describe('engine/rebase — gated resolution loop (real git, fake resolver)', ()
     expect((await g(['log', '--format=%s', 'main..HEAD'])).stdout).toContain('feat: change a');
   });
 
+  it('retains the pre-replay P/B/O identities when ORIG_HEAD moves before resolver continuation', async () => {
+    const preRebaseHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    const mergeBase = (await g(['merge-base', preRebaseHead, 'main'])).stdout.trim();
+    const target = (await g(['rev-parse', 'main'])).stdout.trim();
+    const { git, pre } = await intoConflict();
+
+    // ORIG_HEAD is mutable recovery state, not replay authority. Move it after
+    // performRebase has paused so the resolver must use the captured identity.
+    await g(['update-ref', 'ORIG_HEAD', target]);
+    const outcome = await resolveRebaseConflicts(git, repo, pre, async () => {
+      await writeFile(join(repo, 'a.ts'), 'merged\n');
+      await g(['add', 'a.ts']);
+      await gc(['rebase', '--continue']);
+      return { resolved: true };
+    }, 3);
+
+    expect(outcome).toMatchObject({
+      kind: 'changed',
+      replay: { preRebaseHead, mergeBase, target, completedHead: expect.stringMatching(/^[0-9a-f]{40}$/) },
+    });
+  });
+
   it('FR-6: an explicit cannot-resolve signal short-circuits to HALT after one attempt', async () => {
     const { git, pre } = await intoConflict();
     let calls = 0;

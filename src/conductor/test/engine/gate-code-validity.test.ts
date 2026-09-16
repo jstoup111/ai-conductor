@@ -26,7 +26,11 @@ import {
 } from '../../src/engine/artifacts.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
-import { checkGateCompletion } from '../../src/engine/gate-verdicts.js';
+import {
+  checkGateCompletion,
+  writeVerdict,
+  type ReplayPreservationRecord,
+} from '../../src/engine/gate-verdicts.js';
 
 interface Scratch {
   repo: string;
@@ -170,6 +174,137 @@ describe('verdictProducedByRun', () => {
 });
 
 describe('gateVerdictStillValid', () => {
+  it('preserves a fully bound applied replay despite an upstream edit in the originally reviewed file', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const original = await commit(s, { 'src/shared.ts': 'original\n' }, 'original reviewed work');
+    const completed = await commit(s, { 'src/shared.ts': 'upstream plus replay\n' }, 'completed clean replay');
+    const expectedTree = (await s.git(['rev-parse', `${completed}^{tree}`])).stdout.trim();
+    const replay = {
+      preRebaseHead: original,
+      mergeBase: original,
+      target: original,
+      completedHead: completed,
+      expectedTree,
+    };
+    await writeVerdict(s.repo, 'build_review', {
+      satisfied: true,
+      checkedAt: 1,
+      preservation: {
+        gate: 'build_review',
+        original: { artifactDigest: 'sha256:original', attemptId: 'attempt-1', runId: 'run-1', codeStamp: original },
+        replay,
+        relevantInputIdentities: ['.docs/plans/feature.md@sha256:plan'],
+        operationId: 'rebase-1',
+      },
+    });
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 1,
+      rebaseOperation: {
+        id: 'rebase-1',
+        status: 'applied',
+        transition: { preserved: ['build_review'], invalidated: [], reverified: [] },
+        replay,
+      },
+    });
+
+    await expect(gateVerdictStillValid({ projectRoot: s.repo, git: s.git }, 'build_review', original)).resolves.toBe('preserve');
+  });
+
+  it('refuses malformed, unapplied, superseded, unavailable, and post-replay preservation authority', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const original = await commit(s, { 'src/shared.ts': 'original\n' }, 'original reviewed work');
+    const completed = await commit(s, { 'src/shared.ts': 'upstream plus replay\n' }, 'completed clean replay');
+    const expectedTree = (await s.git(['rev-parse', `${completed}^{tree}`])).stdout.trim();
+    const replay = { preRebaseHead: original, mergeBase: original, target: original, completedHead: completed, expectedTree };
+    const preservation: ReplayPreservationRecord = {
+      gate: 'build_review',
+      original: { artifactDigest: 'sha256:original', attemptId: 'attempt-1', runId: 'run-1', codeStamp: original },
+      replay,
+      relevantInputIdentities: ['.docs/plans/feature.md@sha256:plan'],
+      operationId: 'rebase-1',
+    };
+    const writeApplied = async (preserved: ReplayPreservationRecord = preservation, status: 'applying' | 'applied' = 'applied') => {
+      await writeVerdict(s.repo, 'build_review', { satisfied: true, checkedAt: 1, preservation: preserved });
+      await writeVerdict(s.repo, 'rebase', {
+        satisfied: true,
+        checkedAt: 1,
+        rebaseOperation: {
+          id: 'rebase-1', status, transition: { preserved: ['build_review'], invalidated: [], reverified: [] }, replay,
+        },
+      });
+    };
+    const validity = () => gateVerdictStillValid({ projectRoot: s.repo, git: s.git }, 'build_review', original);
+
+    await writeVerdict(s.repo, 'build_review', { satisfied: true, checkedAt: 1, preservation: {} as never });
+    await expect(validity()).resolves.toBe('rerun');
+
+    await writeApplied({ ...preservation, gate: 'prd_audit' });
+    await expect(validity()).resolves.toBe('rerun');
+
+    await writeApplied({ ...preservation, original: { ...preservation.original, attemptId: '' } });
+    await expect(validity()).resolves.toBe('rerun');
+
+    await writeApplied(preservation, 'applying');
+    await expect(validity()).resolves.toBe('rerun');
+
+    await writeApplied({ ...preservation, replay: { ...replay, expectedTree: '0'.repeat(40) } });
+    await expect(validity()).resolves.toBe('rerun');
+
+    await writeApplied();
+    await commit(s, { '.docs/plans/feature.md': 'relevant input changed\n' }, 'post-replay plan change');
+    await expect(validity()).resolves.toBe('rerun');
+
+    await writeVerdict(s.repo, 'build_review', {
+      satisfied: false,
+      checkedAt: 2,
+      reason: 'repair required',
+      kickback: { from: 'build', evidence: 'ordinary repair' },
+    });
+    await expect(validity()).resolves.toBe('rerun');
+  });
+
+  it('refuses replay preservation when an aggregate-suite repair is outstanding', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const original = await commit(s, { 'src/shared.ts': 'original\n' }, 'original reviewed work');
+    const completed = await commit(s, { 'src/shared.ts': 'upstream plus replay\n' }, 'completed clean replay');
+    const replay = {
+      preRebaseHead: original,
+      mergeBase: original,
+      target: original,
+      completedHead: completed,
+      expectedTree: (await s.git(['rev-parse', `${completed}^{tree}`])).stdout.trim(),
+    };
+    await writeVerdict(s.repo, 'build_review', {
+      satisfied: true,
+      checkedAt: 1,
+      preservation: {
+        gate: 'build_review',
+        original: { artifactDigest: 'sha256:original', attemptId: 'attempt-1', runId: 'run-1', codeStamp: original },
+        replay,
+        relevantInputIdentities: [],
+        operationId: 'rebase-1',
+      },
+    });
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 1,
+      rebaseOperation: {
+        id: 'rebase-1', status: 'applied', transition: { preserved: ['build_review'], invalidated: [], reverified: [] }, replay,
+      },
+    });
+    await writeVerdict(s.repo, 'test_suite', {
+      satisfied: false,
+      checkedAt: 2,
+      kickback: { from: 'rebase', evidence: 'aggregate suite repair required' },
+    });
+
+    await expect(gateVerdictStillValid({ projectRoot: s.repo, git: s.git }, 'build_review', original)).resolves.toBe('rerun');
+  });
+
   it('returns rerun when codeStamp is absent', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);

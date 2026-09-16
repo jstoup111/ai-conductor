@@ -30,6 +30,8 @@ import {
 } from './rebase.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
+import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
+import { applyRebaseTransition } from './rebase-transition.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { GhRunner } from './pr-labels.js';
@@ -856,12 +858,54 @@ export async function resumeRebaseFirst(opts: {
   // against the rebased tree, and any failure/throw falls back to the
   // unconditional kickback (`applyRebaseVerdicts` catches).
   const preVerify = opts.preVerify ?? makeRekickBuildPreVerify(opts.worktreePath, opts.slug);
+  // Match the foreground rebase path: an already-completed BUILD with missing
+  // evidence is a recovery halt, not a reason to dispatch the old task list.
+  // Existing repair work is represented by a non-done BUILD state and retains
+  // the ordinary repair route below.
+  try {
+    const rawState = JSON.parse(await readFile(join(opts.worktreePath, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<string, unknown>;
+    if (rawState.build === 'done') {
+      const buildEvidence = await preVerify('build');
+      if (!buildEvidence.done) {
+        await writeHalt(
+          opts.worktreePath,
+          [],
+          `completed BUILD evidence is unavailable after rebase: ${buildEvidence.reason ?? 'completion predicate did not confirm the recorded BUILD'}; recover .pipeline task evidence before resuming`,
+          opts.events,
+        );
+        return 'halted';
+      }
+    }
+  } catch {
+    // Older re-kick entries may not yet have conduct state. They do not assert
+    // a completed BUILD, so retain their established entry behavior. A state
+    // that explicitly says `build: done` is handled fail-closed above.
+  }
   const rebaseVerdict = await applyRebaseVerdicts(
     opts.worktreePath,
     outcome,
     opts.ranManualTest,
     preVerify,
+    git,
   );
+  const transitionReplay = rebaseVerdict.replay ?? (outcome.kind === 'changed'
+    ? { preRebaseHead: '', mergeBase: '', target: '', completedHead: '', expectedTree: '' }
+    : undefined);
+  if (transitionReplay) {
+    const transition = await applyRebaseTransition({
+      projectRoot: opts.worktreePath,
+      stateStore: createFilesystemConductStateStore(join(opts.worktreePath, '.pipeline', 'conduct-state.json')),
+      replay: transitionReplay,
+      invalidated: rebaseVerdict.kickedBack,
+      preserved: rebaseVerdict.preservedGates ?? [],
+      preservedCandidates: rebaseVerdict.preservedCandidates ?? [],
+      reverified: rebaseVerdict.reverified,
+    });
+    if (transition.stateResult === 'refused') {
+      await writeHalt(opts.worktreePath, [], 'rebase continuation state transition was refused; inspect concurrent state updates before resuming', opts.events);
+      return 'halted';
+    }
+  }
   for (const step of rebaseVerdict.reverified) {
     await opts.events.emit({
       type: 'rebase_gate_reverified',
@@ -877,7 +921,7 @@ export async function resumeRebaseFirst(opts: {
     opts.events,
     outcome,
     opts.ranManualTest,
-    rebaseVerdict.preserved ?? [],
+    rebaseVerdict,
   );
   // #436: stamp state.rebase = 'done' for clean/noop/changelog-resolved
   // outcomes via the shared helper (no-ops on conflict_halt) — same call

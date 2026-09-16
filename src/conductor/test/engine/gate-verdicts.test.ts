@@ -8,6 +8,7 @@ import {
   readAllVerdicts,
   readVerdict,
   writeVerdict,
+  type GateVerdict,
 } from '../../src/engine/gate-verdicts.js';
 
 describe('engine/gate-verdicts', () => {
@@ -63,6 +64,96 @@ describe('engine/gate-verdicts', () => {
     const v = await readVerdict(dir, 'plan');
     expect(v?.kickback?.from).toBe('build');
     expect(v?.kickback?.evidence).toMatch(/AC-7/);
+  });
+
+  it('round trips replay-bound preservation without replacing the original judge identity', async () => {
+    const preservation = {
+      gate: 'build_review' as const,
+      original: {
+        artifactDigest: 'sha256:original-artifact',
+        attemptId: 'attempt-original',
+        runId: 'run-original',
+        codeStamp: 'a'.repeat(40),
+      },
+      replay: {
+        preRebaseHead: 'a'.repeat(40),
+        mergeBase: 'b'.repeat(40),
+        target: 'c'.repeat(40),
+        completedHead: 'd'.repeat(40),
+        expectedTree: 'e'.repeat(40),
+      },
+      relevantInputIdentities: ['.docs/plans/feature.md@sha256:plan'],
+      operationId: 'rebase-operation-1',
+    };
+    const replayBoundVerdict: GateVerdict = {
+      satisfied: true,
+      checkedAt: 123,
+      preservation,
+    };
+    await writeVerdict(dir, 'build_review', replayBoundVerdict);
+
+    expect(await readVerdict(dir, 'build_review')).toEqual({
+      satisfied: true,
+      checkedAt: 123,
+      preservation,
+    });
+  });
+
+  it('round trips applying and applied rebase transition records', async () => {
+    const operation = {
+      id: 'rebase-operation-1',
+      status: 'applying' as const,
+      transition: {
+        preserved: ['build_review'] as const,
+        invalidated: ['test_suite'] as const,
+        reverified: [] as const,
+      },
+      replay: {
+        preRebaseHead: 'a'.repeat(40),
+        mergeBase: 'b'.repeat(40),
+        target: 'c'.repeat(40),
+        completedHead: 'd'.repeat(40),
+        expectedTree: 'e'.repeat(40),
+      },
+    };
+    const applyingVerdict: GateVerdict = { satisfied: true, checkedAt: 123, rebaseOperation: operation };
+    await writeVerdict(dir, 'rebase', applyingVerdict);
+    expect((await readVerdict(dir, 'rebase'))?.rebaseOperation).toEqual(operation);
+
+    await writeVerdict(dir, 'rebase', {
+      satisfied: true,
+      checkedAt: 124,
+      rebaseOperation: { ...operation, status: 'applied' },
+    });
+    expect((await readVerdict(dir, 'rebase'))?.rebaseOperation).toEqual({ ...operation, status: 'applied' });
+  });
+
+  it('drops obsolete preservation metadata when an ordinary verdict replaces the record', async () => {
+    await writeVerdict(dir, 'build_review', {
+      satisfied: true,
+      checkedAt: 1,
+      preservation: {
+        gate: 'build_review',
+        original: { artifactDigest: 'sha256:old', attemptId: 'attempt-old', runId: 'run-old', codeStamp: 'a'.repeat(40) },
+        replay: { preRebaseHead: 'a'.repeat(40), mergeBase: 'b'.repeat(40), target: 'c'.repeat(40), completedHead: 'd'.repeat(40), expectedTree: 'e'.repeat(40) },
+        relevantInputIdentities: [],
+        operationId: 'old-operation',
+      },
+    });
+
+    await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 2, reason: 'fresh ordinary verdict' });
+    expect(await readVerdict(dir, 'build_review')).toEqual({
+      satisfied: true,
+      checkedAt: 2,
+      reason: 'fresh ordinary verdict',
+    });
+  });
+
+  it('continues to read legacy verdicts without optional replay metadata', async () => {
+    await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 123 });
+    const verdict = await readVerdict(dir, 'build_review');
+    expect(verdict?.preservation).toBeUndefined();
+    expect(verdict?.rebaseOperation).toBeUndefined();
   });
 
   it.each(['failed', 'refused'] as const)('does not satisfy coverage_binding for a %s envelope', async (status) => {

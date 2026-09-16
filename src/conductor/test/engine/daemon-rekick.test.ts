@@ -1337,7 +1337,9 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     // graded is unchanged and its verdict is preserved. Fail-closed still
     // governs the gates whose surface the delta actually hits (build,
     // manual_test below).
-    expect(await readVerdict(dir, 'build_review')).toBeNull();
+    // A surface miss is only a preservation candidate. Without a durable
+    // original PASS it must reopen rather than manufacture review authority.
+    expect((await readVerdict(dir, 'build_review'))?.satisfied).toBe(false);
 
     const manualTest = await readVerdict(dir, 'manual_test');
     expect(manualTest?.satisfied).toBe(false);
@@ -1887,7 +1889,7 @@ describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('clean play-forward rebase: gate verdict and conduct-state.rebase must agree (RED — state.rebase never stamped)', async () => {
+  it('halts a clean play-forward rebase when recorded completed BUILD evidence is unavailable', async () => {
     await initFeatureRepo();
     await writeInitialConductState();
 
@@ -1905,23 +1907,11 @@ describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase
       events,
       ranManualTest: true,
     });
-    expect(res).toBe('rebased');
-
-    // The gate verdict IS recorded — this mirrors what runRebaseStep writes
-    // via applyRebaseVerdicts and is expected to pass today.
-    const gateVerdict = await readVerdict(dir, 'rebase');
-    expect(gateVerdict?.satisfied).toBe(true);
-
-    // conduct-state.json's `rebase` field should be stamped 'done' — exactly
-    // as runRebaseStep's fall-through to saveStepStatus(..., 'rebase',
-    // 'done') would do for the SAME successful outcome inside the gate loop.
-    // THIS IS THE RED ASSERTION: resumeRebaseFirst never writes
-    // conduct-state.json, so `rebase` stays unset here, diverging silently
-    // from the gate verdict that says the rebase is satisfied.
-    const stateResult = await readState(join(dir, STATE_PATH_REL));
-    expect(stateResult.ok).toBe(true);
-    const state = stateResult.ok ? stateResult.value : {};
-    expect(state.rebase).toBe('done');
+    expect(res).toBe('halted');
+    await expect(readFile(join(dir, HALT_MARKER), 'utf8')).resolves.toContain(
+      'completed BUILD evidence is unavailable after rebase',
+    );
+    expect((await readVerdict(dir, 'rebase'))).toBeNull();
   });
 
   // Negative path: a conflicted pre-loop rebase must NOT stamp state.rebase.
@@ -2529,25 +2519,15 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     expect(invalidated).toEqual([
       { type: 'rebase_gate_invalidated', gate: 'test_suite', matchedPaths: ['src/sibling.ts'] },
       { type: 'rebase_gate_invalidated', gate: 'manual_test', matchedPaths: ['src/sibling.ts'] },
+      { type: 'rebase_gate_invalidated', gate: 'coverage_binding', matchedPaths: [] },
+      { type: 'rebase_gate_invalidated', gate: 'build_review', matchedPaths: [] },
+      { type: 'rebase_gate_invalidated', gate: 'prd_audit', matchedPaths: [] },
+      { type: 'rebase_gate_invalidated', gate: 'architecture_review_as_built', matchedPaths: [] },
     ]);
-    expect(preserved.map(({ gate, surface, deltaConsidered, basis }) => ({
-      gate, surface, deltaConsidered, basis,
-    }))).toEqual([
-      {
-        gate: 'coverage_binding',
-        surface: ['src/task-1.ts', '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/>'],
-        deltaConsidered: [],
-        basis: undefined,
-      },
-      { gate: 'build_review', surface: ['src/task-1.ts'], deltaConsidered: [], basis: undefined },
-      {
-        gate: 'prd_audit',
-        surface: ['src/task-1.ts', '<.docs/stories/|.docs/specs/>'],
-        deltaConsidered: [],
-        basis: undefined,
-      },
-      { gate: 'architecture_review_as_built', surface: ['src/task-1.ts'], deltaConsidered: [], basis: undefined },
-    ]);
+    // The applied decision invalidates these gates because their prior passes
+    // are not applicable in this fixture; candidate preservation must never
+    // be emitted alongside that actual invalidation.
+    expect(preserved).toEqual([]);
     expect(reverified).toEqual([
       expect.objectContaining({ type: 'rebase_gate_reverified', step: 'build', skippedDispatch: true }),
     ]);
@@ -2610,7 +2590,7 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     // which is outside the feature's surface and so cannot change the diff
     // build_review graded. Its verdict survives rather than paying for another
     // LLM re-grade.
-    expect(await readVerdict(dir, 'build_review')).toBeNull();
+    expect((await readVerdict(dir, 'build_review'))?.satisfied).toBe(false);
   });
 
   it('kicks the build gate back when a plan task has no Task: trailer (fail-closed)', async () => {
