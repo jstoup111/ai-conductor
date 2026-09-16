@@ -178,6 +178,7 @@ type TestSuiteDriftBudgetPreset = keyof typeof TEST_SUITE_DRIFT_BUDGET_PRESETS;
 interface ConfigInitOptions {
   testSuiteMode?: string;
   testSuiteDriftBudget?: string;
+  testSuiteCommand?: string;
   hasVerificationFlags?: boolean;
 }
 
@@ -403,6 +404,7 @@ export type RegistryDispatch =
       kind: 'config-init';
       testSuiteMode?: string;
       testSuiteDriftBudget?: string;
+      testSuiteCommand?: string;
       hasVerificationFlags?: boolean;
     };
 
@@ -435,6 +437,7 @@ export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
   if (sub === 'config' && args[1] === 'init') {
     let testSuiteMode: string | undefined;
     let testSuiteDriftBudget: string | undefined;
+    let testSuiteCommand: string | undefined;
     let hasVerificationFlags = false;
     for (let i = 2; i < args.length; i++) {
       const arg = args[i];
@@ -450,12 +453,19 @@ export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
       } else if (arg.startsWith('--test-suite-drift-budget=')) {
         hasVerificationFlags = true;
         testSuiteDriftBudget = arg.slice('--test-suite-drift-budget='.length);
+      } else if (arg === '--test-suite-command') {
+        hasVerificationFlags = true;
+        testSuiteCommand = args[++i] ?? '';
+      } else if (arg.startsWith('--test-suite-command=')) {
+        hasVerificationFlags = true;
+        testSuiteCommand = arg.slice('--test-suite-command='.length);
       }
     }
     return {
       kind: 'config-init',
       testSuiteMode,
       testSuiteDriftBudget,
+      testSuiteCommand,
       hasVerificationFlags,
     };
   }
@@ -469,6 +479,7 @@ export async function dispatchRegistry(d: RegistryDispatch): Promise<number> {
     return runConfigInit({
       testSuiteMode: d.testSuiteMode,
       testSuiteDriftBudget: d.testSuiteDriftBudget,
+      testSuiteCommand: d.testSuiteCommand,
       hasVerificationFlags: d.hasVerificationFlags,
     });
   }

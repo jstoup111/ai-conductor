@@ -1,4 +1,4 @@
-// Covers: task:19
+// Covers: task:1, task:19
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -37,6 +37,25 @@ describe('conduct-ts config init verification flags', () => {
     process.env.PATH = originalPath;
     vi.restoreAllMocks();
     await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['separate flag value', ['--test-suite-command', 'pytest -q']],
+    ['equals flag value', ['--test-suite-command=pytest -q']],
+  ])('parses the test-suite command from a %s', (_form, flag) => {
+    expect(
+      detectRegistryCommand([
+        'node',
+        'conduct-ts',
+        'config',
+        'init',
+        ...flag,
+      ]),
+    ).toEqual({
+      kind: 'config-init',
+      testSuiteCommand: 'pytest -q',
+      hasVerificationFlags: true,
+    });
   });
 
   it.each([
