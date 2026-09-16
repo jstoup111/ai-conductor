@@ -62,7 +62,7 @@ never breaks the flow.
 **Worktree Compatibility:** All infrastructure must support parallel worktrees sharing
 a single set of Docker services. See Step 1c for the `.env` boundary pattern that enforces this.
 
-### 1b-i. Initialize Project Config
+### 1b.1. Initialize Project Config
 
 For every bootstrap mode, confirm the project is a git repository before continuing:
 `git rev-parse --is-inside-work-tree`. If it is not, initialize it with `git init -b main`
@@ -105,7 +105,7 @@ Never hand-author `.ai-conductor/config.yml` and never copy a config from the ha
 If the config already exists, the command preserves it byte-for-byte and succeeds. Surface any
 other non-zero exit before continuing.
 
-### 1b-ii. Operator Identity
+### 1b.2. Operator Identity
 
 Interactive mode only: read the current value with `ai-conductor config read spec_owner`. If it is
 already set, report `already set: spec_owner = <value>` and do not ask again. When it is empty, ask

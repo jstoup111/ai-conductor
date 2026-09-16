@@ -8,7 +8,7 @@ const skillPath = join(root, 'skills', 'bootstrap', 'SKILL.md');
 
 async function configSection(): Promise<string> {
   const skill = await readFile(skillPath, 'utf8');
-  return skill.slice(skill.indexOf('### 1b-i. Initialize Project Config'), skill.indexOf('### 1c.'));
+  return skill.slice(skill.indexOf('### 1b.1. Initialize Project Config'), skill.indexOf('### 1c.'));
 }
 
 describe('bootstrap project-configuration interview', () => {
@@ -35,7 +35,7 @@ describe('bootstrap project-configuration interview', () => {
 
   it('records, reports, and safely skips machine identity as required', async () => {
     const skill = await readFile(skillPath, 'utf8');
-    const identity = skill.slice(skill.indexOf('### 1b-ii. Operator Identity'), skill.indexOf('### 1c.'));
+    const identity = skill.slice(skill.indexOf('### 1b.2. Operator Identity'), skill.indexOf('### 1c.'));
     for (const text of ['ai-conductor config read spec_owner', 'gh api user -q .login', 'ai-conductor config set spec_owner <login>', 'already set: spec_owner', 'Operator\nidentity unresolved', 'engineer land', 'spec handoff', 'daemon builds']) expect(identity).toContain(text);
     expect(identity).toMatch(/auto mode.*skip.*no `config set`/is);
     expect(identity).toMatch(/setup incomplete/is);
