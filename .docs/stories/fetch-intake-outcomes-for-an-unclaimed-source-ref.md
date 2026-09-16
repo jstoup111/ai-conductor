@@ -16,7 +16,7 @@ As an operator pointing the composer loop at a specific issue, I want the outcom
 
 #### Happy Path
 
-- Given a source ref with no persisted claim record and no explicit body argument, when the per-idea worktree is created, then the worktree carries a staged outcomes file naming that ref and every verbatim Desired-outcome bullet of the referenced issue.
+- Given a source ref with no persisted claim record and no explicit body argument, when the per-idea worktree is created, then the worktree carries a staged outcomes file naming that ref and the Desired-outcome bullets from its sanitized projection: ordinary bullet text is preserved, while instruction-like content is neutralized under the approved intake trust-boundary rules.
 - Given a persisted claim record or an explicit body argument for the same ref, when the per-idea worktree is created, then that body is staged and no issue lookup is performed.
 
 #### Negative Paths
@@ -26,7 +26,7 @@ As an operator pointing the composer loop at a specific issue, I want the outcom
 
 ### Done When
 
-- [ ] A command-level fixture with an injected tracker runner and no claim record produces a staged outcomes file whose reference line and bullet list match the injected issue body.
+- [ ] Command-level fixtures with an injected tracker runner and no claim record produce a staged outcomes file with the supplied source reference, preserve ordinary Desired-outcome bullet text, and neutralize instruction-like content without retaining its raw form.
 - [ ] A claim-record fixture and an explicit-body fixture each record zero issue-view invocations on the injected runner.
 - [ ] Lookup-failure, issue-not-found, and unparseable-reference fixtures each exit zero with the worktree directory present and no staged outcomes file.
 
@@ -43,13 +43,13 @@ As an operator, I want to learn that no outcome layer could be staged at the mom
 #### Negative Paths
 
 - Given an idea with no source ref at all, when the per-idea worktree is created, then no missing-outcome diagnostic is emitted and the outcome layer stays not required, exactly as before.
-- Given a source ref whose body resolved but carries no Desired-outcome bullets, when the per-idea worktree is created, then the staging file is written and no missing-outcome diagnostic is emitted.
+- Given a source ref whose body resolved but carries no Desired-outcome bullets, including a successfully fetched empty body, when the per-idea worktree is created, then the staging file is written with that source reference and zero outcome bullets, and no missing-outcome diagnostic is emitted.
 
 ### Done When
 
 - [ ] An unresolvable-reference fixture captures one diagnostic line containing the source ref, the staging file path, and the body argument name.
 - [ ] A no-source-ref fixture captures no missing-outcome diagnostic, exits zero, and writes no staging file.
-- [ ] A resolved-but-bulletless fixture writes the staging file and captures no missing-outcome diagnostic.
+- [ ] Resolved-but-bulletless fixtures, including a successfully fetched empty body, write the staging file with the source reference and zero outcome bullets and capture no missing-outcome diagnostic.
 
 ## Story 3: Distinguish a never-staged outcome layer from a genuinely absent id
 

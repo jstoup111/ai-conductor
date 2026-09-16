@@ -37,6 +37,7 @@ import {
   createEngineerWorktree,
   removeEngineerWorktree,
 } from './engineer/worktree-authoring.js';
+import { INTAKE_OUTCOMES_RELATIVE_PATH } from './engineer/outcome-staging.js';
 import { recordAuthoredKey } from './engineer/authored-ledger.js';
 import { ensureRunning } from './daemon-lock.js';
 // The CLI is the composition root for the github-issues intake adapter used by
@@ -44,7 +45,12 @@ import { ensureRunning } from './daemon-lock.js';
 import { brainLoopAlive } from './engineer/brain-liveness.js';
 import { CorruptLedgerError, createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
-import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
+import {
+  createGithubIssuesAdapter,
+  fetchSanitizedIssueBody,
+  GITHUB_ISSUES_SOURCE,
+  HANDLED_LABEL,
+} from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
 import { makeProductionGit, restRemoveLabelArgs, type GitRunner } from './pr-labels.js';
 import {
@@ -937,6 +943,29 @@ export async function dispatchEngineer(
         const record = await loadClaimRecord(engDir, sourceRef);
         if (resolvedBody == null) resolvedBody = record?.body ?? undefined;
         inbound = record?.inbound;
+
+        // An unclaimed GitHub issue has no local record yet. Resolve its body through
+        // the canonical tracker seam so the injected runner remains the sole external
+        // boundary for this deterministic command.
+        if (resolvedBody == null) {
+          try {
+            const fetched = await fetchSanitizedIssueBody(gh, sourceRef, target.canonicalPath);
+            if (fetched) {
+              resolvedBody = fetched.text;
+              inbound = fetched.inbound;
+            }
+          } catch {
+            // Tracker reachability must not prevent offline worktree creation.
+            // Leave the body unresolved so staging remains a no-op.
+          }
+        }
+
+        if (resolvedBody == null) {
+          printErr(
+            `engineer worktree: no intake outcome layer was staged for ${sourceRef}; ` +
+            `the source body could not be resolved. Supply it with --body to stage ${INTAKE_OUTCOMES_RELATIVE_PATH}.`,
+          );
+        }
       }
 
       try {

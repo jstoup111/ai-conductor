@@ -22,7 +22,7 @@ import {
   type GhRunner,
   type TrackerClient,
 } from '../../tracker-client.js';
-import { formatWorkRef, type WorkRef } from '../source-ref.js';
+import { formatWorkRef, parseWorkRef, type WorkRef } from '../source-ref.js';
 import { sanitizeInboundText, type InboundSanitizeResult } from './sanitize-inbound.js';
 export { type GhRunner };
 
@@ -87,15 +87,35 @@ function buildText(
   title: string | undefined,
   body: string | undefined,
   workRef: WorkRef,
+  allowEmpty = false,
 ): { text: string; inbound: Pick<InboundSanitizeResult, 'neutralizations' | 'digest'> } | null {
   const t = title ?? '';
   const b = body ?? '';
-  if (t.trim() === '' && b.trim() === '') return null;
+  if (!allowEmpty && t.trim() === '' && b.trim() === '') return null;
   const sanitized = sanitizeInboundText([t, b].filter((s) => s.trim() !== ''), workRef);
   return {
     text: sanitized.text,
     inbound: { neutralizations: sanitized.neutralizations, digest: sanitized.digest },
   };
+}
+
+/**
+ * Read one GitHub issue body through the canonical tracker seam and return only
+ * its adapter-owned sanitized projection. A successfully resolved empty body is
+ * still a result: unlike polling, this caller must distinguish it from a 404.
+ */
+export async function fetchSanitizedIssueBody(
+  gh: GhRunner,
+  sourceRef: string,
+  cwd: string,
+): Promise<{ text: string; inbound: Pick<InboundSanitizeResult, 'neutralizations' | 'digest'> } | null> {
+  const parsed = parseSourceRef(sourceRef);
+  const workRef = parseWorkRef(sourceRef);
+  if (!parsed || !workRef) return null;
+
+  const body = await createGithubTrackerClient(gh).getIssueBody(parsed.repo, parsed.number, cwd);
+  if (body === null) return null;
+  return buildText('', body, workRef, true);
 }
 
 // `parseSourceRef` is shared from ../issue-ref.js so the adapter and the
