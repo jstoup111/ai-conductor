@@ -11,7 +11,7 @@ import {
   STEP_ARTIFACT_GLOBS,
 } from '../engine/artifacts.js';
 import { createLiveRegion, type LiveRegion } from './live-region.js';
-import { formatProgressDelta, displayBuildPosition } from '../engine/format-retry-line.js';
+import { formatProgressDelta, formatRetryCounter, displayBuildPosition } from '../engine/format-retry-line.js';
 import { formatFeatureUsageTotal } from '../execution/provider-diagnostics.js';
 import { renderedEventTypes } from '../engine/event-sinks.js';
 
@@ -163,7 +163,7 @@ export class TerminalRenderer implements UIRenderer {
         const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
         this.region.log(
           chalk.yellow(
-            `  ↻ ${event.step} — retry ${event.attempt}/${event.maxAttempts}: ${event.reason}${delta ? ' ' + delta : ''}`,
+            `  ↻ ${event.step} — retry ${formatRetryCounter(event.attempt, event.maxAttempts, event.progressAttempt, event.progressAttemptCeiling)}: ${event.reason}${delta ? ' ' + delta : ''}`,
           ),
         );
         break;

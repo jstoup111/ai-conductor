@@ -1,3 +1,4 @@
+// Covers: task:3
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Writable } from 'node:stream';
 import { TerminalRenderer } from '../src/ui/terminal-renderer.js';
@@ -238,6 +239,20 @@ describe('createRenderer — build progress/no-progress/stall', () => {
 
     const output = stream.output();
     expect(output).toContain('3→5 tasks');
+  });
+
+  it('renders step_retry with its progress allowance', async () => {
+    await renderer({
+      type: 'step_retry',
+      step: 'build',
+      attempt: 2,
+      maxAttempts: 3,
+      reason: 'tasks remain',
+      progressAttempt: 2,
+      progressAttemptCeiling: 30,
+    });
+
+    expect(stream.output()).toContain('2/3 (progress allowance: attempt 2 of 30)');
   });
 
   it('omits progress delta for step_retry without resolvedBefore/resolvedAfter', async () => {

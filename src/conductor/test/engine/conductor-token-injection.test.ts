@@ -16,7 +16,8 @@ import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
+import type { ConductorEvent } from '../../src/types/events.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
 type AuthResult = StepRunResult & { authFailure?: boolean };
@@ -130,6 +131,66 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     // Build step should have seen the injected token
     expect(observedTokens).toHaveLength(1);
     expect(observedTokens[0]).toBe('tok-injected-v1');
+  });
+
+  it.each([true, false])('reports only dispatched retry overrides (selfHost=%s)', async (selfHost) => {
+    const dispatches: Array<{ attempt?: number; model?: string; effort?: string }> = [];
+    let buildCalls = 0;
+    const runner: StepRunner = {
+      selfHostRunId: () => 'token-injection-run',
+      run: vi.fn(async (step: string, _state: ConductState, options?: StepRunOptions): Promise<StepRunResult> => {
+        if (step === 'build') {
+          buildCalls++;
+          dispatches.push({ attempt: options?.attempt, model: options?.modelOverride, effort: options?.effortOverride });
+          if (buildCalls === 1) return { success: false, output: 'first attempt failed' };
+        }
+        return { success: true };
+      }),
+    };
+    const retryEvents: Array<Extract<ConductorEvent, { type: 'step_retry' }>> = [];
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry') retryEvents.push(event);
+    });
+    const mockGuardrails = {
+      resolveHarnessRoot: vi.fn().mockResolvedValue(dir),
+      resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok' as const, root: dir }),
+      relink: vi.fn(),
+      provisionSandbox: vi.fn(async () => ({ configDir: dir, childEnv: () => process.env, teardown: async () => {} })),
+      versionGate: vi.fn().mockResolvedValue({ ok: true }),
+      releaseGate: vi.fn().mockResolvedValue({ ok: true }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      selfHost,
+      maxRetries: 3,
+      selfHostGuardrails: mockGuardrails as any,
+      config: selfHostConfig(),
+    });
+
+    await conductor.run();
+
+    expect(retryEvents).toHaveLength(1);
+    expect(dispatches).toHaveLength(2);
+    if (selfHost) {
+      expect(dispatches).toEqual([
+        { attempt: undefined, model: undefined, effort: undefined },
+        { attempt: undefined, model: undefined, effort: undefined },
+      ]);
+      expect(retryEvents[0]).not.toHaveProperty('escalatedModel');
+      expect(retryEvents[0]).not.toHaveProperty('escalatedEffort');
+    } else {
+      expect(dispatches[1]).toEqual({
+        attempt: 2, model: retryEvents[0].escalatedModel, effort: retryEvents[0].escalatedEffort,
+      });
+      expect(dispatches[1].effort ?? dispatches[1].model).toBeDefined();
+    }
   });
 
   it('restores parent env after stepRunner.run() when token was previously unset', async () => {

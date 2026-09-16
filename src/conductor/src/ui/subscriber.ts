@@ -39,26 +39,30 @@ export class TerminalSubscriber implements UISubscriber {
 
     for (const type of eventTypes) {
       const handler: EventHandler = async (event) => {
+        const render = async (targets: UIRenderer[]): Promise<void> => {
+          await Promise.all(targets.map(async (renderer) => {
+            try {
+              await renderer.handle(event);
+            } catch (error) {
+              // Do not recursively report a renderer which also fails while
+              // displaying its own renderer_error diagnostic.
+              if (event.type === 'renderer_error') return;
+              await this.eventEmitter.emit({
+                type: 'renderer_error',
+                rendererName: renderer.name ?? renderer.constructor.name,
+                error: String(error),
+              });
+            }
+          }));
+        };
+
         // A forwarded event has ALREADY been rendered, tagged, by its
         // feature-scoped listeners (see beginFeatureRun in daemon-cli.ts).
         // The daemon-wide `onRender` honours that marker and returns early;
         // this second sink must honour it too, or every feature gate verdict
         // prints a second, untagged copy in the daemon pane.
         if (isForwardedFromFeature(event)) return;
-        await Promise.all(this.renderers.map(async (renderer) => {
-          try {
-            await renderer.handle(event);
-          } catch (error) {
-            // Do not recursively report a renderer which also fails while
-            // displaying its own renderer_error diagnostic.
-            if (event.type === 'renderer_error') return;
-            await this.eventEmitter.emit({
-              type: 'renderer_error',
-              rendererName: renderer.name ?? renderer.constructor.name,
-              error: String(error),
-            });
-          }
-        }));
+        await render(this.renderers);
       };
       this.handlers.push({ type, handler });
       this.eventEmitter.on(type, handler);

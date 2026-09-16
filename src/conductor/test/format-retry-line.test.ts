@@ -1,5 +1,40 @@
 import { describe, it, expect } from 'vitest';
-import { displayBuildPosition, formatCommitAge } from '../src/engine/format-retry-line';
+import {
+  displayBuildPosition,
+  formatCommitAge,
+  formatRetryCounter,
+} from '../src/engine/format-retry-line';
+
+describe('formatRetryCounter', () => {
+  it.each([
+    {
+      name: 'fixed-only input',
+      progressAttempt: undefined,
+      progressAttemptCeiling: undefined,
+      expected: '1/3',
+    },
+    {
+      name: 'complete progress allowance pair',
+      progressAttempt: 2,
+      progressAttemptCeiling: 30,
+      expected: '1/3 (progress allowance: attempt 2 of 30)',
+    },
+    {
+      name: 'progress attempt without its ceiling',
+      progressAttempt: 2,
+      progressAttemptCeiling: undefined,
+      expected: '1/3',
+    },
+    {
+      name: 'progress ceiling without its consumed attempt',
+      progressAttempt: undefined,
+      progressAttemptCeiling: 30,
+      expected: '1/3',
+    },
+  ])('renders $name without undefined output', ({ progressAttempt, progressAttemptCeiling, expected }) => {
+    expect(formatRetryCounter(1, 3, progressAttempt, progressAttemptCeiling)).toBe(expected);
+  });
+});
 
 describe('displayBuildPosition', () => {
   it('returns 1 for the first in-progress task', () => {

@@ -10,6 +10,8 @@
 
 Four bounded tasks deliver #1513. The build step's completion-miss retry decision stops describing a refunded attempt with the fixed slot it never consumes, and starts carrying the progress allowance that actually governed it. One shared formatting helper then renders that allowance at the three retry-line call sites, and the span recorder carries it onto the retry span. Retry budgets, ceiling policy, halt classification, and every non-build retry are outside this slice.
 
+> **Amended 2026-09-11 by James Stoup (#1513):** The operator approved correcting model/effort reporting to match the actual next dispatch, as required by adr-2026-07-05-retry-as-escalation-ladder decision 6. Task 5 owns this bounded repair. No model-selection or budget behavior changes. Task 3's former create-renderer path was replaced upstream by TerminalRenderer; preserve the current production path rather than recreate the removed renderer.
+
 ## Technical Approach
 
 The build step's completion-miss retry decision currently emits the retry with `attempt + 1` and the fixed step maximum, then decrements `attempt` when the progress bypass fired. Because the decrement is a refund, the slot the next attempt will occupy is the current `attempt`, not `attempt + 1` — so on a refunded retry the emitted number is one past the slot and, after enough refunds, one past the maximum on the same event. Emit `attempt` on the refunded branch and leave the ordinary branch emitting `attempt + 1` unchanged. This makes the fixed pair self-consistent on every retry without touching the refund itself, the completion gate, or the ceiling backstop.
@@ -89,7 +91,7 @@ Documentation: the build-progress ceilings section of the stalled-or-stuck-featu
 
 **Done when:**
 1. The daemon log line for a refunded retry contains the in-range fixed counter and the allowance fragment.
-2. Both terminal renderer fixtures produce those same two elements for the same event.
+2. The terminal renderer fixture produces those same two elements for the same event.
 3. Every pre-existing retry fixture across the three files passes unchanged and its output contains no allowance fragment.
 
 ### Task 4: Record the allowance on the retry span and document the line
@@ -110,16 +112,32 @@ Documentation: the build-progress ceilings section of the stalled-or-stuck-featu
 2. A retry with no allowance fields records only the pre-existing attempt, maximum, and reason attributes and adds no undefined-valued attribute.
 3. The build-progress ceilings runbook section names the allowance fragment and states that the fixed counter now stays within its own maximum.
 
+### Task 5: Report the model and effort of the actual next retry
+**Story:** Story 1
+**Type:** happy-path
+**Files:** src/conductor/src/engine/conductor.ts, src/conductor/test/engine/conductor.test.ts
+**Dependencies:** 1
+
+**Steps:**
+1. Extend the existing bounded refunded-retry fixture to capture the model and effort passed to each injected build dispatch, and compare each retry event with the following dispatch.
+2. Establish RED for the refunded attempt at a rung where the ordinary next attempt would escalate.
+3. Derive the emitted attempt and escalation annotation from one next-attempt value: reuse the current attempt on a progress refund and advance it for an ordinary retry. Keep actual dispatch selection, refunds, budgets and ceilings unchanged.
+4. Verify the ordinary retry and repeated refunded retries against the following dispatch through the same fixture; retain all existing counter and allowance assertions.
+
+**Done when:**
+1. Every observed retry event's escalatedModel and escalatedEffort equal the model and effort passed to its following injected build dispatch, covering both ordinary and refunded retries.
+2. Ordinary retries still advance the fixed attempt; refunded retries reuse the slot and preserve the existing progress allowance and ceiling behavior.
+
 ## Coverage Check
 
 | Criterion | Task id(s) | Done when quote | Disposition |
 | --- | --- | --- | --- |
 | Story 1 happy: Given a build attempt resolves more tasks than the previous attempt and the progress-attempt ceiling has not been reached, when the retry is emitted, then its fixed-retry attempt number is the slot the next attempt reuses and is never greater than the stated maximum on the same event. | 1 | "Every retry event observed in the new conductor test has an attempt number no greater than its own stated maximum." | diff-local |
 | Story 1 happy: Given that same refunded retry, when it is emitted, then it additionally carries the number of progress attempts consumed so far and the configured progress-attempt ceiling. | 1 | "Each refunded retry event carries a consumed progress-attempt count one higher than the previous refunded retry and a ceiling equal to the configured attempt ceiling." | diff-local |
-| Story 1 happy: Given a refunded retry, when the daemon log line and both terminal renderers render it, then each line shows the in-range fixed counter and, distinctly from it, the consumed progress-attempt count and its ceiling. | 2, 3 | "Both terminal renderer fixtures produce those same two elements for the same event." | diff-local |
+| Story 1 happy: Given a refunded retry, when the daemon log line and the terminal renderer render it, then each line shows the in-range fixed counter and, distinctly from it, the consumed progress-attempt count and its ceiling. | 2, 3 | "Both terminal renderer fixtures produce those same two elements for the same event." | diff-local |
 | Story 1 happy: Given a refunded retry, when the OpenTelemetry span recorder consumes it, then the retry span event carries the consumed progress-attempt count and its ceiling alongside the existing fixed attempt and maximum. | 4 | "An allowance-bearing retry records the consumed progress-attempt count and its ceiling as attributes on its retry span event." | diff-local |
 | Story 1 negative: Given a build retry whose attempt resolved no additional tasks, when it is emitted and rendered, then it carries no progress-attempt count and no ceiling, and every rendered line reads exactly as it did before this change. | 1, 3 | "A build retry that resolved no additional tasks, and every retry from a step other than build, emit neither allowance field." | diff-local |
-| Story 2 happy: Given a step retry that consumed a fixed retry, when the daemon log line and both terminal renderers render it, then the line carries the plain fixed counter and no progress-allowance fragment. | 3 | "Every pre-existing retry fixture across the three files passes unchanged and its output contains no allowance fragment." | diff-local |
+| Story 2 happy: Given a step retry that consumed a fixed retry, when the daemon log line and the terminal renderer render it, then the line carries the plain fixed counter and no progress-allowance fragment. | 3 | "Every pre-existing retry fixture across the three files passes unchanged and its output contains no allowance fragment." | diff-local |
 | Story 2 negative: Given a retry record carrying no progress-attempt fields, such as one replayed from an event log written before those fields existed, when the renderers and the span recorder consume it, then they report the fixed pair alone and add no text fragment or span attribute holding an undefined value. | 2, 4 | "A retry with no allowance fields records only the pre-existing attempt, maximum, and reason attributes and adds no undefined-valued attribute." | diff-local |
 
 ## Test dispositions and integration ownership
@@ -130,3 +148,12 @@ All criteria are diff-local: each is decided by fixtures and code inside this di
 
 Task 1 -> Task 2 -> Task 3
 Task 1 -> Task 4
+Task 1 -> Task 5
+
+### Task rem-as-built-rem-ab1-1: src/conductor/src/ui/subscriber.ts:32-35,63-77 — delete the terminalRenderer/foregroundRenderers selection and the step_retry branch so every non-forwarded event, step_retry included, fans out through Promise.all to all this.renderers and every feature-forwarded event returns early (the pre-feature ADR-003 handler; keeping the extracted render helper is fine). Preserve Task 3 coverage in the same task: in src/conductor/test/ui/subscriber.test.ts replace the three step_retry cases added by b9636bb66 with RED-first ADR-003 cases — an allowance-bearing step_retry started with [recording renderer, real TerminalRenderer on a CaptureStream live region] reaches the recording renderer exactly once AND the stream contains '2/3 (progress allowance: attempt 2 of 30)' exactly once; a renderer that throws on step_retry emits renderer_error while the other renderer still receives the retry; a feature-forwarded step_retry (startFeatureEventPersistence scope) reaches no registered renderer. Leave terminal-renderer.test.ts, daemon-render.test.ts, and create-renderer-progress.test.ts Task 3 fixtures unchanged
+**Gate:** as-built
+**Rationale:** subscriber.ts:63-76 (added by b9636bb66 under Task 3) routes step_retry only to TerminalRenderer or only to non-terminal renderers, violating APPROVED ADR-003's every-event all-renderer fan-out (003-ui-renderer-plugin-point.md:38-48); ADR-003 remains authoritative and the fix is determinable, so this is conforming implementation drift, not an architecture decision. The special case is obsolete: the accepted-story amendment left a single terminal renderer (ui/create-renderer.ts no longer exists), production starts exactly one renderer per subscriber (index.ts:1425-1427 registry 'terminal'; daemon-cli.ts:1131-1154 daemon-log, which itself skips forwarded events), and step_retry is renderable (event-sinks.ts:81), so the base-branch fan-out already delivers every non-forwarded retry to TerminalRenderer exactly once. Restoring the base handler therefore preserves Task 3 Done-when 1-3: the daemon line (daemon-cli.ts:2750-2754, daemon-render.test.ts) and the TerminalRenderer fixture (terminal-renderer.ts:162-168, terminal-renderer.test.ts) are untouched, and the removed subscriber assertions are replaced in the same task by ADR-conforming ones. Sibling sweep: no other event type in subscriber.ts has renderer selection, and no other file in the feature diff filters renderers — none excluded.
+**Governing clause:** Task 3
+**Parent task:** 3
+**Done when:**
+- Task 3 is satisfied by this task.

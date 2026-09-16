@@ -493,6 +493,11 @@ bounded by the `build_progress_halt` block. Defaults: enabled, `attempt_ceiling:
 "genuinely stuck" apart from "still progressing but out of runway". Key details are in
 [configuration](../reference/configuration.md).
 
+A refunded build retry log line includes a separate allowance fragment, for example
+`progress allowance: attempt 2 of 30`. The fixed retry counter continues to describe the
+reused fixed-budget slot and stays within its own maximum; the allowance fragment tells you
+how much of the independent progress-attempt ceiling the running build has consumed.
+
 A halt awaiting operator action is neither progress-re-kicked nor cleared by rate-limit episode
 recovery; the daemon log names the blocking halt disposition.
 

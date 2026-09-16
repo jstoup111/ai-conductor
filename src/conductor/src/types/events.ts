@@ -634,6 +634,12 @@ export type ConductorEvent =
       resolvedBefore?: number;
       resolvedAfter?: number;
       /**
+       * The consumed progress-attempt allowance for a refunded build retry.
+       * Present together only when that retry reuses its fixed-budget slot.
+       */
+      progressAttempt?: number;
+      progressAttemptCeiling?: number;
+      /**
        * #188 retry-as-escalation: the (model, effort) the UPCOMING attempt
        * (`attempt` above) will dispatch at, per the escalation ladder. Absent
        * on a `escalate:false` step (identical retry — no movement to record) and
