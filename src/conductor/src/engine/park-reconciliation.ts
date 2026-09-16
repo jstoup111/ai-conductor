@@ -14,6 +14,7 @@ import { runProjectTeardown } from './worktree-prepare.js';
 import { loadConfig } from './config.js';
 import { resolveTeardownTimeoutSeconds } from './resolved-config.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
+import type { ConductorEvent, WorktreeReclaimRetainedReason } from '../types/events.js';
 
 export interface ReconcileMergedParkOptions {
   projectRoot: string;
@@ -98,6 +99,14 @@ export interface ReconcileParkedFeaturesOptions {
    * helper so cleanup never leaves a watcher on a worktree it just deleted.
    */
   disposeHaltWatcher?: (slug: string) => void;
+  /** Daemon-pool liveness guard; active worktrees are never reclaimed. */
+  isFeatureInFlight?: (slug: string) => boolean;
+  /** Test seam for the single pass-wide registered-worktree snapshot. */
+  worktreeListing?: () => Promise<Array<{ slug: string; branch: string }> | null>;
+  /** Resolved reclamation policy; false holds registered, non-parked candidates. */
+  reclaimMergedWorktrees?: boolean;
+  /** Best-effort event-spine sink for one terminal candidate disposition. */
+  onEvent?: (event: ConductorEvent) => void;
   log?: (message: string) => void;
   autoCleanup?: boolean;
   cache?: Map<string, ParkClassification>;
@@ -475,8 +484,33 @@ export async function reconcileParkedFeatures(
     skipped: 0,
   };
   const refusedByReason: Partial<Record<RefusalReason, number>> = {};
+  const retainedByReason: Record<WorktreeReclaimRetainedReason, number> = {
+    'in-flight': 0,
+    'foreign-lifecycle': 0,
+    'invalid-slug': 0,
+    halted: 0,
+    'listing-unavailable': 0,
+    disabled: 0,
+    'ancestry-check-failed': 0,
+    'branch-missing': 0,
+    'no-merge-proof': 0,
+    'unmerged-commits': 0,
+    'branch-behind-merged-head': 0,
+    'record-missing': 0,
+    'worktree-remove-failed': 0,
+    'branch-delete-failed': 0,
+    'unpark-failed': 0,
+  };
   const runGit = opts.runGit ?? makeProductionGit();
   const parkedSlugs = await listOperatorParkedSlugs(opts.projectRoot);
+  const registeredWorktrees = await (opts.worktreeListing?.() ?? listRegisteredWorktrees(runGit, opts.projectRoot));
+  const candidates = new Map<string, { branch?: string; parked: boolean }>();
+  for (const slug of parkedSlugs) candidates.set(slug, { parked: true });
+  for (const { slug, branch } of registeredWorktrees ?? []) {
+    const existing = candidates.get(slug);
+    candidates.set(slug, { branch, parked: existing?.parked ?? false });
+  }
+  const enumeratedCandidates = [...candidates.values()].filter((candidate) => !candidate.parked).length;
 
   // Read the base-branch record listing and the local ref listing ONCE for the
   // whole pass; both are pass-invariant and the sweep runs on every idle tick.
@@ -485,14 +519,37 @@ export async function reconcileParkedFeatures(
     branchesBySlug: await listBranchesBySlug(runGit, opts.projectRoot),
   };
 
-  for (const slug of parkedSlugs) {
+  for (const [slug, candidate] of candidates) {
+    let retainedReason: WorktreeReclaimRetainedReason | undefined;
+    if (registeredWorktrees === null) retainedReason = 'listing-unavailable';
+    else if (opts.isFeatureInFlight?.(slug)) retainedReason = 'in-flight';
+    else if (slug.startsWith('engineer-') || slug.startsWith('resolve-')) retainedReason = 'foreign-lifecycle';
+    else if (!SINGLE_SLUG.test(slug)) retainedReason = 'invalid-slug';
+    else {
+      try {
+        await access(join(opts.projectRoot, '.worktrees', slug, '.pipeline', 'HALT'));
+        retainedReason = 'halted';
+      } catch (error) {
+        if ((error as { code?: unknown }).code !== 'ENOENT') retainedReason = 'halted';
+      }
+    }
+    if (!retainedReason) {
+      let markerReadError = false;
+      await isOperatorParked(opts.projectRoot, slug, () => { markerReadError = true; });
+      if (markerReadError) retainedReason = 'halted';
+    }
+
     let classification: ParkClassification;
-    const evidence = await gatherMergeEvidence(runGit, opts.projectRoot, slug, prefetched);
-    if (evidence === null) {
+    if (retainedReason) {
       classification = 'unclassified';
-    } else if (isMerged(evidence)) {
-      classification = 'merged';
+      retainedByReason[retainedReason]++;
     } else {
+      const evidence = await gatherMergeEvidence(runGit, opts.projectRoot, slug, prefetched, candidate.branch);
+      if (evidence === null) {
+      classification = 'unclassified';
+      } else if (isMerged(evidence)) {
+      classification = 'merged';
+      } else {
       const intake = await readFile(join(opts.projectRoot, '.docs', 'intake', `${slug}.md`), 'utf-8')
         .then((content) => content)
         .catch(() => null);
@@ -508,6 +565,7 @@ export async function reconcileParkedFeatures(
           classification = 'unclassified';
         }
       }
+      }
     }
 
     const autoCleanup = opts.autoCleanup ?? true;
@@ -516,13 +574,18 @@ export async function reconcileParkedFeatures(
       classification,
       annotation: classification === 'orphan' ? 'orphan' : classification === 'merged' && !autoCleanup ? 'merged-ready' : undefined,
     });
-    if (classification === 'merged' && autoCleanup) {
+    const reclamationDisabled = opts.reclaimMergedWorktrees === false && !candidate.parked;
+    if (classification === 'merged' && autoCleanup && reclamationDisabled) {
+      retainedReason = 'disabled';
+      retainedByReason.disabled++;
+    } else if (classification === 'merged' && autoCleanup) {
       // The helper reports its refusal reason for direct/operator invocation.
       // A daemon sweep deliberately suppresses that per-slug chatter; the
       // aggregate below reports the outcome and the operator's next steps.
       const outcome = await reconcileMergedPark({
         ...opts,
         slug,
+        branch: candidate.branch,
         log: undefined,
         capabilityLog: opts.log,
         teardownLog: opts.log,
@@ -537,11 +600,38 @@ export async function reconcileParkedFeatures(
       });
       if (outcome.refusal === undefined) {
         counts.reconciled++;
+        try {
+          opts.onEvent?.({
+            type: 'worktree_reclaim_reclaimed',
+            slug,
+            branch: candidate.branch ?? '',
+            proof: candidate.branch ? 'ancestry' : 'shipped-record',
+          });
+        } catch {
+          // Event persistence must not make this best-effort sweep fail.
+        }
       }
       else if (outcome.refusal === 'record-missing') counts.deferred++;
       else {
         counts.refused++;
         refusedByReason[outcome.refusal] = (refusedByReason[outcome.refusal] ?? 0) + 1;
+        if (outcome.refusal === 'worktree-remove-failed' || outcome.refusal === 'branch-delete-failed') {
+          try {
+            opts.onEvent?.({ type: 'worktree_reclaim_failed', slug, branch: candidate.branch, refusal: outcome.refusal });
+          } catch {
+            // Event persistence must not make this best-effort sweep fail.
+          }
+        } else {
+          retainedReason = outcome.refusal;
+          retainedByReason[outcome.refusal]++;
+        }
+      }
+    }
+    if (retainedReason) {
+      try {
+        opts.onEvent?.({ type: 'worktree_reclaim_retained', slug, branch: candidate.branch, reason: retainedReason });
+      } catch {
+        // Event persistence must not make this best-effort sweep fail.
       }
     }
     if (classification === 'orphan') counts.orphaned++;
@@ -554,13 +644,21 @@ export async function reconcileParkedFeatures(
     .sort(([leftReason], [rightReason]) => leftReason.localeCompare(rightReason))
     .map(([reason, count]) => `${reason}=${count}`)
     .join(',');
-  const signature = `${counts.reconciled}:${counts.deferred}:${counts.orphaned}:${counts.parked}:${counts.refused}:${counts.skipped}:${refusalSignature}`;
+  const retainedSignature = Object.entries(retainedByReason)
+    .filter(([, count]) => count > 0)
+    .sort(([leftReason], [rightReason]) => leftReason.localeCompare(rightReason))
+    .map(([reason, count]) => `${reason}=${count}`)
+    .join(',');
+  const signature = `${counts.reconciled}:${counts.deferred}:${counts.orphaned}:${counts.parked}:${counts.refused}:${counts.skipped}:${enumeratedCandidates}:${retainedSignature}:${refusalSignature}`;
   if (!opts.cache || sweepSummarySignatures.get(opts.cache) !== signature) {
     const refusalReasons = Object.entries(refusedByReason)
       .sort(([leftReason, leftCount], [rightReason, rightCount]) =>
         rightCount - leftCount || leftReason.localeCompare(rightReason));
     const refusalSummary = counts.refused > 0
       ? `; refusals: ${refusalReasons.map(([reason, count]) => `${reason}=${count}`).join(', ')}`
+      : '';
+    const retainedSummary = enumeratedCandidates > 0
+      ? ` candidates=${candidates.size} retained=${Object.values(retainedByReason).reduce((sum, count) => sum + count, 0)}${retainedSignature ? `; retained: ${retainedSignature}` : ''}`
       : '';
     const remainingParked = Math.max(0, counts.parked - counts.reconciled);
     const nextSteps = [
@@ -573,11 +671,11 @@ export async function reconcileParkedFeatures(
       counts.skipped > 0 ? `${counts.skipped} skipped retry when merge/issue evidence is available` : undefined,
     ].filter((step): step is string => step !== undefined);
     const guidance = nextSteps.length > 0 ? `; next: ${nextSteps.join('; ')}` : '; next: no action required';
-    opts.log?.(`[parked-reconciliation] reconciled=${counts.reconciled} deferred=${counts.deferred} orphaned=${counts.orphaned} parked=${counts.parked} refused=${counts.refused} skipped=${counts.skipped}${refusalSummary}${guidance}`);
+    opts.log?.(`[parked-reconciliation] reconciled=${counts.reconciled} deferred=${counts.deferred} orphaned=${counts.orphaned} parked=${counts.parked} refused=${counts.refused} skipped=${counts.skipped}${retainedSummary}${refusalSummary}${guidance}`);
     if (opts.cache) sweepSummarySignatures.set(opts.cache, signature);
   }
   if (opts.cache) {
-    const live = new Set(parkedSlugs);
+    const live = new Set(candidates.keys());
     for (const slug of opts.cache.keys()) if (!live.has(slug)) opts.cache.delete(slug);
   }
 

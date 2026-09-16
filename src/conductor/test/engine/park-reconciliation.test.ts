@@ -1226,6 +1226,109 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
 });
 
 describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
+  it('unions parked and registered candidates once, carries their listed branches, and reports enumeration without a watch registry', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const { run, deleted } = makeGit({
+      branches: ['hotfix/first', 'spec/second', 'fix/third'],
+      merged: ['hotfix/first', 'spec/second', 'fix/third'],
+    });
+    const log = vi.fn<(message: string) => void>();
+    const worktreeListing = vi.fn(async () => [
+      { slug: 'first', branch: 'hotfix/first' },
+      { slug: 'second', branch: 'spec/second' },
+      { slug: 'third', branch: 'fix/third' },
+    ]);
+    try {
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, log, worktreeListing });
+
+      expect({
+        entries: result.entries.map(({ slug }) => slug).sort(),
+        deleted: deleted.sort(),
+        listingCalls: worktreeListing.mock.calls.length,
+        logs: log.mock.calls,
+      }).toEqual({
+        entries: ['first', 'second', 'third'],
+        deleted: ['fix/third', 'hotfix/first', 'spec/second'],
+        listingCalls: 1,
+        logs: [[
+          expect.stringContaining('candidates=3 retained=0'),
+        ]],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('deduplicates a parked slug against the registered listing while retaining excluded candidates before cleanup', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const halted = 'halted';
+    const markerReadError = 'marker-read-error';
+    const { run, deleted } = makeGit({
+      shipped: ['parked-only'],
+      branches: [
+        'hotfix/parked-only',
+        'hotfix/shared',
+        'hotfix/in-flight',
+        'hotfix/engineer-run',
+        'hotfix/resolve-run',
+        'hotfix/bad_slug',
+        'hotfix/halted',
+        'hotfix/marker-read-error',
+      ],
+      merged: [
+        'hotfix/parked-only',
+        'hotfix/shared',
+        'hotfix/in-flight',
+        'hotfix/engineer-run',
+        'hotfix/resolve-run',
+        'hotfix/bad_slug',
+        'hotfix/halted',
+        'hotfix/marker-read-error',
+      ],
+    });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      await writeOperatorPark(projectRoot, 'parked-only');
+      await writeOperatorPark(projectRoot, 'shared');
+      await mkdir(join(projectRoot, '.worktrees', halted, '.pipeline'), { recursive: true });
+      await writeFile(join(projectRoot, '.worktrees', halted, '.pipeline', 'HALT'), 'halted\n');
+      // A directory at the marker path makes the marker read fail with EISDIR.
+      // It exercises the same fail-closed path as EACCES without depending on
+      // the test process's effective uid.
+      await mkdir(join(projectRoot, '.daemon', 'parked', markerReadError), { recursive: true });
+
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        log,
+        isFeatureInFlight: (slug) => slug === 'in-flight',
+        worktreeListing: async () => [
+          { slug: 'shared', branch: 'hotfix/shared' },
+          { slug: 'in-flight', branch: 'hotfix/in-flight' },
+          { slug: 'engineer-run', branch: 'hotfix/engineer-run' },
+          { slug: 'resolve-run', branch: 'hotfix/resolve-run' },
+          { slug: 'bad_slug', branch: 'hotfix/bad_slug' },
+          { slug: halted, branch: 'hotfix/halted' },
+          { slug: markerReadError, branch: 'hotfix/marker-read-error' },
+        ],
+      });
+
+      expect({
+        entries: result.entries.map(({ slug }) => slug).sort(),
+        deleted: deleted.sort(),
+        branchDeletes: run.mock.calls.filter(([args]) => args[0] === 'branch').map(([args]) => args[2]),
+        log: log.mock.calls[0]?.[0],
+      }).toEqual({
+        entries: ['bad_slug', 'engineer-run', 'halted', 'in-flight', 'marker-read-error', 'parked-only', 'resolve-run', 'shared'],
+        deleted: ['hotfix/parked-only', 'hotfix/shared'],
+        branchDeletes: ['hotfix/parked-only', 'hotfix/shared'],
+        log: expect.stringContaining('retained: foreign-lifecycle=2,halted=2,in-flight=1,invalid-slug=1'),
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('logs a gh capability diagnostic during the quiet automatic sweep and refuses with no-merge-proof', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'sweep-gh-capability';
@@ -1438,7 +1541,8 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
 
       expect({
         entries: result.entries,
-        destructive: run.mock.calls.filter(([args]) => args[0] === 'worktree' || args[0] === 'branch'),
+        destructive: run.mock.calls.filter(([args]) =>
+          args[0] === 'branch' || (args[0] === 'worktree' && args[1] === 'remove')),
       }).toEqual({
         entries: [{
           slug,
@@ -1819,6 +1923,85 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
           { slug: mergedSlug, classification: 'merged', annotation: 'merged-ready' },
         ],
         logs: [['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 refused=0 skipped=1; next: 1 parked remains parked; 1 skipped retry when merge/issue evidence is available']],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('retains every candidate when the pass-wide worktree listing is unavailable', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'listing-unavailable';
+    const { run, deleted } = makeGit({ shipped: [slug], branches: [`feat/${slug}`], merged: [`feat/${slug}`] });
+    const events: unknown[] = [];
+    try {
+      await writeOperatorPark(projectRoot, slug);
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        worktreeListing: async () => null,
+        onEvent: (event) => events.push(event),
+      });
+
+      expect({ deleted, events, skipped: result.counts.skipped }).toEqual({
+        deleted: [],
+        events: [{ type: 'worktree_reclaim_retained', slug, branch: undefined, reason: 'listing-unavailable' }],
+        skipped: 1,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('honours the reclaim gate for enumerated worktrees while preserving the terminal event', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'disabled-reclaim';
+    const branch = `hotfix/${slug}`;
+    const { run, deleted } = makeGit({ branches: [branch], merged: [branch] });
+    const events: unknown[] = [];
+    try {
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        reclaimMergedWorktrees: false,
+        worktreeListing: async () => [{ slug, branch }],
+        onEvent: (event) => events.push(event),
+      });
+
+      expect({ deleted, reconciled: result.counts.reconciled, events }).toEqual({
+        deleted: [],
+        reconciled: 0,
+        events: [{ type: 'worktree_reclaim_retained', slug, branch, reason: 'disabled' }],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('emits one failed event when a proven registered worktree cannot be removed', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'remove-fails';
+    const branch = `hotfix/${slug}`;
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run } = makeGit({
+      branches: [branch],
+      merged: [branch],
+      registeredWorktrees: [worktree],
+      worktreeRemoveFails: 'locked worktree',
+    });
+    const events: unknown[] = [];
+    try {
+      await mkdir(worktree, { recursive: true });
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        worktreeListing: async () => [{ slug, branch }],
+        onEvent: (event) => events.push(event),
+      });
+
+      expect({ refused: result.counts.refused, events }).toEqual({
+        refused: 1,
+        events: [{ type: 'worktree_reclaim_failed', slug, branch, refusal: 'worktree-remove-failed' }],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });

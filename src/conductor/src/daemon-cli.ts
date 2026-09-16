@@ -849,6 +849,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const haltPrSweepCache = new Map<string, PrSweepOutcome>();
   const parkedSweepCache = new Map<string, ParkClassification>();
   const reconcileParkedAutoCleanup = config?.reconcile_parked_auto_cleanup ?? true;
+  const reclaimMergedWorktrees = config?.reclaim_merged_worktrees ?? true;
 
   const log = createDaemonModeLogger({
     formatActivityLine: formatDaemonActivityLine,
@@ -2267,12 +2268,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // per-slug watcher disposer (cleanup otherwise leaves a watcher on a
       // deleted worktree). Removing either silently reverts this sweep to a
       // no-op fallback path — the same failure mode as the bindings above.
-      reconcileParkedFeatures: async ({ disposeHaltWatcher }) => {
+      reconcileParkedFeatures: async ({ disposeHaltWatcher, isFeatureInFlight }) => {
         await reconcileParkedFeatures({
           projectRoot,
           log: (message) => log(message, true),
           cache: parkedSweepCache,
           autoCleanup: reconcileParkedAutoCleanup,
+          reclaimMergedWorktrees,
+          isFeatureInFlight,
+          onEvent: (event) => events.emit(event),
           getIssueState: tracker.getIssueState.bind(tracker),
           requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log }),
           disposeHaltWatcher,

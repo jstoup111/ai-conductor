@@ -15,13 +15,14 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
   it('snapshots cleanup config once and binds a per-run cache into the daemon sweep', () => {
     expect(source).toMatch(/const reconcileParkedAutoCleanup = config\?\.reconcile_parked_auto_cleanup \?\? true;/);
     expect(source).toMatch(/const parkedSweepCache = new Map<string, ParkClassification>\(\);/);
-    expect(source).toMatch(/reconcileParkedFeatures: async \(\{ disposeHaltWatcher \}\) => \{[\s\S]*cache: parkedSweepCache,[\s\S]*autoCleanup: reconcileParkedAutoCleanup,/);
+    expect(source).toMatch(/reconcileParkedFeatures: async \(\{ disposeHaltWatcher, isFeatureInFlight \}\) => \{[\s\S]*cache: parkedSweepCache,[\s\S]*autoCleanup: reconcileParkedAutoCleanup,/);
+    expect(source).toMatch(/const reclaimMergedWorktrees = config\?\.reclaim_merged_worktrees \?\? true;/);
     expect(source).toContain('log: (message) => log(message, true),');
   });
 
   it('supplies BOTH adr-2026-07-27 hand-off callbacks from the production sweep binding (rem-adr-002, rem-adr-005)', () => {
     const sweepBinding = source.match(
-      /reconcileParkedFeatures: async \(\{ disposeHaltWatcher \}\) => \{([\s\S]*?)\n {6}\},/,
+      /reconcileParkedFeatures: async \(\{ disposeHaltWatcher, isFeatureInFlight \}\) => \{([\s\S]*?)\n {6}\},/,
     );
     expect(sweepBinding?.[1]).toBeDefined();
     // The ST-916 repair adapter is constructed from the real production factory,
@@ -34,9 +35,12 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
 
   it('binds the receiver-dependent tracker issue-state lookup for the idle sweep', () => {
     const sweepBinding = source.match(
-      /reconcileParkedFeatures: async \(\{ disposeHaltWatcher \}\) => \{([\s\S]*?)\n {6}\},/,
+      /reconcileParkedFeatures: async \(\{ disposeHaltWatcher, isFeatureInFlight \}\) => \{([\s\S]*?)\n {6}\},/,
     );
-    expect(sweepBinding?.[1]).toContain('getIssueState: tracker.getIssueState.bind(tracker),');
+      expect(sweepBinding?.[1]).toContain('getIssueState: tracker.getIssueState.bind(tracker),');
+    expect(sweepBinding?.[1]).toContain('reclaimMergedWorktrees,');
+    expect(sweepBinding?.[1]).toContain('isFeatureInFlight,');
+    expect(sweepBinding?.[1]).toContain('onEvent: (event) => events.emit(event),');
   });
 
   it('classifies a CLOSED non-ancestor park as orphan through the bound real tracker seam', async () => {
@@ -63,6 +67,7 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
         autoCleanup: false,
         // getIssueState calls this.viewIssue; this mirrors the idle callback binding.
         getIssueState: tracker.getIssueState.bind(tracker),
+        worktreeListing: async () => [],
       });
 
       expect(result.entries).toEqual([{ slug: 'orphan-park', classification: 'orphan', annotation: 'orphan' }]);
