@@ -330,6 +330,26 @@ describe('renderDaemonEvent', () => {
     ).toEqual(['· ✋ ci_failed[myorg/myrepo]: phase=exhausted attempts=2 checks=[build]']);
   });
 
+  it('renders reclaimed and failed worktree reclamation outcomes but not retained outcomes', () => {
+    expect(lines({
+      type: 'worktree_reclaim_reclaimed',
+      slug: 'merged-feature',
+      branch: 'feat/daemon-merged-feature',
+      proof: 'ancestry',
+    })).toHaveLength(1);
+    expect(lines({
+      type: 'worktree_reclaim_failed',
+      slug: 'merged-feature',
+      branch: 'feat/daemon-merged-feature',
+      refusal: 'branch-delete-failed',
+    })).toHaveLength(1);
+    expect(lines({
+      type: 'worktree_reclaim_retained',
+      slug: 'active-feature',
+      reason: 'in-flight',
+    })).toEqual([]);
+  });
+
   it('renders sealed-artifact remediation redirects with their gap and artifact', () => {
     expect(lines({
       type: 'remediation_sealed_artifact_redirect',
@@ -645,6 +665,19 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       { type: 'finish_publication_transition', phase: 'started', transition: 'ready_pr' },
       { type: 'finish_publication_blocked', condition: 'release_readiness_missing' },
       { type: 'finish_publication_disposition', disposition: 'complete' },
+      {
+        type: 'worktree_reclaim_reclaimed',
+        slug: 'merged-feature',
+        branch: 'feat/daemon-merged-feature',
+        proof: 'ancestry',
+      },
+      { type: 'worktree_reclaim_retained', slug: 'active-feature', reason: 'in-flight' },
+      {
+        type: 'worktree_reclaim_failed',
+        slug: 'merged-feature',
+        branch: 'feat/daemon-merged-feature',
+        refusal: 'branch-delete-failed',
+      },
     ];
 
     const renderingTypes = new Set(
@@ -684,6 +717,8 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'finish_publication_transition',
       'finish_publication_blocked',
       'finish_publication_disposition',
+      'worktree_reclaim_reclaimed',
+      'worktree_reclaim_failed',
     ]);
 
     expect(renderingTypes).toEqual(expected);

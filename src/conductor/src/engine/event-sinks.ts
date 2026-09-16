@@ -161,6 +161,9 @@ export const EVENT_SINKS = {
   ci_repair_diagnostic: { render: true, persist: true, audit: false, otel: false },
   attribution_divergence: { render: false, persist: true, audit: false, otel: false },
   acceptance_red: { render: false, persist: true, audit: false, otel: false },
+  worktree_reclaim_reclaimed: { render: true, persist: true, audit: false, otel: false },
+  worktree_reclaim_retained: { render: false, persist: true, audit: false, otel: false },
+  worktree_reclaim_failed: { render: true, persist: true, audit: false, otel: false },
 } as const satisfies Record<ConductorEvent['type'], SinkDeclaration>;
 
 export type OtelEventType = {

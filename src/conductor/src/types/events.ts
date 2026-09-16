@@ -12,8 +12,19 @@ import type {
 import type { ObservedInterval } from '../execution/observed-interval.js';
 import type { SchedulingUnitRef } from './scheduling-unit.js';
 import type { LandGateRejectionIdentifier } from '../engine/engineer/land-spec.js';
+import type { RefusalReason } from '../engine/park-reconciliation.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
+
+/** Closed reasons why the daemon retained a worktree during reclamation. */
+export type WorktreeReclaimRetainedReason =
+  | 'in-flight'
+  | 'foreign-lifecycle'
+  | 'invalid-slug'
+  | 'halted'
+  | 'listing-unavailable'
+  | 'disabled'
+  | RefusalReason;
 
 /** Daemon-lifetime backlog dimensions. Kept closed so metric cardinality is bounded. */
 export type BacklogState = 'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked';
@@ -1383,4 +1394,23 @@ export type ConductorEvent =
       reason?: string;
       failingTests?: Array<{ name: string; reason: string }>;
       viaException: boolean;
+    }
+  // ── Worktree reclamation lifecycle ──
+  | {
+      type: 'worktree_reclaim_reclaimed';
+      slug: string;
+      branch: string;
+      proof: 'ancestry' | 'merged-pr-head' | 'shipped-record';
+    }
+  | {
+      type: 'worktree_reclaim_retained';
+      slug: string;
+      branch?: string;
+      reason: WorktreeReclaimRetainedReason;
+    }
+  | {
+      type: 'worktree_reclaim_failed';
+      slug: string;
+      branch?: string;
+      refusal: string;
     };
