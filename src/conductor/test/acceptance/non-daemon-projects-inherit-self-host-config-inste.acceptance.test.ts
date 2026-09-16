@@ -27,6 +27,12 @@ const projectTemplate = join(
   'templates',
   'project-config.yml.template',
 );
+const configInitDefaults = join(
+  conductorDir,
+  'test',
+  'fixtures',
+  'config-init-defaults.yml',
+);
 const forbiddenSeedKeys = [
   'harness_self_host',
   'owner_gate_cutover',
@@ -116,7 +122,7 @@ describe('deterministic project-config scaffolding (#683)', () => {
     expect(existsSync(join(target, '.ai-conductor'))).toBe(false);
   });
 
-  it('config init seeds an existing git repo once and is idempotent', async () => {
+  it('config init seeds an existing git repo with rendered defaults once and is idempotent', async () => {
     sandbox = await mkdtemp(join(tmpdir(), 'project-config-init-'));
     await initGitRepo(sandbox);
 
@@ -129,7 +135,7 @@ describe('deterministic project-config scaffolding (#683)', () => {
     expect(second.code).toBe(0);
     expect(second.stdout + second.stderr).toMatch(/already exists/i);
     expect(await readFile(configPath, 'utf8')).toBe(firstBytes);
-    expect(firstBytes).toBe(await readFile(projectTemplate, 'utf8'));
+    expect(firstBytes).toBe(await readFile(configInitDefaults, 'utf8'));
   });
 
   it('config init preserves operator edits and rejects a non-git directory without writing', async () => {
