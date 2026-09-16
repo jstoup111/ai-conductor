@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:2
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -121,6 +121,40 @@ describe('production FINISH publication composition', () => {
       expect(gateSatisfied).toHaveBeenNthCalledWith(1, 'build_review', state, expect.any(Object));
       expect(gateSatisfied).toHaveBeenNthCalledWith(2, 'test_suite', state, expect.any(Object));
       expect(gateSatisfied).toHaveBeenCalledTimes(2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { label: 'no build-review step-state key', state: { test_suite: 'done' } },
+    { label: 'a done build-review step-state key', state: { build_review: 'done', test_suite: 'done' } },
+  ])('refuses a false build-review verdict with $label', async ({ state: stepState }) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-unsatisfied-build-review-'));
+    try {
+      await Promise.all([
+        writeVerdict(root, 'build_review', { satisfied: false, checkedAt: 0 }),
+        writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
+      ]);
+      await expect(observeImplementationEvidence({
+        root,
+        state: {
+          feature_desc: 'feature', worktree_branch: 'feat/feature', ...stepState,
+        } as ConductState,
+      })).resolves.toBe('invalid');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an unrecorded test-suite member', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-unrecorded-test-suite-'));
+    try {
+      await writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 0 });
+      await expect(observeImplementationEvidence({
+        root,
+        state: { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState,
+      })).resolves.toBe('invalid');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
