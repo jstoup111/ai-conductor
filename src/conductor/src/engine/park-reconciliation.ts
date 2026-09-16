@@ -18,6 +18,8 @@ import type { WorktreeLifecycleQueue } from './worktree.js';
 export interface ReconcileMergedParkOptions {
   projectRoot: string;
   slug: string;
+  /** Registered worktree branch; when present, evidence is scoped to this ref. */
+  branch?: string;
   runGit?: GitRunner;
   runGh?: GhRunner;
   requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
@@ -426,6 +428,7 @@ async function gatherMergeEvidence(
   projectRoot: string,
   slug: string,
   prefetched?: { shippedStems: string[] | null; branchesBySlug: Map<string, string[]> | null },
+  branch?: string,
 ): Promise<MergeEvidence | null> {
   const shippedStems =
     prefetched?.shippedStems ?? (await listShippedStemsOnMain(runGit, projectRoot));
@@ -436,7 +439,9 @@ async function gatherMergeEvidence(
 
   const key = undatedStem(slug);
   const shippedRecordOnMain = shippedStems.some((stem) => undatedStem(stem) === key);
-  const branches = branchesBySlug.get(key) ?? [];
+  const branches = branch === undefined
+    ? branchesBySlug.get(key) ?? []
+    : [...branchesBySlug.values()].some((refs) => refs.includes(branch)) ? [branch] : [];
 
   const mergedBranches: string[] = [];
   let ancestryUnavailable = false;
@@ -595,7 +600,7 @@ export async function reconcileMergedPark(
   // Re-derive the evidence here rather than trusting any caller's or sweep's
   // cached classification (ADR: the helper re-verifies immediately before any
   // destructive step).
-  const evidence = await gatherMergeEvidence(runGit, opts.projectRoot, opts.slug);
+  const evidence = await gatherMergeEvidence(runGit, opts.projectRoot, opts.slug, undefined, opts.branch);
   if (evidence === null) {
     return { slug: opts.slug, steps: [], refusal: 'ancestry-check-failed' };
   }
