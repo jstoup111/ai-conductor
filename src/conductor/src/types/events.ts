@@ -23,6 +23,7 @@ export type WorktreeReclaimRetainedReason =
   | 'invalid-slug'
   | 'halted'
   | 'listing-unavailable'
+  | 'evidence-unavailable'
   | 'disabled'
   | RefusalReason;
 

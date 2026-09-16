@@ -21,6 +21,8 @@ export interface ReconcileMergedParkOptions {
   slug: string;
   /** Registered worktree branch; when present, evidence is scoped to this ref. */
   branch?: string;
+  /** Internal sweep hand-off: expose the proof kind to the event producer. */
+  emitProof?: boolean;
   runGit?: GitRunner;
   runGh?: GhRunner;
   requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
@@ -43,6 +45,8 @@ export interface ReconcileMergedParkOutcome {
   refusal?: RefusalReason;
   unmergedCommits?: UnmergedCommitListing;
   deferred?: boolean;
+  /** The deletion authority used by a successful reconciliation. */
+  proof?: 'ancestry' | 'merged-pr-head' | 'shipped-record';
 }
 
 export interface UnmergedCommitSummary {
@@ -102,7 +106,7 @@ export interface ReconcileParkedFeaturesOptions {
   /** Daemon-pool liveness guard; active worktrees are never reclaimed. */
   isFeatureInFlight?: (slug: string) => boolean;
   /** Test seam for the single pass-wide registered-worktree snapshot. */
-  worktreeListing?: () => Promise<Array<{ slug: string; branch: string }> | null>;
+  worktreeListing?: () => Promise<RegisteredWorktree[] | null>;
   /** Resolved reclamation policy; false holds registered, non-parked candidates. */
   reclaimMergedWorktrees?: boolean;
   /** Best-effort event-spine sink for one terminal candidate disposition. */
@@ -245,14 +249,21 @@ async function listBranchesBySlug(
  * `null` when Git cannot provide the listing. This deliberately reads once so
  * a caller can apply one coherent registry snapshot to a whole sweep.
  */
+export interface RegisteredWorktree {
+  slug: string;
+  branch: string;
+  /** Nested paths are reported for retention, but never passed to the helper. */
+  reclaimable: boolean;
+}
+
 export async function listRegisteredWorktrees(
   runGit: GitRunner,
   projectRoot: string,
-): Promise<Array<{ slug: string; branch: string }> | null> {
+): Promise<RegisteredWorktree[] | null> {
   try {
     const { stdout } = await runGit(['worktree', 'list', '--porcelain'], { cwd: projectRoot });
     const worktreesRoot = join(projectRoot, '.worktrees');
-    const candidates: Array<{ slug: string; branch: string }> = [];
+    const candidates: RegisteredWorktree[] = [];
 
     for (const record of stdout.split(/\n\s*\n/)) {
       const lines = record.split('\n');
@@ -261,11 +272,16 @@ export async function listRegisteredWorktrees(
       if (!worktreeLine || !branchLine) continue;
 
       const path = worktreeLine.slice('worktree '.length).trim();
-      if (dirname(path) !== worktreesRoot) continue;
+      const parent = dirname(path);
+      // The root checkout and other worktree roots are not part of this
+      // lifecycle. Nested entries are retained below as invalid-slug, never
+      // handed to the destructive helper.
+      if (parent !== worktreesRoot && !path.startsWith(`${worktreesRoot}/`)) continue;
 
       candidates.push({
-        slug: basename(path),
+        slug: parent === worktreesRoot ? basename(path) : path.slice(`${worktreesRoot}/`.length),
         branch: branchLine.slice('branch refs/heads/'.length).trim(),
+        reclaimable: parent === worktreesRoot,
       });
     }
 
@@ -490,6 +506,7 @@ export async function reconcileParkedFeatures(
     'invalid-slug': 0,
     halted: 0,
     'listing-unavailable': 0,
+    'evidence-unavailable': 0,
     disabled: 0,
     'ancestry-check-failed': 0,
     'branch-missing': 0,
@@ -504,13 +521,20 @@ export async function reconcileParkedFeatures(
   const runGit = opts.runGit ?? makeProductionGit();
   const parkedSlugs = await listOperatorParkedSlugs(opts.projectRoot);
   const registeredWorktrees = await (opts.worktreeListing?.() ?? listRegisteredWorktrees(runGit, opts.projectRoot));
-  const candidates = new Map<string, { branch?: string; parked: boolean }>();
-  for (const slug of parkedSlugs) candidates.set(slug, { parked: true });
-  for (const { slug, branch } of registeredWorktrees ?? []) {
+  const candidates = new Map<string, { branch?: string; parked: boolean; reclaimable: boolean }>();
+  for (const slug of parkedSlugs) candidates.set(slug, { parked: true, reclaimable: true });
+  for (const entry of registeredWorktrees ?? []) {
+    const { slug, branch } = entry;
+    const reclaimable = entry.reclaimable ?? true;
     const existing = candidates.get(slug);
-    candidates.set(slug, { branch, parked: existing?.parked ?? false });
+    candidates.set(slug, {
+      branch,
+      parked: existing?.parked ?? false,
+      reclaimable: (existing?.reclaimable ?? true) && reclaimable,
+    });
   }
-  const enumeratedCandidates = [...candidates.values()].filter((candidate) => !candidate.parked).length;
+  const enumeratedCandidates = [...candidates.values()]
+    .filter((candidate) => !candidate.parked && candidate.reclaimable).length;
 
   // Read the base-branch record listing and the local ref listing ONCE for the
   // whole pass; both are pass-invariant and the sweep runs on every idle tick.
@@ -521,15 +545,11 @@ export async function reconcileParkedFeatures(
 
   for (const [slug, candidate] of candidates) {
     let retainedReason: WorktreeReclaimRetainedReason | undefined;
-    // The new retention guards protect candidates discovered from the worktree
-    // registry.  Park markers predate this enumeration path and retain their
-    // established reconciliation contract: their marker is the authority and
-    // they are classified/repaired even when a stale worktree HALT remains.
     if (registeredWorktrees === null) retainedReason = 'listing-unavailable';
-    else if (!candidate.parked && opts.isFeatureInFlight?.(slug)) retainedReason = 'in-flight';
-    else if (!candidate.parked && (slug.startsWith('engineer-') || slug.startsWith('resolve-'))) retainedReason = 'foreign-lifecycle';
-    else if (!candidate.parked && !SINGLE_SLUG.test(slug)) retainedReason = 'invalid-slug';
-    else if (!candidate.parked) {
+    else if (opts.isFeatureInFlight?.(slug)) retainedReason = 'in-flight';
+    else if (slug.startsWith('engineer-') || slug.startsWith('resolve-')) retainedReason = 'foreign-lifecycle';
+    else if (!candidate.reclaimable || !SINGLE_SLUG.test(slug)) retainedReason = 'invalid-slug';
+    else {
       try {
         await access(join(opts.projectRoot, '.worktrees', slug, '.pipeline', 'HALT'));
         retainedReason = 'halted';
@@ -557,6 +577,8 @@ export async function reconcileParkedFeatures(
       );
       if (evidence === null) {
       classification = 'unclassified';
+      retainedReason = 'evidence-unavailable';
+      retainedByReason[retainedReason]++;
       } else if (isMerged(evidence)) {
       classification = 'merged';
       } else {
@@ -585,10 +607,11 @@ export async function reconcileParkedFeatures(
       annotation: classification === 'orphan' ? 'orphan' : classification === 'merged' && !autoCleanup ? 'merged-ready' : undefined,
     });
     const reclamationDisabled = opts.reclaimMergedWorktrees === false && !candidate.parked;
-    if (classification === 'merged' && autoCleanup && reclamationDisabled) {
+    const shouldReconcile = candidate.parked ? classification === 'merged' : candidate.branch !== undefined;
+    if (!retainedReason && shouldReconcile && autoCleanup && reclamationDisabled) {
       retainedReason = 'disabled';
       retainedByReason.disabled++;
-    } else if (classification === 'merged' && autoCleanup) {
+    } else if (!retainedReason && shouldReconcile && autoCleanup) {
       // The helper reports its refusal reason for direct/operator invocation.
       // A daemon sweep deliberately suppresses that per-slug chatter; the
       // aggregate below reports the outcome and the operator's next steps.
@@ -607,6 +630,7 @@ export async function reconcileParkedFeatures(
         teardownTimeoutSeconds: opts.teardownTimeoutSeconds,
         verbose: opts.verbose,
         worktreeLifecycle: opts.worktreeLifecycle,
+        emitProof: true,
       });
       if (outcome.refusal === undefined) {
         counts.reconciled++;
@@ -615,13 +639,17 @@ export async function reconcileParkedFeatures(
             type: 'worktree_reclaim_reclaimed',
             slug,
             branch: candidate.branch ?? '',
-            proof: candidate.branch ? 'ancestry' : 'shipped-record',
+            proof: outcome.proof!,
           });
         } catch {
           // Event persistence must not make this best-effort sweep fail.
         }
       }
-      else if (outcome.refusal === 'record-missing') counts.deferred++;
+      else if (outcome.refusal === 'record-missing') {
+        counts.deferred++;
+        retainedReason = outcome.refusal;
+        retainedByReason[outcome.refusal]++;
+      }
       else {
         counts.refused++;
         refusedByReason[outcome.refusal] = (refusedByReason[outcome.refusal] ?? 0) + 1;
@@ -715,7 +743,13 @@ export async function reconcileMergedPark(
   if (evidence === null) {
     return { slug: opts.slug, steps: [], refusal: 'ancestry-check-failed' };
   }
-  if (!isMerged(evidence)) {
+  if (opts.branch !== undefined && evidence.branches.length === 0) {
+    return { slug: opts.slug, steps: [], refusal: 'branch-missing' };
+  }
+  // A listed branch may be squash- or rebase-merged: neither the record nor
+  // ancestry need exist for it, but merged-PR head identity below can still
+  // prove deletion safe. The parked path retains its historical classifier.
+  if (!isMerged(evidence) && !(opts.branch !== undefined && evidence.branches.length > 0)) {
     return {
       slug: opts.slug,
       steps: [],
@@ -736,6 +770,9 @@ export async function reconcileMergedPark(
   //       current tip as the commit it merged (squash/rebase merge, where (a)
   //       is structurally always false).
   // Neither proof available ⇒ refuse, exactly as before.
+  let proof: 'ancestry' | 'merged-pr-head' | 'shipped-record' = evidence.branches.length === 0
+    ? 'shipped-record'
+    : 'ancestry';
   const unproven = evidence.branches.filter((ref) => !evidence.mergedBranches.includes(ref));
   if (unproven.length > 0) {
     const runGh = opts.runGh ?? makeProductionGh();
@@ -747,6 +784,7 @@ export async function reconcileMergedPark(
       });
       switch (diagnosis.kind) {
         case 'proven':
+          proof = 'merged-pr-head';
           continue;
         case 'no-pr':
           return { slug: opts.slug, steps: [], refusal: 'no-merge-proof' };
@@ -771,13 +809,10 @@ export async function reconcileMergedPark(
     }
   }
 
-  // Existing parked feature branches use the historical `feature/<slug>`
-  // namespace and remain record-gated.  The newly enumerated, non-daemon
+  // Existing parked feature branches remain record-gated. The newly enumerated, non-daemon
   // branches are independently ancestry-proven and intentionally do not need
   // a shipped record; daemon setup branches stay record-gated by contract.
-  const requiresRecord = opts.branch === undefined ||
-    opts.branch.startsWith('feature/') ||
-    opts.branch.startsWith('feat/daemon-');
+  const requiresRecord = opts.branch === undefined || opts.branch.startsWith('feat/daemon-');
   if (requiresRecord && !evidence.shippedRecordOnMain) {
     let prUrl: string | undefined;
     for (const head of evidence.branches) {
@@ -894,5 +929,5 @@ export async function reconcileMergedPark(
     steps.push('unparked');
   }
 
-  return { slug: opts.slug, steps };
+  return opts.emitProof ? { slug: opts.slug, steps, proof } : { slug: opts.slug, steps };
 }

@@ -1978,6 +1978,105 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     }
   });
 
+  it('keeps parked cleanup enabled when the enumerated reclaim gate is off', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const parkedSlug = 'gate-off-parked';
+    const enumeratedSlug = 'gate-off-enumerated';
+    const parkedBranch = `feat/${parkedSlug}`;
+    const enumeratedBranch = `hotfix/${enumeratedSlug}`;
+    const { run, deleted } = makeGit({
+      shipped: [parkedSlug],
+      branches: [parkedBranch, enumeratedBranch],
+      merged: [parkedBranch, enumeratedBranch],
+    });
+    const events: unknown[] = [];
+    try {
+      await writeOperatorPark(projectRoot, parkedSlug);
+      await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        reclaimMergedWorktrees: false,
+        worktreeListing: async () => [{ slug: enumeratedSlug, branch: enumeratedBranch }],
+        onEvent: (event) => events.push(event),
+      });
+
+      expect({ deleted, events }).toEqual({
+        deleted: [parkedBranch],
+        events: [
+          { type: 'worktree_reclaim_reclaimed', slug: parkedSlug, branch: '', proof: 'ancestry' },
+          { type: 'worktree_reclaim_retained', slug: enumeratedSlug, branch: enumeratedBranch, reason: 'disabled' },
+        ],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('emits the helper proof and retains unavailable pass-wide evidence', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const squashSlug = 'squash-event';
+    const unavailableSlug = 'evidence-down';
+    const squashBranch = `hotfix/${squashSlug}`;
+    const unavailableBranch = `hotfix/${unavailableSlug}`;
+    const head = '1111111111111111111111111111111111111111';
+    const { run, deleted } = makeGit({
+      branches: [squashBranch],
+      tips: { [squashBranch]: head },
+      mergedPrHeads: [head],
+    });
+    const events: unknown[] = [];
+    try {
+      await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        runGh: async () => ({ stdout: `[{"headRefOid":"${head}"}]` }),
+        worktreeListing: async () => [{ slug: squashSlug, branch: squashBranch }],
+        onEvent: (event) => events.push(event),
+      });
+      expect({ deleted, events }).toEqual({
+        deleted: [squashBranch],
+        events: [{ type: 'worktree_reclaim_reclaimed', slug: squashSlug, branch: squashBranch, proof: 'merged-pr-head' }],
+      });
+
+      const unavailable = makeGit({ refsUnavailable: true });
+      events.length = 0;
+      await reconcileParkedFeatures({
+        projectRoot,
+        runGit: unavailable.run,
+        worktreeListing: async () => [{ slug: unavailableSlug, branch: unavailableBranch }],
+        onEvent: (event) => events.push(event),
+      });
+      expect(events).toEqual([
+        { type: 'worktree_reclaim_retained', slug: unavailableSlug, branch: unavailableBranch, reason: 'evidence-unavailable' },
+      ]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('retains a nested registered path as invalid-slug without calling the helper', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'feat/nested-worktree';
+    const branch = 'feat/nested-worktree';
+    const { run, deleted } = makeGit({ branches: [branch], merged: [branch] });
+    const events: unknown[] = [];
+    try {
+      await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        worktreeListing: async () => [{ slug, branch, reclaimable: false }],
+        onEvent: (event) => events.push(event),
+      });
+
+      expect({ deleted, events }).toEqual({
+        deleted: [],
+        events: [{ type: 'worktree_reclaim_retained', slug, branch, reason: 'invalid-slug' }],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('emits one failed event when a proven registered worktree cannot be removed', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'remove-fails';
