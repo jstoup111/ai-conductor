@@ -79,6 +79,7 @@ async function writeGreenShipValidatorEvidence(dir: string): Promise<void> {
   await utimes(join(dir, '.pipeline', 'architecture-review-as-built.md'), fresh, fresh);
 }
 
+// Covers: task:6, task:9
 describe('Conductor FINISH publication routing', () => {
   let dir: string;
   let statePath: string;
@@ -105,6 +106,58 @@ describe('Conductor FINISH publication routing', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it.each([
+    { name: 'interactive', mode: 'interactive' as const, daemon: false },
+    { name: 'default foreground', mode: 'default' as const, daemon: false },
+  ])('does not write a synthetic validation key for a successful serial member in %s mode', async ({ mode, daemon }) => {
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw persisted.error;
+    await writeState(statePath, {
+      ...persisted.value,
+      prd_audit: 'pending',
+      validation__manual_test: 'done',
+    } as ConductState);
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'prd_audit',
+      mode,
+      daemon,
+      verifyArtifacts: false,
+    }).run();
+
+    const after = await readState(statePath);
+    if (!after.ok) throw after.error;
+    expect(after.value.prd_audit).toBe('done');
+    expect((after.value as Record<string, unknown>).validation__prd_audit).toBeUndefined();
+  });
+
+  it('does not write a synthetic validation key for an auto serial member without a retained sibling', async () => {
+    await writeGreenShipValidatorEvidence(dir);
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw persisted.error;
+    await writeState(statePath, { ...persisted.value, prd_audit: 'pending' });
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'prd_audit',
+      mode: 'auto',
+      daemon: false,
+      verifyArtifacts: false,
+    }).run();
+
+    const after = await readState(statePath);
+    if (!after.ok) throw after.error;
+    expect(after.value.prd_audit).toBe('done');
+    expect(Object.keys(after.value).filter((key) => key.startsWith('validation__'))).toEqual([]);
   });
 
   it.each([
@@ -236,6 +289,149 @@ describe('Conductor FINISH publication routing', () => {
       step: 'manual_test',
       reason: 'manual test evidence contains FAIL rows',
     }]);
+  });
+
+  it('blocks publication when a retained done prd_audit has an unsatisfied on-disk verdict', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeGreenShipValidatorEvidence(dir);
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
+    );
+    // This is the retained member's on-disk gate evidence. FINISH must
+    // re-evaluate it rather than trusting its `done` status.
+    await writeFile(join(dir, '.pipeline', 'prd-audit.md'), '# PRD Audit\n\nVerdict: BLOCKED\n');
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M', architecture_review: 'skipped',
+      manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done',
+      validation__prd_audit: 'done',
+    } as ConductState);
+    const advance = vi.fn(async () => ({ kind: 'complete' } as const));
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async (step) => {
+        if (step === 'prd_audit') throw ROUTED_SENTINEL;
+        return { success: true };
+      }) },
+      finishPublication: { advance }, events: new ConductorEventEmitter(), projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true,
+      verifyArtifacts: true, git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    });
+    const finishFence = conductor as unknown as {
+      nonGreenFinishValidators(state: ConductState): Promise<Array<{ name: StepName }>>;
+    };
+    const state = await readState(statePath);
+    if (!state.ok) throw new Error('test fixture state must be readable');
+    await expect(finishFence.nonGreenFinishValidators(state.value)).resolves.toEqual([
+      expect.objectContaining({ name: 'prd_audit' }),
+    ]);
+    await conductor.run();
+    expect(advance).not.toHaveBeenCalled();
+  });
+
+  it('retries a FINISH-fence recheck and publishes only after it writes passing evidence', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeGreenShipValidatorEvidence(dir);
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n## Attempt 1\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
+    );
+    await writeFile(join(dir, '.pipeline', 'manual-test-fail-evidence.json'), JSON.stringify({ codeStamp: 'baseline' }));
+    await writeFile(join(dir, '.pipeline', 'prd-audit-code-stamp.json'), JSON.stringify({ codeStamp: 'baseline' }));
+    await writeFile(join(dir, '.pipeline', 'architecture-review-as-built-code-stamp.json'), JSON.stringify({ codeStamp: 'baseline' }));
+    // The FINISH fence must distrust this retained member's stale evidence.
+    await writeFile(join(dir, '.pipeline', 'prd-audit.md'), '# PRD Audit\n\nVerdict: BLOCKED\n');
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M', architecture_review: 'skipped',
+      session_started_at: Date.now() - 60_000,
+      coverage_binding: 'done',
+      manual_test: 'skipped', prd_audit: 'done', architecture_review_as_built: 'done',
+      validation__prd_audit: 'done',
+      validation__architecture_review_as_built: 'done',
+    } as ConductState);
+
+    const calls: StepName[] = [];
+    const advance = vi.fn(async () => {
+      expect(calls.filter((step) => step === 'prd_audit')).toHaveLength(2);
+      await expect(readFile(join(dir, '.pipeline', 'prd-audit.md'), 'utf8')).resolves.not.toContain('BLOCKED');
+      return { kind: 'complete' } as const;
+    });
+    const runner: StepRunner = {
+      run: vi.fn(async (step, _state, options) => {
+        calls.push(step);
+        if (step === 'prd_audit' && calls.length === 1) throw new Error('transient validator crash');
+        if (step === 'prd_audit') {
+          await writeGreenShipValidatorEvidence(dir);
+          await writeFile(
+            join(dir, '.pipeline', 'prd-audit-code-stamp.json'),
+            JSON.stringify({ runId: options?.runId }),
+          );
+        }
+        return { success: true };
+      }),
+    };
+
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: runner, finishPublication: { advance },
+      events: new ConductorEventEmitter(), projectRoot: dir, fromStep: 'finish',
+      mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 2,
+      config: { steps: { manual_test: { disable: true } } },
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    }).run();
+
+    expect(calls.filter((step) => step === 'prd_audit')).toEqual(['prd_audit', 'prd_audit']);
+    expect(calls).not.toContain('manual_test');
+    expect(advance).toHaveBeenCalled();
+    const after = await readState(statePath);
+    expect(after.ok && [
+      after.value.prd_audit, after.value.architecture_review_as_built,
+      (after.value as Record<string, unknown>).validation__prd_audit,
+      (after.value as Record<string, unknown>).validation__architecture_review_as_built,
+    ]).toEqual(['done', 'done', 'done', 'done']);
+  });
+
+  it('halts after the configured FINISH-fence recheck budget and never publishes', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeGreenShipValidatorEvidence(dir);
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '# Manual Test Results\n\n## Attempt 1\n\n| Story | Result |\n|---|---|\n| Story 1 | PASS |\n',
+    );
+    await writeFile(join(dir, '.pipeline', 'manual-test-fail-evidence.json'), JSON.stringify({ codeStamp: 'baseline' }));
+    await writeFile(join(dir, '.pipeline', 'prd-audit-code-stamp.json'), JSON.stringify({ codeStamp: 'baseline' }));
+    await writeFile(join(dir, '.pipeline', 'architecture-review-as-built-code-stamp.json'), JSON.stringify({ codeStamp: 'baseline' }));
+    await writeFile(join(dir, '.pipeline', 'prd-audit.md'), '# PRD Audit\n\nVerdict: BLOCKED\n');
+    const persisted = await readState(statePath);
+    if (!persisted.ok) throw new Error('test fixture state must be readable');
+    await writeState(statePath, {
+      ...persisted.value,
+      complexity_tier: 'M', architecture_review: 'skipped',
+      session_started_at: Date.now() - 60_000,
+      coverage_binding: 'done',
+      manual_test: 'skipped', prd_audit: 'done', architecture_review_as_built: 'done',
+      validation__prd_audit: 'done',
+      validation__architecture_review_as_built: 'done',
+    } as ConductState);
+
+    const advance = vi.fn(async () => ({ kind: 'complete' } as const));
+    const runnerRun = vi.fn<StepRunner['run']>(async () => { throw new Error('validator remains down'); });
+    const runner: StepRunner = { run: runnerRun };
+    await new Conductor({
+      stateFilePath: statePath, stepRunner: runner, finishPublication: { advance },
+      events: new ConductorEventEmitter(), projectRoot: dir, fromStep: 'finish',
+      mode: 'auto', daemon: true, verifyArtifacts: true, maxRetries: 2,
+      config: { steps: { manual_test: { disable: true } } },
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    }).run();
+
+    expect(runnerRun.mock.calls.filter(([step]) => step === 'prd_audit')).toHaveLength(2);
+    expect(advance).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('validator remains down');
   });
 
   it('redirects several non-green validators to the earliest one without demoting a green sibling', async () => {

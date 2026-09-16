@@ -134,6 +134,12 @@ lines are daemon-wide, not feature work. The exact shapes and the slug length bo
 
 ### Build-review rubric progress
 
+Before publication, FINISH rechecks the current validation evidence. If one validator crashes during
+that final recheck, the daemon retries only that validator within its configured attempt budget; already
+passing validation siblings are not repeated. A retry never authorizes publication by itself: FINISH
+publishes only after fresh passing evidence exists. When the budget is exhausted, the feature HALTs and
+the publication coordinator is not invoked.
+
 During `build_review`, the daemon log names each rubric branch and its full lap identifier. This
 lets you distinguish concurrent or retried review laps without reading `.pipeline/events.jsonl`:
 

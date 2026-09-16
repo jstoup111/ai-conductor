@@ -127,6 +127,9 @@ describe('operator park boundary contract', () => {
       'return this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });',
       'return await this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });',
       'return runGroupBranch(member, state, { stepRunner: this.stepRunner }, 1);',
+      // Configured-group branches run only through runParallelGroupViaCore,
+      // whose caller is one of the guarded scheduling-unit entries above.
+      'return runGroupBranch(member, state, { stepRunner: this.stepRunner }, resolved.max_retries);',
       "return this.stepRunner.run('finish', state, options);",
       // The two bounded FINISH prose passes. Both are reached only from inside
       // the already-park-guarded FINISH dispatch.
@@ -144,7 +147,7 @@ describe('operator park boundary contract', () => {
     const guardedSegmentsIn = (source: string) => {
       const guardedSegments = [
         /if \(stepCfg\?\.parallel\) \{[\s\S]*?await this\.runParallelGroupViaCore\(/,
-        /if \(groupEntryName === step\.name && membership\.dispatchable\.length > 1\) \{[\s\S]*?return runGroupBranch\(/,
+        /if \(\s*groupEntryName === step\.name &&[\s\S]*?runGroupBranch\(/,
       ].map((pattern) => {
         const match = source.match(pattern);
         expect(match).not.toBeNull();

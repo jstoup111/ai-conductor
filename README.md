@@ -120,6 +120,9 @@ that is what frees your head for the next design problem while this one builds.
 
 CI repair agents commit fixes from CI diagnostics; the daemon owns repair test execution and publishes
 only after the configured verifier passes. Missing test configuration blocks publication.
+If final validation itself crashes, the daemon retries that validator only within its configured attempt
+budget. It never publishes until fresh passing validation evidence exists, and an exhausted retry budget
+halts the feature for operator recovery.
 
 **The ADRs are the asset.** Every ADR is a durable architectural decision with its reasoning attached,
 committed to the repo and read by machinery: the composer plans the next feature against them, and the
