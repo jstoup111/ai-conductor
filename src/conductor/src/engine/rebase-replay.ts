@@ -70,28 +70,29 @@ export async function compareReplayTree(
     : { kind: 'changed', identity, expectedTree, completedTree };
 }
 
-/** Capture only a complete, immutable identity tuple; partial tuples are unsafe. */
+/**
+ * Capture the immutable replay tuple, including an incomplete tuple when Git
+ * cannot provide one of its objects. The comparator owns the conservative
+ * unproved decision; dropping this value would bypass that decision entirely.
+ */
 export async function captureReplayIdentity(
   git: GitRunner,
   preRebaseHead: string,
   mergeBase: string,
   target: string,
-): Promise<ReplayIdentity | undefined> {
+): Promise<ReplayIdentity> {
+  const identity = {
+    preRebaseHead: preRebaseHead.trim(),
+    mergeBase: mergeBase.trim(),
+    // This must be the object captured before replay, not a ref resolved
+    // afterwards: the base ref may move while the replay is in progress.
+    target: target.trim(),
+    completedHead: '',
+  };
   try {
     const completed = await git(['rev-parse', 'HEAD']);
-    const identity = {
-      preRebaseHead: preRebaseHead.trim(),
-      mergeBase: mergeBase.trim(),
-      // This must be the object captured before replay, not a ref resolved
-      // afterwards: the base ref may move while the replay is in progress.
-      target: target.trim(),
-      completedHead: completed.exitCode === 0 ? completed.stdout.trim() : '',
-    };
-    return validObject(identity.preRebaseHead) && validObject(identity.mergeBase) &&
-      validObject(identity.target) && validObject(identity.completedHead)
-      ? identity
-      : undefined;
+    return { ...identity, completedHead: completed.exitCode === 0 ? completed.stdout.trim() : '' };
   } catch {
-    return undefined;
+    return identity;
   }
 }

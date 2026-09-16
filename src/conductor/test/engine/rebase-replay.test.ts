@@ -1,3 +1,4 @@
+// Covers: task:3
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -144,5 +145,24 @@ describe('captureReplayIdentity', () => {
         target,
         completedHead: completed,
       });
+  });
+
+  it.each([
+    ['missing pre-rebase object', '', 'b'.repeat(40), 'c'.repeat(40), [{ exitCode: 0, stdout: `${'d'.repeat(40)}\n` }]],
+    ['malformed pre-rebase object', 'not-an-object', 'b'.repeat(40), 'c'.repeat(40), [{ exitCode: 0, stdout: `${'d'.repeat(40)}\n` }]],
+    ['missing merge-base object', 'a'.repeat(40), '', 'c'.repeat(40), [{ exitCode: 0, stdout: `${'d'.repeat(40)}\n` }]],
+    ['malformed merge-base object', 'a'.repeat(40), 'not-an-object', 'c'.repeat(40), [{ exitCode: 0, stdout: `${'d'.repeat(40)}\n` }]],
+    ['missing target object', 'a'.repeat(40), 'b'.repeat(40), '', [{ exitCode: 0, stdout: `${'d'.repeat(40)}\n` }]],
+    ['malformed target object', 'a'.repeat(40), 'b'.repeat(40), 'not-an-object', [{ exitCode: 0, stdout: `${'d'.repeat(40)}\n` }]],
+    ['missing completed object', 'a'.repeat(40), 'b'.repeat(40), 'c'.repeat(40), [{ exitCode: 1 }]],
+    ['malformed completed object', 'a'.repeat(40), 'b'.repeat(40), 'c'.repeat(40), [{ exitCode: 0, stdout: 'not-an-object\n' }]],
+  ] as const)('carries %s into the explicit unproved comparison branch', async (_name, preRebaseHead, mergeBase, target, completed) => {
+    const captured = await captureReplayIdentity(scripted(completed), preRebaseHead, mergeBase, target);
+
+    await expect(compareReplayTree(scripted([]), captured)).resolves.toEqual({
+      kind: 'unproved',
+      identity: captured,
+      reason: 'replay identity is missing or malformed',
+    });
   });
 });
