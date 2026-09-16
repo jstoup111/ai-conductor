@@ -221,25 +221,29 @@ describe('engine/build-review-policy-bundle', () => {
   });
 
   it('refuses special files before materializing a partial package', async () => {
-    // Keep the Unix-domain socket below its platform pathname limit.
-    const sourceParent = await temporaryDirectory('p-');
+    // Vitest scopes tmpdir() under a long worktree path, which exceeds the
+    // Unix-domain socket pathname limit even with a short fixture prefix.
+    const sourceParent = await mkdtemp('/tmp/p-');
     const materialParent = await temporaryDirectory('m-');
     const packageRoot = await policyPackage(sourceParent);
     const socketPath = join(packageRoot, 'criteria', 'policy.sock');
     const server = createServer();
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(socketPath, resolve);
-    });
 
     try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(socketPath, resolve);
+      });
       await expectRejectedWithoutMaterial(
         captureInstalledReviewPolicyBundle(installedSkill(packageRoot), { materialParent }),
         materialParent,
         /policy\.sock/,
       );
     } finally {
-      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      if (server.listening) {
+        await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      }
+      await rm(sourceParent, { recursive: true, force: true });
     }
   });
 

@@ -96,6 +96,9 @@ function customConfig(): HarnessConfig {
         },
       },
     },
+    // This fixture stops at manual_test; skip the unrelated validator so the
+    // daemon validation group cannot enter the PRD-audit recovery path.
+    steps: { prd_audit: { disable: true } },
   } as unknown as HarnessConfig;
 }
 
