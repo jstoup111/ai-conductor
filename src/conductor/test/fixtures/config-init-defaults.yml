@@ -39,7 +39,16 @@ build_review:
 #   # Changing it: enables scoped verification instead of the aggregate command.
 #   scoped_command: npm test -- {selectors}
 
-# CONFIG_INIT_TEST_SUITE_VERIFICATION
+# Test-suite verification answer recorded by ai-conductor config init.
+test_suite:
+  command: npm test
+  verification:
+    mode: aggregate
+    drift_budget:
+      additional_inputs: none
+      source: none
+      test_infrastructure: none
+      tests: none
 
 # Controls: otel.worker_name, the OpenTelemetry worker identity.
 # Allowed: a non-empty worker name.

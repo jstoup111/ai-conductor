@@ -229,11 +229,27 @@ describe('conduct-ts config init verification flags', () => {
     expect(await dispatchRegistry(command!)).toBe(0);
 
     const config = await readFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'utf8');
-    const template = await readFile(
-      join(repositoryRoot, 'templates', 'project-config.yml.template'),
+    const fixture = await readFile(
+      join(repositoryRoot, 'src', 'conductor', 'test', 'fixtures', 'config-init-defaults.yml'),
       'utf8',
     );
-    expect(config).toBe(template);
+    expect(config).toBe(fixture);
+  });
+
+  it('keeps auto-mode config-init output byte-identical to the default fixture', async () => {
+    const command = detectRegistryCommand([
+      'node', 'conduct-ts', 'config', 'init',
+      '--test-suite-mode', 'aggregate',
+      '--test-suite-drift-budget', 'strict',
+    ]);
+    expect(command).not.toBeNull();
+    expect(await dispatchRegistry(command!)).toBe(0);
+
+    const [config, fixture] = await Promise.all([
+      readFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'utf8'),
+      readFile(join(repositoryRoot, 'src', 'conductor', 'test', 'fixtures', 'config-init-defaults.yml'), 'utf8'),
+    ]);
+    expect(config).toBe(fixture);
   });
 
   it.each([
@@ -313,5 +329,19 @@ describe('conduct-ts config init verification flags', () => {
     expect(command).not.toBeNull();
     expect(await dispatchRegistry(command!)).toBe(0);
     expect(await readFile(configPath, 'utf8')).toBe(before);
+  });
+
+  it('preserves a hand-edited config when a test command is supplied', async () => {
+    const configPath = join(projectRoot, '.ai-conductor', 'config.yml');
+    const original = 'test_suite:\n  command: make check\n';
+    await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+    await writeFile(configPath, original, 'utf8');
+    const command = detectRegistryCommand([
+      'node', 'conduct-ts', 'config', 'init', '--test-suite-command', 'pytest',
+    ]);
+
+    expect(command).not.toBeNull();
+    expect(await dispatchRegistry(command!)).toBe(0);
+    expect(await readFile(configPath, 'utf8')).toBe(original);
   });
 });

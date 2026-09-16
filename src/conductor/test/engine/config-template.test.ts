@@ -163,6 +163,38 @@ describe('templates/ai-conductor-config.yml.template (issue #1010)', () => {
 });
 
 describe('templates/project-config.yml.template', () => {
+  it('explains every unasked operator-settable key with complete guidance', async () => {
+    const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
+    const expectedKeys = [
+      'test_suite.working_directory',
+      'test_suite.timeout_seconds',
+      'test_suite.inputs',
+      'test_suite.scoped_command',
+      'build_review.rubrics.testQuality.enabled',
+      'otel.worker_name',
+      'steps.<name>.model',
+      'steps.<name>.effort',
+      'harness_version',
+    ];
+    for (const key of expectedKeys) {
+      expect(raw, key).toContain(`Controls: ${key}`);
+      expect(raw, key).toContain('Allowed:');
+      expect(raw, key).toContain('Default:');
+      expect(raw, key).toContain('Changing it:');
+    }
+  });
+
+  it('contains only validator-known documented project keys', async () => {
+    const result = validateConfig({
+      harness_version: '>=0.99.0',
+      build_review: { rubrics: { testQuality: { enabled: false } } },
+      test_suite: { working_directory: '.', timeout_seconds: 1800, inputs: [], scoped_command: 'npm test -- {selectors}' },
+      otel: { worker_name: 'ci-worker-1' },
+      steps: { explore: { model: 'haiku', effort: 'low' } },
+    }, undefined, { materializeDefaults: false });
+    expect(result.ok).toBe(true);
+  });
+
   it('is a valid project seed without user or self-host configuration', async () => {
     const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
     const authoredConfig = loadYaml(raw);

@@ -67,19 +67,32 @@ a single set of Docker services. See Step 1c for the `.env` boundary pattern tha
 For every bootstrap mode, confirm the project is a git repository before continuing:
 `git rev-parse --is-inside-work-tree`. If it is not, initialize it with `git init -b main`
 as described in Step 1b. Then invoke the deterministic, idempotent project-config writer. In
-interactive mode, ask:
+interactive mode, first check whether `.ai-conductor/config.yml` already exists. When it does, read
+each decidable key with `ai-conductor config read <key>`, print `already set: <key> = <value>` for
+each, ask none of these questions, and still invoke `config init` below so its normal no-clobber
+result is surfaced. Otherwise ask one question at a time:
 
-1. "Which test-suite verification mode should this project use: `aggregate` (run the full suite) or
-   `scoped` (run the configured scoped command for selected tests)?" Pass the answer as
+1. **`test_suite.verification.mode`** — Controls: whether verification runs the aggregate suite or a
+   selected-test command. Allowed: `aggregate` or `scoped`. Default: `aggregate`. Changing it:
+   `scoped` uses the configured scoped command for selected tests. Record with
    `--test-suite-mode <aggregate|scoped>`.
-2. "Which drift-budget preset should this project use: `strict` (no tolerated drift) or `tolerant`
-   (up to 20 source paths and unlimited additional inputs)?" Pass the answer as
-   `--test-suite-drift-budget <strict|tolerant>`.
+2. **`test_suite.verification.drift_budget`** — Controls: tolerated test-suite input drift. Allowed:
+   `strict` or `tolerant`. Default: `strict`. Changing it: `tolerant` permits up to 20 source paths
+   and unlimited additional inputs. Record with `--test-suite-drift-budget <strict|tolerant>`.
+3. **`test_suite.command`** — Controls: the aggregate test command the pre-SHIP gate invokes.
+   Allowed: one non-empty, single-line project command. Default: infer one from project tooling:
+   `package.json` `scripts.test` → its package-manager test command; `pyproject.toml` or `pytest.ini`
+   → `pytest`; `Gemfile` or `Rakefile` → `bundle exec rake`; `go.mod` → `go test ./...`; `Cargo.toml`
+   → `cargo test`. Changing it: records the project's authoritative aggregate suite. Record with
+   `--test-suite-command <command>`. When no command can be inferred and the answer is empty, re-ask;
+   never record `npm test` as an uninferred answer.
 
-Use both answers when invoking the writer:
+For a closed-set answer outside its allowed values, restate the allowed values, re-ask the same
+question, and record nothing. For a free-text empty or multi-line answer, re-ask and record nothing.
+Record all accepted answers through this single writer invocation only:
 
 ```bash
-ai-conductor config init --test-suite-mode <aggregate|scoped> --test-suite-drift-budget <strict|tolerant>
+ai-conductor config init --test-suite-mode <aggregate|scoped> --test-suite-drift-budget <strict|tolerant> --test-suite-command <command>
 ```
 
 In auto mode, do not prompt; record the strict preset with aggregate verification:
@@ -91,6 +104,20 @@ ai-conductor config init --test-suite-mode aggregate --test-suite-drift-budget s
 Never hand-author `.ai-conductor/config.yml` and never copy a config from the harness checkout.
 If the config already exists, the command preserves it byte-for-byte and succeeds. Surface any
 other non-zero exit before continuing.
+
+### 1b-ii. Operator Identity
+
+Interactive mode only: read the current value with `ai-conductor config read spec_owner`. If it is
+already set, report `already set: spec_owner = <value>` and do not ask again. When it is empty, ask
+for the operator identity, offering `gh api user -q .login` as the default when available; record an
+accepted answer only with `ai-conductor config set spec_owner <login>`. An empty submission is not a
+decline: re-ask it and restate the option to decline. Never edit a configuration file or record a
+placeholder identity.
+
+If identity remains unresolved (no value, no `gh` login, or the operator declines), print `Operator
+identity unresolved`: `engineer land`, spec handoff, and daemon builds will refuse until it is set.
+Mark bootstrap setup incomplete rather than successful. In auto mode, skip this section entirely:
+ask no identity question and make no `config set` call.
 
 ### 1c. Generate Infrastructure Boundary Files
 

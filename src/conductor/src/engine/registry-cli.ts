@@ -323,9 +323,7 @@ async function runConfigInit(
     return 1;
   }
 
-  const verification = options.hasVerificationFlags
-    ? resolveVerificationSelection(options)
-    : undefined;
+  const verification = resolveVerificationSelection(options);
   if (typeof verification === 'string') {
     console.error(`conduct config init: ${verification}`);
     return 1;
