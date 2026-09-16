@@ -37,6 +37,10 @@ not grow materially.
    refresh scan (satisfies FR-6's "a subsequent scan"). The first scan of a daemon run primes
    the cache (startup scan may fetch).
 
+> **Amended 2026-09-15 by #2158:** James Stoup approved a bounded exception to Decision 3 for cold caches and previously unseen issue references. On a local (`refresh: false`) scan, the existing resolver may read each distinct reference for which it has no completed result, including references first encountered after startup. Successful label results and `not-found` results are remembered in process-local state, so subsequent local scans do not re-read those references. Refresh scans retain their existing full-read behavior and remain the way to observe label changes for known references. A cold or newly encountered reference may therefore add GitHub read latency to a local scan; the zero-network guarantee applies to warm local scans with no unseen references.
+>
+> If a read throws, preserve the existing fail-soft contract: clear cached and attempted state, return whole-scan fallback, warn once per outage, and suppress further local reads until a successful refresh ends the outage. After recovery, references absent from the refreshed set can be primed when encountered again. Eligibility, discovery cadence, ordering rules, and the existing read-only tracker seam remain unchanged; no persistent priority store or poll-rate retry loop is introduced. This amendment resolves this feature's as-built AB-1 fetch-cadence conflict; all other acceptance and verification requirements remain required.
+
 ## Alternatives rejected
 
 - **Sort inside `discoverBacklog`** — entangles a network concern with the offline-capable

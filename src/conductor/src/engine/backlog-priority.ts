@@ -111,7 +111,7 @@ export function parseSizeLabel(labels: string[]): 'S' | 'M' | 'L' | undefined {
  * The resolver maintains an in-memory cache (process-local, never persisted to disk) and
  * handles transport failures gracefully:
  * - On `refresh: true`: fetches all linked refs via the reader, updates cache, returns bands
- * - On `refresh: false`: returns cached bands with zero reader calls (cache hit)
+ * - On `refresh: false`: primes unseen linked refs, then returns cached bands
  * - On reader throw: clears cache, returns fallback mode, logs exactly one warning per outage
  * - Fallback persists across `refresh: false` resolves until a successful refresh resets the
  *   outage state — a non-refresh resolve during an outage never pseudo-bands the empty cache
@@ -128,6 +128,10 @@ export function createPriorityResolver(
 } {
   // In-memory cache: ref -> labels
   const cache = new Map<string, string[]>();
+  // Refs for which the reader has returned a result, including not-found.
+  // This is separate from the labels cache because a missing issue must not
+  // trigger a network read on every local discovery pass.
+  const attemptedRefs = new Set<string>();
   // Outage tracking: whether we're currently in a failed state
   let inOutage = false;
   // Warning flag: whether we've warned about the current outage
@@ -140,35 +144,39 @@ export function createPriorityResolver(
       // Collect all sourceRefs that need resolution
       const sourceRefs = items.filter((item) => item.sourceRef).map((item) => item.sourceRef as string);
 
-      if (options.refresh || sourceRefs.length === 0) {
-        // On refresh: true, or if there are sourceRefs to fetch, call the reader
-        if (sourceRefs.length > 0) {
-          try {
-            const readerResult = await reader(sourceRefs);
-            // Reader succeeded: reset outage state
-            inOutage = false;
-            hasWarnedThisOutage = false;
-            // Update cache with reader results
-            for (const [ref, labels] of readerResult.entries()) {
-              if (labels !== 'not-found') {
-                cache.set(ref, labels);
-              } else {
-                cache.delete(ref);
-              }
+      const unattemptedRefs = [...new Set(sourceRefs)].filter((ref) => !attemptedRefs.has(ref));
+      const refsToRead = options.refresh ? sourceRefs : unattemptedRefs;
+
+      if ((options.refresh || !inOutage) && refsToRead.length > 0) {
+        // Refreshes retain their full-read behavior. Local scans prime only
+        // references this process has never resolved.
+        try {
+          const readerResult = await reader(refsToRead);
+          // Reader succeeded: reset outage state
+          inOutage = false;
+          hasWarnedThisOutage = false;
+          // Update cache with reader results
+          for (const [ref, labels] of readerResult.entries()) {
+            attemptedRefs.add(ref);
+            if (labels !== 'not-found') {
+              cache.set(ref, labels);
+            } else {
+              cache.delete(ref);
             }
-          } catch (error) {
-            // Reader threw: set outage state and clear cache
-            inOutage = true;
-            cache.clear();
-            // Warn exactly once per outage
-            if (!hasWarnedThisOutage) {
-              const errorMsg = error instanceof Error ? error.message : String(error);
-              log(`Priority resolution outage (reader failed): ${errorMsg}`);
-              hasWarnedThisOutage = true;
-            }
-            // Return fallback mode immediately
-            return { mode: 'fallback' };
           }
+        } catch (error) {
+          // Reader threw: set outage state and clear cache
+          inOutage = true;
+          cache.clear();
+          attemptedRefs.clear();
+          // Warn exactly once per outage
+          if (!hasWarnedThisOutage) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            log(`Priority resolution outage (reader failed): ${errorMsg}`);
+            hasWarnedThisOutage = true;
+          }
+          // Return fallback mode immediately
+          return { mode: 'fallback' };
         }
       }
 
