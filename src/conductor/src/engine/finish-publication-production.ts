@@ -17,6 +17,8 @@ import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
 import { hasHaltSignal, isEngineFlooredBody } from './halt-pr-rehabilitation.js';
 import { replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
+import { readAllVerdicts } from './gate-verdicts.js';
+import { gateSatisfied } from './selector.js';
 import {
   dispatchFinishRecord,
   makeProductionFinishRecordRunners,
@@ -392,18 +394,18 @@ export function createProductionFinishPublicationCoordinator(
         intent,
         ports: {
           filesystem: {
-            // A step the engine resolved by SKIPPING is resolved evidence, not
-            // absent evidence: `stepDone` is the same 'done' || 'skipped'
-            // predicate every other resolution site uses. Comparing to 'done'
-            // alone reported a legitimately skipped step as missing, which
-            // preflight maps to `*_evidence_invalid` — a disposition the router
-            // deliberately has no rule for, so every technical-track feature
-            // (no manual_test, no prd_audit) halted at FINISH with all work
-            // green.
-            observeImplementationEvidence: async () =>
-              stepDone(state, 'build_review') && stepDone(state, 'test_suite')
+            // FINISH must ask the same verdict-first question that selected
+            // these gates. A gate can be satisfied without dispatching, so it
+            // may have no state key at all. One tolerant store read per
+            // observation preserves selector fallback behavior for missing or
+            // malformed verdicts without manufacturing state.
+            observeImplementationEvidence: async () => {
+              const verdicts = await readAllVerdicts(deps.projectRoot);
+              return gateSatisfied('build_review', state, verdicts)
+                && gateSatisfied('test_suite', state, verdicts)
                 ? 'present'
-                : 'missing',
+                : 'missing';
+            },
             observeShipEvidence: async () =>
               stepDone(state, 'manual_test') && stepDone(state, 'architecture_review_as_built')
                 ? 'present'

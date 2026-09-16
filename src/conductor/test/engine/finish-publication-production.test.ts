@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:1
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -16,12 +16,116 @@ import type { BuildReviewDispositionRecord } from '../../src/engine/build-review
 import { routeFinishPublicationDisposition } from '../../src/engine/finish-publication.js';
 import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
+import { recordSkipVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import type { dispatchFinishRecord } from '../../src/engine/finish-record-cli.js';
 import type { ConductState } from '../../src/types/index.js';
 
 const commandResult = { stdout: '' };
 
+async function observeImplementationEvidence(input: {
+  root: string;
+  state: ConductState;
+  substituteGateSatisfied?: (step: string, state: ConductState, verdicts: unknown) => boolean;
+}): Promise<'valid' | 'invalid' | 'indeterminate'> {
+  let observation: 'valid' | 'invalid' | 'indeterminate' | undefined;
+  const advanceFinishPublication = vi.fn(async (args: { observe: () => Promise<{ implementationEvidence: 'valid' | 'invalid' | 'indeterminate' }> }) => {
+    observation = (await args.observe()).implementationEvidence;
+    return { kind: 'complete' as const };
+  });
+  vi.resetModules();
+  vi.doMock('../../src/engine/finish-publication.js', async () => ({
+    ...await vi.importActual('../../src/engine/finish-publication.js'),
+    advanceFinishPublication,
+  }));
+  if (input.substituteGateSatisfied) {
+    vi.doMock('../../src/engine/selector.js', async () => ({
+      ...await vi.importActual('../../src/engine/selector.js'),
+      gateSatisfied: input.substituteGateSatisfied,
+    }));
+  }
+
+  try {
+    const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+      '../../src/engine/finish-publication-production.js'
+    );
+    const coordinator = createCoordinator({
+      projectRoot: input.root,
+      stateFilePath: join(input.root, '.pipeline', 'conduct-state.json'),
+      baseBranch: 'main',
+      git: async () => commandResult,
+      gh: async () => commandResult,
+      acquireInteractiveIntent: async () => 'keep',
+      observeReleaseReadiness: async () => 'present',
+    });
+    await coordinator.advance({
+      state: input.state,
+      mode: 'interactive',
+      daemon: false,
+      dispatchJudgment: async () => ({ success: true }),
+      emit: async () => {},
+    });
+    return observation!;
+  } finally {
+    vi.doUnmock('../../src/engine/finish-publication.js');
+    vi.doUnmock('../../src/engine/selector.js');
+    vi.resetModules();
+  }
+}
+
 describe('production FINISH publication composition', () => {
+  it.each([
+    {
+      label: 'satisfied verdicts without step-state keys',
+      state: { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState,
+      writeVerdicts: async (root: string) => Promise.all([
+        writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 0 }),
+        writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
+      ]),
+    },
+    {
+      label: 'satisfied verdicts alongside done step-state keys',
+      state: {
+        feature_desc: 'feature', worktree_branch: 'feat/feature',
+        build_review: 'done', test_suite: 'done',
+      } as ConductState,
+      writeVerdicts: async (root: string) => Promise.all([
+        writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 0 }),
+        writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
+      ]),
+    },
+    {
+      label: 'a skip verdict',
+      state: { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState,
+      writeVerdicts: async (root: string) => Promise.all([
+        recordSkipVerdict(root, 'build_review', 'technical track'),
+        writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
+      ]),
+    },
+  ])('observes implementation evidence as present for $label', async ({ state, writeVerdicts }) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-gate-verdict-'));
+    try {
+      await writeVerdicts(root);
+      await expect(observeImplementationEvidence({ root, state })).resolves.toBe('valid');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('delegates each implementation-evidence member to selector gateSatisfied', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-gate-selector-'));
+    const gateSatisfied = vi.fn(() => true);
+    const state = { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState;
+    try {
+      await expect(observeImplementationEvidence({ root, state, substituteGateSatisfied: gateSatisfied }))
+        .resolves.toBe('valid');
+      expect(gateSatisfied).toHaveBeenNthCalledWith(1, 'build_review', state, expect.any(Object));
+      expect(gateSatisfied).toHaveBeenNthCalledWith(2, 'test_suite', state, expect.any(Object));
+      expect(gateSatisfied).toHaveBeenCalledTimes(2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     {
       label: 'an absent declaration for an exact plan',
