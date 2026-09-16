@@ -88,6 +88,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   gate_code_validity: consumer('src/conductor/src/engine/gate-code-validity.ts'),
   daemon_verbose: consumer('src/conductor/src/engine/daemon-deps.ts'),
   reconcile_parked_auto_cleanup: consumer(DAEMON_CLI),
+  reclaim_merged_worktrees: consumer(DAEMON_CLI),
   step_heartbeat_stall_minutes: none('deprecated compatibility no-op; never grants termination authority (#1025)'),
   stale_claim_window_hours: consumer(RESOLVED_CONFIG),
   provider_preparation_timeout_minutes: consumer(RESOLVED_CONFIG),
