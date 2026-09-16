@@ -693,6 +693,87 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     });
   });
 
+  it('reclaims a proven feat/daemon branch when its shipped record is present', async () => {
+    const slug = 'daemon-recorded';
+    const branch = `feat/daemon-${slug}`;
+    const { run, deleted } = makeGit({ shipped: [slug], branches: [branch], merged: [branch] });
+
+    const outcome = await reconcileMergedPark({ projectRoot: '/project', slug, branch, runGit: run });
+
+    expect({ outcome, deleted }).toEqual({
+      outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+      deleted: [branch],
+    });
+  });
+
+  it.each([
+    { slug: 'hotfix-without-record', branch: 'hotfix/x' },
+    { slug: 'spec-without-record', branch: 'spec/spec-without-record' },
+  ])('reclaims a proven non-daemon $branch branch without a shipped-record repair', async ({ slug, branch }) => {
+    const { run, deleted } = makeGit({ branches: [branch], merged: [branch] });
+    const requestRecordRepair = vi.fn(async () => {});
+
+    const outcome = await reconcileMergedPark({
+      projectRoot: '/project',
+      slug,
+      branch,
+      runGit: run,
+      requestRecordRepair,
+    });
+
+    expect({ outcome, deleted, repairs: requestRecordRepair.mock.calls }).toEqual({
+      outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+      deleted: [branch],
+      repairs: [],
+    });
+  });
+
+  it('defers a proven feat/daemon branch without a shipped record and requests repair', async () => {
+    const slug = 'daemon-record-missing';
+    const branch = `feat/daemon-${slug}`;
+    const { run } = makeGit({ branches: [branch], merged: [branch] });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: '[{"url":"https://example.test/pr/3"}]' });
+    const requestRecordRepair = vi.fn(async () => {});
+
+    const outcome = await reconcileMergedPark({
+      projectRoot: '/project',
+      slug,
+      branch,
+      runGit: run,
+      runGh,
+      requestRecordRepair,
+    });
+
+    expect({ outcome, repairs: requestRecordRepair.mock.calls }).toEqual({
+      outcome: { slug, steps: [], refusal: 'record-missing', deferred: true },
+      repairs: [[{ slug, prUrl: 'https://example.test/pr/3' }]],
+    });
+  });
+
+  it('refuses an unproven hotfix branch without a shipped record before the record rule', async () => {
+    const slug = 'hotfix-no-proof';
+    const branch = 'hotfix/x';
+    const { run, deleted } = makeGit({ branches: [branch] });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: '[]' });
+
+    const outcome = await reconcileMergedPark({ projectRoot: '/project', slug, branch, runGit: run, runGh });
+
+    expect({ outcome, deleted }).toEqual({
+      outcome: { slug, steps: [], refusal: 'no-merge-proof' },
+      deleted: [],
+    });
+  });
+
+  it('fails closed when the shipped-record listing is unreadable for a feat/daemon branch', async () => {
+    const slug = 'daemon-unreadable-records';
+    const branch = `feat/daemon-${slug}`;
+    const { run } = makeGit({ shipped: 'unavailable', branches: [branch], merged: [branch] });
+
+    const outcome = await reconcileMergedPark({ projectRoot: '/project', slug, branch, runGit: run });
+
+    expect(outcome).toEqual({ slug, steps: [], refusal: 'ancestry-check-failed' });
+  });
+
   it('treats an origin/main without a .docs/shipped tree as no records rather than unavailable', async () => {
     const { run } = makeGit({ shipped: 'no-tree', branches: ['feat/no-tree'], merged: ['feat/no-tree'] });
     const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: '[]' });

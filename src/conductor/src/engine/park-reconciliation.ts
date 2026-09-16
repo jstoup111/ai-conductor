@@ -660,7 +660,8 @@ export async function reconcileMergedPark(
     }
   }
 
-  if (!evidence.shippedRecordOnMain) {
+  const requiresRecord = opts.branch === undefined || opts.branch.startsWith('feat/daemon-');
+  if (requiresRecord && !evidence.shippedRecordOnMain) {
     let prUrl: string | undefined;
     for (const head of evidence.branches) {
       try {
@@ -684,10 +685,11 @@ export async function reconcileMergedPark(
     return { slug: opts.slug, steps: [], refusal: 'record-missing', deferred: true };
   }
 
-  // No local-resume check runs here, deliberately. Reaching this line means
-  // `evidence.shippedRecordOnMain` is true — the gate above returns for every
-  // other case — and a shipped record on origin/main is the harness's durable
-  // definition of "the work shipped" (CLAUDE.md rule 4). The per-worktree
+  // No local-resume check runs here, deliberately. A parked candidate reaching
+  // this line has a shipped record on origin/main — the harness's durable
+  // definition of "the work shipped" (CLAUDE.md rule 4). A listed non-daemon
+  // branch instead reached this line through its independently proven merge.
+  // The per-worktree
   // `detectAutoResume` verdict is derived from local `.pipeline/conduct-state.json`
   // and classifies as resumable any worktree missing `feature_status: complete`,
   // which is the normal state for every feature built before that field existed
