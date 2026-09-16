@@ -10140,18 +10140,19 @@ export class Conductor {
             }
             if (route.kind === 'retry_build') {
               await emitTracked({ type: 'finish_publication_disposition', disposition: 'retry_build' });
-              const kickback = await consumeKickbackBudget('finish', route.evidence);
+              const evidence = `${route.evidence}\nUnsatisfied implementation evidence members: ${route.unsatisfiedMembers.join(', ')}`;
+              const kickback = await consumeKickbackBudget('finish', evidence);
               if (!kickback.exhausted) {
                 await emitTracked({
                   type: 'kickback',
                   from: 'finish',
                   to: 'build',
-                  evidence: route.evidence,
+                  evidence,
                   count: kickback.entry.count,
                 });
                 pendingRetryHints.set(
                   'build',
-                  `FINISH found invalid implementation evidence:\n${route.evidence}\n` +
+                  `FINISH found invalid implementation evidence:\n${evidence}\n` +
                     'Fix and commit the cited implementation defect, then re-run BUILD verification.',
                 );
                 await captureKickbackToBuildContext('finish');

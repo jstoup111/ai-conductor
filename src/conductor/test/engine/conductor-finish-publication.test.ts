@@ -1129,7 +1129,11 @@ describe('Conductor FINISH publication routing', () => {
         if (step === 'build') throw ROUTED_SENTINEL;
         return {
           success: false,
-          publicationDisposition: { kind: 'implementation_invalid', evidence },
+          publicationDisposition: {
+            kind: 'implementation_invalid',
+            evidence,
+            unsatisfiedMembers: ['build_review'],
+          },
         };
       }),
     };
@@ -1151,14 +1155,59 @@ describe('Conductor FINISH publication routing', () => {
 
     expect(calls.map(({ step }) => step)).toEqual(['finish', 'build']);
     expect(calls[1]?.retryReason).toContain(evidence);
-    expect(kickbacks).toContainEqual(expect.objectContaining({
-      from: 'finish', to: 'build', evidence,
-    }));
+    const recordedEvidence = kickbacks.find((event) => event.from === 'finish' && event.to === 'build')?.evidence;
+    expect(recordedEvidence).toContain(evidence);
     expect(calls.map(({ step }) => step)).not.toContain('remediate');
     expect(dispositions).toEqual(['retry_build']);
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
       ROUTED_SENTINEL.message,
     );
+  });
+
+  it.each([
+    'implementation_evidence_invalid: Implementation evidence is invalid. Re-run the BUILD verification, then retry FINISH.',
+    'rewritten implementation-evidence guidance that deliberately names no gate',
+  ])('names the typed build-review member in the kickback and retry hint without parsing evidence text', async (evidence) => {
+    const calls: Array<{ step: StepName; retryReason?: string }> = [];
+    const kickbacks: Array<{ from: StepName; to: StepName; evidence?: string }> = [];
+    const events = new ConductorEventEmitter();
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push(event);
+    });
+    const runner: StepRunner = {
+      run: vi.fn(async (step, _state, options) => {
+        calls.push({ step, retryReason: options?.retryReason });
+        if (step === 'build') throw ROUTED_SENTINEL;
+        return {
+          success: false,
+          publicationDisposition: {
+            kind: 'implementation_invalid',
+            evidence,
+            unsatisfiedMembers: ['build_review'],
+          },
+        };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      maxRetries: 2,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+      escalateBuildFailure: vi.fn(async () => ({})),
+    });
+
+    await conductor.run();
+
+    const recordedEvidence = kickbacks.find((event) => event.from === 'finish' && event.to === 'build')?.evidence;
+    const buildHint = calls.find(({ step }) => step === 'build')?.retryReason;
+    expect(recordedEvidence).toContain('build_review');
+    expect(buildHint).toContain('build_review');
   });
 
   it.each([
@@ -1192,6 +1241,7 @@ describe('Conductor FINISH publication routing', () => {
               publicationDisposition: {
                 kind: 'implementation_invalid',
                 evidence: 'implementation_evidence_invalid',
+                unsatisfiedMembers: ['build_review'],
               },
             };
           }
@@ -1651,7 +1701,11 @@ describe('Conductor FINISH publication routing', () => {
         if (behavior === 'build_kickback') {
           return {
             success: false,
-            publicationDisposition: { kind: 'implementation_invalid', evidence: 'BUILD proof is stale' },
+            publicationDisposition: {
+              kind: 'implementation_invalid',
+              evidence: 'BUILD proof is stale',
+              unsatisfiedMembers: ['build_review'],
+            },
           };
         }
         if (behavior === 'human_required') {
