@@ -231,10 +231,24 @@ export async function landSpec(
     });
 
     if (dirtyLines.length > 0) {
-      const summary = dirtyLines.map((l) => l.trim()).join(', ');
+      const trackedChanges = dirtyLines.filter((line) => line.slice(0, 2) !== '??');
+      const untrackedOutsideDocs = dirtyLines.filter((line) => line.slice(0, 2) === '??');
+      const conditions = [
+        trackedChanges.length > 0
+          ? `Uncommitted changes to tracked files (including under .docs/): ${trackedChanges.map((line) => line.trim()).join(', ')}`
+          : null,
+        untrackedOutsideDocs.length > 0
+          ? `Untracked files outside .docs/: ${untrackedOutsideDocs.map((line) => line.trim()).join(', ')}`
+          : null,
+      ].filter((condition): condition is string => condition !== null);
+      const remedies = [
+        trackedChanges.length > 0 ? 'Commit or discard the tracked changes' : null,
+        untrackedOutsideDocs.length > 0 ? 'remove or relocate the untracked files' : null,
+      ].filter((remedy): remedy is string => remedy !== null);
       throw landGateError('worktree-dirty',
-        `landSpec: per-idea worktree at "${worktreePath}" has uncommitted (dirty) changes outside .docs/: ${summary}. ` +
-          'Recreate the worktree or discard tracked changes before running landSpec.',
+        `landSpec: per-idea worktree at "${worktreePath}" has uncommitted (dirty) changes. ` +
+          'The landing commit stages only untracked artifacts under .docs/. ' +
+          `${conditions.join('. ')}. ${remedies.join('; ')} before running landSpec.`,
       );
     }
   }
