@@ -1,4 +1,4 @@
-// Covers: task:1, task:2
+// Covers: task:1, task:2, task:3
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -154,6 +154,24 @@ describe('production FINISH publication composition', () => {
       await expect(observeImplementationEvidence({
         root,
         state: { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState,
+      })).resolves.toBe('invalid');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a staled build-review step despite its satisfied verdict', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-staled-build-review-'));
+    try {
+      await Promise.all([
+        writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 0 }),
+        writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
+      ]);
+      await expect(observeImplementationEvidence({
+        root,
+        state: {
+          feature_desc: 'feature', worktree_branch: 'feat/feature', build_review: 'stale',
+        } as ConductState,
       })).resolves.toBe('invalid');
     } finally {
       await rm(root, { recursive: true, force: true });
