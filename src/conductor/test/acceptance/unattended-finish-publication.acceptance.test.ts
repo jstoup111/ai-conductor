@@ -3,6 +3,7 @@
  *
  * Covers: FR-1, FR-2, FR-3, FR-4, FR-5, FR-6, FR-7, FR-8, FR-9, FR-10,
  * FR-11, FR-12, FR-13.
+ * Covers: S2.1
  *
  * Stories: .docs/stories/unattended-finish-spends-minutes-before-determinis.md
  * Plan:    .docs/plans/unattended-finish-spends-minutes-before-determinis.md
@@ -56,6 +57,10 @@ interface PublicationSnapshot {
   mode: PublicationMode;
   intent: PublicationIntent | null;
   implementationEvidence: EvidenceState;
+  unsatisfiedImplementationEvidenceMembers?:
+    | readonly ['build_review']
+    | readonly ['test_suite']
+    | readonly ['build_review', 'test_suite'];
   shipEvidence: EvidenceState;
   releaseReadiness: EvidenceState;
   branchPushed: EvidenceState;
@@ -364,17 +369,25 @@ describe('Story 3 — recovery remains local to FINISH unless implementation pro
     expect(fixture.snapshot().implementationEvidence).toBe('valid');
   });
 
-  it.each(['invalid', 'indeterminate'] as const)(
+  it.each([
+    ['invalid', ['test_suite']],
+    ['indeterminate', undefined],
+  ] as const)(
     'routes %s implementation evidence to a typed non-success disposition with cited evidence',
-    async (implementationEvidence) => {
+    async (implementationEvidence, unsatisfiedImplementationEvidenceMembers) => {
       const advance = await loadAdvanceFinishPublication();
-      const fixture = makePublicationFixture(readySnapshot({ implementationEvidence }));
+      const fixture = makePublicationFixture(
+        readySnapshot({ implementationEvidence, unsatisfiedImplementationEvidenceMembers }),
+      );
 
       const result = await advance({ observe: fixture.observe, effects: fixture.effects });
 
       if (implementationEvidence === 'invalid') {
         expect(result.kind).toBe('implementation_invalid');
         expect('evidence' in result ? result.evidence : '').not.toBe('');
+        expect('unsatisfiedMembers' in result ? result.unsatisfiedMembers : undefined).toEqual([
+          'test_suite',
+        ]);
       } else {
         expect(result.kind).toBe('publication_retry');
       }
@@ -387,6 +400,7 @@ describe('Story 3 — recovery remains local to FINISH unless implementation pro
     const fixture = makePublicationFixture(
       readySnapshot({
         implementationEvidence: 'invalid',
+        unsatisfiedImplementationEvidenceMembers: ['build_review'],
         pr: { identity: 'one', url: PR_URL, prose: 'accepted', ready: true },
         outcomeRecord: 'missing',
       }),
