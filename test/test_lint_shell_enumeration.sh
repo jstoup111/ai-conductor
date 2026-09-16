@@ -108,18 +108,20 @@ mutated_glob="$TMP_ROOT/integrity-glob.sh"
 cp "$INTEGRITY_SOURCE" "$mutated_glob"
 sed -i '/^# ── 1b\./i for script in "${HARNESS_DIR}"/bin/*; do :; done' "$mutated_glob"
 set +e
-assert_integrity_uses_shared_list "$mutated_glob"
+glob_output="$(assert_integrity_uses_shared_list "$mutated_glob" 2>&1)"
 glob_exit=$?
 set -e
 assert 'drift guard rejects a syntax-check glob' "$([ "$glob_exit" -ne 0 ] && echo 0 || echo 1)"
+assert 'glob rejection names the syntax-check section' "$(grep -q 'syntax-check section' <<<"$glob_output" && echo 0 || echo 1)"
 
 mutated_missing="$TMP_ROOT/integrity-missing.sh"
 sed 's|"${HARNESS_DIR}/test/lint_shell.sh" --list|false|' "$INTEGRITY_SOURCE" > "$mutated_missing"
 set +e
-assert_integrity_uses_shared_list "$mutated_missing"
+missing_output="$(assert_integrity_uses_shared_list "$mutated_missing" 2>&1)"
 missing_exit=$?
 set -e
 assert 'drift guard rejects a missing shared list' "$([ "$missing_exit" -ne 0 ] && echo 0 || echo 1)"
+assert 'missing-list rejection names the syntax-check section' "$(grep -q 'syntax-check section' <<<"$missing_output" && echo 0 || echo 1)"
 
 printf '%s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
