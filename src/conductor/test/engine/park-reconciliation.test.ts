@@ -18,6 +18,7 @@ import {
   writeOperatorPark,
 } from '../../src/engine/park-marker.js';
 import { TEARDOWN_SCRIPT } from '../../src/engine/worktree-prepare.js';
+import * as daemonParkCli from '../../src/engine/daemon-park-cli.js';
 
 /**
  * A faithful in-memory stand-in for the four git reads the reconciler makes,
@@ -682,7 +683,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       gitVerbs: run.mock.calls.map(([args]) => args.slice(0, 2).join(' ')),
       ghCalls: runGh.mock.calls,
     }).toEqual({
-      outcome: { slug: 'recorded', steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+      outcome: { slug: 'recorded', steps: ['worktree-removed', 'branch-deleted'] },
       gitVerbs: [
         'ls-tree --name-only',
         'for-each-ref --format=%(refname:short)',
@@ -701,7 +702,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     const outcome = await reconcileMergedPark({ projectRoot: '/project', slug, branch, runGit: run });
 
     expect({ outcome, deleted }).toEqual({
-      outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+      outcome: { slug, steps: ['worktree-removed', 'branch-deleted'] },
       deleted: [branch],
     });
   });
@@ -722,7 +723,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     });
 
     expect({ outcome, deleted, repairs: requestRecordRepair.mock.calls }).toEqual({
-      outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+      outcome: { slug, steps: ['worktree-removed', 'branch-deleted'] },
       deleted: [branch],
       repairs: [],
     });
@@ -1044,8 +1045,53 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
 
       const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run });
 
-      expect(outcome).toEqual({ slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] });
+      expect(outcome).toEqual({ slug, steps: ['worktree-removed', 'branch-deleted'] });
     } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reclaims an eligible non-parked worktree after project teardown without dispatching unpark', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'non-parked-reclaim';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const teardownObservation = join(projectRoot, 'teardown-ran');
+    const { run, deleted } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [`feat/${slug}`],
+      onWorktreeRemove: async () => {
+        expect(await access(teardownObservation).then(() => true, () => false)).toBe(true);
+      },
+    });
+    const log = vi.fn<(message: string) => void>();
+    const dispatch = vi.spyOn(daemonParkCli, 'dispatchDaemonPark');
+    try {
+      await mkdir(join(worktree, 'bin'), { recursive: true });
+      await writeFile(join(worktree, 'package.json'), '{"type":"commonjs"}\n', 'utf-8');
+      await writeFile(
+        join(worktree, TEARDOWN_SCRIPT),
+        `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(teardownObservation)}, 'ran');\n`,
+      );
+      await chmod(join(worktree, TEARDOWN_SCRIPT), 0o755);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, log });
+
+      expect({
+        outcome,
+        deleted,
+        parked: await isOperatorParked(projectRoot, slug),
+        dispatches: dispatch.mock.calls,
+        unparkLogs: log.mock.calls.filter(([message]) => message.includes('was not operator-parked')),
+      }).toEqual({
+        outcome: { slug, steps: ['worktree-removed', 'branch-deleted'] },
+        deleted: [`feat/${slug}`],
+        parked: false,
+        dispatches: [],
+        unparkLogs: [],
+      });
+    } finally {
+      dispatch.mockRestore();
       await rm(projectRoot, { recursive: true, force: true });
     }
   });

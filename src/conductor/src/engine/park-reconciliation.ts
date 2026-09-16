@@ -8,7 +8,7 @@ import { GhCapabilityError } from './tracker-client.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
 import { access, readFile, rm } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { listOperatorParkedSlugs } from './park-marker.js';
+import { isOperatorParked, listOperatorParkedSlugs } from './park-marker.js';
 import { parseIntakeSourceRef } from './artifacts.js';
 import { runProjectTeardown } from './worktree-prepare.js';
 import { loadConfig } from './config.js';
@@ -764,16 +764,18 @@ export async function reconcileMergedPark(
     steps.push('branch-deleted');
   }
 
-  try {
-    const exitCode = await dispatchDaemonPark(
-      { kind: 'unpark', slug: opts.slug },
-      { cwd: opts.projectRoot, out: opts.log ?? (() => {}) },
-    );
-    if (exitCode !== 0) throw new Error('canonical unpark failed');
-  } catch {
-    return { slug: opts.slug, steps, refusal: 'unpark-failed' };
+  if (await isOperatorParked(opts.projectRoot, opts.slug)) {
+    try {
+      const exitCode = await dispatchDaemonPark(
+        { kind: 'unpark', slug: opts.slug },
+        { cwd: opts.projectRoot, out: opts.log ?? (() => {}) },
+      );
+      if (exitCode !== 0) throw new Error('canonical unpark failed');
+    } catch {
+      return { slug: opts.slug, steps, refusal: 'unpark-failed' };
+    }
+    steps.push('unparked');
   }
-  steps.push('unparked');
 
   return { slug: opts.slug, steps };
 }
