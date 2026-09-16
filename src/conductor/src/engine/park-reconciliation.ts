@@ -7,7 +7,7 @@ import {
 import { GhCapabilityError } from './tracker-client.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
 import { access, readFile, rm } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { listOperatorParkedSlugs } from './park-marker.js';
 import { parseIntakeSourceRef } from './artifacts.js';
 import { runProjectTeardown } from './worktree-prepare.js';
@@ -224,6 +224,41 @@ async function listBranchesBySlug(
       else bySlug.set(key, [ref]);
     }
     return bySlug;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Registered, depth-one feature worktrees and their checked-out branches, or
+ * `null` when Git cannot provide the listing. This deliberately reads once so
+ * a caller can apply one coherent registry snapshot to a whole sweep.
+ */
+export async function listRegisteredWorktrees(
+  runGit: GitRunner,
+  projectRoot: string,
+): Promise<Array<{ slug: string; branch: string }> | null> {
+  try {
+    const { stdout } = await runGit(['worktree', 'list', '--porcelain'], { cwd: projectRoot });
+    const worktreesRoot = join(projectRoot, '.worktrees');
+    const candidates: Array<{ slug: string; branch: string }> = [];
+
+    for (const record of stdout.split(/\n\s*\n/)) {
+      const lines = record.split('\n');
+      const worktreeLine = lines.find((line) => line.startsWith('worktree '));
+      const branchLine = lines.find((line) => line.startsWith('branch refs/heads/'));
+      if (!worktreeLine || !branchLine) continue;
+
+      const path = worktreeLine.slice('worktree '.length).trim();
+      if (dirname(path) !== worktreesRoot) continue;
+
+      candidates.push({
+        slug: basename(path),
+        branch: branchLine.slice('branch refs/heads/'.length).trim(),
+      });
+    }
+
+    return candidates;
   } catch {
     return null;
   }
