@@ -22,7 +22,15 @@ import {
   isReviewDocumentPath,
   projectGateSurfaces,
 } from './gate-invalidation.js';
-import { buildArtifactResolutionContext, resolveFeaturePlanPath, resolveFeaturePrdPaths } from './artifacts.js';
+import {
+  ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+  MANUAL_TEST_CODE_STAMP,
+  MANUAL_TEST_FAIL_EVIDENCE,
+  PRD_AUDIT_CODE_STAMP,
+  buildArtifactResolutionContext,
+  resolveFeaturePlanPath,
+  resolveFeaturePrdPaths,
+} from './artifacts.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import { ALL_STEPS } from './steps.js';
 import type { ProviderAttributionMetadata } from './provider-execution.js';
@@ -821,9 +829,11 @@ async function resolveFeatureDesc(projectRoot: string): Promise<string | undefin
   }
 }
 
-/** Resolve only when a document delta exists; no additional persisted state. */
-export async function resolveReviewInputs(projectRoot: string, delta: string[]): Promise<string[]> {
-  if (!delta.some(isReviewDocumentPath)) return [];
+/** Resolve review inputs.  Ordinary callers resolve only for a document
+ * delta; preservation additionally requests the full declared set to bind
+ * authority against later input edits. */
+export async function resolveReviewInputs(projectRoot: string, delta: string[], force = false): Promise<string[]> {
+  if (!force && !delta.some(isReviewDocumentPath)) return [];
   const featureDesc = await resolveFeatureDesc(projectRoot);
   const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
   const context = await buildArtifactResolutionContext(projectRoot, { planPath, featureDesc });
@@ -843,6 +853,7 @@ export async function resolveReviewInputs(projectRoot: string, delta: string[]):
     for (const prefix of ['stories', 'specs', 'plans', 'coherence']) {
       inputs.push(`.docs/${prefix}/${identity}.md`);
     }
+    inputs.push(`.docs/decisions/adr-${identity}.md`);
   }
   return [...new Set(inputs.map(repoPath))];
 }
@@ -1689,6 +1700,68 @@ async function applicableOriginalPass(
   return verdict!;
 }
 
+const PRESERVED_GATE_ARTIFACTS: Partial<Record<StepName, string>> = {
+  coverage_binding: '.pipeline/coverage-binding.json',
+  build_review: '.pipeline/build-review.json',
+  test_suite: '.pipeline/test-suite-evidence.json',
+  manual_test: '.pipeline/manual-test-results.md',
+  prd_audit: '.pipeline/prd-audit.md',
+  architecture_review_as_built: '.pipeline/architecture-review-as-built.md',
+};
+
+/**
+ * Capture the durable identity of the original judge result.  A gate verdict
+ * is only loop bookkeeping: its timestamp is neither an artifact digest nor
+ * a provider attempt.  Replay authority therefore exists only when the
+ * original artifact and its engine-owned sidecar can both prove the identity
+ * we are retaining.
+ */
+async function capturePreservedJudgeIdentity(
+  projectRoot: string,
+  gate: StepName,
+): Promise<RebasePreservedCandidate['original'] | undefined> {
+  const artifactPath = PRESERVED_GATE_ARTIFACTS[gate];
+  if (!artifactPath) return undefined;
+
+  try {
+    const artifact = await readFile(join(projectRoot, artifactPath), 'utf-8');
+    let codeStamp: unknown;
+    let runId: unknown;
+
+    if (gate === 'manual_test') {
+      const [stamp, identity] = await Promise.all([
+        readFile(join(projectRoot, MANUAL_TEST_FAIL_EVIDENCE), 'utf-8'),
+        readFile(join(projectRoot, MANUAL_TEST_CODE_STAMP), 'utf-8'),
+      ]);
+      codeStamp = (JSON.parse(stamp) as { codeStamp?: unknown }).codeStamp;
+      runId = (JSON.parse(identity) as { runId?: unknown }).runId;
+    } else if (gate === 'prd_audit' || gate === 'architecture_review_as_built') {
+      const sidecar = await readFile(join(
+        projectRoot,
+        gate === 'prd_audit' ? PRD_AUDIT_CODE_STAMP : ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+      ), 'utf-8');
+      const parsed = JSON.parse(sidecar) as { codeStamp?: unknown; runId?: unknown };
+      codeStamp = parsed.codeStamp;
+      runId = parsed.runId;
+    }
+
+    // The SHIP-tail sidecar is the engine's source of truth: the same run id
+    // is deliberately handed to the provider as its attempt id. Other gates
+    // lack this authority and must be re-judged rather than assigned a
+    // plausible identity from the generic gate verdict.
+    if (typeof codeStamp !== 'string' || codeStamp.length === 0 ||
+        typeof runId !== 'string' || runId.length === 0) return undefined;
+    return {
+      artifactDigest: `sha256:${createHash('sha256').update(artifact).digest('hex')}`,
+      attemptId: runId,
+      runId,
+      codeStamp,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Write the gate verdicts implied by a rebase outcome and return whether the
  * rebase gate itself is satisfied (→ proceed to finish) or the loop must HALT.
@@ -1854,6 +1927,9 @@ export async function applyRebaseVerdicts(
     : undefined;
   const applicablePreservations = new Set<StepName>();
   const preservedCandidates: RebasePreservedCandidate[] = [];
+  const fullReviewInputs = replayPartition === undefined
+    ? []
+    : await resolveReviewInputs(projectRoot, [], true);
   // Only the replay classifier has immutable candidate provenance. The legacy
   // path retains its existing gate-selection behavior but cannot mint bounded
   // replay authority from a path-only preservation.
@@ -1861,23 +1937,23 @@ export async function applyRebaseVerdicts(
   if (partition !== undefined) {
     for (const gate of partition.preserved as StepName[]) {
       const original = await applicableOriginalPass(projectRoot, gate);
-      if (original) applicablePreservations.add(gate);
       const classified = replayCandidates.find((candidate) => candidate.gate === gate);
       if (original && classified) {
-        const originalIdentity = `${original.checkedAt}`;
-        preservedCandidates.push({
-          gate,
-          original: {
-            artifactDigest: createHash('sha256').update(JSON.stringify(original)).digest('hex'),
-            attemptId: originalIdentity,
-            runId: originalIdentity,
-            codeStamp: replayComparison?.identity.preRebaseHead ?? '',
-          },
-          originalVerdictDigest: createHash('sha256').update(JSON.stringify(original)).digest('hex'),
-          relevantInputIdentities: classified.source.activeInputs.map(
-            (path) => `${path}@${replayComparison?.identity.completedHead ?? ''}`,
-          ),
-        });
+        const identity = await capturePreservedJudgeIdentity(projectRoot, gate);
+        if (identity) {
+          applicablePreservations.add(gate);
+          preservedCandidates.push({
+            gate,
+            original: identity,
+            originalVerdictDigest: createHash('sha256').update(JSON.stringify(original)).digest('hex'),
+            // `activeInputs` is only the changed slice.  Bound every resolved
+            // review document instead, so a later story/plan/coherence/ADR
+            // edit cannot silently retain this replay authority.
+            relevantInputIdentities: fullReviewInputs.map(
+              (path) => `${path}@${replayComparison?.identity.completedHead ?? ''}`,
+            ),
+          });
+        }
       }
     }
   }
