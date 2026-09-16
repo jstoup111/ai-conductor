@@ -1,7 +1,7 @@
 import { access, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { basename, dirname, isAbsolute, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
-import type { HarnessConfig } from '../types/config.js';
+import type { BuildReviewRubricId, HarnessConfig } from '../types/config.js';
 import type {
   VerdictFreshnessClassification,
   VerdictFreshnessOutcome,
@@ -61,6 +61,7 @@ import {
   parseBuildReviewAggregate,
   type BuildReviewEffectiveVerdict,
 } from './build-review-aggregate.js';
+import { BUILD_REVIEW_RUBRIC_IDS } from './build-review-registry.js';
 import {
   resolveEffectiveBuildReviewVerdict,
   type BuildReviewEffectiveResolverDeps,
@@ -2172,10 +2173,7 @@ export async function discardStaleLapBuildReviewFail(
  * fields optional — a grader may flag one, several, or (rarely) none of the
  * categories while still returning FAIL with free-form `reasons`.
  */
-export interface BuildReviewRubric {
-  /** A changed test is insensitive to the behavior it claims to cover. */
-  testQuality: boolean;
-}
+export type BuildReviewRubric = Record<BuildReviewRubricId, boolean>;
 
 /**
  * Detailed, independently actionable findings grouped by the rubric item
@@ -2204,7 +2202,7 @@ export interface BuildReviewVerdict {
   codeStamp?: string | null;
 }
 
-const BUILD_REVIEW_RUBRIC_NAMES = ['testQuality'] as const;
+const BUILD_REVIEW_RUBRIC_NAMES = BUILD_REVIEW_RUBRIC_IDS;
 
 /**
  * Flatten a verdict's legacy summaries and structured findings for every
@@ -2332,6 +2330,16 @@ export function validateBuildReviewVerdict(
       ok: false,
       reason: `${BUILD_REVIEW_VERDICT} "verdict" FAIL requires at least one rubric flag to be true`,
     };
+  }
+  if (findings !== undefined) {
+    for (const rubricName of failedRubrics) {
+      if ((findings[rubricName]?.length ?? 0) === 0) {
+        return {
+          ok: false,
+          reason: `${BUILD_REVIEW_VERDICT} "findings.${rubricName}" must be non-empty when ${rubricName} is named in failedRubrics`,
+        };
+      }
+    }
   }
 
   const result: {
