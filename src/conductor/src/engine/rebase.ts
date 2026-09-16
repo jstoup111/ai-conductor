@@ -1926,6 +1926,11 @@ export async function applyRebaseVerdicts(
     ? replayPartition ?? classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
     : undefined;
   const applicablePreservations = new Set<StepName>();
+  // A current original PASS is enough to retain a classifier-preserved gate.
+  // Capturing replay identity is stricter: it grants the PASS durable bounded
+  // replay authority for later readers, but a missing legacy sidecar must not
+  // turn that otherwise applicable PASS into a rebase invalidation.
+  const applicableOriginalPasses = new Set<StepName>();
   const preservedCandidates: RebasePreservedCandidate[] = [];
   const fullReviewInputs = replayPartition === undefined
     ? []
@@ -1938,6 +1943,9 @@ export async function applyRebaseVerdicts(
     for (const gate of partition.preserved as StepName[]) {
       const original = await applicableOriginalPass(projectRoot, gate);
       const classified = replayCandidates.find((candidate) => candidate.gate === gate);
+      if (original) {
+        applicableOriginalPasses.add(gate);
+      }
       if (original && classified) {
         const identity = await capturePreservedJudgeIdentity(projectRoot, gate);
         if (identity) {
@@ -1959,7 +1967,7 @@ export async function applyRebaseVerdicts(
   }
   const unprovedPreservations = partition === undefined
     ? []
-    : (partition.preserved as StepName[]).filter((gate) => !applicablePreservations.has(gate));
+    : (partition.preserved as StepName[]).filter((gate) => !applicableOriginalPasses.has(gate));
   const targets: StepName[] = partition !== undefined
     // A completed BUILD is attested before this decision is applied. Replay
     // equivalence changes which reviews need another judgement, not whether
@@ -1998,7 +2006,7 @@ export async function applyRebaseVerdicts(
     satisfied: true,
     kickedBack,
     reverified,
-    ...([...applicablePreservations].length === 0 ? {} : { preservedGates: [...applicablePreservations] }),
+    ...([...applicableOriginalPasses].length === 0 ? {} : { preservedGates: [...applicableOriginalPasses] }),
     ...(preservedCandidates.length === 0 ? {} : { preservedCandidates }),
     ...(preserved.length === 0 ? {} : { preserved }),
     ...(replayComparison ? { replay: {
