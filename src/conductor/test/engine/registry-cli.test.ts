@@ -1,5 +1,6 @@
-// Covers: task:1, task:2, task:19
+// Covers: task:1, task:2, task:3, task:19
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync } from 'node:fs';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -16,6 +17,7 @@ describe('conduct-ts config init verification flags', () => {
   let projectRoot: string;
   const repositoryRoot = join(process.cwd(), '..', '..');
   let originalPath: string | undefined;
+  let originalGitCallLog: string | undefined;
 
   beforeEach(async () => {
     projectRoot = await mkdtemp(join(tmpdir(), 'registry-cli-config-init-'));
@@ -23,11 +25,12 @@ describe('conduct-ts config init verification flags', () => {
     await mkdir(fakeBin);
     await writeFile(
       join(fakeBin, 'git'),
-      '#!/bin/sh\nprintf "true\\n"\n',
+      '#!/bin/sh\nif [ -n "$GIT_CALL_LOG" ]; then\n  printf "%s\\n" "$@" >> "$GIT_CALL_LOG"\nfi\nprintf "true\\n"\n',
       'utf8',
     );
     await chmod(join(fakeBin, 'git'), 0o755);
     originalPath = process.env.PATH;
+    originalGitCallLog = process.env.GIT_CALL_LOG;
     process.env.PATH = `${fakeBin}:${originalPath ?? ''}`;
     process.chdir(projectRoot);
   });
@@ -35,6 +38,11 @@ describe('conduct-ts config init verification flags', () => {
   afterEach(async () => {
     process.chdir(repositoryRoot);
     process.env.PATH = originalPath;
+    if (originalGitCallLog === undefined) {
+      delete process.env.GIT_CALL_LOG;
+    } else {
+      process.env.GIT_CALL_LOG = originalGitCallLog;
+    }
     vi.restoreAllMocks();
     await rm(projectRoot, { recursive: true, force: true });
   });
@@ -112,6 +120,106 @@ describe('conduct-ts config init verification flags', () => {
     expect(loaded.ok).toBe(true);
     if (!loaded.ok) return;
     expect(loaded.config.test_suite?.verification).toMatchObject(verification);
+  });
+
+  it('writes the supplied test command under the rendered test_suite block', async () => {
+    const command = detectRegistryCommand([
+      'node',
+      'conduct-ts',
+      'config',
+      'init',
+      '--test-suite-mode',
+      'aggregate',
+      '--test-suite-drift-budget',
+      'strict',
+      '--test-suite-command',
+      'pytest -q',
+    ]);
+
+    expect(command).not.toBeNull();
+    expect(await dispatchRegistry(command!)).toBe(0);
+
+    const generatedConfig = await readFile(
+      join(projectRoot, '.ai-conductor', 'config.yml'),
+      'utf8',
+    );
+    expect(generatedConfig).toMatch(/test_suite:\n  command: pytest -q\n/);
+    expect(generatedConfig).not.toMatch(/^  command: npm test$/m);
+  });
+
+  it('quotes a scalar-looking test command so loadConfig reads it back as a string', async () => {
+    const testSuiteCommand = 'true';
+    const command = detectRegistryCommand([
+      'node',
+      'conduct-ts',
+      'config',
+      'init',
+      '--test-suite-command',
+      testSuiteCommand,
+    ]);
+
+    expect(command).not.toBeNull();
+    expect(await dispatchRegistry(command!)).toBe(0);
+
+    const generatedConfig = await readFile(
+      join(projectRoot, '.ai-conductor', 'config.yml'),
+      'utf8',
+    );
+    expect(generatedConfig).toMatch(/^  command: "true"$/m);
+
+    const loaded = await loadConfig(projectRoot);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.config.test_suite?.command).toBe(testSuiteCommand);
+  });
+
+  it('stores a metacharacter-bearing test command as one YAML scalar', async () => {
+    const testSuiteCommand = 'make test && echo done';
+    const command = detectRegistryCommand([
+      'node',
+      'conduct-ts',
+      'config',
+      'init',
+      '--test-suite-command',
+      testSuiteCommand,
+    ]);
+
+    expect(command).not.toBeNull();
+    expect(await dispatchRegistry(command!)).toBe(0);
+
+    const loaded = await loadConfig(projectRoot);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.config.test_suite?.command).toBe(testSuiteCommand);
+  });
+
+  it('records the supplied command without executing it during config init', async () => {
+    const executionMarker = join(projectRoot, 'test-suite-command-was-executed');
+    const gitCallLog = join(projectRoot, 'git-calls');
+    process.env.GIT_CALL_LOG = gitCallLog;
+    const testSuiteCommand = `touch ${executionMarker}`;
+    const command = detectRegistryCommand([
+      'node',
+      'conduct-ts',
+      'config',
+      'init',
+      '--test-suite-command',
+      testSuiteCommand,
+    ]);
+
+    expect(command).not.toBeNull();
+    expect(await dispatchRegistry(command!)).toBe(0);
+
+    expect(await readFile(gitCallLog, 'utf8')).toBe(
+      `-C\n${projectRoot}\nrev-parse\n--is-inside-work-tree\n`,
+    );
+    expect(existsSync(executionMarker)).toBe(false);
+
+    const generatedConfig = await readFile(
+      join(projectRoot, '.ai-conductor', 'config.yml'),
+      'utf8',
+    );
+    expect(generatedConfig).toContain(`command: ${testSuiteCommand}`);
   });
 
   it('copies the bare template byte-for-byte without verification flags', async () => {

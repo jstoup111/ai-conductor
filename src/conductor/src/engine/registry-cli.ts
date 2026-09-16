@@ -184,6 +184,7 @@ interface ConfigInitOptions {
 }
 
 interface TestSuiteVerificationSelection {
+  command: string;
   mode: TestSuiteVerificationMode;
   preset: TestSuiteDriftBudgetPreset;
 }
@@ -214,9 +215,19 @@ function resolveVerificationSelection(
   }
 
   return {
+    command: options.testSuiteCommand ?? 'npm test',
     mode: (options.testSuiteMode ?? 'aggregate') as TestSuiteVerificationMode,
     preset: (options.testSuiteDriftBudget ?? 'strict') as TestSuiteDriftBudgetPreset,
   };
+}
+
+const YAML_IMPLICIT_SCALAR = /^(?:true|false|yes|no|on|off|null|~|[-+]?\d[\d_]*(?:\.\d[\d_]*)?(?:e[-+]?\d[\d_]*)?|[-+]?\.\d[\d_]*(?:e[-+]?\d[\d_]*)?|[-+]?\.(?:inf|nan)|\d{4}-\d{1,2}-\d{1,2}(?:[Tt ].*)?)$/i;
+
+function yamlScalar(value: string): string {
+  return /^[A-Za-z0-9][A-Za-z0-9 ._/-]*$/.test(value) &&
+    !YAML_IMPLICIT_SCALAR.test(value)
+    ? value
+    : JSON.stringify(value);
 }
 
 function renderVerificationBlock(selection: TestSuiteVerificationSelection): string {
@@ -238,7 +249,7 @@ function renderVerificationBlock(selection: TestSuiteVerificationSelection): str
   return [
     '# Test-suite verification answer recorded by ai-conductor config init.',
     'test_suite:',
-    '  command: npm test',
+    `  command: ${yamlScalar(selection.command)}`,
     scopedCommand.trimEnd(),
     '  verification:',
     `    mode: ${selection.mode}`,
