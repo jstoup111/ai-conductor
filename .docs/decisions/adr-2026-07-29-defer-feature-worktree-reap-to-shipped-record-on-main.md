@@ -88,6 +88,27 @@ pass a gate."
    already best-effort/non-throwing; the sweep re-evaluates the gate every pass, so a transient
    fetch or `gh` failure defers a reap rather than losing one, and never deletes on unknown state.
 
+> **Amended 2026-09-14 by jstoup111/ai-conductor#1510 (spec `reclaim-merged-feature-worktrees-without-depending`):** the registry-driven reap in Decision 2
+> stopped reclaiming once the watch registry stopped covering worktrees (never enrolled, trimmed
+> at its cap, or pruned on `NOTFOUND`); an enumeration-fed automatic path is added beside it.
+>
+> 8. **Automatic reclamation over enumerated candidates goes through the single-slug helper.**
+>    The parked-feature reconciliation sweep enumerates the git-registered worktrees under
+>    `.worktrees/` and feeds `reconcileMergedPark` one explicit slug at a time, under
+>    `adr-2026-08-01` Decisions 6–8. Decision 6's single-slug operator verb is unchanged: the
+>    enumeration is the candidate source, never the deletion unit, and no glob or computed set
+>    reaches a removal primitive. The path is gated by `reclaim_merged_worktrees` (boolean,
+>    default `true`), with the same semantics as `reconcile_parked_auto_cleanup`: it changes who
+>    initiates, never what is checked.
+>
+> 9. **Every enumerated candidate that is not reclaimed is retained with a named reason on the
+>    event spine.** In-flight (the sweep context's `isFeatureInFlight`), `engineer-*` and
+>    `resolve-*` prefixes, nested or otherwise invalid slugs, a live `.pipeline/HALT`, and every
+>    helper refusal retain the worktree; the reason is emitted as `worktree_reclaim_retained`, a
+>    reclaim as `worktree_reclaim_reclaimed`, and a removal error as `worktree_reclaim_failed`.
+>    An unreadable worktree, record, or ref listing retains every candidate for that pass. The
+>    daemon log line is a rendering of the event, never a parallel write.
+
 ## Relationship to adjacent approved decisions
 
 - **`adr-2026-07-03-committed-shipped-record-dispatch-dedup`** — unchanged and relied upon. This ADR
