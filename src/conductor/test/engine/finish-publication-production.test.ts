@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:4
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
@@ -172,6 +172,38 @@ describe('production FINISH publication composition', () => {
         state: {
           feature_desc: 'feature', worktree_branch: 'feat/feature', build_review: 'stale',
         } as ConductState,
+      })).resolves.toBe('invalid');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to done step state when the verdict directory is absent', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-absent-verdict-directory-'));
+    try {
+      await expect(observeImplementationEvidence({
+        root,
+        state: {
+          feature_desc: 'feature', worktree_branch: 'feat/feature',
+          build_review: 'done', test_suite: 'done',
+        } as ConductState,
+      })).resolves.toBe('valid');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('treats a malformed build-review verdict as unrecorded', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-malformed-build-review-verdict-'));
+    try {
+      await mkdir(join(root, '.pipeline', 'gates'), { recursive: true });
+      await Promise.all([
+        writeFile(join(root, '.pipeline', 'gates', 'build_review.json'), '{not json'),
+        writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
+      ]);
+      await expect(observeImplementationEvidence({
+        root,
+        state: { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState,
       })).resolves.toBe('invalid');
     } finally {
       await rm(root, { recursive: true, force: true });
