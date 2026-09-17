@@ -478,6 +478,8 @@ export type ConductorEvent =
       lapId: string;
       caseIds: readonly string[];
       effectIds: readonly string[];
+      /** Durable stop evidence, including blocked consistency verdicts. */
+      decisionStops?: readonly { readonly caseId: string; readonly owner?: 'product' | 'plan' | 'architecture'; readonly sourceIds: readonly string[]; readonly rationale: string }[];
     }
   | {
       /** A remediation judgement could not be completed and remains fail-closed. */

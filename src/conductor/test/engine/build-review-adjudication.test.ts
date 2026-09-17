@@ -150,4 +150,29 @@ describe('reduceBuildReviewAdjudication', () => {
     });
     await expect(readFile(sealedArtifact, 'utf8')).resolves.toBe('approved baseline\n');
   });
+
+  it('persists a blocked consistency stop and derives its halt from the durable evidence', async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'build-review-consistency-stop-'));
+    const feature = { version: 'v1', repository: 'acme/repo', feature: 'consistency-stop' } as const;
+    const stop: RemediationCaseRecord = {
+      id: 'case-consistency-stop', domain: 'build_review', disposition: 'escalate', priority: 'high',
+      rationale: 'The proposed cases contradict one another.', confidence: 'high', resolution: 'open',
+      sources: [{ sourceId: 'finding-1', outcome: 'rejected', recordedAt: '2026-09-17T00:00:00.000Z' }],
+      effect: { kind: 'none' },
+      consistencyStop: { sourceIds: ['finding-1'], rationale: 'The proposed cases contradict one another.' },
+    };
+
+    await expect(persistBuildReviewDecisionStop({
+      store: new RemediationCaseStore(projectRoot, feature), record: stop,
+    })).resolves.toMatchObject({ ok: true, caseId: stop.id });
+    const persisted = await new RemediationCaseStore(projectRoot, feature).read();
+    expect(persisted).toMatchObject({ ok: true, state: { cases: [stop] } });
+    if (!persisted.ok) return;
+    expect(reduceBuildReviewAdjudication({
+      currentSourceIds: ['finding-1'], cases: persisted.state.cases, mechanical: 'healthy',
+    })).toMatchObject({
+      route: 'halt',
+      reason: 'build-review adjudication consistency is blocked for finding-1: The proposed cases contradict one another.',
+    });
+  });
 });

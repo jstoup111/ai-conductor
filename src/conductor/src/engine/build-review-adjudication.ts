@@ -82,7 +82,18 @@ export function reduceBuildReviewAdjudication(input: {
   const currentDecisionOwners = [...new Set(input.cases
     .filter(isBuildReviewDecisionStop)
     .filter((record) => record.sources.some((source) => input.currentSourceIds.includes(source.sourceId)))
-    .map((record) => record.escalation!.owner))];
+    .map((record) => record.escalation?.owner)
+    .filter((owner): owner is 'product' | 'plan' | 'architecture' => owner !== undefined))];
+  const consistencyStop = input.cases
+    .filter(isBuildReviewDecisionStop)
+    .find((record) => record.consistencyStop !== undefined && record.sources.some((source) => input.currentSourceIds.includes(source.sourceId)));
+  if (consistencyStop?.consistencyStop) {
+    return {
+      route: 'halt',
+      remainingMechanical: input.mechanical !== 'healthy',
+      reason: `build-review adjudication consistency is blocked for ${consistencyStop.consistencyStop.sourceIds.join(', ')}: ${consistencyStop.consistencyStop.rationale}`,
+    };
+  }
   if (currentDecisionOwners.length > 0) {
     return {
       route: 'halt',

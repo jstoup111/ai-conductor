@@ -101,8 +101,8 @@ describe('engine/build-review-policy-bundle', () => {
       .toBe('Check every changed boundary.\n');
     expect(bundle.manifest.find((entry) => entry.relativePath === 'criteria/linked-checks.md')?.bytes)
       .toEqual(Buffer.from('Check every changed boundary.\n'));
-    expect(bundle.manifest.find((entry) => entry.relativePath === 'criteria/linked-checks.md')?.symbolicLinkTarget)
-      .toBe('checks.md');
+    expect(bundle.manifest.find((entry) => entry.relativePath === 'criteria/linked-checks.md')?.symbolicLinkTargets)
+      .toEqual(['checks.md']);
   });
 
   it('changes identity when byte-identical file or directory symlinks are retargeted', async () => {
@@ -128,8 +128,28 @@ describe('engine/build-review-policy-bundle', () => {
 
     expect(fileRetargeted.digest).not.toBe(fileFirst.digest);
     expect(directoryRetargeted.digest).not.toBe(directoryFirst.digest);
-    expect(directoryRetargeted.manifest.find((entry) => entry.relativePath === 'linked-directory/check.md')?.symbolicLinkTarget)
-      .toBe('directory-b');
+    expect(directoryRetargeted.manifest.find((entry) => entry.relativePath === 'linked-directory/check.md')?.symbolicLinkTargets)
+      .toEqual(['directory-b']);
+  });
+
+  it('changes identity when an outer directory hop is retargeted around an identical nested file hop', async () => {
+    const sourceParent = await temporaryDirectory('build-review-policy-nested-retarget-source-');
+    const materialParent = await temporaryDirectory('build-review-policy-nested-retarget-material-');
+    const packageRoot = await policyPackage(sourceParent);
+    for (const directory of ['a', 'b']) {
+      await mkdir(join(packageRoot, directory), { recursive: true });
+      await writeFile(join(packageRoot, directory, 'common.md'), 'shared bytes\n', 'utf8');
+      await symlink('common.md', join(packageRoot, directory, 'inner.md'));
+    }
+    await symlink('a', join(packageRoot, 'alias'));
+    const first = await captureInstalledReviewPolicyBundle(installedSkill(packageRoot), { materialParent });
+    await rm(join(packageRoot, 'alias'));
+    await symlink('b', join(packageRoot, 'alias'));
+    const retargeted = await captureInstalledReviewPolicyBundle(installedSkill(packageRoot), { materialParent });
+
+    expect(retargeted.digest).not.toBe(first.digest);
+    expect(retargeted.manifest.find((entry) => entry.relativePath === 'alias/inner.md')?.symbolicLinkTargets)
+      .toEqual(['b', 'common.md']);
   });
 
   it('uses the selected plugin root as the complete package boundary', async () => {

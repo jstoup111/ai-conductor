@@ -51,7 +51,7 @@ export type BuildReviewAdjudicationCoordinatorResult =
       /** Durable cases that make this settled-lap route inspectable to its consumer. */
       readonly durable: {
         readonly repairCaseIds: readonly string[];
-        readonly decisionStops: readonly { readonly caseId: string; readonly owner: 'product' | 'plan' | 'architecture' }[];
+        readonly decisionStops: readonly { readonly caseId: string; readonly owner?: 'product' | 'plan' | 'architecture'; readonly sourceIds: readonly string[]; readonly rationale: string }[];
       } }
   | { readonly ok: false; readonly detail: string };
 
@@ -385,7 +385,12 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
             .map((record) => record.id)
           : [],
         decisionStops: settledCases.filter((record) => isBuildReviewDecisionStop(record) && record.sources.some((source) => currentSourceSet.has(source.sourceId)))
-          .map((record) => ({ caseId: record.id, owner: record.escalation!.owner })),
+          .map((record) => ({
+            caseId: record.id,
+            ...(record.escalation === undefined ? {} : { owner: record.escalation.owner }),
+            sourceIds: record.consistencyStop?.sourceIds ?? record.sources.map((source) => source.sourceId),
+            rationale: record.consistencyStop?.rationale ?? record.rationale,
+          })),
       };
       if (!completedEmitted && !options.terminalFailureEmitted) {
         completedEmitted = true;
@@ -393,6 +398,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
           type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
           caseIds: settledCases.map((record) => record.id),
           effectIds: options.dispatchSkipped === true ? [] : settledCases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
+          ...(durable.decisionStops.length === 0 ? {} : { decisionStops: durable.decisionStops }),
         });
       }
       // The completion emission is itself awaited, so it is one more window in
@@ -612,6 +618,22 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     });
     if (!persistedStop.ok) return fail(`decision stop ${persistedStop.reason}`);
     caseIdsByRef.set(proposed.case.caseRef, persistedStop.caseId);
+  }
+  if (judgement.mode === 'case-v2' && judgement.consistency.verdict === 'blocked') {
+    const sourceIds = judgement.consistency.sourceIds.filter((sourceId) => liveSourceIds.has(sourceId));
+    const sources = graph.graph.sourceOutcomes
+      .filter((source) => sourceIds.includes(source.sourceId))
+      .map((source) => ({ sourceId: source.sourceId, outcome: source.outcome, recordedAt }));
+    if (sources.length === 0) return fail('blocked consistency stop has no live sources');
+    const persistedStop = await persistBuildReviewDecisionStop({
+      store,
+      record: {
+        id: `consistency-stop-${input.aggregate.lapId}`, domain: 'build_review', disposition: 'escalate', priority: 'high',
+        rationale: judgement.consistency.rationale, confidence: 'high', resolution: 'open', sources,
+        effect: { kind: 'none' }, consistencyStop: { sourceIds, rationale: judgement.consistency.rationale },
+      },
+    });
+    if (!persistedStop.ok) return fail(`blocked consistency stop ${persistedStop.reason}`);
   }
   const durableState = await store.read();
   if (!durableState.ok) return fail(`case store ${durableState.reason}`);

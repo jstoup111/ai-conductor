@@ -563,11 +563,16 @@ export interface ReviewScratchLease {
 }
 
 export async function acquireReviewScratchHome(
-  options: ResolveScratchHomeOptions & { readonly fs?: Pick<ScratchFs, 'mkdir' | 'rm'> },
+  options: ResolveScratchHomeOptions & {
+    readonly fs?: Pick<ScratchFs, 'mkdir' | 'rm'>;
+    /** Seed provider-private read-only credentials before review containment starts. */
+    readonly seed?: (home: string) => Promise<void>;
+  },
 ): Promise<ReviewScratchLease> {
   const fs = options.fs ?? realScratchFs;
   const home = resolveReviewScratchHome(options);
   await fs.mkdir(home, { recursive: true });
+  await options.seed?.(home);
   let released = false;
   return {
     home,

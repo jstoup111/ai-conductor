@@ -143,6 +143,9 @@ describe('custom build-review policy runner', () => {
     const root = await fixture();
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: '{}' }));
     const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const events = new ConductorEventEmitter();
+    const failures: unknown[] = [];
+    events.on('build_review_policy_failed', (event) => { failures.push(event); });
     const runner = new DefaultStepRunner(provider, 'custom-policy', root, {
       featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
       config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
@@ -150,7 +153,9 @@ describe('custom build-review policy runner', () => {
       } } } as HarnessConfig,
       providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
       sessionStore: new ProviderSessionStore(),
+      events,
       buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: passingEffectiveResolver,
       buildReviewPolicyCatalog: async () => ['project', 'global'].map((source) => ({
         semanticName: 'portable-policy', source: source as 'project' | 'global', installationOrigin: `/fixture/${source}`, canonicalSkillPath: `/fixture/${source}/SKILL.md`, packageRoot: `/fixture/${source}`, declaredDependencies: [], availability: 'available' as const,
       })),
@@ -158,12 +163,18 @@ describe('custom build-review policy runner', () => {
     const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
     expect(result.success).toBe(false);
     expect(result.output).toContain('ambiguous');
+    expect(result.output).toContain('conflicting installed sources: /fixture/global, /fixture/project');
     expect(result.output).not.toContain('disposition resolution failed');
     const aggregate = JSON.parse(await readFile(join(root, '.pipeline', 'build-review.json'), 'utf8'));
     expect(aggregate.customResults.portable.result).toMatchObject({
       kind: 'infrastructure-failure', reason: 'policy-load-failed',
     });
     expect(invoke).not.toHaveBeenCalled();
+    await expect(readFile(join(root, '.pipeline', 'kickback-ledger.json'), 'utf8')).resolves.toContain('"mechanicalFaults": 1');
+    expect(failures).toHaveLength(3);
+    expect(failures).toEqual(expect.arrayContaining([expect.objectContaining({
+      reason: expect.stringContaining('conflicting installed sources: /fixture/global, /fixture/project'),
+    })]));
   });
 
   it('publishes a first-use custom loading failure with its declaration and no invented content', async () => {

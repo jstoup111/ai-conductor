@@ -63,6 +63,8 @@ export interface RemediationCaseRecord {
   readonly refutation?: RemediationCaseRefutation;
   /** Present only for a persisted decision-owner stop; it carries no external effect. */
   readonly escalation?: { readonly owner: RemediationCaseEscalationOwner };
+  /** A blocked v2 consistency verdict, retained as the authoritative halt evidence. */
+  readonly consistencyStop?: { readonly sourceIds: readonly string[]; readonly rationale: string };
 }
 
 /** Immutable evidence captured for the finding that opened a PRD case. */
@@ -297,7 +299,7 @@ function parseCase(value: unknown):
   const expectedKeys = value.disposition === 'refute'
     ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'refutation']
     : value.disposition === 'escalate'
-      ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'escalation']
+      ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', ...(value.consistencyStop === undefined ? ['escalation'] : ['consistencyStop'])]
     : ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect'];
   if (!exactKeys(value, expectedKeys)) return { ok: false, reason: 'malformed-state' };
   if (value.domain !== 'build_review') return { ok: false, reason: 'foreign-domain' };
@@ -314,9 +316,16 @@ function parseCase(value: unknown):
     exactKeys(value.escalation, ['owner']) && oneOf(value.escalation.owner, ['product', 'plan', 'architecture'] as const)
     ? { owner: value.escalation.owner }
     : undefined;
+  const consistencyStop = value.disposition === 'escalate' && isRecord(value.consistencyStop) &&
+    exactKeys(value.consistencyStop, ['sourceIds', 'rationale']) && Array.isArray(value.consistencyStop.sourceIds) &&
+    value.consistencyStop.sourceIds.length > 0 && value.consistencyStop.sourceIds.length <= MAX_SOURCES_PER_CASE &&
+    value.consistencyStop.sourceIds.every((sourceId) => boundedString(sourceId, MAX_REFERENCE_LENGTH)) &&
+    boundedString(value.consistencyStop.rationale)
+    ? { sourceIds: value.consistencyStop.sourceIds, rationale: value.consistencyStop.rationale }
+    : undefined;
   if (sources.some((source) => source === undefined) || effect === undefined ||
     value.disposition === 'refute' && refutation === undefined ||
-    value.disposition === 'escalate' && escalation === undefined) return { ok: false, reason: 'malformed-state' };
+    value.disposition === 'escalate' && escalation === undefined && consistencyStop === undefined) return { ok: false, reason: 'malformed-state' };
   return { ok: true, record: {
     id: value.id,
     domain: 'build_review',
@@ -329,6 +338,7 @@ function parseCase(value: unknown):
     effect,
     ...(refutation === undefined ? {} : { refutation }),
     ...(escalation === undefined ? {} : { escalation }),
+    ...(consistencyStop === undefined ? {} : { consistencyStop }),
   } };
 }
 

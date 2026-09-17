@@ -7,7 +7,7 @@ import { parseBuildReviewAggregate } from './build-review-aggregate.js';
 export type BuildReviewOutcome =
   | { readonly kind: 'awaiting-settlement'; readonly lapId: string }
   | { readonly kind: 'repair'; readonly lapId: string; readonly caseIds: readonly string[]; readonly trace: string; readonly remainingInfrastructure: boolean }
-  | { readonly kind: 'decision-stop'; readonly lapId: string; readonly stops: readonly { readonly caseId: string; readonly owner: 'product' | 'plan' | 'architecture' }[]; readonly detail: string; readonly trace: string; readonly remainingInfrastructure: boolean }
+  | { readonly kind: 'decision-stop'; readonly lapId: string; readonly stops: readonly { readonly caseId: string; readonly owner?: 'product' | 'plan' | 'architecture'; readonly sourceIds: readonly string[]; readonly rationale: string }[]; readonly detail: string; readonly trace: string; readonly remainingInfrastructure: boolean }
   | { readonly kind: 'infrastructure'; readonly lapId?: string; readonly status: 'retry' | 'halt'; readonly reason: string; readonly trace?: string }
   | { readonly kind: 'settled'; readonly lapId: string; readonly trace: string };
 

@@ -52,12 +52,12 @@ export function isOpenRemediationCase(record: RemediationCaseRecord): boolean {
   return record.resolution === 'open';
 }
 
-/** An open owner stop is durable blocking state, never a deferral-shaped effect. */
+/** An open owner or blocked-consistency stop is durable blocking state, never a deferral-shaped effect. */
 export function isBuildReviewDecisionStop(record: RemediationCaseRecord): boolean {
   return isOpenRemediationCase(record)
     && record.disposition === 'escalate'
     && record.effect.kind === 'none'
-    && record.escalation !== undefined;
+    && (record.escalation !== undefined || record.consistencyStop !== undefined);
 }
 
 function sameDecisionStop(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
@@ -65,7 +65,8 @@ function sameDecisionStop(left: RemediationCaseRecord, right: RemediationCaseRec
     right.disposition === 'escalate' && left.priority === right.priority && left.rationale === right.rationale &&
     left.confidence === right.confidence && left.resolution === right.resolution &&
     left.effect.kind === 'none' && right.effect.kind === 'none' &&
-    left.escalation?.owner === right.escalation?.owner && left.sources.length === right.sources.length &&
+    left.escalation?.owner === right.escalation?.owner &&
+    JSON.stringify(left.consistencyStop) === JSON.stringify(right.consistencyStop) && left.sources.length === right.sources.length &&
     left.sources.every((source, index) => {
       const other = right.sources[index];
       return other !== undefined && source.sourceId === other.sourceId && source.outcome === other.outcome && source.recordedAt === other.recordedAt;

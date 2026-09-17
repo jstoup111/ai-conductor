@@ -39,6 +39,18 @@ describe('provider scratch homes', () => {
     expect(removed).toEqual([lease.home]);
   });
 
+  it('seeds private review authentication before exposing the scratch lease', async () => {
+    const seeded: string[] = [];
+    const lease = await acquireReviewScratchHome({
+      worktreeRoot: '/worktree', runId: 'review-auth', attempt: 1, provider: 'codex',
+      fs: { mkdir: async () => {}, rm: async () => {} },
+      seed: async (home) => { seeded.push(join(home, 'codex-home', 'auth.json')); },
+    });
+
+    expect(seeded).toEqual([join(lease.home, 'codex-home', 'auth.json')]);
+    await lease.release();
+  });
+
   it('retains legacy entries that are not provably stale while continuing after a failed removal', async () => {
     const tempRoot = '/legacy-scratch-refusal';
     const processStartedAt = new Date('2026-08-11T12:00:00.000Z');

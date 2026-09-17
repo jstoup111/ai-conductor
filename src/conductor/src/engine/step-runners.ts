@@ -98,6 +98,7 @@ import { discoverClaudeReviewPolicies } from './build-review-policy-claude.js';
 import { createCodexAppServerTransport, listCodexInstalledReviewSkills } from './build-review-policy-codex.js';
 import { prepareBuildReviewContainment } from './build-review-containment.js';
 import { acquireReviewScratchHome } from './self-host/provider-scratch.js';
+import { copySelectedCodexLogin } from '../execution/codex-self-host-auth.js';
 import { stampBuildReviewCustomJudgedResult } from './build-review-finding-identity.js';
 import { buildReviewEffectiveResultDescriptor, parseBuildReviewReviewerPayload } from './build-review-projections.js';
 import {
@@ -2394,7 +2395,11 @@ export class DefaultStepRunner implements StepRunner {
     const scopeIncompleteFault = Object.values(validResults).flatMap((result) =>
       result.kind === 'judged' ? [deriveBuildReviewScopeIncompleteFault(result)] : [],
     ).find((fault): fault is NonNullable<typeof fault> => fault !== undefined);
-    const infrastructureFailure = Object.values(validResults).find((result): result is Extract<BuildReviewRubricResult, { kind: 'infrastructure-failure' }> =>
+    const lapResults = [
+      ...Object.values(validResults),
+      ...Object.values(customResults ?? {}).map((member) => member.result),
+    ];
+    const infrastructureFailure = lapResults.find((result): result is Extract<BuildReviewRubricResult, { kind: 'infrastructure-failure' }> =>
       result.kind === 'infrastructure-failure',
     );
     // A semantically valid indeterminate candidate is a non-judgment fault,
@@ -2424,7 +2429,7 @@ export class DefaultStepRunner implements StepRunner {
           providerSetupExhaustion: infrastructureFailure.providerSetupExhaustion,
         };
       }
-      const hasJudgedFinding = Object.values(validResults).some(
+      const hasJudgedFinding = lapResults.some(
         (result) => result.kind === 'judged' && result.findings.length > 0,
       );
       if (!hasJudgedFinding && infrastructureFailure.reason !== 'projection-oversized') {
@@ -2516,7 +2521,7 @@ export class DefaultStepRunner implements StepRunner {
     // A judged finding is a completed review, even when another rubric had a
     // mechanical fault. Let the conductor route that semantic failure through
     // its ordinary kickback budget; only a pure mechanical lap retries here.
-    const hasJudgedFinding = Object.values(aggregate.results).some(
+    const hasJudgedFinding = lapResults.some(
       (result) => result.kind === 'judged' && result.findings.length > 0,
     );
     return {
@@ -2616,9 +2621,17 @@ export class DefaultStepRunner implements StepRunner {
           ...(entry.source === undefined ? {} : { source: entry.source as InstalledReviewSkill['source'] }),
         }, catalog);
         if (resolved.kind === 'failure') {
-          failure = { reason: 'policy-load-failed', detail: `Installed build-review policy ${entry.skill} is unavailable: ${resolved.failure.code}` };
+          const resolutionDetail = 'origins' in resolved.failure && resolved.failure.origins !== undefined
+            ? `conflicting installed sources: ${resolved.failure.origins.join(', ')}; choose one source explicitly`
+            : 'source' in resolved.failure && resolved.failure.source !== undefined
+              ? `requested source: ${resolved.failure.source}`
+              : 'message' in resolved.failure
+                ? resolved.failure.message
+                : 'no source was selected';
+          const detail = `Installed build-review policy ${entry.skill} is unavailable: ${resolved.failure.code}; ${resolutionDetail}`;
+          failure = { reason: 'policy-load-failed', detail };
           coverageFailure = true;
-          await emitPolicyFailure('catalog', failure.detail);
+          await emitPolicyFailure('catalog', detail);
           return { kind: 'failure' as const, result: {
             success: false, exitCode: 1,
             output: failure.detail,
@@ -2690,7 +2703,15 @@ export class DefaultStepRunner implements StepRunner {
         // frozen cwd and proved access profile to this actual provider.
         let reviewAccess: InvokeOptions['reviewAccess'];
         if (source) {
-          const scratchLease = await acquireReviewScratchHome({ worktreeRoot: this.projectDir, runId: this.runId, attempt: 0, provider, memberId: entry.id });
+          const cachedLoginSource = provider === 'codex' && context.prepared?.env.CODEX_HOME !== undefined && context.prepared.env.CODEX_API_KEY === undefined
+            ? join(context.prepared.env.CODEX_HOME, 'auth.json')
+            : undefined;
+          const scratchLease = await acquireReviewScratchHome({
+            worktreeRoot: this.projectDir, runId: this.runId, attempt: 0, provider, memberId: entry.id,
+            ...(cachedLoginSource === undefined ? {} : {
+              seed: async (home) => { await copySelectedCodexLogin({ source: cachedLoginSource, homeDir: join(home, 'codex-home') }); },
+            }),
+          });
           context.onTeardown(() => scratchLease.release());
           const scratch = scratchLease.home;
           const engineEvidence = join(this.projectDir, '.pipeline', 'build-review', 'engine-evidence');
@@ -2951,12 +2972,30 @@ export class DefaultStepRunner implements StepRunner {
       return { success: false, output: `build_review disposition resolution failed: ${effective.reason}` };
     }
     if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
-    const hasFinding = Object.values(input.customResults).some((member) =>
-      member.result.kind === 'judged' && member.result.findings.length > 0,
+    const lapResults = Object.values(input.customResults).map((member) => member.result);
+    const infrastructureFailure = lapResults.find((result): result is Extract<BuildReviewRubricResult, { kind: 'infrastructure-failure' }> =>
+      result.kind === 'infrastructure-failure',
     );
+    const hasFinding = lapResults.some((result) => result.kind === 'judged' && result.findings.length > 0);
+    if (infrastructureFailure && !hasFinding) {
+      const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review', {
+        rubric: infrastructureFailure.rubric,
+        reason: infrastructureFailure.reason,
+        detail: infrastructureFailure.detail,
+        lapId: input.lapId,
+      });
+      if (mechanicalFaults.mechanicalFaults! < MAX_MECHANICAL_FAULTS_BUILD_REVIEW) {
+        return {
+          success: false,
+          output: `build_review mechanical fault in ${infrastructureFailure.rubric} (${infrastructureFailure.reason}): ${infrastructureFailure.detail}`,
+          currentLapMechanicalFault: true,
+        };
+      }
+    }
     return {
       success: effective.effective.verdict === 'PASS' || hasFinding,
       output: JSON.stringify(aggregate),
+      ...(infrastructureFailure === undefined || hasFinding ? {} : { currentLapMechanicalFault: true }),
     };
   }
 
@@ -3103,7 +3142,15 @@ export class DefaultStepRunner implements StepRunner {
                 ? context.candidate.providerKey : undefined;
               let reviewAccess: InvokeOptions['reviewAccess'];
               if (materialized && containmentProvider) {
-                const scratchLease = await acquireReviewScratchHome({ worktreeRoot: this.projectDir, runId: this.runId, attempt: 0, provider: containmentProvider, memberId: branch.rubric });
+                const cachedLoginSource = containmentProvider === 'codex' && context.prepared?.env.CODEX_HOME !== undefined && context.prepared.env.CODEX_API_KEY === undefined
+                  ? join(context.prepared.env.CODEX_HOME, 'auth.json')
+                  : undefined;
+                const scratchLease = await acquireReviewScratchHome({
+                  worktreeRoot: this.projectDir, runId: this.runId, attempt: 0, provider: containmentProvider, memberId: branch.rubric,
+                  ...(cachedLoginSource === undefined ? {} : {
+                    seed: async (home) => { await copySelectedCodexLogin({ source: cachedLoginSource, homeDir: join(home, 'codex-home') }); },
+                  }),
+                });
                 context.onTeardown(() => scratchLease.release());
                 const scratch = scratchLease.home;
                 const engineEvidence = join(this.projectDir, '.pipeline', 'build-review', 'engine-evidence');
@@ -3583,10 +3630,12 @@ export class DefaultStepRunner implements StepRunner {
       // to a detached, immutable view shared by every member in the lap.
       const lapMembers = this.usesInjectedBuildReviewGit && this.buildReviewInputOptions?.materialization === undefined
         ? undefined
-        : buildReviewConfig.catalog.map((entry) => ({
-        id: entry.id,
-        kind: entry.kind,
-      })) as BuildReviewInputOptions['lapMembers'];
+        : buildReviewConfig.catalog.some((entry) => entry.kind === 'custom')
+          ? buildReviewConfig.catalog.map((entry) => ({
+              id: entry.id,
+              kind: entry.kind,
+            })) as BuildReviewInputOptions['lapMembers']
+          : undefined;
       inputs = {
         ...await assembleBuildReviewInputs(this.gitRunner, planPath, {
           ...this.buildReviewInputOptions,

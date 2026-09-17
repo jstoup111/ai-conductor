@@ -17,8 +17,8 @@ import type { InstalledReviewSkill } from './build-review-policy.js';
 export interface CapturedReviewPolicyBundleEntry {
   readonly relativePath: string;
   readonly bytes: Buffer;
-  /** Lexical in-package symlink destination when this delivered file crossed one. */
-  readonly symbolicLinkTarget?: string;
+  /** Ordered lexical in-package link hops crossed while delivering this leaf. */
+  readonly symbolicLinkTargets?: readonly string[];
 }
 
 /** Stable, path-free selected-policy facts bound to the captured package. */
@@ -180,7 +180,7 @@ function effectiveBundleDigest(
   for (const entry of manifest) {
     write(entry.relativePath);
     write(entry.bytes);
-    write(entry.symbolicLinkTarget ?? '');
+    write(JSON.stringify(entry.symbolicLinkTargets ?? []));
   }
   return `sha256-v1:${hash.digest('hex')}`;
 }
@@ -192,7 +192,7 @@ async function collectPackageFiles(
   ancestry: ReadonlySet<string>,
   manifest: CapturedSourceManifestEntry[],
   sourceReadFile: (path: string) => Promise<Buffer>,
-  symbolicLinkTarget?: string,
+  symbolicLinkTargets: readonly string[] = [],
 ): Promise<void> {
   const canonicalCurrentPath = await canonicalResourcePath(currentPath, relativeParent);
   if (!isWithin(packageRoot, canonicalCurrentPath)) {
@@ -221,7 +221,7 @@ async function collectPackageFiles(
     }
 
     if (stat.isDirectory()) {
-      await collectPackageFiles(packageRoot, sourcePath, relativePath, nextAncestry, manifest, sourceReadFile, symbolicLinkTarget);
+      await collectPackageFiles(packageRoot, sourcePath, relativePath, nextAncestry, manifest, sourceReadFile, symbolicLinkTargets);
       continue;
     }
     if (stat.isSymbolicLink()) {
@@ -237,7 +237,7 @@ async function collectPackageFiles(
         throw policyResourceError('symlink escapes the selected package', relativePath);
       }
       if (targetStat.isDirectory()) {
-        await collectPackageFiles(packageRoot, targetPath, relativePath, nextAncestry, manifest, sourceReadFile, target);
+        await collectPackageFiles(packageRoot, targetPath, relativePath, nextAncestry, manifest, sourceReadFile, [...symbolicLinkTargets, target]);
         continue;
       }
       if (!targetStat.isFile()) {
@@ -247,7 +247,7 @@ async function collectPackageFiles(
         manifest.push({
           relativePath,
           bytes: await sourceReadFile(targetPath),
-          symbolicLinkTarget: target,
+          symbolicLinkTargets: [...symbolicLinkTargets, target],
         });
       } catch {
         throw policyResourceError('is missing or unreadable', relativePath);
@@ -258,7 +258,7 @@ async function collectPackageFiles(
       throw policyResourceError('is not a regular file', relativePath);
     }
     try {
-      manifest.push({ relativePath, bytes: await sourceReadFile(sourcePath), ...(symbolicLinkTarget === undefined ? {} : { symbolicLinkTarget }) });
+      manifest.push({ relativePath, bytes: await sourceReadFile(sourcePath), ...(symbolicLinkTargets.length === 0 ? {} : { symbolicLinkTargets: [...symbolicLinkTargets] }) });
     } catch {
       throw policyResourceError('is missing or unreadable', relativePath);
     }
@@ -285,7 +285,7 @@ function sameSourceManifest(
     const comparison = current[index];
     return entry.relativePath === comparison.relativePath
       && entry.bytes.equals(comparison.bytes)
-      && entry.symbolicLinkTarget === comparison.symbolicLinkTarget;
+      && JSON.stringify(entry.symbolicLinkTargets ?? []) === JSON.stringify(comparison.symbolicLinkTargets ?? []);
   });
 }
 
@@ -313,7 +313,7 @@ export async function captureInstalledReviewPolicyBundle(
   const manifest: readonly CapturedReviewPolicyBundleEntry[] = capturedSourceManifest.map((entry) => ({
     relativePath: entry.relativePath,
     bytes: entry.bytes,
-    ...(entry.symbolicLinkTarget === undefined ? {} : { symbolicLinkTarget: entry.symbolicLinkTarget }),
+    ...(entry.symbolicLinkTargets === undefined ? {} : { symbolicLinkTargets: entry.symbolicLinkTargets }),
   }));
   validateBundleLimits(manifest);
   validateRequiredResources(policy, manifest);
