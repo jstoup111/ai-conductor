@@ -1264,7 +1264,7 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     const halted = 'halted';
     const markerReadError = 'marker-read-error';
     const { run, deleted } = makeGit({
-      shipped: ['parked-only'],
+      shipped: ['bad_slug', 'engineer-run', 'halted', 'in-flight', 'parked-only', 'resolve-run'],
       branches: [
         'hotfix/parked-only',
         'hotfix/shared',
@@ -1290,6 +1290,11 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     try {
       await writeOperatorPark(projectRoot, 'parked-only');
       await writeOperatorPark(projectRoot, 'shared');
+      await writeOperatorPark(projectRoot, 'in-flight');
+      await writeOperatorPark(projectRoot, halted);
+      await writeOperatorPark(projectRoot, 'engineer-run');
+      await writeOperatorPark(projectRoot, 'resolve-run');
+      await writeOperatorPark(projectRoot, 'bad_slug');
       await mkdir(join(projectRoot, '.worktrees', halted, '.pipeline'), { recursive: true });
       await writeFile(join(projectRoot, '.worktrees', halted, '.pipeline', 'HALT'), 'halted\n');
       // A directory at the marker path makes the marker read fail with EISDIR.
@@ -1320,8 +1325,8 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
         log: log.mock.calls[0]?.[0],
       }).toEqual({
         entries: ['bad_slug', 'engineer-run', 'halted', 'in-flight', 'marker-read-error', 'parked-only', 'resolve-run', 'shared'],
-        // `shared` is parked, so it follows the historical parked contract:
-        // its listed non-daemon ref cannot relax the shipped-record gate.
+        // `shared` retains the historical parked record contract; Story 2's
+        // in-flight and HALT guards, however, also protect parked candidates.
         deleted: ['hotfix/parked-only'],
         branchDeletes: ['hotfix/parked-only'],
         log: expect.stringContaining('retained: foreign-lifecycle=2,halted=2,in-flight=1,invalid-slug=1,record-missing=1'),

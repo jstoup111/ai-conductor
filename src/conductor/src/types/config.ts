@@ -566,6 +566,11 @@ export interface HarnessConfig {
    */
   reconcile_parked_auto_cleanup?: boolean;
   /**
+   * Whether reconciliation reclaims merged registered worktrees automatically.
+   * Absent config resolves to `true` during validation.
+   */
+  reclaim_merged_worktrees?: boolean;
+  /**
    * Attribution audit sample percentage (Task 11): integer percentage [0, 100]
    * of audit events to sample. Out-of-range values are clamped with a startup
    * warning. Absent → defaults to 10.

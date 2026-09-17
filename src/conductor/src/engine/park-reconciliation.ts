@@ -546,15 +546,12 @@ export async function reconcileParkedFeatures(
   for (const [slug, candidate] of candidates) {
     let retainedReason: WorktreeReclaimRetainedReason | undefined;
     if (registeredWorktrees === null) retainedReason = 'listing-unavailable';
-    // These guards protect candidates discovered from the worktree registry.
-    // A park marker remains the authority for an established parked feature:
-    // its worktree-local HALT must not prevent the durable-marker path from
-    // classifying and repairing it, and it retains the helper's historical
-    // branch/record semantics.
-    else if (!candidate.parked && opts.isFeatureInFlight?.(slug)) retainedReason = 'in-flight';
-    else if (!candidate.parked && (slug.startsWith('engineer-') || slug.startsWith('resolve-'))) retainedReason = 'foreign-lifecycle';
-    else if (!candidate.parked && (!candidate.reclaimable || !SINGLE_SLUG.test(slug))) retainedReason = 'invalid-slug';
-    else if (!candidate.parked) {
+    // These guards protect every registered candidate, including one that is
+    // also operator-parked. A live dispatch or HALT always wins over cleanup.
+    else if (opts.isFeatureInFlight?.(slug)) retainedReason = 'in-flight';
+    else if (slug.startsWith('engineer-') || slug.startsWith('resolve-')) retainedReason = 'foreign-lifecycle';
+    else if (!candidate.reclaimable || !SINGLE_SLUG.test(slug)) retainedReason = 'invalid-slug';
+    else {
       try {
         await access(join(opts.projectRoot, '.worktrees', slug, '.pipeline', 'HALT'));
         retainedReason = 'halted';
