@@ -61,7 +61,15 @@ function bounded(value: string, maximum = MAX_TEXT_LENGTH): boolean {
  * whole offer as `invalid-offer` (which surfaced as `persistence-failed`).
  */
 export function boundReportSnapshot(reportSnapshot: string): string {
-  return reportSnapshot.length <= MAX_TEXT_LENGTH ? reportSnapshot : reportSnapshot.slice(0, MAX_TEXT_LENGTH);
+  // The widening context bound (`proseBytes`) is measured in UTF-8 bytes, so
+  // clip by bytes as well: a report with multibyte characters (em dashes,
+  // arrows) that is clipped by character count still exceeds the byte bound
+  // and the offer is rejected as `context-overflow` on the very next read.
+  if (Buffer.byteLength(reportSnapshot, 'utf8') <= MAX_TEXT_LENGTH) return reportSnapshot;
+  let clipped = Buffer.from(reportSnapshot, 'utf8').subarray(0, MAX_TEXT_LENGTH).toString('utf8');
+  // A cut inside a multibyte sequence decodes to U+FFFD; drop the partial character.
+  if (clipped.endsWith('\uFFFD')) clipped = clipped.slice(0, -1);
+  return clipped;
 }
 
 function validInput(input: PrdWideningOfferInput): boolean {
