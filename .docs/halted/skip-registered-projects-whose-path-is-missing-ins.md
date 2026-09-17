@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-17T12:35:42.007Z
 Slug: skip-registered-projects-whose-path-is-missing-ins
 Class: plan-gap
 Halting step: prd_audit
