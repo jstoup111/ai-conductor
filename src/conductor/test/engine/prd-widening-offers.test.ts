@@ -27,6 +27,30 @@ afterEach(async () => {
 });
 
 describe('PRD widening offers', () => {
+  it('clips an oversized report snapshot to the store bound instead of rejecting the offer', async () => {
+    // A real prd-audit report is 18-20 KB; the store bounds text at 8 000
+    // characters. Before the clip, the whole offer failed as invalid-offer and
+    // the audit halted with `persistence-failed` although no store failed.
+    const projectRoot = await createProjectRoot();
+    const oversized = 'R'.repeat(20_000);
+
+    const result = await persistPrdWideningOffers(projectRoot, FEATURE, [{
+      criterion: 'NC.1',
+      sourceId: 'prd-audit:NC.1',
+      evidence: 'The sweep counts unparked registered worktrees as parked.',
+      reportSnapshot: oversized,
+      relation: 'outside-visible',
+    }], { newCaseId: () => 'prd-case-1', now: () => '2026-09-16T13:07:00.000Z' });
+
+    expect(result.ok).toBe(true);
+    const stored = await new RemediationCaseStore(projectRoot, FEATURE).read();
+    expect(stored.ok).toBe(true);
+    if (!stored.ok || stored.state.version !== 'v2') throw new Error('expected a v2 store');
+    expect(stored.state.prdWideningCases[0]?.currentSources[0]?.snapshot).toBe('R'.repeat(8_000));
+    expect(stored.state.prdWideningCases[0]?.originalSources[0]?.snapshot)
+      .toBe('The sweep counts unparked registered worktrees as parked.');
+  });
+
   it('persists original source and report evidence before returning the editable offer block', async () => {
     const projectRoot = await createProjectRoot();
 
