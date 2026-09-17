@@ -3220,11 +3220,11 @@ describe('engine/conductor', () => {
         .split('\n')
         .map((line) => JSON.parse(line));
       const terminals = records.filter((record) =>
-        record.type === 'step_completed' || record.type === 'step_failed',
+        record.type === 'step_completed' || record.type === 'step_failed' || record.type === 'step_interrupted',
       );
       expect(terminals).toEqual([
         expect.objectContaining({
-          type: 'step_failed',
+          type: 'step_interrupted',
           step: 'prd_audit',
           activeInterval: { startedAtMs: 1_000, durationMs: 25 },
         }),

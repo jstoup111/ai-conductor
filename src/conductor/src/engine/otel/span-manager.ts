@@ -36,6 +36,8 @@ interface StepState {
   retryCount: number;
   startTimeMs: number;
   subjectLabel: string;
+  /** Explicit scopes have a shared event-time clock; legacy spans retain SDK timing. */
+  usesEventClock: boolean;
   settlementEndTimeMs?: number;
   dispatch?: DispatchMeteringObservation;
 }
@@ -64,6 +66,8 @@ export class SpanManager {
       featureId: 'unknown-feature',
       runId: 'unknown-run',
     },
+    /** Shared event-time clock; defaults to wall time in production. */
+    private readonly now: () => number = () => Date.now(),
   ) {}
 
   // ── Run span ───────────────────────────────────────────────────────────────
@@ -109,7 +113,7 @@ export class SpanManager {
     // the SDK's monotonic start clock and the engine's wall-clock timestamp
     // form an invalid duration pair. Legacy context-free spans retain the SDK
     // clock because they have no separate settlement boundary.
-    const startTimeMs = Date.now();
+    const startTimeMs = this.now();
     const span = this.tracer.startSpan(
       identity.subjectLabel,
       event.executionContext === undefined ? {} : { startTime: startTimeMs },
@@ -129,6 +133,7 @@ export class SpanManager {
       retryCount: 0,
       startTimeMs,
       subjectLabel: identity.subjectLabel,
+      usesEventClock: event.executionContext !== undefined,
     });
   }
 
@@ -141,7 +146,7 @@ export class SpanManager {
       );
       return;
     }
-    const durationMs = Date.now() - state.startTimeMs;
+    const durationMs = this.now() - state.startTimeMs;
 
     this.setDispatchAttributes(state, {
       model: event.model,
@@ -169,7 +174,7 @@ export class SpanManager {
       );
       return;
     }
-    const durationMs = Date.now() - state.startTimeMs;
+    const durationMs = this.now() - state.startTimeMs;
 
     this.setDispatchAttributes(state, {
       effort: event.effort,
@@ -194,7 +199,7 @@ export class SpanManager {
       );
       return;
     }
-    const durationMs = Date.now() - state.startTimeMs;
+    const durationMs = this.now() - state.startTimeMs;
 
     // Interruption means the conductor caught shutdown before the work had a
     // verdict. It is neither successful work nor an ERROR-class work failure.
@@ -216,7 +221,7 @@ export class SpanManager {
       );
       return;
     }
-    const durationMs = Date.now() - state.startTimeMs;
+    const durationMs = this.now() - state.startTimeMs;
 
     // Refusal is an authoritative terminal outcome, not successful work and
     // not a provider/runtime failure. Keep the OTel status UNSET while making
@@ -239,7 +244,7 @@ export class SpanManager {
     // A group result is observed at the member's own settlement boundary. A
     // later refusal or group join closes this same span at the frozen instant,
     // excluding sibling and join delay from member work time.
-    state.settlementEndTimeMs = Date.now();
+    state.settlementEndTimeMs = this.now();
   }
 
   onProviderAttempt(
@@ -329,7 +334,13 @@ export class SpanManager {
   }
 
   private endSpan(state: StepState): void {
-    state.span.end(state.settlementEndTimeMs);
+    if (state.settlementEndTimeMs !== undefined) {
+      state.span.end(state.settlementEndTimeMs);
+    } else if (state.usesEventClock) {
+      state.span.end(this.now());
+    } else {
+      state.span.end();
+    }
   }
 
   // ── Span events ────────────────────────────────────────────────────────────
@@ -460,7 +471,7 @@ export class SpanManager {
       state.span.setAttribute('conductor.retry.count', state.retryCount);
       state.span.setStatus({ code: SpanStatusCode.OK });
       this.endSpan(state);
-      const durationMs = Date.now() - state.startTimeMs;
+      const durationMs = this.now() - state.startTimeMs;
       this.callbacks?.onStepClose?.(step, durationMs, state.retryCount);
     }
     this.openSteps.clear();
@@ -505,7 +516,7 @@ export class SpanManager {
       state.span.setAttribute('conductor.retry.count', state.retryCount);
       state.span.setStatus({ code: SpanStatusCode.ERROR, message: 'incomplete: process terminated' });
       this.endSpan(state);
-      const durationMs = Date.now() - state.startTimeMs;
+      const durationMs = this.now() - state.startTimeMs;
       this.callbacks?.onStepClose?.(step, durationMs, state.retryCount);
     }
     this.openSteps.clear();

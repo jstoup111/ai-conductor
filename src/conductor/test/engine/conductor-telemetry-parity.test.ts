@@ -96,7 +96,6 @@ async function runSerial(input: {
   await writeState(stateFilePath, state);
 
   let now = 1_000;
-  vi.spyOn(Date, 'now').mockImplementation(() => now);
   const events = new ConductorEventEmitter();
   const observed: ConductorEvent[] = [];
   for (const type of ['step_started', 'step_completed', 'step_failed', 'step_refused', 'step_retry', 'provider_attempt'] as const) {
@@ -118,7 +117,7 @@ async function runSerial(input: {
       : spanExporter;
     visualizer = new OtelVisualizer(
       resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, join(projectRoot, '.pipeline')),
-      { spanExporter: exporter, onWarning: (warning) => warnings.push(warning), exportTimeoutMillis: 50 },
+      { spanExporter: exporter, onWarning: (warning) => warnings.push(warning), exportTimeoutMillis: 50, now: () => now },
     );
     visualizer.start(events, { runId: 'serial-run', feature: 'serial-telemetry-parity', project: projectRoot });
     metrics.start(events);
@@ -205,7 +204,6 @@ async function runBuiltinGroup(input: {
   };
   await writeState(stateFilePath, state);
   let now = 1_000;
-  vi.spyOn(Date, 'now').mockImplementation(() => now);
   const events = new ConductorEventEmitter();
   const observed: ConductorEvent[] = [];
   for (const type of ['step_started', 'step_completed', 'step_failed', 'step_refused', 'step_retry', 'provider_attempt', 'group_member_step'] as const) {
@@ -226,7 +224,7 @@ async function runBuiltinGroup(input: {
       : spanExporter;
     visualizer = new OtelVisualizer(
       resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, join(projectRoot, '.pipeline')),
-      { spanExporter: exporter, onWarning: (warning) => warnings.push(warning), exportTimeoutMillis: 50 },
+      { spanExporter: exporter, onWarning: (warning) => warnings.push(warning), exportTimeoutMillis: 50, now: () => now },
     );
     visualizer.start(events, { runId: 'built-in-group-run', feature: 'built-in-group-telemetry', project: projectRoot });
     metrics.start(events);
@@ -325,7 +323,6 @@ async function runConfiguredGroup(input: {
   } as ConductState;
   await writeState(stateFilePath, state);
   let now = 1_000;
-  vi.spyOn(Date, 'now').mockImplementation(() => now);
   const events = new ConductorEventEmitter();
   const observed: ConductorEvent[] = [];
   for (const type of ['step_started', 'step_completed', 'step_failed', 'step_interrupted', 'step_refused', 'step_retry', 'provider_attempt', 'group_member_step', 'parallel_failure', 'parallel_completed'] as const) {
@@ -340,7 +337,7 @@ async function runConfiguredGroup(input: {
   const spanExporter = new CapturingSpanExporter();
   const visualizer = new OtelVisualizer(
     resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, join(projectRoot, '.pipeline')),
-    { spanExporter, exportTimeoutMillis: 50 },
+    { spanExporter, exportTimeoutMillis: 50, now: () => now },
   );
   visualizer.start(events, { runId: 'configured-group-run', feature: 'configured-group-telemetry', project: projectRoot });
   metrics.start(events);
