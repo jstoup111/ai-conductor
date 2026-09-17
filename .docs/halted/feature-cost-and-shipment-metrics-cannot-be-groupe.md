@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-17T12:26:44.298Z
 Slug: feature-cost-and-shipment-metrics-cannot-be-groupe
 Class: needs-human
 Halting step: prd_audit
