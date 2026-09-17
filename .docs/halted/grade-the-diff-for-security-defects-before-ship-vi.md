@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: rekick
+Resolved at: 2026-09-17T21:50:18.542Z
 Slug: grade-the-diff-for-security-defects-before-ship-vi
 Class: plan-gap
 Halting step: prd_audit
