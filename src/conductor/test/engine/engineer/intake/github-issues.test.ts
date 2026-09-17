@@ -518,6 +518,45 @@ describe('poll() invalid repository targets', () => {
     });
   });
 
+  it('shares missing-registration episodes across adapters when injected, then re-arms after restore', async () => {
+    const repoPath = join(dir, 'shared-missing-then-restored');
+    const missingRegistrationEpisodes = new Set<string>();
+    const logs: string[] = [];
+    let listingCalls = 0;
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'issue' && args[1] === 'list') {
+        listingCalls += 1;
+        return { stdout: JSON.stringify([{ number: 1, title: 'Captured after restore', body: 'body' }]) };
+      }
+      return { stdout: '' };
+    };
+    const registry = { list: async () => [{ name: 'o/a', path: repoPath }] };
+    const ledger = createLedger(join(dir, 'ledger.json'));
+    const createAdapter = () => createGithubIssuesAdapter({
+      gh,
+      registry,
+      ledger,
+      log: (message) => logs.push(message),
+      missingRegistrationEpisodes,
+    });
+
+    await createAdapter().poll();
+    await createAdapter().poll();
+    await mkdir(repoPath);
+    const captured = await createAdapter().poll();
+    await rm(repoPath, { recursive: true });
+    await createAdapter().poll();
+
+    expect({ listingCalls, logs, captured: captured.map(({ sourceRef }) => sourceRef) }).toEqual({
+      listingCalls: 1,
+      logs: [
+        `github-issues: skipping o/a: missing path ${repoPath}`,
+        `github-issues: skipping o/a: missing path ${repoPath}`,
+      ],
+      captured: ['o/a#1'],
+    });
+  });
+
   it('isolates an invalid repository before fetching and captures the following valid repository', async () => {
     const logs: string[] = [];
     const targets: string[] = [];

@@ -46,6 +46,8 @@ export interface GithubIssuesDeps {
   log?: (msg: string) => void;
   /** Maximum issues requested per repository; defaults above the GitHub CLI's implicit 30. */
   issueListLimit?: number;
+  /** Missing-path episodes shared by adapters built within one owning process. */
+  missingRegistrationEpisodes?: Set<string>;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
@@ -154,7 +156,7 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
 
   // Missing registered paths are reported once per absence episode. A restored
   // path clears its marker so a later disappearance is visible again.
-  const reportedMissingRegistrations = new Set<string>();
+  const reportedMissingRegistrations = deps.missingRegistrationEpisodes ?? new Set<string>();
 
   /**
    * Resolve the working directory for a report() gh call. Never falls back to
