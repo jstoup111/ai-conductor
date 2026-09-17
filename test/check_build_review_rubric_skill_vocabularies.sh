@@ -39,6 +39,9 @@ cat >"$probe_script" <<'PROBE'
  * Emits, per rubric:
  *   "<rubric> vocab <member>"        — every string leaf of the exported
  *                                      BUILD_REVIEW_FINDING_VOCABULARIES entry
+ *   "<rubric> parses <member>"       — the concern-kind parser accepts a
+ *                                      documented vocabulary member unchanged
+ *   "<rubric> !unparsed <member>"    — the concern-kind parser rejects one
  *   "<rubric> <field>=<grammar>"     — enforced grammar, classified by behavior
  *   "<rubric> !baseline-rejected"    — no specimen anchor is accepted at all
  *   "<rubric> <field>!unenforced"    — the field accepts garbage
@@ -51,6 +54,13 @@ const parseAnchor = mod.parseBuildReviewFindingAnchor as (
 ) => unknown;
 if (typeof parseAnchor !== 'function') {
   console.error(`probe: ${domainPath} does not export parseBuildReviewFindingAnchor`);
+  process.exit(1);
+}
+const parseConcernKind = mod.parseBuildReviewFindingConcernKind as (
+  value: unknown, rubric: string,
+) => unknown;
+if (typeof parseConcernKind !== 'function') {
+  console.error(`probe: ${domainPath} does not export parseBuildReviewFindingConcernKind`);
   process.exit(1);
 }
 const vocabularies = (mod.BUILD_REVIEW_FINDING_VOCABULARIES ?? {}) as Record<string, unknown>;
@@ -86,6 +96,15 @@ for (const [rubric, shape] of Object.entries(RUBRICS)) {
   const leaves = new Set<string>();
   vocabLeaves(vocabularies[rubric], leaves);
   for (const leaf of [...leaves].sort()) console.log(`${rubric} vocab ${leaf}`);
+
+  const concernKinds = (vocabularies[rubric] as { concernKinds?: unknown } | undefined)?.concernKinds;
+  if (Array.isArray(concernKinds)) {
+    for (const member of concernKinds) {
+      if (typeof member !== 'string') continue;
+      if (parseConcernKind(member, rubric) === member) console.log(`${rubric} parses ${member}`);
+      else console.log(`${rubric} !unparsed ${member}`);
+    }
+  }
 
   const accepts = (assignment: Record<string, unknown>): boolean => {
     const anchor: Record<string, unknown> = { rubric, ...shape.fixed, ...assignment };
@@ -162,7 +181,7 @@ extract_documented_reference_grammars() {
 check_vocabulary_drift() {
   local domain_file=$1
   local harness_dir=$2
-  local rubric skill_file engine_vocabulary documented_vocabulary probe_output
+  local rubric skill_file engine_vocabulary documented_vocabulary probe_output member
 
   if [ ! -r "$domain_file" ]; then
     echo "could not read build-review reference grammar source: ${domain_file}" >&2
@@ -191,6 +210,18 @@ check_vocabulary_drift() {
       echo "build-review ${rubric} vocabulary drift: update the engine and SKILL.md together" >&2
       return 1
     fi
+
+    while IFS= read -r member; do
+      [ -n "$member" ] || continue
+      if grep -Fxq "${rubric} !unparsed ${member}" <<<"$probe_output"; then
+        echo "build-review ${rubric} vocabulary drift: concern-kind parser rejected documented member ${member}" >&2
+        return 1
+      fi
+      if ! grep -Fxq "${rubric} parses ${member}" <<<"$probe_output"; then
+        echo "build-review ${rubric} vocabulary drift: concern-kind parser did not parse documented member ${member}" >&2
+        return 1
+      fi
+    done <<<"$documented_vocabulary"
   done
 }
 
@@ -304,6 +335,10 @@ export function parseBuildReviewFindingAnchor(value: Record<string, unknown>): u
     ? parseContentRegionReference(source.locus)
     : undefined;
 }
+export function parseBuildReviewFindingConcernKind(value: unknown, rubric: string): string | undefined {
+  const vocabulary = BUILD_REVIEW_FINDING_VOCABULARIES[rubric as keyof typeof BUILD_REVIEW_FINDING_VOCABULARIES]?.concernKinds;
+  return typeof value === 'string' && vocabulary?.includes(value as never) ? value : undefined;
+}
 EOF
 
 for rubric in test-quality security; do
@@ -398,6 +433,12 @@ cp "$fixture_domain" "$fixture_engine_extra_domain"
 sed -i "s/'ssrf',/'ssrf', 'unknown-security-kind',/" "$fixture_engine_extra_domain"
 run_vocabulary_drift_fixture \
   'an engine-side extra security vocabulary member' "$fixture_engine_extra_domain" "$fixture_harness" security unknown-security-kind
+
+fixture_security_parser_rejects_domain="$fixture_dir/build-review-domain-security-parser-rejects.ts"
+cp "$fixture_domain" "$fixture_security_parser_rejects_domain"
+sed -i "s/return typeof value === 'string' && vocabulary?.includes(value as never) ? value : undefined;/return typeof value === 'string' \&\& value !== 'ssrf' \&\& vocabulary?.includes(value as never) ? value : undefined;/" "$fixture_security_parser_rejects_domain"
+run_vocabulary_drift_fixture \
+  'a concern-kind parser that rejects documented security member ssrf' "$fixture_security_parser_rejects_domain" "$fixture_harness" security ssrf
 
 if ! check_vocabulary_drift "$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts" "$HARNESS_DIR"; then
   failures=1
