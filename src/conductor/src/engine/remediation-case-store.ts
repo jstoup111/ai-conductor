@@ -299,7 +299,9 @@ function parseCase(value: unknown):
   const expectedKeys = value.disposition === 'refute'
     ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'refutation']
     : value.disposition === 'escalate'
-      ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', ...(value.consistencyStop === undefined ? ['escalation'] : ['consistencyStop'])]
+      ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect',
+        ...(Object.hasOwn(value, 'escalation') ? ['escalation'] : []),
+        ...(Object.hasOwn(value, 'consistencyStop') ? ['consistencyStop'] : [])]
     : ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect'];
   if (!exactKeys(value, expectedKeys)) return { ok: false, reason: 'malformed-state' };
   if (value.domain !== 'build_review') return { ok: false, reason: 'foreign-domain' };

@@ -578,6 +578,15 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // routing a stop through it would manufacture a deferral-shaped effect.
   const ordinaryCases = admitted.filter((proposed) => proposed.case.disposition !== 'escalate');
   const escalationCases = admitted.filter((proposed) => proposed.case.disposition === 'escalate');
+  const blockedConsistency = judgement.mode === 'case-v2' && judgement.consistency.verdict === 'blocked'
+    ? {
+      sourceIds: judgement.consistency.sourceIds.filter((sourceId) => liveSourceIds.has(sourceId)),
+      rationale: judgement.consistency.rationale,
+    }
+    : undefined;
+  if (blockedConsistency && blockedConsistency.sourceIds.length === 0) {
+    return fail('blocked consistency stop has no live sources');
+  }
   const recordedAt = new Date().toISOString();
   const generateId = input.generateId ?? randomUUID;
   const reconciled = await reconcileRemediationCases(store, {
@@ -605,8 +614,11 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // map itself. Deriving it here from array positions could not see a replayed
   // judgement converging on an already-stamped case.
   const caseIdsByRef = new Map(reconciled.caseIdsByRef);
+  let persistedConsistencyStop = false;
   for (const proposed of escalationCases) {
     const caseId = proposed.case.existingCaseId ?? generateId();
+    const ownsBlockedConsistency = blockedConsistency !== undefined && !persistedConsistencyStop &&
+      proposed.sources.some((source) => blockedConsistency.sourceIds.includes(source.sourceId));
     const persistedStop = await persistBuildReviewDecisionStop({
       store,
       record: {
@@ -614,23 +626,23 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         rationale: proposed.case.rationale, confidence: proposed.case.confidence, resolution: 'open',
         sources: proposed.sources.map((source) => ({ sourceId: source.sourceId, outcome: source.outcome, recordedAt })),
         effect: { kind: 'none' }, escalation: proposed.case.escalation!,
+        ...(ownsBlockedConsistency ? { consistencyStop: blockedConsistency } : {}),
       },
     });
     if (!persistedStop.ok) return fail(`decision stop ${persistedStop.reason}`);
+    persistedConsistencyStop ||= ownsBlockedConsistency;
     caseIdsByRef.set(proposed.case.caseRef, persistedStop.caseId);
   }
-  if (judgement.mode === 'case-v2' && judgement.consistency.verdict === 'blocked') {
-    const sourceIds = judgement.consistency.sourceIds.filter((sourceId) => liveSourceIds.has(sourceId));
+  if (blockedConsistency && !persistedConsistencyStop) {
     const sources = graph.graph.sourceOutcomes
-      .filter((source) => sourceIds.includes(source.sourceId))
+      .filter((source) => blockedConsistency.sourceIds.includes(source.sourceId))
       .map((source) => ({ sourceId: source.sourceId, outcome: source.outcome, recordedAt }));
-    if (sources.length === 0) return fail('blocked consistency stop has no live sources');
     const persistedStop = await persistBuildReviewDecisionStop({
       store,
       record: {
         id: `consistency-stop-${input.aggregate.lapId}`, domain: 'build_review', disposition: 'escalate', priority: 'high',
-        rationale: judgement.consistency.rationale, confidence: 'high', resolution: 'open', sources,
-        effect: { kind: 'none' }, consistencyStop: { sourceIds, rationale: judgement.consistency.rationale },
+        rationale: blockedConsistency.rationale, confidence: 'high', resolution: 'open', sources,
+        effect: { kind: 'none' }, consistencyStop: blockedConsistency,
       },
     });
     if (!persistedStop.ok) return fail(`blocked consistency stop ${persistedStop.reason}`);
