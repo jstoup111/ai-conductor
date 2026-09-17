@@ -54,6 +54,16 @@ function bounded(value: string, maximum = MAX_TEXT_LENGTH): boolean {
   return value.trim().length > 0 && value.length <= maximum;
 }
 
+/**
+ * A report snapshot is context, not identity: the offer's identity is its
+ * `sourceId` and `evidence`. A full prd-audit report routinely exceeds the
+ * store's text bound, so it is clipped to the bound instead of rejecting the
+ * whole offer as `invalid-offer` (which surfaced as `persistence-failed`).
+ */
+export function boundReportSnapshot(reportSnapshot: string): string {
+  return reportSnapshot.length <= MAX_TEXT_LENGTH ? reportSnapshot : reportSnapshot.slice(0, MAX_TEXT_LENGTH);
+}
+
 function validInput(input: PrdWideningOfferInput): boolean {
   return bounded(input.criterion, MAX_REFERENCE_LENGTH) &&
     bounded(input.sourceId, MAX_REFERENCE_LENGTH) && bounded(input.evidence) &&
@@ -115,9 +125,10 @@ function stateWithOffers(
 export async function persistPrdWideningOffers(
   projectRoot: string,
   feature: RemediationCaseFeatureIdentity,
-  inputs: readonly PrdWideningOfferInput[],
+  rawInputs: readonly PrdWideningOfferInput[],
   options: PersistPrdWideningOffersOptions = {},
 ): Promise<PersistPrdWideningOffersResult> {
+  const inputs = rawInputs.map((input) => ({ ...input, reportSnapshot: boundReportSnapshot(input.reportSnapshot) }));
   if (inputs.some((input) => !validInput(input)) ||
     new Set(inputs.map((input) => input.sourceId)).size !== inputs.length) {
     return { ok: false, reason: 'could not persist PRD widening offer: invalid-offer', offers: [], block: '' };
