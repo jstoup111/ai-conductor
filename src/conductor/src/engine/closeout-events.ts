@@ -11,15 +11,10 @@ export type BuildReviewExternalEvent = Extract<ConductorEvent,
     | 'build_review_reduced_coverage_accepted'
     | 'build_review_disposition_refused'
     | 'build_review_outer_verdict' }> & { ts: string };
-export type TaskPlanGapExternalEvent = Extract<ConductorEvent, { type: 'loop_halt' }> & {
-  haltClass: 'plan-gap';
-  ts: string;
-};
 export type KickbackBudgetExternalEvent = Extract<ConductorEvent, { type: 'kickback_budget_adjustment_authorized' }>;
 export type ExternalPipelineEvent =
   | PipelineCloseoutEvent
   | BuildReviewExternalEvent
-  | TaskPlanGapExternalEvent
   | KickbackBudgetExternalEvent;
 
 function pipelineEventPath(projectRoot: string): string {
