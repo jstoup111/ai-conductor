@@ -109,9 +109,10 @@ equal-content regions in one path. Omit it for a unique region or the first equa
 for each later duplicate, supply its ordinal (for example, `1` for the second region).
 
 Each finding has a `concernKind` from the closed vocabulary, a nested `security` anchor, an
-actionable summary, and concrete evidence locations. `confidence` is a required integer from 0
-through 100: calibrate it to the evidence rather than treating uncertainty as a reason to invent a
-finding. The anchor `locus` is the immutable changed content-region reference; it is never
+actionable summary, and concrete evidence locations. `confidence` is an optional integer from 0
+through 100: include it whenever you can calibrate it to the evidence, rather than treating
+uncertainty as a reason to invent a finding. A finding that omits `confidence` is treated as
+blocking by the engine (absent means blocking), so omit it only when you cannot calibrate. The anchor `locus` is the immutable changed content-region reference; it is never
 flattened to the finding's top level.
 
 The engine validates anchors, canonicalizes identities, stamps the envelope, and decides the
@@ -120,8 +121,8 @@ write, or apply a disposition.
 
 ## Verification
 
-- [ ] Every finding uses one closed-vocabulary concern kind, an integer `confidence`, and a nested
-      `security` content-region anchor for the introducing hunk.
+- [ ] Every finding uses one closed-vocabulary concern kind, an integer `confidence` when one is
+      supplied, and a nested `security` content-region anchor for the introducing hunk.
 - [ ] Every finding has concrete evidence locations; unchanged sinks appear only there, never as
       anchors.
 - [ ] Each independent defect has one finding; an empty `findings` array is used when no concrete
