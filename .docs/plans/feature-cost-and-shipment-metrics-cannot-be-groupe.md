@@ -327,3 +327,23 @@ Task 5 ─────────────┘
 **Governing clause:** adr-014-otel-observability-exporter D14
 **Done when:**
 - adr-014-otel-observability-exporter D14 is satisfied by this task.
+
+> **Amended 2026-09-17 by operator (as-built AB-2 resolution — comply with adr-2026-08-11-halt-events-ride-the-persisted-spine D2):** Tasks rem-as-built-rem-ab1-1 and rem-as-built-rem-ab1-2 required a pipeline-owned `loop_halt` appended by `runTaskPlanGap`, which contradicts D2's single conductor-owned `loop_halt` emitter. The operator chose ADR compliance over a superseding ADR. Their delivered tier stamping and tests are superseded by Tasks rem-as-built-rem-ab2-1 and rem-as-built-rem-ab2-2, which remove the external terminal producer so the centralized `emitLoopHalt` is the only plan-gap `loop_halt` source. This also resolves AB-1 (no `engine-state.json` tier read remains) and makes the approved terminal-sequence diagram accurate without a new ADR.
+
+### Task rem-as-built-rem-ab2-1: src/conductor/src/engine/task-cli.ts runTaskPlanGap — delete the appended `loop_halt` closeout event and the `engine-state.json` `complexity_tier` read, keeping the classified plan-gap HALT marker write, the `activePlanPath` read, the operator diagnostics, and return code 1 unchanged; delete `TaskPlanGapExternalEvent` from src/conductor/src/engine/closeout-events.ts and the `ExternalPipelineEvent` union; rewrite the task-cli plan-gap tests to assert the HALT marker is written, the plan is preserved, and `.pipeline/pipeline-events.jsonl` gains no `loop_halt` record, deleting the tier-stamping and tier-omission cases
+**Story:** 3
+**Gate:** as-built
+**Rationale:** DESIGN finding AB-2 (operator resolution 2026-09-17): adr-2026-08-11-halt-events-ride-the-persisted-spine D2 requires one conductor-owned `loop_halt` emit path with every emit site routed through it. `runTaskPlanGap` is the only other producer; the conductor already writes the centralized halt when the build stalls on the classified marker, so the pipeline-owned event is a duplicate terminal seam rather than missing behaviour. Removing it makes the centralized tier-bearing halt the single `conductor.run.outcomes` source for a plan-gap halt.
+**Governing clause:** adr-2026-08-11-halt-events-ride-the-persisted-spine D2
+**Done when:**
+- `grep -rn "type: 'loop_halt'" src/conductor/src` matches only conductor.ts emit sites reached through `emitLoopHalt`; task-cli.ts contains no `appendCloseoutEvent` call and closeout-events.ts contains no `TaskPlanGapExternalEvent`.
+- A task-cli unit test proves a plan-gap report writes the classified HALT marker, preserves the plan, returns 1, and appends no record to `.pipeline/pipeline-events.jsonl`.
+
+### Task rem-as-built-rem-ab2-2: src/conductor/test/engine/conductor.test.ts (Task 9 production-order block) — replace the case "keeps a plan-gap halt tiered when the build tail projects it before the centralized halt" with a regression that runs a BUILD step whose mocked provider reports a plan gap through the task-cli path while a real CloseoutEventTail, bus, MetricsListener, and in-memory exporter are active, then lets the centralized halt (tier read from the real persisted `complexity_tier` in `conduct-state.json`, not a fabricated `engine-state.json` fixture) and dispatch-end follow; assert exactly one `conductor.run.outcomes` point and that it carries the run tier
+**Story:** 3
+**Gate:** as-built
+**Rationale:** Same AB-2 resolution: once the external producer is gone, the proof that a plan-gap halt yields one tiered outcome must come from the production emitter and production state, so the regression that pinned the removed seam is replaced rather than deleted. Task 9's existing complete/halt production-order, interactive, early-halt, and legacy-replay cases stay unchanged.
+**Governing clause:** adr-2026-08-11-halt-events-ride-the-persisted-spine D2
+**Done when:**
+- The replaced regression proves exactly one tiered `conductor.run.outcomes` point for a task-cli plan-gap halt with the closeout tail polling, and the test writes no `engine-state.json` fixture.
+- The Task 9 production-order, interactive, early-halt, and legacy tierless replay cases still pass unchanged.
