@@ -1320,9 +1320,11 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
         log: log.mock.calls[0]?.[0],
       }).toEqual({
         entries: ['bad_slug', 'engineer-run', 'halted', 'in-flight', 'marker-read-error', 'parked-only', 'resolve-run', 'shared'],
-        deleted: ['hotfix/parked-only', 'hotfix/shared'],
-        branchDeletes: ['hotfix/parked-only', 'hotfix/shared'],
-        log: expect.stringContaining('retained: foreign-lifecycle=2,halted=2,in-flight=1,invalid-slug=1'),
+        // `shared` is parked, so it follows the historical parked contract:
+        // its listed non-daemon ref cannot relax the shipped-record gate.
+        deleted: ['hotfix/parked-only'],
+        branchDeletes: ['hotfix/parked-only'],
+        log: expect.stringContaining('retained: foreign-lifecycle=2,halted=2,in-flight=1,invalid-slug=1,record-missing=1'),
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });

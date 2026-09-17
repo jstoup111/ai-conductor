@@ -546,10 +546,15 @@ export async function reconcileParkedFeatures(
   for (const [slug, candidate] of candidates) {
     let retainedReason: WorktreeReclaimRetainedReason | undefined;
     if (registeredWorktrees === null) retainedReason = 'listing-unavailable';
-    else if (opts.isFeatureInFlight?.(slug)) retainedReason = 'in-flight';
-    else if (slug.startsWith('engineer-') || slug.startsWith('resolve-')) retainedReason = 'foreign-lifecycle';
-    else if (!candidate.reclaimable || !SINGLE_SLUG.test(slug)) retainedReason = 'invalid-slug';
-    else {
+    // These guards protect candidates discovered from the worktree registry.
+    // A park marker remains the authority for an established parked feature:
+    // its worktree-local HALT must not prevent the durable-marker path from
+    // classifying and repairing it, and it retains the helper's historical
+    // branch/record semantics.
+    else if (!candidate.parked && opts.isFeatureInFlight?.(slug)) retainedReason = 'in-flight';
+    else if (!candidate.parked && (slug.startsWith('engineer-') || slug.startsWith('resolve-'))) retainedReason = 'foreign-lifecycle';
+    else if (!candidate.parked && (!candidate.reclaimable || !SINGLE_SLUG.test(slug))) retainedReason = 'invalid-slug';
+    else if (!candidate.parked) {
       try {
         await access(join(opts.projectRoot, '.worktrees', slug, '.pipeline', 'HALT'));
         retainedReason = 'halted';
@@ -618,7 +623,10 @@ export async function reconcileParkedFeatures(
       const outcome = await reconcileMergedPark({
         ...opts,
         slug,
-        branch: candidate.branch,
+        // Parked features deliberately preserve the pre-enumeration helper
+        // contract. Only a never-parked registry candidate supplies its
+        // listed ref (and gets the relaxed non-daemon record rule).
+        branch: candidate.parked ? undefined : candidate.branch,
         log: undefined,
         capabilityLog: opts.log,
         teardownLog: opts.log,
