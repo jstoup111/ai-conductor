@@ -452,3 +452,25 @@ Approved by James Stoup on 2026-09-15 as a separate change after #2034 ships.
 **Done when:**
 - Task 1 is satisfied by this task.
 - Re-run as-built and confirm task rem-as-built-rem-ab2-1 is complete.
+
+> **Amended 2026-09-17 by operator (as-built AB-2 resolution):** Story 5 criterion 1 requires the vocabulary integrity check to execute the engine parser against each declared member, but approved Task 13 delivered only the exported-vocabulary list comparison. The operator kept the sealed criterion and authorized Task 15 to add the parser execution; Task 13's delivered drift comparison stays as-is.
+
+### Task 15: Execute the concern-kind parser against every documented vocabulary member in the integrity guard
+**Story:** 5
+**Type:** negative-path
+
+**Steps:**
+1. Write the failing check first: in the probe script embedded in `test/check_build_review_rubric_skill_vocabularies.sh`, import `parseBuildReviewFindingConcernKind` from the domain module (fail the probe naming the export when absent) and, for each rubric in `RUBRICS`, emit `"<rubric> parses <member>"` for every member of that rubric's `concernKinds` that the parser returns unchanged and `"<rubric> !unparsed <member>"` for any it rejects.
+2. In `check_vocabulary_drift`, after the list comparison, run every member from the skill's documented `**Closed vocabulary:**` line through the probe's parser output: a documented member with no `"<rubric> parses <member>"` line, or any `!unparsed` line, fails naming the rubric and the member.
+3. Add a drift fixture in the script's fixture block proving that a domain module whose parser rejects one declared member (for example a normalizer that lowercases a member the vocabulary lists in another case) fails naming `security` and that member, while the unmodified domain passes for both `testQuality` and `security`.
+4. Run `bash test/check_build_review_rubric_skill_vocabularies.sh` and `bash test/test_harness_integrity.sh` and observe RED then GREEN.
+5. Commit with message: `test(integrity): execute the concern-kind parser per documented vocabulary member`.
+
+**Done when:**
+- `test/check_build_review_rubric_skill_vocabularies.sh` executes `parseBuildReviewFindingConcernKind` against every documented `**Closed vocabulary:**` member for both `testQuality` and `security` and passes on the committed skill and domain files.
+- A fixture in which the parser rejects one declared `security` member makes the check exit non-zero naming `security` and that member, as asserted by the script's own fixture run.
+- The existing list-comparison drift fixtures from Task 13 still fail naming the rubric and the drifted member.
+
+**Files:** `test/check_build_review_rubric_skill_vocabularies.sh`
+
+**Dependencies:** Task 13
