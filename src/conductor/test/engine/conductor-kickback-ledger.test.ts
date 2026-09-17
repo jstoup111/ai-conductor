@@ -128,8 +128,8 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
             join(dir, '.pipeline/build-review.json'),
             JSON.stringify({
               verdict: 'FAIL',
-              rubric: { testQuality: true },
-              findings: lastReason === '' ? {} : { testQuality: [lastReason] },
+              rubric: { testQuality: true, security: false },
+              ...(lastReason === '' ? {} : { findings: { testQuality: [lastReason] } }),
             }),
           );
         }

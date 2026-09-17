@@ -2344,7 +2344,11 @@ export function validateBuildReviewVerdict(
   }
   if (findings !== undefined) {
     for (const rubricName of failedRubrics) {
-      if ((findings[rubricName]?.length ?? 0) === 0) {
+      const hasScopeIncompleteFault = Array.isArray(e.scopeIncomplete) && e.scopeIncomplete.some(
+        (fault) => typeof fault === 'object' && fault !== null &&
+          (fault as Record<string, unknown>).rubric === rubricName,
+      );
+      if ((findings[rubricName]?.length ?? 0) === 0 && !hasScopeIncompleteFault) {
         return {
           ok: false,
           reason: `${BUILD_REVIEW_VERDICT} "findings.${rubricName}" must be non-empty when ${rubricName} is named in failedRubrics`,

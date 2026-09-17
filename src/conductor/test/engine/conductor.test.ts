@@ -1213,7 +1213,7 @@ describe('engine/conductor', () => {
     expect(haltReasons).toEqual([
       'build_review cumulative kickback cap exceeded:\n' +
         'Kickback budget (build_review): 6/5 consumed; 0 remaining\n' +
-        'Latest reason: [testQuality] test-insensitive\n[security] skipped: disabled\n[testQuality] test-insensitive\n' +
+        'Latest reason: [testQuality] test-insensitive\n[security] skipped: disabled\n[testQuality] test-insensitive\n[security] skipped: disabled\n' +
         'Adjustment history: unavailable\n' +
         'Mechanical faults: 0',
     ]);
@@ -1277,7 +1277,7 @@ describe('engine/conductor', () => {
     expect(haltReasons).toEqual([
       'build_review cumulative kickback cap exceeded:\n' +
         'Kickback budget (build_review): 6/5 consumed; 0 remaining\n' +
-        'Latest reason: [testQuality] test-insensitive\n[security] skipped: disabled\n[testQuality] test-insensitive\n' +
+        'Latest reason: [testQuality] test-insensitive\n[security] skipped: disabled\n[testQuality] test-insensitive\n[security] skipped: disabled\n' +
         'Adjustment history: unavailable\n' +
         'Mechanical faults: 0',
     ]);
