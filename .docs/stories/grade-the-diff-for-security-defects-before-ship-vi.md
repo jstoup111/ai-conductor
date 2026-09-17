@@ -164,8 +164,10 @@ As a feature owner, I want the security grader to raise a finding only when it c
 
 ### Done When
 
-- [ ] `skills/build-review-security/SKILL.md` instructs one finding per independent defect, requires the introducing hunk as the anchor and concrete evidence locations, defines each of the ten concern kinds with an explicit non-finding for each, and requires an integer `confidence` on every finding.
-- [ ] Fixture provider payloads for the four happy-path diffs validate as judged `FAIL` results with the named concern kinds, and fixture payloads for the five negative diffs validate as judged results with zero blocking findings.
+_Amended 2026-09-17: `confidence` optional per ADR D4.2; the unchanged-sink fixture proves anchoring, not zero findings._
+
+- [ ] `skills/build-review-security/SKILL.md` instructs one finding per independent defect, requires the introducing hunk as the anchor and concrete evidence locations, defines each of the ten concern kinds with an explicit non-finding for each, and accepts an optional integer `confidence` on a finding (absent means blocking, per ADR D4.2).
+- [ ] Fixture provider payloads for the four happy-path diffs validate as judged `FAIL` results with the named concern kinds, and fixture payloads for the four zero-finding negative diffs validate as judged results with zero blocking findings, and the unchanged-sink fixture validates as one finding anchored to the changed hunk with the unchanged line named only in `evidenceLocations`.
 - [ ] The skill contract returns `findings` only, with no `scopeResolutions`, `counterfactualSensitivity`, or `boundTo` field.
 
 ## Negative-category review

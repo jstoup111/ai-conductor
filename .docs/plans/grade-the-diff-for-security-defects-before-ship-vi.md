@@ -12,6 +12,8 @@
 
 ## Summary
 
+**Amendment 2026-09-17 (prd_audit PLAN_GAP S6.1/S6.9, as-built AB-1):** Task 12 and Story 6 now follow ADR adr-2026-08-29 D4.2 — `confidence` is optional and absent means blocking — and the unchanged-sink negative fixture must prove a finding anchored to the changed hunk rather than zero findings.
+
 Fourteen TDD tasks add `security` as the second built-in, default-off member of the build_review rubric container: registry and config, a whole-diff projection with content-addressed caching, a ten-member closed vocabulary with content-region anchors, aggregate and adjudicator flow with no plan-binding exemption, the shipped `build-review-security` skill, its integrity and model-table registration, and the removal of security grading from the per-batch code-review evaluator.
 
 ## Technical Approach
@@ -266,16 +268,16 @@ Fourteen TDD tasks add `security` as the second built-in, default-off member of 
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests in `build-review-rubric-skills.test.ts` and `build-review-skill-contract.test.ts`: the skill file exists with frontmatter `name: build-review-security`, `disable-model-invocation: true`, `enforcement: gating`, `phase: build`; its `**Closed vocabulary:**` line lists the ten kinds and its `**Reference grammar:**` line binds `anchor.locus` to `content-region`; its result contract names `findings` only and no `boundTo`, `scopeResolutions`, or `counterfactualSensitivity`; fixture payloads for the committed-secret, injection, authorization-removal, and SSRF diffs validate as judged FAIL with the named kinds; fixture payloads for the rename-only, fake-test-credential, manifest-bump, design-only, and unchanged-sink diffs validate as judged results with zero blocking findings.
+1. Write failing tests in `build-review-rubric-skills.test.ts` and `build-review-skill-contract.test.ts`: the skill file exists with frontmatter `name: build-review-security`, `disable-model-invocation: true`, `enforcement: gating`, `phase: build`; its `**Closed vocabulary:**` line lists the ten kinds and its `**Reference grammar:**` line binds `anchor.locus` to `content-region`; its result contract names `findings` only and no `boundTo`, `scopeResolutions`, or `counterfactualSensitivity`; fixture payloads for the committed-secret, injection, authorization-removal, and SSRF diffs validate as judged FAIL with the named kinds; fixture payloads for the rename-only, fake-test-credential, manifest-bump, and design-only diffs validate as judged results with zero blocking findings, and the unchanged-sink fixture validates as one finding anchored to the changed hunk with the unchanged line named only in `evidenceLocations`.
 2. Run `npx vitest run test/engine/build-review-rubric-skills.test.ts test/engine/build-review-skill-contract.test.ts` and observe RED.
-3. Author `skills/build-review-security/SKILL.md` on the test-quality exemplar: purpose, closed input projection (whole diff by reference, worktree reads as part of the input), judgement (one finding per independent defect, anchored to the introducing hunk, unchanged sinks cited only in `evidenceLocations`, a definition and an explicit non-finding for each of the ten kinds, integer `confidence` required), result contract, verification checklist. Add `agents/openai.yaml` only if the sibling shipped rubric skill carries one.
+3. Author `skills/build-review-security/SKILL.md` on the test-quality exemplar: purpose, closed input projection (whole diff by reference, worktree reads as part of the input), judgement (one finding per independent defect, anchored to the introducing hunk, unchanged sinks cited only in `evidenceLocations`, a definition and an explicit non-finding for each of the ten kinds, optional integer `confidence`, absent means blocking per ADR D4.2), result contract, verification checklist. Add `agents/openai.yaml` only if the sibling shipped rubric skill carries one.
 4. Run the same command and observe GREEN.
 5. Commit with message: `feat(skills): add the build-review-security rubric skill`.
 
 **Done when:**
 - `skills/build-review-security/SKILL.md` carries the four required frontmatter fields plus `disable-model-invocation: true`, a ten-member `**Closed vocabulary:**` line, and a `**Reference grammar:**` line binding `anchor.locus` to `content-region`, as asserted by the rubric-skills test.
-- The skill's result contract returns `findings` only, with no `scopeResolutions`, `counterfactualSensitivity`, or `boundTo` field, and its judgement section defines each of the ten concern kinds with an explicit non-finding and requires an integer `confidence`, as asserted by the skill-contract test.
-- Fixture payloads for the four happy-path diffs validate as judged `FAIL` results with the named concern kinds, and fixture payloads for the five negative diffs validate as judged results with zero blocking findings, as asserted by the rubric-skills test.
+- The skill's result contract returns `findings` only, with no `scopeResolutions`, `counterfactualSensitivity`, or `boundTo` field, and its judgement section defines each of the ten concern kinds with an explicit non-finding and accepts an optional integer `confidence` (absent means blocking, per ADR D4.2), as asserted by the skill-contract test.
+- Fixture payloads for the four happy-path diffs validate as judged `FAIL` results with the named concern kinds, and fixture payloads for the four zero-finding negative diffs validate as judged results with zero blocking findings, and the unchanged-sink fixture validates as one finding anchored to the changed hunk with the unchanged line named only in `evidenceLocations`, as asserted by the rubric-skills test.
 
 **Files:** `skills/build-review-security/SKILL.md`; `src/conductor/test/engine/build-review-rubric-skills.test.ts`; `src/conductor/test/engine/build-review-skill-contract.test.ts`
 
