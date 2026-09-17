@@ -395,7 +395,7 @@ Extends the two existing deterministic config writers by one input each and grow
 
 | Criterion | Task id(s) | Done when quote | Disposition |
 | --- | --- | --- | --- |
-| Story 1 happy: Given an operator is present and the project has no configuration yet, when onboarding reaches configuration, then every project-scoped setting the operator is expected to decide is asked, one question at a time, and no such setting is silently defaulted without being asked. | 11 | "a numbered question for each decidable key" | diff-local |
+| Story 1 happy: Given an operator is present and the project has no configuration yet, when onboarding reaches configuration, then every project-scoped setting the operator is expected to decide is asked, one question at a time, and no such setting is silently defaulted without being asked. | 17 | "asks for the scoped command only when the mode answer is `scoped`" | diff-local |
 | Story 1 happy: Given a question is asked, when it is presented, then it states what the setting controls, which values are permitted, which value applies if the operator answers nothing, and what a non-default value changes. | 11 | "carrying `Controls:`, `Allowed:`, `Default:`, and `Changing it:`" | diff-local |
 | Story 1 negative: Given a question with a closed set of permitted values, when the operator answers with a value outside that set, then the answer is rejected with the permitted values restated, the same question is asked again, and nothing is recorded for it. | 11, 2 | "states the closed-set and free-text re-ask rules" | diff-local |
 | Story 1 negative: Given a question whose answer is free text, when the operator answers with an empty or multi-line value, then the answer is rejected, the question is re-asked, and nothing is recorded for it. | 2, 11 | "exits 1 naming `--test-suite-command` and writes no config file for the empty and multi-line fixtures" | diff-local |
@@ -417,8 +417,8 @@ Extends the two existing deterministic config writers by one input each and grow
 | Story 6 happy: Given operator identity is already established, when onboarding runs again, then it is reported and preserved. | 13 | "reports an already-set identity without asking" | diff-local |
 | Story 6 negative: Given a project whose configuration already exists, when the recording step is invoked again with different answers, then it refuses to overwrite, reports that the configuration already exists, and the file is unchanged. | 5 | "the pre-existing file is byte-identical after a flagged re-run" | diff-local |
 | Story 6 negative: Given a project configuration that has been hand-edited since it was recorded, when onboarding runs again, then the hand-edited values are preserved and reported, not replaced with defaults. | 5 | "The hand-edited `command: make check` value survives the re-run unchanged" | diff-local |
-| Story 7 happy: Given onboarding has recorded a project configuration, when the operator opens it, then every setting the walkthrough did not ask about is accompanied by an explanation stating what it controls, its permitted values, its default, and the consequence of changing it. | 9 | "has a template comment block with `Controls:`, `Allowed:`, `Default:`, and `Changing it:`" | diff-local |
-| Story 7 negative: Given the recorded configuration, when its explanations are compared with the keys the harness accepts, then no explained key is unknown to the harness and no decidable-but-unasked key lacks an explanation. | 10 | "passes `validateConfig` with no unknown-key error" | diff-local |
+| Story 7 happy: Given onboarding has recorded a project configuration, when the operator opens it, then every setting the walkthrough did not ask about is accompanied by an explanation stating what it controls, its permitted values, its default, and the consequence of changing it. | 18 | "every project-settable top-level key has a template comment block" | diff-local |
+| Story 7 negative: Given the recorded configuration, when its explanations are compared with the keys the harness accepts, then no explained key is unknown to the harness and no decidable-but-unasked key lacks an explanation. | 18 | "derived from `CONFIG_CONSUMER_KEY_SETS.top`" | diff-local |
 | Story 8 happy: Given onboarding runs with no operator present, when it reaches configuration, then it asks no question, records today's defaults, and completes. | 16 | "the unchanged flagless-defaults invocation with no question text" | diff-local |
 | Story 8 negative: Given onboarding runs with no operator present and no identity is established, when it reaches the identity step, then it neither asks nor records an identity, and the existing fail-closed behavior on later identity-dependent actions is unchanged. | 16 | "declares itself skipped in auto mode with no `config set` call" | diff-local |
 | Story 8 negative: Given onboarding runs with no operator present, when its output is compared with the pre-change unattended output, then the recorded project configuration is byte-identical. | 4 | "`runConfigInit` with the auto-mode flags produces a file byte-equal to the fixture" | diff-local |
@@ -430,3 +430,51 @@ Extends the two existing deterministic config writers by one input each and grow
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
+
+> **Amended 2026-09-17 by operator (prd_audit PLAN_GAP resolution for S1.1, S7.1, S7.2):** The operator chose to ask for the scoped test command instead of dropping `scoped` from the walkthrough, and to explain every project-settable top-level key instead of narrowing Story 7 to a fixed list. Task 17 owns the S1.1 gap (answering `scoped` silently recorded a fixed `scoped_command` literal). Task 18 owns the S7.1/S7.2 gaps (nine explained keys against 46 accepted; the coverage test hardcoded the nine). Tasks 9, 10, and 11 keep their delivered scope; the Coverage Check rows for those criteria now cite Tasks 17 and 18.
+
+### Task 17: Ask for the scoped test command and record it through a config-init flag
+**Story:** 1
+**Type:** happy-path
+
+**Steps:**
+1. Write failing tests: in `src/conductor/test/engine/registry-cli.test.ts`, `config init --test-suite-mode scoped --test-suite-scoped-command "npm test -- {selectors}"` renders `scoped_command: npm test -- {selectors}` through `yamlScalar`; `--test-suite-mode scoped` without the scoped flag returns a naming message and writes no file; `--test-suite-scoped-command` with `--test-suite-mode aggregate` returns a naming message and writes no file; an empty or multi-line scoped command is refused before any write. In `src/conductor/test/bootstrap-skill-config-questions.test.ts`, extend the decidable-key list with `test_suite.scoped_command` as a conditional question that carries the four elements and names `--test-suite-scoped-command`.
+2. Verify RED.
+3. Implement in `src/conductor/src/engine/registry-cli.ts`: parse `--test-suite-scoped-command` (bare and `=` forms) into the config-init dispatch; validate it with the same non-empty single-line rule as `--test-suite-command`; make `renderVerificationBlock` substitute the operator's value instead of the fixed literal and never render a `scoped_command` line when the mode is `aggregate`. Declare the flag on the commander `config init` command next to `--test-suite-command`.
+4. Implement in `skills/bootstrap/SKILL.md` Step 1b-i: add a question for `test_suite.scoped_command` asked only when question 1 was answered `scoped` — Controls: the command the scoped verification mode runs for selected tests, with `{selectors}` substituted; Allowed: one non-empty single-line command containing `{selectors}`; Default: none, the answer is required once `scoped` is chosen; Changing it: records the project's selected-test runner. Record with `--test-suite-scoped-command <command>`. Auto mode never reaches this question because it records `aggregate`.
+5. Verify GREEN and re-run Task 4's byte-identity tests. Commit: "bootstrap: ask for the scoped test command instead of defaulting it"
+
+**Done when:**
+- `config init` renders `scoped_command` only from `--test-suite-scoped-command`, refuses the flag without `--test-suite-mode scoped`, refuses `scoped` mode without the flag, and refuses an empty or multi-line value before any write, as asserted by the registry-cli tests.
+- Step 1b-i of `skills/bootstrap/SKILL.md` asks for the scoped command only when the mode answer is `scoped`, with the four elements and the recording flag named, as asserted by the question-coverage test.
+- Task 4's flagless and auto-mode byte-identity tests still pass.
+
+**Files likely touched:**
+- `src/conductor/src/engine/registry-cli.ts`
+- `src/conductor/src/cli.ts`
+- `skills/bootstrap/SKILL.md`
+- `src/conductor/test/engine/registry-cli.test.ts`
+- `src/conductor/test/bootstrap-skill-config-questions.test.ts`
+
+**Dependencies:** 11, 12
+
+### Task 18: Explain every project-settable top-level key and derive the coverage check from the validator
+**Story:** 7
+**Type:** negative-path
+
+**Steps:**
+1. Write failing tests in `src/conductor/test/engine/config-template.test.ts`: derive the expected key set from `CONFIG_CONSUMER_KEY_SETS.top` in `src/conductor/src/engine/config.ts` minus the user-scoped keys `conductor` and `spec_owner` and minus the three keys the walkthrough asks (`test_suite.verification.mode`, `test_suite.verification.drift_budget`, `test_suite.command`; `test_suite` itself stays in the set because its unasked sub-keys need explanation); assert every derived key has a `Controls: <key>` comment block with `Allowed:`, `Default:`, and `Changing it:` in `templates/project-config.yml.template`; replace the hand-typed nine-key `validateConfig` object with one assembled from every `Controls: <key>` token found in the template comments, using each block's stated default, and assert the validator accepts it with no unknown-key error.
+2. Verify RED (missing `test_suite.environment` and the other unexplained top-level keys).
+3. Implement: annotate every derived key in `templates/project-config.yml.template` with the four-line block, keeping every rendered (non-comment) key and the `# CONFIG_INIT_TEST_SUITE_VERIFICATION` anchor exactly as they are; nested sub-keys of an explained top-level key are covered by that key's block unless the walkthrough asks a sibling, in which case the unasked siblings (`test_suite.working_directory`, `timeout_seconds`, `inputs`, `environment`, `scoped_command`, `commands`) keep their own blocks.
+4. Verify GREEN and re-run Task 4's byte-identity tests. Commit: "template: explain every project-settable key, derived from the validator"
+
+**Done when:**
+- Every project-settable top-level key derived from `CONFIG_CONSUMER_KEY_SETS.top` (excluding `conductor` and `spec_owner`) has a template comment block with `Controls:`, `Allowed:`, `Default:`, and `Changing it:`, as asserted by the derived annotation-coverage test.
+- A project config assembled from every `Controls:` token in the template comments passes `validateConfig` with no unknown-key error, as asserted by the token-derived test, so adding an accepted key without a comment or a comment naming a rejected key fails.
+- The template still contains the `# CONFIG_INIT_TEST_SUITE_VERIFICATION` anchor and Task 4's byte-identity tests still pass.
+
+**Files likely touched:**
+- `templates/project-config.yml.template`
+- `src/conductor/test/engine/config-template.test.ts`
+
+**Dependencies:** 9, 10
