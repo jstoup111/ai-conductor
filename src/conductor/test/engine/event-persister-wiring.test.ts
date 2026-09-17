@@ -21,11 +21,20 @@ import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../test-conductor.js';
 import type { ConductorEvent, ConductState } from '../../src/types/index.js';
 import type { LiveRegion } from '../../src/ui/live-region.js';
-import { AggregationTemporality, InMemoryMetricExporter, MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+import {
+  AggregationTemporality,
+  InMemoryMetricExporter,
+  MeterProvider,
+  PeriodicExportingMetricReader,
+} from '@opentelemetry/sdk-metrics';
 import { CapturingSpanExporter } from '../fixtures/capturing-span-exporter.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const srcRoot = join(__dirname, '..', '..', 'src');
+
+interface MetricPoint {
+  attributes: Record<string, unknown>;
+}
 
 /**
  * Task 8: EventPersister MUST be wired only in index.ts — zero references in
@@ -122,7 +131,7 @@ describe('EventPersister wiring constraints', () => {
       const durationPoints = metricExporter.getMetrics().flatMap((batch) => batch.scopeMetrics)
         .flatMap((scope) => scope.metrics)
         .filter((metric) => metric.descriptor.name === 'conductor.step.duration')
-        .flatMap((metric) => metric.dataPoints);
+        .flatMap((metric) => metric.dataPoints as unknown as MetricPoint[]);
       expect(durationPoints.filter((point) => point.attributes.feature === 'alpha' && point.attributes.step === 'configured:explore/audit')).toHaveLength(1);
       expect(durationPoints.filter((point) => point.attributes.feature === 'beta' && point.attributes.step === 'configured:explore/audit')).toHaveLength(1);
       expect(spanExporter.getFinishedSpans().filter((span) => span.name === 'configured:explore/audit')).toHaveLength(2);

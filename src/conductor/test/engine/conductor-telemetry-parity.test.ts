@@ -440,8 +440,7 @@ function assertOneMemberLifecycle(
   expect(fixture.events.filter((event) => (
     event.type === 'group_member_step'
     && event.phase === 'result'
-    && event.executionContext?.subject.kind !== undefined
-    && event.executionContext.subject.member === member
+    && event.member === member
   ))).toHaveLength(1);
   expect(fixture.spans.filter((span) => span.name === spanName)).toHaveLength(1);
   expect(metricPoints(fixture.metrics, 'conductor.step.duration')
