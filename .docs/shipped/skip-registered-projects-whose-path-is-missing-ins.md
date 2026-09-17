@@ -4,6 +4,12 @@ spec_hash: d320f3b1e971d75aa46e6bb739a99bc40242d36aa5d3d0723b542568adcc0cd9
 pr: https://github.com/jstoup111/ai-conductor/pull/2566
 shipped: 2026-09-17
 engine_version: 20260917T120938Z-cb86a041782a
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "src/conductor/test/acceptance/canonical-tracker-client-seam-with-per-backend-tra.acceptance.test.ts:72 and src/conductor/test/engine/engineer/engineer-cli-intake.test.ts:70 — two test files named by no active plan task gained `mkdir` of their registered fixture paths"
+    accepted: true
 ---
 
 ## Cost
