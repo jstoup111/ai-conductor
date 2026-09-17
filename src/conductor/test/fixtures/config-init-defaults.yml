@@ -1,13 +1,231 @@
 # Project config — <repo>/.ai-conductor/config.yml
+#
+# This catalog covers every project-settable top-level key. Defaults are YAML
+# values so the template documentation is checked against the validator.
+# Controls: harness_version, the compatible harness release range.
+# Allowed: a satisfiable semver range.
+# Default: ">=0.99.0"
+# Changing it: raises or narrows the required harness release.
+# Controls: defaults, fallback model-routing settings for every step.
+# Allowed: an object with supported routing fields.
+# Default: {}
+# Changing it: changes defaults inherited by lifecycle steps.
+# Controls: phases, routing overrides for a lifecycle phase.
+# Allowed: an object keyed by SETUP, UNDERSTAND, DECIDE, BUILD, or SHIP.
+# Default: {}
+# Changing it: changes defaults for all steps in that phase.
+# Controls: steps, routing overrides for named lifecycle steps.
+# Allowed: an object keyed by built-in or fully declared custom steps.
+# Default: {}
+# Changing it: changes routing for the selected steps.
+# Controls: complexity, reserved complexity configuration.
+# Allowed: an empty object.
+# Default: {}
+# Changing it: is not currently supported; leave it empty.
+# Controls: markdown_viewer, artifact-review markdown viewer settings.
+# Allowed: an object with a supported preset or command settings.
+# Default: {"preset":"none"}
+# Changing it: selects how markdown artifacts are displayed.
+# Controls: mermaid_renderer, architecture-diagram renderer settings.
+# Allowed: an object with a supported preset or command settings.
+# Default: {"preset":"none"}
+# Changing it: selects how Mermaid diagrams are rendered.
+# Controls: assess, staleness thresholds for the assessment prelude.
+# Allowed: an object with non-negative thresholds.
+# Default: {}
+# Changing it: changes when an assessment is considered stale.
+# Controls: acceptance_spec_globs, additional acceptance-spec file globs.
+# Allowed: an array of strings.
+# Default: []
+# Changing it: adds project-specific acceptance-spec locations.
+# Controls: test_suite, the project-owned verification configuration.
+# Allowed: an object with a command, commands, or scoped command.
+# Default: {"scoped_command":"npm test -- {selectors}"}
+# Changing it: selects the project's verification operation.
+# Controls: llm_provider, the provider used for lifecycle work.
+# Allowed: a provider name or ordered provider names.
+# Default: "claude"
+# Changing it: routes work to the selected provider.
+# Controls: ui_renderer, the configured terminal UI renderer.
+# Allowed: a renderer identifier.
+# Default: "terminal"
+# Changing it: selects the UI renderer.
+# Controls: visualizers, enabled visualizer plugins.
+# Allowed: an array of plugin names.
+# Default: []
+# Changing it: enables the named visualizers.
+# Controls: memory_provider, the memory plugin selection.
+# Allowed: a provider identifier.
+# Default: "local"
+# Changing it: selects the memory backend.
+# Controls: otel, OpenTelemetry export configuration.
+# Allowed: an object with supported telemetry settings.
+# Default: {"worker_name":"local-worker"}
+# Changing it: configures telemetry export and worker identity.
+# Controls: build_progress, build-progress observation cadence.
+# Allowed: an object with supported progress settings.
+# Default: {}
+# Changing it: adjusts build-progress reporting.
+# Controls: provider_stream, provider-observation cadence.
+# Allowed: an object with a positive interval.
+# Default: {}
+# Changing it: adjusts live provider-stream reporting.
+# Controls: owner_gate_cutover, the owner-gate grandfathering instant.
+# Allowed: an ISO-8601 timestamp.
+# Default: "2026-01-01T00:00:00Z"
+# Changing it: changes the ownership cutover boundary.
+# Controls: attribution_audit_sample_pct, the attribution audit sampling percentage.
+# Allowed: a number from 0 through 100.
+# Default: 10
+# Changing it: changes how often attribution is audited.
+# Controls: rebase_resolution_attempts, the rebase conflict-resolution attempt budget.
+# Allowed: a number.
+# Default: 1
+# Changing it: changes the allowed automatic resolution attempts.
+# Controls: validation_concurrency, concurrent SHIP validation workers.
+# Allowed: a number.
+# Default: 1
+# Changing it: changes validation fan-out.
+# Controls: daemon_concurrency, concurrent daemon feature workers.
+# Allowed: a positive integer.
+# Default: 1
+# Changing it: changes daemon feature throughput.
+# Controls: harness_self_host, self-host guardrail settings.
+# Allowed: an object with supported guardrail settings.
+# Default: {}
+# Changing it: overrides self-host guardrail behavior.
+# Controls: model_fallback_ladder, ordered fallback model identifiers.
+# Allowed: an array of non-empty strings.
+# Default: []
+# Changing it: changes model fallback order.
+# Controls: auto_restart_on_stale_engine, stale-engine restart policy.
+# Allowed: true or false.
+# Default: false
+# Changing it: enables or disables automatic stale-engine restarts.
+# Controls: engine_refresh_min_interval_seconds, minimum engine refresh interval.
+# Allowed: a positive number of seconds.
+# Default: 300
+# Changing it: changes how frequently the engine may refresh.
+# Controls: codex_doctor_timeout_seconds, Codex readiness-check timeout.
+# Allowed: a positive finite number of seconds.
+# Default: 10
+# Changing it: changes the readiness-check deadline.
+# Controls: mergeable_autoresolve, automatic merge-conflict resolution settings.
+# Allowed: an object with supported autoresolve settings.
+# Default: {"enabled":false}
+# Changing it: enables or configures automatic merge resolution.
+# Controls: build_review, build-review gate settings.
+# Allowed: an object with supported build-review settings.
+# Default: {"enabled":true,"maxParallel":1,"adjudication":{"enabled":true},"rubrics":{"testQuality":{"enabled":false}}}
+# Changing it: configures the build-review gate.
+# Controls: conflict_check, conflict-check settings.
+# Allowed: an object with a supported ADR corpus.
+# Default: {}
+# Changing it: changes the ADR corpus considered for conflicts.
+# Controls: prd_audit, PRD-audit remediation bounds.
+# Allowed: an object with supported audit bounds.
+# Default: {}
+# Changing it: changes PRD-audit remediation limits.
+# Controls: architecture_review_as_built, as-built architecture review settings.
+# Allowed: an object with supported checks and remediation settings.
+# Default: {}
+# Changing it: changes as-built architecture review behavior.
+# Controls: ci_watch, CI-watch settings.
+# Allowed: an object with enabled and cooldown settings.
+# Default: {}
+# Changing it: configures CI-watch behavior.
+# Controls: build_progress_halt, build-progress halt settings.
+# Allowed: an object with supported halt settings.
+# Default: {}
+# Changing it: configures progress-aware halting.
+# Controls: retry_routing, retry-routing settings.
+# Allowed: an object with supported retry-routing settings.
+# Default: {}
+# Changing it: configures retry routing.
+# Controls: coverage_binding, coverage-binding judge settings.
+# Allowed: an object with supported judge settings.
+# Default: {}
+# Changing it: configures criterion-to-Done-when coverage binding.
+# Controls: wiring, internal wiring configuration.
+# Allowed: an object.
+# Default: {}
+# Changing it: changes internal harness wiring.
+# Controls: kickback_escalation, build kickback escalation settings.
+# Allowed: an object with an enabled setting.
+# Default: {}
+# Changing it: enables or disables kickback escalation.
+# Controls: cumulative_kickback_bound, cumulative kickback-bound settings.
+# Allowed: an object with an enabled setting.
+# Default: {}
+# Changing it: enables or disables the cumulative bound.
+# Controls: gate_code_validity, gate code-validity settings.
+# Allowed: an object with an enabled setting.
+# Default: {}
+# Changing it: enables or disables code-validity preservation.
+# Controls: daemon_verbose, daemon verbose logging.
+# Allowed: true or false.
+# Default: false
+# Changing it: enables or disables verbose daemon logging.
+# Controls: reconcile_parked_auto_cleanup, parked-feature cleanup policy.
+# Allowed: true or false.
+# Default: true
+# Changing it: enables or disables automatic parked-feature cleanup.
+# Controls: step_heartbeat_stall_minutes, legacy heartbeat stall setting.
+# Allowed: a finite number.
+# Default: 5
+# Changing it: retains compatibility only; it grants no termination authority.
+# Controls: stale_claim_window_hours, stale daemon-claim window.
+# Allowed: a number.
+# Default: 24
+# Changing it: changes when a daemon claim is considered stale.
+# Controls: provider_preparation_timeout_minutes, provider preparation deadline.
+# Allowed: a finite number of minutes.
+# Default: 5
+# Changing it: changes the provider preparation deadline.
+# Controls: teardown_timeout_seconds, teardown deadline.
+# Allowed: a number of seconds.
+# Default: 10
+# Changing it: changes the teardown deadline.
+# Controls: dispatch_start_timeout_seconds, dispatch-start deadline.
+# Allowed: a number of seconds.
+# Default: 10
+# Changing it: changes the dispatch-start deadline.
+#
+# The walkthrough separately asks about test_suite.command and verification
+# mode/budget. The remaining test-suite siblings are documented here.
+# Controls: test_suite.working_directory, the working directory used before test commands run.
+# Allowed: a project-relative directory.
+# Default: "."
+# Changing it: points at a subproject when the authoritative suite lives there.
+# Controls: test_suite.timeout_seconds, the maximum test-suite runtime in seconds.
+# Allowed: a positive number.
+# Default: 1800
+# Changing it: raises the suite deadline when normal runtime requires it.
+# Controls: test_suite.inputs, files included when calculating scoped-test drift.
+# Allowed: an array of project-relative paths.
+# Default: []
+# Changing it: adds authoritative inputs outside the ordinary source tree.
+# Controls: test_suite.environment, environment-variable inputs used by the suite.
+# Allowed: an array of variable names.
+# Default: []
+# Changing it: records environment inputs that affect verification.
+# Controls: test_suite.scoped_command, the command used to run selected tests.
+# Allowed: one project-owned command containing {selectors}.
+# Default: "npm test -- {selectors}"
+# Changing it: enables scoped verification instead of only aggregate verification.
+# Controls: test_suite.commands, the collection of aggregate test commands.
+# Allowed: a non-empty array of command objects.
+# Default: [{"command":"npm test"}]
+# Changing it: runs each declared suite as part of aggregate verification.
 # Controls: harness_version compatibility with the installed harness.
 # Allowed: a satisfiable semver range.
-# Default: >=0.99.0.
+# Default: ">=0.99.0"
 # Changing it: raises or narrows the required harness release.
 harness_version: ">=0.99.0"
 
 # Controls: build_review.rubrics.testQuality.enabled, whether build review evaluates changed tests.
 # Allowed: true or false.
-# Default: false.
+# Default: false
 # Changing it: enable only after configuring a supported scoped test command below.
 build_review:
   adjudication:
@@ -18,11 +236,11 @@ build_review:
 
 # Controls: test_suite.working_directory, the working directory used before test commands run.
 # Allowed: a project-relative directory.
-# Default: `.`.
+# Default: "."
 # Changing it: point it at a subproject when the authoritative suite lives there.
 # Controls: test_suite.timeout_seconds, the maximum test-suite runtime in seconds.
 # Allowed: a positive integer.
-# Default: 1800.
+# Default: 1800
 # Changing it: raise it only for a suite whose normal runtime needs more time.
 # test_suite:
 #   command: npm test
@@ -52,18 +270,18 @@ test_suite:
 
 # Controls: otel.worker_name, the OpenTelemetry worker identity.
 # Allowed: a non-empty worker name.
-# Default: this machine's hostname.
+# Default: "local-worker"
 # Changing it: gives CI or shared workers a stable trace identity.
 # otel:
 #   worker_name: ci-worker-1
 
 # Controls: steps.<name>.model, the model selected for an individual lifecycle step.
 # Allowed: a routed model identifier.
-# Default: the harness routing default.
+# Default: "haiku"
 # Changing it: overrides model selection for that step.
 # Controls: steps.<name>.effort, the reasoning effort selected for an individual lifecycle step.
 # Allowed: low, medium, high, xhigh, or max.
-# Default: the harness routing default.
+# Default: "low"
 # Changing it: overrides effort for that step.
 # --- Per-step overrides (optional) -------------------------------------------
 # steps:
