@@ -1,3 +1,4 @@
+// Covers: task:18
 /**
  * Regression coverage for issue #1010: copying
  * templates/ai-conductor-config.yml.template produced an invalid
@@ -22,13 +23,51 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import { load as loadYaml } from 'js-yaml';
-import { loadConfig, satisfiesVersion, validateConfig } from '../../src/engine/config.js';
+import {
+  CONFIG_CONSUMER_KEY_SETS,
+  loadConfig,
+  satisfiesVersion,
+  validateConfig,
+} from '../../src/engine/config.js';
 
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
 const TEMPLATE_PATH = join(REPO_ROOT, 'templates', 'ai-conductor-config.yml.template');
 const PROJECT_TEMPLATE_PATH = join(REPO_ROOT, 'templates', 'project-config.yml.template');
 const VERSION_PATH = join(REPO_ROOT, 'VERSION');
+
+type DocumentedControl = { key: string; defaultValue: unknown };
+
+function documentedControls(raw: string): DocumentedControl[] {
+  const blocks = raw.matchAll(
+    /^# Controls: ([^,\s]+).*\n# Allowed: .+\n# Default: (.+)\n# Changing it: .+$/gm,
+  );
+  return Array.from(blocks, ([, key, defaultValue]) => ({
+    key,
+    defaultValue: loadYaml(defaultValue),
+  }));
+}
+
+function setDocumentedValue(
+  config: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): void {
+  const segments = key.split('.').map((segment) => segment === '<name>' ? 'explore' : segment);
+  let target = config;
+  for (const segment of segments.slice(0, -1)) {
+    const existing = target[segment];
+    if (existing === undefined) {
+      target[segment] = {};
+    }
+    target = target[segment] as Record<string, unknown>;
+  }
+  target[segments.at(-1) ?? key] = value;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /**
  * Uncomment a line that is part of a commented-out YAML example block.
@@ -163,35 +202,40 @@ describe('templates/ai-conductor-config.yml.template (issue #1010)', () => {
 });
 
 describe('templates/project-config.yml.template', () => {
-  it('explains every unasked operator-settable key with complete guidance', async () => {
+  it('explains every project-settable key with complete guidance', async () => {
     const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
-    const expectedKeys = [
+    const walkthroughKeys = new Set([
+      'test_suite.verification.mode',
+      'test_suite.verification.drift_budget',
+      'test_suite.command',
+    ]);
+    const expectedKeys = CONFIG_CONSUMER_KEY_SETS.top.filter(
+      (key) => key !== 'conductor' && key !== 'spec_owner' && !walkthroughKeys.has(key),
+    );
+    const unaskedTestSuiteSiblings = [
       'test_suite.working_directory',
       'test_suite.timeout_seconds',
       'test_suite.inputs',
+      'test_suite.environment',
       'test_suite.scoped_command',
-      'build_review.rubrics.testQuality.enabled',
-      'otel.worker_name',
-      'steps.<name>.model',
-      'steps.<name>.effort',
-      'harness_version',
+      'test_suite.commands',
     ];
-    for (const key of expectedKeys) {
-      expect(raw, key).toContain(`Controls: ${key}`);
-      expect(raw, key).toContain('Allowed:');
-      expect(raw, key).toContain('Default:');
-      expect(raw, key).toContain('Changing it:');
+    for (const key of [...expectedKeys, ...unaskedTestSuiteSiblings]) {
+      expect(raw, key).toMatch(new RegExp(
+        `^# Controls: ${escapeRegex(key)}.*\\n# Allowed: .+\\n# Default: .+\\n# Changing it: .+$`,
+        'm',
+      ));
     }
   });
 
   it('contains only validator-known documented project keys', async () => {
-    const result = validateConfig({
-      harness_version: '>=0.99.0',
-      build_review: { rubrics: { testQuality: { enabled: false } } },
-      test_suite: { working_directory: '.', timeout_seconds: 1800, inputs: [], scoped_command: 'npm test -- {selectors}' },
-      otel: { worker_name: 'ci-worker-1' },
-      steps: { explore: { model: 'haiku', effort: 'low' } },
-    }, undefined, { materializeDefaults: false });
+    const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
+    const documentedConfig: Record<string, unknown> = {};
+    for (const { key, defaultValue } of documentedControls(raw)) {
+      setDocumentedValue(documentedConfig, key, defaultValue);
+    }
+
+    const result = validateConfig(documentedConfig, undefined, { materializeDefaults: false });
     expect(result.ok).toBe(true);
   });
 
