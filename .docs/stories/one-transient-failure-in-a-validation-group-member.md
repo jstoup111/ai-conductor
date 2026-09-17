@@ -4,7 +4,7 @@
 
 Source-Ref: jstoup111/ai-conductor#1425
 
-Scope boundary (from the track marker, as amended after conflict-check): retain completed sibling verdicts across a no-verdict validation-group halt. The per-branch retry budget (the member's resolved `max_retries` instead of the literal `1`) is delivered by #2190 (`.docs/stories/a-halted-feature-only-re-runs-when-a-human-clears-.md` Story 1, PR #2206); #1425 is blocked by #2190 and these stories assume that budget is in place. The join policy is unchanged (a no-verdict branch still halts the group) and no new observability surface is added.
+Scope boundary (from the track marker, as amended after conflict-check): retain completed sibling verdicts across a no-verdict validation-group halt. The per-branch retry budget (the member's resolved `max_retries` instead of the literal `1`) is delivered by #2190 (`.docs/stories/a-halted-feature-only-re-runs-when-a-human-clears-.md` Story 1, PR #2206); #1425 is blocked by #2190 and these stories assume that budget is in place. The join policy is unchanged (a no-verdict branch still halts the group) and no new observability surface is added. Operator approval on 2026-09-11 also includes the bounded FINISH-fence recheck behavior specified in Story 4, with mandatory regression proof before shipping.
 
 ## Story 1: A genuine failure still halts the group loudly
 
@@ -13,7 +13,7 @@ As a daemon operator, I want a member that cannot produce a verdict after its fu
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a member throws on every attempt up to its resolved `max_retries`, when the join runs, then the loop writes a `needs-human` HALT whose reason names the failed member and its no-verdict reason, records the same `failed`/`last_step` stamping it records today, and emits `loop_halt` and `step_failed`.
+- Given a member throws on every attempt up to its resolved `max_retries`, when the join runs, then the loop writes a `needs-human` HALT whose reason names the failed member and its no-verdict reason, records the same `failed`/`last_step` stamping it records today, and emits `loop_halt` and a terminal `parallel_failure` whose `branch` names the failed member.
 - Given a member's runner is dead in this way, when its siblings are already in flight, then the siblings still run to their own outcomes before the join halts (no cancellation).
 
 #### Negative Paths
@@ -40,13 +40,13 @@ As a daemon operator, I want the passing members' completed work retained when o
 - Given `manual_test` dispatched successfully but its results file carries FAIL rows, when a sibling halts the group, then `manual_test` is NOT recorded `done`.
 - Given a member's dispatch succeeded but its verdict-run-identity handshake failed, when a sibling halts the group, then that member is NOT recorded `done`.
 - Given the member that produced `no-verdict`, when the halt commits, then that member's status is not `done` and its synthetic group-member key is not `done`.
-- Given the state commit that would retain siblings throws, when the join halts, then the HALT marker is still written, `loop_halt` and `step_failed` are still emitted, and the failure to persist is logged loudly.
+- Given the state commit that would retain siblings throws, when the join halts, then the HALT marker is still written, `loop_halt` and a terminal `parallel_failure` whose `branch` names the failed member are still emitted, and the failure to persist is logged loudly.
 - Given a process crash between the halt marker write and the state commit, when the feature is next read, then the state is either the pre-halt state or the complete post-halt state (siblings `done` and the `failed` stamping together), never siblings `done` without the `failed` stamping.
 
 ### Done When
 - [ ] A test with one always-throwing member and two passing members observes both passing members `done` and the `failed` stamping in `conduct-state.json` after the halt, written by a single state commit.
 - [ ] Negative tests observe that a member with an unsatisfied gate verdict, `manual_test` with FAIL rows, and a member with a handshake failure are each left not-`done` when a sibling halts the group.
-- [ ] A test with a state store that rejects the commit observes the HALT marker, `loop_halt`, and `step_failed` still produced.
+- [ ] A test with a state store that rejects the commit observes the HALT marker, `loop_halt`, and a terminal `parallel_failure` whose `branch` names the failed member still produced.
 
 ## Story 3: Clearing the halt re-runs only the failed member
 
@@ -69,3 +69,21 @@ As a daemon operator, I want the re-dispatch after I clear a validation-group ha
 - [ ] A test seeds state with two `done` members and one pending member, runs the group round, and observes exactly one dispatch (the pending member) followed by an all-green join.
 - [ ] A test observes that a kickback restage flips a retained member to `stale` and that the next round dispatches it.
 - [ ] A test observes that the finish fence reports a retained member non-green when its gate verdict is unsatisfied.
+
+## Story 4: Retry transient FINISH-fence crashes without bypassing validation
+
+As a daemon operator, I want a transient final validation crash to use its existing retry allowance while publication still waits for valid passing evidence.
+
+### Acceptance Criteria
+
+#### Happy Path
+- Given the FINISH fence rechecks one validator while its siblings remain done, when that validator throws once and then supplies valid passing evidence within its existing retry budget, then only that validator is retried and publication is reached only after its evidence passes.
+
+#### Negative Paths
+- Given the FINISH fence rechecks one validator that throws on every attempt, when its existing retry budget is exhausted, then the run halts and publication is never invoked.
+- Given a FINISH-fence recheck returns success without valid passing evidence, when publication is considered, then publication remains blocked.
+
+### Done When
+- [ ] A FINISH-fence regression test proves a single crashing recheck retries within its configured budget, retains completed siblings, and reaches publication only after valid passing evidence.
+- [ ] An always-throwing recheck exhausts its configured budget, halts, and never invokes publication.
+- [ ] A successful runner result without valid passing evidence never authorizes publication.

@@ -1,4 +1,4 @@
-// Covers: task:7
+// Covers: task:5, task:7
 import { describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -107,6 +107,8 @@ async function nonRetryablePublicationReason(reason: string) {
 }
 
 type ObservationState = 'present' | 'missing' | 'stale' | 'malformed' | 'unavailable';
+type ImplementationEvidenceObservation =
+  import('../../src/engine/finish-publication.js').ImplementationEvidenceObservation;
 type PushObservationState = 'pushed' | 'unpushed' | 'stale' | 'malformed' | 'unavailable';
 type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
 type PublicationTransition = import('../../src/engine/finish-publication.js').PublicationTransition;
@@ -223,7 +225,7 @@ type AdvanceFinishPublication = (
 
 interface PublicationObservationPorts {
   filesystem: {
-    observeImplementationEvidence(): Promise<ObservationState>;
+    observeImplementationEvidence(): Promise<ImplementationEvidenceObservation>;
     observeShipEvidence(): Promise<ObservationState>;
     observeOutcomeRecord(): Promise<ObservationState>;
   };
@@ -260,6 +262,15 @@ async function observePublicationSnapshot(input: ObservePublicationSnapshotInput
     throw new Error('expected export "observePublicationSnapshot" to be a function (not yet implemented)');
   }
   return observer(input);
+}
+
+async function preflightFinishPublication(snapshot: PublicationSnapshot) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const preflight = mod.preflightFinishPublication;
+  if (typeof preflight !== 'function') {
+    throw new Error('expected export "preflightFinishPublication" to be a function (not yet implemented)');
+  }
+  return preflight(snapshot);
 }
 
 async function resolveInteractivePublicationIntent(choice: unknown) {
@@ -329,7 +340,7 @@ function readyPublicationSnapshot(
 }
 
 function observerPorts(overrides: Partial<{
-  implementationEvidence: ObservationState;
+  implementationEvidence: ImplementationEvidenceObservation;
   shipEvidence: ObservationState;
   outcomeRecord: ObservationState;
   branchPushed: PushObservationState;
@@ -339,7 +350,7 @@ function observerPorts(overrides: Partial<{
 }> = {}): PublicationObservationPorts {
   return {
     filesystem: {
-      observeImplementationEvidence: async () => overrides.implementationEvidence ?? 'present',
+      observeImplementationEvidence: async () => overrides.implementationEvidence ?? { state: 'present' },
       observeShipEvidence: async () => overrides.shipEvidence ?? 'present',
       observeOutcomeRecord: async () => overrides.outcomeRecord ?? 'present',
     },
@@ -776,8 +787,16 @@ describe('FINISH publication disposition routing', () => {
     ],
     [
       'implementation invalid',
-      { kind: 'implementation_invalid', evidence: 'build-review FAIL: finish-publication.ts' },
-      { kind: 'retry_build', evidence: 'build-review FAIL: finish-publication.ts' },
+      {
+        kind: 'implementation_invalid',
+        evidence: 'build-review FAIL: finish-publication.ts',
+        unsatisfiedMembers: ['build_review'],
+      },
+      {
+        kind: 'retry_build',
+        evidence: 'build-review FAIL: finish-publication.ts',
+        unsatisfiedMembers: ['build_review'],
+      },
     ],
     [
       'contradictory disposition',
@@ -1017,9 +1036,12 @@ describe('FINISH publication disposition routing', () => {
       'SHIP evidence could not be determined; restore its observer before FINISH can continue.',
     ],
   ] as const)('halts evidence-invalid condition %s with its unresolved observation', async (code, message, nextAction, reason) => {
+    const condition = code === 'implementation_evidence_invalid'
+      ? { code, message, nextAction, unsatisfiedMembers: ['build_review'] }
+      : { code, message, nextAction };
     const result = await routeFinishPublicationDisposition({
       kind: 'publication_retry',
-      condition: { code, message, nextAction },
+      condition,
     });
     expect(result).toEqual({ kind: 'halt', reason });
     expect(result.kind === 'halt' && result.reason).not.toContain('dedicated BUILD routing rule');
@@ -1029,10 +1051,10 @@ describe('FINISH publication disposition routing', () => {
     const evidence = 'build-review FAIL: src/engine/finish-publication.ts:497';
 
     await expect(
-      routeFinishPublicationDisposition({ kind: 'implementation_invalid', evidence }),
-    ).resolves.toEqual({ kind: 'retry_build', evidence });
+      routeFinishPublicationDisposition({ kind: 'implementation_invalid', evidence, unsatisfiedMembers: ['build_review'] }),
+    ).resolves.toEqual({ kind: 'retry_build', evidence, unsatisfiedMembers: ['build_review'] });
     await expect(
-      routeFinishPublicationDisposition({ kind: 'implementation_invalid', evidence: '   ' }),
+      routeFinishPublicationDisposition({ kind: 'implementation_invalid', evidence: '   ', unsatisfiedMembers: ['build_review'] }),
     ).resolves.toMatchObject({ kind: 'halt' });
   });
 
@@ -1144,7 +1166,7 @@ describe('observePublicationSnapshot', () => {
   });
 
   it.each([
-    ['missing', { implementationEvidence: 'missing' }, { implementationEvidence: 'invalid' }],
+    ['missing', { implementationEvidence: { state: 'missing', unsatisfiedMembers: ['build_review'] } }, { implementationEvidence: 'invalid' }],
     ['stale', { releaseReadiness: 'stale' }, { releaseReadiness: 'invalid' }],
     ['malformed', { shippedRecord: 'malformed' }, { shippedRecord: 'invalid' }],
     ['unpushed', { branchPushed: 'unpushed' }, { branchPushed: 'missing' }],
@@ -1753,6 +1775,38 @@ describe('resolveUnattendedPublicationIntent', () => {
 });
 
 describe('advanceFinishPublication preflight', () => {
+  it.each([
+    ['build review only', ['build_review']],
+    ['test suite only', ['test_suite']],
+    ['both implementation members in evaluation order', ['build_review', 'test_suite']],
+  ] as const)('carries the typed unsatisfied members for %s', async (_caseName, unsatisfiedMembers) => {
+    const snapshot = readyPublicationSnapshot({
+      implementationEvidence: 'invalid',
+      unsatisfiedImplementationEvidenceMembers: unsatisfiedMembers,
+    });
+
+    await expect(preflightFinishPublication(snapshot)).resolves.toEqual({
+      kind: 'blocked',
+      condition: {
+        code: 'implementation_evidence_invalid',
+        message: 'Implementation evidence is invalid. Re-run the BUILD verification, then retry FINISH.',
+        nextAction: 'rerun_build_verification',
+        unsatisfiedMembers,
+      },
+    });
+
+    const result = await advanceFinishPublication({
+      observe: async () => snapshot,
+      effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+    });
+
+    expect(result).toEqual({
+      kind: 'implementation_invalid',
+      evidence: 'implementation_evidence_invalid: Implementation evidence is invalid. Re-run the BUILD verification, then retry FINISH.',
+      unsatisfiedMembers,
+    });
+  });
+
   it('reaches the judgment boundary once when observed publication, SHIP, and release readiness are valid', async () => {
     let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'stale';
     const dispatchJudgment = vi.fn(async () => {

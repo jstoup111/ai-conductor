@@ -131,7 +131,7 @@ run prints almost nothing.
 | Linter | Config | Scope | Threshold |
 | --- | --- | --- | --- |
 | ESLint (typescript-eslint, type-aware) | `src/conductor/eslint.config.mjs` | `src/**/*.ts` **and** `test/**/*.ts` | `no-floating-promises`, `await-thenable`, `no-misused-promises` (with `checksVoidReturn.arguments` off) |
-| ShellCheck | `test/lint_shell.sh` | `bin/*` (by shebang), `hooks/**/*.sh`, `test/*.sh`, `.github/scripts/*.sh` | `--severity=error` |
+| ShellCheck | `test/lint_shell.sh` | `bin/**` (by shell shebang), `hooks/**/*.sh`, `test/*.sh`, `.github/scripts/*.sh` | `--severity=error` |
 | lychee | `lychee.toml` | `docs/`, `README.md`, `AGENT_INSTRUCTIONS.md`, `src/conductor/README.md` | internal links only (offline) |
 
 The ESLint rule set is deliberately tiny. `strict: true` already covers the ground a stock preset
@@ -360,6 +360,11 @@ The same test re-reads `vitest.config.ts` and reports
 is `--bare`, commented out, or annotated `// portability-ok: <reason>`. It also flags `.unref()` under
 `src/engine/**` and hardcoded absolute `/tmp/...` string literals — use `os.tmpdir()`.
 
+**`module-header-caller-claims.test.ts`** scans leading comment blocks in `src/engine/**` for explicit
+no-caller claims (`nothing imports`, `no callers`/`no importers`, inert-module claims, and `nothing`
+calling, using, or invoking a backticked identifier). It fails only when a relative import or symbol
+reference contradicts a claim; truthful claims and matching prose below the leading comment block pass.
+
 ## Smoke tests
 
 Smoke tests are excluded from `npm test` by the two globs in `vitest.config.ts`. Run the complete,
@@ -400,7 +405,7 @@ execute smoke tests.
 
 40 `.sh` files live under `test/`. Only six ever execute:
 
-- `test/test_harness_integrity.sh`, run by CI and by the self-host release gate. See
+- `test/test_harness_integrity.sh`, run by CI and by the BUILD `test_suite` gate. See
   [validation](validation.md).
 - `test/test_ci_detect_docs_only.sh` and `test/test_provider_skill_contracts.sh`, executed by the
   integrity suite as checks 13 and 14.
@@ -445,14 +450,17 @@ from `.ai-conductor/config.yml`:
 
 ```yaml
 test_suite:
-  command: npm test
-  working_directory: src/conductor
+  commands:
+    - command: npm test
+      working_directory: src/conductor
+    - command: test/test_harness_integrity.sh
+      working_directory: .
   timeout_seconds: 1800
 ```
 
-The `--slowTestThreshold=1800000` in the npm script matches that 1800-second budget, suppressing
-slow-test warnings that would otherwise fire on every long run. The ordinary suite is expected to finish
-under five minutes; a healthy run is roughly two to three.
+The entries run in order, so the integrity suite runs only after the conductor suite passes. The
+`--slowTestThreshold=1800000` in the npm script matches that 1800-second budget, suppressing slow-test
+warnings that would otherwise fire on every long run.
 
 For where `test_suite` sits in the flow and what happens when it fails, see
 [steps](../reference/steps.md) and [gates](../explanation/gates.md).

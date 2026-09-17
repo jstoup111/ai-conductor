@@ -1200,6 +1200,13 @@ it('binds every production step-resolution call to the policy owned by its execu
       },
       {
         file: 'engine/conductor.ts',
+        scope: 'reconcileCurrentPrdWidening',
+        argumentCount: 5,
+        policyProvenance:
+          'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
+      },
+      {
+        file: 'engine/conductor.ts',
         scope: 'resolveGroupMembership',
         argumentCount: 5,
         policyProvenance: 'parameter:modelPolicy:ProviderModelPolicy',

@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -192,6 +193,25 @@ const EXPECTED_EXTRA_ROW_NAMES = [
   'cto-orchestrator',
 ];
 
+const RETIRED_EVALUATOR_SELECTION_CATEGORIES = [
+  'value objects',
+  'pure functions',
+  'config',
+  'infra',
+  'view templates',
+  'financial calculations',
+  'complex domain interactions',
+] as const;
+
+function retiredEvaluatorCategories(
+  evaluator: Pick<(typeof EXTRA_MODEL_TABLE_ROWS)[number], 'claudeModel' | 'why'>,
+): string[] {
+  const selectionText = `${evaluator.claudeModel}\n${evaluator.why}`;
+  return RETIRED_EVALUATOR_SELECTION_CATEGORIES.filter((category) =>
+    selectionText.toLocaleLowerCase().includes(category),
+  );
+}
+
 describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
   it('contains every expected non-engine HARNESS.md row name exactly once', () => {
     const names = EXTRA_MODEL_TABLE_ROWS.map((row) => row.name);
@@ -216,6 +236,42 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
     });
 
     expect(violations).toEqual([]);
+  });
+
+  it('routes the evaluator through the default-or-risk-domain two-way switch', () => {
+    const evaluator = EXTRA_MODEL_TABLE_ROWS.find((row) => row.name === 'evaluator');
+
+    expect(evaluator).toMatchObject({
+      name: 'evaluator',
+      executionPath: 'supported-host interactive',
+      claudeModel: 'sonnet (default) / fable (concurrency, state mutation, security, auth, money)',
+      claudeEffort: '',
+      codexModel: 'inherits model from the Codex session or spawned-agent configuration',
+      codexEffort: 'inherits effort from the Codex session or spawned-agent configuration',
+      why: expect.stringMatching(/single risk-domain criterion/i),
+    });
+  });
+
+  it('rejects every retired evaluator selection category with the category named', () => {
+    const evaluator = EXTRA_MODEL_TABLE_ROWS.find((row) => row.name === 'evaluator');
+    expect(evaluator).toBeDefined();
+
+    const retired = retiredEvaluatorCategories(evaluator!);
+    expect(
+      retired,
+      `evaluator claudeModel/why contains retired selection categories: ${retired.join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('names a temporarily reintroduced retired evaluator category', () => {
+    const evaluator = EXTRA_MODEL_TABLE_ROWS.find((row) => row.name === 'evaluator');
+    expect(evaluator).toBeDefined();
+
+    const retired = retiredEvaluatorCategories({
+      ...evaluator!,
+      why: `${evaluator!.why} Value objects are retired.`,
+    });
+    expect(retired).toEqual(['value objects']);
   });
 
   it('registers the canonical composer at the Opus tier and keeps engineer as its compatibility delegate', () => {

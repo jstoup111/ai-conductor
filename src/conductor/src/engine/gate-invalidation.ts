@@ -1,10 +1,9 @@
 // ── Post-rebase delta-aware gate invalidation (ADR
 // .docs/decisions/adr-2026-07-20-post-rebase-delta-aware-invalidation.md) ──
 //
-// This module is currently inert — nothing imports it yet. It will grow
-// `partitionDelta` and `classifyGateInvalidation` in later plan tasks; for
-// now it defines only the path predicates and the gate→surface map they
-// feed.
+// Imported by `conductor.ts`, `rebase.ts`, and `gate-code-validity.ts`.
+// `partitionDelta` and `classifyGateInvalidation` are live; this module also
+// defines the path predicates and gate→surface map they use.
 
 import { isCodeOrTestPath } from './rebase.js';
 

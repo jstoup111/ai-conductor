@@ -93,6 +93,19 @@ machine.
    validator's `typeof === 'boolean'` check (`config.ts:1159`). This turns the schema's existing
    per-key error messages into a real, enforced gate, which is the point of issue outcome #1.
 
+   > **Amended 2026-09-14 by #2218 (guided bootstrap setup):** decision 3 scoped `config set`'s
+   > accepted paths to the `conductor` block and the Consequences recorded that widening it was
+   > "deliberately not attempted" then. It is attempted now, for exactly one additional path.
+   >
+   > 6. **`config set` additionally accepts the top-level `spec_owner` path**, validated with the
+   >    same `validateConfig` pass the `conductor` block receives (string, non-empty). It stays a
+   >    user-config-only writer: `config set` never targets a project file, so
+   >    adr-2026-07-01-machine-scoped-operator-identity D1/D2 hold by construction — the project-
+   >    source anti-leak guard is untouched and continues to reject a committed `spec_owner`. Every
+   >    other non-`conductor` path remains rejected with the existing "Unsupported user config path"
+   >    error; this is a one-key widening, not a general one. The bootstrap walkthrough records the
+   >    operator's identity through this verb, replacing the hand-edit the documentation prescribes.
+
 4. **A missing or unbuilt `conduct-ts` is a loud failure, never a silent default.** If
    `conduct-ts` is unavailable, `conductor_cfg_get` returns non-zero and the caller warns explicitly
    rather than substituting a default. `bin/update`'s update check then declines to run with a stated

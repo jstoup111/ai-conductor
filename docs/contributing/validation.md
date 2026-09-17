@@ -18,11 +18,11 @@ This page covers the integrity script only. Runtime gates that block a feature's
 bash test/test_harness_integrity.sh
 ```
 
-Run it from the worktree root. It takes no arguments. In managed self-host runs, the
-release gate owns this suite; other steps consume its evidence instead of rerunning it.
+Run it from the worktree root. It takes no arguments. In managed self-host runs, the BUILD
+`test_suite` gate owns this suite; other steps consume its evidence instead of rerunning it.
 For an operator-requested hotfix outside the lifecycle, run it once on the completed
 change. A file edit or step completion is not a separate suite trigger. The `test_suite`
-gate independently owns aggregate application tests.
+gate owns this integrity suite alongside the aggregate application tests.
 
 Two result classes:
 
@@ -57,8 +57,8 @@ In file order. Sections 1, 2, 5, and 9 carry lettered sub-checks, and four check
 | # | Verifies | Fails when | Fix |
 | --- | --- | --- | --- |
 | — | The repository root has no `package-lock.json`. The Node project lives under `src/conductor/`; a root lockfile would describe no installable package and mislead dependency tooling about that boundary. | `package-lock.json` exists at the repository root. | Remove the stray root lockfile; run `npm ci` inside `src/conductor/` instead. |
-| 1 | `bash -n` over `bin/*` (only files whose first line matches `bash`), `hooks/claude/*.sh`, `test/*.sh`, and `.github/scripts/*.sh`. | Any of those scripts has a syntax error. | Fix the syntax. A `bin/` file with a non-bash shebang is skipped entirely, not checked. |
-| 1b | ShellCheck at `--severity=error` over the script set enumerated by `test/lint_shell.sh` (`bin/*` by shebang, plus `hooks/**/*.sh`, `test/*.sh`, `.github/scripts/*.sh`). Where check 1 proves a script *parses*, this catches shell bugs that parse fine and misbehave at runtime. | Any finding at `error` severity (exit 1), or the enumeration returns zero scripts (exit 2 — the gate refuses to report success on an empty set). | Run `test/lint_shell.sh` and fix what it names. Threshold and deferred warning/info/style counts are documented in that script's header. |
+| 1 | `bash -n` over `bin/**` (only files whose first line has a shell shebang), `hooks/**/*.sh`, `test/*.sh`, and `.github/scripts/*.sh`, as enumerated by `test/lint_shell.sh`. | Any of those scripts has a syntax error. | Fix the syntax. A `bin/` file with a non-shell shebang is skipped entirely, not checked. |
+| 1b | ShellCheck at `--severity=error` over the same script set: `bin/**` by shell shebang, plus `hooks/**/*.sh`, `test/*.sh`, and `.github/scripts/*.sh`. Where check 1 proves a script *parses*, this catches shell bugs that parse fine and misbehave at runtime. | Any finding at `error` severity (exit 1), or the enumeration returns zero scripts (exit 2 — the gate refuses to report success on an empty set). | Run `test/lint_shell.sh` and fix what it names. Threshold and deferred warning/info/style counts are documented in that script's header. |
 | 1c | No tracked text source file (`.ts`, `.tsx`, `.js`, `.mjs`, `.cjs`, `.json`, `.sh`, `.md`, `.yml`, `.yaml`) contains a raw NUL byte. A committed NUL makes the file *binary* to the whole search toolchain, and every tool fails silently: `grep` (shimmed to `ugrep -I` in agent sessions) and recursive `rg` skip it entirely — no match, no count line, no warning, exit 1. That reads as "the symbol does not exist", which has already caused a live misdiagnosis (2026-08-20, `build-review-domain.ts:84`). | Any listed file contains a NUL byte. | Replace the raw byte with the `\u0000` escape, which is semantically identical: `perl -0777 -pi -e 's/\000/\\u0000/g' <file>`. Detection is by construction (stripping NULs changes the file iff it had one) because a NUL cannot be passed as a `grep` pattern argument at all. |
 | 2 | Every `skills/*/SKILL.md` opens with `---` and its frontmatter contains `name:`, `description:`, `enforcement:`, `phase:`. | The delimiter or any required field is missing. | Add the field. See [skills](../reference/skills.md). |
 | 2a | `test/check_skill_invocation_policy.sh` verifies every shipped and repository-local skill has exactly one invocation classification, and `test/test_skill_invocation_policy.sh` mutation-tests that audit. The fixed implicit-required set carries one canonical `implicit_invocation: required` marker and no host disable; every other skill carries Claude `disable-model-invocation: true` plus Codex `policy.allow_implicit_invocation: false`. The observed exception set must exactly equal the verified same-session dependency allowlist. | A host policy is missing, duplicated, noncanonical, or contradictory; a local skill is omitted; the implicit-required set drifts in either direction; or the checker accepts a representative invalid mutation. | Classify the caller first. Keep implicit invocation only when another loaded skill must activate the workflow in the same session; otherwise add both host disable controls. Update the fixed allowlist and [skills reference](../reference/skills.md#invocation-policy) together when a verified composition dependency changes. |

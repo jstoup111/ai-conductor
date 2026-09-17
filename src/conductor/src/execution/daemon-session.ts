@@ -55,6 +55,9 @@ const SESSION_SANCTIONED_SUBCOMMANDS: ReadonlySet<string> = new Set([
   // skills/tdd/SKILL.md + skills/pipeline/SKILL.md — scoped VERIFY runs the
   // affected-test union through `ai-conductor scoped-run <selectors...>`.
   'scoped-run',
+  // skills/pipeline/SKILL.md — provider-native task dispatch stamps and clears
+  // the current worktree's task; completion remains gate-owned.
+  'task',
   // skills/plan/SKILL.md + skills/architecture-review/SKILL.md — advisory
   // overlap scan required before the plan is committed.
   'overlap-scan',

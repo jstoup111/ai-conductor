@@ -132,15 +132,17 @@ You should see `{"kind":"worktree","slug":"…","branch":"spec/<slug>","worktree
 - Failure exits 1 and makes **zero** changes to the target's primary tree. Do not fall back to the
   primary checkout; fix the error and retry.
 
-`--source-ref` is optional and only meaningful for intake-claimed ideas. With `--source-ref` and no
-`--body`, the command loads the Desired-outcome body from the claim record written at claim time; a
-missing or unreadable record degrades to no staging rather than failing.
+`--source-ref` is optional and normally comes from an intake-claimed idea. With `--source-ref` and no
+`--body`, the command first loads the Desired-outcome body from the claim record written at claim
+time. If no record is available, it reads the referenced GitHub issue through the configured tracker
+instead. A resolved empty or bulletless body still creates an outcomes file with the source reference
+and zero bullets. An unreadable, missing, or unparseable source leaves no outcomes file, prints a
+diagnostic that names `--body`, and still creates the worktree. `--body` always takes precedence.
 
 > **Known limitation.** `--source-ref` and `--body` are both parsed and honoured by
-> `composer worktree`, but neither is declared in the commander tree, so `ai-conductor --help` omits
-> them; `--body` is additionally absent from `composer worktree --help` and from the guide text. If
-> you pass `--body "<text>"` it wins over the claim record, but no help output will tell you it
-> exists. Tracked in [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
+> `composer worktree`, but neither is declared in the commander tree, so help output omits them. If
+> you pass `--body "<text>"` it wins over the claim record or issue body. Tracked in
+> [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
 
 ## Step 4 — Run DECIDE inside the worktree
 
@@ -188,7 +190,8 @@ Before committing, `land` refuses on any of:
 - an ADR under `.docs/decisions/` whose first declared status is not `APPROVED` or `SUPERSEDED`, or that declares no status at all,
 - an added or changed approved ADR with no citable decision in its `## Decision` section,
 - an empty or stub artifact,
-- uncommitted changes in the worktree outside `.docs/`,
+- uncommitted changes to tracked files at any path, including tracked artifacts under `.docs/`,
+- untracked files outside `.docs/`,
 - an unresolved identity (no `spec_owner` configured and no `gh` login).
 
 `--worktree` is required. `land` never falls back to the primary checkout. On failure the worktree

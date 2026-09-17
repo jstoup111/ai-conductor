@@ -58,6 +58,21 @@ With a correct concurrent core available, the SHIP tail's three validators —
    `skipWhenSkipped`); skipped members simply don't dispatch. A group whose effective
    width is ≤1 degrades to today's serial behavior with no semantic change.
 
+   > **Amended 2026-09-11 by #1425 (James Stoup, operator-approved):**
+   > This amendment supersedes D1's no-semantic-change clause only for an auto-mode
+   > validation group with one dispatchable member and retained, completed siblings,
+   > including a single-member recheck requested by the FINISH publication fence.
+   > A thrown dispatch failure enters that member's existing bounded retry path using
+   > its resolved retry budget. Completed siblings remain subject to normal evidence
+   > verification and invalidation; no retry budget is increased. Exhaustion halts.
+   > Publication requires valid passing evidence at current HEAD; runner success alone
+   > never authorizes publication. Ordinary serial steps without retained validation
+   > siblings keep their existing exception behavior. This approves the bounded
+   > extension already owned by Story 4 and Task 9 of
+   > `one-transient-failure-in-a-validation-group-member`, resolving as-built finding
+   > AB-2. It does not waive AB-1: the no-verdict group's persisted parallel lifecycle
+   > still requires a matching terminal under the existing lifecycle ADR.
+
    > **Amended 2026-08-27 by #1987:** the consolidated-kickback restage of group members
    > honors these same skip rules on the way back: a member whose status is `skipped`
    > never dispatched, so a kickback restage never overwrites it to `stale`. Kickback

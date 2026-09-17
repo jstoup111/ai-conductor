@@ -45,6 +45,24 @@ export function formatProgressDelta(before?: number, after?: number): string {
 }
 
 /**
+ * Formats a retry's fixed budget counter and, when complete, its separate
+ * progress allowance counter.
+ */
+export function formatRetryCounter(
+  attempt: number,
+  maxAttempts: number,
+  progressAttempt?: number,
+  progressAttemptCeiling?: number,
+): string {
+  const fixedCounter = `${attempt}/${maxAttempts}`;
+  if (progressAttempt === undefined || progressAttemptCeiling === undefined) {
+    return fixedCounter;
+  }
+
+  return `${fixedCounter} (progress allowance: attempt ${progressAttempt} of ${progressAttemptCeiling})`;
+}
+
+/**
  * Computes the 1-based display position for build progress.
  * @param resolved - Count of resolved/completed tasks
  * @param total - Total task count

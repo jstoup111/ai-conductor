@@ -29,6 +29,22 @@ vi.mock('../../../src/engine/self-host/build-auth-preflight.js', () => ({
   preflightBuildAuthCheck: vi.fn().mockResolvedValue(undefined),
 }));
 
+// This fixture's temporary project root is intentionally not a linked
+// worktree. PRD widening entry nevertheless requires the durable feature
+// identity that a real self-host worktree supplies, so keep that filesystem
+// boundary out of these self-host wiring tests.
+vi.mock('../../../src/engine/build-review-effective.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../../src/engine/build-review-effective.js')>();
+  return {
+    ...original,
+    resolveBuildReviewFeatureIdentity: vi.fn(async () => ({
+      version: 'v1' as const,
+      repository: '/self-host-wiring-repository',
+      feature: 'self-build-feat',
+    })),
+  };
+});
+
 import type { ConductState } from '../../../src/types/index.js';
 import type { StepName } from '../../../src/types/index.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
@@ -347,8 +363,6 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
         changedFiles: async () => [
           { status: 'M', path: 'src/conductor/src/engine/self-host/release-gate.ts' },
         ],
-        access: async () => {},
-        exec: async () => ({ code: 0, timedOut: false }),
       }),
     );
     const { guardrails } = makeGuardrails({ releaseGate });

@@ -243,8 +243,12 @@ cat .worktrees/<slug>/.pipeline/HALT.class
 ```
 
 It names the logical `step`, `phase: preparing`, attempt id, elapsed milliseconds, and recovery
-count. The timeout applies only before a provider process starts: candidate resolution, session
-setup, or self-host preparation did not complete within
+count. Self-host dispatches waiting for root-mutation admission are queued outside this deadline;
+the daemon log and event ledger distinguish `queued`, `admitted`, and `cancelled` (operator park).
+Queue time consumes no preparation recovery attempt.
+
+After admission, the timeout applies before a provider process starts. It means candidate resolution,
+session setup, or self-host preparation did not complete within
 `provider_preparation_timeout_minutes`. The first expiration already used the one automatic
 replacement; because this is a `needs-human` HALT, the re-kick sweep will not clear it.
 
@@ -488,6 +492,11 @@ bounded by the `build_progress_halt` block. Defaults: enabled, `attempt_ceiling:
 `dispatch_ceiling: 20`. Hitting the attempt ceiling parks with a distinct reason so you can tell
 "genuinely stuck" apart from "still progressing but out of runway". Key details are in
 [configuration](../reference/configuration.md).
+
+A refunded build retry log line includes a separate allowance fragment, for example
+`progress allowance: attempt 2 of 30`. The fixed retry counter continues to describe the
+reused fixed-budget slot and stays within its own maximum; the allowance fragment tells you
+how much of the independent progress-attempt ceiling the running build has consumed.
 
 A halt awaiting operator action is neither progress-re-kicked nor cleared by rate-limit episode
 recovery; the daemon log names the blocking halt disposition.
@@ -1179,6 +1188,26 @@ If `HALT.class` is `over-scope`, do not clear the body unchanged. Edit the fence
 `decision` to `accept` or `refuse` and add a non-empty `rationale`. Leave entries you are not
 deciding as `pending`. An accept clears that criterion; a refusal records the decision but keeps
 the halt active as “refused — rework required.”
+
+Keep the offered criterion and summary unchanged, including when a revision refers to an older
+report number or wording. Only the decision and rationale are editable.
+
+For a durable PRD-widening recovery, keep every unaffected decision and refusal in place. The
+halt body names the affected source, case, decision, or artifact and one of these actions:
+
+- `malformed-history`: restore the original widening history from a known-good copy, then resume.
+- `unsupported-history`: preserve the history and upgrade to a conductor version that supports it.
+- `missing-operator`: configure the machine owner and resubmit the explicit decision.
+- `persistence-failed`: resolve the store or lease failure and verify the durable records.
+- `invalid-provider-result`: retry only once the selected provider supports the required native schema.
+- `stale-relation`: retain the decision and rerun reconciliation against the current report.
+- `context-overflow`: the halt and event name the dimension, actual size, and limit; reduce the cited source input without pruning history.
+- `projection-failed`: repair the named stored evidence or verdict renderer without re-deciding valid authority.
+- `uncertain-relation`: review the preserved original and current evidence, then submit a new explicit decision if desired.
+
+Version-2 `accepted-widenings.json` preserves valid legacy attributed evidence in its original
+order. A refusal is also preserved: revise it only through its offered explicit revision entry,
+never by reusing an old accepted clear or deleting history.
 
 Then clear by **renaming** the edited body to `.pipeline/HALT.cleared` — never `rm -f` it. The
 next prd_audit lap harvests your decisions from `HALT.cleared` and from nowhere else, so deleting

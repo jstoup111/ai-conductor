@@ -81,6 +81,12 @@ ai-conductor inline --interactive "add a CSV export"
 `ai-conductor inline --auto` is deprecated; use the daemon for unattended work. The `inline` token is
 required for foreground runs — the bare form `ai-conductor "<feature>"` is rejected.
 
+Self-host dispatches wait for root-refresh admission before starting their provider preparation timeout.
+Queued work resumes automatically when the earlier dispatch releases the root.
+
+Daemon-managed sessions can run `ai-conductor task start` and `task done` for task attribution;
+completion remains gate-owned. See [task commands](docs/reference/cli.md#ai-conductor-task).
+
 The harness runs on Claude Code and Codex. Select the host with the `llm_provider` config key; an ordered
 array such as `[claude, codex]` acts as a fallback ladder. See
 [Multiprovider](docs/guides/multiprovider.md).
@@ -114,6 +120,9 @@ that is what frees your head for the next design problem while this one builds.
 
 CI repair agents commit fixes from CI diagnostics; the daemon owns repair test execution and publishes
 only after the configured verifier passes. Missing test configuration blocks publication.
+If final validation itself crashes, the daemon retries that validator only within its configured attempt
+budget. It never publishes until fresh passing validation evidence exists, and an exhausted retry budget
+halts the feature for operator recovery.
 
 **The ADRs are the asset.** Every ADR is a durable architectural decision with its reasoning attached,
 committed to the repo and read by machinery: the composer plans the next feature against them, and the
@@ -156,6 +165,9 @@ review kickback laps are tuning telemetry, not your signal.
 
 **It got stuck.** Run `/daemon-triage` from a Claude Code or Codex session in the project. It gathers
 the evidence and routes you to the right [runbook](docs/runbooks/index.md).
+
+PRD scope approvals retain their original evidence when reviewer wording changes. To revise a refusal,
+edit only the offered decision and rationale; see [scope-halt recovery](docs/runbooks/stalled-or-stuck-feature.md#over_scope-decision-halt).
 
 [FAQ](docs/guides/faq.md) has the short answers to everything above.
 

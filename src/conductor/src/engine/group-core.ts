@@ -348,6 +348,8 @@ export interface BranchRateLimitEpisode {
 
 export interface BranchExecutorDeps {
   stepRunner: BranchStepRunner;
+  /** Engine-rendered PRD widening history for the prd_audit member only. */
+  prdWideningReviewContext?: StepRunOptions['prdWideningReviewContext'];
   /** Test seam: override session-id minting instead of importing uuid. */
   mintSessionId?: () => string;
   /**
@@ -564,13 +566,21 @@ async function runGroupBranchInner(
         memberStep,
         state,
         providerSessions
-          ? { providerSessions, attempt, escalate, runId: deps.runId }
+          ? {
+              providerSessions, attempt, escalate, runId: deps.runId,
+              ...(member.name === 'prd_audit' && deps.prdWideningReviewContext
+                ? { prdWideningReviewContext: deps.prdWideningReviewContext }
+                : {}),
+            }
           : {
               sessionId: mintSessionId(),
               resume: false,
               attempt,
               escalate,
               runId: deps.runId,
+              ...(member.name === 'prd_audit' && deps.prdWideningReviewContext
+                ? { prdWideningReviewContext: deps.prdWideningReviewContext }
+                : {}),
             },
       );
     } catch (err) {

@@ -23,7 +23,7 @@ behind a single decision:
 | Sandbox build env | Runs the build step under a throwaway `CLAUDE_CONFIG_DIR` pointing at the build worktree's own `skills/` and `hooks/` |
 | Live-boundary fingerprint | Fails the run if the live checkout or unrelated provider state changes mid-build |
 | Version approval gate | Halts at finish unless the VERSION change is approved |
-| Release artifact gate | Halts at finish on an integrity, changelog, or migration failure |
+| Release artifact gate | Halts at finish when a required migration block or waiver is absent or invalid |
 | Build auth | Uses a daemon-owned OAuth token rather than the operator's live credentials |
 
 Activation is decided once per daemon, against the main repo root, by
@@ -434,16 +434,20 @@ closed — the freeze resolves to no value, and the gate falls through to signal
 HALT exactly as if no freeze were declared. A freeze still never approves an actual bump: if the
 worktree's own `VERSION` differs from the tracked value, the gate HALTs as usual.
 
-**Release artifact.** Runs the integrity suite (`test/test_harness_integrity.sh`, 120s timeout), then
-the changelog and migration-block check, then waiver evaluation. It HALTs on the **first** failure —
-later sub-gates are not consulted. A missing script, a timeout, and a non-zero exit are all HALTs.
+**Release artifact.** Evaluates the migration-block requirement and any waiver. It HALTs on the first
+failure. The BUILD `test_suite` gate owns `test/test_harness_integrity.sh` together with the conductor
+test suite before SHIP.
 
 The migration requirement fires when the change set touches a breaking surface, or when the change
 set cannot be determined at all (fail-closed). Waivers live in `.docs/release-waivers/` and must be
 fresh in the same diff. See [releases](../contributing/releases.md) for the canonical surface names,
 the waiver format, and when a waiver is the wrong answer.
 
-Both gates write `.pipeline/HALT` with a distinct first line and a shared resume procedure.
+Both gates write `.pipeline/HALT` with a distinct first line and a shared resume procedure. To
+resume, address that reason in the feature worktree and commit the fix, then clear both
+`.pipeline/HALT` and `.pipeline/HALT.class`. The daemon re-dispatches the feature, re-runs the
+gates, and opens or updates its PR. Merge the PR yourself after its checks pass; re-installing the
+harness and running `/verify` are not generic resume prerequisites.
 
 ## Troubleshooting
 
@@ -475,3 +479,14 @@ prints `version:<engine-version-id>` per repo. Compare it against
 **A gate halted and you want to change what runs.** Do not disable a guardrail to get past it. The
 gates are described in [gates](../explanation/gates.md); the validation suite every harness change
 must pass is in [validation](../contributing/validation.md).
+
+### Queued dispatch admission
+
+A self-host dispatch waits behind any pending root refresh before provider preparation begins.
+This queue has no provider startup deadline: waiting does not spend the preparation recovery
+allowance. After admission, candidate resolution, isolated-home setup, and provider startup retain
+the configured preparation timeout. The dispatch reserves the root until it settles, and candidate
+windows remain protected through cleanup, including cleanup after a timeout.
+
+The daemon log and the existing event ledger record `self_host_dispatch_admission` as `queued`,
+`admitted`, or `cancelled`. Parking a feature while it waits prevents launch when its turn arrives.

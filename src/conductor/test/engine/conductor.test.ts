@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:4, task:5
+// Covers: task:1, task:2, task:3, task:4, task:5
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { execFile as execFileCb } from 'child_process';
@@ -75,6 +75,7 @@ import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
 import { writeFile, mkdir, readFile } from 'fs/promises';
 import { createHash } from 'crypto';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
+import { validatePlanDoneWhen } from '../../src/engine/plan-done-when.js';
 import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
@@ -1534,6 +1535,8 @@ describe('engine/conductor', () => {
         attempt: 1,
         reason: expect.stringContaining('infrastructure'),
       })]);
+      expect(retryEvents[0]).not.toHaveProperty('progressAttempt');
+      expect(retryEvents[0]).not.toHaveProperty('progressAttemptCeiling');
       expect((await readKickbackLedger(dir)).gates.test_suite).toEqual(expect.objectContaining({
         count: 1,
         cumulative: 1,
@@ -3113,6 +3116,80 @@ describe('engine/conductor', () => {
         expect.objectContaining({
           type: 'step_failed',
           step: 'build',
+          activeInterval: { startedAtMs: 1_000, durationMs: 25 },
+        }),
+      ]);
+    } finally {
+      persister.stop();
+    }
+  });
+
+  it.each(['step_completed', 'step_failed'] as const)(
+    'does not let %s close a non-validation parallel execution',
+    async (type) => {
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+      });
+      const emit = vi.spyOn(events, 'emit');
+      const executionEvents = conductor as unknown as {
+        emitExecutionEvent(event: ConductorEvent): Promise<void>;
+      };
+      await executionEvents.emitExecutionEvent({ type: 'parallel_started', step: 'build', branches: [] });
+      emit.mockClear();
+      const terminal: ConductorEvent = type === 'step_completed'
+        ? { type, step: 'build', status: 'done' }
+        : { type, step: 'build', error: 'late step failure', retryCount: 0 };
+      await executionEvents.emitExecutionEvent(terminal);
+      expect(emit).not.toHaveBeenCalled();
+
+      await conductor.closeOpenExecutionsForShutdown();
+      expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'parallel_failure', step: 'build',
+      }));
+    },
+  );
+
+  it('suppresses a late validation terminal after daemon SIGTERM closed the execution', async () => {
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+    });
+    const timestamps = [1_000, 1_025];
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events, {
+      nowMs: () => timestamps.shift()!,
+    });
+    persister.start();
+
+    try {
+      const executionEvents = conductor as unknown as {
+        emitExecutionEvent(event: ConductorEvent): Promise<void>;
+      };
+      await executionEvents.emitExecutionEvent({ type: 'step_started', step: 'prd_audit', index: 0 });
+      await conductor.closeOpenExecutionsForShutdown();
+
+      // A validation member is drained like any other step: its late terminal
+      // must not land as a second terminal for the same execution.
+      await executionEvents.emitExecutionEvent({ type: 'step_completed', step: 'prd_audit', status: 'done' });
+      await executionEvents.emitExecutionEvent({
+        type: 'step_failed', step: 'prd_audit', error: 'late validation failure', retryCount: 0,
+      });
+
+      const records = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const terminals = records.filter((record) =>
+        record.type === 'step_completed' || record.type === 'step_failed',
+      );
+      expect(terminals).toEqual([
+        expect.objectContaining({
+          type: 'step_failed',
+          step: 'prd_audit',
           activeInterval: { startedAtMs: 1_000, durationMs: 25 },
         }),
       ]);
@@ -6029,6 +6106,94 @@ describe('engine/conductor', () => {
 
       const evidence = await createTaskEvidence(dir);
       expect(evidence.lastResolvedCount).toBe(CEILING);
+    });
+
+    it.each([false, true])('reports refunded build retries without changing dispatch (selfHost=%s)', async (selfHost) => {
+      await seedToBuild();
+      const tokenPath = join(dir, 'retry-test-token');
+      await writeFile(tokenPath, 'fixture-token');
+      const TOTAL = 4;
+      const CEILING = 3;
+      let progress = 0;
+      let buildCalls = 0;
+      const dispatches: Array<{ model?: string; effort?: string }> = [];
+      const retryEvents: Array<Extract<ConductorEvent, { type: 'step_retry' }>> = [];
+
+      const runner: StepRunner = {
+        selfHostRunId: () => 'retry-reporting-fixture',
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions) => {
+          if (step === 'build') {
+            buildCalls++;
+            dispatches.push({ model: options?.modelOverride, effort: options?.effortOverride });
+            // The first retry consumes a normal fixed-budget slot. Each later
+            // attempt resolves one task, until the existing ceiling halts it.
+            if (buildCalls > 1) {
+              progress++;
+              await writePlanAndStatus(progress, TOTAL);
+            } else {
+              await writePlanAndStatus(0, TOTAL);
+            }
+          }
+          return { success: true };
+        }),
+      };
+      events.on('step_retry', (event) => {
+        if (event.type === 'step_retry') retryEvents.push(event);
+      });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        selfHost,
+        selfHostGuardrails: {
+          resolveHarnessRoot: vi.fn().mockResolvedValue(dir),
+          resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok', root: dir }),
+          relink: vi.fn(),
+          provisionSandbox: vi.fn(async () => ({ configDir: dir, childEnv: () => process.env, teardown: async () => {} })),
+          versionGate: vi.fn().mockResolvedValue({ ok: true }),
+          releaseGate: vi.fn().mockResolvedValue({ ok: true }),
+        } as any,
+        verifyArtifacts: true,
+        maxRetries: 3,
+        fromStep: 'build',
+        config: {
+          harness_self_host: { build_auth: { mode: 'daemon-token', token_path: tokenPath } },
+          build_progress_halt: { enabled: true, attempt_ceiling: CEILING, dispatch_ceiling: 20 },
+        } as HarnessConfig,
+      });
+
+      await conductor.run();
+
+      expect(retryEvents).toHaveLength(3);
+      expect(dispatches).toHaveLength(4);
+      if (selfHost) {
+        expect(dispatches).toEqual(Array.from({ length: 4 }, () => ({ model: undefined, effort: undefined })));
+        for (const event of retryEvents) {
+          expect(event).not.toHaveProperty('escalatedModel');
+          expect(event).not.toHaveProperty('escalatedEffort');
+        }
+      }
+      expect(retryEvents.map((event) => ({
+        model: event.escalatedModel, effort: event.escalatedEffort,
+      }))).toEqual(dispatches.slice(1));
+      expect(retryEvents.every((event) => event.attempt <= event.maxAttempts)).toBe(true);
+      expect(retryEvents[0]).toMatchObject({ step: 'build', attempt: 2, maxAttempts: 3 });
+      expect(retryEvents[0]).not.toHaveProperty('progressAttempt');
+      expect(retryEvents[0]).not.toHaveProperty('progressAttemptCeiling');
+      expect(retryEvents.slice(1)).toEqual([
+        expect.objectContaining({
+          step: 'build', attempt: 2, maxAttempts: 3,
+          progressAttempt: 1, progressAttemptCeiling: CEILING,
+        }),
+        expect.objectContaining({
+          step: 'build', attempt: 2, maxAttempts: 3,
+          progressAttempt: 2, progressAttemptCeiling: CEILING,
+        }),
+      ]);
     });
   });
 
@@ -9234,7 +9399,7 @@ describe('engine/conductor', () => {
       '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n';
     const AS_BUILT_APPROVED = '# As-Built Architecture Review\n\nVerdict: APPROVED\n';
 
-    it('a branch that never produces a completion marker (crashed/exhausted retries) halts the group loudly, zero kickback, no remediation.json, no partial join', async () => {
+    it('a branch that never produces a completion marker halts the group without kickback while retaining satisfied siblings', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
 
       const runner: StepRunner = {
@@ -9290,11 +9455,11 @@ describe('engine/conductor', () => {
       const result = await readState(statePath);
       expect(result.ok).toBe(true);
       const state = result.ok ? (result.value as Record<string, unknown>) : {};
-      // No member — including the ones that themselves passed — gets marked
-      // done: no partial join on a no-verdict outcome.
-      expect(state.manual_test).not.toBe('done');
-      expect(state.prd_audit).not.toBe('done');
-      expect(state.architecture_review_as_built).not.toBe('done');
+      // The failed member still blocks the group, but satisfied siblings remain
+      // done so a resume does not discard their validated work.
+      expect(state.manual_test).toBe('failed');
+      expect(state.prd_audit).toBe('done');
+      expect(state.architecture_review_as_built).toBe('done');
     });
 
     it('FAIL verdict + a crashed sibling: same halt path, zero kickback events', async () => {
@@ -9337,6 +9502,9 @@ describe('engine/conductor', () => {
         events,
         fromStep: 'manual_test',
         mode: 'auto',
+        // The FAIL-row retention predicate is artifact-aware. Keep this
+        // no-verdict fixture on that production path rather than bypassing it.
+        verifyArtifacts: true,
       });
 
       await conductor.run();
@@ -9346,6 +9514,11 @@ describe('engine/conductor', () => {
 
       expect(kickbacks.length).toBe(0);
       expect(haltCount).toBeGreaterThan(0);
+      const result = await readState(statePath);
+      if (!result.ok) throw result.error;
+      const state = result.value as Record<string, unknown>;
+      // A successful dispatch with FAIL rows is not a satisfied join member.
+      expect([state.manual_test, state.validation__manual_test]).not.toContain('done');
     });
   });
 
@@ -16550,6 +16723,20 @@ describe('appendRemediationTasks', () => {
     expect(content).not.toContain('### Task rem-test-1:');
   });
 
+  it('separates a bare remediation task from plan content without a final newline', async () => {
+    const planPath = join(dir, 'plan.md');
+    await writeFile(planPath, '# Implementation Plan\n\n## Tasks');
+
+    const result = await appendRemediationTasks(dir, planPath, [
+      { id: 'rem-test-no-final-newline', title: 'Repair the terminal plan boundary' },
+    ]);
+
+    expect(result).toEqual({ success: true, appendedIds: ['rem-test-no-final-newline'] });
+    const content = await readFile(planPath, 'utf-8');
+    expect(content).toContain('## Tasks\n\n### Task rem-test-no-final-newline:');
+    expect(validatePlanDoneWhen(content)).toEqual([]);
+  });
+
   describe('idempotent upsert semantics', () => {
     it('append task with id rem-fr10-1 → exists in plan', async () => {
       const planPath = join(dir, 'plan.md');
@@ -16567,6 +16754,7 @@ describe('appendRemediationTasks', () => {
 
       const content = await readFile(planPath, 'utf-8');
       expect(content).toContain('### Task rem-fr10-1:');
+      expect(validatePlanDoneWhen(content)).toEqual([]);
     });
 
     it('append same id again → still exactly one instance (no duplicate)', async () => {
@@ -16591,6 +16779,7 @@ describe('appendRemediationTasks', () => {
       const content = await readFile(planPath, 'utf-8');
       const matches = content.match(/### Task rem-fr10-1:/g);
       expect(matches).toHaveLength(1); // Exactly one, not two
+      expect(validatePlanDoneWhen(content)).toEqual([]);
     });
 
     it('attempt to append same id with different content → preserved (not mutated)', async () => {
@@ -16626,6 +16815,7 @@ describe('appendRemediationTasks', () => {
       // A suffixed version should be created for the different content
       const hasSuffixedVersion = /### Task rem-fr10-1-[a-f0-9]{6}:.*Different title for rem-fr10-1/.test(content);
       expect(hasSuffixedVersion).toBe(true);
+      expect(validatePlanDoneWhen(content)).toEqual([]);
     });
 
     it('two separate remediations from different gates with same semantic issue → distinct ids (with suffix)', async () => {

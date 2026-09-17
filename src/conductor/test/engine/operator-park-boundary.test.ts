@@ -105,67 +105,101 @@ describe('operator park boundary contract', () => {
       new URL('../../src/engine/conductor.ts', import.meta.url),
       'utf8',
     );
-    const guardedSegments = [
-      /if \(stepCfg\?\.parallel\) \{[\s\S]*?await this\.runParallelGroupViaCore\(/,
-      /if \(groupEntryName === step\.name && membership\.dispatchable\.length > 1\) \{[\s\S]*?return runGroupBranch\(/,
-    ].map((pattern) => {
-      const match = conductorSource.match(pattern);
-      expect(match).not.toBeNull();
-      const source = match![0];
-      const start = conductorSource.indexOf(source);
-      return {
-        start,
-        guard: start + source.indexOf('await stopAtOperatorParkBoundary();'),
-        end: start + source.length,
-      };
-    });
-    const serialGuard = conductorSource.lastIndexOf(
-      'const preDispatchPark = await stopAtOperatorParkBoundary();',
-    );
-    const serialDispatch = conductorSource.indexOf(
-      'this.stepRunner.run(',
-      serialGuard,
-    );
-    expect(serialGuard).toBeGreaterThan(-1);
-    expect(serialDispatch).toBeGreaterThan(serialGuard);
-    guardedSegments.push({
-      start: serialGuard,
-      guard: serialGuard,
-      end: serialDispatch + 'this.stepRunner.run('.length,
-    });
-    const reviewedHelperDispatchAllowlist: Array<string | RegExp> = [
-      "await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });",
-      'return this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });',
-      'return await this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });',
-      'return runGroupBranch(member, state, { stepRunner: this.stepRunner }, 1);',
-      "return this.stepRunner.run('finish', state, options);",
-      // The two bounded FINISH prose passes. Both are reached only from inside
-      // the already-park-guarded FINISH dispatch.
-      "this.stepRunner.run('finish', state, { ...options, finishProsePass: 'judge' })",
-      /this\.stepRunner\.run\(\s*'finish',\s*state,\s*\{\s*\.\.\.options,\s*finishProsePass:\s*'author',\s*\.\.\.\(request\.revisionGuidance\s*===\s*undefined\s*\?\s*\{\}\s*:\s*\{\s*revisionGuidance:\s*request\.revisionGuidance\s*\}\s*\),\s*\}\s*\)/,
-    ];
     const dispatchPrimitives = [
       'this.stepRunner.run(',
       'runGroupBranch(',
       'this.runParallelGroupViaCore(',
+    ] as const;
+    const prdWideningReconciliationDispatch = `const judgement = await this.stepRunner.run('remediate', state, {
+          remediationRequest: {
+            mode: 'prd-widening-reconciliation',
+            projection: JSON.stringify(context.value),
+            nativeSchema: PRD_WIDENING_RECONCILIATION_SCHEMA,
+          },
+        });`;
+    const buildReviewAdjudicationDispatch = `const dispatched = await this.stepRunner.run('remediate', state, {
+                        retryReason: \`Adjudicate this complete build-review context only; write case-v1 remediation output.\\n\${JSON.stringify(context)}\`,
+                      });`;
+    const reviewedHelperDispatchAllowlist = [
+      "await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });",
+      prdWideningReconciliationDispatch,
+      buildReviewAdjudicationDispatch,
+      'return this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });',
+      'return await this.stepRunner.run(name, state, { retryReason: retryHint, ...identityOption });',
+      'return runGroupBranch(member, state, { stepRunner: this.stepRunner }, 1);',
+      // Configured-group branches run only through runParallelGroupViaCore,
+      // whose caller is one of the guarded scheduling-unit entries above.
+      'return runGroupBranch(member, state, { stepRunner: this.stepRunner }, resolved.max_retries);',
+      "return this.stepRunner.run('finish', state, options);",
+      // The two bounded FINISH prose passes. Both are reached only from inside
+      // the already-park-guarded FINISH dispatch.
+      "this.stepRunner.run('finish', state, { ...options, finishProsePass: 'judge' })",
+      `this.stepRunner.run('finish', state, {
+          ...options,
+          finishProsePass: 'author',
+          ...(request.revisionGuidance === undefined
+            ? {}
+            : { revisionGuidance: request.revisionGuidance }),
+        })`,
     ];
-    const discoveredDispatches = dispatchPrimitives.flatMap((primitive) =>
-      [...conductorSource.matchAll(new RegExp(primitive.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))].map(
-        (match) => ({ primitive, offset: match.index! }),
-      ),
-    );
-    const unreviewedDispatches = discoveredDispatches.filter(({ offset }) => {
-      const guarded = guardedSegments.some(
-        (segment) => offset > segment.guard && offset < segment.end,
-      );
-      const reviewedHelper = reviewedHelperDispatchAllowlist.some((allowed) => {
-        const sourceAtDispatch = conductorSource.slice(Math.max(0, offset - 40));
-        return typeof allowed === 'string'
-          ? sourceAtDispatch.slice(0, allowed.length + 80).includes(allowed)
-          : allowed.test(sourceAtDispatch);
+    expect(conductorSource).toContain(prdWideningReconciliationDispatch);
+    expect(conductorSource).toContain(buildReviewAdjudicationDispatch);
+    const guardedSegmentsIn = (source: string) => {
+      const guardedSegments = [
+        /if \(stepCfg\?\.parallel\) \{[\s\S]*?await this\.runParallelGroupViaCore\(/,
+        /if \(\s*groupEntryName === step\.name &&[\s\S]*?runGroupBranch\(/,
+      ].map((pattern) => {
+        const match = source.match(pattern);
+        expect(match).not.toBeNull();
+        const guardedSource = match![0];
+        const start = source.indexOf(guardedSource);
+        return {
+          start,
+          guard: start + guardedSource.indexOf('await stopAtOperatorParkBoundary();'),
+          end: start + guardedSource.length,
+        };
       });
-      return !guarded && !reviewedHelper;
-    });
+      const serialGuard = source.lastIndexOf(
+        'const preDispatchPark = await stopAtOperatorParkBoundary();',
+      );
+      const serialDispatch = source.indexOf('this.stepRunner.run(', serialGuard);
+      expect(serialGuard).toBeGreaterThan(-1);
+      expect(serialDispatch).toBeGreaterThan(serialGuard);
+      guardedSegments.push({
+        start: serialGuard,
+        guard: serialGuard,
+        end: serialDispatch + 'this.stepRunner.run('.length,
+      });
+      return guardedSegments;
+    };
+    const unreviewedDispatchesIn = (source: string) => {
+      const discoveredDispatches = dispatchPrimitives.flatMap((primitive) =>
+        [...source.matchAll(new RegExp(primitive.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))].map(
+          (match) => ({ primitive, offset: match.index! }),
+        ),
+      );
+      const guardedSegments = guardedSegmentsIn(source);
+      return {
+        discoveredDispatches,
+        unreviewedDispatches: discoveredDispatches.filter(({ primitive, offset }) => {
+          const guarded = guardedSegments.some(
+            (segment) => offset > segment.guard && offset < segment.end,
+          );
+          const reviewedHelper = reviewedHelperDispatchAllowlist.some((statement) => {
+            const primitiveOffset = statement.indexOf(primitive);
+            if (primitiveOffset === -1) return false;
+            let statementOffset = source.indexOf(statement);
+            while (statementOffset !== -1) {
+              if (offset === statementOffset + primitiveOffset) return true;
+              statementOffset = source.indexOf(statement, statementOffset + statement.length);
+            }
+            return false;
+          });
+          return !guarded && !reviewedHelper;
+        }),
+      };
+    };
+    const { discoveredDispatches, unreviewedDispatches } = unreviewedDispatchesIn(conductorSource);
 
     expect({ discoveredDispatches, unreviewedDispatches }).toEqual({
       discoveredDispatches: expect.arrayContaining([
@@ -174,6 +208,21 @@ describe('operator park boundary contract', () => {
         expect.objectContaining({ primitive: 'this.runParallelGroupViaCore(' }),
       ]),
       unreviewedDispatches: [],
+    });
+
+    const unguardedRemediateDispatch = "const judgement = await this.stepRunner.run('remediate', state, { retryReason: 'unguarded reconciliation dispatch' });";
+    const unguardedSource = conductorSource.replace(
+      prdWideningReconciliationDispatch,
+      unguardedRemediateDispatch,
+    );
+    const unguardedOffset = unguardedSource.indexOf(
+      'this.stepRunner.run(',
+      unguardedSource.indexOf(unguardedRemediateDispatch),
+    );
+    expect(unguardedOffset).toBeGreaterThan(-1);
+    expect(unreviewedDispatchesIn(unguardedSource).unreviewedDispatches).toContainEqual({
+      primitive: 'this.stepRunner.run(',
+      offset: unguardedOffset,
     });
   });
 

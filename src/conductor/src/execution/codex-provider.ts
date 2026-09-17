@@ -25,6 +25,7 @@ import { scrubTmuxEnvironment } from './child-environment.js';
 import { withDaemonSessionMarker } from './daemon-session.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
 import { validateSpawnPermit } from '../engine/provider-runtime.js';
+import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
 
 // These are deliberately Codex-specific rather than reusing Claude's error
@@ -225,6 +226,7 @@ function parseWaitSeconds(output: string, fallbackSeconds = 300): number {
 export class CodexProvider implements LLMProvider {
   readonly supportsSessionResume = false;
   readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
+  readonly nativeSchemaCapability = { nativeOutputSchema: true } as const;
 
   private readonly authentication: SelectedAuthentication;
   private readonly executable: string;
@@ -307,7 +309,19 @@ export class CodexProvider implements LLMProvider {
     }
 
     const authentication = this.authentication;
-    const args = [...this.selfHostArgs(options), ...this.buildArgs(options, !repl)];
+    let schemaFile: string | undefined;
+    if (options.nativeSchema !== undefined) {
+      try {
+        schemaFile = await this.writeNativeSchema(options);
+      } catch (error) {
+        return {
+          success: false,
+          output: `Codex native schema setup failed: ${error instanceof Error ? error.message : String(error)}`,
+          exitCode: 1,
+        };
+      }
+    }
+    const args = [...this.selfHostArgs(options), ...this.buildArgs(options, !repl, schemaFile)];
     let streamedTokenUsage: TokenUsage | undefined;
 
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
@@ -338,6 +352,7 @@ export class CodexProvider implements LLMProvider {
       readiness,
       { model: options.model, cwd: options.cwd },
       !repl,
+      options.nativeSchema !== undefined,
     );
     const tokenUsage = !repl && completion.success && completion.tokenUsage === undefined && streamedTokenUsage !== undefined
       ? applyRateCard(
@@ -489,6 +504,7 @@ export class CodexProvider implements LLMProvider {
      */
     pricing?: { model?: string; cwd?: string },
     strictMachineEnvelope = false,
+    requiresNativeSchema = false,
   ): InvokeResult {
     const { source } = authenticationSelection;
     const stdout = (result.stdout ?? '') as string;
@@ -574,6 +590,12 @@ export class CodexProvider implements LLMProvider {
     // recovery classification above loses its precedence.
     const toolProcessCreationFailures = countToolProcessCreationFailures(rawOutput);
 
+    const finalStructuredResult = requiresNativeSchema
+      ? this.terminalStructuredResult(parsedRaw.output)
+      : undefined;
+    if (requiresNativeSchema && exitCode === 0 && finalStructuredResult === undefined) {
+      return { success: false, output: 'Codex provider parse failure: terminal result record is missing its structured result.', exitCode, authentication };
+    }
     return {
       success: exitCode === 0 && toolProcessCreationFailures === 0,
       output: authFailure
@@ -597,7 +619,28 @@ export class CodexProvider implements LLMProvider {
       sessionExpired: sessionExpired || undefined,
       tokenUsage: parsed.tokenUsage,
       authentication,
+      ...(finalStructuredResult === undefined ? {} : { finalStructuredResult }),
     };
+  }
+
+  private terminalStructuredResult(finalAgentMessage: string): unknown {
+    try {
+      return JSON.parse(finalAgentMessage);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async writeNativeSchema(options: InvokeOptions): Promise<string> {
+    const homeDir = options.nativeSchemaScratchHome ?? options.selfHost?.env.CODEX_HOME;
+    if (typeof homeDir !== 'string' || homeDir.length === 0) {
+      throw new Error('requested native schema requires an owned Codex scratch home');
+    }
+    return writeScratchSchema({
+      worktreeRoot: options.cwd ?? process.cwd(),
+      homeDir,
+      schema: options.nativeSchema!,
+    });
   }
 
   private readinessFailure(readiness: AuthenticationReadiness): InvokeResult {
@@ -930,7 +973,7 @@ export class CodexProvider implements LLMProvider {
     );
   }
 
-  private buildArgs(options: InvokeOptions, unattended: boolean): string[] {
+  private buildArgs(options: InvokeOptions, unattended: boolean, schemaFile?: string): string[] {
     const args = ['exec'];
 
     if (options.model) args.push('--model', options.model);
@@ -960,6 +1003,7 @@ export class CodexProvider implements LLMProvider {
     }
     if (options.cwd) args.push('--cd', options.cwd);
     if (!options.interactive) args.push('--json');
+    if (schemaFile) args.push('--output-schema', schemaFile);
     // An explicit '-' makes stdin prompt delivery unambiguous and avoids argv
     // length limits for large build-review prompts.
     args.push('-');

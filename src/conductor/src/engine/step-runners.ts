@@ -872,6 +872,7 @@ export class DefaultStepRunner implements StepRunner {
       opts?.finishProsePass,
       opts?.revisionGuidance,
       state.complexity_tier,
+      opts?.prdWideningReviewContext,
     );
 
     // Every dispatch reaches the provider through invoke(). `interactive`
@@ -881,19 +882,32 @@ export class DefaultStepRunner implements StepRunner {
       if (this.providerRuntimes && branchSessionId === undefined) {
         if (step === 'remediate') {
           try {
+            const reconciliation = opts?.remediationRequest;
+            const reconciliationInput = reconciliation === undefined
+              ? undefined
+              : `PRD WIDENING RECONCILIATION INPUT (engine-owned):\n${reconciliation.projection}`;
             const result = await this.executeProviderAwareSkillOneShot(
               step,
               {
-                prompt,
-                systemPrompt,
+                // executeProviderAwareSkillOneShot prepends the selected
+                // provider's skill invocation for a schema request. Keep the
+                // supplied projection separate so that command appears once.
+                prompt: reconciliationInput ?? prompt,
+                systemPrompt: reconciliation
+                  ? `${systemPrompt}\n\nJudge only semantic same/different/uncertain relations. Do not grant authority or create BUILD work.`
+                  : systemPrompt,
                 cwd: this.projectDir,
                 dangerouslySkipPermissions: true,
+                ...(reconciliation ? { nativeSchema: reconciliation.nativeSchema } : {}),
               },
               state.complexity_tier,
               opts,
             );
             if (result) {
               this.callCount++;
+              if (reconciliation && result.success && result.finalStructuredResult === undefined) {
+                return { success: false, output: 'PRD widening reconciliation returned no native structured result.' };
+              }
               return this.toStepRunResult(step, result);
             }
           } catch (error) {
@@ -1048,6 +1062,11 @@ export class DefaultStepRunner implements StepRunner {
             tier: state.complexity_tier,
             attempt: opts?.attempt ?? 1,
             runId: this.runId,
+            nativeSchemaScratch: {
+              worktreeRoot: this.projectDir,
+              repository: this.projectDir,
+              featureSlug: this.featureDesc || basename(this.projectDir),
+            },
             escalate: opts?.escalate ?? true,
             modelOverride: opts?.modelOverride ?? this.modelOverride,
             effortOverride: opts?.effortOverride ?? this.effortOverride,
@@ -1140,6 +1159,11 @@ export class DefaultStepRunner implements StepRunner {
           tier: request.tier,
           attempt: request.dispatch?.attempt ?? 1,
           runId: this.runId,
+          nativeSchemaScratch: {
+            worktreeRoot: this.projectDir,
+            repository: this.projectDir,
+            featureSlug: this.featureDesc || basename(this.projectDir),
+          },
           escalate: request.dispatch?.escalate ?? true,
           modelOverride: request.dispatch?.modelOverride ?? this.modelOverride,
           effortOverride: request.dispatch?.effortOverride ?? this.effortOverride,
@@ -1154,10 +1178,9 @@ export class DefaultStepRunner implements StepRunner {
             ? {
                 optionsForCandidate: (candidateKey: string) => ({
                   ...options,
-                  prompt: renderSkillInvocation(
-                    STEP_SKILL_INVOCATIONS[request.step]!,
-                    candidateKey,
-                  ),
+                  prompt: options.nativeSchema === undefined
+                    ? renderSkillInvocation(STEP_SKILL_INVOCATIONS[request.step]!, candidateKey)
+                    : `${renderSkillInvocation(STEP_SKILL_INVOCATIONS[request.step]!, candidateKey)}\n\n${options.prompt}`,
                 }),
               }
             : {}),
@@ -1362,6 +1385,9 @@ export class DefaultStepRunner implements StepRunner {
     return {
       success: result.success,
       ...(result.output ? { output: result.output } : {}),
+      ...(result.finalStructuredResult === undefined
+        ? {}
+        : { finalStructuredResult: result.finalStructuredResult }),
       ...(publicationDisposition !== undefined ? { publicationDisposition } : {}),
       ...(result.authFailure ? { authFailure: true } : {}),
       ...(result.commandUnresolved
@@ -3012,6 +3038,7 @@ export class DefaultStepRunner implements StepRunner {
     finishProsePass?: 'author' | 'judge',
     revisionGuidance?: string,
     tier?: ComplexityTier,
+    prdWideningReviewContext?: StepRunOptions['prdWideningReviewContext'],
   ): Promise<string> {
     const stepDef = this.stepRegistry.find((candidate) => candidate.name === step)
       ?? getStepDefinition(step);
@@ -3068,6 +3095,13 @@ export class DefaultStepRunner implements StepRunner {
         + 'trailer rationales only as OVER_SCOPE intent evidence. This evidence is immutable; do not invent '
         + 'a widening rationale.\n```json\n'
         + `${JSON.stringify(scopeEvidence, null, 2)}\n` + '```';
+      if (prdWideningReviewContext) {
+        prompt +=
+          '\n\nPRD WIDENING DECISION HISTORY (engine-rendered) — use this only as original authority '
+          + 'and evidence when judging a current finding. Report current evidence in your own words; do not '
+          + 'copy a stored summary or claim it proves the same behavior. The engine alone reconciles and routes.\n```json\n'
+          + `${JSON.stringify(prdWideningReviewContext, null, 2)}\n` + '```';
+      }
     }
 
     // Task 14: Include quarantine context if a .pipeline/QUARANTINE sentinel exists.

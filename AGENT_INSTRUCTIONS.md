@@ -185,7 +185,7 @@ parent directory it is restoring into — so this rule is the interim guard, not
 ## Validation Rules (This Repo)
 
 Follow the test-execution ownership in `HARNESS.md`. During managed runs, `test_suite`
-owns aggregate tests and the self-host release gate owns `test/test_harness_integrity.sh`.
+owns aggregate tests, including `test/test_harness_integrity.sh` for self-host builds.
 Other steps consume their evidence; editing a file or completing a step does not trigger
 another suite run. Run only targeted checks needed for changed behavior or a concrete defect.
 Missing or failed aggregate evidence returns to its owning gate.

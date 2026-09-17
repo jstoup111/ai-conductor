@@ -36,7 +36,7 @@ As a daemon operator, I want a parked feature whose branch is already contained 
 
 #### Negative Paths
 - Given a parked slug whose branch is NOT an ancestor of `origin/main`, when the sweep runs, then nothing is deleted and the slug is passed to issue-state classification instead.
-- Given an ancestry-proven slug whose `.docs/shipped/<slug>.md` is MISSING from the base branch, when the sweep runs, then no worktree/branch/marker is removed this pass; the helper resolves the merged implementation PR (e.g. `gh pr list --state merged --head feature/<slug>`) and hands record creation to the ST-916 record-only repair-PR seam, logging "not reconcilable until the record lands". If no merged PR is resolvable, it reports and makes zero record writes.
+- Given an ancestry-proven slug on a `feat/daemon-*` branch whose `.docs/shipped/<slug>.md` is MISSING from the base branch, when the sweep runs, then no worktree/branch/marker is removed this pass; the helper resolves the merged implementation PR (e.g. `gh pr list --state merged --head feat/daemon-<slug>`) and hands record creation to the ST-916 record-only repair-PR seam, logging "not reconcilable until the record lands". If no merged PR is resolvable, it reports and makes zero record writes. A proven-merged slug on any other branch kind is reclaimed on the proof set alone (adr-2026-08-01 D8).
 - Given `origin/main` does not exist locally (no remote or never fetched), when the sweep classifies the slug, then the slug is skipped for this pass with no state change and no deletion.
 - Given the branch `feature/<slug>` does not exist at all, when the sweep classifies the slug, then no ancestry claim is made and the slug falls through to issue-state classification (a missing branch is not "merged").
 - Given the worktree's `.pipeline/` indicates an in-progress run (park was placed over a live attempt), when the helper runs, then it refuses to remove the worktree this pass and logs the reason (mid-loop-pipeline-wipe audit invariant).
@@ -44,7 +44,7 @@ As a daemon operator, I want a parked feature whose branch is already contained 
 ### Done When
 - [ ] Acceptance test: temp git repo with a merged parked feature + shipped record on base → after one sweep pass, worktree, branch, and park marker are gone.
 - [ ] Acceptance test: not-ancestor branch → byte-identical worktree/branch/marker state after the pass.
-- [ ] Acceptance test: ancestry-proven but record missing → nothing deleted; record creation delegated (repair-PR seam invoked or zero-writes report), marker survives.
+- [ ] Acceptance test: ancestry-proven `feat/daemon-*` slug but record missing → nothing deleted; record creation delegated (repair-PR seam invoked or zero-writes report), marker survives.
 - [ ] Acceptance test: in-flight `.pipeline` → worktree untouched.
 
 ## Story S3: Auto-cleanup is governed by `reconcile_parked_auto_cleanup` (default `true`)

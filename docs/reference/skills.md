@@ -680,8 +680,9 @@ the aggregate gate. Scoped success alone never satisfies that gate.
   reference; the active plan and any coherence mapping; the matching non-`SUPERSEDED-` PRD when present
   (context, not the key); the implementation, changed tests, and BUILD `Scope:` trailers; operator
   reseal and `Scope:` trailer rationales as immutable `OVER_SCOPE` intent evidence;
-  `.pipeline/accepted-widenings.json` when present — a no-owner finding matching a recorded operator
-  decision reuses that entry's summary verbatim so the decision keeps matching across laps.
+  `.pipeline/accepted-widenings.json` when present — durable operator authority, including immutable
+  original evidence and case/offer references. The engine may apply that authority to later wording
+  only after it records a fresh relation; the auditor does not preserve it by copying a summary.
 - **Outputs** — `.pipeline/prd-audit.md`, overwritten each run; a code-stamp sidecar on the pass path.
 - **Gate role** — blocking. Each finding carries exactly one grade — `PASS`, `FIXABLE`, `PLAN_GAP`, or
   `OVER_SCOPE` — and the report needs exactly one graded verdict row per acceptance criterion. A

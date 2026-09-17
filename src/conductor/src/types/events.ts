@@ -11,6 +11,7 @@ import type {
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
 import type { SchedulingUnitRef } from './scheduling-unit.js';
+import type { LandGateRejectionIdentifier } from '../engine/engineer/land-spec.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
@@ -238,6 +239,14 @@ export type ConductorEvent =
       active: { state: 'exact' | 'partial' | 'unavailable'; activeMs?: number };
     }
   | { type: 'intake_inbound_sanitized'; sourceRef: string; neutralizations: import('../engine/engineer/intake/sanitize-inbound.js').InboundNeutralization[]; digest: string }
+  | {
+      type: 'land_gate_rejected';
+      gate: LandGateRejectionIdentifier;
+      reason: string;
+      project: string;
+      worktreePath: string;
+      sourceRef?: string;
+    }
   | { type: 'operator_rewind'; operator: string; target: string; demoted: string[] }
   | {
       type: 'setup_repair';
@@ -290,6 +299,7 @@ export type ConductorEvent =
       adr: string;
     }
   | { type: 'build_review_rubric_started'; rubric: string; lapId: string }
+  | { type: 'self_host_dispatch_admission'; step: StepName; state: 'queued' | 'admitted' | 'cancelled' }
   | {
       /** The self-host dispatch was proven contained, so this concurrent drift is not a dispatch leak. */
       type: 'contained_live_checkout_drift';
@@ -407,6 +417,15 @@ export type ConductorEvent =
       lapId: string;
       caseId: string;
       residualEffectId?: string;
+    }
+  | {
+      /** Durable PRD widening lifecycle occurrence; detail remains in case/decision state. */
+      type: 'prd_widening_reconciled';
+      sourceId: string;
+      caseId?: string;
+      decisionId?: string;
+      outcome: 'offer' | 'imported' | 'recovered' | 'same-case' | 'different' | 'uncertain' | 'reused' | 'rejected';
+      reason?: string;
     }
   | {
       /** One idempotent remediation effect was reserved before execution. */
@@ -619,6 +638,12 @@ export type ConductorEvent =
       tier?: ComplexityTier;
       resolvedBefore?: number;
       resolvedAfter?: number;
+      /**
+       * The consumed progress-attempt allowance for a refunded build retry.
+       * Present together only when that retry reuses its fixed-budget slot.
+       */
+      progressAttempt?: number;
+      progressAttemptCeiling?: number;
       /**
        * #188 retry-as-escalation: the (model, effort) the UPCOMING attempt
        * (`attempt` above) will dispatch at, per the escalation ladder. Absent

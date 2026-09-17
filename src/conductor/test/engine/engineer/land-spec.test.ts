@@ -1811,6 +1811,68 @@ describe('landSpec Done-when validation', () => {
     expect(existsSync(dir)).toBe(true);
   });
 
+  it('attributes only engine-appended Done-when violations to the engine before committing', async () => {
+    const dir = await seedValidWorktree();
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+    const cases = [
+      {
+        name: 'an engine-appended task only',
+        tasks: ['### Task rem-test-17: Engine remediation'],
+        expectedViolations:
+          'plan task rem-test-17 has no Done when: block ' +
+          '(engine-appended: the engine wrote this remediation block; fix the engine rather than re-authoring the plan)',
+      },
+      {
+        name: 'a bare-writer engine-appended task only',
+        tasks: ['### Task rem-foo: Engine remediation'],
+        expectedViolations:
+          'plan task rem-foo has no Done when: block ' +
+          '(engine-appended: the engine wrote this remediation block; fix the engine rather than re-authoring the plan)',
+      },
+      {
+        name: 'an empty-suffix engine-appended task only',
+        tasks: ['### Task rem-: Engine remediation'],
+        expectedViolations:
+          'plan task rem- has no Done when: block ' +
+          '(engine-appended: the engine wrote this remediation block; fix the engine rather than re-authoring the plan)',
+      },
+      {
+        name: 'hand-authored tasks only',
+        tasks: ['### Task 17: Hand-authored task'],
+        expectedViolations: 'plan task 17 has no Done when: block',
+      },
+      {
+        name: 'one engine-appended and one hand-authored task',
+        tasks: [
+          '### Task rem-test-17: Engine remediation',
+          '### Task 17: Hand-authored task',
+        ],
+        expectedViolations:
+          'plan task rem-test-17 has no Done when: block ' +
+          '(engine-appended: the engine wrote this remediation block; fix the engine rather than re-authoring the plan); ' +
+          'plan task 17 has no Done when: block',
+      },
+    ];
+
+    for (const scenario of cases) {
+      await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), [
+        '# Implementation Plan: dep bump',
+        '',
+        '**Stories:** .docs/stories/dep-bump.md',
+        '',
+        ...scenario.tasks.flatMap((task) => [task, '']),
+      ].join('\n'));
+
+      const refusal = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh })
+        .then(() => null, (error: Error) => error);
+
+      expect(refusal, scenario.name).toBeInstanceOf(Error);
+      const message = refusal!.message;
+      expect(message).toBe(`landSpec: ${scenario.expectedViolations}`);
+      expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+    }
+  });
+
   it('lands a plan whose tasks have two well-formed Done-when criteria', async () => {
     const dir = await seedValidWorktree();
     await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), [
@@ -2129,6 +2191,80 @@ describe('Task 7: idea-scoped resolution preserves content validation and the di
 
     const headAfter = await git(['rev-parse', 'HEAD'], dir);
     expect(headAfter).toBe(headBefore);
+  });
+});
+
+describe('landSpec dirty-worktree refusal diagnostics', () => {
+  const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+  async function refusalFor(dir: string): Promise<Error> {
+    try {
+      await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
+    } catch (error) {
+      return error instanceof Error ? error : new Error(String(error));
+    }
+    throw new Error('expected landSpec to refuse the dirty worktree');
+  }
+
+  it('labels a modified tracked artifact as a tracked change and leaves the branch unchanged', async () => {
+    const dir = await seedValidWorktree();
+    await git(['add', '.docs'], dir);
+    await git(['commit', '-m', 'seed tracked decide artifacts'], dir);
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES + '\nchanged\n');
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+
+    const error = await refusalFor(dir);
+
+    expect(error.message).toContain(`per-idea worktree at "${dir}" has uncommitted (dirty) changes`);
+    expect(error.message).toContain('Uncommitted changes to tracked files (including under .docs/): M .docs/stories/dep-bump.md');
+    expect(error.message).not.toContain('Untracked files outside .docs/');
+    expect(error.message).not.toContain('changes outside .docs/');
+    expect(error.message).toContain('Commit or discard the tracked changes');
+    expect(error.message).not.toContain('remove or relocate the untracked files');
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+  });
+
+  it('labels an untracked file outside .docs and scopes the remedy to it', async () => {
+    const dir = await seedValidWorktree();
+    await writeFile(join(dir, 'leftover.txt'), 'left behind\n');
+
+    const error = await refusalFor(dir);
+
+    expect(error.message).toContain('Untracked files outside .docs/: ?? leftover.txt');
+    expect(error.message).not.toContain('Uncommitted changes to tracked files');
+    expect(error.message).toContain('remove or relocate the untracked files');
+    expect(error.message).not.toContain('Commit or discard the tracked changes');
+  });
+
+  it('separates mixed tracked and untracked blockers and names both remedies', async () => {
+    const dir = await seedValidWorktree();
+    await git(['add', '.docs'], dir);
+    await git(['commit', '-m', 'seed tracked decide artifacts'], dir);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), PLAN_WITH_DEPS + '\nchanged\n');
+    await writeFile(join(dir, 'leftover.txt'), 'left behind\n');
+
+    const error = await refusalFor(dir);
+
+    expect(error.message).toContain('Uncommitted changes to tracked files (including under .docs/): M .docs/plans/dep-bump.md');
+    expect(error.message).toContain('Untracked files outside .docs/: ?? leftover.txt');
+    expect(error.message).toContain('Commit or discard the tracked changes; remove or relocate the untracked files');
+  });
+
+  it('allows untracked artifacts under .docs through the cleanliness guard', async () => {
+    const dir = await seedValidWorktree();
+    const unresolvedGh: GhRunner = async () => {
+      throw new Error('not logged in');
+    };
+    let error: Error | null = null;
+    try {
+      await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh: unresolvedGh });
+    } catch (caught) {
+      error = caught instanceof Error ? caught : new Error(String(caught));
+    }
+
+    expect(error).not.toBeNull();
+    expect(error!.message).not.toMatch(/dirty|uncommitted/i);
+    expect(error!.message).toContain('identity is unresolved');
   });
 });
 

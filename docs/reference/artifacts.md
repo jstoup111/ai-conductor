@@ -184,7 +184,9 @@ the `plan` step, which an autonomous run may not enter.
 When the engine appends remediation tasks to the plan after a `remediate` round, it commits that
 amendment itself (`chore(plan): record appended remediation tasks`) — the appended heading is engine
 bookkeeping, not builder work, and leaving it uncommitted would fail the build step's clean-tree
-completion check. The engine also records every appended task id in
+completion check. Each appended task includes one valid `Done when:` block with two to three
+single-line, nonblank checks: the cited criterion, governing clause, rationale, or title as
+available, plus a check to re-run the gate. The engine also records every appended task id in
 `.pipeline/engine-state.json` (`appendedRemediationTaskIds`), and the build completion predicate
 refuses completion while any recorded id's `### Task <id>` heading is missing from the plan:
 deleting a remediation task never completes it. The guard disarms only when the engine-state file is
@@ -464,13 +466,13 @@ Agent-authored, engine-validated. Alphabetized.
 | `manual-test-fail-evidence.json` | Failure detail for the above | engine |
 | `manual-test-code-stamp.json` | The HEAD sha the manual test was formed against when available, plus the engine-stamped `runId` for its latest dispatch | engine |
 | `per-task-floor.json` | Per-task commit-floor telemetry | `step-runners.ts` |
-| `prd-audit.md` | A `## Verdict Table` with one graded row per story acceptance criterion: `Criterion`, `Grade` (`PASS`\|`FIXABLE`\|`PLAN_GAP`\|`OVER_SCOPE`), `Plan task` (required for `FIXABLE`; any grade may cite one or a comma-separated list, and every cited id must be declared by the active plan — a `FIXABLE` row must cite exactly one, because its repair is appended under that single parent task), `FR`, `Intent relation` (required for `OVER_SCOPE`: `within`\|`outside-harmless`\|`outside-visible`), `Evidence`. The grade is read from the verdict **cell**, not from anywhere else in the row. Every `Criterion` key must be an active story criterion id, each on exactly one row. A finding that owns no criterion (typically an unplanned change) is a unique `NC.<n>` `OVER_SCOPE` row in `## Findings without an owning criterion`, with `Finding`, `Grade`, `Intent relation`, and `Evidence`; its operator decision binds to that evidence summary. Invalid or duplicate rows are rejected individually, but any rejected row blocks the audit with its diagnostic. | `prd-audit` skill |
+| `prd-audit.md` | A `## Verdict Table` with one graded row per story acceptance criterion: `Criterion`, `Grade` (`PASS`\|`FIXABLE`\|`PLAN_GAP`\|`OVER_SCOPE`), `Plan task` (required for `FIXABLE`; any grade may cite one or a comma-separated list, and every cited id must be declared by the active plan — a `FIXABLE` row must cite exactly one, because its repair is appended under that single parent task), `FR`, `Intent relation` (required for `OVER_SCOPE`: `within`\|`outside-harmless`\|`outside-visible`), `Evidence`. The grade is read from the verdict **cell**, not from anywhere else in the row. Every `Criterion` key must be an active story criterion id, each on exactly one row. A finding that owns no criterion (typically an unplanned change) is a unique `NC.<n>` `OVER_SCOPE` row in `## Findings without an owning criterion`, with `Finding`, `Grade`, `Intent relation`, and `Evidence`. For a visible NC widening, its offer/decision binds immutable original evidence; a later rewording is classified only through a fresh durable relationship, never summary similarity. Invalid or duplicate rows are rejected individually, but any rejected row blocks the audit with its diagnostic. | `prd-audit` skill |
 | `prd-audit-code-stamp.json` | The HEAD sha the audit was formed against, plus the engine-stamped `runId` for its latest dispatch | engine |
 | `protected-artifact-seal.json` | See above | `protected-artifact-seal.ts` |
 | `rebase-residue.json` | `[{ sha, citingTaskIds[], reason }]` — citations a rebase could not translate | `rebase-translate.ts` |
 | `rebase-rewrites.json` | Pre-to-post rebase sha map, merged transitively; atomic temp plus rename | `rebase-translate.ts` |
 | `remediation.json` | Legacy remediation output is per-gap dispositions and tasks. Post-join `build_review` adjudication writes the additive strict `{ mode: 'case-v1', domain: 'build_review', sourceOutcomes, cases }` form; the engine validates it before any case or effect state changes. Its source outcomes include `refuted`; a `refute` case binds an existing attempted action case, has high confidence, and carries a claim plus assertion verdicts with path/excerpt evidence. | `remediate` skill |
-| `remediation-cases.json` | `{ version: 'v1', feature, cases[] }`. Feature-local post-join adjudication state: engine-stamped case identities, append-only source links, open/resolved status, and `none`, reserved, applied, or failed action/deferral effects. A resolved `refute` case persists its refutation record (claim; `refuted`/`upheld` assertions; path/excerpt evidence) and may retain a residual deferral effect. Reads and writes validate the feature identity and replace atomically under the conductor lease. | build-review adjudication coordinator |
+| `remediation-cases.json` | Version 2 feature-local case state. It retains the version-one `build_review` cases, effects, and suppressions, and adds a distinct `prd_widening` collection with engine-stamped case IDs, immutable original source snapshots, current source links, and validated relationships. PRD records carry no autonomous action/effect or operator authority. A resolved build-review `refute` case retains its refutation record and any residual deferral effect. Reads and writes validate the feature identity and replace atomically under the conductor lease; malformed or unsupported history remains intact and halts with named recovery. | build-review adjudication coordinator |
 | `summary.json` | At least `{ tasks_completed: number }`; read tolerantly — missing or corrupt reads as 0 | `pipeline` skill |
 | `test-failures.md` | Failure detail consumed by the remediation flow | remediate flow |
 | `test-suite-environment.key` | Environment fingerprint for suite evidence | `full-suite-fingerprint.ts` |
@@ -491,9 +493,9 @@ Existence is the signal. Alphabetized.
 | `.task-status.lock` | `pre-dispatch.sh` (mkdir lock) | Serializes concurrent `task-status.json` row flips |
 | `DONE` | conductor on convergence | Paired with the `loop_converged` event |
 | `HALT` | `halt-marker.ts::writeHaltMarker`, best-effort — write failures are swallowed | The daemon treats it as a full stop: it never advances, opens a PR, or merges past it. The first non-empty body line is the reason the dashboard shows |
-| `HALT.class` | the same writer, always, plus the daemon's startup migration for halts predating it | `needs-human`, `kickback-cap`, `mechanical`, `legacy`, `protected-artifact`, or `over-scope`. A matching one-use `kickback-budget` authorization is the only automatic path that clears an eligible `needs-human` or `kickback-cap` budget halt. An `over-scope` halt contains an operator-authored fenced `over-scope-decisions` block; its `pending` entries are inert until explicitly changed to `accept` or `refuse` with a rationale. `protected-artifact` identifies a genuine protected DECIDE-artifact violation; `legacy` is stamped once by the daemon's startup migration for a HALT it finds still unclassified; missing or unrecognized content reads as `unclassified` and never throws. Written atomically (temp file plus rename) after removing any stale sidecar, so a reader never observes a class from a prior HALT paired with a newer body |
+| `HALT.class` | the same writer, always, plus the daemon's startup migration for halts predating it | `needs-human`, `kickback-cap`, `mechanical`, `legacy`, `protected-artifact`, or `over-scope`. A matching one-use `kickback-budget` authorization is the only automatic path that clears an eligible `needs-human` or `kickback-cap` budget halt. An `over-scope` halt contains an operator-authored fenced `over-scope-decisions` block; its `pending` entries are inert until explicitly changed to `accept` or `refuse` with a rationale, and a refusal is retained as an explicit revision target rather than erased. `protected-artifact` identifies a genuine protected DECIDE-artifact violation; `legacy` is stamped once by the daemon's startup migration for a HALT it finds still unclassified; missing or unrecognized content reads as `unclassified` and never throws. Written atomically (temp file plus rename) after removing any stale sidecar, so a reader never observes a class from a prior HALT paired with a newer body |
 | `HALT.cleared` | the re-kick sweep | Records halt lifecycle closure; pairs with the `halt_cleared` event |
-| `accepted-widenings.json` | conductor | Version-one durable OVER_SCOPE decisions: `{ decisions: [{ criterion, summary, decision, rationale, operator, decidedAt }] }`. Old shapes read as absent. |
+| `accepted-widenings.json` | conductor | Version 2 durable operator authority: immutable source/case/offer references, engine decision ID, `accept` or `refuse`, rationale, resolved operator, and engine-ordered revision/supersession. Valid legacy rows are preserved as attributed source snapshots in original order; malformed or unsupported history never reads as an empty decision set. |
 | `QUARANTINE` | setup triage | The feature is quarantined from dispatch |
 | `REKICK` | the re-kick sweep | Body is literally `rekick` |
 | `conduct-session-id` | step runners | Durable conductor run identity. It survives daemon restart and redispatch; provider attempts use separate fresh IDs and do not rewrite it |
@@ -519,6 +521,7 @@ To clear a halt safely, use the procedure in
 | `git-hooks/` | `prepare-commit-msg`, `commit-msg` | Wired via the worktree-local `core.hooksPath` |
 | `events.jsonl` | The run event log | Append-only, no rotation — see below |
 | `pipeline-events.jsonl` | Pipeline-owned closeout timing events | Separate single-writer ledger — see below |
+| `composer-events.jsonl` | Compose-loop-owned events (`land_gate_rejected`), written at the target repository root | Separate single-writer ledger, same schema as `events.jsonl`; merged by the run report |
 | `audit-trail/events.jsonl` | A separate ledger with a different shape | See below |
 | `otel.jsonl` | OTLP-JSON, one batch per line | Default file-transport target. Off unless the `otel:` config block is present. For daemon runs, each feature writes its own worktree `.pipeline/otel.jsonl`. Append-only, unbounded |
 | `conduct.log` | Session narrative | Written only by the legacy bash CLI; `ai-conductor` never writes it. Read by `rate-limit-wait.sh` |
@@ -697,12 +700,12 @@ One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-86
 no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
 `<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
 
-`ConductorEvent` defines **108 variants** across **107** event types (`self_host_containment_verdict`
+`ConductorEvent` defines **109 variants** across **108** event types (`self_host_containment_verdict`
 declares two variants — `contained: true`/`contained: false` — under one type). `EventPersister`
-subscribes to the **95** event types marked `persist: true` in `event-sinks.ts` and writes only
+subscribes to the **96** event types marked `persist: true` in `event-sinks.ts` and writes only
 those:
 
-`contained_live_checkout_drift`, `self_host_containment_verdict`, `containment_check_unresolved`,
+`land_gate_rejected`, `contained_live_checkout_drift`, `self_host_containment_verdict`, `containment_check_unresolved`,
 `operator_rewind`,
 `setup_repair`, `project_setup`,
 `build_review_rubric_started`, `build_review_rubric_prompt`, `build_review_rubric_result`, `build_review_rubric_skipped`,
@@ -738,6 +741,11 @@ change once a dispatch is proven contained, and the verdict event records whethe
 succeeded for each completed self-host dispatch. Both render to the terminal and daemon log and
 persist to this file; see [`live_containment`](configuration.md#harness_self_host) and the
 [live-boundary runbook](../runbooks/stalled-or-stuck-feature.md#live-boundary-violation-self-host-only).
+
+`land_gate_rejected` records a failed `engineer land` attempt with its closed gate identifier,
+bounded reason, project, worktree path, and optional source reference. The command writes it to the
+target repository's `.pipeline/composer-events.jsonl` (a compose-loop-owned sibling ledger, per adr-2026-08-08 D2), rather than the disposable per-idea worktree ledger,
+so rejection history remains available after that worktree is removed. The run report merges this ledger with `events.jsonl` by timestamp and renders per-gate counts and latest reasons.
 
 The remediation adjudication events are the durable lifecycle trace for post-join `build_review`
 handling. They identify the lap, case, and effect where applicable; they persist only to

@@ -72,6 +72,7 @@ import { scanPlanProtectedTargets } from '../plan-protected-targets.js';
 import { validatePlanDoneWhen } from '../plan-done-when.js';
 import { PLAN_TASK_HARD_STOP_BOUNDARY, validatePlanTaskCount } from '../plan-task-count.js';
 import { composeSpecCommitMessage } from './spec-commit-message.js';
+import { isEngineAppendedRemediationTaskId } from '../remediation-append.js';
 
 const execFile = promisify(execFileCb);
 
@@ -107,6 +108,63 @@ export interface LandSpecResult {
   repoPath: string;
 }
 
+/** Closed identifiers for every rejection produced by the land gate. */
+export type LandGateIdentifier =
+  | 'worktree-missing'
+  | 'worktree-dirty'
+  | 'owner-identity-unresolved'
+  | 'required-artifacts-missing'
+  | 'plan-protected-targets'
+  | 'plan-done-when'
+  | 'plan-task-count'
+  | 'plan-stories-reference'
+  | 'stories-not-approved'
+  | 'tier-artifacts-missing'
+  | 'architecture-mermaid-missing'
+  | 'artifact-stem-mismatch'
+  | 'adr-not-approved'
+  | 'adr-uncitable-decision'
+  | 'adr-filename'
+  | 'coherence'
+  | 'mermaid-render'
+  | 'mermaid-tool-missing'
+  | 'artifact-empty'
+  | 'artifact-draft-status'
+  | 'artifact-stub';
+
+export class LandGateError extends Error {
+  constructor(public readonly gate: LandGateIdentifier, message: string) {
+    super(message);
+    this.name = 'LandGateError';
+  }
+}
+
+export function landGateError(gate: LandGateIdentifier, message: string): LandGateError {
+  return new LandGateError(gate, message);
+}
+
+export type LandGateRejectionIdentifier = LandGateIdentifier | 'unclassified';
+
+const REASON_LIMIT = 1000;
+const TRUNCATION_MARKER = '… [truncated]';
+
+/** Convert any land failure into its durable, bounded event fields without mutating it. */
+export function classifyLandGateRejection(error: unknown): {
+  gate: LandGateRejectionIdentifier;
+  reason: string;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+  const reason = message.length <= REASON_LIMIT
+    ? message
+    : message.slice(0, REASON_LIMIT - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
+  return {
+    gate: error instanceof LandGateError
+      ? error.gate
+      : 'unclassified',
+    reason,
+  };
+}
+
 // ── Implementation ────────────────────────────────────────────────────────────
 
 /**
@@ -134,7 +192,7 @@ export async function landSpec(
   try {
     await access(worktreePath);
   } catch {
-    throw new Error(
+    throw landGateError('worktree-missing',
       `landSpec: per-idea worktree "${worktreePath}" does not exist. ` +
         'Create the worktree (ai-conductor compose worktree) before landing — landSpec never ' +
         'falls back to the primary checkout.',
@@ -173,10 +231,24 @@ export async function landSpec(
     });
 
     if (dirtyLines.length > 0) {
-      const summary = dirtyLines.map((l) => l.trim()).join(', ');
-      throw new Error(
-        `landSpec: per-idea worktree at "${worktreePath}" has uncommitted (dirty) changes outside .docs/: ${summary}. ` +
-          'Recreate the worktree or discard tracked changes before running landSpec.',
+      const trackedChanges = dirtyLines.filter((line) => line.slice(0, 2) !== '??');
+      const untrackedOutsideDocs = dirtyLines.filter((line) => line.slice(0, 2) === '??');
+      const conditions = [
+        trackedChanges.length > 0
+          ? `Uncommitted changes to tracked files (including under .docs/): ${trackedChanges.map((line) => line.trim()).join(', ')}`
+          : null,
+        untrackedOutsideDocs.length > 0
+          ? `Untracked files outside .docs/: ${untrackedOutsideDocs.map((line) => line.trim()).join(', ')}`
+          : null,
+      ].filter((condition): condition is string => condition !== null);
+      const remedies = [
+        trackedChanges.length > 0 ? 'Commit or discard the tracked changes' : null,
+        untrackedOutsideDocs.length > 0 ? 'remove or relocate the untracked files' : null,
+      ].filter((remedy): remedy is string => remedy !== null);
+      throw landGateError('worktree-dirty',
+        `landSpec: per-idea worktree at "${worktreePath}" has uncommitted (dirty) changes. ` +
+          'The landing commit stages only untracked artifacts under .docs/. ' +
+          `${conditions.join('. ')}. ${remedies.join('; ')} before running landSpec.`,
       );
     }
   }
@@ -194,7 +266,7 @@ export async function landSpec(
     canonical,
   );
   if (!ownerResolution.resolved) {
-    throw new Error(
+    throw landGateError('owner-identity-unresolved',
       'landSpec: identity is unresolved — spec cannot be authored without a known owner. ' +
       'To resolve, either: (1) configure `spec_owner` in ~/.ai-conductor/config.yml, or ' +
       '(2) run `gh auth login` to authenticate.',
@@ -238,7 +310,7 @@ export async function landSpec(
     if (specRequired && !specFile) missing.push('spec (product track)');
     if (!storiesFile) missing.push('stories');
     if (!planFile) missing.push('plan');
-    throw new Error(
+    throw landGateError('required-artifacts-missing',
       `landSpec: required artifact ${missing.join(', ')} ${missing.length === 1 ? 'file is' : 'files are'} missing ` +
         `in ".docs/" under "${worktreePath}". Run the /explore, /prd (product track), /stories, /plan skills first.`,
     );
@@ -265,7 +337,7 @@ export async function landSpec(
     const targets = protectedTargetViolations
       .map(({ taskId, path }) => `Task ${taskId}: ${path}`)
       .join(', ');
-    throw new Error(
+    throw landGateError('plan-protected-targets',
       `landSpec: plan targets sealed artifacts owned by another feature: ${targets}. ` +
         'Amend accepted artifacts during DECIDE, then re-author the plan.',
     );
@@ -278,10 +350,13 @@ export async function landSpec(
         const description = reason === 'missing'
           ? 'no Done when: block'
           : `an invalid Done when: block (${reason})`;
-        return `plan task ${taskId} has ${description}`;
+        const attribution = isEngineAppendedRemediationTaskId(taskId)
+          ? ' (engine-appended: the engine wrote this remediation block; fix the engine rather than re-authoring the plan)'
+          : '';
+        return `plan task ${taskId} has ${description}${attribution}`;
       })
       .join('; ');
-    throw new Error(`landSpec: ${violations}`);
+    throw landGateError('plan-done-when', `landSpec: ${violations}`);
   }
 
   const taskCountValidation = validatePlanTaskCount(planContent);
@@ -289,7 +364,7 @@ export async function landSpec(
     const declarationProblem = taskCountValidation.kind === 'unauthorized'
       ? 'no scope exception declaration was provided'
       : 'the scope exception declaration is malformed';
-    throw new Error(
+    throw landGateError('plan-task-count',
       `landSpec: plan has ${taskCountValidation.taskCount} addressable tasks, reaching hard-stop ` +
         `boundary ${PLAN_TASK_HARD_STOP_BOUNDARY}; ${declarationProblem}.`,
     );
@@ -304,7 +379,7 @@ export async function landSpec(
   const storiesRepoPath = relative(worktreePath, storiesFile).replaceAll('\\', '/');
   const referencedStoriesPath = resolvePlanStoriesPath(planRepoPath, planContent);
   if (referencedStoriesPath !== storiesRepoPath) {
-    throw new Error(
+    throw landGateError('plan-stories-reference',
       `landSpec: plan Stories reference does not resolve to the selected stories artifact ` +
         `"${storiesRepoPath}" (resolved: ${referencedStoriesPath ?? 'invalid'}). ` +
         'Use a repo-relative path, an inline-code path, or a Markdown link whose target resolves to that artifact; ' +
@@ -319,7 +394,7 @@ export async function landSpec(
   // mismatch can never reach a silently-skipping daemon. (Applied to stories
   // only — the PRD/spec uses "Status: Approved" and the plan has no status.)
   if (!isStoriesApproved(storiesContent)) {
-    throw new Error(
+    throw landGateError('stories-not-approved',
       'landSpec: stories artifact is not approved — it must declare "Status: Accepted" ' +
         '(and no "Status: DRAFT"). Run the /stories skill and approve before landing.',
     );
@@ -347,14 +422,14 @@ export async function landSpec(
     if (!architectureFile) missing.push('architecture');
     if (!reviewFile) missing.push('decisions (architecture-review/ADRs)');
     if (missing.length > 0) {
-      throw new Error(
+      throw landGateError('tier-artifacts-missing',
         `landSpec: complexity tier is "${tier}" (non-Small) but required DECIDE artifact ` +
           `${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing in ".docs/". ` +
           'Run /conflict-check, /architecture-diagram, and /architecture-review before landing.',
       );
     }
     if (architectureFile && extractMermaidBlocks(await readFile(architectureFile, 'utf-8')).length === 0) {
-      throw new Error(
+      throw landGateError('architecture-mermaid-missing',
         `landSpec: non-Small architecture artifact "${architectureFile}" is missing a fenced mermaid diagram. ` +
           'Regenerate the diagram through /architecture-diagram before landing.',
       );
@@ -405,7 +480,7 @@ export async function landSpec(
       .map(({ path, expectedStem, strategy }) =>
         `${path.replaceAll('\\', '/')}: expected stem "${expectedStem}" (${strategy})`)
       .join('; ');
-    throw new Error(`landSpec: feature-scoped artifact stems do not match the feature: ${violations}`);
+    throw landGateError('artifact-stem-mismatch', `landSpec: feature-scoped artifact stems do not match the feature: ${violations}`);
   }
 
   // 4e. ADR hard gates — no spec lands with an unapproved ADR (mirrors the
@@ -460,19 +535,19 @@ export async function landSpec(
     const offenders = unapprovedAdrs
       .map(({ path, found }) => `${path} (${found === null ? 'no status declaration' : `status "${found}"`})`)
       .join('; ');
-    throw new Error(
+    throw landGateError('adr-not-approved',
       `landSpec: ADRs are not approved: ${offenders}. All ADRs must be ` +
       'APPROVED before landing. Approve the ADRs via /architecture-review, then land.',
     );
   }
   if (uncitableAdrs.length > 0) {
-    throw new Error(
+    throw landGateError('adr-uncitable-decision',
       `landSpec: approved ADRs have no citable decision: ${uncitableAdrs.join('; ')}. ` +
         'Each added or changed APPROVED ADR must declare at least one citable decision before landing.',
     );
   }
   if (nonCanonicalNewAdrs.length > 0) {
-    throw new Error(
+    throw landGateError('adr-filename',
       `landSpec: newly added ADRs must use canonical filenames: ${nonCanonicalNewAdrs.join('; ')}. ` +
         'Required format: adr-YYYY-MM-DD-lowercase-hyphenated-slug.md.',
     );
@@ -494,7 +569,8 @@ export async function landSpec(
     // .docs/intake/<planStem>.md marker, which carries the same bullets.
     stagedOutcomes = await readCommittedIntakeOutcomes(worktreePath, markerSlug);
   }
-  await runCoherenceGate({
+  try {
+    await runCoherenceGate({
     worktreePath,
     canonicalPath: canonical,
     tier,
@@ -508,7 +584,10 @@ export async function landSpec(
     ideaFiles,
     guard,
     gh: opts.gh,
-  });
+    });
+  } catch (error) {
+    throw landGateError('coherence', error instanceof Error ? error.message : String(error));
+  }
 
   // 4f. Mermaid render hard gate (#810). Broken diagrams shipped because the
   //     render-check was skill prose (not enforced) and fail-opened when mmdc
@@ -525,14 +604,14 @@ export async function landSpec(
     if (check.status === 'errors') {
       const first = check.failures[0];
       const firstLine = (first?.error ?? 'parse error').split('\n').find((l) => /error/i.test(l));
-      throw new Error(
+      throw landGateError('mermaid-render',
         `landSpec: mermaid diagram ${first?.index ?? '?'} in "${mdFile}" fails to render — ` +
           `${(firstLine ?? first?.error ?? 'parse error').trim()}. Fix the diagram(s) ` +
           '(run `conduct render-diagrams --check <file>`), then re-run land.',
       );
     }
     if (check.status === 'tool-missing') {
-      throw new Error(
+      throw landGateError('mermaid-tool-missing',
         `landSpec: "${mdFile}" contains ${check.total} mermaid diagram(s) that cannot be ` +
           'validated — @mermaid-js/mermaid-cli (mmdc) is not installed. Install it so diagrams ' +
           'are verified to render before landing (bin/install mermaid preset, or ' +
@@ -828,7 +907,7 @@ const STUB_PATTERN = /_Generated by engineer\._/i;
  */
 function validateArtifactContent(label: string, content: string, _idea: string): void {
   if (content.trim() === '') {
-    throw new Error(
+    throw landGateError('artifact-empty',
       `landSpec: ${label} artifact is empty/blank. Run the corresponding DECIDE skill to produce real content.`,
     );
   }
@@ -838,14 +917,14 @@ function validateArtifactContent(label: string, content: string, _idea: string):
   // We match "status" followed (on the same line) by "draft", ignoring markdown
   // bold/italic markers and arbitrary whitespace/punctuation between them.
   if (/status[^:\n]*:\s*[\*_]*\s*draft/i.test(content)) {
-    throw new Error(
+    throw landGateError('artifact-draft-status',
       `landSpec: ${label} artifact contains "Status: DRAFT" and has not been approved. ` +
         'The artifact must be accepted/approved before landing.',
     );
   }
 
   if (STUB_PATTERN.test(content)) {
-    throw new Error(
+    throw landGateError('artifact-stub',
       `landSpec: ${label} artifact contains a stub/generated placeholder ("_Generated by engineer._"). ` +
         'Replace it with real content from the /stories skill before landing.',
     );

@@ -6,6 +6,8 @@ export interface LiveBoundaryWindow {
   close(): void;
 }
 
+export type OpenAdmittedWindow = (containment: ContainmentVerdict) => LiveBoundaryWindow;
+
 /**
  * Serializes dispatcher mutations with provider fingerprint windows.
  *
@@ -22,6 +24,29 @@ export class LiveBoundaryCoordinator {
   /** Wait for an already-started root mutation, then register a new window. */
   async openWindow(containment: ContainmentVerdict): Promise<LiveBoundaryWindow> {
     await this.mutationTail;
+    return this.registerWindow(containment);
+  }
+
+  /** Queue before provider preparation, then reserve the root until dispatch settles. */
+  async runDispatch<T>(run: (openWindow: OpenAdmittedWindow) => Promise<T>): Promise<T> {
+    const reservation = await this.openWindow({ contained: false, reason: 'dispatch admission' });
+    let admitted = true;
+    try {
+      return await run((containment) => {
+        if (!admitted) throw new Error('Self-host dispatch admission closed');
+        // A later root mutation waits for this reservation. Waiting on its
+        // tail again here would deadlock an already admitted provider.
+        return this.registerWindow(containment);
+      });
+    } finally {
+      admitted = false;
+      reservation.close();
+      // Candidate windows retain their own lifetime: an expired preparation
+      // may still be unwinding after the supervisor returns its halt.
+    }
+  }
+
+  private registerWindow(containment: ContainmentVerdict): LiveBoundaryWindow {
     const id = this.nextWindowId++;
     this.windows.set(id, containment);
     let closed = false;

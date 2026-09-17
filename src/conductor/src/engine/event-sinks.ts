@@ -19,6 +19,7 @@ export const EVENT_SINKS = {
   // path carries this occurrence to a live renderer. Persist-only keeps this
   // registry a description of production rather than an aspiration.
   intake_inbound_sanitized: { render: false, persist: true, audit: false, otel: false },
+  land_gate_rejected: { render: false, persist: true, audit: false, otel: false },
   operator_rewind: { render: true, persist: true, audit: true, otel: false },
   setup_repair: { render: true, persist: true, audit: false, otel: false },
   project_setup: { render: true, persist: true, audit: false, otel: false },
@@ -29,6 +30,7 @@ export const EVENT_SINKS = {
   config_deprecated_key: { render: false, persist: true, audit: false, otel: false },
   contained_live_checkout_drift: { render: true, persist: true, audit: false, otel: false },
   self_host_containment_verdict: { render: true, persist: true, audit: false, otel: false },
+  self_host_dispatch_admission: { render: true, persist: true, audit: false, otel: false },
   build_review_rubric_started: { render: true, persist: true, audit: false, otel: false },
   build_review_rubric_prompt: { render: false, persist: true, audit: false, otel: false },
   build_review_rubric_result: { render: true, persist: true, audit: false, otel: false },
@@ -57,6 +59,7 @@ export const EVENT_SINKS = {
   remediation_adjudication_failed: { render: false, persist: true, audit: false, otel: false },
   remediation_case_reconciled: { render: false, persist: true, audit: false, otel: false },
   remediation_case_refuted: { render: true, persist: true, audit: true, otel: false },
+  prd_widening_reconciled: { render: false, persist: true, audit: false, otel: false },
   remediation_effect_reserved: { render: false, persist: true, audit: false, otel: false },
   remediation_effect_applied: { render: false, persist: true, audit: false, otel: false },
   remediation_effect_failed: { render: false, persist: true, audit: false, otel: false },
