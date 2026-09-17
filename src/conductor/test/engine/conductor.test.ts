@@ -65,6 +65,7 @@ import {
   resolveGroupMembership,
   earliestRemediationTarget,
   resolveExistingTaskBindingsForAdmission,
+  recordActivePlanPath,
 } from '../../src/engine/conductor.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
@@ -262,8 +263,8 @@ describe('engine/conductor', () => {
     }
   });
 
-  // Covers: task:9, rem-ab1-2
-  it('keeps a plan-gap halt tiered when the build tail projects it before the centralized halt', async () => {
+  // Covers: task:9, rem-as-built-rem-ab2-2
+  it('keeps a plan-gap halt tiered when the centralized halt follows a tail poll', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, 'plan.md'), [
       '### Task 7: Deliver the bounded behavior',
@@ -271,9 +272,8 @@ describe('engine/conductor', () => {
       '- The approved behavior can be verified without widening the plan.',
       '',
     ].join('\n'));
-    await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
-      activePlanPath: 'plan.md', complexity_tier: 'M',
-    }));
+    await recordActivePlanPath(dir, 'plan.md');
+    await writeState(statePath, { complexity_tier: 'M' });
     await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
       tasks: [{ id: '7', name: 'Task 7', status: 'in_progress' }],
     }));
@@ -304,7 +304,9 @@ describe('engine/conductor', () => {
 
     try {
       await buildProvider.run('build', { complexity_tier: 'M' });
-      (conductor as unknown as { haltState: ConductState }).haltState = { complexity_tier: 'M' };
+      const persistedState = await readState(statePath);
+      if (!persistedState.ok) throw new Error(persistedState.error.message);
+      (conductor as unknown as { haltState: ConductState }).haltState = persistedState.value;
       await (conductor as unknown as { emitLoopHalt(reason: string): Promise<void> }).emitLoopHalt('centralized halt');
       await events.emit({
         type: 'feature_dispatch_ended', slug: 'feature', outcome: 'halted', haltClass: 'plan-gap', step: 'build', tier: 'M',
