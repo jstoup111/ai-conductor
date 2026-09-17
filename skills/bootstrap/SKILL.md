@@ -86,13 +86,18 @@ result is surfaced. Otherwise ask one question at a time:
    → `cargo test`. Changing it: records the project's authoritative aggregate suite. Record with
    `--test-suite-command <command>`. When no command can be inferred and the answer is empty, re-ask;
    never record `npm test` as an uninferred answer.
+4. **`test_suite.scoped_command`** — Ask only when `test_suite.verification.mode` is `scoped`.
+   Controls: the selected-test command that receives `{selectors}`. Allowed: one non-empty, single-line
+   project command containing `{selectors}`. Default: no default; this command is required for scoped
+   verification. Changing it: changes how selected tests run. Record with
+   `--test-suite-scoped-command <command>`.
 
 For a closed-set answer outside its allowed values, restate the allowed values, re-ask the same
 question, and record nothing. For a free-text empty or multi-line answer, re-ask and record nothing.
 Record all accepted answers through this single writer invocation only:
 
 ```bash
-ai-conductor config init --test-suite-mode <aggregate|scoped> --test-suite-drift-budget <strict|tolerant> --test-suite-command <command>
+ai-conductor config init --test-suite-mode <aggregate|scoped> --test-suite-drift-budget <strict|tolerant> --test-suite-command <command> [--test-suite-scoped-command <command> when scoped]
 ```
 
 In auto mode, do not prompt; record the strict preset with aggregate verification:

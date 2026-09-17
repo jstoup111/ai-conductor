@@ -179,6 +179,7 @@ interface ConfigInitOptions {
   testSuiteMode?: string;
   testSuiteDriftBudget?: string;
   testSuiteCommand?: string;
+  testSuiteScopedCommand?: string;
   unknownFlags?: string[];
   hasVerificationFlags?: boolean;
 }
@@ -187,6 +188,7 @@ interface TestSuiteVerificationSelection {
   command: string;
   mode: TestSuiteVerificationMode;
   preset: TestSuiteDriftBudgetPreset;
+  scopedCommand?: string;
 }
 
 function resolveVerificationSelection(
@@ -198,6 +200,13 @@ function resolveVerificationSelection(
       /[\r\n]/.test(options.testSuiteCommand))
   ) {
     return 'invalid --test-suite-command: must be non-empty and single line';
+  }
+  if (
+    options.testSuiteScopedCommand !== undefined &&
+    (options.testSuiteScopedCommand.trim().length === 0 ||
+      /[\r\n]/.test(options.testSuiteScopedCommand))
+  ) {
+    return 'invalid --test-suite-scoped-command: must be non-empty and single line';
   }
   if (
     options.testSuiteMode !== undefined &&
@@ -214,10 +223,22 @@ function resolveVerificationSelection(
     return `invalid --test-suite-drift-budget ${JSON.stringify(options.testSuiteDriftBudget)}; allowed values: ${Object.keys(TEST_SUITE_DRIFT_BUDGET_PRESETS).join(', ')}`;
   }
 
+  const mode = (options.testSuiteMode ?? 'aggregate') as TestSuiteVerificationMode;
+  if (mode === 'scoped' && options.testSuiteScopedCommand === undefined) {
+    return 'invalid --test-suite-scoped-command: required when --test-suite-mode is scoped; it is only allowed with scoped verification';
+  }
+  if (mode !== 'scoped' && options.testSuiteScopedCommand !== undefined) {
+    return 'invalid --test-suite-scoped-command: only allowed when --test-suite-mode is scoped';
+  }
+  if (mode === 'scoped' && !options.testSuiteScopedCommand!.includes('{selectors}')) {
+    return 'invalid --test-suite-scoped-command: must contain the "{selectors}" placeholder';
+  }
+
   return {
     command: options.testSuiteCommand ?? 'npm test',
-    mode: (options.testSuiteMode ?? 'aggregate') as TestSuiteVerificationMode,
+    mode,
     preset: (options.testSuiteDriftBudget ?? 'strict') as TestSuiteDriftBudgetPreset,
+    ...(mode === 'scoped' ? { scopedCommand: options.testSuiteScopedCommand } : {}),
   };
 }
 
@@ -234,7 +255,7 @@ function renderVerificationBlock(selection: TestSuiteVerificationSelection): str
   const driftBudget = TEST_SUITE_DRIFT_BUDGET_PRESETS[selection.preset];
   const scopedCommand =
     selection.mode === 'scoped'
-      ? '  scoped_command: npm test -- {selectors}\n'
+      ? `  scoped_command: ${yamlScalar(selection.scopedCommand!)}\n`
       : '';
   const budgetLines = Object.entries(driftBudget)
     .filter(
@@ -427,6 +448,7 @@ export type RegistryDispatch =
       testSuiteMode?: string;
       testSuiteDriftBudget?: string;
       testSuiteCommand?: string;
+      testSuiteScopedCommand?: string;
       unknownFlags?: string[];
       hasVerificationFlags?: boolean;
     };
@@ -461,6 +483,7 @@ export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
     let testSuiteMode: string | undefined;
     let testSuiteDriftBudget: string | undefined;
     let testSuiteCommand: string | undefined;
+    let testSuiteScopedCommand: string | undefined;
     const unknownFlags: string[] = [];
     let hasVerificationFlags = false;
     for (let i = 2; i < args.length; i++) {
@@ -483,6 +506,12 @@ export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
       } else if (arg.startsWith('--test-suite-command=')) {
         hasVerificationFlags = true;
         testSuiteCommand = arg.slice('--test-suite-command='.length);
+      } else if (arg === '--test-suite-scoped-command') {
+        hasVerificationFlags = true;
+        testSuiteScopedCommand = args[++i] ?? '';
+      } else if (arg.startsWith('--test-suite-scoped-command=')) {
+        hasVerificationFlags = true;
+        testSuiteScopedCommand = arg.slice('--test-suite-scoped-command='.length);
       } else if (arg.startsWith('--')) {
         unknownFlags.push(arg);
       }
@@ -492,6 +521,7 @@ export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
       testSuiteMode,
       testSuiteDriftBudget,
       testSuiteCommand,
+      testSuiteScopedCommand,
       ...(unknownFlags.length > 0 ? { unknownFlags } : {}),
       hasVerificationFlags,
     };
@@ -507,6 +537,7 @@ export async function dispatchRegistry(d: RegistryDispatch): Promise<number> {
       testSuiteMode: d.testSuiteMode,
       testSuiteDriftBudget: d.testSuiteDriftBudget,
       testSuiteCommand: d.testSuiteCommand,
+      testSuiteScopedCommand: d.testSuiteScopedCommand,
       unknownFlags: d.unknownFlags,
       hasVerificationFlags: d.hasVerificationFlags,
     });

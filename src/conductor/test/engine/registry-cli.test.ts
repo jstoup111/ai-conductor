@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:19
+// Covers: task:1, task:2, task:3, task:17, task:19
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -67,6 +67,28 @@ describe('conduct-ts config init verification flags', () => {
   });
 
   it.each([
+    ['separate flag value', ['--test-suite-scoped-command', 'npm test -- {selectors}']],
+    ['equals flag value', ['--test-suite-scoped-command=npm test -- {selectors}']],
+  ])('parses the scoped test-suite command from a %s', (_form, flag) => {
+    expect(
+      detectRegistryCommand([
+        'node',
+        'conduct-ts',
+        'config',
+        'init',
+        '--test-suite-mode',
+        'scoped',
+        ...flag,
+      ]),
+    ).toEqual({
+      kind: 'config-init',
+      testSuiteMode: 'scoped',
+      testSuiteScopedCommand: 'npm test -- {selectors}',
+      hasVerificationFlags: true,
+    });
+  });
+
+  it.each([
     [
       'strict',
       'aggregate',
@@ -103,6 +125,9 @@ describe('conduct-ts config init verification flags', () => {
       mode,
       '--test-suite-drift-budget',
       preset,
+      ...(mode === 'scoped'
+        ? ['--test-suite-scoped-command', 'npm test -- {selectors}']
+        : []),
     ]);
 
     expect(command).not.toBeNull();
@@ -145,6 +170,35 @@ describe('conduct-ts config init verification flags', () => {
     );
     expect(generatedConfig).toMatch(/test_suite:\n  command: pytest -q\n/);
     expect(generatedConfig).not.toMatch(/^  command: npm test$/m);
+    expect(generatedConfig).not.toMatch(/^  scoped_command:/m);
+  });
+
+  it('quotes and round-trips a YAML-sensitive scoped command only in scoped mode', async () => {
+    const scopedCommand = 'make test # {selectors}';
+    const command = detectRegistryCommand([
+      'node',
+      'conduct-ts',
+      'config',
+      'init',
+      '--test-suite-mode',
+      'scoped',
+      '--test-suite-scoped-command',
+      scopedCommand,
+    ]);
+
+    expect(command).not.toBeNull();
+    expect(await dispatchRegistry(command!)).toBe(0);
+
+    const generatedConfig = await readFile(
+      join(projectRoot, '.ai-conductor', 'config.yml'),
+      'utf8',
+    );
+    expect(generatedConfig).toContain(`  scoped_command: ${JSON.stringify(scopedCommand)}\n`);
+
+    const loaded = await loadConfig(projectRoot);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.config.test_suite?.scoped_command).toBe(scopedCommand);
   });
 
   it('quotes a scalar-looking test command so loadConfig reads it back as a string', async () => {
@@ -293,6 +347,81 @@ describe('conduct-ts config init verification flags', () => {
     await expect(readFile(join(projectRoot, '.ai-conductor', 'config.yml'))).rejects.toThrow();
   });
 
+  it('refuses scoped verification without its scoped command before creating a config', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const command = detectRegistryCommand([
+      'node', 'conduct-ts', 'config', 'init', '--test-suite-mode', 'scoped',
+    ]);
+
+    expect(command).not.toBeNull();
+    expect(await dispatchRegistry(command!)).toBe(1);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('--test-suite-scoped-command'));
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/required.*scoped/i));
+    await expect(readFile(join(projectRoot, '.ai-conductor', 'config.yml'))).rejects.toThrow();
+  });
+
+  it('refuses a scoped command outside scoped verification before creating a config', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const command = detectRegistryCommand([
+      'node',
+      'conduct-ts',
+      'config',
+      'init',
+      '--test-suite-mode',
+      'aggregate',
+      '--test-suite-scoped-command',
+      'npm test -- {selectors}',
+    ]);
+
+    expect(command).not.toBeNull();
+    expect(await dispatchRegistry(command!)).toBe(1);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('--test-suite-scoped-command'));
+    await expect(readFile(join(projectRoot, '.ai-conductor', 'config.yml'))).rejects.toThrow();
+  });
+
+  it.each([
+    ['empty', ''],
+    ['multi-line', 'npm test\n-- {selectors}'],
+  ])('refuses a %s scoped command before creating a config', async (_shape, scopedCommand) => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const command = detectRegistryCommand([
+      'node',
+      'conduct-ts',
+      'config',
+      'init',
+      '--test-suite-mode',
+      'scoped',
+      '--test-suite-scoped-command',
+      scopedCommand,
+    ]);
+
+    expect(command).not.toBeNull();
+    expect(await dispatchRegistry(command!)).toBe(1);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('--test-suite-scoped-command'));
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/non-empty.*single line/i));
+    await expect(readFile(join(projectRoot, '.ai-conductor', 'config.yml'))).rejects.toThrow();
+  });
+
+  it('refuses a scoped command without {selectors} before creating a config', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const command = detectRegistryCommand([
+      'node',
+      'conduct-ts',
+      'config',
+      'init',
+      '--test-suite-mode',
+      'scoped',
+      '--test-suite-scoped-command',
+      'npm test',
+    ]);
+
+    expect(command).not.toBeNull();
+    expect(await dispatchRegistry(command!)).toBe(1);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('--test-suite-scoped-command'));
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('{selectors}'));
+    await expect(readFile(join(projectRoot, '.ai-conductor', 'config.yml'))).rejects.toThrow();
+  });
+
   it('rejects an unknown config-init flag without creating a config', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const command = detectRegistryCommand([
@@ -324,6 +453,7 @@ describe('conduct-ts config init verification flags', () => {
       'init',
       '--test-suite-mode=scoped',
       '--test-suite-drift-budget=tolerant',
+      '--test-suite-scoped-command=npm test -- {selectors}',
     ]);
 
     expect(command).not.toBeNull();

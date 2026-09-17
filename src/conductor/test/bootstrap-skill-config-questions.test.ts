@@ -1,3 +1,4 @@
+// Covers: task:17
 import { describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +19,7 @@ describe('bootstrap project-configuration interview', () => {
       ['test_suite.verification.mode', '--test-suite-mode'],
       ['test_suite.verification.drift_budget', '--test-suite-drift-budget'],
       ['test_suite.command', '--test-suite-command'],
+      ['test_suite.scoped_command', '--test-suite-scoped-command'],
     ]) {
       const question = section.slice(section.indexOf(key), section.indexOf('\n\n', section.indexOf(key)));
       expect(question).toContain(flag);
@@ -25,6 +27,16 @@ describe('bootstrap project-configuration interview', () => {
     }
     expect(section).toMatch(/closed-set.*restate.*re-ask.*record nothing/is);
     expect(section).toMatch(/free-text empty or multi-line.*re-ask.*record nothing/is);
+  });
+
+  it('asks for the scoped command only after scoped verification is selected', async () => {
+    const section = await configSection();
+    const questionStart = section.indexOf('test_suite.scoped_command');
+    const question = section.slice(questionStart, section.indexOf('\n\n', questionStart));
+
+    expect(question).toMatch(/only when.*test_suite\.verification\.mode.*scoped/is);
+    expect(question).toContain('{selectors}');
+    expect(question).toContain('--test-suite-scoped-command <command>');
   });
 
   it('infers a test-command default from common project tooling and re-asks an uninferred empty answer', async () => {

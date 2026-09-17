@@ -612,7 +612,8 @@ export function createProgram(): Command {
     .description('Create project-scoped .ai-conductor/config.yml from the template if absent')
     .option('--test-suite-mode <mode>', 'Test-suite verification mode: aggregate or scoped')
     .option('--test-suite-drift-budget <preset>', 'Test-suite drift-budget preset: strict or tolerant')
-    .option('--test-suite-command <command>', 'Aggregate test command recorded in the project config');
+    .option('--test-suite-command <command>', 'Aggregate test command recorded in the project config')
+    .option('--test-suite-scoped-command <command>', 'Selected-test command recorded for scoped verification');
   config
     .command('read <path>')
     .description('Print a value from effective configuration: project-over-user when a project config exists, user configuration otherwise');
