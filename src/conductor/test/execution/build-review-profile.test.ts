@@ -9,6 +9,7 @@ const reviewProfile = {
   kind: 'ready' as const,
   provider: 'codex' as const,
   profile: {
+    scratch: '/review/private/codex',
     mountArgs: [
       '--ro-bind', '/review/source', '/review/source',
       '--ro-bind', '/review/policy', '/review/policy',
@@ -21,6 +22,7 @@ const claudeReviewProfile = {
   ...reviewProfile,
   provider: 'claude' as const,
   profile: {
+    scratch: '/review/private/claude',
     mountArgs: [
       '--ro-bind', '/review/source', '/review/source',
       '--ro-bind', '/review/policy', '/review/policy',
@@ -62,7 +64,7 @@ describe('build-review access profile', () => {
       selfHost: {
         executable: '/private/codex',
         args: ['--config', 'provider_state=/review/private/codex'],
-        env: { CODEX_HOME: '/review/private/codex' },
+        env: {},
         teardown: async () => {},
       },
     });
@@ -87,7 +89,11 @@ describe('build-review access profile', () => {
       ],
       expect.objectContaining({
         input: `${baseOptions.systemPrompt}\n\n${baseOptions.prompt}`,
-        env: expect.objectContaining({ CODEX_HOME: '/review/private/codex' }),
+        env: expect.objectContaining({
+          CODEX_HOME: '/review/private/codex/codex-home',
+          TMPDIR: '/review/private/codex/tmp',
+          XDG_CONFIG_HOME: '/review/private/codex/xdg-config',
+        }),
       }),
     );
   });
@@ -104,7 +110,7 @@ describe('build-review access profile', () => {
       selfHost: {
         executable: '/private/claude',
         args: ['--setting-sources', 'project'],
-        env: { CLAUDE_CONFIG_DIR: '/review/private/claude' },
+        env: {},
         teardown: async () => {},
       },
     });
@@ -123,7 +129,12 @@ describe('build-review access profile', () => {
       ],
       expect.objectContaining({
         input: baseOptions.prompt,
-        env: expect.objectContaining({ CLAUDE_CONFIG_DIR: '/review/private/claude' }),
+        env: expect.objectContaining({
+          HOME: '/review/private/claude/home',
+          CLAUDE_CONFIG_DIR: '/review/private/claude/claude-config',
+          TMPDIR: '/review/private/claude/tmp',
+          XDG_CONFIG_HOME: '/review/private/claude/xdg-config',
+        }),
       }),
     );
   });

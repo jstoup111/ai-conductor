@@ -9,6 +9,7 @@ import {
   isRegisteredRubric,
 } from '../../src/engine/build-review-registry.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
+import { validateConfig } from '../../src/engine/config.js';
 import type { ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
@@ -62,6 +63,19 @@ describe('engine/build-review-registry', () => {
       BUILD_REVIEW_RUBRIC_REGISTRY.security,
     );
   });
+
+  it.each([...BUILD_REVIEW_RUBRIC_IDS, 'security'] as const)(
+    'reserves approved built-in %s without adding it to the shipped registry',
+    (id) => {
+      expect(validateConfig({ build_review: { custom_rubrics: {
+        [id]: { skill: 'project-review', question: 'Review the change.' },
+      } } })).toMatchObject({
+        ok: false,
+        error: { message: expect.stringMatching(/reserved built-in rubric/i) },
+      });
+      expect(BUILD_REVIEW_RUBRIC_IDS).not.toContain('security');
+    },
+  );
 
   it('fingerprints resolved execution policy canonically while preserving ordered fallback semantics', () => {
     const policy: ResolvedBuildReviewRubricPolicy = {

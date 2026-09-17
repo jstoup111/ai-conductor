@@ -3016,6 +3016,7 @@ export class DefaultStepRunner implements StepRunner {
       lapId: projection.lapId,
       promptBytes: Buffer.byteLength(rubricPrompt, 'utf8'),
     });
+    let cacheWriteFailureDetail: string | undefined;
     const invokeOnce = async (prompt: string): Promise<{
       success: boolean;
       output?: string;
@@ -3160,8 +3161,18 @@ export class DefaultStepRunner implements StepRunner {
                 projectionDigest: projection.digest, policyFingerprint: fingerprintBuildReviewRubricPolicy(branch.policy),
                 engineIdentity: { engineStamp: engineIdentity.engineStamp, skillDigest: builtinBundle.digest }, semanticIdentity, result: judged,
                 }, { readFile: async (path) => readFile(path, 'utf-8'), mkdir: async (path) => { await mkdir(path, { recursive: true }); }, writeFile, rename });
-                // Cache is an optimization. Preserve the validated judgment when its atomic write fails.
-                if (!cacheWrite.ok) { /* coordinator receives the judged member below */ }
+                if (!cacheWrite.ok) {
+                  cacheWriteFailureDetail = cacheWrite.error instanceof Error ? cacheWrite.error.message : String(cacheWrite.error);
+                  await inputs?.sourceMaterialization?.settle(branch.rubric);
+                  return {
+                    kind: 'failure' as const,
+                    result: {
+                      success: false,
+                      exitCode: 1,
+                      output: `build_review ${branch.rubric} cache-write-failed: ${cacheWriteFailureDetail}`,
+                    },
+                  };
+                }
               }
               await inputs?.sourceMaterialization?.settle(branch.rubric);
               return { kind: 'judged' as const, result: judged ? { ...invoked, output: JSON.stringify(judged) } : invoked };
@@ -3195,6 +3206,9 @@ export class DefaultStepRunner implements StepRunner {
     // infrastructure failure. Provider-agnostic by construction: both the
     // runtime-candidates path and the legacy provider path share invokeOnce.
     const initial = await invokeOnce(rubricPrompt);
+    if (cacheWriteFailureDetail !== undefined) {
+      return { kind: 'cache-write-failed', detail: cacheWriteFailureDetail };
+    }
     if (initial.providerSetupExhaustion) {
       return makeBuildReviewDispatchFailure(
         `All configured providers were unavailable during setup: ${initial.providerSetupExhaustion.candidates.map(

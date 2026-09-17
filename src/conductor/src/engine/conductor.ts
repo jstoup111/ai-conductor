@@ -11987,6 +11987,13 @@ export class Conductor {
                   const legacyAdjudicationInput = !effective.ok
                     ? effective.reason === 'build-review feature identity is unavailable'
                     : !('feature' in effective) || effective.feature === undefined;
+                  if (legacyAdjudicationInput && this.hasEnabledCustomBuildReviewPolicy()) {
+                    const reason = 'build_review custom-capability error: compatibility adjudication requires feature identity';
+                    await this.writeHaltMarker(reason + '\n', 'needs-human');
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    await this.emitLoopHalt(reason);
+                    return;
+                  }
                   if (!effective.ok && !legacyAdjudicationInput) {
                     const reason = `build_review adjudication halted: ${effective.reason}`;
                     await this.writeHaltMarker(reason + '\n', 'needs-human');

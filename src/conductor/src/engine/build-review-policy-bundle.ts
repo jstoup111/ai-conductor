@@ -17,6 +17,8 @@ import type { InstalledReviewSkill } from './build-review-policy.js';
 export interface CapturedReviewPolicyBundleEntry {
   readonly relativePath: string;
   readonly bytes: Buffer;
+  /** Lexical in-package symlink destination when this delivered file crossed one. */
+  readonly symbolicLinkTarget?: string;
 }
 
 /** Stable, path-free selected-policy facts bound to the captured package. */
@@ -178,6 +180,7 @@ function effectiveBundleDigest(
   for (const entry of manifest) {
     write(entry.relativePath);
     write(entry.bytes);
+    write(entry.symbolicLinkTarget ?? '');
   }
   return `sha256-v1:${hash.digest('hex')}`;
 }
@@ -189,6 +192,7 @@ async function collectPackageFiles(
   ancestry: ReadonlySet<string>,
   manifest: CapturedSourceManifestEntry[],
   sourceReadFile: (path: string) => Promise<Buffer>,
+  symbolicLinkTarget?: string,
 ): Promise<void> {
   const canonicalCurrentPath = await canonicalResourcePath(currentPath, relativeParent);
   if (!isWithin(packageRoot, canonicalCurrentPath)) {
@@ -217,11 +221,12 @@ async function collectPackageFiles(
     }
 
     if (stat.isDirectory()) {
-      await collectPackageFiles(packageRoot, sourcePath, relativePath, nextAncestry, manifest, sourceReadFile);
+      await collectPackageFiles(packageRoot, sourcePath, relativePath, nextAncestry, manifest, sourceReadFile, symbolicLinkTarget);
       continue;
     }
     if (stat.isSymbolicLink()) {
       const targetPath = await canonicalResourcePath(sourcePath, relativePath);
+      const target = await readlink(sourcePath, 'utf8');
       let targetStat;
       try {
         targetStat = await lstat(targetPath);
@@ -232,7 +237,7 @@ async function collectPackageFiles(
         throw policyResourceError('symlink escapes the selected package', relativePath);
       }
       if (targetStat.isDirectory()) {
-        await collectPackageFiles(packageRoot, targetPath, relativePath, nextAncestry, manifest, sourceReadFile);
+        await collectPackageFiles(packageRoot, targetPath, relativePath, nextAncestry, manifest, sourceReadFile, target);
         continue;
       }
       if (!targetStat.isFile()) {
@@ -242,7 +247,7 @@ async function collectPackageFiles(
         manifest.push({
           relativePath,
           bytes: await sourceReadFile(targetPath),
-          symbolicLinkTarget: await readlink(sourcePath, 'utf8'),
+          symbolicLinkTarget: target,
         });
       } catch {
         throw policyResourceError('is missing or unreadable', relativePath);
@@ -253,7 +258,7 @@ async function collectPackageFiles(
       throw policyResourceError('is not a regular file', relativePath);
     }
     try {
-      manifest.push({ relativePath, bytes: await sourceReadFile(sourcePath) });
+      manifest.push({ relativePath, bytes: await sourceReadFile(sourcePath), ...(symbolicLinkTarget === undefined ? {} : { symbolicLinkTarget }) });
     } catch {
       throw policyResourceError('is missing or unreadable', relativePath);
     }
@@ -308,6 +313,7 @@ export async function captureInstalledReviewPolicyBundle(
   const manifest: readonly CapturedReviewPolicyBundleEntry[] = capturedSourceManifest.map((entry) => ({
     relativePath: entry.relativePath,
     bytes: entry.bytes,
+    ...(entry.symbolicLinkTarget === undefined ? {} : { symbolicLinkTarget: entry.symbolicLinkTarget }),
   }));
   validateBundleLimits(manifest);
   validateRequiredResources(policy, manifest);

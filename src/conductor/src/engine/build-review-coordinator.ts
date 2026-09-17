@@ -735,15 +735,28 @@ export async function coordinateBuildReviewRubrics(
         const result = validateBuildReviewDispatchedResult(candidate, rubric, projection);
         if (!result) {
           const failure = parseBuildReviewDispatchFailure(dispatched);
+          const cacheWriteFailure = typeof dispatched === 'object' && dispatched !== null
+            && !Array.isArray(dispatched) && (dispatched as { kind?: unknown }).kind === 'cache-write-failed';
+          const cacheWriteDetail = cacheWriteFailure && typeof (dispatched as { detail?: unknown }).detail === 'string'
+            ? (dispatched as { detail: string }).detail
+            : undefined;
           // No pre-formed dispatch failure: the engine derives the failed
           // requirement itself from the stamped candidate, so the diagnosis
           // is produced by the same validation surface that rejected it.
-          const detail = failure?.detail ?? (dispatched === undefined ? undefined : (
+          const detail = cacheWriteDetail ?? failure?.detail ?? (dispatched === undefined ? undefined : (
             typeof dispatched !== "object" || dispatched === null || Array.isArray(dispatched)
               ? "no parseable JSON object was found in the response"
               : describeBuildReviewDispatchedResultRejection(candidate, rubric, projection)
           ));
-          return { rubric, branch: infrastructure(rubric, "invalid-provider-result", detail, failure?.providerSetupExhaustion) };
+          return {
+            rubric,
+            branch: infrastructure(
+              rubric,
+              cacheWriteFailure ? 'cache-write-failed' : 'invalid-provider-result',
+              detail,
+              failure?.providerSetupExhaustion,
+            ),
+          };
         }
         let written: BuildReviewJudgedResult | undefined;
         try {

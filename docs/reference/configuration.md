@@ -1176,16 +1176,15 @@ dispatches neither the test-quality reviewer nor counterfactual execution. Enabl
 runs and participates in the joined verdict. Missing markers, absent plan test paths, and
 an abstract possibility of an unknown dependency do not turn that empty scope into a coverage failure.
 Under `build_review.rubrics`: Every other id ever accepted is retired: `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring`.
-Any unknown rubric id, and each retired id above, is accepted as a no-op with a one-time notice naming
-the retired setting; it never fails
-configuration loading or halts a run. `security` judges the whole frozen feature diff for concrete,
+Any unknown rubric id is rejected as a configuration error. Each retired id above is accepted as a
+no-op with a one-time notice naming the retired setting; it never fails configuration loading or halts a run. `security` judges the whole frozen feature diff for concrete,
 changed-hunk-anchored security defects and has no test scope or counterfactual preflight.
 Both behaviors follow `adr-2026-08-22-build-review-opt-in-rubric-container`.
 
 ### `build_review.custom_rubrics`
 
-Each key is a stable custom rubric id (lowercase letters, digits, `_`, and `-`; it must begin with a
-letter). A build may declare at most 32 custom rubrics. A declaration requires `skill` and `question`;
+Each key is a stable custom rubric id: 1-64 ASCII characters, beginning with an ASCII letter (upper- or
+lowercase), followed by letters, digits, `_`, or `-`. A build may declare at most 32 custom rubrics. A declaration requires `skill` and `question`;
 it may set `source` (`project`, `global`, or `plugin`), `resources`, and the normal provider/model/retry
 fields. Custom policies are disabled unless their declaration sets `enabled: true`, and they require
 `build_review.adjudication.enabled` so their findings pass through the shared decision and repair path.

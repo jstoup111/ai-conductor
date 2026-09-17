@@ -91,6 +91,8 @@ const ARCHITECTURE_REVIEW_AS_BUILT_DEFAULTS = {
   max_remediation_laps: 1,
   remediation: { enabled: true },
 } as const;
+/** Built-in ids (now including shipped `security`) are reserved from custom declarations. */
+const RESERVED_BUILD_REVIEW_RUBRIC_IDS = new Set<string>(BUILD_REVIEW_RUBRIC_IDS);
 /** Keys accepted on each member of test_suite.commands. */
 export const TEST_SUITE_COMMAND_ENTRY_KEYS = [
   'command', 'working_directory', 'timeout_seconds',
@@ -319,7 +321,7 @@ function validateBuildReviewCustomRubrics(
         message: `${path} must be a 1-64 character ASCII letter-leading identifier`,
       };
     }
-    if (BUILD_REVIEW_RUBRIC_IDS.includes(rubricId as (typeof BUILD_REVIEW_RUBRIC_IDS)[number])) {
+    if (RESERVED_BUILD_REVIEW_RUBRIC_IDS.has(rubricId)) {
       return { type: 'validation_error', message: `${path} is a reserved built-in rubric ID` };
     }
     if (DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET.has(rubricId)) {

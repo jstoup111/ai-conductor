@@ -8,6 +8,7 @@ import {
   validateConfig,
 } from '../src/engine/config.js';
 import type { HarnessConfig } from '../src/types/config.js';
+import { BUILD_REVIEW_RUBRIC_IDS } from '../src/engine/build-review-registry.js';
 
 describe('project config load errors', () => {
   it.each([
@@ -276,6 +277,20 @@ describe('build_review rubric validation', () => {
       error: { type: 'validation_error', message: expect.stringMatching(new RegExp(`custom_rubrics\\.${id.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}`, 'i')) },
     });
   });
+
+  it.each([...BUILD_REVIEW_RUBRIC_IDS, 'security'] as const)(
+    'rejects approved built-in %s from the custom namespace before dispatch',
+    (id) => {
+      expect(validateConfig({
+        build_review: {
+          custom_rubrics: { [id]: { skill: 'project-review', question: 'Review.' } },
+        },
+      })).toMatchObject({
+        ok: false,
+        error: { type: 'validation_error', message: expect.stringMatching(new RegExp(`custom_rubrics\\.${id}.*reserved built-in`, 'i')) },
+      });
+    },
+  );
 
   it.each([
     ['an unknown declaration field', { skill: 'project-review', question: 'Review.', typo: true }, /Unknown key/i],

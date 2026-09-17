@@ -1023,6 +1023,9 @@ export class CodexProvider implements LLMProvider {
 
   private invocationEnv(options: InvokeOptions, authentication: SelectedAuthentication): NodeJS.ProcessEnv {
     const auth = authentication.apiKey ? { CODEX_API_KEY: authentication.apiKey } : undefined;
+    const scratch = options.reviewAccess?.kind === 'ready'
+      ? options.reviewAccess.profile.scratch
+      : undefined;
     // Every session env carries the daemon-session marker: any Codex session
     // spawned through this adapter is engine-managed, and the ai-conductor
     // entry guard refuses recursive conductor invocations from inside it
@@ -1031,7 +1034,18 @@ export class CodexProvider implements LLMProvider {
     // tmux target variables are masked in the overlay (execa extends
     // process.env underneath it) so the child cannot resolve the daemon's pane.
     return scrubTmuxEnvironment(withDaemonSessionMarker(
-      options.selfHost ? { ...options.selfHost.env, ...auth } : auth,
+      {
+        ...(options.selfHost?.env ?? {}),
+        ...auth,
+        ...(scratch === undefined ? {} : {
+          HOME: join(scratch, 'home'),
+          CODEX_HOME: join(scratch, 'codex-home'),
+          TMPDIR: join(scratch, 'tmp'),
+          XDG_CONFIG_HOME: join(scratch, 'xdg-config'),
+          XDG_CACHE_HOME: join(scratch, 'xdg-cache'),
+          XDG_DATA_HOME: join(scratch, 'xdg-data'),
+        }),
+      },
     ));
   }
 

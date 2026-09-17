@@ -1,9 +1,12 @@
 // Covers: task:19
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
+import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
@@ -46,7 +49,59 @@ const passingEffectiveResolver = async () => ({
   },
 }) as never;
 
+function builtInInputs() {
+  const source = {
+    diff: 'diff --git a/src/a.ts b/src/a.ts\ndiff --git a/test/a.test.ts b/test/a.test.ts',
+    planBody: '# Plan\n', repairContext: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+  };
+  return {
+    ...source, mergeBase: 'base', baseRef: 'origin/main', baseKind: 'remote', trackingRefSha: 'base', remoteHeadSha: 'base', fresh: true,
+    testSuiteProof: { provenanceHeadSha: 'head', outcome: 'PASS' },
+    sourceSnapshot: {
+      digest: 'sha256:snapshot',
+      contentDigest: `sha256:${createHash('sha256').update(JSON.stringify(source)).digest('hex')}`,
+      baseRef: 'origin/main', mergeBase: 'base', headSha: 'head', ...source,
+      testQuality: { inScopeTests: ['test/a.test.ts'], counterfactualFileSelectors: ['test/a.test.ts'], unresolvedMarkers: [] },
+    },
+  } as never;
+}
+
 describe('build-review candidate cache runner ordering', () => {
+  it('publishes a cache-write-failed built-in outcome rather than discarding a judged member', async () => {
+    const lapId = parseBuildReviewLapId('lap-cache-write-failure')!;
+    const events: string[] = [];
+    const coordination = await coordinateBuildReviewRubrics({
+      config: {
+        enabled: true, maxParallel: 1,
+        rubrics: { testQuality: { enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false } },
+        catalog: [{ id: 'testQuality', kind: 'builtin', skillName: 'build-review-test-quality', policy: { enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 1, escalate: false } }],
+      } as never,
+      inputs: builtInInputs(),
+      lapId,
+      engineIdentity: { engineStamp: 'stamp', skillDigests: { testQuality: { kind: 'resolved', digest: 'sha256:skill' } } },
+      preflight: async () => undefined as never,
+      projections: {
+        testQuality: {
+          rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v3', lapId,
+          snapshotDigest: 'sha256:snapshot', digest: 'sha256:projection', mergeBase: 'base', headSha: 'head',
+          changedFiles: [], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+          changedTestSelectors: [], testSuiteProof: {}, revertedProductionManifest: [], preflight: {}, repairContext: [],
+        },
+      } as never,
+      readCache: async () => undefined,
+      dispatchModel: async () => ({ kind: 'cache-write-failed', detail: 'rename denied' }),
+      writeArtifact: async () => { throw new Error('a cache failure must not publish a judged artifact'); },
+      writeCache: async () => { throw new Error('candidate cache owns this write'); },
+      emit: async (event) => { if (event.type === 'build_review_rubric_infrastructure_failure') events.push(event.reason); },
+    });
+
+    expect(coordination).toMatchObject({
+      kind: 'ready',
+      branches: [{ kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'cache-write-failed', detail: 'rename denied' }],
+    });
+    expect(events).toEqual(['cache-write-failed']);
+  });
+
   it('resolves the prepared provider candidate before its model ladder judges', async () => {
     const root = await fixture();
     const preparedHome = join(root, 'prepared-codex-home');

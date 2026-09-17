@@ -34,6 +34,8 @@ export interface BuildReviewContainmentOptions {
 /** A proved mount profile that an invoke adapter may wrap around a reviewer. */
 export interface BuildReviewContainmentProfile {
   readonly mountArgs: readonly string[];
+  /** The candidate-private writable directory proved by the containment probe. */
+  readonly scratch: string;
 }
 
 export type BuildReviewContainmentResult =
@@ -186,5 +188,9 @@ export async function prepareBuildReviewContainment(
   }
   const failure = interpretProbe(probe.stdout);
   if (failure) return unsupported(options.provider, failure);
-  return { kind: 'ready', provider: options.provider, profile: Object.freeze({ mountArgs }) };
+  return {
+    kind: 'ready',
+    provider: options.provider,
+    profile: Object.freeze({ mountArgs, scratch: options.paths.scratch }),
+  };
 }

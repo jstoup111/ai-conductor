@@ -63,6 +63,7 @@ describe('engine/build-review-containment', () => {
 
     expect(result).toMatchObject({ kind: 'ready', provider: 'codex' });
     if (result.kind !== 'ready') throw new Error('expected the injected probe to prepare containment');
+    expect(result.profile.scratch).toBe('/review/private-scratch');
     expect(result.profile.mountArgs).not.toContain('/bin/sh');
     expect(processCalls).toEqual([expect.objectContaining({
       executable: 'bwrap',

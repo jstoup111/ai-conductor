@@ -1,4 +1,5 @@
 import { execa, type Options as ExecaOptions, type ResultPromise } from 'execa';
+import { join } from 'node:path';
 import type {
   LLMProvider,
   InvokeOptions,
@@ -895,11 +896,22 @@ export class ClaudeProvider implements LLMProvider {
    * enforceFreshSessionOptions — no config off-switch.
    */
   private buildEnv(options: InvokeOptions): NodeJS.ProcessEnv {
+    const scratch = options.reviewAccess?.kind === 'ready'
+      ? options.reviewAccess.profile.scratch
+      : undefined;
     // tmux target variables are scrubbed last so neither the inherited env
     // nor a self-host overlay can hand the child the daemon's own pane.
     return scrubTmuxEnvironment(withDaemonSessionMarker({
       ...process.env,
       ...options.selfHost?.env,
+      ...(scratch === undefined ? {} : {
+        HOME: join(scratch, 'home'),
+        CLAUDE_CONFIG_DIR: join(scratch, 'claude-config'),
+        TMPDIR: join(scratch, 'tmp'),
+        XDG_CONFIG_HOME: join(scratch, 'xdg-config'),
+        XDG_CACHE_HOME: join(scratch, 'xdg-cache'),
+        XDG_DATA_HOME: join(scratch, 'xdg-data'),
+      }),
       ...(options.effort ? { CLAUDE_CODE_EFFORT_LEVEL: options.effort } : {}),
     }));
   }

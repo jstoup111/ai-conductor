@@ -99,6 +99,35 @@ describe('engine/build-review-policy-bundle', () => {
       .toBe('Check every changed boundary.\n');
     expect(bundle.manifest.find((entry) => entry.relativePath === 'criteria/linked-checks.md')?.bytes)
       .toEqual(Buffer.from('Check every changed boundary.\n'));
+    expect(bundle.manifest.find((entry) => entry.relativePath === 'criteria/linked-checks.md')?.symbolicLinkTarget)
+      .toBe('checks.md');
+  });
+
+  it('changes identity when byte-identical file or directory symlinks are retargeted', async () => {
+    const sourceParent = await temporaryDirectory('build-review-policy-retarget-source-');
+    const materialParent = await temporaryDirectory('build-review-policy-retarget-material-');
+    const packageRoot = await policyPackage(sourceParent);
+    await writeFile(join(packageRoot, 'criteria', 'same-checks.md'), 'Check every changed boundary.\n', 'utf8');
+    await symlink('checks.md', join(packageRoot, 'criteria', 'linked-checks.md'));
+    const fileFirst = await captureInstalledReviewPolicyBundle(installedSkill(packageRoot), { materialParent });
+    await rm(join(packageRoot, 'criteria', 'linked-checks.md'));
+    await symlink('same-checks.md', join(packageRoot, 'criteria', 'linked-checks.md'));
+    const fileRetargeted = await captureInstalledReviewPolicyBundle(installedSkill(packageRoot), { materialParent });
+
+    await mkdir(join(packageRoot, 'directory-a'), { recursive: true });
+    await mkdir(join(packageRoot, 'directory-b'), { recursive: true });
+    await writeFile(join(packageRoot, 'directory-a', 'check.md'), 'Directory check.\n', 'utf8');
+    await writeFile(join(packageRoot, 'directory-b', 'check.md'), 'Directory check.\n', 'utf8');
+    await symlink('directory-a', join(packageRoot, 'linked-directory'));
+    const directoryFirst = await captureInstalledReviewPolicyBundle(installedSkill(packageRoot), { materialParent });
+    await rm(join(packageRoot, 'linked-directory'));
+    await symlink('directory-b', join(packageRoot, 'linked-directory'));
+    const directoryRetargeted = await captureInstalledReviewPolicyBundle(installedSkill(packageRoot), { materialParent });
+
+    expect(fileRetargeted.digest).not.toBe(fileFirst.digest);
+    expect(directoryRetargeted.digest).not.toBe(directoryFirst.digest);
+    expect(directoryRetargeted.manifest.find((entry) => entry.relativePath === 'linked-directory/check.md')?.symbolicLinkTarget)
+      .toBe('directory-b');
   });
 
   it('uses the selected plugin root as the complete package boundary', async () => {
