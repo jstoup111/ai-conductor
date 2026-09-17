@@ -17,13 +17,13 @@ const securitySkill = fileURLToPath(new URL('../../../../skills/build-review-sec
 const retired = ['build-review-scope', 'build-review-root-cause', 'build-review-completeness'];
 const hash = (text: string) => `sha256:${createHash('sha256').update(text).digest('hex')}`;
 
-function judgedSecurityFixture(path: string, concernKind?: string) {
+function judgedSecurityFixture(path: string, concernKind?: string, evidenceLocation = `${path}:8`) {
   const locus = { path, contentHash: hash(`${path}:${concernKind ?? 'clean'}`), display: 'introduced security-relevant hunk' };
   const findings = concernKind === undefined ? [] : [{
     concernKind,
     confidence: 90,
     summary: `The changed hunk introduces ${concernKind}.`,
-    evidenceLocations: [`${path}:8`],
+    evidenceLocations: [evidenceLocation],
     anchor: { rubric: 'security', locus },
   }];
   for (const finding of findings) {
@@ -85,9 +85,20 @@ describe('build-review rubric skill catalog', () => {
       judgedSecurityFixture('test/fixtures/credential.ts'),
       judgedSecurityFixture('package.json'),
       judgedSecurityFixture('docs/design.md'),
-      judgedSecurityFixture('src/request.ts'),
     ];
 
     expect(fixtures).toEqual(fixtures.map((fixture) => expect.objectContaining({ verdict: 'PASS', findings: [] })));
+  });
+
+  it('anchors an unchanged-sink exposure to its changed hunk', () => {
+    const [fixture] = [judgedSecurityFixture('src/request.ts', 'injection', 'src/legacy-request.ts:42')];
+    const [finding] = fixture.findings;
+
+    expect(fixture).toEqual(expect.objectContaining({ verdict: 'FAIL', findings: [expect.any(Object)] }));
+    expect(finding).toEqual(expect.objectContaining({
+      concernKind: 'injection',
+      anchor: expect.objectContaining({ locus: expect.objectContaining({ path: 'src/request.ts' }) }),
+      evidenceLocations: ['src/legacy-request.ts:42'],
+    }));
   });
 });

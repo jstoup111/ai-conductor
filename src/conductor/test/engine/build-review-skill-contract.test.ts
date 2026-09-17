@@ -4,6 +4,11 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import {
+  parseBuildReviewFindingAnchor,
+  parseBuildReviewFindingConcernKind,
+} from '../../src/engine/build-review-domain.js';
+
 const testQualitySkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-test-quality/SKILL.md', import.meta.url),
 );
@@ -99,5 +104,27 @@ describe('build-review Security skill contract', () => {
     expect(skill).toMatch(/one finding per independent defect/i);
     expect(skill).toMatch(/introducing hunk/i);
     expect(skill).toMatch(/unchanged sinks?[^.]*`evidenceLocations`/i);
+  });
+
+  it('models an unchanged-sink finding with the sink only in evidence locations', () => {
+    const locus = {
+      path: 'src/request.ts',
+      contentHash: `sha256:${'a'.repeat(64)}`,
+      display: 'changed request construction hunk',
+    };
+    const finding = {
+      concernKind: 'injection',
+      confidence: 90,
+      summary: 'The changed request construction exposes the existing execution sink.',
+      evidenceLocations: ['src/legacy-request.ts:42'],
+      anchor: { rubric: 'security', locus },
+    };
+
+    expect(parseBuildReviewFindingConcernKind(finding.concernKind, 'security')).toBe('injection');
+    expect(parseBuildReviewFindingAnchor(finding.anchor, {
+      changedTests: [], changedContentRegions: [locus], changedPaths: [locus.path], planTasks: [],
+    })).toEqual(finding.anchor);
+    expect(finding.anchor.locus.path).toBe('src/request.ts');
+    expect(finding.evidenceLocations).toEqual(['src/legacy-request.ts:42']);
   });
 });
