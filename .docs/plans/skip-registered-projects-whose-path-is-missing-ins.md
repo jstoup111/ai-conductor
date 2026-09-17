@@ -131,7 +131,7 @@ skips. No real network, GitHub, or LLM call is introduced. No exact-copy pattern
 | Story 1 happy: Given that skipped registration, when the poll reports it, then the operator-facing line names the registration, names its configured path, and states that the path is missing, and does not report a `gh` command failure. | 1 | "That poll logs exactly one line for the registration, containing its name, its configured path, and the missing-path reason, and not containing the existing poll-failure wording." | diff-local |
 | Story 1 negative: Given a registered project whose directory exists but whose issue listing fails, when the intake poll runs, then the existing per-repo poll-failure diagnostic is emitted unchanged for it and no missing-path notice is emitted. | 2 | "The failing-listing acceptance case emits the existing poll-failure line for that registration and emits no missing-path line." | diff-local |
 | Story 2 happy: Given a registry holding one live registration with an assigned issue and one registration whose directory is missing, when the intake poll runs, then the live registration's issue is captured and only the missing registration is skipped. | 2 | "The mixed-registry acceptance case returns exactly one envelope, and it is the live registration's assigned issue." | diff-local |
-| Story 2 negative: Given a registration whose missing path was already reported in this process, when later polls run, then no further GitHub command is attempted for it and no further notice is emitted for it while the path stays missing. | 3 | "Two consecutive polls of the same absent registration record zero GitHub runner invocations and log exactly one notice in total." | diff-local |
+| Story 2 negative: Given a registration whose missing path was already reported in this process, when later polls run, then no further GitHub command is attempted for it and no further notice is emitted for it while the path stays missing. | 4 | "exactly one notice in total" | diff-local |
 | Story 2 negative: Given a registration whose missing path is restored, when the next poll runs, then it is polled normally, and a later disappearance of the same path is reported again. | 3 | "A poll taken after the same directory is removed again logs a second notice for that registration." | diff-local |
 
 ## Test dispositions and integration ownership
@@ -150,3 +150,23 @@ aggregate test is added, and no terminal validation task exists.
 
 Task 1 -> Task 2
 Task 1 -> Task 3
+
+> **Amended 2026-09-17 by operator (as-built PLAN_GAP resolution):** The approved design bound the missing-path notice to a per-adapter set, but the bare `compose` process rebuilds the intake adapter on every outer-loop pre-poll (`src/conductor/src/engine/engineer-cli.ts` `prePollIntake` → `buildIntake`), so an unchanged missing path was reported again on every iteration of one process. The operator confirmed the sealed once-per-process outcome. Task 4 hoists the episode set to the owning process and threads it into each adapter build; Task 3's per-adapter behaviour and tests stay as delivered. The Coverage Check row for Story 2's already-reported criterion now cites Task 4.
+
+### Task 4: Own the missing-path episode set at process scope so a rebuilt adapter stays quiet
+**Story:** 2
+**Type:** negative-path
+**Files:** src/conductor/src/engine/engineer/intake/github-issues.ts, src/conductor/src/engine/engineer-cli.ts, src/conductor/test/engine/engineer/intake/github-issues.test.ts, src/conductor/test/engine/engineer-cli.test.ts
+**Dependencies:** 3
+
+**Steps:**
+1. Write a failing unit test in `github-issues.test.ts`: two adapters created with the same injected `missingRegistrationEpisodes` set, each polled once against the same absent registration, log exactly one notice in total and record zero runner invocations; a third adapter sharing the set, polled after the directory is created, lists issues and removes the key so a later removal is reported again.
+2. Write a failing test in `engineer-cli.test.ts`: two consecutive `prePollIntake` calls in one process with the same absent registration log exactly one missing-path notice in total.
+3. Verify RED.
+4. Implement: add an optional `missingRegistrationEpisodes?: Set<string>` to `GithubIssuesDeps`; `createGithubIssuesAdapter` uses it as `reportedMissingRegistrations` when supplied and otherwise allocates its own (Task 3's per-adapter default is preserved for every other caller). In `engineer-cli.ts`, create one module-scoped set for the compose process (exported for tests, with a reset helper) and pass it through `buildIntake` from `prePollIntake` so every rebuilt adapter shares the same episode state.
+5. Verify GREEN, run the repository's typecheck target that includes test files, and commit.
+
+**Done when:**
+1. Two `prePollIntake` calls in the same process against one absent registration log exactly one notice in total and attempt no GitHub command, as asserted by the engineer-cli test.
+2. Adapters sharing an injected episode set report an absent registration once across instances, re-arm when the path is restored, and report a later disappearance again, as asserted by the github-issues test.
+3. Callers that inject no set keep Task 3's per-adapter behaviour, as asserted by Task 3's existing tests passing unchanged.
