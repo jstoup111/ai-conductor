@@ -673,13 +673,8 @@ export { makeProductionGh };
 
 /**
  * Missing-path episodes for adapters rebuilt by compose's launch pre-poll loop.
- * Exported with its reset seam so tests can isolate module-scoped process state.
  */
 export const missingRegistrationEpisodes = new Set<string>();
-
-export function resetMissingRegistrationEpisodes(): void {
-  missingRegistrationEpisodes.clear();
-}
 
 /**
  * Composition root for the github-issues intake: wires the registry reader, the

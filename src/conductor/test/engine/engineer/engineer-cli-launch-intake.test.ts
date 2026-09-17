@@ -31,8 +31,8 @@ import {
   detectEngineerCommand,
   dispatchEngineer,
   engineerLaunchArgs,
+  missingRegistrationEpisodes,
   prePollIntake,
-  resetMissingRegistrationEpisodes,
   type DispatchEngineerOpts,
 } from '../../../src/engine/engineer-cli.js';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
@@ -113,7 +113,7 @@ let registryPath: string;
 let engineerDir: string;
 
 beforeEach(async () => {
-  resetMissingRegistrationEpisodes();
+  missingRegistrationEpisodes.clear();
   workDir = await mkdtemp(join(tmpdir(), 'cli-launch-intake-'));
   registryPath = join(workDir, 'registry.json');
   engineerDir = join(workDir, 'engineer');
@@ -121,7 +121,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await rm(workDir, { recursive: true, force: true });
-  resetMissingRegistrationEpisodes();
+  missingRegistrationEpisodes.clear();
 });
 
 async function writeRegistry(repos: Array<{ name: string; path?: string; remote?: string }>): Promise<void> {
