@@ -818,7 +818,10 @@ describe('serial conductor telemetry parity', () => {
       },
     });
 
-    expect(fixture.state[VALIDATION_GROUP.members[0] as StepName]).toBe('failed');
+    // Upstream #2466: a no-verdict member fails alone; satisfied siblings stay 'done'
+    // so a cleared HALT re-dispatches only the failed member.
+    expect(fixture.state[VALIDATION_GROUP.members[0] as StepName]).toBe('done');
+    expect(fixture.state[failedMember]).toBe('failed');
     for (const member of VALIDATION_GROUP.members) {
       expect(fixture.events.filter((event) => event.type === 'step_started' && event.step === member)).toHaveLength(1);
       expect(fixture.events.filter((event) => (event.type === 'step_completed' || event.type === 'step_failed') && event.step === member)).toHaveLength(1);
