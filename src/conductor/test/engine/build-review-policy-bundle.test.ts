@@ -1,7 +1,8 @@
 // Covers: task:7, task:8, task:9
+import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -11,6 +12,7 @@ import {
 import type { InstalledReviewSkill } from '../../src/engine/build-review-policy.js';
 
 const temporaryDirectories: string[] = [];
+const execFileAsync = promisify(execFile);
 
 async function temporaryDirectory(prefix: string): Promise<string> {
   const directory = await mkdtemp(join(process.env.TMPDIR!, prefix));
@@ -249,31 +251,20 @@ describe('engine/build-review-policy-bundle', () => {
     );
   });
 
-  it('refuses special files before materializing a partial package', async () => {
-    // Vitest scopes tmpdir() under a long worktree path, which exceeds the
-    // Unix-domain socket pathname limit even with a short fixture prefix.
-    const sourceParent = await mkdtemp('/tmp/p-');
+  it.skipIf(process.platform === 'win32')('refuses special files before materializing a partial package', async () => {
+    const sourceParent = await temporaryDirectory('build-review-policy-special-source-');
     const materialParent = await temporaryDirectory('m-');
     const packageRoot = await policyPackage(sourceParent);
-    const socketPath = join(packageRoot, 'criteria', 'policy.sock');
-    const server = createServer();
+    const fifoPath = join(packageRoot, 'criteria', 'policy.fifo');
 
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once('error', reject);
-        server.listen(socketPath, resolve);
-      });
-      await expectRejectedWithoutMaterial(
-        captureInstalledReviewPolicyBundle(installedSkill(packageRoot), { materialParent }),
-        materialParent,
-        /policy\.sock/,
-      );
-    } finally {
-      if (server.listening) {
-        await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-      }
-      await rm(sourceParent, { recursive: true, force: true });
-    }
+    // A FIFO exercises the same non-regular-file boundary as a Unix socket,
+    // without bypassing Vitest's run-scoped TMPDIR for socket path length.
+    await execFileAsync('mkfifo', [fifoPath]);
+    await expectRejectedWithoutMaterial(
+      captureInstalledReviewPolicyBundle(installedSkill(packageRoot), { materialParent }),
+      materialParent,
+      /policy\.fifo/,
+    );
   });
 
   it('accepts inclusive package file and byte limits', async () => {
