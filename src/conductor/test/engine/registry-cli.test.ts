@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:17, task:19
+// Covers: task:1, task:2, task:3, task:4, task:17, task:19
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync } from 'node:fs';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -276,18 +276,18 @@ describe('conduct-ts config init verification flags', () => {
     expect(generatedConfig).toContain(`command: ${testSuiteCommand}`);
   });
 
-  it('copies the bare template byte-for-byte without verification flags', async () => {
+  it('copies the raw template byte-for-byte without verification flags', async () => {
     const command = detectRegistryCommand(['node', 'conduct-ts', 'config', 'init']);
 
     expect(command).not.toBeNull();
     expect(await dispatchRegistry(command!)).toBe(0);
 
     const config = await readFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'utf8');
-    const fixture = await readFile(
-      join(repositoryRoot, 'src', 'conductor', 'test', 'fixtures', 'config-init-defaults.yml'),
+    const template = await readFile(
+      join(repositoryRoot, 'templates', 'project-config.yml.template'),
       'utf8',
     );
-    expect(config).toBe(fixture);
+    expect(config).toBe(template);
   });
 
   it('keeps auto-mode config-init output byte-identical to the default fixture', async () => {
