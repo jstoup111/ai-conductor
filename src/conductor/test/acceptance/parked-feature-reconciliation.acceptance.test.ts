@@ -468,7 +468,7 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     expect(await readFile(join(projectRoot, '.daemon', 'parked', slug), 'utf-8')).toBe(markerBefore);
   });
 
-  it('S2 negative (c): ancestry-proven but record MISSING — nothing is deleted, record creation is delegated to the ST-916 seam, marker survives', async () => {
+  it('S2: an ancestry-proven registered non-daemon branch reclaims without a shipped record', async () => {
     const slug = 'merged-without-record';
     await seedParkedFeature(slug, { merged: true, record: false });
 
@@ -482,25 +482,22 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
       log: (m) => log.push(m),
     });
 
-    expect(await worktreeExists(slug)).toBe(true);
-    expect(await branchExists(slug)).toBe(true);
-    expect(await isOperatorParked(projectRoot, slug)).toBe(true);
+    expect(await worktreeExists(slug)).toBe(false);
+    expect(await branchExists(slug)).toBe(false);
+    expect(await isOperatorParked(projectRoot, slug)).toBe(false);
 
-    expect(requestRecordRepair).toHaveBeenCalledTimes(1);
-    expect(requestRecordRepair).toHaveBeenCalledWith(
-      expect.objectContaining({ slug, prUrl: 'https://example.test/pr/1060' }),
-    );
-    expect(result.counts.deferred).toBe(1);
-    expect(result.counts.reconciled).toBe(0);
+    expect(requestRecordRepair).not.toHaveBeenCalled();
+    expect(result.counts.deferred).toBe(0);
+    expect(result.counts.reconciled).toBe(1);
     expect(log).toEqual([
-      '[parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=1 refused=0 skipped=0; next: 1 deferred awaits shipped-record repair; 1 parked remains parked',
+      '[parked-reconciliation] reconciled=1 deferred=0 orphaned=0 parked=1 refused=0 skipped=0; next: no action required',
     ]);
 
     // The sweep never writes a record itself.
     expect(await exists(join(projectRoot, '.docs', 'shipped', `${slug}.md`))).toBe(false);
   });
 
-  it('S2 negative (c2): ancestry-proven, record missing, and NO merged PR resolvable — zero record writes, zero deletions, zero delegation', async () => {
+  it('S2: ancestry proof alone reclaims a registered non-daemon branch when no merged PR is resolvable', async () => {
     const slug = 'merged-no-pr-found';
     await seedParkedFeature(slug, { merged: true, record: false });
 
@@ -513,11 +510,11 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     });
 
     expect(requestRecordRepair).not.toHaveBeenCalled();
-    expect(await worktreeExists(slug)).toBe(true);
-    expect(await branchExists(slug)).toBe(true);
-    expect(await isOperatorParked(projectRoot, slug)).toBe(true);
+    expect(await worktreeExists(slug)).toBe(false);
+    expect(await branchExists(slug)).toBe(false);
+    expect(await isOperatorParked(projectRoot, slug)).toBe(false);
     expect(await exists(join(projectRoot, '.docs', 'shipped', `${slug}.md`))).toBe(false);
-    expect(result.counts.reconciled).toBe(0);
+    expect(result.counts.reconciled).toBe(1);
   });
 
   it('S2 (d): a merged, record-backed park is reconciled even when its .pipeline state still reads in-flight', async () => {

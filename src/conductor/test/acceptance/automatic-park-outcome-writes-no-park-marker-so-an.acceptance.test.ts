@@ -260,7 +260,11 @@ describe('automatic park termination — real runner to durable daemon consumers
       autoCleanup: false,
       getIssueState: async () => 'OPEN',
     });
-    expect(reconciliation.counts.parked).toBe(1);
+    // A worktree-local HALT is a hard retention boundary. The durable marker
+    // still excludes this feature from discovery; reconciliation reports the
+    // retained candidate as unclassified rather than treating it as cleanup
+    // eligible.
+    expect(reconciliation.counts.skipped).toBe(1);
 
     // Worktree-local HALT loss and daemon in-memory restart do not affect the
     // next discovery pass: the main-root marker remains the authority.
