@@ -135,10 +135,18 @@ export async function computeAndWriteVerdict(
   ctx: CompletionContext = {},
 ): Promise<GateVerdict> {
   const result = await checkGateCompletion(dir, step, ctx);
+  const prior = await readVerdict(dir, step);
   const verdict: GateVerdict = {
     satisfied: result.done,
     reason: result.reason,
     checkedAt: Date.now(),
+    // A validation-group join may re-check a preserved sibling without
+    // dispatching a new judge. Keep its replay-bound authority while the
+    // objective predicate remains satisfied; otherwise that bookkeeping pass
+    // would erase the record that the rebase transition and finish fence use.
+    ...(result.done && prior?.satisfied && prior.preservation
+      ? { preservation: prior.preservation }
+      : {}),
   };
   await writeVerdict(dir, step, verdict);
   return verdict;
