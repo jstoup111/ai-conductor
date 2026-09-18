@@ -584,6 +584,21 @@ describe('gateVerdictStillValid', () => {
     expect(await gateVerdictStillValid({ projectRoot: s.repo, git: s.git }, 'prd_audit', baseline)).toBe(expected);
   });
 
+  it('architecture_review_as_built re-runs when a governing decision input changes', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const baseline = await commit(s, {
+      '.docs/plans/active.md': '# plan\n',
+      '.pipeline/conduct-state.json': JSON.stringify({ feature_desc: 'active' }),
+      'src/feature.ts': 'f\n',
+    }, 'approved inputs');
+    await commit(s, { '.docs/decisions/adr-governing.md': 'updated authority\n' }, 'update governing decision');
+
+    await expect(
+      gateVerdictStillValid({ projectRoot: s.repo, git: s.git }, 'architecture_review_as_built', baseline),
+    ).resolves.toBe('rerun');
+  });
+
   it('feature-codetest (build_review): returns preserve when the delta touches only a FOREIGN runtime path', async () => {
     const s = await makeRepo();
     scratches.push(s.repo);

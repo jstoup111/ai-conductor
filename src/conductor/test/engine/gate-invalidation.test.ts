@@ -167,7 +167,17 @@ describe('projectGateSurfaces', () => {
 
     const projection = projectGateSurfaces(D, F);
 
-    expect(Object.keys(projection).sort()).toEqual([...new Set(Object.values(GATE_SURFACE))].sort());
+    // This projection intentionally keeps the standalone feature-runtime
+    // shape available even when no current gate maps to it, so each declared
+    // `GateSurfaceKind` remains explicit rather than relying on a fallback.
+    expect(Object.keys(projection).sort()).toEqual([
+      'all-runtime',
+      'any-codetest',
+      'feature-codetest',
+      'feature-runtime',
+      'feature-runtime-or-coverage-inputs',
+      'feature-runtime-or-prd-inputs',
+    ]);
     expect(projection['feature-runtime']).toEqual({
       matchedPaths: ['src/feature.ts'],
       declaredSurface: ['src/feature.ts'],
@@ -179,6 +189,10 @@ describe('projectGateSurfaces', () => {
     expect(projection['feature-runtime-or-prd-inputs']).toEqual({
       matchedPaths: ['src/feature.ts', '.docs/stories/feature.md', '.docs/specs/feature.md'],
       declaredSurface: ['src/feature.ts', '<.docs/stories/|.docs/specs/>'],
+    });
+    expect(projection['feature-runtime-or-coverage-inputs']).toEqual({
+      matchedPaths: ['src/feature.ts', '.docs/stories/feature.md', '.docs/specs/feature.md'],
+      declaredSurface: ['src/feature.ts', '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/|.docs/decisions/>'],
     });
     expect(projection['all-runtime']).toEqual({
       matchedPaths: ['src/feature.ts', 'src/foreign.ts'],
@@ -196,6 +210,10 @@ describe('projectGateSurfaces', () => {
     expect(projection['feature-runtime-or-prd-inputs']).toEqual({
       matchedPaths: [],
       declaredSurface: ['src/feature.ts', '<.docs/stories/|.docs/specs/>'],
+    });
+    expect(projection['feature-runtime-or-coverage-inputs']).toEqual({
+      matchedPaths: [],
+      declaredSurface: ['src/feature.ts', '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/|.docs/decisions/>'],
     });
   });
 });

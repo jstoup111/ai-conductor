@@ -164,10 +164,10 @@ describe('engine/rebase — refusal before rebase starts', () => {
       // untouched for a document-only delta.
       expect(verdicts.kickedBack).toEqual([
         'coverage_binding',
+        'architecture_review_as_built',
         'build_review',
         'test_suite',
         'prd_audit',
-        'architecture_review_as_built',
       ]);
       expect(await readVerdict(root, 'coverage_binding')).toMatchObject({ satisfied: false });
       await expect(readVerdict(root, 'build')).resolves.toMatchObject({ satisfied: true, reason: 'prior BUILD' });

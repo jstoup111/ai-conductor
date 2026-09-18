@@ -1344,13 +1344,15 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
       'src/feature.ts',
       '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/|.docs/decisions/>',
     ]);
-    // The as-built review remains feature-runtime scoped; its test path is
-    // excluded from the declared source surface.
-    expect(byGate.architecture_review_as_built.surface).toEqual(['src/feature.ts']);
+    // The as-built review consumes the same coverage/review decision inputs
+    // as coverage_binding; its test path is excluded from the source surface.
+    expect(byGate.architecture_review_as_built.surface).toEqual([
+      'src/feature.ts',
+      '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/|.docs/decisions/>',
+    ]);
     expect(byGate.prd_audit.deltaConsidered).toEqual([]);
     expect(byGate.coverage_binding.deltaConsidered).toEqual([]);
-    // The as-built review only considers feature runtime source and sees no
-    // matching delta.
+    // The as-built review sees neither feature runtime nor declared inputs.
     expect(byGate.architecture_review_as_built.deltaConsidered).toEqual([]);
     // Invalidated gates must not appear in the preserved set.
     expect(byGate.build_review).toBeUndefined();
