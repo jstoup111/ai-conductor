@@ -133,7 +133,7 @@ was reclaimed or kept.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a candidate is reclaimed, when the sweep completes it, then a `worktree_reclaim_reclaimed` event carrying the slug, branch, and proof kind is emitted on the daemon's emitter
+- Given a candidate is reclaimed, when the sweep completes it, then a `worktree_reclaim_reclaimed` event carrying the slug, plus the branch and its proof kind when the candidate had a branch, is emitted on the daemon's emitter
 - Given a candidate is retained, when the sweep completes it, then a `worktree_reclaim_retained` event carrying the slug and a closed-union reason is emitted
 - Given a removal or branch deletion fails, when the sweep completes it, then a `worktree_reclaim_failed` event carrying the slug and the refusal is emitted
 - Given the three variants exist, when the sink registry is read, then each has a declaration with `persist: true`, `retained` has `render: false`, and `reclaimed` and `failed` have `render: true`
