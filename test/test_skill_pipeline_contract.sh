@@ -84,6 +84,27 @@ confirmed_breadth_contract_holds() {
     && grep -qiE '(do not|must not|never).+(materially broader|material expansion|expand materially).+(unless|without).+operator.+confirm.+before.+artifact' "$skill_file"
 }
 
+# Security finding ownership belongs to the build_review security rubric. This
+# survivor contract keeps code-review's non-security quality scope explicit
+# while retaining security-boundary batches on the higher-capability evaluator.
+code_review_routing_and_quality_scope_contract_holds() {
+  local skill_file="$1"
+  local routing_section stage_two_section pattern_basis_line calibration_line
+
+  routing_section="$(sed -n '/^\*\*Claude model selection by batch content:\*\*/,/^Provide the evaluator with:/p' "$skill_file")"
+  stage_two_section="$(sed -n '/^#### Stage 2: Code Quality/,/^#### Stage 3:/p' "$skill_file")"
+  pattern_basis_line="$(grep -F 'semantic traits that creates a' "$skill_file")"
+  calibration_line="$(grep -F 'Find real issues that would cause' "$skill_file")"
+
+  grep -qF 'security boundaries, auth, or money' <<<"$routing_section" \
+    && grep -qF 'stack-specific checks (N+1, performance)' <<<"$stage_two_section" \
+    && ! grep -qiE 'security' <<<"$stage_two_section" \
+    && grep -qF 'correctness or meaningful maintenance risk' <<<"$pattern_basis_line" \
+    && ! grep -qiE 'security' <<<"$pattern_basis_line" \
+    && grep -qF 'bugs or maintenance problems' <<<"$calibration_line" \
+    && ! grep -qiE 'security' <<<"$calibration_line"
+}
+
 ordinary_done_when_close_contract_holds() {
   local skill_file="$1"
   local task_cli_file="$2"
@@ -331,6 +352,26 @@ if [ -f "$CODE_REVIEW_SKILL" ] \
   pass "batch verification and evaluator use affected-test union with uncertainty fallback"
 else
   fail "batch verification and evaluator must use affected-test union, with full suite only when scope is uncertain"
+fi
+
+# Code review keeps routing batches touching security boundaries to the higher
+# capability evaluator, while its quality review scope remains non-security.
+if [ -f "$CODE_REVIEW_SKILL" ] \
+  && code_review_routing_and_quality_scope_contract_holds "$CODE_REVIEW_SKILL"; then
+  pass "code-review preserves security-boundary model routing and non-security quality scope"
+else
+  fail "code-review must retain security-boundary model routing and limit quality guidance to non-security concerns"
+fi
+
+if [ -f "$CODE_REVIEW_SKILL" ]; then
+  code_review_routing_mutation="$(mktemp "${TMPDIR:-/tmp}/code-review-routing.XXXXXX")"
+  sed 's/security boundaries/auth boundaries/' "$CODE_REVIEW_SKILL" >"$code_review_routing_mutation"
+  if code_review_routing_and_quality_scope_contract_holds "$code_review_routing_mutation"; then
+    fail "code-review routing predicate rejects a missing security-boundary criterion"
+  else
+    pass "code-review routing predicate rejects a missing security-boundary criterion"
+  fi
+  rm -f "$code_review_routing_mutation"
 fi
 
 FINISH_SUITE_SECTION="$(sed -n '/^### 1\. Fresh Verification/,/^### 1b\./p' "$FINISH_SKILL_FILE")"

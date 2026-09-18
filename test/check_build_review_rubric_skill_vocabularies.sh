@@ -39,6 +39,9 @@ cat >"$probe_script" <<'PROBE'
  * Emits, per rubric:
  *   "<rubric> vocab <member>"        — every string leaf of the exported
  *                                      BUILD_REVIEW_FINDING_VOCABULARIES entry
+ *   "<rubric> parses <member>"       — the concern-kind parser accepts a
+ *                                      documented vocabulary member unchanged
+ *   "<rubric> !unparsed <member>"    — the concern-kind parser rejects one
  *   "<rubric> <field>=<grammar>"     — enforced grammar, classified by behavior
  *   "<rubric> !baseline-rejected"    — no specimen anchor is accepted at all
  *   "<rubric> <field>!unenforced"    — the field accepts garbage
@@ -51,6 +54,13 @@ const parseAnchor = mod.parseBuildReviewFindingAnchor as (
 ) => unknown;
 if (typeof parseAnchor !== 'function') {
   console.error(`probe: ${domainPath} does not export parseBuildReviewFindingAnchor`);
+  process.exit(1);
+}
+const parseConcernKind = mod.parseBuildReviewFindingConcernKind as (
+  value: unknown, rubric: string,
+) => unknown;
+if (typeof parseConcernKind !== 'function') {
+  console.error(`probe: ${domainPath} does not export parseBuildReviewFindingConcernKind`);
   process.exit(1);
 }
 const vocabularies = (mod.BUILD_REVIEW_FINDING_VOCABULARIES ?? {}) as Record<string, unknown>;
@@ -68,6 +78,10 @@ const RUBRICS: Record<string, { referenceFields: string[]; fixed: Record<string,
     referenceFields: ['locus'],
     fixed: {},
   },
+  security: {
+    referenceFields: ['locus'],
+    fixed: {},
+  },
 };
 const SPECIMENS: Record<string, unknown> = { OBJ, PATH, GARBAGE };
 const BASELINE_CANDIDATES = ['OBJ', 'PATH', 'TASK'];
@@ -82,6 +96,15 @@ for (const [rubric, shape] of Object.entries(RUBRICS)) {
   const leaves = new Set<string>();
   vocabLeaves(vocabularies[rubric], leaves);
   for (const leaf of [...leaves].sort()) console.log(`${rubric} vocab ${leaf}`);
+
+  const concernKinds = (vocabularies[rubric] as { concernKinds?: unknown } | undefined)?.concernKinds;
+  if (Array.isArray(concernKinds)) {
+    for (const member of concernKinds) {
+      if (typeof member !== 'string') continue;
+      if (parseConcernKind(member, rubric) === member) console.log(`${rubric} parses ${member}`);
+      else console.log(`${rubric} !unparsed ${member}`);
+    }
+  }
 
   const accepts = (assignment: Record<string, unknown>): boolean => {
     const anchor: Record<string, unknown> = { rubric, ...shape.fixed, ...assignment };
@@ -158,7 +181,7 @@ extract_documented_reference_grammars() {
 check_vocabulary_drift() {
   local domain_file=$1
   local harness_dir=$2
-  local rubric skill_file engine_vocabulary documented_vocabulary probe_output
+  local rubric skill_file engine_vocabulary documented_vocabulary probe_output member
 
   if [ ! -r "$domain_file" ]; then
     echo "could not read build-review reference grammar source: ${domain_file}" >&2
@@ -169,8 +192,8 @@ check_vocabulary_drift() {
     return 1
   fi
 
-  for rubric in testQuality; do
-    skill_file="$harness_dir/skills/build-review-test-quality/SKILL.md"
+  for rubric in testQuality security; do
+    skill_file="$harness_dir/skills/build-review-$(rubric_skill_name "$rubric")/SKILL.md"
     if [ ! -f "$skill_file" ]; then
       echo "missing vocabulary source for ${rubric}: ${skill_file}" >&2
       return 1
@@ -187,6 +210,18 @@ check_vocabulary_drift() {
       echo "build-review ${rubric} vocabulary drift: update the engine and SKILL.md together" >&2
       return 1
     fi
+
+    while IFS= read -r member; do
+      [ -n "$member" ] || continue
+      if grep -Fxq "${rubric} !unparsed ${member}" <<<"$probe_output"; then
+        echo "build-review ${rubric} vocabulary drift: concern-kind parser rejected documented member ${member}" >&2
+        return 1
+      fi
+      if ! grep -Fxq "${rubric} parses ${member}" <<<"$probe_output"; then
+        echo "build-review ${rubric} vocabulary drift: concern-kind parser did not parse documented member ${member}" >&2
+        return 1
+      fi
+    done <<<"$documented_vocabulary"
   done
 }
 
@@ -204,8 +239,8 @@ check_reference_grammar_drift() {
     return 1
   fi
 
-  for rubric in testQuality; do
-    skill_file="$harness_dir/skills/build-review-test-quality/SKILL.md"
+  for rubric in testQuality security; do
+    skill_file="$harness_dir/skills/build-review-$(rubric_skill_name "$rubric")/SKILL.md"
     if [ ! -r "$skill_file" ]; then
       echo "could not read build-review ${rubric} reference grammar contract: ${skill_file}" >&2
       return 1
@@ -253,6 +288,14 @@ check_reference_grammar_drift() {
   done
 }
 
+rubric_skill_name() {
+  case "$1" in
+    testQuality) printf '%s' test-quality ;;
+    security) printf '%s' security ;;
+    *) return 1 ;;
+  esac
+}
+
 fixture_dir=$(mktemp -d)
 fixture_domain="$fixture_dir/build-review-domain.ts"
 fixture_harness="$fixture_dir/harness"
@@ -265,6 +308,13 @@ cat >"$fixture_domain" <<'EOF'
 export const BUILD_REVIEW_FINDING_VOCABULARIES = Object.freeze({
   testQuality: Object.freeze({
     concernKinds: Object.freeze(['test-insensitive']),
+  }),
+  security: Object.freeze({
+    concernKinds: Object.freeze([
+      'committed-secret', 'injection', 'broken-access-control', 'path-traversal',
+      'unsafe-deserialization', 'cryptographic-failure', 'security-misconfiguration',
+      'authentication-failure', 'integrity-failure', 'ssrf',
+    ]),
   }),
 });
 
@@ -281,13 +331,17 @@ function parseContentRegionReference(value: unknown): unknown {
 }
 export function parseBuildReviewFindingAnchor(value: Record<string, unknown>): unknown {
   const source = value;
-  return source.rubric === 'testQuality'
+  return source.rubric === 'testQuality' || source.rubric === 'security'
     ? parseContentRegionReference(source.locus)
     : undefined;
 }
+export function parseBuildReviewFindingConcernKind(value: unknown, rubric: string): string | undefined {
+  const vocabulary = BUILD_REVIEW_FINDING_VOCABULARIES[rubric as keyof typeof BUILD_REVIEW_FINDING_VOCABULARIES]?.concernKinds;
+  return typeof value === 'string' && vocabulary?.includes(value as never) ? value : undefined;
+}
 EOF
 
-for rubric in test-quality; do
+for rubric in test-quality security; do
   mkdir -p "$fixture_harness/skills/build-review-$rubric"
 done
 
@@ -295,6 +349,10 @@ printf '%s\n' '**Closed vocabulary:** `test-insensitive`' \
   >"$fixture_harness/skills/build-review-test-quality/SKILL.md"
 printf '\n%s\n' '**Reference grammar:** `anchor.locus` is a `content-region` reference.' \
   >>"$fixture_harness/skills/build-review-test-quality/SKILL.md"
+printf '%s\n' '**Closed vocabulary:** `committed-secret`, `injection`, `broken-access-control`, `path-traversal`, `unsafe-deserialization`, `cryptographic-failure`, `security-misconfiguration`, `authentication-failure`, `integrity-failure`, `ssrf`' \
+  >"$fixture_harness/skills/build-review-security/SKILL.md"
+printf '\n%s\n' '**Reference grammar:** `anchor.locus` is a `content-region` reference.' \
+  >>"$fixture_harness/skills/build-review-security/SKILL.md"
 
 # The aligned fixture must pass both checks before any drift scenario runs.
 if ! check_vocabulary_drift "$fixture_domain" "$fixture_harness" >/dev/null; then
@@ -348,6 +406,39 @@ else
   echo "$fixture_output" >&2
   failures=1
 fi
+
+run_vocabulary_drift_fixture() {
+  local label=$1 domain=$2 harness=$3 expected_rubric=$4 expected_member=$5
+  local fixture_output
+  if fixture_output=$(check_vocabulary_drift "$domain" "$harness" 2>&1); then
+    echo "known gap: vocabulary guard accepts ${label}" >&2
+    failures=1
+  elif grep -Fq "$expected_rubric" <<<"$fixture_output" && grep -Fq "$expected_member" <<<"$fixture_output"; then
+    echo "rubric vocabulary guard rejects ${label}"
+  else
+    echo "rubric vocabulary guard rejected ${label} without the required diagnostic" >&2
+    echo "$fixture_output" >&2
+    failures=1
+  fi
+}
+
+fixture_skill_extra_harness="$fixture_dir/harness-skill-extra"
+cp -R "$fixture_harness" "$fixture_skill_extra_harness"
+sed -i 's/`ssrf`/`ssrf`, `unknown-security-kind`/' "$fixture_skill_extra_harness/skills/build-review-security/SKILL.md"
+run_vocabulary_drift_fixture \
+  'a skill-side extra security vocabulary member' "$fixture_domain" "$fixture_skill_extra_harness" security unknown-security-kind
+
+fixture_engine_extra_domain="$fixture_dir/build-review-domain-engine-extra.ts"
+cp "$fixture_domain" "$fixture_engine_extra_domain"
+sed -i "s/'ssrf',/'ssrf', 'unknown-security-kind',/" "$fixture_engine_extra_domain"
+run_vocabulary_drift_fixture \
+  'an engine-side extra security vocabulary member' "$fixture_engine_extra_domain" "$fixture_harness" security unknown-security-kind
+
+fixture_security_parser_rejects_domain="$fixture_dir/build-review-domain-security-parser-rejects.ts"
+cp "$fixture_domain" "$fixture_security_parser_rejects_domain"
+sed -i "s/return typeof value === 'string' && vocabulary?.includes(value as never) ? value : undefined;/return typeof value === 'string' \&\& value !== 'ssrf' \&\& vocabulary?.includes(value as never) ? value : undefined;/" "$fixture_security_parser_rejects_domain"
+run_vocabulary_drift_fixture \
+  'a concern-kind parser that rejects documented security member ssrf' "$fixture_security_parser_rejects_domain" "$fixture_harness" security ssrf
 
 if ! check_vocabulary_drift "$HARNESS_DIR/src/conductor/src/engine/build-review-domain.ts" "$HARNESS_DIR"; then
   failures=1

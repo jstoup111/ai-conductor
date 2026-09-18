@@ -419,13 +419,25 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
 });
 
 describe('engine-managed auxiliary rows', () => {
-  const auxiliarySkills = ['build-review-test-quality', 'coverage-binding'];
+  const auxiliarySkills = [
+    'build-review-test-quality',
+    'build-review-security',
+    'coverage-binding',
+  ];
 
   it('renders rubric and coverage-binding helpers with their resolved policies', () => {
     expect(buildAuxiliaryRows()).toEqual(
       [
         expect.objectContaining({
           name: 'build-review-test-quality',
+          executionPath: 'engine-managed auxiliary rubric',
+          claudeModel: 'inherits resolved rubric policy',
+          claudeEffort: 'inherits resolved rubric policy',
+          codexModel: 'inherits resolved rubric policy',
+          codexEffort: 'inherits resolved rubric policy',
+        }),
+        expect.objectContaining({
+          name: 'build-review-security',
           executionPath: 'engine-managed auxiliary rubric',
           claudeModel: 'inherits resolved rubric policy',
           claudeEffort: 'inherits resolved rubric policy',
@@ -450,6 +462,7 @@ describe('engine-managed auxiliary rows', () => {
 
     const rendered = renderModelTable();
     expect(rendered).toContain('| build-review-test-quality | engine-managed auxiliary rubric |');
+    expect(rendered).toContain('| build-review-security | engine-managed auxiliary rubric |');
     expect(rendered).toContain('| coverage-binding | engine-managed auxiliary judge |');
   });
 });

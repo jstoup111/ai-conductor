@@ -92,19 +92,28 @@ const AFFECTED_CASES: AffectedCase[] = [
       enabled: true,
       maxParallel: 1,
       adjudication: { enabled: true },
-      rubrics: { testQuality: { enabled: false, effort: 'high' } },
+      rubrics: {
+        security: { enabled: false },
+        testQuality: { enabled: false, effort: 'high' },
+      },
     },
     projectValue: {
       enabled: true,
       maxParallel: 1,
       adjudication: { enabled: true },
-      rubrics: { testQuality: { enabled: true, effort: 'low' } },
+      rubrics: {
+        security: { enabled: false },
+        testQuality: { enabled: true, effort: 'low' },
+      },
     },
     defaultValue: {
       enabled: true,
       maxParallel: 1,
       adjudication: { enabled: true },
-      rubrics: { testQuality: { enabled: false } },
+      rubrics: {
+        security: { enabled: false },
+        testQuality: { enabled: false },
+      },
     },
   },
   {

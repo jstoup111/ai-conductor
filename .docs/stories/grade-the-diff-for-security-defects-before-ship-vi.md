@@ -77,7 +77,7 @@ As the build_review engine, I want every security finding to name one of ten clo
 
 - Given a provider payload whose finding has `concernKind: "other"`, when the result is validated, then the payload is rejected naming the closed vocabulary, one repair turn is offered, and a byte-identical repair settles the branch as a dispatch failure rather than a PASS.
 - Given a provider payload whose anchor carries `line: 42` instead of a `contentHash`, when the result is validated, then the payload is rejected naming the content-region grammar and no finding identity is minted.
-- Given a provider payload that includes `verdict: "PASS"` or `rubric: "testQuality"` at the top level, when the result is validated, then the reviewer-supplied envelope fields are rejected and the engine stamps its own.
+- Given a provider payload that includes `verdict: "PASS"` or `rubric: "testQuality"` at the top level, when the result is validated, then the reviewer-supplied envelope fields are ignored and the engine stamps its own authoritative identity and derives the verdict from validated findings, per adr-2026-08-19 D4.
 - Given a provider payload whose anchor path is not in the projection's `changedFiles`, when the result is validated, then the finding is rejected as outside the frozen input.
 - Given a provider reply stating it cannot perform a security review, when the result is validated, then the branch settles as an infrastructure failure, never as an empty-findings PASS.
 
@@ -85,7 +85,7 @@ As the build_review engine, I want every security finding to name one of ten clo
 
 - [ ] `BUILD_REVIEW_FINDING_VOCABULARIES.security.concernKinds` equals exactly the ten members listed in adr-2026-08-16 D1 as amended by #2034, and `parseBuildReviewFindingAnchor` accepts a `security` content-region locus and rejects a coordinate-bearing one.
 - [ ] A valid security payload produces a judged result whose envelope identity fields come from the projection and whose verdict is `FAIL` when findings are non-empty and `PASS` when empty.
-- [ ] An out-of-vocabulary `concernKind`, a coordinate anchor, a reviewer-supplied envelope field, and an out-of-projection path each produce a rejection whose diagnosis names the violated rule.
+- [ ] An out-of-vocabulary `concernKind`, a coordinate anchor, test-quality-only evidence, and an out-of-projection path each produce a rejection whose diagnosis names the violated rule. Reviewer-supplied envelope fields are ignored; engine-owned metadata remains authoritative.
 - [ ] Canonical identity for a `security` finding is a hash over rubric, contract version, concern kind, and anchor only.
 
 ## Story 4: Fail the lap on a security finding and route it through the adjudicator
@@ -164,8 +164,10 @@ As a feature owner, I want the security grader to raise a finding only when it c
 
 ### Done When
 
-- [ ] `skills/build-review-security/SKILL.md` instructs one finding per independent defect, requires the introducing hunk as the anchor and concrete evidence locations, defines each of the ten concern kinds with an explicit non-finding for each, and requires an integer `confidence` on every finding.
-- [ ] Fixture provider payloads for the four happy-path diffs validate as judged `FAIL` results with the named concern kinds, and fixture payloads for the five negative diffs validate as judged results with zero blocking findings.
+_Amended 2026-09-17: `confidence` optional per ADR D4.2; the unchanged-sink fixture proves anchoring, not zero findings._
+
+- [ ] `skills/build-review-security/SKILL.md` instructs one finding per independent defect, requires the introducing hunk as the anchor and concrete evidence locations, defines each of the ten concern kinds with an explicit non-finding for each, and accepts an optional integer `confidence` on a finding (absent means blocking, per ADR D4.2).
+- [ ] Fixture provider payloads for the four happy-path diffs validate as judged `FAIL` results with the named concern kinds, and fixture payloads for the four zero-finding negative diffs validate as judged results with zero blocking findings, and the unchanged-sink fixture validates as one finding anchored to the changed hunk with the unchanged line named only in `evidenceLocations`.
 - [ ] The skill contract returns `findings` only, with no `scopeResolutions`, `counterfactualSensitivity`, or `boundTo` field.
 
 ## Negative-category review

@@ -30,9 +30,29 @@ function aggregate(...findings: readonly BuildReviewFinding[]) {
     lapId,
     snapshotDigest,
     results: {
+      security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
       testQuality: {
         kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest, contractVersion: 'v3',
         findings, verdict: findings.length === 0 ? 'PASS' : 'FAIL',
+      },
+    },
+  });
+}
+
+function securityAggregate() {
+  return joinBuildReviewRubricOutcomes({
+    lapId,
+    snapshotDigest,
+    results: {
+      testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+      security: {
+        kind: 'judged', rubric: 'security', lapId, snapshotDigest, contractVersion: 'v3', verdict: 'FAIL',
+        findings: [{
+          concernKind: 'injection',
+          summary: 'The new request handler interpolates untrusted input into a query.',
+          evidenceLocations: ['src/http/search.ts:42'],
+          anchor: { rubric: 'security', locus: { path: 'src/http/search.ts', contentHash: HASH, display: 'new search handler' } },
+        }],
       },
     },
   });
@@ -113,6 +133,23 @@ describe('build-review adjudication context', () => {
     expect(resolved).toMatchObject({ ok: true, context: { priorCases: [], currentFindings: [expect.objectContaining({ summary: finding('unresolved').summary })] } });
   });
 
+  it('keeps an off-plan security finding as a current source without a plan-binding bucket', () => {
+    const result = assembleBuildReviewAdjudicationContext({
+      aggregate: securityAggregate(),
+      priorCases: [],
+      planContract: { path: '.docs/plans/unrelated.md', pointers: ['Task 1: add a UI label'] },
+    });
+
+    expect(result).toMatchObject({ ok: true, context: {
+      currentFindings: [expect.objectContaining({
+        rubric: 'security', concernKind: 'injection', summary: expect.stringContaining('untrusted input'),
+        sourceId: expect.stringMatching(/^security:/),
+      })],
+    } });
+    if (!result.ok) return;
+    expect(JSON.stringify(result.context)).not.toMatch(/\b(?:beyond|boundTo)\b/);
+  });
+
   it('carries suppression history separately from current findings', () => {
     const result = assembleBuildReviewAdjudicationContext({
       aggregate: aggregate(finding('current')), priorCases: [],
@@ -175,6 +212,7 @@ describe('build-review adjudication context', () => {
       lapId,
       snapshotDigest,
       results: {
+        security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
         testQuality: {
           kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'offline',
         },

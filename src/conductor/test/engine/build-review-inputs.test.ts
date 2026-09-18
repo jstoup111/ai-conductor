@@ -760,7 +760,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       };
       const titleRegions = (inputs: BuildReviewFrozenInputs) =>
         (buildReviewFindingReferenceContext({
-          rubric: 'tautology',
+          rubric: 'testQuality',
           changedFiles: [],
           changedTestSelectors: ['test/widget.test.ts'],
           changedTestTitles: inputs.sourceSnapshot.changedTestTitles,

@@ -298,11 +298,12 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
 });
 
 describe('AUXILIARY_MODEL_TABLE_ROWS auxiliary-judge registration', () => {
-  it('defines the test-quality rubric and coverage-binding judge without inventing lifecycle steps', () => {
+  it('defines the build-review rubrics and coverage-binding judge without inventing lifecycle steps', () => {
     const names = AUXILIARY_MODEL_TABLE_ROWS.map((row) => row.name);
 
     expect(names).toEqual([
       'build-review-test-quality',
+      'build-review-security',
       'coverage-binding',
     ]);
     expect(Object.keys(STEP_RATIONALE)).not.toEqual(expect.arrayContaining(names));

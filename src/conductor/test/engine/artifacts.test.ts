@@ -5298,6 +5298,35 @@ Task 1 → Task 2
   });
 
   describe('validateBuildReviewVerdict', () => {
+    it('accepts security-only failures, requires their findings, and renders their details', () => {
+      const securityOnly = {
+        verdict: 'FAIL' as const,
+        rubric: { testQuality: false, security: true },
+        findings: { security: ['SQL interpolation allows an injection path.'] },
+      };
+
+      expect(validateBuildReviewVerdict(securityOnly)).toEqual({ ok: true, ...securityOnly });
+      expect(validateBuildReviewVerdict({ ...securityOnly, findings: {} })).toEqual({
+        ok: false,
+        reason: '.pipeline/build-review.json "findings.security" must be non-empty when security is named in failedRubrics',
+      });
+      expect(buildReviewFailureDetails(securityOnly)).toEqual([
+        '[security] SQL interpolation allows an injection path.',
+      ]);
+
+      const aggregate = joinBuildReviewRubricOutcomes({
+        lapId: parseBuildReviewLapId('lap-security-only')!,
+        snapshotDigest: 'sha256:security',
+        results: {
+          testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+          security: { kind: 'infrastructure-failure', rubric: 'security', reason: 'provider-error', detail: 'security provider offline' },
+        },
+      });
+      expect(validateBuildReviewVerdict(aggregate)).toMatchObject({
+        ok: true, verdict: 'FAIL', rubric: { testQuality: false, security: true },
+      });
+    });
+
     it('preserves multiple independent findings for the test-quality rubric', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'FAIL',
@@ -5308,7 +5337,7 @@ Task 1 → Task 2
             'The feature logger does not cover teardown transition output.',
           ],
         },
-        rubric: { testQuality: true },
+        rubric: { testQuality: true, security: false },
       });
 
       expect(result).toEqual({
@@ -5321,7 +5350,7 @@ Task 1 → Task 2
             'The feature logger does not cover teardown transition output.',
           ],
         },
-        rubric: { testQuality: true },
+        rubric: { testQuality: true, security: false },
       });
     });
 
@@ -5329,7 +5358,7 @@ Task 1 → Task 2
       const result = validateBuildReviewVerdict({
         verdict: 'FAIL',
         findings: { testQuality: 'two gaps' },
-        rubric: { testQuality: true },
+        rubric: { testQuality: true, security: false },
       });
 
       expect(result).toEqual({
@@ -5352,12 +5381,12 @@ Task 1 → Task 2
     it('accepts a valid PASS verdict', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'PASS',
-        rubric: { testQuality: false },
+        rubric: { testQuality: false, security: false },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'PASS',
-        rubric: { testQuality: false },
+        rubric: { testQuality: false, security: false },
       });
     });
 
@@ -5389,7 +5418,7 @@ Task 1 → Task 2
 
     it('rejects a verdict missing the "verdict" field as invalid-or-FAIL', () => {
       const result = validateBuildReviewVerdict({
-        rubric: { testQuality: false },
+        rubric: { testQuality: false, security: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -5403,25 +5432,25 @@ Task 1 → Task 2
       const result = validateBuildReviewVerdict({
         verdict: 'FAIL',
         reasons: ['test assertion does not observe changed behavior'],
-        rubric: { testQuality: true },
+        rubric: { testQuality: true, security: false },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'FAIL',
         reasons: ['test assertion does not observe changed behavior'],
-        rubric: { testQuality: true },
+        rubric: { testQuality: true, security: false },
       });
     });
 
     it('accepts and round-trips a PASS test-quality verdict', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'PASS',
-        rubric: { testQuality: false },
+        rubric: { testQuality: false, security: false },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'PASS',
-        rubric: { testQuality: false },
+        rubric: { testQuality: false, security: false },
       });
     });
 
@@ -5429,20 +5458,20 @@ Task 1 → Task 2
       const result = validateBuildReviewVerdict({
         verdict: 'FAIL',
         reasons: ['changed test remains insensitive to the claimed behavior'],
-        rubric: { testQuality: true },
+        rubric: { testQuality: true, security: false },
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'FAIL',
         reasons: ['changed test remains insensitive to the claimed behavior'],
-        rubric: { testQuality: true },
+        rubric: { testQuality: true, security: false },
       });
     });
 
     it('rejects lowercase "pass" as invalid-or-FAIL (fail-closed, exact match only)', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'pass',
-        rubric: { testQuality: false },
+        rubric: { testQuality: false, security: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -5450,7 +5479,7 @@ Task 1 → Task 2
     it('rejects unrecognized string "APPROVED" as invalid-or-FAIL', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'APPROVED',
-        rubric: { testQuality: false },
+        rubric: { testQuality: false, security: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -5458,7 +5487,7 @@ Task 1 → Task 2
     it('rejects an empty string verdict as invalid-or-FAIL', () => {
       const result = validateBuildReviewVerdict({
         verdict: '',
-        rubric: { testQuality: false },
+        rubric: { testQuality: false, security: false },
       });
       expect(result.ok).toBe(false);
     });
@@ -5466,13 +5495,13 @@ Task 1 → Task 2
     it('accepts and round-trips a verdict carrying a codeStamp', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'PASS',
-        rubric: { testQuality: false },
+        rubric: { testQuality: false, security: false },
         codeStamp: 'abc123def456',
       });
       expect(result).toEqual({
         ok: true,
         verdict: 'PASS',
-        rubric: { testQuality: false },
+        rubric: { testQuality: false, security: false },
         codeStamp: 'abc123def456',
       });
     });
@@ -5539,7 +5568,7 @@ Task 1 → Task 2
       const p = join(d, '.pipeline/build-review.json');
       const body: Record<string, unknown> = {
         verdict,
-        rubric: { testQuality: false },
+        rubric: { testQuality: false, security: false },
       };
       if (codeStamp !== undefined) body.codeStamp = codeStamp;
       await writeFile(p, JSON.stringify(body, null, 2));
@@ -5598,7 +5627,7 @@ Task 1 → Task 2
       const p = join(gdir, '.pipeline/build-review.json');
       await writeFile(
         p,
-        JSON.stringify({ verdict: 'FAIL', reasons: ['nope'], rubric: { testQuality: true }, codeStamp: baseline }, null, 2),
+        JSON.stringify({ verdict: 'FAIL', reasons: ['nope'], rubric: { testQuality: true, security: false }, codeStamp: baseline }, null, 2),
       );
       // Fresh mtime (not backdated) — never touches the preserve path anyway.
       const result = await checkStepCompletion(gdir, 'build_review', ctxFor(gdir));
@@ -5707,7 +5736,7 @@ Task 1 → Task 2
         verdictFreshness: { outcome: 'preserved_surface_miss' },
       });
       expect(effectiveResolver).toHaveBeenCalledWith(dir, expect.anything(), {
-        minConfidence: { testQuality: 70 },
+        minConfidence: { testQuality: 70, security: 0 },
       });
       expect(result.staleLap).toBeUndefined();
     });
@@ -6868,7 +6897,7 @@ Task 1 → Task 2
 
   describe('removeBuildReviewVerdict (build-review-grades-plan-vs-diff-against-a-stale-o, Task 7)', () => {
     it('deletes an existing build_review verdict artifact', async () => {
-      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({ verdict: 'FAIL', rubric: { testQuality: false } }));
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({ verdict: 'FAIL', rubric: { testQuality: false, security: false } }));
       await removeBuildReviewVerdict(dir);
       await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf-8')).rejects.toThrow();
     });
@@ -6887,7 +6916,7 @@ Task 1 → Task 2
       // read "missing verdict" — never a preserved/reconstructed prior PASS.
       await createFile(
         BUILD_REVIEW_VERDICT,
-        JSON.stringify({ verdict: 'PASS', rubric: { testQuality: false }, codeStamp: 'deadbeef' }),
+        JSON.stringify({ verdict: 'PASS', rubric: { testQuality: false, security: false }, codeStamp: 'deadbeef' }),
       );
       await removeBuildReviewVerdict(dir);
       const result = await checkStepCompletion(dir, 'build_review');

@@ -44,6 +44,9 @@ The rubric joins the existing engine-managed `build_review` container; every run
 - **`skills/code-review/SKILL.md`** — the security bullets are removed; no engine consumer reads them.
 - **This repository's `.ai-conductor/config.yml`** — enables `security` for self-host builds (repo-only half of the change, split per scope-check).
 
+> **Amended 2026-09-15 by operator approval (James Stoup, interactive halt recovery):** Self-host activation is deferred to a separate follow-up after this rubric implementation ships and the running engine recognizes `security`. This feature omits the `security` key from `.ai-conductor/config.yml`; all consumer opt-in behavior and default-off tests remain required. The current daemon rejects an unknown rubric key before `test_suite` starts, even when that key is disabled.
+
+
 **Scope check.** A: consumer-facing — the build_review container and its config keys exist in every installed project; the self-host enablement is the split repo-only half. B: `skills/` — a build-phase lifecycle capability the engine dispatches in any project. C: agnostic — the engine renders the host-specific skill invocation; the skill text is provider-neutral.
 
 **Early overlap scan.** `ai-conductor overlap-scan` over the wiring-surface paths on 2026-09-14: no overlap detected, no open blockers.

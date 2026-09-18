@@ -55,6 +55,17 @@ describe('reduceBuildReviewAdjudication', () => {
       .toMatchObject({ route: 'build', remainingMechanical: true, reason: 'applied action effect with retained coverage blocker' });
   });
 
+  it('routes an acted security source to BUILD without any plan-binding condition', () => {
+    const securitySourceId = 'security:sha256:injection';
+    const result = reduceBuildReviewAdjudication({
+      currentSourceIds: [securitySourceId],
+      cases: [{ ...action(), sources: [{ sourceId: securitySourceId, outcome: 'acted', recordedAt: '2026-09-15T00:00:00.000Z' }] }],
+      mechanical: 'healthy',
+    });
+
+    expect(result).toMatchObject({ route: 'build', remainingMechanical: false, reason: 'applied action effect' });
+  });
+
   it.each([
     ['retry', 'mechanical-retry', 'build-review coverage retry is pending'],
     ['halt', 'halt', 'uncovered build-review coverage failure'],

@@ -72,8 +72,9 @@ current authority. The engine does not make every title in a changed marked file
 file can be selected for conservative counterfactual execution without making unchanged sibling tests
 quality targets.
 
-An enabled rubric with no established targets or concrete candidates is a valid empty-scope PASS: it does
-not dispatch the reviewer or counterfactual preflight. This preserves production-only refactors and pure
+Enabled `testQuality` with no established targets or concrete candidates is a valid empty-scope PASS: it does
+not dispatch its reviewer or counterfactual preflight. An enabled `security` rubric still reviews the diff
+and participates in the joined verdict. This preserves production-only refactors and pure
 moves/renames as non-coverage work; the aggregate suite and CI remain responsible for broad regression
 execution. For each concrete candidate, the normal reviewer returns one source-bound scope resolution:
 `resolved`, `out-of-scope`, or `indeterminate`. An indeterminate candidate preserves any otherwise valid

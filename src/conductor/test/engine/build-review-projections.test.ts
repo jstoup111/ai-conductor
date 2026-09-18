@@ -7,6 +7,7 @@ import {
   canonicalJson,
   deriveBuildReviewRubricProjections,
   deriveChangedFileReferences,
+  isTestQualityProjection,
   projectionDigest,
   type BuildReviewProjectionSource,
   type TestQualityProjection,
@@ -31,6 +32,28 @@ const FIXTURE_DIFF = [
   '@@ -1,2 +1,3 @@',
   ' context',
   '+embedded-diff-body-line',
+  '',
+].join('\n');
+
+const THREE_FILE_DIFF = [
+  'diff --git a/src/a.ts b/src/a.ts',
+  '--- a/src/a.ts',
+  '+++ b/src/a.ts',
+  '@@ -1 +1 @@',
+  '-export const stale = true;',
+  '+export const current = true;',
+  'diff --git a/src/b.ts b/src/b.ts',
+  'new file mode 100644',
+  '--- /dev/null',
+  '+++ b/src/b.ts',
+  '@@ -0,0 +1 @@',
+  '+export const added = true;',
+  'diff --git a/src/c.ts b/src/c.ts',
+  'deleted file mode 100644',
+  '--- a/src/c.ts',
+  '+++ /dev/null',
+  '@@ -1 +0,0 @@',
+  '-export const removed = true;',
   '',
 ].join('\n');
 
@@ -168,6 +191,30 @@ function scopedSource(overrides: {
 }
 
 describe('build-review rubric projections', () => {
+  it('derives the whole frozen diff as a sealed security projection', () => {
+    const threeFileSource = withSnapshot(source(), { diff: THREE_FILE_DIFF });
+    const first = deriveBuildReviewRubricProjections(threeFileSource).security;
+    const second = deriveBuildReviewRubricProjections(threeFileSource).security;
+
+    expect(Object.keys(first).sort()).toEqual([
+      'changedFiles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
+      'mergeBase', 'projectionVersion', 'rubric', 'snapshotDigest',
+    ]);
+    expect(first).toMatchObject({ rubric: 'security', changedFiles: deriveChangedFileReferences(THREE_FILE_DIFF) });
+    expect(first.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(second.digest).toBe(first.digest);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(isTestQualityProjection(first)).toBe(false);
+    expect(isTestQualityProjection(deriveBuildReviewRubricProjections(threeFileSource).testQuality)).toBe(true);
+  });
+
+  it('keeps the security projection sealed when the post-exclusion frozen diff is empty', () => {
+    const projection = deriveBuildReviewRubricProjections(withSnapshot(source(), { diff: '' })).security;
+
+    expect(projection.changedFiles).toEqual([]);
+    expect(projection.digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+  });
+
   it('projects the frozen v3 test scope compactly and keeps runner selectors separate from review targets', () => {
     const projection = deriveBuildReviewRubricProjections(scopedSource()).testQuality as unknown as Record<string, unknown>;
 
@@ -214,7 +261,7 @@ describe('build-review rubric projections', () => {
     const projections = deriveBuildReviewRubricProjections(source());
     const projection: TestQualityProjection = projections.testQuality;
 
-    expect(Object.keys(projections)).toEqual(['testQuality']);
+    expect(Object.keys(projections)).toEqual(['testQuality', 'security']);
     expect(Object.keys(projection).sort()).toEqual([
       'changedFiles', 'changedTestSelectors', 'changedTestTitles', 'contentDigest', 'contractVersion', 'digest', 'headSha', 'lapId',
       'mergeBase', 'preflight', 'projectionVersion', 'revertedProductionManifest', 'rubric', 'runnerSelectors', 'snapshotDigest', 'testScope', 'testSuiteProof', 'unresolvedMarkers',

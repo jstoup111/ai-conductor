@@ -9,6 +9,7 @@ import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-r
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { RemediationCaseStore, type RemediationCaseStoreState } from '../../src/engine/remediation-case-store.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
+import { renderExhaustedMechanicalBuildReviewHalt } from '../../src/engine/conductor.js';
 
 vi.mock('../../src/engine/config.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/config.js')>(),
@@ -21,6 +22,14 @@ const infrastructureAggregate = joinBuildReviewRubricOutcomes({
   lapId, snapshotDigest: 'sha256:snapshot',
   results: {
     testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'offline' },
+  },
+});
+
+const securityInfrastructureAggregate = joinBuildReviewRubricOutcomes({
+  lapId, snapshotDigest: 'sha256:security',
+  results: {
+    testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+    security: { kind: 'infrastructure-failure', rubric: 'security', reason: 'provider-error', detail: 'security provider offline' },
   },
 });
 
@@ -180,6 +189,39 @@ describe('build-review findings CLI', () => {
       feature: { version: 'v1', repository: '/main', feature: 'review-rubrics' }, rubric: 'testQuality', reason: 'provider-error',
       rationale: 'Provider is unavailable.', operator: 'local-operator',
     }, expect.any(Function));
+  });
+
+  it('accepts the terminal security recovery command and writes its reduced-coverage record', async () => {
+    const appendReducedCoverageIfCurrent = vi.fn(async (input, validate) => {
+      expect(await validate([])).toBe(true);
+      return {
+        ok: true as const,
+        record: {
+          kind: 'reduced-coverage' as const, version: 'v1' as const, feature: input.feature,
+          identity: { rubric: input.rubric, reason: input.reason }, rationale: input.rationale,
+          operator: input.operator, acceptedAt: '2026-09-16T00:00:00.000Z',
+        },
+      };
+    });
+    const print = vi.fn();
+    const renderedRecovery = renderExhaustedMechanicalBuildReviewHalt({ mechanicalFaults: 3 }, securityInfrastructureAggregate);
+
+    expect(renderedRecovery).toContain(
+      'ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap lap-current --rubric security --rationale "<rationale>".',
+    );
+
+    await expect(dispatchBuildReviewRecordReducedCoverage({
+      kind: 'record-reduced-coverage', feature: 'review-rubrics', lapId: 'lap-current', rubric: 'security', rationale: 'Security provider is unavailable.',
+    }, {
+      cwd: '/main', isInteractive: true, resolveOperator: () => 'local-operator', resolveMainRoot: async () => '/main', realpath: async (path) => path,
+      readFile: async () => JSON.stringify(securityInfrastructureAggregate), readMechanicalFaults: async () => 3,
+      createStore: () => ({ appendReducedCoverageIfCurrent }), print, appendEvent: vi.fn(),
+    })).resolves.toBe(0);
+
+    expect(appendReducedCoverageIfCurrent).toHaveBeenCalledWith(expect.objectContaining({
+      rubric: 'security', reason: 'provider-error', operator: 'local-operator',
+    }), expect.any(Function));
+    expect(print).toHaveBeenCalledWith('build-review record-reduced-coverage: recorded security for lap lap-current.');
   });
 
   it('records exhausted current scope-incomplete coverage through the existing leased action', async () => {
@@ -411,7 +453,7 @@ describe('build-review findings CLI', () => {
     expect(store.list).toHaveBeenCalledWith({ version: 'v1', repository: '/main', feature: 'review-rubrics' });
     expect(JSON.parse(print.mock.calls[0]![0])).toMatchObject({
       feature: 'review-rubrics', lapId: 'lap-current', rawVerdict: 'FAIL', verdict: 'PASS',
-      acceptedFindingIds: [identity.id], unresolvedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [],
+      acceptedFindingIds: [identity.id], unresolvedFindingIds: [], skippedRubrics: ['security'], infrastructureFailureRubrics: [],
       acceptedDispositions: [{
         findingId: identity.id,
         disposition: expect.objectContaining({
@@ -524,13 +566,13 @@ describe('build-review findings CLI', () => {
 
     expect(machine).toHaveBeenCalledWith(JSON.stringify({
       feature: 'review-rubrics', lapId: 'lap-current', snapshotDigest: 'sha256:snapshot', rawVerdict: 'PASS', verdict: 'PASS',
-      acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], acceptedDispositions: [],
+      acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: ['security'], infrastructureFailureRubrics: [], acceptedDispositions: [],
       cases: [],
     }));
     expect(JSON.parse(machine.mock.calls[0]![0])).not.toHaveProperty('lastMechanicalFault');
     expect(human).toHaveBeenCalledWith([
       'Build review findings: review-rubrics', 'Lap: lap-current', 'Raw verdict: PASS', 'Effective verdict: PASS',
-      'Accepted findings: none', 'Operator dispositions: none', 'Autonomous case outcomes: none', 'Unresolved findings: none', 'Skipped rubrics: none', 'Infrastructure failures: none',
+      'Accepted findings: none', 'Operator dispositions: none', 'Autonomous case outcomes: none', 'Unresolved findings: none', 'Skipped rubrics: security', 'Infrastructure failures: none',
     ].join('\n'));
   });
 

@@ -1,10 +1,19 @@
+// Covers: task:12
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import {
+  parseBuildReviewFindingAnchor,
+  parseBuildReviewFindingConcernKind,
+} from '../../src/engine/build-review-domain.js';
+
 const testQualitySkillPath = fileURLToPath(
   new URL('../../../../skills/build-review-test-quality/SKILL.md', import.meta.url),
+);
+const securitySkillPath = fileURLToPath(
+  new URL('../../../../skills/build-review-security/SKILL.md', import.meta.url),
 );
 
 describe('build-review Test Quality skill contract', () => {
@@ -61,5 +70,61 @@ describe('build-review Test Quality skill contract', () => {
     expect(skill).toMatch(/engine owns scope selection,\s+evidence assembly,\s+result validation,\s+finding identity,\s+the stamped result envelope,\s+and the outer gate verdict/i);
     expect(skill).toMatch(/omit tests outside the supplied in-scope projection/i);
     expect(skill).not.toMatch(/build-review accept|record-reduced-coverage/);
+  });
+});
+
+describe('build-review Security skill contract', () => {
+  it('is a gating build-phase judgement-only contract with a findings-only result', async () => {
+    const skill = await readFile(securitySkillPath, 'utf8');
+    const frontmatter = skill.split('---')[1] ?? '';
+
+    expect(frontmatter).toMatch(/^name: build-review-security$/m);
+    expect(frontmatter).toMatch(/^disable-model-invocation: true$/m);
+    expect(frontmatter).toMatch(/^enforcement: gating$/m);
+    expect(frontmatter).toMatch(/^phase: build$/m);
+    expect(skill).toMatch(/judgement-only contract/i);
+    expect(skill).toMatch(/required `findings` array/i);
+    expect(skill).not.toMatch(/`scopeResolutions`/);
+    expect(skill).not.toMatch(/`counterfactualSensitivity`/);
+    expect(skill).not.toMatch(/`boundTo`/);
+  });
+
+  it('defines all ten concern kinds, explicit non-findings, and integer confidence', async () => {
+    const skill = await readFile(securitySkillPath, 'utf8');
+    const kinds = [
+      'committed-secret', 'injection', 'broken-access-control', 'path-traversal',
+      'unsafe-deserialization', 'cryptographic-failure', 'security-misconfiguration',
+      'authentication-failure', 'integrity-failure', 'ssrf',
+    ];
+
+    for (const kind of kinds) {
+      expect(skill).toMatch(new RegExp('`' + kind + '`[\\s\\S]{0,700}?(?:Non-finding|not a finding)', 'i'));
+    }
+    expect(skill).toMatch(/integer `confidence`/i);
+    expect(skill).toMatch(/one finding per independent defect/i);
+    expect(skill).toMatch(/introducing hunk/i);
+    expect(skill).toMatch(/unchanged sinks?[^.]*`evidenceLocations`/i);
+  });
+
+  it('models an unchanged-sink finding with the sink only in evidence locations', () => {
+    const locus = {
+      path: 'src/request.ts',
+      contentHash: `sha256:${'a'.repeat(64)}`,
+      display: 'changed request construction hunk',
+    };
+    const finding = {
+      concernKind: 'injection',
+      confidence: 90,
+      summary: 'The changed request construction exposes the existing execution sink.',
+      evidenceLocations: ['src/legacy-request.ts:42'],
+      anchor: { rubric: 'security', locus },
+    };
+
+    expect(parseBuildReviewFindingConcernKind(finding.concernKind, 'security')).toBe('injection');
+    expect(parseBuildReviewFindingAnchor(finding.anchor, {
+      changedTests: [], changedContentRegions: [locus], changedPaths: [locus.path], planTasks: [],
+    })).toEqual(finding.anchor);
+    expect(finding.anchor.locus.path).toBe('src/request.ts');
+    expect(finding.evidenceLocations).toEqual(['src/legacy-request.ts:42']);
   });
 });

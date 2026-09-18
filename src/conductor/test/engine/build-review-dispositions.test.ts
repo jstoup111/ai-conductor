@@ -200,6 +200,24 @@ describe('build-review dispositions', () => {
     });
   });
 
+  it('round-trips a stored security reduced-coverage identity', async () => {
+    const filesystem = new MemoryFilesystem();
+    const store = new BuildReviewDispositionStore('/repo', {
+      filesystem, clock: () => Date.parse('2026-09-16T12:00:00.000Z'),
+      lock: lock({ ok: true, handle: { release: async () => ({ ok: true }) } }),
+    });
+
+    await expect(store.appendReducedCoverageIfCurrent({
+      feature, rubric: 'security', reason: 'provider-error', rationale: 'Security provider is unavailable.', operator: 'james',
+    }, async () => true)).resolves.toMatchObject({
+      ok: true, record: { identity: { rubric: 'security', reason: 'provider-error' } },
+    });
+
+    await expect(store.listReducedCoverage(feature)).resolves.toMatchObject({
+      ok: true, records: [expect.objectContaining({ identity: { rubric: 'security', reason: 'provider-error' } })],
+    });
+  });
+
   it('admits scope-incomplete as a closed reduced-coverage cause under the existing lease', async () => {
     const filesystem = new MemoryFilesystem();
     const store = new BuildReviewDispositionStore('/repo', {

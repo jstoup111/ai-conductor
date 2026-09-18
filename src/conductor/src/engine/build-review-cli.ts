@@ -15,6 +15,7 @@ import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, isUnreadableKickbackGate, readKickb
 import { loadConfig as loadConfigDefault, type ConfigResult } from './config.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import type { BuildReviewRubricId } from '../types/config.js';
+import { isRegisteredRubric } from './build-review-registry.js';
 
 export interface BuildReviewFindingsCommand {
   readonly kind: 'findings';
@@ -83,10 +84,8 @@ export interface BuildReviewRecordReducedCoverageDeps extends Omit<BuildReviewFi
   readonly appendEvent?: (worktree: string, event: Extract<BuildReviewExternalEvent, { type: 'build_review_reduced_coverage_accepted' | 'build_review_disposition_refused' }>) => void;
 }
 
-const BUILD_REVIEW_RUBRICS = new Set<BuildReviewRubricId>(['testQuality']);
-
 function isBuildReviewRubricId(value: string): value is BuildReviewRubricId {
-  return BUILD_REVIEW_RUBRICS.has(value as BuildReviewRubricId);
+  return isRegisteredRubric(value);
 }
 
 type AcceptedDisposition = {
