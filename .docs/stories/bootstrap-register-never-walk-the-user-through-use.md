@@ -38,7 +38,7 @@ As an experienced operator, I want the value I chose during onboarding to be wha
 
 #### Happy Path
 - Given the operator answers a question with a permitted non-default value, when onboarding records configuration, then the project configuration carries that value and the harness reads it back as the effective value on its next run.
-- Given the operator accepts the offered value at every question, when onboarding records configuration, then the resulting project configuration parses to the same effective settings onboarding produced before this change, and every line it adds to the pre-change output is a comment or blank line.
+- Given the operator accepts the offered value at every question, when onboarding records configuration, then the resulting project configuration parses to the same effective settings onboarding produced before this change, except that the aggregate test command is the offered project-specific default Story 3 establishes rather than the former fixed literal, and every line it adds to the pre-change output is a comment or blank line.
 
 #### Negative Paths
 - Given a value that would fail configuration validation, when recording is attempted with it, then recording refuses before any file is written, names the rejected value, and the project has no partially written configuration.
@@ -46,7 +46,7 @@ As an experienced operator, I want the value I chose during onboarding to be wha
 
 ### Done When
 - [ ] A round-trip test proves a non-default answer is written and read back as the effective value.
-- [ ] An effective-identity test proves the all-defaults path parses equal to the pre-change output and adds only comment or blank lines, and refusal cases leave no file behind.
+- [ ] An effective-identity test proves the all-defaults path parses equal to the pre-change output apart from the Story 3 project-specific aggregate test command and adds only comment or blank lines, and refusal cases leave no file behind.
 
 ## Story 3: Establish the real test command, never an ecosystem guess
 
