@@ -155,6 +155,19 @@ describe('coverage binding envelope', () => {
     await expect(readCoverageBindingEnvelope(root, fs)).resolves.toBeNull();
   });
 
+  it('keeps the previous envelope parseable when rename is interrupted', async () => {
+    const root = '/feature';
+    const path = coverageBindingEnvelopePath(root);
+    const previous = { version: 1, slug: 'feature', runId: 'run-1', status: 'partial', entries: [] } as const;
+    const fs = memoryFilesystem({ [path]: JSON.stringify(previous) });
+    fs.rename = vi.fn(async () => { throw new Error('interrupted rename'); });
+
+    await expect(writeCoverageBindingEnvelope(root, {
+      version: 1, slug: 'feature', runId: 'run-2', status: 'done', entries: [],
+    }, fs)).rejects.toThrow('interrupted rename');
+    await expect(readCoverageBindingEnvelope(root, fs)).resolves.toEqual(previous);
+  });
+
   it('refuses to write a structurally invalid envelope', async () => {
     const fs = memoryFilesystem();
     const invalidEnvelope = {

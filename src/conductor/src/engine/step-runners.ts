@@ -50,6 +50,7 @@ import {
   readCoverageBindingEnvelope,
   writeCoverageBindingEnvelope,
   type CoverageBindingEnvelopeEntry,
+  type CoverageBindingEnvelopeFilesystem,
 } from './coverage-binding-envelope.js';
 import { assembleCoverageBindingClaims } from './coverage-binding-inputs.js';
 import { planCoverageBindingBatches } from './coverage-binding-batches.js';
@@ -528,6 +529,8 @@ export interface StepRunnerOptions {
   buildReviewArtifactReader?: typeof readBuildReviewBranchArtifact;
   /** Shared event spine for engine-owned build-review occurrences. */
   events?: ConductorEventEmitter;
+  /** Test-only envelope filesystem seam for coverage-binding checkpoints. */
+  coverageBindingFilesystem?: CoverageBindingEnvelopeFilesystem;
   /** Provider-aware session authority. Omitted by legacy scalar callers. */
   sessionStore?: ProviderSessionStore;
   /** Registry key for the captured provider when sessionStore is present. */
@@ -634,6 +637,7 @@ export class DefaultStepRunner implements StepRunner {
   private buildReviewEffectiveResolver: typeof resolveEffectiveBuildReviewVerdict;
   private buildReviewArtifactReader: typeof readBuildReviewBranchArtifact;
   private events?: ConductorEventEmitter;
+  private coverageBindingFilesystem?: CoverageBindingEnvelopeFilesystem;
   private sessionStore?: ProviderSessionStore;
   private readonly runId: string;
   private providerKey: string;
@@ -696,6 +700,7 @@ export class DefaultStepRunner implements StepRunner {
     this.buildReviewEffectiveResolver = options?.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict;
     this.buildReviewArtifactReader = options?.buildReviewArtifactReader ?? readBuildReviewBranchArtifact;
     this.events = options?.events;
+    this.coverageBindingFilesystem = options?.coverageBindingFilesystem;
     this.sessionStore =
       options?.sessionStore ?? options?.providerExecution?.sessions;
     this.providerKey = options?.providerKey ?? 'claude';
@@ -2651,14 +2656,14 @@ export class DefaultStepRunner implements StepRunner {
 
   private async runCoverageBinding(state: ConductState): Promise<StepRunResult> {
     const { judgeEnabled, batchSize } = resolveCoverageBindingConfig(this.config);
-    const filesystem = {
+    const filesystem = this.coverageBindingFilesystem ?? {
       readFile: (path: string) => readFile(path, 'utf8'),
       mkdir: (path: string) => mkdir(path, { recursive: true }).then(() => undefined),
       writeFile,
       rename,
     };
     const writeEnvelope = async (
-      status: 'disabled' | 'done' | 'failed' | 'refused',
+      status: 'disabled' | 'done' | 'failed' | 'partial' | 'refused',
       entries: readonly CoverageBindingEnvelopeEntry[],
     ) => writeCoverageBindingEnvelope(this.projectDir, {
       version: 1,
@@ -2710,7 +2715,7 @@ export class DefaultStepRunner implements StepRunner {
       await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: entry.verdict, digest: entry.digest, taskIds: [...entry.taskIds] });
       if (entry.verdict === 'does-not-assert') refused.push(entry);
     }
-
+    await writeEnvelope('partial', entries);
     for (const batch of planned.batches) {
       const batchDigests = batch.map(({ claimDigest: digest }) => digest);
       const memberId = batchDigests[0]!;
@@ -2779,6 +2784,7 @@ export class DefaultStepRunner implements StepRunner {
         await this.events?.emit({ type: 'coverage_binding_judged', step: 'coverage_binding', verdict: entry.verdict, digest, taskIds: [...entry.taskIds] });
         if (entry.verdict === 'does-not-assert') refused.push(entry);
       }
+      await writeEnvelope('partial', entries);
     }
 
     if (refused.length > 0) {
