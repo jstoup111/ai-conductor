@@ -6,7 +6,7 @@ import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggr
 import { BuildReviewDispositionStore, matchesBuildReviewReducedCoverageDisposition, rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult, type BuildReviewReducedCoverageListResult, type BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId, type BuildReviewInfrastructureFailureReason } from './build-review-domain.js';
-import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
+import { buildReviewConfidenceFloors, deriveComposedBuildReviewEffectiveVerdict, resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import type { BuildReviewCustomDeclaration, BuildReviewCustomInfrastructureFailureReason } from './build-review-artifacts.js';
 import { RemediationCaseStore, type RemediationCaseRecord, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
 import { resolveMainRepoRoot } from './park-marker.js';
@@ -95,8 +95,8 @@ type AcceptedDisposition = {
 };
 
 type ExhaustedMechanicalFault = {
-  readonly rubric: BuildReviewRubricId;
-  readonly cause: BuildReviewInfrastructureFailureReason;
+  readonly rubric: string;
+  readonly cause: BuildReviewInfrastructureFailureReason | BuildReviewCustomInfrastructureFailureReason;
   readonly diagnostic: string;
 };
 
@@ -169,12 +169,20 @@ function exhaustedMechanicalFaults(
   aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>,
   mechanicalFaults: number,
 ): readonly ExhaustedMechanicalFault[] {
-  return Object.values(aggregate.results).flatMap((result) => {
+  const builtin = Object.values(aggregate.results).flatMap((result) => {
     const fault = reducedCoverageFault(result);
     return fault && (fault.cause === 'projection-oversized' || mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW)
       ? [fault]
       : [];
   });
+  const custom = (aggregate.currentCustomRubrics ?? []).flatMap((rubric): ExhaustedMechanicalFault[] => {
+    const result = aggregate.customResults?.[rubric]?.result;
+    return result?.kind === 'infrastructure-failure'
+      && (result.reason === 'projection-oversized' || mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW)
+      ? [{ rubric, cause: result.reason, diagnostic: result.detail }]
+      : [];
+  });
+  return [...builtin, ...custom];
 }
 
 function acceptedDispositions(
@@ -183,13 +191,22 @@ function acceptedDispositions(
   effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>,
   records: readonly BuildReviewDispositionRecord[],
 ): readonly AcceptedDisposition[] {
-  const identities = new Map<string, ReturnType<typeof canonicalizeBuildReviewFindingIdentity>>();
+  const identities = new Map<string, NonNullable<ReturnType<typeof rehydrateBuildReviewAcceptedRiskFinding>>>();
   for (const result of Object.values(aggregate.results)) {
     if (result.kind !== 'judged') continue;
     for (const finding of result.findings) {
       const identity = canonicalizeBuildReviewFindingIdentity({
         rubric: result.rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
       });
+      if (identity) identities.set(identity.id, identity);
+    }
+  }
+  for (const member of Object.values(aggregate.customResults ?? {})) {
+    if (member.result.kind !== 'judged') continue;
+    for (const finding of member.result.findings) {
+      const identity = typeof finding === 'object' && finding !== null && 'identity' in finding
+        ? rehydrateBuildReviewAcceptedRiskFinding((finding as { identity?: { canonicalPayload?: unknown } }).identity?.canonicalPayload)
+        : undefined;
       if (identity) identities.set(identity.id, identity);
     }
   }
@@ -244,11 +261,10 @@ type ResolvedCliFeature = {
 async function resolveCliMinConfidence(
   worktree: string,
   deps: Pick<BuildReviewFindingsDeps, 'loadConfig'>,
-): Promise<Partial<Record<BuildReviewRubricId, number>>> {
+): Promise<Partial<Record<string, number>>> {
   const loaded = await (deps.loadConfig ?? loadConfigDefault)(worktree);
   if (!loaded.ok) throw new Error(loaded.error.message);
-  return Object.fromEntries(Object.entries(resolveBuildReviewConfig(loaded.config).rubrics)
-    .map(([id, policy]) => [id, policy.min_confidence]));
+  return buildReviewConfidenceFloors(resolveBuildReviewConfig(loaded.config));
 }
 
 /** The CLI and live runner must address the same canonical feature state. */
@@ -311,7 +327,8 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
           }
           return ledger.gates.build_review;
         })();
-    const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records, reducedCoverage.records, minConfidence);
+    // The same composed reducer the live gate uses, over the full record list.
+    const effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, records, reducedCoverage.records, minConfidence);
     if (!effective) throw new Error('current findings are invalid');
     const accepted = acceptedDispositions(aggregate, feature, effective, records);
     const faults = exhaustedMechanicalFaults(aggregate, gateEntry?.mechanicalFaults ?? 0);

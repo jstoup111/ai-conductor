@@ -123,6 +123,27 @@ function applyCurrentCustomEffectiveVerdict(
 }
 
 /**
+ * The single built-in plus current-custom reduction. The live gate and the
+ * operator findings command both call this, so neither can report a verdict
+ * the other would not. `dispositions` is the full record list: built-in
+ * acceptance is limited to testQuality here, custom acceptance matches by
+ * rehydrated identity.
+ */
+export function deriveComposedBuildReviewEffectiveVerdict(
+  aggregate: BuildReviewAggregate,
+  feature: BuildReviewFeatureIdentity,
+  dispositions: readonly import('./build-review-dispositions.js').BuildReviewDispositionRecord[],
+  reducedCoverage: readonly import('./build-review-dispositions.js').BuildReviewReducedCoverageDispositionRecord[],
+  minConfidence: Partial<Record<string, number>> = {},
+): BuildReviewEffectiveVerdict | undefined {
+  const builtinDispositions = dispositions.filter((record) => record.finding.canonicalPayload.rubric === 'testQuality');
+  const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, builtinDispositions, reducedCoverage, minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>>);
+  return builtin === undefined ? undefined : applyCurrentCustomEffectiveVerdict(
+    aggregate, builtin, feature, reducedCoverage, dispositions, minConfidence,
+  );
+}
+
+/**
  * Turns a linked-worktree path into the one identity used by both the CLI and
  * live build-review runner. A main checkout, nested path, or unresolved path
  * cannot accidentally consume another feature's accepted-risk state.
@@ -200,11 +221,7 @@ export async function resolveEffectiveBuildReviewVerdict(
   }
   let effective: BuildReviewEffectiveVerdict | undefined;
   try {
-    const builtinDispositions = dispositions.filter((record) => record.finding.canonicalPayload.rubric === 'testQuality');
-    const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, builtinDispositions, reducedCoverageRecords, deps.minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>> | undefined);
-    effective = builtin === undefined ? undefined : applyCurrentCustomEffectiveVerdict(
-      aggregate, builtin, feature, reducedCoverageRecords, dispositions, deps.minConfidence ?? {},
-    );
+    effective = deriveComposedBuildReviewEffectiveVerdict(aggregate, feature, dispositions, reducedCoverageRecords, deps.minConfidence ?? {});
   } catch {
     return { ok: false, reason: 'build-review disposition state is invalid' };
   }

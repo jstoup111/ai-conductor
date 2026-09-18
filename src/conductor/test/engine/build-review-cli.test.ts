@@ -973,3 +973,122 @@ describe('build-review accept', () => {
     expect(new Set(refusals.map(({ message }) => message)).size).toBe(4);
   });
 });
+
+describe('build-review findings with current custom rubrics', () => {
+  const feature = { version: 'v1' as const, repository: '/main', feature: 'review-rubrics' };
+  const declaration = {
+    version: 'v1' as const, rubricId: 'portablePolicy', semanticSkill: 'portable-policy',
+    question: 'Does this preserve the portable policy contract?', source: 'project' as const, resources: ['criteria.md'],
+  };
+  const stamp = {
+    rubric: 'portablePolicy', lapId: 'lap-current', declaration,
+    policy: { version: 'v1' as const, bundleDigest: `sha256:${'c'.repeat(64)}` },
+    candidate: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' },
+    reviewedInput: { version: 'v1' as const, contentDigest: `sha256:${'d'.repeat(64)}` },
+  };
+  const references = {
+    sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: `sha256:${'a'.repeat(64)}`, display: 'public boundary' }],
+  };
+  const passingBuiltin = { testQuality: { kind: 'judged' as const, rubric: 'testQuality' as const, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: 'v3' as const, findings: [], verdict: 'PASS' as const } };
+
+  function customJudgedAggregate(confidence?: number) {
+    const judged = stampBuildReviewCustomJudgedResult({
+      kind: 'custom-findings', version: 'v1', findings: [{
+        concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.',
+        evidenceLocations: ['src/widget.ts:8'], sourceRegions: references.sourceRegions,
+        ...(confidence === undefined ? {} : { confidence }),
+      }],
+    }, stamp, references)!;
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot', results: passingBuiltin,
+      customResults: {
+        portablePolicy: {
+          descriptor: {
+            version: 'v1' as const, semanticSkill: 'portable-policy', declaration,
+            installation: { source: 'project' as const }, effectivePolicy: stamp.policy,
+            reviewedInput: stamp.reviewedInput, producer: stamp.candidate,
+          },
+          result: judged,
+        },
+      },
+      currentCustomRubrics: ['portablePolicy'],
+    } satisfies BuildReviewAggregateInput);
+    return { aggregate, identity: judged.findings[0]!.identity };
+  }
+
+  function findingsDeps(aggregate: unknown, overrides: Record<string, unknown> = {}) {
+    return {
+      cwd: '/main', resolveMainRoot: async () => '/main', realpath: async (path: string) => path,
+      readFile: async () => JSON.stringify(aggregate),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }) }),
+      createCaseStore: () => ({ read: async () => ({ ok: true as const, state: { ...refutedCaseStore, cases: [] } }) }),
+      readMechanicalFaults: async () => 0,
+      ...overrides,
+    };
+  }
+
+  async function jsonFindings(deps: Record<string, unknown>) {
+    const print = vi.fn();
+    await expect(dispatchBuildReviewFindings({ kind: 'findings', feature: 'review-rubrics', format: 'json' }, { ...deps, print })).resolves.toBe(0);
+    return JSON.parse(print.mock.calls[0]![0] as string) as Record<string, unknown>;
+  }
+
+  it('fails the effective verdict on an unresolved custom finding while built-in rubrics pass', async () => {
+    const { aggregate, identity } = customJudgedAggregate();
+
+    const output = await jsonFindings(findingsDeps(aggregate));
+
+    expect(output).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [identity.id], acceptedFindingIds: [] });
+    expect(output).not.toHaveProperty('uncoveredInfrastructureFailureRubrics');
+    expect(output).not.toHaveProperty('uncoveredScopeIncompleteRubrics');
+  });
+
+  it('renders the operator disposition of an accepted custom finding', async () => {
+    const { aggregate, identity } = customJudgedAggregate();
+    const record = {
+      version: 'v1' as const, feature, finding: identity, sourceLapId: 'lap-current',
+      operator: 'local-operator', rationale: 'Known portability risk', recordedAt: '2026-09-11T12:00:00.000Z',
+    };
+    const store = { list: async () => ({ ok: true as const, records: [record] }) };
+
+    const output = await jsonFindings(findingsDeps(aggregate, { createStore: () => store }));
+
+    expect(output).toMatchObject({
+      verdict: 'PASS', unresolvedFindingIds: [], acceptedFindingIds: [identity.id],
+      acceptedDispositions: [{ findingId: identity.id, disposition: { operator: 'local-operator', rationale: 'Known portability risk' } }],
+    });
+  });
+
+  it('suppresses a custom finding below the floor its own catalog entry declares', async () => {
+    const { aggregate, identity } = customJudgedAggregate(60);
+    const loadConfig = async () => ({
+      ok: true as const, warnings: [],
+      config: { build_review: { custom_rubrics: { portablePolicy: { skill: 'portable-policy', enabled: true, question: declaration.question, min_confidence: 70 } } } },
+    });
+
+    const output = await jsonFindings(findingsDeps(aggregate, { loadConfig }));
+
+    expect(output).toMatchObject({ verdict: 'PASS', unresolvedFindingIds: [], suppressedFindingIds: [identity.id] });
+  });
+
+  it('reports an exhausted custom infrastructure failure and fails the effective verdict', async () => {
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId, snapshotDigest: 'sha256:snapshot', results: passingBuiltin,
+      customResults: {
+        portablePolicy: {
+          declaration,
+          result: { kind: 'infrastructure-failure' as const, rubric: 'portablePolicy', reason: 'policy-load-failed' as const, detail: 'policy could not be loaded' },
+        },
+      },
+      currentCustomRubrics: ['portablePolicy'],
+    } satisfies BuildReviewAggregateInput);
+
+    const output = await jsonFindings(findingsDeps(aggregate, { readMechanicalFaults: async () => 3 }));
+
+    expect(output).toMatchObject({
+      verdict: 'FAIL',
+      exhaustedMechanicalFaults: [{ rubric: 'portablePolicy', cause: 'policy-load-failed', diagnostic: 'policy could not be loaded' }],
+    });
+    await expect(jsonFindings(findingsDeps(aggregate, { readMechanicalFaults: async () => 2 }))).resolves.not.toHaveProperty('exhaustedMechanicalFaults');
+  });
+});
