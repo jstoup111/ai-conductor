@@ -11,6 +11,22 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-09-18
+
+### Added
+
+- OpenTelemetry feature metrics now include the raw complexity-tier label when it is available. ([implementation PR #2567](https://github.com/jstoup111/ai-conductor/pull/2567)).
+- Adds an opt-in security rubric that grades build diffs for security defects before ship. ([implementation PR #2568](https://github.com/jstoup111/ai-conductor/pull/2568)).
+
+### Fixed
+
+- Landing diagnostics now identify tracked and untracked worktree changes with the appropriate recovery guidance. ([implementation PR #2562](https://github.com/jstoup111/ai-conductor/pull/2562)).
+- Prevent FINISH from blocking when BUILD gates have already been satisfied. ([implementation PR #2573](https://github.com/jstoup111/ai-conductor/pull/2573)).
+- prd_audit no longer halts with a spurious "persistence-failed" widening recovery when the audit report exceeds 8 000 characters. ([implementation PR #2581](https://github.com/jstoup111/ai-conductor/pull/2581)).
+- prd_audit widening offers no longer halt as context-overflow when the clipped report snapshot contains multibyte characters. ([implementation PR #2583](https://github.com/jstoup111/ai-conductor/pull/2583)).
+- Validation-group members now retain independent lifecycle telemetry throughout shared execution. ([implementation PR #2514](https://github.com/jstoup111/ai-conductor/pull/2514)).
+- Skip registered projects with missing paths while polling other repositories. ([implementation PR #2566](https://github.com/jstoup111/ai-conductor/pull/2566)).
+
 ## [1.3.0] - 2026-09-15
 
 ### Added
