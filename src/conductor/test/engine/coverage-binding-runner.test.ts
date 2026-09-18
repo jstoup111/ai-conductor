@@ -1,4 +1,4 @@
-// Covers: task:5, task:6
+// Covers: task:5, task:6, task:7
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,7 +12,7 @@ import {
   type CoverageBindingEnvelope,
   type CoverageBindingEnvelopeFilesystem,
 } from '../../src/engine/coverage-binding-envelope.js';
-import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { CoverageBindingPayloadError, DefaultStepRunner } from '../../src/engine/step-runners.js';
 
 const FRESH_SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -205,6 +205,97 @@ describe('coverage-binding runner batches', () => {
       expect(envelope.writes.at(-1)).toMatchObject({ status: 'done' });
       expect(envelope.writes.at(-1)?.entries).toHaveLength(20);
       expect(events.filter((event) => (event as { type?: string }).type === 'coverage_binding_judged')).toHaveLength(20);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a malformed second batch without discarding accepted verdicts or dispatching later batches', async () => {
+    const envelope = memoryEnvelopeFilesystem();
+    const { projectDir, provider, runner } = await runBatches(20, 8, { filesystem: envelope.filesystem });
+    try {
+      (provider.invoke as ReturnType<typeof vi.fn>)
+        .mockImplementationOnce(async (options: InvokeOptions) => ({
+          success: true,
+          output: JSON.stringify({ verdicts: promptClaims(options).map(({ digest }) => ({ digest, verdict: 'asserts' })) }),
+          exitCode: 0,
+        }))
+        .mockImplementationOnce(async (options: InvokeOptions) => ({
+          success: true,
+          output: JSON.stringify({ verdicts: promptClaims(options).slice(0, 7).map(({ digest }) => ({ digest, verdict: 'asserts' })) }),
+          exitCode: 0,
+        }));
+
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      const missingDigest = promptClaims((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[1]![0] as InvokeOptions)[7]!.digest;
+
+      expect(result).toMatchObject({
+        success: false,
+        infrastructureFailure: expect.any(CoverageBindingPayloadError),
+        output: expect.stringContaining(missingDigest),
+      });
+      expect(result.infrastructureFailure?.message).toContain(missingDigest);
+      expect(result).not.toHaveProperty('refusal');
+      expect(provider.invoke).toHaveBeenCalledTimes(2);
+      expect(envelope.writes.at(-1)).toMatchObject({ status: 'failed' });
+      expect(envelope.writes.at(-1)?.entries).toHaveLength(8);
+      expect(envelope.writes.at(-1)?.entries.map(({ digest }) => digest)).toEqual(
+        promptClaims((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0]![0] as InvokeOptions).map(({ digest }) => digest),
+      );
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('records accepted batches when the provider fails and does not dispatch a later batch', async () => {
+    const envelope = memoryEnvelopeFilesystem();
+    const { projectDir, provider, runner } = await runBatches(20, 8, { filesystem: envelope.filesystem });
+    try {
+      (provider.invoke as ReturnType<typeof vi.fn>)
+        .mockImplementationOnce(async (options: InvokeOptions) => ({
+          success: true,
+          output: JSON.stringify({ verdicts: promptClaims(options).map(({ digest }) => ({ digest, verdict: 'asserts' })) }),
+          exitCode: 0,
+        }))
+        .mockResolvedValueOnce({ success: false, output: 'provider unavailable', exitCode: 1 });
+
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+
+      expect(result).toMatchObject({
+        success: false,
+        infrastructureFailure: expect.any(CoverageBindingPayloadError),
+        output: expect.stringContaining('provider unavailable'),
+      });
+      expect(result).not.toHaveProperty('refusal');
+      expect(provider.invoke).toHaveBeenCalledTimes(2);
+      expect(envelope.writes.at(-1)).toMatchObject({ status: 'failed' });
+      expect(envelope.writes.at(-1)?.entries).toHaveLength(8);
+      expect(envelope.writes.at(-1)?.entries.map(({ digest }) => digest)).toEqual(
+        promptClaims((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0]![0] as InvokeOptions).map(({ digest }) => digest),
+      );
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('resumes only the missing digests from a failed envelope', async () => {
+    const envelope = memoryEnvelopeFilesystem();
+    const { projectDir, provider, runner } = await runBatches(16, 8, { filesystem: envelope.filesystem });
+    try {
+      await writeCoverageBindingEnvelope(projectDir, {
+        version: 1,
+        slug: 'previous',
+        runId: 'previous-run',
+        status: 'failed',
+        entries: Array.from({ length: 8 }, (_, index) => entryFor(index + 1)),
+      }, envelope.filesystem);
+
+      await expect(runner.run('coverage_binding', { complexity_tier: 'M' })).resolves.toMatchObject({ success: true });
+
+      expect(provider.invoke).toHaveBeenCalledTimes(1);
+      expect(promptClaims((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0]![0] as InvokeOptions).map(({ digest }) => digest)).toEqual(
+        Array.from({ length: 8 }, (_, index) => entryFor(index + 9).digest),
+      );
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }

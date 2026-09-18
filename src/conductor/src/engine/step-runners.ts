@@ -2758,7 +2758,15 @@ export class DefaultStepRunner implements StepRunner {
       }
       if (!result.success || typeof result.output !== 'string') {
         await writeEnvelope('failed', entries);
-        return { success: false, output: result.output ?? `coverage_binding provider failed for ${memberId}`, ...(result.providerSetupExhaustion ? { providerSetupExhaustion: result.providerSetupExhaustion } : {}) };
+        const infrastructureFailure = new CoverageBindingPayloadError(
+          result.output ?? `provider failed for ${memberId}`,
+        );
+        return {
+          success: false,
+          output: infrastructureFailure.message,
+          infrastructureFailure,
+          ...(result.providerSetupExhaustion ? { providerSetupExhaustion: result.providerSetupExhaustion } : {}),
+        };
       }
       const parsed = parseJudgeBatchPayload(result.output, batchDigests);
       if (!parsed.ok) {
