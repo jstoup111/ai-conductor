@@ -1,4 +1,4 @@
-// Covers: S5.1, S5.2, S5.3, S5.4
+// Covers: task:1, S5.1, S5.2, S5.3, S5.4
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -2323,6 +2323,42 @@ describe('prd_audit kickback', () => {
       .resolves.toBeNull();
     await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 10`))
       .resolves.toBeNull();
+  });
+
+  it('resolves fractional subclauses against a D-heading ADR decision', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'as-built-clause-d-heading-fractional-'));
+    dirs.push(root);
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    const adrStem = 'adr-2026-09-18-d-heading-fractional-architecture';
+    await Promise.all([
+      mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+      mkdir(join(root, '.docs', 'decisions'), { recursive: true }),
+    ]);
+    await writeFile(planPath, '### Task 1: Existing approved work\n');
+    await writeFile(join(root, '.docs', 'decisions', `${adrStem}.md`), [
+      '# ADR: Fractional D-heading architecture',
+      '**Status:** APPROVED',
+      '',
+      '## Decision',
+      '',
+      '**D5 — Engine-minted run identity.** The engine binds an identity per dispatch.',
+      '',
+      '## Consequences',
+      '',
+      '- Something else entirely.',
+    ].join('\n'));
+
+    const plan = await readFile(planPath, 'utf8');
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} D5`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} D5` });
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 5`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} decision 5` });
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} D5.2`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} D5.2` });
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} decision 5.2`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} decision 5.2` });
+    await expect(resolveAsBuiltGoverningClause(root, plan, `${adrStem} + 5.2`))
+      .resolves.toEqual({ kind: 'adr', clause: `${adrStem} + 5.2` });
   });
 
   it('fails closed when an ADR omits the cited decision number', async () => {
