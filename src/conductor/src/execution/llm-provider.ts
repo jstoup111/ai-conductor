@@ -265,6 +265,8 @@ export interface InvokeResult {
    * Provider adapters never construct this result.
    */
   providerSetupExhaustion?: ProviderSetupExhaustion;
+  /** Affirmative evidence that this invocation never reached provider execution. */
+  executionDisposition?: 'not-started';
   /** Provider-owned, safe authentication source/readiness metadata. */
   authentication?: AuthenticationReadiness;
   /** Sanitized diagnostic-only safety notices; never an authorization input. */

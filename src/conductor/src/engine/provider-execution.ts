@@ -185,6 +185,7 @@ export function createCandidateSafetyBoundary(options: {
         success: false,
         exitCode: 1,
         permissionDenied: true,
+        executionDisposition: 'not-started',
         output: `Required safety protection unavailable: ${verdict.requiredFailures.map((p) => p.name).join(', ')}`,
         ...(notices.length ? { safetyDiagnostics: notices } : {}),
       };
@@ -295,6 +296,7 @@ function unsupportedLifecycleProviderResult(providerKey: string): InvokeResult {
     providerUnavailableScope: 'run',
     providerUnavailableReason: reason,
     providerInvocationSkipped: true,
+    executionDisposition: 'not-started',
   };
 }
 
@@ -387,6 +389,7 @@ async function invokeRuntimeResolved(
         providerUnavailableReason: reason,
         providerUnavailableScope: 'run',
         providerInvocationSkipped: true,
+        executionDisposition: 'not-started',
       },
     };
   }
@@ -653,6 +656,7 @@ export async function executeProviderCandidates({
   });
   const preferredProvider = candidates[0];
   const attempts: ProviderAttemptMetadata[] = [];
+  let everyUnavailableCandidateWasNotStarted = true;
   const attribution = attributionInput
     ? validateTaskAttribution(attributionInput)
     : undefined;
@@ -851,6 +855,8 @@ export async function executeProviderCandidates({
     const safeResult = result.output === undefined
       ? result
       : { ...result, output: redactSafetyText(result.output) };
+    everyUnavailableCandidateWasNotStarted &&=
+      !safeResult.success && safeResult.executionDisposition === 'not-started';
     const nextProvider = candidates[index + 1];
     const attemptMetadata = buildProviderAttemptMetadata({
       providerKey,
@@ -885,8 +891,14 @@ export async function executeProviderCandidates({
       }
     }
     if (!candidateUnavailable) {
+      const resultForReturn = safeResult.success
+        ? (() => {
+            const { executionDisposition: _executionDisposition, ...successfulResult } = safeResult;
+            return successfulResult;
+          })()
+        : safeResult;
       return {
-        ...safeResult,
+        ...resultForReturn,
         preferredProvider,
         actualProvider: providerKey,
         resolvedModel: invokedModel ?? resolved.model,
@@ -926,10 +938,14 @@ export async function executeProviderCandidates({
           `${provider} (${reason}${invoked ? '' : `, ${skipReason === 'setup-unavailable' ? 'setup unavailable' : skipReason === 'cached-unavailable' ? 'cached unavailable' : 'not invoked'}`})`,
         )
         .join('; ');
+      const { executionDisposition: _executionDisposition, ...lastResult } = result;
       return {
         success: false,
         output: `All configured providers are unavailable for step ${step}: ${diagnostic}.`,
-        exitCode: result.exitCode,
+        exitCode: lastResult.exitCode,
+        ...(everyUnavailableCandidateWasNotStarted
+          ? { executionDisposition: 'not-started' as const }
+          : {}),
         preferredProvider,
         attempts,
         ...(!anyCandidateInvoked && setupUnavailableCandidates.length === candidates.length

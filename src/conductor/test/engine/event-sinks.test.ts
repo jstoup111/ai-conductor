@@ -167,6 +167,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'prd_widening_reconciled',
   'build_review_scope_summary',
   'build_review_scope_incomplete',
+  'ci_repair_diagnostic',
 ] satisfies Array<ConductorEvent['type']>;
 
 const NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES = [
@@ -247,6 +248,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'loop_converged',
   'rebase_conflict_halt',
   'ci_failed',
+  'ci_repair_diagnostic',
   'build_review_base',
   'build_review_scope_incomplete',
   'build_review_stale_mirage_regrade',

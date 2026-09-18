@@ -197,6 +197,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   operator_rewind: 'friction-mapped',
   plan_growth: 'not-audited-by-design',
   ci_failed: 'not-audited-by-design',
+  ci_repair_diagnostic: 'not-audited-by-design',
   attribution_divergence: 'not-audited-by-design',
   acceptance_red: 'not-audited-by-design',
 };
@@ -215,6 +216,10 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   feature_dispatch_started: { type: 'feature_dispatch_started', slug: 'feature', kind: 'initial' },
   feature_dispatch_ended: { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete' },
   feature_shipped: { type: 'feature_shipped', slug: 'feature', active: { state: 'unavailable' } },
+  ci_repair_diagnostic: {
+    type: 'ci_repair_diagnostic', prUrl: 'https://github.com/acme/widget/pull/1', slug: 'widget',
+    stage: 'execution', reason: 'unknown', disposition: 'failed', provider: 'codex',
+  },
   intake_inbound_sanitized: {
     type: 'intake_inbound_sanitized',
     sourceRef: 'owner/repo#12',

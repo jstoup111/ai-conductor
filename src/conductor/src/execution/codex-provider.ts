@@ -649,6 +649,7 @@ export class CodexProvider implements LLMProvider {
       output: readiness.remediation ?? 'Codex authentication is not ready.',
       exitCode: 1,
       authFailure: true,
+      executionDisposition: 'not-started',
       authentication: readiness,
     };
   }

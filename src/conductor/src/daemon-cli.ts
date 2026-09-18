@@ -21,13 +21,13 @@ import {
 } from './engine/autoresolve.js';
 import {
   isEligibleForCiFix,
-  runCiFix,
-  buildCiFixHint,
-  productionCiFixRunner,
-  classifyFixError,
-  preflightCiFixInvocation,
-  defaultCiFixProbe,
 } from './engine/ci-fix.js';
+import {
+  ciRepairOutcomeDiagnostic,
+  ciRepairPreDispatchDisposition,
+  classifyCiContextFailure,
+  createDaemonCiFixDispatch,
+} from './engine/daemon-ci-fix.js';
 import {
   resolveRebaseResolutionAttempts,
   resolveDispatchStartTimeoutSeconds,
@@ -869,17 +869,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // Logs fetch failures/recovery only on state transitions
   const discoveryLogger = createDiscoveryLogger(log);
 
-  // CF-5/CF-6 (intake #666): run the ci-fix startup preflight exactly once,
-  // before the sweep loop starts, so a broken `claude` fix-invocation surface
-  // (missing binary, bad auth, stale flag) disables ci-fix for this daemon
-  // run instead of crashing or silently retrying a broken invocation on every
-  // PR. Never repeated per-PR — the `ciFix.dispatch` closure only reads the
-  // resulting `ciFixEnabled` flag.
-  const ciFixPreflight = await preflightCiFixInvocation({ probe: defaultCiFixProbe });
-  if (!ciFixPreflight.ok) {
-    ciFixEnabled = false;
-    log(`[ci-fix] startup preflight failed, disabling ci-fix for this run: ${ciFixPreflight.reason}`);
-  }
+  // CI-fix readiness is evaluated by the selected build provider at the
+  // invocation boundary. Do not let a Claude-only startup probe veto a
+  // configured Codex repair path.
 
   // ADR-010: claim the 1-per-repo pidfile so this daemon's liveness is observable
   // (the pidfile under .daemon/ holds our pid) and a second daemon for the same repo
@@ -2296,6 +2288,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         await sweepMergeableLabels({
           projectRoot,
           log,
+          tracker,
           teardownWorktree: deps.teardownWorktree,
           canRemoveWorktree,
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING
@@ -2425,36 +2418,28 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             enabled: config?.ci_watch?.enabled ?? true,
             isEligible: (entry, state) =>
               isEligibleForCiFix(entry, state, config, new Date(), log),
-            dispatch: async (entry) => {
-              if (!ciFixEnabled) {
-                return;
-              }
-              log(`[mergeable-sweep] ci-fix dispatch: ${entry.prUrl} (attempt ${entry.ciFixAttempts})`);
-
-              try {
-                const prViewResult = await execFile('sh', [
-                  '-c',
-                  `gh pr view "${entry.prUrl}" --json headRefName --jq '.headRefName'`,
-                ], { cwd: entry.repoCwd });
-
-                const branch = (prViewResult.stdout || '').toString().trim();
-                if (!branch) {
-                  log(`[ci-fix] empty branch name for ${entry.prUrl}`);
-                  return;
-                }
-
-                const productionGh = makeProductionGh();
-                const ghRunner = async (args: string[]) =>
-                  productionGh(args, { cwd: entry.repoCwd });
-
-                const hint = await buildCiFixHint(ghRunner, entry.repoCwd, entry.prUrl);
-
+            diagnostic: async (entry, state) => {
+              const reason = classifyCiContextFailure(state);
+              await events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
+                stage: 'context', reason, disposition: 'deferred' });
+            },
+            dispatch: async (entry, state) => {
+              if (!ciFixEnabled) return;
+              const dispatchCiFix = createDaemonCiFixDispatch({
+                tracker: createGithubTrackerClient(makeProductionGh()),
+                liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
+                log,
+                diagnostic: async ({ stage, reason, provider }) => {
+                  void events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
+                    stage, reason,
+                    disposition: ciRepairPreDispatchDisposition(stage), provider });
+                },
+                createDispatcher: () => ({
                 // Route the ci-fix dispatch through resolveCiFailure (T4):
                 // adapt a real DefaultStepRunner into productionCiFixRunner's
                 // dispatcher seam instead of wiring the bare exec-based
                 // runner directly — mirrors the resolveRebaseConflict /
                 // DefaultStepRunner pattern used for rebase resolution above.
-                const ciFixDispatcher = {
                   resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: typeof entry }) => {
                     const sessionId = uuidv4();
                     const providerExecution = createSlugScopedProviderExecution(ctx.entry.slug);
@@ -2485,36 +2470,16 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
                       slug: ctx.entry.slug,
                     });
                   },
-                };
-
-                const outcome = await runCiFix(
-                  entry,
-                  branch,
-                  hint,
-                  {
-                    fixRunner: {
-                      run: (opts) => productionCiFixRunner.run({ ...opts, dispatcher: ciFixDispatcher }),
-                    },
-                    liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
-                  },
-                  log,
-                );
-
-                log(`[ci-fix] outcome for ${entry.prUrl}: ${outcome.kind}`);
-                if (outcome.kind === 'changed') {
-                  return { kind: 'green-verified' };
-                }
-                if (outcome.kind === 'needs-human') {
-                  log(`[ci-fix] setup-only provider exhaustion for ${entry.prUrl}; parking for human recovery`);
-                  return { kind: 'needs-human' };
-                }
-                return;
-              } catch (err: any) {
-                log(
-                  `[ci-fix] error resolving ${entry.prUrl} [${classifyFixError(err)}]: ${err?.message || err}`,
-                );
-                return;
+                }),
+              });
+              const outcome = await dispatchCiFix(entry, state);
+              if (outcome.kind === 'needs-human') {
+                log(`[ci-fix] setup-only provider exhaustion for ${entry.prUrl}; parking for human recovery`);
               }
+              if (outcome.kind === 'failed' || outcome.kind === 'published') {
+                await events.emit(ciRepairOutcomeDiagnostic(entry, outcome));
+              }
+              return outcome;
             },
           },
         });
@@ -2924,6 +2889,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'ci_failed':
       log(
         `${dot} ${chalk.red('✋')} ${chalk.red(`ci_failed[${event.slug}]: phase=${event.phase} attempts=${event.attempts} checks=[${event.checks.join(',')}]`)}`,
+      );
+      break;
+    case 'ci_repair_diagnostic':
+      log(
+        `${dot} ${chalk.red('✋')} ${chalk.red(`ci_repair[${event.slug}] PR ${event.prUrl}${event.provider ? ` provider=${event.provider}` : ''}: ${event.stage}/${event.reason} (${event.disposition})`)}`,
       );
       break;
     case 'rate_limit':

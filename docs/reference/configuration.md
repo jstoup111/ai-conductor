@@ -1255,10 +1255,26 @@ conclusion nor a state are not. A deferral burns no attempt — the next sweep t
 dispatches once every check has finished. When the PR state carries no check-rollup detail at all, the
 gate does not block.
 
-CI repair agents diagnose from the supplied logs and commit fixes without running tests or pushing.
-The daemon runs the configured `test_suite` verifier in the repair worktree, including its working
+CI repair uses the same selected check rollup that made the PR eligible. It supplies failed check
+names or status contexts and available detail links, then optionally adds failed-job excerpts from at
+most three distinct workflow runs. The complete repair context is capped at 24,576 UTF-8 bytes;
+omitted metadata or logs are marked. An unavailable optional log degrades the context without
+blocking repair, but an unreadable, malformed, or empty required check context defers repair and
+does not consume an attempt.
+
+Repair execution follows the effective `build` provider, model, effort, and configured fallback
+policy; it has no separate provider setting. The repair session diagnoses and commits only. The
+daemon runs the configured `test_suite` verifier in the repair worktree, including its working
 directory, timeout, and evidence policy, before publishing with lease protection. Missing or invalid
 verification configuration blocks publication; CI repair does not use `mergeable_autoresolve.suiteCommand`.
+
+The sweep reserves an attempt before dispatch. It restores that reservation only when the execution
+boundary proves that no repair session started; no-change, failed, ambiguous, and locally published
+repairs retain it. A published repair means a changed commit passed preservation checks and the
+configured verifier, then passed the lease-protected push. It is not a GitHub-green result: only a
+later observed green rollup resets the attempt and failure-detection state. Preparation and repair
+diagnostics are rendered in the daemon log and persisted as bounded, credential-safe
+`ci_repair_diagnostic` events in `.daemon/events.jsonl`.
 
 Draft PRs are never dispatched to the CI fix loop. The sweep may still reconcile their `mergeable`
 label, but logs `skipping ci-fix for <url> (draft PR)` instead of collecting them as candidates — a

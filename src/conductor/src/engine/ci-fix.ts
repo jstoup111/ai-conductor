@@ -2,13 +2,14 @@
  * CI fix eligibility, hint builder, and resolver for failed check remediation.
  *
  * Provides:
- * - `buildCiFixHint`: Fetches failing check names and log excerpts
+ * - `buildCiFixHint`: Prepares required failure context from a selected PR snapshot
  * - `isEligibleForCiFix`: Eligibility gates for ci-fix dispatch
  * - `runCiFix`: Resolver orchestration (Tasks 17–20)
  */
 
-import type { GhRunner } from './pr-labels.js';
+import type { TrackerClient } from './tracker-client.js';
 import type { WatchEntry } from './mergeable-sweep.js';
+import type { CiRepairDiagnosticReason } from '../types/events.js';
 import type { PrMergeState } from './pr-labels.js';
 import type { HarnessConfig } from '../types/config.js';
 import {
@@ -24,6 +25,23 @@ import type { CiFailureAttempt } from './rebase.js';
 import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
 import { execa } from 'execa';
 import { dispatchTestSuiteCommand } from './test-suite-cli.js';
+
+export const CI_FIX_HINT_MAX_BYTES = 24_576;
+export const CI_FIX_METADATA_MAX_BYTES = 12_288;
+export const CI_FIX_MAX_FAILED_ENTRIES = 64;
+export const CI_FIX_LOG_TIMEOUT_MS = 10_000;
+export const CI_FIX_LOG_MAX_BUFFER = 65_536;
+
+function truncateUtf8(value: string, maxBytes: number, marker = '[truncated]'): string {
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value;
+  const limit = Math.max(0, maxBytes - Buffer.byteLength(marker, 'utf8'));
+  let result = '';
+  for (const char of value) {
+    if (Buffer.byteLength(result + char, 'utf8') > limit) break;
+    result += char;
+  }
+  return result + marker;
+}
 
 /**
  * Classify a ci-fix resolver error into a coarse category so logs and
@@ -59,93 +77,127 @@ export function classifyFixError(err: unknown): 'flag-invalid' | 'auth' | 'spawn
 }
 
 /**
- * Build a RETRY hint from failing checks and their logs.
- *
- * Story: TR-4 happy (hint names failing checks + includes log excerpt)
- *
- * Fetches `gh pr checks --json` to get the list of checks, identifies failed ones,
- * then calls `gh run view --log-failed` for each to get log excerpts.
- * Returns a bounded-length hint string suitable for injecting into a fix session.
- *
- * @param gh The GhRunner to execute commands
- * @param cwd Working directory for gh commands
- * @param prUrl The PR URL to fetch checks for
- * @returns A hint string containing check names and log excerpts
+ * Required CI failure context prepared from the same snapshot that selected a
+ * PR for repair. Optional log enrichment is deliberately owned by Task 3.
  */
-export async function buildCiFixHint(
-  gh: GhRunner,
-  cwd: string,
-  prUrl: string,
-): Promise<string> {
-  try {
-    // Fetch the list of checks for this PR
-    const checksResult = await gh(['pr', 'checks', prUrl, '--json'], { cwd });
-    const checksData = JSON.parse(checksResult.stdout);
+export type CiFixHintResult =
+  | { kind: 'ready'; hint: string }
+  | {
+    kind: 'context-error';
+    reason: 'read-failure' | 'malformed-context' | 'empty-failure-context';
+  };
 
-    // Extract failed checks with their run links
-    const failedChecks: Array<{ name: string; url?: string }> = [];
+const FAILED_CHECK_RUN_CONCLUSIONS = new Set([
+  'FAILURE',
+  'TIMED_OUT',
+  'CANCELLED',
+  'ACTION_REQUIRED',
+  'STARTUP_FAILURE',
+  'STALE',
+]);
+const FAILED_EXTERNAL_STATUS_STATES = new Set(['FAILURE', 'ERROR']);
 
-    if (checksData.checkSuites && Array.isArray(checksData.checkSuites)) {
-      for (const suite of checksData.checkSuites) {
-        if (suite.checkRuns && Array.isArray(suite.checkRuns)) {
-          for (const run of suite.checkRuns) {
-            if (run.conclusion === 'FAILURE') {
-              failedChecks.push({
-                name: run.name,
-                url: run.detailsUrl,
-              });
-            }
-          }
-        }
-      }
-    }
+function checkDisplayName(check: NonNullable<PrMergeState['statusCheckRollup']>[number], index: number): string {
+  return check.name?.trim() || check.context?.trim() || `(unnamed check #${index + 1})`;
+}
 
-    // Build the hint from failed checks
-    const lines: string[] = ['CI checks failed:'];
-
-    for (const check of failedChecks) {
-      lines.push(`\n• ${check.name}`);
-
-      // Add the link if available
-      if (check.url) {
-        lines.push(`  ${check.url}`);
-      }
-
-      // Try to fetch logs for this check
-      if (check.url) {
-        try {
-          // Extract run ID from the details URL (GitHub Actions run URL format)
-          const runIdMatch = check.url.match(/\/runs\/(\d+)/);
-          if (runIdMatch) {
-            const runId = runIdMatch[1];
-            const logsResult = await gh(['run', 'view', runId, '--log-failed'], { cwd });
-            const logLines = logsResult.stdout.split('\n');
-
-            // Include first few log lines (bounded length)
-            const maxLogLines = 10;
-            const excerpt = logLines.slice(0, maxLogLines).join('\n');
-            if (excerpt.trim()) {
-              lines.push('  Log excerpt:');
-              lines.push('  ' + excerpt.split('\n').join('\n  '));
-            }
-          }
-        } catch (err) {
-          // Degrade gracefully: log fetch failed, continue with just the check name and link
-          // (Task 16: negative path)
-        }
-      }
-    }
-
-    // Return non-empty hint even if all checks were added without logs
-    if (failedChecks.length > 0) {
-      return lines.join('\n');
-    }
-
-    return '';
-  } catch (err) {
-    // If gh call fails, return empty hint
-    return '';
+function isFailedCheck(check: NonNullable<PrMergeState['statusCheckRollup']>[number]): boolean {
+  if (check.kind === 'status-context') {
+    return FAILED_EXTERNAL_STATUS_STATES.has((check.state ?? '').toUpperCase());
   }
+  return FAILED_CHECK_RUN_CONCLUSIONS.has((check.conclusion ?? '').toUpperCase());
+}
+
+/** Prepare a hint from a selected PR state. */
+export function buildCiFixHint(prState: PrMergeState): CiFixHintResult {
+  if (prState.readFailure) {
+    return { kind: 'context-error', reason: 'read-failure' };
+  }
+  if (prState.contextFailure) {
+    return { kind: 'context-error', reason: 'malformed-context' };
+  }
+
+  const failedChecks = (prState.statusCheckRollup ?? [])
+    .map((check, index) => ({ check, index }))
+    .filter(({ check }) => isFailedCheck(check));
+  if (failedChecks.length === 0) {
+    return { kind: 'context-error', reason: 'empty-failure-context' };
+  }
+
+  const lines = ['CI checks failed:'];
+  let omitted = Math.max(0, failedChecks.length - CI_FIX_MAX_FAILED_ENTRIES);
+  for (const { check, index } of failedChecks.slice(0, CI_FIX_MAX_FAILED_ENTRIES)) {
+    const name = checkDisplayName(check, index);
+    const boundedName = truncateUtf8(name, 256);
+    const entry = [`\n• ${boundedName}`];
+    const link = check.kind === 'status-context' ? check.targetUrl : check.detailsUrl;
+    if (link && Buffer.byteLength(link, 'utf8') <= 2048) entry.push(`  ${link}`);
+    else if (link) entry.push('  [link omitted: too long]');
+    lines.push(entry.join('\n'));
+  }
+  // Reserve room for the counter itself: adding an omission marker after
+  // filling the metadata used to make the supposedly bounded prefix overflow.
+  while (true) {
+    const omissionMarker = omitted ? `\n[${omitted} failed check entries omitted]` : '';
+    const metadata = `${lines.join('\n')}${omissionMarker}`;
+    if (Buffer.byteLength(metadata, 'utf8') <= CI_FIX_METADATA_MAX_BYTES) {
+      return { kind: 'ready', hint: metadata };
+    }
+    // The header is far below the fixed budget, so an oversized result always
+    // has at least one removable complete entry.
+    lines.pop();
+    omitted += 1;
+  }
+}
+
+export interface CiFixHintEnrichment {
+  hint: string;
+  degradations: Array<'log-unavailable' | 'context-truncated'>;
+}
+
+/** Optional workflow-log enrichment. Required check context is prepared first,
+ * so any log failure is degradable rather than a reason to start blindly. */
+export async function enrichCiFixHint(
+  hint: string,
+  state: PrMergeState,
+  tracker: TrackerClient,
+  cwd: string,
+): Promise<CiFixHintEnrichment> {
+  const runKeys = new Set<string>();
+  for (const check of state.statusCheckRollup ?? []) {
+    if (!isFailedCheck(check)) continue;
+    const url = check.kind === 'status-context' ? check.targetUrl : check.detailsUrl;
+    const match = url?.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/actions\/runs\/(\d+)(?:\/|$)/);
+    if (match) runKeys.add(`${match[1]}#${match[2]}`);
+  }
+  const excerpts: string[] = [];
+  const degradations: CiFixHintEnrichment['degradations'] = [];
+  const uniqueRuns = [...runKeys];
+  const omittedRuns = Math.max(0, uniqueRuns.length - 3);
+  if (omittedRuns) {
+    excerpts.push(`\n[log enrichment omitted for ${omittedRuns} workflow runs]`);
+    degradations.push('context-truncated');
+  }
+  for (const key of uniqueRuns.slice(0, 3)) {
+    const [repo, run] = key.split('#');
+    try {
+      const stdout = await tracker.viewWorkflowRunFailedLog(repo, run, cwd, {
+        timeout: CI_FIX_LOG_TIMEOUT_MS, maxBuffer: CI_FIX_LOG_MAX_BUFFER,
+      });
+      // Buffer slicing can split a multibyte code point and decode it as U+FFFD.
+      // Iterate strings instead so the excerpt remains valid UTF-8 text.
+      const excerpt = truncateUtf8(stdout, 12_288, '[log excerpt truncated]');
+      if (excerpt) excerpts.push(`\nWorkflow run ${run} log excerpt:\n${excerpt}`);
+    } catch {
+      degradations.push('log-unavailable');
+    }
+  }
+  let combined = `${hint}${excerpts.join('')}`;
+  if (Buffer.byteLength(combined, 'utf8') > CI_FIX_HINT_MAX_BYTES) {
+    combined = `${truncateUtf8(combined, CI_FIX_HINT_MAX_BYTES - 28, '')}\n[context truncated]`;
+    degradations.push('context-truncated');
+  }
+  return { hint: combined, degradations: [...new Set(degradations)] };
 }
 
 /**
@@ -339,7 +391,25 @@ async function evaluateEligibilityGates(
 /**
  * Result of a CI fix attempt.
  */
-export type CiFixOutcome = { kind: 'changed' } | { kind: 'noop' } | { kind: 'branch-gone' } | { kind: 'needs-human'; providerSetupExhaustion: ProviderSetupExhaustion };
+export type CiFixOutcome =
+  | { kind: 'not-started'; provider?: string; reason?: CiRepairDiagnosticReason }
+  | { kind: 'noop'; provider?: string }
+  | { kind: 'failed'; stage: 'provider' | 'guard' | 'verification' | 'publication' | 'worktree'; provider?: string; reason?: CiRepairDiagnosticReason }
+  | { kind: 'published'; provider?: string }
+  | { kind: 'branch-gone' }
+  | { kind: 'needs-human'; providerSetupExhaustion: ProviderSetupExhaustion };
+
+/** Internal result emitted by the provider-session boundary. */
+export type CiFixSessionOutcome =
+  | { kind: 'not-started'; actualProvider?: string; preferredProvider?: string; reason?: CiRepairDiagnosticReason }
+  | { kind: 'failed'; actualProvider?: string; preferredProvider?: string; reason?: CiRepairDiagnosticReason }
+  | { kind: 'session-completed'; actualProvider?: string; preferredProvider?: string }
+  /** @deprecated compatibility for existing injected seams; treated as completed. */
+  | { kind: 'changed'; actualProvider?: string; preferredProvider?: string }
+  /** @deprecated compatibility for existing injected seams; treated as no-start. */
+  | { kind: 'noop' }
+  /** Every provider candidate was unavailable during setup; park for human recovery. */
+  | { kind: 'needs-human'; providerSetupExhaustion: ProviderSetupExhaustion };
 
 /**
  * Injected fix-runner seam (pattern: {@link RebaseResolver} in rebase.ts).
@@ -356,7 +426,7 @@ export interface CiFixRunner {
     hint: string;
     entry: WatchEntry;
     dispatcher?: CiFixDispatcher;
-  }): Promise<CiFixOutcome>;
+  }): Promise<CiFixSessionOutcome>;
 }
 
 /**
@@ -384,9 +454,9 @@ export interface CiFixDispatcher {
  * no-op outcome without invoking the dispatcher.
  */
 export const productionCiFixRunner: CiFixRunner = {
-  async run({ worktreePath, hint, entry, dispatcher }): Promise<CiFixOutcome> {
+  async run({ worktreePath, hint, entry, dispatcher }): Promise<CiFixSessionOutcome> {
     if (process.env.AI_CONDUCTOR_NO_REAL_EXEC) {
-      return { kind: 'noop' };
+      return { kind: 'not-started' };
     }
 
     if (!dispatcher) {
@@ -399,7 +469,7 @@ export const productionCiFixRunner: CiFixRunner = {
     const attempt = await dispatcher.resolveCiFailure({ worktreePath, hint, entry });
     return attempt.providerSetupExhaustion
       ? { kind: 'needs-human', providerSetupExhaustion: attempt.providerSetupExhaustion }
-      : { kind: 'changed' };
+      : attempt;
   },
 };
 
@@ -510,12 +580,34 @@ export async function runCiFix(
         }
       }
 
-      // Run the fix-runner seam inside the worktree, propagating its result
-      // as the dispatch outcome (Task 18).
+      const beforeHead = await git(['rev-parse', 'HEAD']);
+      if (beforeHead.exitCode !== 0) return { kind: 'failed', stage: 'worktree' };
+
+      // Run the provider session inside the worktree. A completed session is
+      // only a candidate repair; the committed HEAD check below is authoritative.
       const fixOutcome = await deps.fixRunner.run({ worktreePath, hint, entry });
 
-      if (fixOutcome.kind !== 'changed') {
-        return fixOutcome;
+      if (fixOutcome.kind === 'needs-human') return fixOutcome;
+      if (fixOutcome.kind === 'not-started') {
+        return {
+          kind: 'not-started',
+          ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}),
+          ...(fixOutcome.reason ? { reason: fixOutcome.reason } : {}),
+        };
+      }
+      if (fixOutcome.kind === 'noop') return { kind: 'not-started' };
+      if (fixOutcome.kind === 'failed') {
+        return {
+          kind: 'failed', stage: 'provider',
+          ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}),
+          ...(fixOutcome.reason ? { reason: fixOutcome.reason } : {}),
+        };
+      }
+
+      const afterHead = await git(['rev-parse', 'HEAD']);
+      if (afterHead.exitCode !== 0) return { kind: 'failed', stage: 'worktree' };
+      if (afterHead.stdout.trim() === beforeHead.stdout.trim()) {
+        return { kind: 'noop', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
       }
 
       // Task 19: guards + suite gate before push.
@@ -524,36 +616,41 @@ export async function runCiFix(
         const reason = `${guardsResult.guard}: ${guardsResult.reason}`;
         log(`${prUrl}: ci-fix acceptance guard failed: ${reason}`);
         logOutcome(log, prUrl, 'ci-fix-acceptance-guards', 'escalated');
-        return fixOutcome;
+        return { kind: 'failed', stage: 'guard', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
       }
 
       const verify = deps.verify ?? ((projectRoot: string) =>
         dispatchTestSuiteCommand({ kind: 'run' }, { projectRoot, print: log }));
-      const suiteExitCode = await verify(worktreePath);
+      let suiteExitCode: number;
+      try {
+        suiteExitCode = await verify(worktreePath);
+      } catch {
+        return { kind: 'failed', stage: 'verification', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
+      }
       if (suiteExitCode !== 0) {
         log(`${prUrl}: ci-fix suite gate failed`);
         logOutcome(log, prUrl, 'ci-fix-suite-gate', 'escalated');
-        return fixOutcome;
+        return { kind: 'failed', stage: 'verification', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
       }
 
       const pushResult = await pushRefreshedBranch(git, branch, log);
       if (!pushResult.pushed) {
         log(`${prUrl}: ci-fix lease push failed: ${pushResult.reason}`);
         logOutcome(log, prUrl, 'ci-fix-lease-push', 'escalated');
-        return fixOutcome;
+        return { kind: 'failed', stage: 'publication', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
       }
 
       logOutcome(log, prUrl, 'ci-fix-lease-push', 'refreshed');
-      return fixOutcome;
+      return { kind: 'published', ...((fixOutcome.actualProvider ?? fixOutcome.preferredProvider) ? { provider: fixOutcome.actualProvider ?? fixOutcome.preferredProvider } : {}) };
     }, undefined, deps.liveness ?? {});
 
-    return outcome;
+    return outcome as CiFixOutcome;
   } catch (err) {
-    // Any unhandled error in worktree setup gets logged but re-thrown
+    // Worktree failures are conservative and never become a refund.
     const tag = classifyFixError(err);
     const message = err instanceof Error ? err.message : String(err);
     log(`${prUrl}: unexpected error in ci-fix resolver [${tag}]: ${message}`);
-    throw err;
+    return { kind: 'failed', stage: 'worktree' };
   }
 }
 

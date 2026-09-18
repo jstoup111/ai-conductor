@@ -116,6 +116,15 @@ class MockGh implements TrackerClient {
   async viewPullRequest(): Promise<{ state?: string; mergedAt?: string | null }> {
     throw new Error('gh should not be called during dry-run');
   }
+  async getPullRequestHeadRef(): Promise<string> {
+    throw new Error('gh should not be called during dry-run');
+  }
+  async viewWorkflowRunFailedLog(): Promise<string> {
+    throw new Error('gh should not be called during dry-run');
+  }
+  async readPullRequestMergeState(): ReturnType<TrackerClient['readPullRequestMergeState']> {
+    throw new Error('gh should not be called during dry-run');
+  }
   async createLabel(): Promise<void> {
     throw new Error('gh should not be called during dry-run');
   }
