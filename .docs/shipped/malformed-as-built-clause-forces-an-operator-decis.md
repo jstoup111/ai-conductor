@@ -4,12 +4,6 @@ spec_hash: 1db32b747dbb4c15a602255aef962406563333f962d90bd49b8a6c962c64e8b0
 pr: https://github.com/jstoup111/ai-conductor/pull/2593
 shipped: 2026-09-18
 engine_version: 20260918T114042Z-85a6c2193c48
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC.1
-    summary: "src/conductor/test/engine/self-host/build-auth-preflight.test.ts:50 — commit c5d0ba789 relaxes `expect(haltContent).not.toContain('operator')` to `expect(haltContent).not.toMatch(/operator.*oauth/i)` in an unrelated self-host build-auth test; no plan task, no story, no `Task:` or `Scope:` trailer"
-    accepted: true
 ---
 
 ## Cost
@@ -28,8 +22,10 @@ providers:
   claude: input: 46, output: 20910, cache_read: 1649640, cache_creation: 228292, cost_usd: 3.9463, dispatches: 3, cost_unmetered: 0
 
 ## Time
-state: partial
-reason: open-executions:step:finish
+state: measured
+active_ms: 3608762
+provider_active_ms: 1786236
+no_provider_active_ms: 1822526
 
 ## Build Review
 laps_to_pass: 1
