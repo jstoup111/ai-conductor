@@ -872,6 +872,46 @@ describe("build-review coordinator: candidate scope resolutions", () => {
     },
   );
 
+  it('rejects a finding whose content hash is absent from projected evidence and candidates', () => {
+    const unreadableResolution = {
+      candidateId: scopeCandidate.candidateId,
+      status: 'indeterminate',
+      missingEvidenceReason: 'unreadable at pinned ref',
+    };
+    const payload = {
+      findings: [{ ...testQualityFinding('The unreadable region can pass.'), anchor: { rubric: 'testQuality', locus: {
+        path: scopeRegion.path, contentHash: `sha256:${'f'.repeat(64)}`, display: scopeRegion.display,
+      } } }],
+      scopeResolutions: [unreadableResolution],
+    };
+
+    expect(validateBuildReviewDispatchedResult(
+      stampBuildReviewDispatchedCandidate(payload, 'testQuality', candidateProjection), 'testQuality', candidateProjection,
+    )).toBeUndefined();
+  });
+
+  it('accepts an unreadable pinned region as indeterminate only with a non-empty reason', () => {
+    const acceptedPayload = {
+      findings: [],
+      scopeResolutions: [{
+        candidateId: scopeCandidate.candidateId,
+        status: 'indeterminate',
+        missingEvidenceReason: 'unreadable at pinned ref',
+      }],
+    };
+    const emptyReasonPayload = {
+      ...acceptedPayload,
+      scopeResolutions: [{ ...acceptedPayload.scopeResolutions[0], missingEvidenceReason: '' }],
+    };
+
+    expect(validateBuildReviewDispatchedResult(
+      stampBuildReviewDispatchedCandidate(acceptedPayload, 'testQuality', candidateProjection), 'testQuality', candidateProjection,
+    )).toMatchObject({ scopeResolutions: [{ ...acceptedPayload.scopeResolutions[0], sourceRegion: scopeRegion }] });
+    expect(validateBuildReviewDispatchedResult(
+      stampBuildReviewDispatchedCandidate(emptyReasonPayload, 'testQuality', candidateProjection), 'testQuality', candidateProjection,
+    )).toBeUndefined();
+  });
+
   it('diagnoses invalid candidate authority before blaming an otherwise scoped finding anchor', () => {
     const foreignResolution = {
       candidateId: 'candidate-widget', status: 'resolved',

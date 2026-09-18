@@ -29,12 +29,22 @@ Use only the supplied projection version `v3`. Its closed input contains:
 - any concrete fallback candidates in `testScope`, each with its engine-established candidate ID,
   pinned source region, and allowed Covers obligation references. Unchanged legacy bare markers
   are excluded before projection; their ordinals never gain authority from the active plan.
+- `testScope.evidence` records are identity-only references: `source`, `region`, `startLine`,
+  `endLine`, and `contentHash`. They are not embedded source content or a replacement for the
+  engine's authority.
 
 The session runs inside the feature worktree. The diff content is not embedded: read referenced
 files and obtain any per-path diff with `git diff <mergeBase>..HEAD -- <path>` (or the merge-base
 form with `git show <mergeBase>:<path>`). Those reads are part of this closed input. Do not infer
 facts from a maker transcript, task-status narrative, prior review, or state outside this projection
 and its referenced content.
+
+For every `testScope.evidence` region you inspect, re-read its exact `startLine` through `endLine`
+at the pinned ref for its `source` side: `mergeBase` for base regions and `headSha` for head regions.
+Verify the bytes hash to `contentHash` before judging. A hash-mismatched or unreadable region is not
+judged: return its fallback candidate as `indeterminate` with a non-empty `missingEvidenceReason`.
+Your own read never becomes authoritative. The engine rejects a finding anchored to a `contentHash`
+that is absent from the projected evidence and candidates.
 
 ## Judgement
 

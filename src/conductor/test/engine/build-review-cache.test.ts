@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   cacheEntryPath,
@@ -332,6 +333,25 @@ describe("engine identity in the cache key (adr-2026-08-21)", () => {
       { kind: "miss", reason: "policy-fingerprint-mismatch" },
       "hit",
     ]);
+  });
+
+  it("misses when one byte of the resolved skill text changes its digest", () => {
+    const skillText = "Judge changed tests.";
+    const changedSkillText = "Judge changed testS.";
+    const digest = (text: string) => `sha256:${createHash("sha256").update(text).digest("hex")}`;
+    const cached = {
+      ...identified(),
+      engineIdentity: { ...engineIdentity, skillDigest: digest(skillText) },
+    };
+    const changedRequest = {
+      ...request,
+      engineIdentity: { ...engineIdentity, skillDigest: digest(changedSkillText) },
+    };
+
+    expect(skillText.length).toBe(changedSkillText.length);
+    expect(classifyBuildReviewCacheLookup(cached, changedRequest)).toEqual({
+      kind: "miss", reason: "skill-digest-mismatch", cachedEngineStamp: engineIdentity.engineStamp,
+    });
   });
 
   it("classifies a legacy entry without engineIdentity as engine-version-mismatch, not invalid-entry (D4)", () => {
