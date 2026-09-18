@@ -1,4 +1,6 @@
 // Covers: task:10
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
@@ -22,6 +24,10 @@ import { analyzeBuildReviewTestScope } from '../../src/engine/build-review-test-
 // this file pins projection derivation itself.
 
 const lapId = parseBuildReviewLapId('lap-1')!;
+
+function contentHash(content: string): string {
+  return `sha256:${createHash('sha256').update(content).digest('hex')}`;
+}
 
 const FIXTURE_DIFF = [
   'diff --git a/src/a.ts b/src/a.ts',
@@ -155,8 +161,7 @@ function scopedSource(overrides: {
     id: 'source:head:src/helper.ts:0:24',
     source: { fileName: 'src/helper.ts', side: 'head' },
     region: { start: 0, end: helperContent.length },
-    content: helperContent,
-    contentHash: `sha256:${helperContent}`,
+    contentHash: contentHash(helperContent),
   }];
 
   return withProof(withSnapshot(source(), {
@@ -180,9 +185,25 @@ describe('build-review rubric projections', () => {
         bindings: [{ marker: { reference: { id: '10' } } }],
       }],
       candidates: [{ reasons: ['uncertain-association'] }],
-      evidence: [{ id: 'source:head:src/helper.ts:0:24', content: 'export const helper = 1;' }],
+      evidence: [{ id: 'source:head:src/helper.ts:0:24', contentHash: contentHash('export const helper = 1;') }],
     });
     expect((projection.testScope as { targets: readonly unknown[] }).targets).toHaveLength(1);
+    expect(JSON.stringify((projection.testScope as { evidence: unknown }).evidence)).not.toContain('"content"');
+  });
+
+  it('bounds serialized test-quality projection size by evidence count, not evidence bytes', () => {
+    const regionContent = 'x'.repeat(12 * 1024);
+    const evidence: readonly BuildReviewPinnedScopeEvidence[] = Array.from({ length: 98 }, (_, index) => ({
+      id: `source:head:src/helper-${index}.ts:0:${regionContent.length}`,
+      source: { fileName: `src/helper-${index}.ts`, side: 'head' },
+      region: { start: 0, end: regionContent.length },
+      contentHash: contentHash(regionContent),
+    }));
+    const projection = deriveBuildReviewRubricProjections(withSnapshot(scopedSource(), {
+      testScopeEvidence: evidence,
+    })).testQuality;
+
+    expect(Buffer.byteLength(JSON.stringify(projection), 'utf8')).toBeLessThan(64 * 1024);
   });
 
   it('does not inflate direct review targets when frozen input adds unchanged sibling titles', () => {
