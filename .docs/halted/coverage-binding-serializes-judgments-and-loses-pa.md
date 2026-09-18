@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-18T17:09:15.217Z
 Slug: coverage-binding-serializes-judgments-and-loses-pa
 Class: needs-human
 Halting step: unknown
