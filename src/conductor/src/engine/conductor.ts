@@ -701,7 +701,8 @@ export async function resolveAsBuiltGoverningClause(
     // literal word `decision` is optional; requiring it made the documented
     // form unresolvable. ADR headings themselves use the `D3` shorthand, so
     // reviewers naturally cite `<stem> D3` — accept that form too (#2228).
-    /^([A-Za-z0-9][A-Za-z0-9._-]*)\s+(?:\+\s*)?(?:decision\s+|D)?(\d+)$/i,
+    // Dotted citations such as `<stem> D5.2` govern the whole D5 decision (#2424).
+    /^([A-Za-z0-9][A-Za-z0-9._-]*)\s+(?:\+\s*)?(?:decision\s+|D)?(\d+)(?:\.\d+)*$/i,
   );
   if (!adrReference) return null;
   const [, stem, decisionNumber] = adrReference;
