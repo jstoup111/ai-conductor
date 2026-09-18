@@ -13,7 +13,7 @@ Extends the two existing deterministic config writers by one input each and grow
 ## Technical Approach
 
 - **Skill asks, engine writes (adr-2026-08-28 D8, new D9).** `skills/bootstrap/SKILL.md` Step 1b-i becomes a per-setting interview; every answer is recorded through one `ai-conductor config init` invocation carrying flags. The skill never edits `.ai-conductor/config.yml` (adr-2026-07-27 decision 3).
-- **One new `config init` flag: `--test-suite-command`.** Parsed in `detectRegistryCommand`, validated in `resolveVerificationSelection`, substituted by `renderVerificationBlock` at the existing single template anchor, replacing the hardcoded `npm test` literal. Flagless output stays byte-identical, pinned by a committed fixture. Local pattern to follow: the D8 flags in `src/conductor/src/engine/registry-cli.ts` — typed option carried into `runConfigInit`, closed-vocabulary validation before any write, single-anchor substitution, `already-exists` refusal untouched; allowed variation: the command is free text, so validation is shape-only (non-empty, single line). Rediscover via symbols `detectRegistryCommand`, `ConfigInitOptions`, `resolveVerificationSelection`, `renderVerificationBlock`, `TEST_SUITE_VERIFICATION_TEMPLATE_ANCHOR`.
+- **One new `config init` flag: `--test-suite-command`.** Parsed in `detectRegistryCommand`, validated in `resolveVerificationSelection`, substituted by `renderVerificationBlock` at the existing single template anchor, replacing the hardcoded `npm test` literal. Flagless output keeps its pre-change effective settings and non-comment lines, pinned by a committed pre-change fixture; only comment or blank lines are added. Local pattern to follow: the D8 flags in `src/conductor/src/engine/registry-cli.ts` — typed option carried into `runConfigInit`, closed-vocabulary validation before any write, single-anchor substitution, `already-exists` refusal untouched; allowed variation: the command is free text, so validation is shape-only (non-empty, single line). Rediscover via symbols `detectRegistryCommand`, `ConfigInitOptions`, `resolveVerificationSelection`, `renderVerificationBlock`, `TEST_SUITE_VERIFICATION_TEMPLATE_ANCHOR`.
 - **One new `config set` path: `spec_owner` (adr-2026-08-09 decision 6).** `userConfigSetCommand` in `src/conductor/src/cli.ts` accepts exactly this additional top-level path, validated through `validateConfig` on the user source, written by the existing atomic `writeUserConfig`. It never targets a project file, so adr-2026-07-01 D1/D2 hold by construction. Local pattern: the function's own `conductor` branch (validate prospective value, then write); allowed variation: one more accepted path.
 - **Identity step in the skill.** Step 1b-ii reads `config read spec_owner`; when empty it asks, defaulting to `gh api user -q .login`, and records via `config set spec_owner`. Unresolved identity is reported with the blocked actions named; auto mode skips the step.
 - **Template annotations.** `templates/project-config.yml.template` explains each unasked operator-settable key in place with `Controls:` / `Allowed:` / `Default:` / `Changing it:` comment lines; rendered keys and the anchor do not move.
@@ -88,19 +88,20 @@ Extends the two existing deterministic config writers by one input each and grow
 
 **Dependencies:** 1
 
-### Task 4: Prove flagless and auto-mode config-init output is byte-identical to the pre-change fixture
+### Task 4: Prove flagless and auto-mode config-init output is effectively identical to the pre-change fixture
 **Story:** 2
 **Story:** 8
 **Type:** negative-path
 
 **Steps:**
 1. Add a committed fixture `src/conductor/test/fixtures/config-init-defaults.yml` captured from the pre-change `config init --test-suite-mode aggregate --test-suite-drift-budget strict` output and from the flagless byte copy.
-2. Write tests asserting `runConfigInit` output equals the fixture byte-for-byte for (a) no flags and (b) the auto-mode invocation the bootstrap skill documents.
+2. Restore the fixture to its pre-change bytes (commit `f1130bd37` refreshed it with the annotated output; take the file from the merge base). Write tests asserting, for (a) no flags and (b) the auto-mode invocation the bootstrap skill documents, that `runConfigInit` output parses to settings deep-equal to the parsed fixture and that its non-comment, non-blank lines equal the fixture's non-comment, non-blank lines in order. Flagless `config init` stays a verbatim copy of the template (adr-2026-08-28 D9).
 3. Verify GREEN (behavior is preserved; this task proves it). Commit: "config init: pin flagless and auto-mode output to the pre-change fixture"
 
 **Done when:**
-- `runConfigInit` with no flags produces a file byte-equal to `config-init-defaults.yml`, as asserted by the flagless identity test.
-- `runConfigInit` with the auto-mode flags produces a file byte-equal to the fixture, as asserted by the auto-mode identity test.
+- `runConfigInit` with no flags produces a file whose parsed settings deep-equal the parsed pre-change `config-init-defaults.yml` and whose non-comment, non-blank lines equal the fixture's in order, as asserted by the flagless effective-identity test.
+- `runConfigInit` with the auto-mode flags produces a file whose parsed settings deep-equal the parsed pre-change fixture and whose non-comment, non-blank lines equal the fixture's in order, as asserted by the auto-mode effective-identity test.
+- `config-init-defaults.yml` holds the pre-change bytes captured at the merge base, as asserted by a test comparing it with the merge-base template rendering recorded in the test.
 
 **Files likely touched:**
 - `src/conductor/test/engine/registry-cli.test.ts`
@@ -197,11 +198,11 @@ Extends the two existing deterministic config writers by one input each and grow
 1. Write failing test in `config-template.test.ts`: for each key in a fixed list of unasked operator-settable keys (`test_suite.working_directory`, `test_suite.timeout_seconds`, `test_suite.inputs`, `test_suite.environment`, `test_suite.scoped_command`, `build_review.rubrics.testQuality.enabled`, `otel.worker_name`, `steps.<name>.model`, `steps.<name>.effort`, `harness_version`), the template contains a comment block naming the key and carrying the four markers `Controls:`, `Allowed:`, `Default:`, `Changing it:`.
 2. Verify RED.
 3. Implement: rewrite the template comments so each listed key has that four-line explanation, keeping every rendered (non-comment) key and the `# CONFIG_INIT_TEST_SUITE_VERIFICATION` anchor exactly as they are.
-4. Verify GREEN, and re-run Task 4's byte-identity tests (they must still pass, which pins that rendered keys did not move). Commit: "template: explain every unasked project config key in place"
+4. Verify GREEN, and re-run Task 4's effective-identity tests (they must still pass, which pins that rendered keys did not move). Commit: "template: explain every unasked project config key in place"
 
 **Done when:**
 - Every key in the test's unasked-key list has a template comment block with `Controls:`, `Allowed:`, `Default:`, and `Changing it:`, as asserted by the annotation-coverage test.
-- The template still contains the `# CONFIG_INIT_TEST_SUITE_VERIFICATION` anchor and Task 4's byte-identity tests still pass, as asserted by re-running them.
+- The template still contains the `# CONFIG_INIT_TEST_SUITE_VERIFICATION` anchor and Task 4's effective-identity tests still pass, as asserted by re-running them.
 
 **Files likely touched:**
 - `templates/project-config.yml.template`
@@ -221,7 +222,7 @@ Extends the two existing deterministic config writers by one input each and grow
 
 **Done when:**
 - A project config assembled from every key named in template comments passes `validateConfig` with no unknown-key error, as asserted by the explained-keys-are-known test.
-- The rendered (non-comment) keys of the template are unchanged by this task, as asserted by re-running Task 4's byte-identity tests.
+- The rendered (non-comment) keys of the template are unchanged by this task, as asserted by re-running Task 4's effective-identity tests.
 
 **Files likely touched:**
 - `templates/project-config.yml.template`
@@ -342,7 +343,7 @@ Extends the two existing deterministic config writers by one input each and grow
 4. Verify GREEN. Commit: "bootstrap: auto mode asks nothing and records no identity"
 
 **Done when:**
-- The auto-mode branch of Step 1b-i is the unchanged flagless-defaults invocation with no question text, as asserted by the auto-mode test, and Task 4 pins its output byte-identical.
+- The auto-mode branch of Step 1b-i is the unchanged flagless-defaults invocation with no question text, as asserted by the auto-mode test, and Task 4 pins its output effectively identical.
 - Step 1b-ii declares itself skipped in auto mode with no `config set` call, as asserted by the auto-mode identity test.
 
 **Files likely touched:**
@@ -400,7 +401,7 @@ Extends the two existing deterministic config writers by one input each and grow
 | Story 1 negative: Given a question with a closed set of permitted values, when the operator answers with a value outside that set, then the answer is rejected with the permitted values restated, the same question is asked again, and nothing is recorded for it. | 11, 2 | "states the closed-set and free-text re-ask rules" | diff-local |
 | Story 1 negative: Given a question whose answer is free text, when the operator answers with an empty or multi-line value, then the answer is rejected, the question is re-asked, and nothing is recorded for it. | 2, 11 | "exits 1 naming `--test-suite-command` and writes no config file for the empty and multi-line fixtures" | diff-local |
 | Story 2 happy: Given the operator answers a question with a permitted non-default value, when onboarding records configuration, then the project configuration carries that value and the harness reads it back as the effective value on its next run. | 3 | "`loadConfig` reads it back unchanged" | diff-local |
-| Story 2 happy: Given the operator accepts the offered value at every question, when onboarding records configuration, then the resulting project configuration is byte-identical to what onboarding produced before this change. | 4 | "byte-equal to `config-init-defaults.yml`" | diff-local |
+| Story 2 happy: Given the operator accepts the offered value at every question, when onboarding records configuration, then the resulting project configuration parses to the same effective settings onboarding produced before this change, and every line it adds to the pre-change output is a comment or blank line. | 4 | "`runConfigInit` with no flags produces a file whose parsed settings deep-equal the parsed pre-change `config-init-defaults.yml` and whose non-comment, non-blank lines equal the fixture's in order, as asserted by the flagless effective-identity test." | diff-local |
 | Story 2 negative: Given a value that would fail configuration validation, when recording is attempted with it, then recording refuses before any file is written, names the rejected value, and the project has no partially written configuration. | 2 | "writes no config file for the empty and multi-line fixtures" | diff-local |
 | Story 2 negative: Given recording is invoked with a value for a setting it does not accept, when it runs, then it refuses with a message naming the unsupported setting and writes nothing. | 2 | "exits 1 with `unsupported flag --<name>` and writes no file" | diff-local |
 | Story 3 happy: Given an operator is present, when onboarding asks for the project's test command, then the operator's answer is recorded verbatim as the aggregate test command and is the value the pre-ship gate invokes. | 3, 1 | "The rendered `test_suite.command` equals the `--test-suite-command` value" | diff-local |
@@ -417,11 +418,11 @@ Extends the two existing deterministic config writers by one input each and grow
 | Story 6 happy: Given operator identity is already established, when onboarding runs again, then it is reported and preserved. | 13 | "reports an already-set identity without asking" | diff-local |
 | Story 6 negative: Given a project whose configuration already exists, when the recording step is invoked again with different answers, then it refuses to overwrite, reports that the configuration already exists, and the file is unchanged. | 5 | "the pre-existing file is byte-identical after a flagged re-run" | diff-local |
 | Story 6 negative: Given a project configuration that has been hand-edited since it was recorded, when onboarding runs again, then the hand-edited values are preserved and reported, not replaced with defaults. | 5 | "The hand-edited `command: make check` value survives the re-run unchanged" | diff-local |
-| Story 7 happy: Given onboarding has recorded a project configuration, when the operator opens it, then every setting the walkthrough did not ask about is accompanied by an explanation stating what it controls, its permitted values, its default, and the consequence of changing it. | 18 | "every project-settable top-level key has a template comment block" | diff-local |
-| Story 7 negative: Given the recorded configuration, when its explanations are compared with the keys the harness accepts, then no explained key is unknown to the harness and no decidable-but-unasked key lacks an explanation. | 18 | "derived from `CONFIG_CONSUMER_KEY_SETS.top`" | diff-local |
+| Story 7 happy: Given onboarding has recorded a project configuration, when the operator opens it, then every setting the walkthrough did not ask about is accompanied by an explanation stating what it controls, its permitted values, its default, and the consequence of changing it. | 18 | "Every project-settable key at every depth, derived from every `CONFIG_CONSUMER_KEY_SETS` entry by dotted config path (excluding the user-scoped `conductor` set, `spec_owner`, and the three asked keys), has a template comment block with `Controls:`, `Allowed:`, `Default:`, and `Changing it:`, as asserted by the derived annotation-coverage test." | diff-local |
+| Story 7 negative: Given the recorded configuration, when its explanations are compared with the keys the harness accepts, then no explained key is unknown to the harness and no decidable-but-unasked key lacks an explanation. | 18 | "The set of `Controls:` tokens in the template equals the derived dotted-path set exactly, as asserted by the token-equality test, so adding an accepted key at any depth without a block or a block naming a rejected key fails." | diff-local |
 | Story 8 happy: Given onboarding runs with no operator present, when it reaches configuration, then it asks no question, records today's defaults, and completes. | 16 | "the unchanged flagless-defaults invocation with no question text" | diff-local |
 | Story 8 negative: Given onboarding runs with no operator present and no identity is established, when it reaches the identity step, then it neither asks nor records an identity, and the existing fail-closed behavior on later identity-dependent actions is unchanged. | 16 | "declares itself skipped in auto mode with no `config set` call" | diff-local |
-| Story 8 negative: Given onboarding runs with no operator present, when its output is compared with the pre-change unattended output, then the recorded project configuration is byte-identical. | 4 | "`runConfigInit` with the auto-mode flags produces a file byte-equal to the fixture" | diff-local |
+| Story 8 negative: Given onboarding runs with no operator present, when its output is compared with the pre-change unattended output, then the recorded project configuration parses to the same effective settings and differs only by added comment or blank lines. | 4 | "`runConfigInit` with the auto-mode flags produces a file whose parsed settings deep-equal the parsed pre-change fixture and whose non-comment, non-blank lines equal the fixture's in order, as asserted by the auto-mode effective-identity test." | diff-local |
 
 ## Verification
 
@@ -442,12 +443,12 @@ Extends the two existing deterministic config writers by one input each and grow
 2. Verify RED.
 3. Implement in `src/conductor/src/engine/registry-cli.ts`: parse `--test-suite-scoped-command` (bare and `=` forms) into the config-init dispatch; validate it with the same non-empty single-line rule as `--test-suite-command`; make `renderVerificationBlock` substitute the operator's value instead of the fixed literal and never render a `scoped_command` line when the mode is `aggregate`. Declare the flag on the commander `config init` command next to `--test-suite-command`.
 4. Implement in `skills/bootstrap/SKILL.md` Step 1b-i: add a question for `test_suite.scoped_command` asked only when question 1 was answered `scoped` — Controls: the command the scoped verification mode runs for selected tests, with `{selectors}` substituted; Allowed: one non-empty single-line command containing `{selectors}`; Default: none, the answer is required once `scoped` is chosen; Changing it: records the project's selected-test runner. Record with `--test-suite-scoped-command <command>`. Auto mode never reaches this question because it records `aggregate`.
-5. Verify GREEN and re-run Task 4's byte-identity tests. Commit: "bootstrap: ask for the scoped test command instead of defaulting it"
+5. Verify GREEN and re-run Task 4's effective-identity tests. Commit: "bootstrap: ask for the scoped test command instead of defaulting it"
 
 **Done when:**
 - `config init` renders `scoped_command` only from `--test-suite-scoped-command`, refuses the flag without `--test-suite-mode scoped`, refuses `scoped` mode without the flag, and refuses an empty or multi-line value before any write, as asserted by the registry-cli tests.
 - Step 1b-i of `skills/bootstrap/SKILL.md` asks for the scoped command only when the mode answer is `scoped`, with the four elements and the recording flag named, as asserted by the question-coverage test.
-- Task 4's flagless and auto-mode byte-identity tests still pass.
+- Task 4's flagless and auto-mode effective-identity tests still pass.
 
 **Files likely touched:**
 - `src/conductor/src/engine/registry-cli.ts`
@@ -458,20 +459,20 @@ Extends the two existing deterministic config writers by one input each and grow
 
 **Dependencies:** 11, 12
 
-### Task 18: Explain every project-settable top-level key and derive the coverage check from the validator
+### Task 18: Explain every project-settable key at every depth and derive the coverage check from the validator
 **Story:** 7
 **Type:** negative-path
 
 **Steps:**
-1. Write failing tests in `src/conductor/test/engine/config-template.test.ts`: derive the expected key set from `CONFIG_CONSUMER_KEY_SETS.top` in `src/conductor/src/engine/config.ts` minus the user-scoped keys `conductor` and `spec_owner` and minus the three keys the walkthrough asks (`test_suite.verification.mode`, `test_suite.verification.drift_budget`, `test_suite.command`; `test_suite` itself stays in the set because its unasked sub-keys need explanation); assert every derived key has a `Controls: <key>` comment block with `Allowed:`, `Default:`, and `Changing it:` in `templates/project-config.yml.template`; replace the hand-typed nine-key `validateConfig` object with one assembled from every `Controls: <key>` token found in the template comments, using each block's stated default, and assert the validator accepts it with no unknown-key error.
-2. Verify RED (missing `test_suite.environment` and the other unexplained top-level keys).
-3. Implement: annotate every derived key in `templates/project-config.yml.template` with the four-line block, keeping every rendered (non-comment) key and the `# CONFIG_INIT_TEST_SUITE_VERIFICATION` anchor exactly as they are; nested sub-keys of an explained top-level key are covered by that key's block unless the walkthrough asks a sibling, in which case the unasked siblings (`test_suite.working_directory`, `timeout_seconds`, `inputs`, `environment`, `scoped_command`, `commands`) keep their own blocks.
-4. Verify GREEN and re-run Task 4's byte-identity tests. Commit: "template: explain every project-settable key, derived from the validator"
+1. Write failing tests in `src/conductor/test/engine/config-template.test.ts`: derive the expected dotted-path key set from every entry of `CONFIG_CONSUMER_KEY_SETS` in `src/conductor/src/engine/config.ts` (top-level keys plus each nested set under its config path, e.g. `defaults.model`, `steps.by_tier.effort`, `harness_self_host.build_auth.mode`) minus the user-scoped `conductor` set, the user-scoped keys `conductor` and `spec_owner`, and minus the three keys the walkthrough asks (`test_suite.verification.mode`, `test_suite.verification.drift_budget`, `test_suite.command`; `test_suite` itself stays in the set because its unasked sub-keys need explanation); assert every derived key has a `Controls: <key>` comment block with `Allowed:`, `Default:`, and `Changing it:` in `templates/project-config.yml.template`; assert the set of `Controls: <key>` tokens in the template equals the derived dotted-path set exactly; keep a `validateConfig` check assembled from the top-level tokens and their stated defaults that passes with no unknown-key error.
+2. Verify RED (missing `test_suite.environment`, `defaults.model`, and the other unexplained keys).
+3. Implement: annotate every derived key in `templates/project-config.yml.template` with the four-line block, keeping every rendered (non-comment) key and the `# CONFIG_INIT_TEST_SUITE_VERIFICATION` anchor exactly as they are; every nested key the validator accepts gets its own block under its parent's; a generic parent block never stands in for a nested key.
+4. Verify GREEN and re-run Task 4's effective-identity tests. Commit: "template: explain every project-settable key, derived from the validator"
 
 **Done when:**
-- Every project-settable top-level key derived from `CONFIG_CONSUMER_KEY_SETS.top` (excluding `conductor` and `spec_owner`) has a template comment block with `Controls:`, `Allowed:`, `Default:`, and `Changing it:`, as asserted by the derived annotation-coverage test.
-- A project config assembled from every `Controls:` token in the template comments passes `validateConfig` with no unknown-key error, as asserted by the token-derived test, so adding an accepted key without a comment or a comment naming a rejected key fails.
-- The template still contains the `# CONFIG_INIT_TEST_SUITE_VERIFICATION` anchor and Task 4's byte-identity tests still pass.
+- Every project-settable key at every depth, derived from every `CONFIG_CONSUMER_KEY_SETS` entry by dotted config path (excluding the user-scoped `conductor` set, `spec_owner`, and the three asked keys), has a template comment block with `Controls:`, `Allowed:`, `Default:`, and `Changing it:`, as asserted by the derived annotation-coverage test.
+- The set of `Controls:` tokens in the template equals the derived dotted-path set exactly, as asserted by the token-equality test, so adding an accepted key at any depth without a block or a block naming a rejected key fails.
+- The template still contains the `# CONFIG_INIT_TEST_SUITE_VERIFICATION` anchor and Task 4's effective-identity tests still pass.
 
 **Files likely touched:**
 - `templates/project-config.yml.template`
