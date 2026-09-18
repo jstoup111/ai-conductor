@@ -637,7 +637,12 @@ export async function reconcileParkedFeatures(
     const reclamationDisabled = candidate.parked
       ? !autoCleanup
       : opts.reclaimMergedWorktrees === false;
-    const shouldReconcile = candidate.parked ? classification === 'merged' : candidate.branch !== undefined;
+    // A registered operator-parked ref needs the helper's point-of-deletion
+    // proof even when no merge proof classified it as merged. Orphans remain
+    // report-only: issue state must never lead to a cleanup attempt or tally.
+    const shouldReconcile = candidate.parked
+      ? classification === 'merged' || (candidate.branch !== undefined && classification !== 'orphan')
+      : candidate.branch !== undefined;
     if (!retainedReason && shouldReconcile && reclamationDisabled) {
       retainedReason = 'disabled';
       retainedByReason.disabled++;
