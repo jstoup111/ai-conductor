@@ -160,9 +160,9 @@ describe('engine/daemon-runner — makeRunFeature', () => {
   ])('emits the raw backlog tier on every feature lifecycle event', async ({ item, expectedTier }) => {
     const events = new ConductorEventEmitter();
     const emitted: Array<Record<string, unknown>> = [];
-    events.on('feature_dispatch_started', (event) => emitted.push(event as Record<string, unknown>));
-    events.on('feature_dispatch_ended', (event) => emitted.push(event as Record<string, unknown>));
-    events.on('feature_shipped', (event) => emitted.push(event as Record<string, unknown>));
+    events.on('feature_dispatch_started', (event) => { emitted.push(event as Record<string, unknown>); });
+    events.on('feature_dispatch_ended', (event) => { emitted.push(event as Record<string, unknown>); });
+    events.on('feature_shipped', (event) => { emitted.push(event as Record<string, unknown>); });
     const featureDeps = deps({
       done: true,
       halted: false,
@@ -199,8 +199,8 @@ describe('engine/daemon-runner — makeRunFeature', () => {
   ])('emits the raw backlog tier when a dispatch halts', async ({ item, expectedTier }) => {
     const events = new ConductorEventEmitter();
     const emitted: Array<Record<string, unknown>> = [];
-    events.on('feature_dispatch_started', (event) => emitted.push(event as Record<string, unknown>));
-    events.on('feature_dispatch_ended', (event) => emitted.push(event as Record<string, unknown>));
+    events.on('feature_dispatch_started', (event) => { emitted.push(event as Record<string, unknown>); });
+    events.on('feature_dispatch_ended', (event) => { emitted.push(event as Record<string, unknown>); });
     const featureDeps = deps({ done: false, halted: true, reason: 'needs human' });
     featureDeps.daemon = true;
     featureDeps.beginFeatureRun = () => ({
