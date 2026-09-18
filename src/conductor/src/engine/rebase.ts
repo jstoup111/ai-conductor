@@ -2022,28 +2022,11 @@ export async function applyRebaseVerdicts(
         'build',
         ...Object.keys(GATE_SURFACE).filter((gate) => ranManualTest || gate !== 'manual_test'),
       ] as StepName[]);
-  // The classifier exposes two buckets (directly invalidated gates and
-  // preservation candidates that lacked durable authority).  Applying them
-  // bucket-by-bucket makes the observable verdict/event order depend on why
-  // a gate reopened rather than on the canonical gate order.  Preserve that
-  // deterministic order for state effects and event consumers alike.
-  const activePrdInputChanged = reviewDelta(outcome).some((path) =>
-    path.startsWith('.docs/stories/') || path.startsWith('.docs/specs/'),
-  ) ?? false;
-  const gateOrder = new Map<StepName, number>([
-    ['coverage_binding', 0],
-    // Requirement authority refreshes immediately after coverage; the other
-    // SHIP validators retain their ordinary tail order.
-    ['prd_audit', activePrdInputChanged ? 1 : 4],
-    ['build_review', 1 + Number(activePrdInputChanged)],
-    ['test_suite', 2 + Number(activePrdInputChanged)],
-    ['manual_test', 3 + Number(activePrdInputChanged)],
-    ['architecture_review_as_built', 5],
-  ]);
-  const orderedTargets = [...new Set(targets)].sort(
-    (left, right) => (gateOrder.get(left) ?? -1) - (gateOrder.get(right) ?? -1),
-  );
-  for (const target of orderedTargets) {
+  // The classifier's partition is the canonical ordering for applied gate
+  // effects and their corresponding events.  Keep direct invalidations ahead
+  // of unproved preservation candidates, rather than imposing a separate
+  // lifecycle order here.
+  for (const target of targets) {
     // A successful tree-attesting pre-verify has already written this gate's
     // fresh satisfied verdict, so it is not kicked back.
     if (reverifiedGates.has(target)) {
