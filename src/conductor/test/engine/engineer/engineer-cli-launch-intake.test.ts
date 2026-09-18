@@ -31,6 +31,7 @@ import {
   detectEngineerCommand,
   dispatchEngineer,
   engineerLaunchArgs,
+  missingRegistrationEpisodes,
   prePollIntake,
   type DispatchEngineerOpts,
 } from '../../../src/engine/engineer-cli.js';
@@ -112,6 +113,7 @@ let registryPath: string;
 let engineerDir: string;
 
 beforeEach(async () => {
+  missingRegistrationEpisodes.clear();
   workDir = await mkdtemp(join(tmpdir(), 'cli-launch-intake-'));
   registryPath = join(workDir, 'registry.json');
   engineerDir = join(workDir, 'engineer');
@@ -119,6 +121,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await rm(workDir, { recursive: true, force: true });
+  missingRegistrationEpisodes.clear();
 });
 
 async function writeRegistry(repos: Array<{ name: string; path?: string; remote?: string }>): Promise<void> {
@@ -130,6 +133,7 @@ async function writeRegistry(repos: Array<{ name: string; path?: string; remote?
     status: 'registered',
     registeredAt: '2026-06-27T00:00:00.000Z',
   }));
+  await Promise.all(records.map((record) => mkdir(record.path, { recursive: true })));
   await writeFile(registryPath, JSON.stringify(records, null, 2), 'utf-8');
 }
 
@@ -225,6 +229,20 @@ describe('prePollIntake', () => {
     const { gh } = makeGh({ 'o/a': [{ number: 1, title: 'Idea', body: 'body' }] });
     expect(await prePollIntake({ engineerDir, registryPath, gh, printErr: () => {} })).toBe(1);
     expect(await prePollIntake({ engineerDir, registryPath, gh, printErr: () => {} })).toBe(0);
+  });
+
+  it('reports the same missing registration once across rebuilt adapters in one process', async () => {
+    await writeRegistry([{ name: 'o/a' }]);
+    const missingPath = join(workDir, 'o_a');
+    await rm(missingPath, { recursive: true });
+    const logs: string[] = [];
+    const { gh, calls } = makeGh();
+
+    expect(await prePollIntake({ engineerDir, registryPath, gh, printErr: (message) => logs.push(message) })).toBe(0);
+    expect(await prePollIntake({ engineerDir, registryPath, gh, printErr: (message) => logs.push(message) })).toBe(0);
+
+    expect(logs).toEqual([`github-issues: skipping o/a: missing path ${missingPath}`]);
+    expect(calls.filter(([group, command]) => group === 'issue' && command === 'list')).toHaveLength(0);
   });
 });
 

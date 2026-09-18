@@ -1,7 +1,7 @@
 // Acceptance: github-issues adapter — capture + write-back + re-eligibility
 // (FR-26/27/28/34/35/36/37/38/39/40; Stories 2,3,4,9,10,11,12,14,15).
 // RED until intake/github-issues.ts exists. All gh access via injected fake (no network).
-// Covers: S6.1, task:10
+// Covers: S6.1, task:1, task:2, task:10
 // Covers: S6.4, task:10
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -44,6 +44,7 @@ afterEach(async () => {
 });
 
 async function makeAdapter(state: FakeGhState, repos: Array<{ name: string; path: string }>) {
+  await Promise.all(repos.map(({ path }) => mkdir(path, { recursive: true })));
   const { createGithubIssuesAdapter } = await loadAdapter();
   const { createLedger } = await loadLedger();
   const { gh } = makeFakeGh(state);
@@ -243,6 +244,65 @@ describe('FR-27 degrade on auth/availability failure', () => {
     state.failRepos = new Set(['o/a']);
     const { adapter } = await makeAdapter(state, [{ name: 'o/a', path: join(dir, 'a') }]);
     await expect(adapter.poll()).resolves.toEqual([]);
+  });
+});
+
+describe('registered repository path availability during poll', () => {
+  it('polls live registrations while skipping only the absent registration', async () => {
+    const state = baseState();
+    state.issuesByRepo = {
+      'o/live': [{ repo: 'o/live', number: 1, title: 'Live issue', body: 'body' }],
+    };
+    const logs: string[] = [];
+    const livePath = join(dir, 'live');
+    await mkdir(livePath, { recursive: true });
+    const { createGithubIssuesAdapter } = await loadAdapter();
+    const { createLedger } = await loadLedger();
+    const { gh } = makeFakeGh(state);
+    const adapter = createGithubIssuesAdapter({
+      gh,
+      registry: fakeRegistry([
+        { name: 'o/live', path: livePath },
+        { name: 'o/absent', path: join(dir, 'absent') },
+      ]),
+      ledger: createLedger(join(dir, 'ledger.json')),
+      log: (message: string) => logs.push(message),
+    });
+
+    const envelopes = await adapter.poll();
+
+    expect({ sourceRefs: envelopes.map((envelope: any) => envelope.sourceRef), logs }).toEqual({
+      sourceRefs: ['o/live#1'],
+      logs: [`github-issues: skipping o/absent: missing path ${join(dir, 'absent')}`],
+    });
+  });
+
+  it('keeps an issue-listing failure distinct from a missing registration path', async () => {
+    const state = baseState();
+    state.failRepos = new Set(['o/failing']);
+    const logs: string[] = [];
+    const { createGithubIssuesAdapter } = await loadAdapter();
+    const { createLedger } = await loadLedger();
+    const { gh } = makeFakeGh(state);
+    const adapter = createGithubIssuesAdapter({
+      gh,
+      registry: fakeRegistry([{ name: 'o/failing', path: join(dir, 'failing') }]),
+      ledger: createLedger(join(dir, 'ledger.json')),
+      log: (message: string) => logs.push(message),
+    });
+    await mkdir(join(dir, 'failing'), { recursive: true });
+
+    const envelopes = await adapter.poll();
+
+    expect({
+      sourceRefs: envelopes.map((envelope: any) => envelope.sourceRef),
+      hasPollFailure: logs.some((line) => line.includes('github-issues: poll failed for o/failing')),
+      hasMissingPath: logs.some((line) => line.includes('missing path')),
+    }).toEqual({
+      sourceRefs: [],
+      hasPollFailure: true,
+      hasMissingPath: false,
+    });
   });
 });
 

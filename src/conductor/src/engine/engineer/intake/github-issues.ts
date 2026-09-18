@@ -46,6 +46,8 @@ export interface GithubIssuesDeps {
   log?: (msg: string) => void;
   /** Maximum issues requested per repository; defaults above the GitHub CLI's implicit 30. */
   issueListLimit?: number;
+  /** Missing-path episodes shared by adapters built within one owning process. */
+  missingRegistrationEpisodes?: Set<string>;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
@@ -152,6 +154,10 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
   // Populated during poll(); keyed by the ghRepo or name used in sourceRef.
   const repoPaths = new Map<string, string>();
 
+  // Missing registered paths are reported once per absence episode. A restored
+  // path clears its marker so a later disappearance is visible again.
+  const reportedMissingRegistrations = deps.missingRegistrationEpisodes ?? new Set<string>();
+
   /**
    * Resolve the working directory for a report() gh call. Never falls back to
    * process.cwd() — gh calls always target `-R <owner/repo>`, so any existing
@@ -250,6 +256,15 @@ export function createGithubIssuesAdapter(deps: GithubIssuesDeps): IntakeSource 
           log(`github-issues: skipping invalid repository target ${ghRepo}`);
           continue;
         }
+        const registrationKey = `${ghRepo}\0${repo.path}`;
+        if (!existsSync(repo.path)) {
+          if (!reportedMissingRegistrations.has(registrationKey)) {
+            log(`github-issues: skipping ${ghRepo}: missing path ${repo.path}`);
+            reportedMissingRegistrations.add(registrationKey);
+          }
+          continue;
+        }
+        reportedMissingRegistrations.delete(registrationKey);
         repoPaths.set(ghRepo, repo.path);
 
         let issues: RawIssue[];

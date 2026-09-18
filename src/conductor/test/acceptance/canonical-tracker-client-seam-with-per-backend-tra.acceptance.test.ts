@@ -69,7 +69,11 @@ describe('acceptance: canonical tracker-client seam — kill-switch at real comp
     it('never spawns a real gh process; the guard message surfaces on the CLI error stream', async () => {
       const registryPath = join(workDir, 'registry.json');
       const engineerDir = join(workDir, 'engineer');
-      await mkdir(engineerDir, { recursive: true });
+      const projectDir = join(workDir, 'o_a');
+      await Promise.all([
+        mkdir(engineerDir, { recursive: true }),
+        mkdir(projectDir, { recursive: true }),
+      ]);
       await writeFile(
         registryPath,
         JSON.stringify(
@@ -77,7 +81,7 @@ describe('acceptance: canonical tracker-client seam — kill-switch at real comp
             {
               schemaVersion: 1,
               name: 'o/a',
-              path: join(workDir, 'o_a'),
+              path: projectDir,
               status: 'registered',
               registeredAt: '2026-07-22T00:00:00.000Z',
             },

@@ -672,6 +672,11 @@ function printGuide(print: (s: string) => void): void {
 export { makeProductionGh };
 
 /**
+ * Missing-path episodes for adapters rebuilt by compose's launch pre-poll loop.
+ */
+export const missingRegistrationEpisodes = new Set<string>();
+
+/**
  * Composition root for the github-issues intake: wires the registry reader, the
  * durable ledger + file queue, and the adapter (IntakeSource + IntakePort) over an
  * injected gh runner. The engineer loop must NOT import a concrete adapter (FR-13);
@@ -686,6 +691,7 @@ export function buildIntake(deps: {
   registryPath?: string;
   gh: NonNullable<DispatchEngineerOpts['gh']>;
   printErr: (s: string) => void;
+  missingRegistrationEpisodes?: Set<string>;
 }): {
   reader: ReturnType<typeof createRegistryReader>;
   ledger: ReturnType<typeof createLedger>;
@@ -707,6 +713,7 @@ export function buildIntake(deps: {
     },
     ledger,
     log: (m: string) => deps.printErr(m),
+    missingRegistrationEpisodes: deps.missingRegistrationEpisodes,
   });
   return { reader, ledger, queue, adapter };
 }
@@ -724,7 +731,10 @@ export async function prePollIntake(deps: {
   gh: NonNullable<DispatchEngineerOpts['gh']>;
   printErr: (s: string) => void;
 }): Promise<number> {
-  const { queue, adapter } = buildIntake(deps);
+  const { queue, adapter } = buildIntake({
+    ...deps,
+    missingRegistrationEpisodes,
+  });
   const envelopes = await adapter.poll();
   for (const e of envelopes) {
     await queue.enqueue(e);
