@@ -1425,6 +1425,7 @@ async function resolveRebaseConflictsInner(
   conflictOutcome: RebaseOutcome,
   resolver: RebaseResolver,
   cap: number,
+  opts?: Pick<PerformRebaseOpts, 'translateAfterRebase'>,
 ): Promise<RebaseOutcome> {
   // FR-7: cap of 0 disables resolution entirely.
   if (cap <= 0) return conflictOutcome;
@@ -1592,6 +1593,21 @@ async function resolveRebaseConflictsInner(
     const resolvedOutcome: RebaseOutcome = changedCodePaths.length > 0 || documentsChanged
       ? { documentInputs, ...(changedCodePaths.length === 0 ? { featureSurface: [] } : {}), kind: 'changed', changedCodePaths, ...(allChangedPaths === undefined ? {} : { allChangedPaths }) }
       : { kind: 'noop', ...(allChangedPaths === undefined ? {} : { allChangedPaths }) };
+    // Resolver completion rewrites the same feature commits as the clean
+    // `performRebase` path. The seed was captured before the initial rebase
+    // moved HEAD; never reconstruct its original head from mutable ORIG_HEAD.
+    // Guard failures return above, so no rewrite map is persisted for a
+    // rejected or unresolved continuation.
+    if (replaySeed && opts?.translateAfterRebase) {
+      const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+      await opts.translateAfterRebase(
+        git,
+        projectRoot,
+        onto,
+        replaySeed.preRebaseHead,
+        head,
+      );
+    }
     return attachResolvedReplay(resolvedOutcome);
   }
 
@@ -1614,6 +1630,7 @@ export async function resolveRebaseConflicts(
   conflictOutcome: RebaseOutcome,
   resolver: RebaseResolver,
   cap: number,
+  opts?: Pick<PerformRebaseOpts, 'translateAfterRebase'>,
 ): Promise<RebaseOutcome> {
   const resolved = await resolveRebaseConflictsInner(
     git,
@@ -1621,6 +1638,7 @@ export async function resolveRebaseConflicts(
     conflictOutcome,
     resolver,
     cap,
+    opts,
   );
   return conflictOutcome.quarantine === undefined
     ? resolved
@@ -1652,12 +1670,14 @@ export async function runGatedRebaseResolution(opts: {
   outcome: RebaseOutcome;
   cap: number;
   resolve?: RebaseResolver;
+  /** Carries the caller's evidence-translation seam across resolver completion. */
+  translateAfterRebase?: PerformRebaseOpts['translateAfterRebase'];
   /** Fired before each resolver dispatch with the 1-based attempt index + cap. */
   onAttempt?: (index: number, cap: number) => void | Promise<void>;
   /** Fired once after the loop settles: `succeeded` (rebase completed) or `exhausted`. */
   onSettled?: (kind: 'succeeded' | 'exhausted') => void | Promise<void>;
 }): Promise<RebaseOutcome> {
-  const { git, projectRoot, outcome, cap, resolve, onAttempt, onSettled } = opts;
+  const { git, projectRoot, outcome, cap, resolve, translateAfterRebase, onAttempt, onSettled } = opts;
   if (outcome.kind !== 'conflict_halt') return outcome;
   if (cap <= 0 || !resolve) return outcome;
 
@@ -1678,7 +1698,7 @@ export async function runGatedRebaseResolution(opts: {
     }
   };
 
-  const resolved = await resolveRebaseConflicts(git, projectRoot, outcome, countingResolver, cap);
+  const resolved = await resolveRebaseConflicts(git, projectRoot, outcome, countingResolver, cap, { translateAfterRebase });
   if (onSettled) {
     try {
       await onSettled(resolved.kind === 'changed' || resolved.kind === 'noop' ? 'succeeded' : 'exhausted');

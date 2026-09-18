@@ -14429,6 +14429,7 @@ export class Conductor {
         resolve: this.stepRunner.resolveRebaseConflict
           ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
           : undefined,
+        translateAfterRebase,
         onAttempt: (index, cap) =>
           this.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
         onSettled: (kind) =>

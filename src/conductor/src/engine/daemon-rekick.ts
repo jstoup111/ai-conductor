@@ -831,6 +831,7 @@ export async function resumeRebaseFirst(opts: {
     outcome,
     cap: opts.resolveAttempts ?? 0,
     resolve: opts.resolveConflict,
+    translateAfterRebase,
     onAttempt: (index, cap) =>
       opts.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
     onSettled: (kind) =>
