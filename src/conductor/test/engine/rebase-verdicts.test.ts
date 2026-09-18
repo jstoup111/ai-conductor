@@ -171,7 +171,7 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
     // test_suite/build_review candidates prove that preservation additionally
     // requires their original PASS evidence, rather than trusting the
     // classifier partition alone.
-    expect(result.kickedBack).toEqual(['manual_test', 'test_suite', 'build_review']);
+    expect(result.kickedBack).toEqual(['build_review', 'test_suite', 'manual_test']);
   });
 
   it.each([

@@ -2513,10 +2513,10 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
 
     expect(res).toBe('rebased');
     expect(invalidated).toEqual([
-      { type: 'rebase_gate_invalidated', gate: 'test_suite', matchedPaths: ['src/sibling.ts'] },
-      { type: 'rebase_gate_invalidated', gate: 'manual_test', matchedPaths: ['src/sibling.ts'] },
       { type: 'rebase_gate_invalidated', gate: 'coverage_binding', matchedPaths: [] },
       { type: 'rebase_gate_invalidated', gate: 'build_review', matchedPaths: [] },
+      { type: 'rebase_gate_invalidated', gate: 'test_suite', matchedPaths: ['src/sibling.ts'] },
+      { type: 'rebase_gate_invalidated', gate: 'manual_test', matchedPaths: ['src/sibling.ts'] },
       { type: 'rebase_gate_invalidated', gate: 'prd_audit', matchedPaths: [] },
       { type: 'rebase_gate_invalidated', gate: 'architecture_review_as_built', matchedPaths: [] },
     ]);

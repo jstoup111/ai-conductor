@@ -1212,10 +1212,10 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // The directly matched gates and every unproved candidate preservation
     // are invalidated. Completed BUILD is not selected by rebase position.
     expect(r.kickedBack).toEqual([
+      'coverage_binding',
       'build_review',
       'test_suite',
       'manual_test',
-      'coverage_binding',
       'prd_audit',
       'architecture_review_as_built',
     ]);
