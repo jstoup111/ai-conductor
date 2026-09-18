@@ -332,9 +332,9 @@ describe('engine/conductor', () => {
   // Covers: task:9
   it('omits tier from unresolved completion and an early halt', async () => {
     const terminalEvents: Array<Extract<ConductorEvent, { type: 'feature_complete' | 'loop_halt' }>> = [];
-    events.on('feature_complete', (event) => terminalEvents.push(event));
+    events.on('feature_complete', (event) => { terminalEvents.push(event as (typeof terminalEvents)[number]); });
     const haltEvents = new ConductorEventEmitter();
-    haltEvents.on('loop_halt', (event) => terminalEvents.push(event));
+    haltEvents.on('loop_halt', (event) => { terminalEvents.push(event as (typeof terminalEvents)[number]); });
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     const provider = new MeterProvider({
       readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
@@ -452,7 +452,7 @@ describe('engine/conductor', () => {
       };
 
       await executionEvents.emitExecutionEvent({ type: 'step_started', step: 'build', index: 0 });
-      await executionEvents.emitExecutionEvent({ type, step: 'build', tier, ...event });
+      await executionEvents.emitExecutionEvent({ type, step: 'build', tier, ...event } as ConductorEvent);
 
       expect(snapshots).toEqual([expect.objectContaining({ tier })]);
     } finally {

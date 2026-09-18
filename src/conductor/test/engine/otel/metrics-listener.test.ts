@@ -415,7 +415,7 @@ describe('MetricsListener dispatch dimensions', () => {
     listener.start(emitter);
 
     try {
-      await emitter.emit({ type: 'feature_dispatch_started', slug: 'tiered', kind: 'fresh', tier: 'M' });
+      await emitter.emit({ type: 'feature_dispatch_started', slug: 'tiered', kind: 'initial', tier: 'M' });
       await emitter.emit({
         type: 'feature_dispatch_ended', slug: 'tiered', outcome: 'halted', haltClass: 'mechanical', step: 'build', tier: 'L',
       });
@@ -428,7 +428,7 @@ describe('MetricsListener dispatch dimensions', () => {
         type: 'feature_shipped', slug: 'partial', runStartedAt: 100, active: { state: 'partial' }, tier: 'S',
       });
 
-      await emitter.emit({ type: 'feature_dispatch_started', slug: 'untiered', kind: 'fresh' });
+      await emitter.emit({ type: 'feature_dispatch_started', slug: 'untiered', kind: 'initial' });
       await emitter.emit({
         type: 'feature_dispatch_ended', slug: 'untiered', outcome: 'halted', haltClass: 'mechanical', step: 'build',
       });
@@ -439,7 +439,7 @@ describe('MetricsListener dispatch dimensions', () => {
 
       const tiered = (name: string) => attributesForInstrument(exporter, name).filter((attributes) => attributes.tier !== undefined);
       const untiered = (name: string) => attributesForInstrument(exporter, name).filter((attributes) => attributes.feature === 'untiered');
-      expect(tiered('conductor.feature.dispatches')).toEqual([{ kind: 'fresh', tier: 'M', project: 'project', worker: 'worker', feature: 'tiered' }]);
+      expect(tiered('conductor.feature.dispatches')).toEqual([{ kind: 'initial', tier: 'M', project: 'project', worker: 'worker', feature: 'tiered' }]);
       expect(tiered('conductor.feature.halts')).toEqual([{ haltClass: 'mechanical', step: 'build', tier: 'L', project: 'project', worker: 'worker', feature: 'tiered' }]);
       expect(tiered('conductor.run.outcomes')).toEqual([{ outcome: 'halted', tier: 'L', project: 'project', worker: 'worker', feature: 'tiered' }]);
       expect(tiered('conductor.feature.shipped')).toEqual([
@@ -451,7 +451,7 @@ describe('MetricsListener dispatch dimensions', () => {
         { tier: 'S', project: 'project', worker: 'worker', feature: 'partial' },
       ]);
       expect(tiered('conductor.feature.duration.active')).toEqual([{ tier: 'S', project: 'project', worker: 'worker', feature: 'tiered' }]);
-      expect(untiered('conductor.feature.dispatches')).toEqual([{ kind: 'fresh', project: 'project', worker: 'worker', feature: 'untiered' }]);
+      expect(untiered('conductor.feature.dispatches')).toEqual([{ kind: 'initial', project: 'project', worker: 'worker', feature: 'untiered' }]);
       expect(untiered('conductor.feature.halts')).toEqual([{ haltClass: 'mechanical', step: 'build', project: 'project', worker: 'worker', feature: 'untiered' }]);
       expect(untiered('conductor.run.outcomes')).toEqual([{ outcome: 'halted', project: 'project', worker: 'worker', feature: 'untiered' }]);
       expect(untiered('conductor.feature.shipped')).toEqual([{ project: 'project', worker: 'worker', feature: 'untiered' }]);
