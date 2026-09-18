@@ -12,6 +12,12 @@ async function configSection(): Promise<string> {
   return skill.slice(skill.indexOf('### 1b.1. Initialize Project Config'), skill.indexOf('### 1c.'));
 }
 
+function questionFor(section: string, key: string): string {
+  return section
+    .split(/\n(?=\d+\. \*\*)/)
+    .find((item) => item.replace(/^\d+\. /, '').startsWith(`**\`${key}\`**`)) ?? '';
+}
+
 describe('bootstrap project-configuration interview', () => {
   it('asks every decidable project setting with guidance and its writer flag', async () => {
     const section = await configSection();
@@ -21,7 +27,7 @@ describe('bootstrap project-configuration interview', () => {
       ['test_suite.command', '--test-suite-command'],
       ['test_suite.scoped_command', '--test-suite-scoped-command'],
     ]) {
-      const question = section.slice(section.indexOf(key), section.indexOf('\n\n', section.indexOf(key)));
+      const question = questionFor(section, key);
       expect(question).toContain(flag);
       for (const marker of ['Controls:', 'Allowed:', 'Default:', 'Changing it:']) expect(question).toContain(marker);
     }
@@ -31,8 +37,7 @@ describe('bootstrap project-configuration interview', () => {
 
   it('asks for the scoped command only after scoped verification is selected', async () => {
     const section = await configSection();
-    const questionStart = section.indexOf('test_suite.scoped_command');
-    const question = section.slice(questionStart, section.indexOf('\n\n', questionStart));
+    const question = questionFor(section, 'test_suite.scoped_command');
 
     expect(question).toMatch(/only when.*test_suite\.verification\.mode.*scoped/is);
     expect(question).toContain('{selectors}');
