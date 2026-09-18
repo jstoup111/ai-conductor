@@ -2022,11 +2022,25 @@ export async function applyRebaseVerdicts(
         'build',
         ...Object.keys(GATE_SURFACE).filter((gate) => ranManualTest || gate !== 'manual_test'),
       ] as StepName[]);
-  // The classifier's partition is the canonical ordering for applied gate
-  // effects and their corresponding events.  Keep direct invalidations ahead
-  // of unproved preservation candidates, rather than imposing a separate
-  // lifecycle order here.
-  for (const target of targets) {
+  // Applying the classifier's invalidated and unproved-preservation buckets
+  // directly makes observable verdict/event order depend on why a gate
+  // reopened. Keep effects in lifecycle order, with changed requirement
+  // inputs refreshing their audit immediately after coverage.
+  const activePrdInputChanged = reviewDelta(outcome).some((path) =>
+    path.startsWith('.docs/stories/') || path.startsWith('.docs/specs/'),
+  );
+  const gateOrder = new Map<StepName, number>([
+    ['coverage_binding', 0],
+    ['prd_audit', activePrdInputChanged ? 1 : 4],
+    ['build_review', 1 + Number(activePrdInputChanged)],
+    ['test_suite', 2 + Number(activePrdInputChanged)],
+    ['manual_test', 3 + Number(activePrdInputChanged)],
+    ['architecture_review_as_built', 5],
+  ]);
+  const orderedTargets = [...new Set(targets)].sort(
+    (left, right) => (gateOrder.get(left) ?? -1) - (gateOrder.get(right) ?? -1),
+  );
+  for (const target of orderedTargets) {
     // A successful tree-attesting pre-verify has already written this gate's
     // fresh satisfied verdict, so it is not kicked back.
     if (reverifiedGates.has(target)) {
