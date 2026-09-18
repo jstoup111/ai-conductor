@@ -278,7 +278,7 @@ describe('Task 8: tier remains feature-scoped', () => {
 
     try {
       recorder.onFeatureShipped('M');
-      recorder.onMemorySetup({ type: 'memory_setup', before: 'missing', canonical: 'created', ts: 1 });
+      recorder.onMemorySetup({ type: 'memory_setup', before: 'absent', canonical: true });
       recorder.onGateVerdict('build', 'pass');
       recorder.onKickback('build_review', 'pipeline');
       recorder.onPipelineCloseout({ type: 'pipeline_closeout', obligation: 'simplify', startedAt: 1, endedAt: 2, ts: 2 });
@@ -292,10 +292,10 @@ describe('Task 8: tier remains feature-scoped', () => {
       recorder.onFeatureShipped('S');
       await provider.forceFlush();
 
-      const points = (name: string) => exporter.getMetrics()
+      const points = (name: string): Array<{ attributes: Record<string, unknown> }> => exporter.getMetrics()
         .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
         .filter((metric) => metric.descriptor.name === name)
-        .flatMap((metric) => metric.dataPoints);
+        .flatMap((metric) => [...metric.dataPoints] as Array<{ attributes: Record<string, unknown> }>);
       const attributes = (name: string, project: string) => points(name)
         .find((point) => point.attributes.project === project)?.attributes;
       const customShipped = points('conductor.feature.shipped').map((point) => point.attributes);
