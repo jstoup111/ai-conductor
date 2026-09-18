@@ -8,9 +8,10 @@ import { promisify } from 'node:util';
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
-import { readVerdict } from '../../src/engine/gate-verdicts.js';
+import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { FullSuiteFailureReason } from '../../src/engine/full-suite-evidence.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import {
   performRebase,
@@ -299,8 +300,9 @@ describe('integration/rebase-loop', () => {
 
   function conductorWith(
     runner: StepRunner,
-    fromStep: 'build' | 'rebase' = 'build',
+    fromStep: 'build' | 'rebase' | 'test_suite' = 'build',
     rebaseResolutionAttempts = 0,
+    fullSuiteVerifier?: ConstructorParameters<typeof Conductor>[0]['fullSuiteVerifier'],
   ): Conductor {
     const fakeGit: GitRunner = async (args) =>
       args.includes('--symbolic-full-name')
@@ -323,6 +325,22 @@ describe('integration/rebase-loop', () => {
       config: { rebase_resolution_attempts: rebaseResolutionAttempts },
       git: fakeGit,
       shipmentEvidence: validShipmentEvidence,
+      fullSuiteVerifier,
+    });
+  }
+
+  async function writeAppliedRebaseOperation(): Promise<void> {
+    await writeVerdict(dir, 'rebase', {
+      satisfied: true,
+      checkedAt: 1,
+      rebaseOperation: {
+        id: 'applied-rebase-fixture',
+        status: 'applied',
+        transition: { preserved: [], invalidated: ['test_suite'], reverified: [] },
+        replay: {
+          preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e',
+        },
+      },
     });
   }
 
@@ -443,6 +461,81 @@ describe('integration/rebase-loop', () => {
       },
     };
   }
+
+  describe('Tasks 15-16: post-rebase native suite outcomes', () => {
+    it('routes a completed suite failure through ordinary BUILD repair with its evidence', async () => {
+      await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+      await writeAppliedRebaseOperation();
+      await writeState(statePath, { ...FRONT_DONE_M, build: 'done', build_review: 'done', test_suite: 'pending' });
+
+      const dispatched: string[] = [];
+      const retryReasons: string[] = [];
+      const runner: StepRunner = {
+        run: async (step, _state, options) => {
+          dispatched.push(step);
+          if (step === 'build') {
+            retryReasons.push(options?.retryReason ?? '');
+            return { success: false, output: 'stop after repair routing assertion' };
+          }
+          return satisfy(step);
+        },
+      };
+      const kickbacks: string[] = [];
+      events.on('kickback', (event) => {
+        if (event.type === 'kickback' && event.from === 'test_suite') kickbacks.push(event.evidence ?? '');
+      });
+      const ensure = vi.fn(async () => ({
+        status: 'FAILED' as const,
+        reason: 'nonzero_exit' as const,
+        message: 'fixture suite assertion failed',
+      }));
+
+      await conductorWith(runner, 'test_suite', 0, {
+        inspect: async () => ({ status: 'STALE' as const, reason: 'missing' as const }),
+        ensure,
+      }).run();
+
+      expect(ensure).toHaveBeenCalledTimes(1);
+      expect(dispatched).toContain('build');
+      expect(retryReasons).toContainEqual(expect.stringContaining('fixture suite assertion failed'));
+      expect(kickbacks).toEqual([expect.stringContaining('nonzero_exit')]);
+    });
+
+    it.each([
+      ['launch failure', 'unlaunchable'],
+      ['timeout', 'timeout'],
+      ['unavailable result', 'preflight_failed'],
+    ] as const)(
+      'halts the %s infrastructure outcome without charging BUILD repair',
+      async (_label, reason: FullSuiteFailureReason) => {
+        await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+        await writeAppliedRebaseOperation();
+        await writeState(statePath, { ...FRONT_DONE_M, build: 'done', build_review: 'done', test_suite: 'pending' });
+
+        const dispatched: string[] = [];
+        const ensure = vi.fn(async () => ({
+          status: 'FAILED' as const,
+          reason,
+          message: `fixture ${reason}`,
+        }));
+        await conductorWith({
+          run: async (step) => {
+            dispatched.push(step);
+            return satisfy(step);
+          },
+        }, 'test_suite', 0, {
+          inspect: async () => ({ status: 'STALE' as const, reason: 'missing' as const }),
+          ensure,
+        }).run();
+
+        expect(ensure).toHaveBeenCalledTimes(3);
+        expect(dispatched).toEqual([]);
+        await expect(readFile(join(dir, '.pipeline/HALT'), 'utf-8')).resolves.toContain(
+          `test_suite infrastructure failure (${reason})`,
+        );
+      },
+    );
+  });
 
   it('rebases a clean-mergeable feature before finish when the base advance is root source (FR-1/FR-2/FR-5)', async () => {
     await initRepoOnFeatureBranch({
