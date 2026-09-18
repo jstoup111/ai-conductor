@@ -39,15 +39,21 @@ export interface ReconcileMergedParkOptions {
   worktreeLifecycle?: WorktreeLifecycleQueue;
 }
 
-export interface ReconcileMergedParkOutcome {
+type ReclaimProof = 'ancestry' | 'merged-pr-head';
+
+interface ReconcileMergedParkBaseOutcome {
   slug: string;
   steps: string[];
   refusal?: RefusalReason;
   unmergedCommits?: UnmergedCommitListing;
   deferred?: boolean;
-  /** The deletion authority used by a successful reconciliation. */
-  proof?: 'ancestry' | 'merged-pr-head';
 }
+
+/** A successful branch reconciliation carries its deletion authority; a branchless record reconciliation does not. */
+export type ReconcileMergedParkOutcome = ReconcileMergedParkBaseOutcome & (
+  | { proof: ReclaimProof }
+  | { proof?: never }
+);
 
 export interface UnmergedCommitSummary {
   sha: string;
@@ -786,7 +792,7 @@ export async function reconcileMergedPark(
   //       current tip as the commit it merged (squash/rebase merge, where (a)
   //       is structurally always false).
   // Neither proof available ⇒ refuse, exactly as before.
-  let proof: 'ancestry' | 'merged-pr-head' = 'ancestry';
+  let proof: ReclaimProof = 'ancestry';
   const unproven = evidence.branches.filter((ref) => !evidence.mergedBranches.includes(ref));
   if (unproven.length > 0) {
     const runGh = opts.runGh ?? makeProductionGh();
@@ -943,5 +949,7 @@ export async function reconcileMergedPark(
     steps.push('unparked');
   }
 
-  return opts.emitProof ? { slug: opts.slug, steps, proof } : { slug: opts.slug, steps };
+  return opts.emitProof && opts.branch !== undefined
+    ? { slug: opts.slug, steps, proof }
+    : { slug: opts.slug, steps };
 }

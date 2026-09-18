@@ -1400,8 +1400,14 @@ export type ConductorEvent =
   | {
       type: 'worktree_reclaim_reclaimed';
       slug: string;
-      branch?: string;
-      proof?: 'ancestry' | 'merged-pr-head';
+      branch: string;
+      proof: 'ancestry' | 'merged-pr-head';
+    }
+  | {
+      type: 'worktree_reclaim_reclaimed';
+      slug: string;
+      branch?: never;
+      proof?: never;
     }
   | {
       type: 'worktree_reclaim_retained';

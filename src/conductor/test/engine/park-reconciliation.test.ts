@@ -333,6 +333,22 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     }
   });
 
+  it('does not report a deletion proof when a shipped record reconciles a branchless worktree', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'branchless-no-proof';
+    const { run } = makeGit({ shipped: [slug], branches: [] });
+    try {
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, emitProof: true });
+
+      expect(outcome).toEqual({
+        slug,
+        steps: ['worktree-removed', 'branch-absent'],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('refuses cleanup when a record-backed slug still has a branch outside origin/main', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'raced-after-record';
@@ -2044,6 +2060,42 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       expect({ deleted, reconciled: result.counts.reconciled }).toEqual({
         deleted: [branch],
         reconciled: 1,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('uses independent gates: reclaiming an enumerated worktree while retaining a parked candidate', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const parkedSlug = 'auto-cleanup-off-parked';
+    const enumeratedSlug = 'auto-cleanup-off-enumerated-with-park';
+    const parkedBranch = `feat/${parkedSlug}`;
+    const enumeratedBranch = `hotfix/${enumeratedSlug}`;
+    const { run, deleted } = makeGit({
+      shipped: [parkedSlug],
+      branches: [parkedBranch, enumeratedBranch],
+      merged: [parkedBranch, enumeratedBranch],
+    });
+    const events: unknown[] = [];
+    try {
+      await writeOperatorPark(projectRoot, parkedSlug);
+
+      await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        autoCleanup: false,
+        reclaimMergedWorktrees: true,
+        worktreeListing: async () => [{ slug: enumeratedSlug, branch: enumeratedBranch }],
+        onEvent: (event) => events.push(event),
+      });
+
+      expect({ deleted, events }).toEqual({
+        deleted: [enumeratedBranch],
+        events: [
+          { type: 'worktree_reclaim_retained', slug: parkedSlug, reason: 'disabled' },
+          { type: 'worktree_reclaim_reclaimed', slug: enumeratedSlug, branch: enumeratedBranch, proof: 'ancestry' },
+        ],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
