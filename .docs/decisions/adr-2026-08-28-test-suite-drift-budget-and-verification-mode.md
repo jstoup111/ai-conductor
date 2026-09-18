@@ -231,7 +231,9 @@ byte copy, still deterministic and refuse-to-clobber.
 > beginning with the project's real aggregate test command (`test_suite.command`), which today is
 > substituted as the fixed literal `npm test` regardless of the project's stack. Each flag is
 > validated before any write; an absent flag records exactly today's value, so a flagless
-> invocation and the auto-mode invocation remain byte-identical to the current output. The
+> invocation and the auto-mode invocation yield the same effective settings as the current
+> output: every key and value is unchanged. The template may gain explanatory comment lines
+> (operator decision 2026-09-18), so the identity is over parsed settings, not file bytes. The
 > bootstrap skill asks and records through these flags; it never composes the file. No new
 > config key is introduced by this amendment — every substituted key already exists in the
 > consumer registry (adr-2026-08-26-config-key-consumer-registry-and-dead-surface-removal
