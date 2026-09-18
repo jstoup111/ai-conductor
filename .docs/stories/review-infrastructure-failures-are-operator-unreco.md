@@ -110,7 +110,8 @@ rework, so that no work is asked of the builder for a fault the builder did not 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a lap that ends in a mechanical fault with mechanical allowance remaining, when the lap
+- Given a lap that ends in a retriable mechanical fault (any closed reason other than
+  `projection-oversized`, adr-2026-08-18 D3.1) with mechanical allowance remaining, when the lap
   completes, then no review outcome is published for that lap and the review runs again.
 - Given a mechanical fault that clears on the next attempt, when the review runs again, then it
   proceeds to a normal judged outcome with no residue from the faulted lap.

@@ -11,7 +11,7 @@ import {
   type BuildReviewRubricResult,
   type BuildReviewScopeIncompleteFault,
 } from './build-review-domain.js';
-import { isRegisteredRubric } from './build-review-registry.js';
+import { BUILD_REVIEW_RUBRIC_IDS, isRegisteredRubric } from './build-review-registry.js';
 import { isRetiredBuildReviewRubric } from './build-review-dispositions.js';
 import {
   matchesBuildReviewDisposition,
@@ -23,7 +23,7 @@ import {
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 
 const AGGREGATE_VERSION = 'v1' as const;
-const RUBRICS = ['testQuality'] as const;
+const RUBRICS = BUILD_REVIEW_RUBRIC_IDS;
 const RETIRED_REASON_PREFIX = new RegExp(`^\\[(${DEPRECATED_BUILD_REVIEW_RUBRIC_IDS.join('|')})\\]`);
 
 type Coverage = 'judged' | 'skipped' | 'infrastructure-failure' | 'scope-incomplete';
@@ -57,7 +57,13 @@ export interface BuildReviewAggregate {
 export interface BuildReviewAggregateInput {
   readonly lapId: BuildReviewLapId;
   readonly snapshotDigest: string;
-  readonly results: Readonly<Record<BuildReviewRubricId, BuildReviewRubricResult>>;
+  /**
+   * Construction compatibility: callers written before the default-off
+   * security rubric may omit it. The join seals that omission as the explicit
+   * disabled result; persisted aggregates remain exhaustive.
+   */
+  readonly results: Readonly<Partial<Record<BuildReviewRubricId, BuildReviewRubricResult>>> &
+    Readonly<Pick<Record<BuildReviewRubricId, BuildReviewRubricResult>, 'testQuality'>>;
   readonly codeStamp?: string | null;
 }
 
@@ -206,15 +212,25 @@ function aggregateVerdict(results: Readonly<Record<BuildReviewRubricId, BuildRev
   return judgedCount > 0 && !RUBRICS.some((name) => legacyFailure(results[name])) ? 'PASS' : 'FAIL';
 }
 
+function normalizeBuildReviewAggregateResults(
+  results: BuildReviewAggregateInput['results'],
+): Readonly<Record<BuildReviewRubricId, BuildReviewRubricResult>> {
+  return Object.freeze({
+    testQuality: results.testQuality,
+    security: results.security ?? { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+  });
+}
+
 /** Derives an immutable, backward-compatible aggregate from every raw branch. */
 export function joinBuildReviewRubricOutcomes(input: BuildReviewAggregateInput): BuildReviewAggregate {
+  const results = normalizeBuildReviewAggregateResults(input.results);
   const coverage = {} as Record<BuildReviewRubricId, Coverage>;
   const rubric = {} as RubricFlags;
   const findings = {} as LegacyFindings;
   const reasons: string[] = [];
   const scopeIncomplete: BuildReviewScopeIncompleteFault[] = [];
   for (const name of RUBRICS) {
-    const result = input.results[name];
+    const result = results[name];
     const scopeFault = scopeFaultFor(result);
     coverage[name] = coverageFor(result);
     rubric[name] = legacyFailure(result);
@@ -227,7 +243,7 @@ export function joinBuildReviewRubricOutcomes(input: BuildReviewAggregateInput):
   }
   const aggregate: BuildReviewAggregate = {
     aggregateVersion: AGGREGATE_VERSION, lapId: input.lapId, snapshotDigest: input.snapshotDigest,
-    results: input.results, scopeIncomplete: Object.freeze(scopeIncomplete), coverage, verdict: aggregateVerdict(input.results),
+    results, scopeIncomplete: Object.freeze(scopeIncomplete), coverage, verdict: aggregateVerdict(results),
     rubric, findings, reasons,
     ...(input.codeStamp !== undefined ? { codeStamp: input.codeStamp } : {}),
   };

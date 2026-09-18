@@ -12,7 +12,7 @@ import type {
 import { ModelAvailability } from './model-availability.js';
 import { redactSafetyText } from './safety-diagnostics.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
-import type { StepName, ConductState, ComplexityTier, RunMode } from '../types/index.js';
+import type { StepName, ConductState, ComplexityTier, ExecutionContext, RunMode } from '../types/index.js';
 import type { HarnessConfig, EffortLevel, BuildReviewRubricId } from '../types/config.js';
 import { prdAuditScopeProjection } from './conductor.js';
 import type {
@@ -120,6 +120,7 @@ import type {
   ProviderSessionStore,
 } from './provider-session.js';
 import {
+  buildProviderAttemptMetadata,
   executeProviderCandidates,
   executeAuxiliaryProviderCandidates,
   type ExecuteProviderCandidatesInput,
@@ -929,7 +930,16 @@ export class DefaultStepRunner implements StepRunner {
           false,
         );
       }
-      return this.runAutonomous(step, prompt, resume, systemPrompt, resolved, branchSessionId);
+      return this.runAutonomous(
+        step,
+        prompt,
+        resume,
+        systemPrompt,
+        resolved,
+        branchSessionId,
+        state.complexity_tier,
+        opts?.executionContext,
+      );
     }
 
     // Open a REPL when the step is designed for user conversation AND we're
@@ -976,7 +986,7 @@ export class DefaultStepRunner implements StepRunner {
       : this.createProviderStreamConsumer(step, this.providerKey);
 
     try {
-      await this.provider.invoke({
+      const result = await this.provider.invoke({
         prompt,
         sessionId: branchSessionId ?? this.sessionId,
         resume,
@@ -994,6 +1004,14 @@ export class DefaultStepRunner implements StepRunner {
         effort: resolved.effort,
         ...(streamConsumer ? { streamConsumer } : {}),
       });
+      await this.emitScalarProviderAttempt(
+        step,
+        result,
+        effectiveModel,
+        resolved.effort,
+        state.complexity_tier,
+        opts?.executionContext,
+      );
       this.callCount++;
 
       if (branchSessionId === undefined) {
@@ -1067,6 +1085,7 @@ export class DefaultStepRunner implements StepRunner {
               repository: this.projectDir,
               featureSlug: this.featureDesc || basename(this.projectDir),
             },
+            executionContext: opts?.executionContext,
             escalate: opts?.escalate ?? true,
             modelOverride: opts?.modelOverride ?? this.modelOverride,
             effortOverride: opts?.effortOverride ?? this.effortOverride,
@@ -1093,6 +1112,7 @@ export class DefaultStepRunner implements StepRunner {
               : {}),
           }),
         opts?.runId,
+        opts?.executionContext,
       );
       const verifiedResult = safety?.verify(result) ?? result;
       this.callCount++;
@@ -1164,6 +1184,7 @@ export class DefaultStepRunner implements StepRunner {
             repository: this.projectDir,
             featureSlug: this.featureDesc || basename(this.projectDir),
           },
+          executionContext: request.dispatch?.executionContext,
           escalate: request.dispatch?.escalate ?? true,
           modelOverride: request.dispatch?.modelOverride ?? this.modelOverride,
           effortOverride: request.dispatch?.effortOverride ?? this.effortOverride,
@@ -1186,6 +1207,7 @@ export class DefaultStepRunner implements StepRunner {
             : {}),
         }),
       request.dispatch?.runId,
+      request.dispatch?.executionContext,
     );
     return safety?.verify(result) ?? result;
   }
@@ -1202,6 +1224,7 @@ export class DefaultStepRunner implements StepRunner {
       options: ExecuteProviderCandidatesInput['options'],
     ) => Promise<ProviderExecutionResult>,
     dispatchRunId?: string,
+    executionContext?: ExecutionContext,
   ): Promise<ProviderExecutionResult> {
     const pulse = createHeartbeatPulse(this.projectDir, step);
     const providerStreamIntervalMs = resolveProviderStreamMinIntervalMs(this.config);
@@ -1230,7 +1253,10 @@ export class DefaultStepRunner implements StepRunner {
       preparationTimeoutMinutes: resolveProviderPreparationTimeoutMinutes(this.config),
       timer: this.providerLifecycleTimer,
       onLifecycleEvent: (event) => {
-        void this.providerAttempt?.(event.step, event);
+        void this.providerAttempt?.(
+          event.step,
+          executionContext ? { ...event, executionContext } : event,
+        );
       },
       recovery: {
         projectRoot: this.projectDir,
@@ -1437,6 +1463,8 @@ export class DefaultStepRunner implements StepRunner {
     systemPrompt: string,
     resolved: ResolvedStepConfig,
     branchSessionId?: string,
+    tier?: ComplexityTier,
+    executionContext?: ExecutionContext,
   ): Promise<StepRunResult> {
     // Resolve to a live model up front (skipping any already known-dead
     // model in this process) so a single ladder-covered invocation doesn't
@@ -1472,6 +1500,14 @@ export class DefaultStepRunner implements StepRunner {
       const { v4: uuidv4 } = await import('uuid');
       return { sessionId: uuidv4(), resume: false };
     });
+    await this.emitScalarProviderAttempt(
+      step,
+      result,
+      attemptedModels.at(-1) || effectiveModel,
+      resolved.effort,
+      tier,
+      executionContext,
+    );
     this.callCount++;
     const observedIntervals = result.observedIntervals
       ? { observedIntervals: result.observedIntervals }
@@ -1594,6 +1630,33 @@ export class DefaultStepRunner implements StepRunner {
         : {}),
       ...observedIntervals,
     };
+  }
+
+  /** Emits scalar-provider telemetry without retaining invocation state on the runner. */
+  private async emitScalarProviderAttempt(
+    step: StepName,
+    result: InvokeResult,
+    model: string,
+    effort: EffortLevel,
+    tier: ComplexityTier | undefined,
+    executionContext: ExecutionContext | undefined,
+  ): Promise<void> {
+    try {
+      await this.providerAttempt?.(
+        step,
+        buildProviderAttemptMetadata({
+          providerKey: this.providerKey,
+          executionContext,
+          result,
+          preferredProvider: this.providerKey,
+          resolvedModel: model,
+          resolvedEffort: effort,
+          tier,
+        }),
+      );
+    } catch {
+      // Attempt metadata is observational and must not alter scalar dispatch.
+    }
   }
 
   async resetSession(step?: StepName, providerKey = this.providerKey): Promise<void> {
@@ -2310,15 +2373,23 @@ export class DefaultStepRunner implements StepRunner {
     projection: BuildReviewRubricProjection,
     tier?: ConductState['complexity_tier'],
   ): Promise<unknown> {
-    const label: Record<BuildReviewDispatchableRubric['rubric'], string> = { testQuality: 'Test Quality' };
+    const label: Record<BuildReviewDispatchableRubric['rubric'], string> = {
+      testQuality: 'Test Quality',
+      security: 'Security',
+    };
     const contractShape = renderBuildReviewProviderPayloadShape(branch.rubric);
-    const scopeResolutionContext = buildReviewCandidateScopeResolutionContext(projection);
+    const payloadInstruction: Record<BuildReviewDispatchableRubric['rubric'], string> = {
+      testQuality: '`findings` is an array; `scopeResolutions` has exactly one entry per supplied candidate (or [] when no candidates); and `counterfactualSensitivity` is optional.',
+      security: '`findings` is an array using only the Security concern kinds. Do not return scope resolutions or counterfactual sensitivity.',
+    };
     const rubricPrompt = [
         `Build Review ${label[branch.rubric]} rubric.`,
         'You are running inside the feature worktree. The closed projection below identifies the implementation diff BY REFERENCE instead of embedding it: changedFiles lists each changed file\'s path, change kind, and hunk line ranges (oldStart,oldCount -> newStart,newCount) from the graded diff. Read the working-tree files and run git yourself for any content you need — for example `git diff <mergeBase>..HEAD -- <path>` for one file\'s diff, or `git show <mergeBase>:<path>` for its pre-change form — using the mergeBase and headSha fields of the projection. Judge only the referenced changes; treat the projection as the complete list of what changed.',
-        `Return only the provider payload shape below: \`findings\` is an array; \`scopeResolutions\` has exactly one entry per supplied candidate (or [] when no candidates); and \`counterfactualSensitivity\` is optional. The engine stamps the judged envelope identity afterward. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
-        `Candidate-resolution authority (use only these ids, regions, and obligations):\n${JSON.stringify(scopeResolutionContext)}`,
-        `Your final message MUST end with a JSON object of exactly this shape (an empty findings array means no concern; anchor values follow the schema below exactly — content-region fields (\`changedTest\`, \`locus\`) are structured \`{path, contentHash, display}\` objects and every other anchor value is a plain string, all nested under \`anchor\` — never flattened to the finding's top level and never renamed):\n${contractShape}`,
+        `Return only the provider payload shape below: ${payloadInstruction[branch.rubric]} The engine stamps the judged envelope identity afterward. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
+        ...(branch.rubric === 'testQuality'
+          ? [`Candidate-resolution authority (use only these ids, regions, and obligations):\n${JSON.stringify(buildReviewCandidateScopeResolutionContext(projection))}`]
+          : []),
+        `Your final message MUST end with a JSON object of exactly this shape (an empty findings array means no concern; anchor values follow the schema below exactly — content-region fields (\`changedTest\`, \`locus\`) are structured \`{path, contentHash, display, occurrence?}\` objects; \`occurrence\` is the 0-based ordinal among equal-content regions in one path and is omitted for a unique or first region; every other anchor value is a plain string, all nested under \`anchor\` — never flattened to the finding's top level and never renamed):\n${contractShape}`,
         JSON.stringify(projection),
       ].join('\n\n');
     // Regression visibility for prompt bloat (#projection-size): record the

@@ -40,7 +40,7 @@ export interface BuildReviewArtifactFilesystem {
 }
 
 function isRubric(value: unknown): value is BuildReviewRubricId {
-  return value === 'testQuality';
+  return value === 'testQuality' || value === 'security';
 }
 
 function isNonEmptyString(value: unknown): value is string {

@@ -162,9 +162,15 @@ vi.mock('../src/engine/conductor.js', async (importOriginal) => {
 import { runDaemonMode } from '../src/daemon-cli.js';
 
 let dirs: string[] = [];
+let engineerDir = '';
+let savedEngineerDir: string | undefined;
 
-beforeEach(() => {
+beforeEach(async () => {
   dirs = [];
+  engineerDir = await mkdtemp(join(tmpdir(), 'daemon-otel-engineer-'));
+  dirs.push(engineerDir);
+  savedEngineerDir = process.env.AI_CONDUCTOR_ENGINEER_DIR;
+  process.env.AI_CONDUCTOR_ENGINEER_DIR = engineerDir;
   fixture.scopes = [];
   fixture.visualizer = null;
   fixture.emittedBeforeHalt = [];
@@ -200,6 +206,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  if (savedEngineerDir === undefined) delete process.env.AI_CONDUCTOR_ENGINEER_DIR;
+  else process.env.AI_CONDUCTOR_ENGINEER_DIR = savedEngineerDir;
   await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })));
 });
 

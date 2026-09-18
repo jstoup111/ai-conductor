@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:6, task:10
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -135,5 +135,23 @@ describe('OtelVisualizer', () => {
         'conductor.provider.preferred': 'codex',
         'conductor.fallback': true,
       });
+  });
+
+  it('projects refusal through the registry-derived trace subscription without recording metrics', async () => {
+    const visualizer = makeVisualizer();
+    visualizer.start(emitter, { runId: 'run-1', feature: 'feature', project: 'project' });
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'step_refused', step: 'build', kind: 'needs-human', reason: 'operator required' });
+    await emitter.emit({ type: 'feature_complete' });
+    await visualizer.stop();
+
+    const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'build')!;
+    expect({
+      refusalSubscribed: otelTracedEventTypes().includes('step_refused'),
+      status: span.status.code,
+      outcome: span.attributes['conductor.step.status'],
+      metrics: metricExporter.getMetrics(),
+    }).toEqual({ refusalSubscribed: true, status: 0, outcome: 'refused', metrics: [] });
   });
 });

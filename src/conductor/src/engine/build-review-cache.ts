@@ -114,7 +114,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isRubric(value: unknown): value is BuildReviewRubricId {
-  return value === "testQuality";
+  return value === "testQuality" || value === "security";
 }
 
 function parseBuildReviewEngineIdentity(value: unknown): BuildReviewEngineIdentity | undefined {

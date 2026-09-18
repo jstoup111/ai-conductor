@@ -42,6 +42,18 @@ This ADR establishes the analysis-to-projection boundary and structured fallback
 
 6. **Compact evidence with fallback judgment in the existing call.** Project established targets and one compact record per uncertain group, plus deduplicated pinned references for setup, helpers and approved criteria. Unchanged sibling titles stay out of the changed-target list. The existing reviewer resolves uncertain groups while judging assertions, without a new scope-review session or mandatory additional model call. Each candidate receives exactly one structured disposition: resolved (concrete test regions and valid binding references), out-of-scope (grounded reason), or indeterminate (what evidence is missing). These are judgment records, not string-matched prose verdicts. The engine validates candidate identity, source range/hash, approved-reference membership and disposition completeness; semantic relevance and marker-association reasoning remain reviewer judgments. It must not mechanically re-derive that judgment from an exact-match rationale.
 
+> **Amended 2026-09-18 by #2582:** "compact evidence" and "deduplicated pinned references" in
+> decision 6 were implemented as records that also inlined every referenced region's source bytes,
+> and decision 11's projection-size comparison never measured that field.
+>
+> **D6.1 — A pinned reference carries identity, not bytes.** Each `BuildReviewPinnedScopeEvidence`
+> record is `source`, `region`, `startLine`, `endLine`, and `contentHash` over the region at the
+> frozen ref; the reviewer re-reads the region through the same `git show`/`git diff` seam it uses
+> for the diff and verifies it against `contentHash` (adr-2026-08-13 D2.1). Candidate matching,
+> finding anchors, and occurrence resolution already use only those identity fields and are
+> unchanged. The input projection stays at `v3`: the record's identity fields are unchanged and the
+> projection digest and engine identity already miss closed on the shape change.
+
 7. **Refactors, empty scope and recovery.** This rubric judges opted-in test quality; it does not require a feature to add or modify tests. Production-only refactors, moves and renames with no directly changed tests or concrete evidence of affected opted-in test behavior remain a valid empty-scope PASS, with no reviewer or counterfactual dispatch. Missing markers, missing plan test paths, or the abstract possibility of an unknown dependency do not create uncertain candidates or a coverage failure. Existing full-suite, CI and completion authorities retain their responsibilities.
 
 A candidate requires concrete evidence: a changed declaration with an ambiguous association to an actual Covers marker, or an identified changed setup/helper dependency affecting an opted-in test/group. Unmarked tests and markers that refer to absent feature obligations remain explicit out-of-scope notes, not requests to add tests or fabricate bindings. A test path appearing in a plan is evidence-discovery input, never authority by itself. Pure movements/renames must not manufacture behavioral changes. Where structural comparison cannot establish whether a concretely identified opted-in test is unchanged, the existing reviewer may resolve that uncertainty; there is no blanket repository-wide completeness requirement.

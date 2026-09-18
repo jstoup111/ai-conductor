@@ -51,6 +51,30 @@ describe('PRD widening offers', () => {
       .toBe('The sweep counts unparked registered worktrees as parked.');
   });
 
+  it('clips an oversized report snapshot by UTF-8 bytes so the widening context bound accepts it', async () => {
+    // The context check measures `proseBytes` in UTF-8 bytes; a character-count
+    // clip of a report full of em dashes came back as 8 110 bytes and the offer
+    // was rejected as `context-overflow` on the next prd_audit entry.
+    const projectRoot = await createProjectRoot();
+    const oversized = '\u2014'.repeat(6_000);
+
+    const result = await persistPrdWideningOffers(projectRoot, FEATURE, [{
+      criterion: 'NC.1',
+      sourceId: 'prd-audit:NC.1',
+      evidence: 'A flag-free config init now writes a default test_suite block.',
+      reportSnapshot: oversized,
+      relation: 'outside-visible',
+    }], { newCaseId: () => 'prd-case-bytes', now: () => '2026-09-17T14:38:00.000Z' });
+
+    expect(result.ok).toBe(true);
+    const stored = await new RemediationCaseStore(projectRoot, FEATURE).read();
+    expect(stored.ok).toBe(true);
+    if (!stored.ok || stored.state.version !== 'v2') throw new Error('expected a v2 store');
+    const snapshot = stored.state.prdWideningCases[0]?.currentSources[0]?.snapshot ?? '';
+    expect(Buffer.byteLength(snapshot, 'utf8')).toBeLessThanOrEqual(8_000);
+    expect(snapshot).toBe('\u2014'.repeat(2_666));
+  });
+
   it('persists original source and report evidence before returning the editable offer block', async () => {
     const projectRoot = await createProjectRoot();
 

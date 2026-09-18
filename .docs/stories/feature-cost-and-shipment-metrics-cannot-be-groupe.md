@@ -60,16 +60,23 @@ As an operator charting throughput and halt rates, I want `conductor.feature.dis
 ### Acceptance Criteria
 
 #### Happy Path
+- Given a resolved run tier, when the conductor completes or halts, then its existing `feature_complete` or `loop_halt` event carries that raw tier and the listener records one `conductor.run.outcomes` point with the corresponding outcome and tier
+- Given that terminal event followed by `feature_dispatch_ended` for the same dispatch, when both are delivered in production order, then the outcome count stays one and retains the terminal event's tier; dispatch-end still records its applicable halt metric
+- Given an interactive run with no daemon dispatch-end, when it completes or halts, then its terminal event alone records the tiered outcome
 - Given a `feature_dispatch_started` with `tier: 'M'` and `kind: 'fresh'`, when the metrics listener records it, then the `conductor.feature.dispatches` point carries `kind=fresh` and `tier=M` alongside the identity attributes
-- Given a `feature_dispatch_ended` with `tier: 'L'`, `outcome: 'halted'`, a halt class, and a step, when the listener records it, then the `conductor.feature.halts` point carries `haltClass`, `step`, and `tier=L`, and the `conductor.run.outcomes` point carries `outcome=halted` and `tier=L`
+- Given a `feature_dispatch_ended` with `tier: 'L'`, `outcome: 'halted'`, a halt class, and a step, with no preceding terminal event, when the listener records it, then the `conductor.feature.halts` point carries `haltClass`, `step`, and `tier=L`, and the `conductor.run.outcomes` point carries `outcome=halted` and `tier=L`
 - Given a `feature_shipped` with `tier: 'S'`, `runStartedAt`, and an exact active duration, when the listener records it, then the `conductor.feature.shipped` point and both `conductor.feature.duration.wall` and `.active` points carry `tier=S`
 
 #### Negative Paths
+- Given unresolved run state (including an early halt), when the terminal event is emitted, then neither that event nor its outcome point contains a tier key; no policy default or listener inference fills it
+- Given tierless terminal records from an older ledger, when replayed through the existing event path, then they remain accepted and record tierless outcomes
 - Given a `feature_dispatch_started` with no `tier` key, when the listener records it, then the `conductor.feature.dispatches` point has no `tier` attribute and no placeholder value
-- Given a `feature_dispatch_ended` with no `tier` key that halted, when the listener records it, then neither the `conductor.feature.halts` point nor the `conductor.run.outcomes` point has a `tier` attribute
+- Given a `feature_dispatch_ended` with no `tier` key that halted and no preceding terminal event, when the listener records it, then neither the `conductor.feature.halts` point nor the `conductor.run.outcomes` point has a `tier` attribute
 - Given a `feature_shipped` with `tier: 'S'` whose `active.state` is `partial`, when the listener records it, then the wall histogram point carries `tier=S` and no active-duration point is recorded at all — the tier does not cause a fabricated active duration
 
 ### Done When
+- [ ] Both terminal event variants declare optional `tier?: ComplexityTier`; completion reads `state.complexity_tier` and the centralized halt helper reads `haltState.complexity_tier`
+- [ ] Conductor-entry regression coverage proves normal complete/halt production order through the listener and exporter, exactly one outcome, interactive terminal-only behavior, dispatch-end fallback, and unresolved/legacy tier absence
 - [ ] `MetricsRecorder.onFeatureDispatch`, `onFeatureHalt`, `onRunClose`, `onFeatureShipped`, and `onFeatureDuration` accept an optional tier and merge it into the data-point attributes only when defined
 - [ ] The `feature_dispatch_started`, `feature_dispatch_ended`, and `feature_shipped` handlers in the metrics listener pass the event's tier to every recorder call they make
 - [ ] A unit test asserts the exact attribute set on each of the six instruments for a tiered event and asserts absence of `tier` for an untiered event

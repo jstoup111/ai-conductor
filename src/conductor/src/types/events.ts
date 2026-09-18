@@ -172,6 +172,20 @@ export interface ProviderLifecycleEventMetadata {
   outcome?: 'completed' | 'failed';
 }
 
+/**
+ * Stable identity for one logical execution. It is intentionally separate
+ * from provider-attempt IDs and from the lifecycle registry's policy step.
+ */
+export interface ExecutionContext {
+  executionId: string;
+  subject: ExecutionSubject;
+}
+
+/** A telemetry subject is either a registered lifecycle step or a configured branch. */
+export type ExecutionSubject =
+  | { kind: 'lifecycle-step'; step: StepName }
+  | { kind: 'configured-member'; parentGroup: string; member: string };
+
 /** Closed, non-textual facts permitted on the CI repair diagnostic bus event. */
 export type CiRepairDiagnosticStage = 'context' | 'log-enrichment' | 'branch' | 'readiness' | 'execution' | 'guard' | 'verification' | 'publication';
 export type CiRepairDiagnosticReason = 'auth' | 'permission' | 'timeout' | 'api' | 'capability' | 'malformed-context' | 'missing-context' | 'missing-branch' | 'log-unavailable' | 'context-truncated' | 'provider-unavailable' | 'readiness-degraded' | 'flag-invalid' | 'spawn-env' | 'unknown' | 'guard-refused' | 'verification-failed' | 'publication-refused' | 'verified-publication';
@@ -181,6 +195,8 @@ export type CiRepairDiagnosticDisposition = 'deferred' | 'degraded' | 'failed' |
 export interface ProviderAttemptEvent {
   type: 'provider_attempt';
   step: StepName;
+  /** Optional so historical event records retain their legacy interpretation. */
+  executionContext?: ExecutionContext;
   provider: string;
   /** Sanitized Codex authentication source; omitted for other providers. */
   authenticationSource?: 'api-key' | 'cached-login';
@@ -224,17 +240,19 @@ export type ConductorEvent =
       blocked: Record<DispatchBlockReason, boolean>;
       pollDurationMs: number;
     }
-  | { type: 'feature_dispatch_started'; slug: string; kind: DispatchKind }
+  | { type: 'feature_dispatch_started'; slug: string; kind: DispatchKind; tier?: ComplexityTier }
   | {
       type: 'feature_dispatch_ended';
       slug: string;
       outcome: FeatureDispatchOutcome;
+      tier?: ComplexityTier;
       haltClass?: import('../engine/halt-marker.js').HaltDisposition;
       step?: string;
     }
   | {
       type: 'feature_shipped';
       slug: string;
+      tier?: ComplexityTier;
       runStartedAt?: number;
       active: { state: 'exact' | 'partial' | 'unavailable'; activeMs?: number };
     }
@@ -465,7 +483,12 @@ export type ConductorEvent =
       reason: 'already-attempted' | 'regressed';
     }
   | { type: 'build_review_stale_aggregate'; storedLapId: string; currentLapId: string }
-  | { type: 'step_started'; step: StepName; index: number }
+  | {
+      type: 'step_started';
+      step: StepName;
+      index: number;
+      executionContext?: ExecutionContext;
+    }
   | {
       /** A hook-owned containment check could not reach a verdict. */
       type: 'containment_check_unresolved';
@@ -500,6 +523,7 @@ export type ConductorEvent =
       /** Build-only tree witnesses; absent on legacy and non-build events. */
       treeBefore?: string | null;
       treeAfter?: string | null;
+      executionContext?: ExecutionContext;
     }
   | {
       type: 'step_failed';
@@ -509,6 +533,14 @@ export type ConductorEvent =
       effort?: EffortLevel;
       tier?: ComplexityTier;
       observedIntervals?: readonly ObservedInterval[];
+      executionContext?: ExecutionContext;
+    }
+  | {
+      /** A started execution was catchably interrupted before work could settle. */
+      type: 'step_interrupted';
+      step: StepName;
+      reason: string;
+      executionContext?: ExecutionContext;
     }
   | {
       /** The step was stopped before its own work could be judged a failure. */
@@ -516,6 +548,8 @@ export type ConductorEvent =
       step: StepName;
       kind: 'seal' | 'needs-human' | 'validation-verdict';
       reason: string;
+      provider?: string;
+      executionContext?: ExecutionContext;
     }
   | {
       /** A domain rule refused a conductor-owned step status write. */
@@ -569,6 +603,7 @@ export type ConductorEvent =
        * already recorded.
        */
       type: 'feature_usage_total';
+      tier?: ComplexityTier;
       dispatches: number;
       meteredDispatches: number;
       unmeteredDispatches: number;
@@ -595,6 +630,7 @@ export type ConductorEvent =
        * cost occurrence.
        */
       type: 'feature_cost_snapshot';
+      tier?: ComplexityTier;
       costUsd: number;
       costComplete: boolean;
       byDimension: Array<{
@@ -635,6 +671,9 @@ export type ConductorEvent =
       model?: string;
       effort?: EffortLevel;
       provider?: string;
+      /** Resolved provider facts from the failed attempt. */
+      actualProvider?: string;
+      preferredProvider?: string;
       tier?: ComplexityTier;
       resolvedBefore?: number;
       resolvedAfter?: number;
@@ -653,6 +692,7 @@ export type ConductorEvent =
        */
       escalatedModel?: string;
       escalatedEffort?: string;
+      executionContext?: ExecutionContext;
     }
   | {
       // #646: rerun-vs-route classification, emitted on every classifier-
@@ -682,7 +722,7 @@ export type ConductorEvent =
   /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
   | CredentialParkProgressEvent
   | FinishPublicationEvent
-  | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number }
+  | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number; tier?: ComplexityTier }
   | { type: 'dashboard_refresh' }
   | {
       type: 'protected_artifact_rebaseline';
@@ -946,6 +986,8 @@ export type ConductorEvent =
       phase: 'dispatch' | 'result';
       /** Present when phase === 'result': the classified outcome (see classifyOutcome in group-core.ts). */
       outcome?: string;
+      /** Correlates an admitted configured member without registering it as a StepName. */
+      executionContext?: ExecutionContext;
     }
   // ── Gate-driven loop (Phase 5 observability) ──
   | {
@@ -1044,6 +1086,7 @@ export type ConductorEvent =
       type: 'loop_halt';
       step?: StepName;
       reason: string;
+      tier?: ComplexityTier;
       /** Present when an external BUILD action classifies its own terminal halt. */
       haltClass?: 'plan-gap';
       /**

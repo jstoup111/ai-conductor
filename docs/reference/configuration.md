@@ -721,6 +721,15 @@ Production visualizers continue exporting traces with their per-run meter disabl
 The `conductor.step.duration` and `conductor.pipeline.closeout.duration` histograms use explicit
 duration buckets through 8 hours; quantiles saturate above that largest finite bucket boundary.
 
+Each started execution that reaches a terminal event contributes one
+`conductor.step.outcomes` counter point. Its `outcome` is `success`, `failure`, `interrupted`, or
+`refusal`; interruption and refusal are terminal states, not successful work or provider failures.
+For a configured validation-group member, the `step` attribute identifies the member as
+`configured:<url-encoded-parent-group>/<url-encoded-member>` rather than collapsing it into the
+group policy step. Its duration ends when that member settles, so sibling and group-join delay do
+not inflate the member's duration. The same member label is used for its duration, retry, dispatch,
+and terminal-outcome metrics.
+
 Daemon exports include backlog count and oldest state-residence age by `state`, busy and free slots,
 in-flight features, liveness, active dispatch blockers, discovery duration, and build stalls by
 `reason`. `conductor.daemon.inflight` is the only `conductor.daemon.*` instrument with a `feature`
@@ -738,6 +747,15 @@ terminal paths.
 The `conductor.run.outcomes` counter increments once when an opened root run reaches one of those
 terminal paths. Its `outcome` attribute uses the same `complete`, `halted`, and `terminated` taxonomy,
 so dashboards can chart terminal runs without deriving counts from trace-query metrics.
+
+All nine D14 instruments carry an optional raw `tier` label when the producing event
+resolved one: `conductor.feature.dispatches`, `conductor.feature.halts`, `conductor.run.outcomes`,
+`conductor.feature.shipped`, `conductor.feature.duration.wall`, `conductor.feature.duration.active`,
+`conductor.feature.cost`, `conductor.feature.step.cost`, and `conductor.feature.step.tokens`.
+Unresolved tiers are omitted rather than defaulted. Re-tiering creates a new cumulative series while
+the earlier tier's last value remains available. Query cumulative feature totals by both dimensions,
+for example `max by (feature, tier) (...)`; summing those cross-tier series can double-count a
+feature that was re-tiered.
 
 Dispatch metrics use the same projection as the shipped-record cost rollup. Every invoked
 `provider_attempt` contributes one `conductor.step.dispatches` point, including failed attempts; an
@@ -767,7 +785,7 @@ Prometheus commonly normalizes the instruments to `conductor_feature_cost_usd`,
 `conductor_feature_step_cost_usd`, and `conductor_feature_step_tokens`. For example:
 
 ```promql
-max by (feature) (
+max by (feature, tier) (
   last_over_time(conductor_feature_cost_usd{project=~"$project"}[$__range])
 )
 ```
@@ -1097,7 +1115,7 @@ block is normalized in place; the resolved value is written back (`config.ts:111
 | `build_review.adjudication.enabled` | boolean | `true` | Strict nested rollout switch for post-join remediation adjudication |
 | `build_review.scopeContainmentEnforced` | boolean | `false` | Works |
 | `build_review.maxParallel` | integer | `4` | Must be between 1 and 4 |
-| `build_review.rubrics` | object | `testQuality` off | Closed canonical map: `testQuality` only. Every other id ever accepted — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring` — is retired: it warns and is silently ignored rather than rejecting the config |
+| `build_review.rubrics` | object | `testQuality`, `security` off | Closed canonical map: `testQuality` and `security`. Every other id ever accepted — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring` — is retired: it warns and is silently ignored rather than rejecting the config |
 
 Normalization contract:
 
@@ -1119,21 +1137,23 @@ opting a project out of the replacement authority.
 config key is the only off switch. When disabled, the step is marked `skipped` and a `config_skip` event
 is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved once per pass.
 
-`testQuality` accepts `enabled`, `llm_provider`, `model`, `effort`, `model_fallback_ladder`,
+`testQuality` and `security` accept `enabled`, `llm_provider`, `model`, `effort`, `model_fallback_ladder`,
 `max_retries`, `escalate`, and `min_confidence`. `min_confidence` is an integer from 0 through 100 and
 defaults to `0`; scored findings below it are reported as suppressed rather than failing the gate or
 remaining actionable through `build-review findings` / `build-review accept`. Unscored findings are
-never suppressed. `testQuality` is off by default. When enabled, the engine derives a frozen,
+never suppressed. Both rubrics are off by default. When enabled, `testQuality` derives a frozen,
 feature-local typed scope from the graded diff, the active plan and stories, and established `Covers`
 bindings; it does not admit every declaration in a marked file. A production-only refactor, move, or
 rename with neither an established target nor a concrete candidate is a valid empty-scope PASS and
-dispatches neither the reviewer nor counterfactual execution. Missing markers, absent plan test paths, and
+dispatches neither the test-quality reviewer nor counterfactual execution. Enabled security review still
+runs and participates in the joined verdict. Missing markers, absent plan test paths, and
 an abstract possibility of an unknown dependency do not turn that empty scope into a coverage failure.
 Any unknown or retired rubric
 id under `build_review.rubrics` — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`,
 `wiring` — is accepted as a no-op with a one-time notice naming the retired setting; it never fails
-configuration loading or halts a run
-(`adr-2026-08-22-build-review-opt-in-rubric-container`).
+configuration loading or halts a run. `security` judges the whole frozen feature diff for concrete,
+changed-hunk-anchored security defects and has no test scope or counterfactual preflight.
+Both behaviors follow `adr-2026-08-22-build-review-opt-in-rubric-container`.
 
 An ambiguous changed marker association or identified changed setup/helper that affects an opted-in test
 is a concrete candidate, not an automatically in-scope test. The existing test-quality reviewer resolves

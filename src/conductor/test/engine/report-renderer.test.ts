@@ -1,9 +1,9 @@
-// Covers: task:1, task:2, task:3, task:5
+// Covers: task:1, task:2, task:3, task:5, task:16
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { renderReport, ReportError, parseEvents, aggregateHalts, aggregateKickbacks, summarizeKickbacks } from '../../src/engine/report-renderer.js';
+import { renderReport, ReportError, parseEvents, aggregateDurations, aggregateHalts, aggregateKickbacks, aggregateRetryHotspots, summarizeKickbacks } from '../../src/engine/report-renderer.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { computeCostRollup } from '../../src/engine/cost-rollup.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
@@ -348,6 +348,63 @@ describe('report-renderer', () => {
     expect(report).toContain('5000'); // ms
     expect(report).toContain('stories');
     expect(report).toContain('2500');
+  });
+
+  it('renders a configured member duration from its persisted active interval', async () => {
+    const executionContext = {
+      executionId: 'manual-test-execution',
+      subject: { kind: 'configured-member', parentGroup: 'validation', member: 'manual_test' },
+    };
+    const slowerSiblingContext = {
+      executionId: 'prd-audit-execution',
+      subject: { kind: 'configured-member', parentGroup: 'validation', member: 'prd_audit' },
+    };
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'step_started', step: 'validation', index: 0, executionContext }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'step_started', step: 'validation', index: 0, executionContext: slowerSiblingContext }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'step_completed', step: 'validation', status: 'done', executionContext: slowerSiblingContext, activeInterval: { durationMs: 4_000 } }, ts: '2026-01-01T00:00:04.000Z' },
+      { event: { type: 'step_completed', step: 'validation', status: 'done', executionContext, activeInterval: { durationMs: 1_000 } }, ts: '2026-01-01T00:00:05.000Z' },
+    ]), 'utf-8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toMatch(/configured:validation\/manual_test\s+1000/);
+    expect(report).not.toMatch(/configured:validation\/manual_test\s+5000/);
+  });
+
+  it('keeps legacy context-free duration rendering on timestamp fallback', async () => {
+    await writeFile(eventsPath, makeLines([
+      { event: { type: 'step_started', step: 'bootstrap', index: 0 }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'step_completed', step: 'bootstrap', status: 'done' }, ts: '2026-01-01T00:00:05.000Z' },
+    ]), 'utf-8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toMatch(/bootstrap\s+5000/);
+  });
+
+  it('keeps configured members of one parent group distinct in duration and retry aggregates', () => {
+    const member = (executionId: string, name: string) => ({
+      executionId,
+      subject: { kind: 'configured-member', parentGroup: 'explore', member: name },
+    });
+    const events = parseEvents(makeLines([
+      { event: { type: 'step_started', step: 'explore', index: 0, executionContext: member('manual-execution', 'manual_test') }, ts: '2026-01-01T00:00:00.000Z' },
+      { event: { type: 'step_started', step: 'explore', index: 0, executionContext: member('audit-execution', 'prd_audit') }, ts: '2026-01-01T00:00:01.000Z' },
+      { event: { type: 'step_retry', step: 'explore', attempt: 2, maxAttempts: 3, reason: 'manual retry', executionContext: member('manual-execution', 'manual_test') }, ts: '2026-01-01T00:00:02.000Z' },
+      { event: { type: 'step_completed', step: 'explore', status: 'done', executionContext: member('manual-execution', 'manual_test') }, ts: '2026-01-01T00:00:03.000Z' },
+      { event: { type: 'step_retry', step: 'explore', attempt: 2, maxAttempts: 3, reason: 'audit retry', executionContext: member('audit-execution', 'prd_audit') }, ts: '2026-01-01T00:00:04.000Z' },
+      { event: { type: 'step_completed', step: 'explore', status: 'done', executionContext: member('audit-execution', 'prd_audit') }, ts: '2026-01-01T00:00:06.000Z' },
+    ]));
+
+    expect(aggregateDurations(events)).toEqual({
+      'configured:explore/manual_test': 3_000,
+      'configured:explore/prd_audit': 5_000,
+    });
+    expect(aggregateRetryHotspots(events)).toEqual([
+      { step: 'configured:explore/manual_test', count: 1, topReason: 'manual retry' },
+      { step: 'configured:explore/prd_audit', count: 1, topReason: 'audit retry' },
+    ]);
   });
 
   // ─── #647 D3: kickback_outcome discriminator surfaced by aggregateKickbacks ──

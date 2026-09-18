@@ -246,6 +246,33 @@ standalone CLI writes through `adr-2026-08-13` §5's existing external same-sche
 A/B). No new event file, no new ledger, no sidecar. `build_review_rubric_infrastructure_failure`
 already exists and is reused; additive fields follow `adr-2026-07-26-event-sink-registry-exhaustiveness`.
 
+> **Amended 2026-09-18 by #2582:** the lane assumed every mechanical fault might clear on a re-run.
+> An oversized rubric projection cannot: the same frozen snapshot produces the same bytes on every
+> lap, so retrying consumed all three shared faults on `enforce-ownership-across-all-harness-github-operat`
+> (promptBytes 1,308,560 and 1,346,093 on consecutive laps) and halted with no diagnostic the
+> operator could act on.
+>
+> **D2.1 — `projection-oversized` is a closed cause of its own.** The coordinator gains the branch
+> reason `projection-oversized`, mapped to a new `BuildReviewInfrastructureFailureReason` member of
+> the same name; the total closed mapping of D2 is extended, not bypassed. It is raised at the
+> existing projection check in the coordinator, before any provider dispatch, when the serialized
+> projection exceeds `build_review.rubrics.<id>.max_projection_bytes` (a provider-agnostic byte
+> bound with a shipped default; never a model token limit). `detail` carries the measured and
+> permitted byte counts.
+>
+> **D3.1 — A deterministic fault is charged once and never retried.** `projection-oversized` is
+> deterministic over the lap's frozen inputs, so D3's "publish nothing, re-run" rule does not
+> apply to it. The lap publishes its aggregate with the infrastructure result, does not bump the
+> mechanical-fault counter of D4, and routes directly to D5's `needs-human` HALT naming the rubric,
+> the measured bytes, and the bound. D6's reduced-coverage record remains the operator's attributed
+> way past it; nothing here accepts a finding or manufactures a PASS. Transient causes keep D3/D4
+> unchanged.
+>
+> **D10.1 — The oversize rides the existing spine.** The occurrence is emitted on the existing
+> `build_review_rubric_infrastructure_failure` event with additive optional `measuredBytes` and
+> `limitBytes` fields; `build_review_rubric_prompt` keeps reporting `promptBytes` for admitted
+> dispatches. No new event, ledger, or sidecar.
+
 ## Alternatives considered
 
 - **Amend `adr-2026-08-13` so `accept` clears an exhausted mechanical fault** (the single-verb form of

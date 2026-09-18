@@ -1,3 +1,4 @@
+// Covers: task:2
 import { describe, it, expect, vi } from 'vitest';
 import {
   resolveStepConfig,
@@ -115,7 +116,7 @@ describe('engine/resolved-config', () => {
     });
   });
 
-  describe('resolveBuildReviewConfig (opt-in test-quality rubric)', () => {
+  describe('resolveBuildReviewConfig (opt-in rubric policies)', () => {
     it('defaults to enabled when no build_review block is present at all', () => {
       const resolved = resolveBuildReviewConfig(undefined);
       expect(resolved.enabled).toBe(true);
@@ -142,6 +143,16 @@ describe('engine/resolved-config', () => {
     it('defaults the test-quality rubric off with no overrides', () => {
       const resolved = resolveBuildReviewConfig(undefined);
       expect(resolved.rubrics.testQuality.enabled).toBe(false);
+    });
+
+    it('materializes the default-off security policy with its high effort and no confidence floor', () => {
+      const resolved = resolveBuildReviewConfig(undefined);
+
+      expect(resolved.rubrics.security).toMatchObject({
+        enabled: false,
+        effort: 'high',
+        min_confidence: 0,
+      });
     });
 
     it('honors an explicit test-quality opt-in over the off default', () => {
@@ -254,6 +265,16 @@ describe('engine/resolved-config', () => {
             model_fallback_ladder: ['gpt-5.6-terra'],
             max_retries: 2,
             escalate: false,
+            min_confidence: 0,
+          },
+          security: {
+            enabled: false,
+            llm_provider: ['claude', 'codex'],
+            model: 'opus',
+            effort: 'high',
+            model_fallback_ladder: ['fable', 'opus', 'sonnet'],
+            max_retries: 4,
+            escalate: true,
             min_confidence: 0,
           },
         },

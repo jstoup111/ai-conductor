@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 
 import type { BuildReviewRubricId } from '../types/config.js';
 import { DEPRECATED_BUILD_REVIEW_RUBRIC_IDS } from './config.js';
+import { isRegisteredRubric } from './build-review-registry.js';
 import {
   createConductStateLease,
   type ConductStateLease,
@@ -126,7 +127,6 @@ interface BuildReviewDispositionState {
   readonly records: readonly BuildReviewStoredDispositionRecord[];
 }
 
-const REDUCED_COVERAGE_RUBRICS = new Set<BuildReviewRubricId>(['testQuality']);
 const REDUCED_COVERAGE_REASONS = new Set<BuildReviewInfrastructureFailureReason>([
   'provider-error', 'retry-exhausted', 'missing-artifact', 'malformed-artifact', 'stale-artifact',
   'identity-mismatch', 'preflight-failed', 'artifact-read-failed', 'artifact-write-failed', 'scope-incomplete',
@@ -201,7 +201,7 @@ function parseDispositionRecord(value: unknown): BuildReviewDispositionRecord | 
 function parseReducedCoverageIdentity(value: unknown): BuildReviewReducedCoverageIdentity | undefined {
   const source = record(value);
   return source && exactKeys(source, ['rubric', 'reason']) &&
-    typeof source.rubric === 'string' && REDUCED_COVERAGE_RUBRICS.has(source.rubric as BuildReviewRubricId) &&
+    typeof source.rubric === 'string' && isRegisteredRubric(source.rubric) &&
     typeof source.reason === 'string' && REDUCED_COVERAGE_REASONS.has(source.reason as BuildReviewInfrastructureFailureReason)
     ? { rubric: source.rubric as BuildReviewRubricId, reason: source.reason as BuildReviewInfrastructureFailureReason }
     : undefined;

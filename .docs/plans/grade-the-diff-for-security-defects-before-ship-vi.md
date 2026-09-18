@@ -12,6 +12,8 @@
 
 ## Summary
 
+**Amendment 2026-09-17 (prd_audit PLAN_GAP S6.1/S6.9, as-built AB-1):** Task 12 and Story 6 now follow ADR adr-2026-08-29 D4.2 — `confidence` is optional and absent means blocking — and the unchanged-sink negative fixture must prove a finding anchored to the changed hunk rather than zero findings.
+
 Fourteen TDD tasks add `security` as the second built-in, default-off member of the build_review rubric container: registry and config, a whole-diff projection with content-addressed caching, a ten-member closed vocabulary with content-region anchors, aggregate and adjudicator flow with no plan-binding exemption, the shipped `build-review-security` skill, its integrity and model-table registration, and the removal of security grading from the per-batch code-review evaluator.
 
 ## Technical Approach
@@ -61,6 +63,9 @@ Fourteen TDD tasks add `security` as the second built-in, default-off member of 
 1. Write failing tests in `config.test.ts` and `resolved-config.test.ts`: a config omitting `security` resolves `enabled: false`, `effort: 'high'`, `min_confidence: 0`; `enabled: "yes"` fails validation with a message naming `build_review.rubrics.security.enabled` and `boolean`; `effort: extreme` fails naming the key and the allowed set.
 2. Run `npx vitest run test/engine/config.test.ts test/engine/resolved-config.test.ts` and observe RED.
 3. Extend `validateBuildReviewRubrics` normalization so every registry member is materialized `enabled: false` unless set; add `security: false` to `DEFAULT_RUBRIC_ENABLED` and `security: 'high'` to `DEFAULT_RUBRIC_EFFORT`; keep the `build_review.rubrics` consumer-registry key set unchanged. Enable `security` for this repository in `.ai-conductor/config.yml` beside `testQuality` (repo-only half of the change).
+
+> **Amended 2026-09-15 by operator approval (James Stoup, interactive halt recovery):** Self-host activation is deferred to a separate follow-up after this rubric implementation ships and the running engine recognizes `security`. This feature omits the `security` key from `.ai-conductor/config.yml`; all consumer opt-in behavior and default-off tests remain required. The current daemon rejects an unknown rubric key before `test_suite` starts, even when that key is disabled.
+
 4. Run the same command and observe GREEN.
 5. Commit with message: `feat(build-review): resolve the security rubric policy default-off`.
 
@@ -68,6 +73,8 @@ Fourteen TDD tasks add `security` as the second built-in, default-off member of 
 - `resolveBuildReviewConfig` on a config that omits `security` yields `rubrics.security.enabled === false` and `effort === 'high'`, as asserted by the resolved-config test.
 - `validateConfig` rejects `build_review.rubrics.security.enabled: "yes"` and `effort: extreme` with errors that name the offending key, as asserted by the config test.
 - `.ai-conductor/config.yml` declares `build_review.rubrics.security.enabled: true` for self-host builds, and the shipped default remains off.
+
+> **Amended 2026-09-15 by operator approval (James Stoup, interactive halt recovery):** Self-host activation is deferred to a separate follow-up after this rubric implementation ships and the running engine recognizes `security`. This feature omits the `security` key from `.ai-conductor/config.yml`; all consumer opt-in behavior and default-off tests remain required. The current daemon rejects an unknown rubric key before `test_suite` starts, even when that key is disabled.
 
 **Files:** `src/conductor/src/engine/config.ts`; `src/conductor/src/engine/resolved-config.ts`; `.ai-conductor/config.yml`; `src/conductor/test/engine/config.test.ts`; `src/conductor/test/engine/resolved-config.test.ts`
 
@@ -155,6 +162,8 @@ Fourteen TDD tasks add `security` as the second built-in, default-off member of 
 **Dependencies:** Task 1
 
 ### Task 7: Stamp the security envelope and refuse reviewer-supplied identity
+
+> **Amended 2026-09-16 by operator approval (James Stoup, interactive halt recovery for #2568):** Follow adr-2026-08-19-engine-stamped-rubric-judged-result-envelope D4. The title, step 1, and Done when rejection requirement below are superseded: ignore all reviewer-supplied envelope fields, stamp engine-owned metadata, and derive the verdict from validated findings. Envelope echoes never trigger repair or dispatch failure. Invalid security findings and test-quality-only evidence remain rejected. The coordinator tests own this boundary proof.
 **Story:** 3 (S3.1, S3.6, S3.8)
 **Type:** negative-path
 
@@ -259,16 +268,16 @@ Fourteen TDD tasks add `security` as the second built-in, default-off member of 
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests in `build-review-rubric-skills.test.ts` and `build-review-skill-contract.test.ts`: the skill file exists with frontmatter `name: build-review-security`, `disable-model-invocation: true`, `enforcement: gating`, `phase: build`; its `**Closed vocabulary:**` line lists the ten kinds and its `**Reference grammar:**` line binds `anchor.locus` to `content-region`; its result contract names `findings` only and no `boundTo`, `scopeResolutions`, or `counterfactualSensitivity`; fixture payloads for the committed-secret, injection, authorization-removal, and SSRF diffs validate as judged FAIL with the named kinds; fixture payloads for the rename-only, fake-test-credential, manifest-bump, design-only, and unchanged-sink diffs validate as judged results with zero blocking findings.
+1. Write failing tests in `build-review-rubric-skills.test.ts` and `build-review-skill-contract.test.ts`: the skill file exists with frontmatter `name: build-review-security`, `disable-model-invocation: true`, `enforcement: gating`, `phase: build`; its `**Closed vocabulary:**` line lists the ten kinds and its `**Reference grammar:**` line binds `anchor.locus` to `content-region`; its result contract names `findings` only and no `boundTo`, `scopeResolutions`, or `counterfactualSensitivity`; fixture payloads for the committed-secret, injection, authorization-removal, and SSRF diffs validate as judged FAIL with the named kinds; fixture payloads for the rename-only, fake-test-credential, manifest-bump, and design-only diffs validate as judged results with zero blocking findings, and the unchanged-sink fixture validates as one finding anchored to the changed hunk with the unchanged line named only in `evidenceLocations`.
 2. Run `npx vitest run test/engine/build-review-rubric-skills.test.ts test/engine/build-review-skill-contract.test.ts` and observe RED.
-3. Author `skills/build-review-security/SKILL.md` on the test-quality exemplar: purpose, closed input projection (whole diff by reference, worktree reads as part of the input), judgement (one finding per independent defect, anchored to the introducing hunk, unchanged sinks cited only in `evidenceLocations`, a definition and an explicit non-finding for each of the ten kinds, integer `confidence` required), result contract, verification checklist. Add `agents/openai.yaml` only if the sibling shipped rubric skill carries one.
+3. Author `skills/build-review-security/SKILL.md` on the test-quality exemplar: purpose, closed input projection (whole diff by reference, worktree reads as part of the input), judgement (one finding per independent defect, anchored to the introducing hunk, unchanged sinks cited only in `evidenceLocations`, a definition and an explicit non-finding for each of the ten kinds, optional integer `confidence`, absent means blocking per ADR D4.2), result contract, verification checklist. Add `agents/openai.yaml` only if the sibling shipped rubric skill carries one.
 4. Run the same command and observe GREEN.
 5. Commit with message: `feat(skills): add the build-review-security rubric skill`.
 
 **Done when:**
 - `skills/build-review-security/SKILL.md` carries the four required frontmatter fields plus `disable-model-invocation: true`, a ten-member `**Closed vocabulary:**` line, and a `**Reference grammar:**` line binding `anchor.locus` to `content-region`, as asserted by the rubric-skills test.
-- The skill's result contract returns `findings` only, with no `scopeResolutions`, `counterfactualSensitivity`, or `boundTo` field, and its judgement section defines each of the ten concern kinds with an explicit non-finding and requires an integer `confidence`, as asserted by the skill-contract test.
-- Fixture payloads for the four happy-path diffs validate as judged `FAIL` results with the named concern kinds, and fixture payloads for the five negative diffs validate as judged results with zero blocking findings, as asserted by the rubric-skills test.
+- The skill's result contract returns `findings` only, with no `scopeResolutions`, `counterfactualSensitivity`, or `boundTo` field, and its judgement section defines each of the ten concern kinds with an explicit non-finding and accepts an optional integer `confidence` (absent means blocking, per ADR D4.2), as asserted by the skill-contract test.
+- Fixture payloads for the four happy-path diffs validate as judged `FAIL` results with the named concern kinds, and fixture payloads for the four zero-finding negative diffs validate as judged results with zero blocking findings, and the unchanged-sink fixture validates as one finding anchored to the changed hunk with the unchanged line named only in `evidenceLocations`, as asserted by the rubric-skills test.
 
 **Files:** `skills/build-review-security/SKILL.md`; `src/conductor/test/engine/build-review-rubric-skills.test.ts`; `src/conductor/test/engine/build-review-skill-contract.test.ts`
 
@@ -419,3 +428,51 @@ Task 14 (independent)
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
+
+## Deferred follow-up: activate security review for self-host builds
+
+Approved by James Stoup on 2026-09-15 as a separate change after #2034 ships.
+
+- Prerequisite: the rubric implementation is merged and the running self-host daemon uses an engine whose registry accepts `security`.
+- Deliverable: enable `build_review.rubrics.security.enabled: true` in this repository’s `.ai-conductor/config.yml`.
+- Verification: the running engine accepts the configuration and an enabled self-host lap dispatches the security rubric; shipped consumer defaults stay off.
+- This activation is intentionally excluded from the current feature’s completion criteria.
+
+### Task rem-as-built-rem-ab1-1: src/conductor/src/engine/artifacts.ts:2166,2198 — derive the verdict rubric contract from the single registry authority: import BUILD_REVIEW_RUBRIC_IDS from './build-review-registry.js' (no import cycle: the registry chain never imports artifacts.ts), replace the literal BUILD_REVIEW_RUBRIC_NAMES = ['testQuality'] with that tuple, and replace the one-member BuildReviewRubric interface with Record<BuildReviewRubricId, boolean> so the type and the runtime list cannot diverge; the flag/findings loops at :2283-2325 and the failedRubrics compatibility mapping at :2425-2432 then cover security without a second list. Add a failing-first test in src/conductor/test/engine/artifacts.test.ts: validateBuildReviewVerdict accepts verdict FAIL with rubric { testQuality: false, security: true } and findings.security non-empty, rejects it when findings omits security, and buildReviewFailureDetails emits the '[security] ...' detail lines; also assert an aggregate-derived security-only FAIL passes the validator that conductor.ts:11042 gates adjudication on. Keep every existing testQuality validator and failure-detail assertion (Task 4) unchanged.
+**Gate:** as-built
+**Rationale:** src/conductor/src/engine/artifacts.ts:2198 still declares BUILD_REVIEW_RUBRIC_NAMES = ['testQuality'] (and its matched pair, the BuildReviewRubric interface at :2166), so validateBuildReviewVerdict at :2313-2325 rejects a security-only FAIL as 'FAIL requires at least one rubric flag to be true' before Conductor's validator gate at conductor.ts:11042-11043 can enter the adjudication path at :11083-11158; the approved architecture already requires this flow (adr-2026-08-21-review-bound-by-plan-done-when-criteria D3 and plan Task 10, .docs/plans/grade-the-diff-for-security-defects-before-ship-vi.md:224-238), so it is conforming implementation drift with a determinable fix, not an architecture decision. Matched pair named and brought along: the BuildReviewRubric interface and BUILD_REVIEW_RUBRIC_NAMES are both derived from the one registry authority BUILD_REVIEW_RUBRIC_IDS (build-review-registry.ts:19), which build-review-aggregate.ts already uses via RUBRICS, so the two cannot drift again; BuildReviewFindings at :2176 is a mapped type over the interface and follows automatically. Sibling sweep: the failedRubrics compatibility path at artifacts.ts:2425-2432 reads the same constant and is fixed by the same derivation; build-review-aggregate.ts:66,151 keep their deliberate 'testQuality' construction-compatibility and unregistered-rubric fault slot and are found-and-excluded because no plan task admits changing them and the aggregate already joins every registry member at :334-361; no other production site reads verdict.rubric.testQuality. No coverage is removed: Task 4's existing testQuality verdict-validation and buildReviewFailureDetails assertions must stay green unchanged, with security added alongside.
+**Governing clause:** adr-2026-08-21-review-bound-by-plan-done-when-criteria D3
+**Done when:**
+- adr-2026-08-21-review-bound-by-plan-done-when-criteria D3 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab1-1 is complete.
+
+### Task rem-as-built-rem-ab2-1: src/conductor/src/engine/build-review-cli.ts:86 and src/conductor/src/engine/build-review-dispositions.ts:129 — replace both literal one-member sets (BUILD_REVIEW_RUBRICS and REDUCED_COVERAGE_RUBRICS) with the registry authority, using isRegisteredRubric/BUILD_REVIEW_RUBRIC_IDS from './build-review-registry.js' so the CLI predicate at :425-438 and parseReducedCoverageIdentity at :201-207 accept every registered rubric from one source and cannot drift apart. Add failing-first tests in src/conductor/test/engine/build-review-cli.test.ts and src/conductor/test/engine/build-review-dispositions.test.ts: `build-review record-reduced-coverage --rubric security` against an aggregate whose security result is an infrastructure-failure is accepted and writes a reduced-coverage record, the exact command string rendered by conductor.ts:1803-1807 for a security fault is the one accepted, a genuinely unregistered rubric id is still refused 'unknown-rubric', and the stored security identity round-trips through parseReducedCoverageIdentity. Keep the existing testQuality acceptance and unknown-rubric refusal assertions unchanged.
+**Gate:** as-built
+**Rationale:** conductor.ts:1790-1807 renders the terminal mechanical-fault recovery command from the aggregate's actual failing rubric (so it emits `--rubric security`), but build-review-cli.ts:86 gates the command on BUILD_REVIEW_RUBRICS = new Set(['testQuality']) and refuses it 'unknown-rubric' at :425-438, and build-review-dispositions.ts:129 repeats the same one-member set in REDUCED_COVERAGE_RUBRICS so parseReducedCoverageIdentity at :201-207 could not read the record either; plan Task 1 Done-when already forbids a third literal copy of the rubric id list under src/conductor/src (.docs/plans/grade-the-diff-for-security-defects-before-ship-vi.md:47-50), so this is conforming implementation drift with a determinable fix and no architectural question. Matched pair named and brought along in the same task: the CLI predicate and the disposition-store predicate are two lists that must agree, and both are derived from BUILD_REVIEW_RUBRIC_IDS (build-review-registry.ts:19) rather than fixed separately. Sibling sweep: isRegisteredRubric already exists on that authority and is reused; build-review-cache.ts:117 is the remaining literal pair but it enumerates both ids and is already security-correct, named here as found-and-excluded because widening it is not required to close this finding and no plan task admits reworking the cache parser. No coverage is removed: the existing testQuality reduced-coverage CLI and store tests remain green, with security cases added.
+**Parent task:** 1
+**Governing clause:** Task 1
+**Done when:**
+- Task 1 is satisfied by this task.
+- Re-run as-built and confirm task rem-as-built-rem-ab2-1 is complete.
+
+> **Amended 2026-09-17 by operator (as-built AB-2 resolution):** Story 5 criterion 1 requires the vocabulary integrity check to execute the engine parser against each declared member, but approved Task 13 delivered only the exported-vocabulary list comparison. The operator kept the sealed criterion and authorized Task 15 to add the parser execution; Task 13's delivered drift comparison stays as-is.
+
+### Task 15: Execute the concern-kind parser against every documented vocabulary member in the integrity guard
+**Story:** 5
+**Type:** negative-path
+
+**Steps:**
+1. Write the failing check first: in the probe script embedded in `test/check_build_review_rubric_skill_vocabularies.sh`, import `parseBuildReviewFindingConcernKind` from the domain module (fail the probe naming the export when absent) and, for each rubric in `RUBRICS`, emit `"<rubric> parses <member>"` for every member of that rubric's `concernKinds` that the parser returns unchanged and `"<rubric> !unparsed <member>"` for any it rejects.
+2. In `check_vocabulary_drift`, after the list comparison, run every member from the skill's documented `**Closed vocabulary:**` line through the probe's parser output: a documented member with no `"<rubric> parses <member>"` line, or any `!unparsed` line, fails naming the rubric and the member.
+3. Add a drift fixture in the script's fixture block proving that a domain module whose parser rejects one declared member (for example a normalizer that lowercases a member the vocabulary lists in another case) fails naming `security` and that member, while the unmodified domain passes for both `testQuality` and `security`.
+4. Run `bash test/check_build_review_rubric_skill_vocabularies.sh` and `bash test/test_harness_integrity.sh` and observe RED then GREEN.
+5. Commit with message: `test(integrity): execute the concern-kind parser per documented vocabulary member`.
+
+**Done when:**
+- `test/check_build_review_rubric_skill_vocabularies.sh` executes `parseBuildReviewFindingConcernKind` against every documented `**Closed vocabulary:**` member for both `testQuality` and `security` and passes on the committed skill and domain files.
+- A fixture in which the parser rejects one declared `security` member makes the check exit non-zero naming `security` and that member, as asserted by the script's own fixture run.
+- The existing list-comparison drift fixtures from Task 13 still fail naming the rubric and the drifted member.
+
+**Files:** `test/check_build_review_rubric_skill_vocabularies.sh`
+
+**Dependencies:** Task 13

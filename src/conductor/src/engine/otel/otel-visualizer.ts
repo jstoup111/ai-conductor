@@ -87,6 +87,8 @@ export interface OtelVisualizerContext {
   metricExporter?: unknown;
   /** Optional warning callback. Receives O(1) warning strings; never throws. */
   onWarning?: (msg: string) => void;
+  /** Event-time clock. Defaults to wall time; injectable for deterministic consumers. */
+  now?: () => number;
   /**
    * Timeout (ms) for a single export call. If an endpoint does not respond
    * within this bound the export is abandoned and a warning is emitted.
@@ -110,6 +112,7 @@ export class OtelVisualizer implements VisualizerPlugin {
   private readonly spanExporter: SpanExporter;
   private readonly onWarning?: (msg: string) => void;
   private readonly exportTimeoutMillis: number;
+  private readonly now: () => number;
   /** Compatibility only for legacy direct callers that omit start context. */
   private readonly legacyStartContext: VisualizerStartContext;
   /** Configured `otel.project_name` overrides the trace Resource project name. */
@@ -182,6 +185,7 @@ export class OtelVisualizer implements VisualizerPlugin {
     this.spanExporter = spanExporter;
     this.onWarning = ctx.onWarning;
     this.exportTimeoutMillis = ctx.exportTimeoutMillis ?? EXPORT_TIMEOUT_MS;
+    this.now = ctx.now ?? (() => Date.now());
     this.legacyStartContext = {
       runId: ctx.runId,
       pipelineDir: ctx.pipelineDir,
@@ -322,10 +326,19 @@ export class OtelVisualizer implements VisualizerPlugin {
       case 'step_failed':
         this.spanManager.onStepFailed(event);
         break;
+      case 'step_interrupted':
+        this.spanManager.onStepInterrupted(event);
+        break;
+      case 'step_refused':
+        this.spanManager.onStepRefused(event);
+        break;
+      case 'group_member_step':
+        this.spanManager.onGroupMemberStep(event);
+        break;
       case 'provider_attempt':
         {
           const observation = this.dispatchMetering.observe(event);
-          if (observation !== undefined) this.spanManager.onProviderAttempt(event.step, observation);
+          if (observation !== undefined) this.spanManager.onProviderAttempt(event, observation);
         }
         break;
       case 'step_retry':
@@ -385,6 +398,15 @@ export class OtelVisualizer implements VisualizerPlugin {
       spanProcessors: [new BatchSpanProcessor(this.spanExporter, { exportTimeoutMillis: this.exportTimeoutMillis })],
     });
     const tracer = this.tracerProvider.getTracer('conductor', '1.0.0');
-    this.spanManager = new SpanManager(tracer, this.onWarning);
+    this.spanManager = new SpanManager(
+      tracer,
+      this.onWarning,
+      undefined,
+      {
+        featureId: context.feature ?? 'unknown-feature',
+        runId: context.runId ?? 'unknown-run',
+      },
+      this.now,
+    );
   }
 }

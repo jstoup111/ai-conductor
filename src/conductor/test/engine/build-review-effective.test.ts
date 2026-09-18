@@ -9,10 +9,15 @@ const lapId = parseBuildReviewLapId('lap-current')!;
 const root = '/repo';
 const worktree = '/repo/.worktrees/feature';
 const feature = { version: 'v1' as const, repository: root, feature: 'feature' };
-type Rubric = 'testQuality';
+type Rubric = 'testQuality' | 'security';
 const currentContractVersion: BuildReviewRubricContractVersion = 'v3';
 
 const testQualityFinding = { concernKind: 'test-insensitive', summary: 'Actionable finding summary', evidenceLocations: ['test/a.test.ts:1'], anchor: { rubric: 'testQuality' as const, locus: { path: 'test/a.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'fixture test' } } };
+const securityFinding = { concernKind: 'committed-secret', summary: 'Credential committed to source.', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: 'security' as const, locus: { path: 'src/a.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'credential assignment' } } };
+
+function securityPass() {
+  return { kind: 'judged' as const, rubric: 'security' as const, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: currentContractVersion, findings: [], verdict: 'PASS' as const };
+}
 
 function reducedCoverageDecision(rubric: Rubric) {
   return { kind: 'reduced-coverage' as const, version: 'v1' as const, feature, identity: { rubric, reason: 'provider-error' as const }, rationale: 'mechanical fault is covered', operator: 'operator', acceptedAt: '2026-08-14T00:00:00.000Z' };
@@ -21,8 +26,9 @@ function reducedCoverageDecision(rubric: Rubric) {
 function aggregate(options: {
   readonly faults?: Partial<Record<Rubric, 'provider-error'>>;
   readonly includeTestQualityFinding?: boolean;
+  readonly skipSecurity?: boolean;
 } = {}) {
-  const judged = (rubric: Rubric, findings = options.includeTestQualityFinding !== false ? [testQualityFinding] : []) => ({
+  const judged = (rubric: Rubric, findings = rubric === 'testQuality' && options.includeTestQualityFinding !== false ? [testQualityFinding] : []) => ({
     kind: 'judged' as const, rubric, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: currentContractVersion,
     findings, verdict: findings.length ? 'FAIL' as const : 'PASS' as const,
   });
@@ -31,6 +37,7 @@ function aggregate(options: {
     : judged(rubric);
   return joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
     testQuality: outcome('testQuality'),
+    security: options.skipSecurity ? { kind: 'skipped' as const, rubric: 'security' as const, reason: 'disabled' as const } : outcome('security'),
   } });
 }
 
@@ -52,12 +59,59 @@ function scopeAggregate(resolution: 'indeterminate' | 'resolved', includeTestQua
       kind: 'judged' as const, rubric: 'testQuality' as const, lapId, snapshotDigest: 'sha256:snapshot', contractVersion: currentContractVersion,
       findings, scopeResolutions: [scopeResolution], verdict: findings.length ? 'FAIL' as const : 'PASS' as const,
     },
+    security: securityPass(),
   } });
 }
 
 const identityDeps = { resolveMainRoot: async () => root, realpath: async (path: string) => path };
 
 describe('live build-review effective resolver', () => {
+  it('suppresses only scored security findings below the security confidence floor', () => {
+    const raw = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
+      testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: currentContractVersion, findings: [], verdict: 'PASS' },
+      security: {
+        kind: 'judged', rubric: 'security', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: currentContractVersion,
+        findings: [{ concernKind: 'committed-secret', summary: 'Credential committed to source.', evidenceLocations: ['src/a.ts:1'], confidence: 40, anchor: { rubric: 'security', locus: { path: 'src/a.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'credential assignment' } } }],
+        verdict: 'FAIL',
+      },
+    } });
+    const suppressed = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'security', contractVersion: currentContractVersion, concernKind: 'committed-secret',
+      anchor: { rubric: 'security', locus: { path: 'src/a.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'credential assignment' } },
+    })!;
+
+    expect(deriveEffectiveBuildReviewVerdictWithDispositions(raw, feature, [], [], { security: 60 })).toMatchObject({
+      verdict: 'PASS', suppressedFindingIds: [suppressed.id], unresolvedFindingIds: [],
+    });
+    if (raw.results.security.kind !== 'judged') throw new Error('security fixture must be judged');
+    const unscored = {
+      ...raw,
+      results: {
+        ...raw.results,
+        security: {
+          ...raw.results.security,
+          findings: raw.results.security.findings.map(({ confidence: _confidence, ...finding }) => finding),
+        },
+      },
+    };
+    expect(deriveEffectiveBuildReviewVerdictWithDispositions(unscored, feature, [], [], { security: 60 })).toMatchObject({
+      verdict: 'FAIL', suppressedFindingIds: [], unresolvedFindingIds: [suppressed.id],
+    });
+  });
+
+  it('excludes an operator-accepted security finding under the current contract version', () => {
+    const raw = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
+      testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: currentContractVersion, findings: [], verdict: 'PASS' },
+      security: { kind: 'judged', rubric: 'security', lapId, snapshotDigest: 'sha256:snapshot', contractVersion: currentContractVersion, findings: [securityFinding], verdict: 'FAIL' },
+    } });
+    const accepted = canonicalizeBuildReviewFindingIdentity({ ...securityFinding, rubric: 'security', contractVersion: currentContractVersion })!;
+    const dispositions = [{ version: 'v1' as const, feature, finding: accepted, sourceLapId: lapId, summary: 'accepted security risk', rationale: 'known development credential', operator: 'operator', acceptedAt: '2026-09-14T00:00:00.000Z' }];
+
+    expect(deriveEffectiveBuildReviewVerdictWithDispositions(raw, feature, dispositions)).toMatchObject({
+      rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [accepted.id], unresolvedFindingIds: [],
+    });
+  });
+
   it('canonicalizes exactly one linked-worktree feature beneath the canonical main root', async () => {
     await expect(resolveBuildReviewFeatureIdentity(worktree, identityDeps)).resolves.toEqual(feature);
     await expect(resolveBuildReviewFeatureIdentity('/repo/.worktrees/feature/nested', identityDeps)).resolves.toBeUndefined();
@@ -75,7 +129,7 @@ describe('live build-review effective resolver', () => {
   });
 
   it('keeps a zero-judged review blocking while rendering current reduced-coverage evidence', async () => {
-    const raw = aggregate({ faults: { testQuality: 'provider-error' } });
+    const raw = aggregate({ faults: { testQuality: 'provider-error' }, skipSecurity: true });
     const result = await resolveEffectiveBuildReviewVerdict(worktree, raw, {
       ...identityDeps,
       createStore: () => ({
@@ -189,7 +243,7 @@ describe('live build-review effective resolver', () => {
     const decision = reducedCoverageDecision('testQuality');
     const uncoveredFault = aggregate({ faults: { testQuality: 'provider-error' }, includeTestQualityFinding: false });
     const unresolvedFinding = aggregate();
-    const nothingJudged = aggregate({ faults: { testQuality: 'provider-error' }, includeTestQualityFinding: false });
+    const nothingJudged = aggregate({ faults: { testQuality: 'provider-error' }, includeTestQualityFinding: false, skipSecurity: true });
     const resolver = (raw: ReturnType<typeof aggregate>, reducedCoverage = [decision]) => resolveEffectiveBuildReviewVerdict(worktree, raw, {
       ...identityDeps,
       createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), listReducedCoverage: async () => ({ ok: true as const, records: reducedCoverage }) }),

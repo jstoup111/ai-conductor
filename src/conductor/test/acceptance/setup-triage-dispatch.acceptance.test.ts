@@ -245,7 +245,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
       sessions: 'new ProviderSessionStore()',
       config: 'config',
       onAttempt:
-        "(step, attempt) =>\n      eventTarget.emit({ type: 'provider_attempt', step, ...attempt })",
+        "(step, { executionContext, ...attempt }) =>\n      eventTarget.emit({\n        type: 'provider_attempt', step, ...attempt,\n        ...(executionContext ? { executionContext } : {}),\n      })",
       warn: '(_message, transition) => eventTarget.emit(transition)',
       withCandidateSafety: 'createCandidateSafetyBoundary()',
     },

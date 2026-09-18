@@ -2729,7 +2729,7 @@ steps:
       });
     });
 
-    it('materializes the single test-quality policy and preserves its configured policy', () => {
+    it('materializes every registered rubric policy and preserves its configured policy', () => {
       const defaults = validateConfig({ build_review: {} });
       const configured = validateConfig({
         build_review: {
@@ -2758,6 +2758,7 @@ steps:
           adjudication: { enabled: true },
           rubrics: {
             testQuality: { enabled: false },
+            security: { enabled: false },
           },
         },
         configured: {
@@ -2774,8 +2775,25 @@ steps:
               max_retries: 2,
               escalate: true,
             },
+            security: { enabled: false },
           },
         },
+      });
+    });
+
+    it.each([
+      [
+        { enabled: 'yes' },
+        'build_review.rubrics.security.enabled must be a boolean',
+      ],
+      [
+        { effort: 'extreme' },
+        'build_review.rubrics.security.effort must be low|medium|high|xhigh|max',
+      ],
+    ])('rejects invalid security rubric policy %#', (security, message) => {
+      expect(validateConfig({ build_review: { rubrics: { security } } })).toEqual({
+        ok: false,
+        error: { type: 'validation_error', message },
       });
     });
 
@@ -2838,7 +2856,10 @@ steps:
           enabled: false,
           maxParallel: 1,
           adjudication: { enabled: true },
-          rubrics: { testQuality: { enabled: false } },
+          rubrics: {
+            testQuality: { enabled: false },
+            security: { enabled: false },
+          },
         },
         warnings: ['build_review.perTaskFloor is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).'],
         deprecatedKeys: [{

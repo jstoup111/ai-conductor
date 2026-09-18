@@ -36,6 +36,7 @@ import type { BuildReviewFrozenInputs } from "./build-review-inputs.js";
 import { buildReviewScopeCandidateIdentityKey } from "./build-review-scope-identity.js";
 import {
   deriveBuildReviewRubricProjections,
+  isTestQualityProjection,
   type BuildReviewRubricProjections,
   type BuildReviewRubricProjection,
   type BuildReviewTestQualityProjectionInput,
@@ -131,7 +132,8 @@ export interface BuildReviewCoordinationInput {
   readonly inputs: BuildReviewFrozenInputs;
   readonly lapId: BuildReviewLapId;
   /** Test seam for an engine-held projection corruption at branch settlement. */
-  readonly projections?: BuildReviewRubricProjections;
+  /** Legacy test seams may override one projection; unset members use the engine-derived projection. */
+  readonly projections?: Partial<BuildReviewRubricProjections>;
   readonly preflight: () => Promise<TautologyPreflightResult>;
   /** Resolved once per dispatch by the caller; never read from the environment here (D6). */
   readonly engineIdentity: BuildReviewCoordinationEngineIdentity;
@@ -311,6 +313,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
  * second provider call participate in candidate settlement.
  */
 export function buildReviewCandidateScopeResolutionContext(projection: BuildReviewRubricProjection): BuildReviewCandidateScopeResolutionContext {
+  if (!isTestQualityProjection(projection)) return { candidates: [] };
   const scope = record(projection.testScope);
   const rawCandidates = Array.isArray(scope?.candidates) ? scope.candidates : [];
   const evidence = Array.isArray(scope?.evidence) ? scope.evidence : [];
@@ -467,7 +470,9 @@ export async function coordinateBuildReviewRubrics(
     ? inScopeTests.length > 0
     : (typedScope?.targets?.length ?? 0) > 0;
   const hasConcreteCandidates = (typedScope?.candidates?.length ?? 0) > 0;
-  if (input.config.enabled && testQualityPolicy?.enabled && !hasEstablishedTargets && !hasConcreteCandidates) {
+  const emptyTestQualityScope = !hasEstablishedTargets && !hasConcreteCandidates;
+  const otherRubricEnabled = BUILD_REVIEW_RUBRICS.some((rubric) => rubric !== TEST_QUALITY_RUBRIC && input.config.rubrics[rubric]?.enabled);
+  if (input.config.enabled && testQualityPolicy?.enabled && emptyTestQualityScope && !otherRubricEnabled) {
     // An empty scope is still a settled scope assessment: publish its counts and
     // unresolved reasons on the same event as every judged settlement, so a
     // production-only refactor or pure move is observable rather than silent.
@@ -509,7 +514,7 @@ export async function coordinateBuildReviewRubrics(
     (branch) => !("kind" in branch) && branch.rubric === TEST_QUALITY_RUBRIC,
   );
   let preflight: TautologyPreflightResult | undefined;
-  if (testQualityEnabled) {
+  if (testQualityEnabled && !emptyTestQualityScope) {
     try {
       preflight = await input.preflight();
     } catch {
@@ -544,7 +549,10 @@ export async function coordinateBuildReviewRubrics(
       runnerSelectors: [], changedTestSelectors: [], unresolvedMarkers, revertedProductionManifest: [], preflight: { classification: "not-requested", excerpt: "" },
     },
   });
-  const projections = input.projections ?? derivedProjections;
+  const projections: Readonly<Record<BuildReviewRubricId, BuildReviewRubricProjection>> = {
+    ...derivedProjections,
+    ...input.projections,
+  };
   const resolved = new Map<BuildReviewRubricId, BuildReviewCoordinatedBranch>();
   const misses: BuildReviewDispatchableRubric[] = [];
 
@@ -552,6 +560,12 @@ export async function coordinateBuildReviewRubrics(
     if ("kind" in branch) {
       resolved.set(branch.rubric, branch);
       await input.emit?.({ type: "build_review_rubric_skipped", rubric: branch.rubric, lapId: input.lapId, reason: branch.reason });
+      continue;
+    }
+    if (branch.rubric === TEST_QUALITY_RUBRIC && emptyTestQualityScope) {
+      resolved.set(branch.rubric, { kind: "skipped", rubric: branch.rubric, reason: "test_quality_empty_scope" });
+      await input.emit?.({ type: "build_review_rubric_skipped", rubric: branch.rubric, lapId: input.lapId, reason: "test_quality_empty_scope" });
+      await emitScopeSummary(input.emit, input);
       continue;
     }
     const projection = projections[branch.rubric];

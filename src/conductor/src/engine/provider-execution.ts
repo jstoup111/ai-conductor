@@ -7,7 +7,7 @@ import type {
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
-import type { ComplexityTier, StepName } from '../types/index.js';
+import type { ComplexityTier, ExecutionContext, StepName } from '../types/index.js';
 import type {
   EffortLevel,
   HarnessConfig,
@@ -58,6 +58,8 @@ export interface ProviderCandidateFailureClassification {
 
 export interface ProviderAttemptMetadata {
   provider: string;
+  /** Logical execution identity carried by the caller-owned invocation scope. */
+  executionContext?: ExecutionContext;
   /** Auxiliary member that selected this candidate; never a lifecycle step. */
   auxiliaryMember?: string;
   /** Validated task-local telemetry; never an authorization input. */
@@ -223,6 +225,8 @@ export interface ExecuteProviderCandidatesInput {
     readonly repository: string;
     readonly featureSlug: string;
   };
+  /** Logical execution identity for this invocation's existing event-spine metadata. */
+  executionContext?: ExecutionContext;
   escalate?: boolean;
   modelOverride?: string;
   effortOverride?: EffortLevel;
@@ -531,6 +535,7 @@ export async function invokeProviderCandidate({
 
 export interface BuildProviderAttemptMetadataInput {
   providerKey: string;
+  executionContext?: ExecutionContext;
   taskId?: string;
   taskAttributionDiagnostic?: TaskAttributionDiagnosticCode;
   result: InvokeResult;
@@ -549,6 +554,7 @@ export interface BuildProviderAttemptMetadataInput {
 /** Construct event-boundary metadata for exactly one candidate result. */
 export function buildProviderAttemptMetadata({
   providerKey,
+  executionContext,
   taskId,
   taskAttributionDiagnostic,
   result,
@@ -567,6 +573,7 @@ export function buildProviderAttemptMetadata({
   const failureReason = redactSafetyText(unavailable?.reason ?? result.output ?? 'Provider attempt failed.');
   return {
     provider: providerKey,
+    ...(executionContext ? { executionContext } : {}),
     ...(auxiliaryMember ? { auxiliaryMember } : {}),
     ...(taskId ? { taskId } : {}),
     ...(taskAttributionDiagnostic ? { taskAttributionDiagnostic } : {}),
@@ -628,6 +635,7 @@ export async function executeProviderCandidates({
   attempt = 1,
   runId,
   nativeSchemaScratch,
+  executionContext,
   escalate = true,
   modelOverride,
   effortOverride,
@@ -852,6 +860,7 @@ export async function executeProviderCandidates({
     const nextProvider = candidates[index + 1];
     const attemptMetadata = buildProviderAttemptMetadata({
       providerKey,
+      executionContext,
       taskId,
       taskAttributionDiagnostic,
       result: safeResult,

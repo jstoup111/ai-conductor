@@ -39,6 +39,7 @@ const aggregate = joinBuildReviewRubricOutcomes({
   lapId: 'lap-1' as never,
   snapshotDigest: 'snapshot-1',
   results: {
+    security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
     testQuality: {
       kind: 'judged', rubric: 'testQuality', lapId: 'lap-1' as never, snapshotDigest: 'snapshot-1', contractVersion: 'v3', verdict: 'FAIL',
       findings: [{
@@ -61,6 +62,23 @@ const sourceId = buildReviewAdjudicationSourceId(rawSource);
 const findingId = rawSource.findingId;
 const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
 
+const securityAggregate = joinBuildReviewRubricOutcomes({
+  lapId: 'lap-security' as never,
+  snapshotDigest: 'snapshot-security',
+  results: {
+    testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+    security: {
+      kind: 'judged', rubric: 'security', lapId: 'lap-security' as never, snapshotDigest: 'snapshot-security', contractVersion: 'v3', verdict: 'FAIL',
+      findings: [{
+        concernKind: 'injection', summary: 'A new query interpolates untrusted input.', evidenceLocations: ['src/search.ts:42'],
+        anchor: { rubric: 'security', locus: { path: 'src/search.ts', contentHash: `sha256:${'b'.repeat(64)}`, display: 'new search query' } },
+      }],
+    },
+  },
+});
+const rawSecuritySource = projectBuildReviewAggregateSources(securityAggregate)![0]!;
+const securitySourceId = buildReviewAdjudicationSourceId(rawSecuritySource);
+
 // A mixed lap: one finding the operator has already accepted (or accepts
 // mid-lap) alongside a live sibling. Late authority must suppress only its own
 // source, never fail the whole lap closed.
@@ -68,6 +86,7 @@ const mixedAggregate = joinBuildReviewRubricOutcomes({
   lapId: 'lap-2' as never,
   snapshotDigest: 'snapshot-2',
   results: {
+    security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
     testQuality: {
       kind: 'judged', rubric: 'testQuality', lapId: 'lap-2' as never, snapshotDigest: 'snapshot-2', contractVersion: 'v3', verdict: 'FAIL',
       findings: [
@@ -116,6 +135,7 @@ const staggeredAggregate = joinBuildReviewRubricOutcomes({
   lapId: 'lap-3' as never,
   snapshotDigest: 'snapshot-3',
   results: {
+    security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
     testQuality: {
       kind: 'judged', rubric: 'testQuality', lapId: 'lap-3' as never, snapshotDigest: 'snapshot-3', contractVersion: 'v3', verdict: 'FAIL',
       findings: [
@@ -177,6 +197,30 @@ function deferralJudgement(): RemediationCaseJudgement {
   };
 }
 
+function securityActionJudgement(): RemediationCaseJudgement {
+  return {
+    mode: 'case-v1', domain: 'build_review',
+    sourceOutcomes: [{ sourceId: securitySourceId, outcome: 'acted', caseRef: 'security-case' }],
+    cases: [{
+      caseRef: 'security-case', disposition: 'act', priority: 'critical', confidence: 'high',
+      rationale: 'The injected query must be parameterized before shipping.',
+      effect: { kind: 'action', route: 'build', tasks: [{ title: 'Parameterize the search query' }] },
+    }],
+  };
+}
+
+function securityDeferralJudgement(): RemediationCaseJudgement {
+  return {
+    mode: 'case-v1', domain: 'build_review',
+    sourceOutcomes: [{ sourceId: securitySourceId, outcome: 'deferred', caseRef: 'security-case' }],
+    cases: [{
+      caseRef: 'security-case', disposition: 'defer', priority: 'low', confidence: 'high',
+      rationale: 'The risk is documented for a separately scheduled hardening change.',
+      effect: { kind: 'deferral', title: 'Harden the search query', body: 'Untrusted input reaches the query builder.', exclusionRationale: 'The current feature does not own this handler.' },
+    }],
+  };
+}
+
 function mixedDeferralJudgement(): RemediationCaseJudgement {
   return {
     mode: 'case-v1', domain: 'build_review',
@@ -214,6 +258,90 @@ function input(root: string, judge: (context: unknown) => Promise<RemediationCas
 }
 
 describe('coordinateBuildReviewAdjudication', () => {
+  it('routes a security act through BUILD with a bounded work order and leaves the plan unchanged', async () => {
+    const root = await projectRoot();
+    await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+    const planPath = join(root, '.docs', 'plans', 'feature.md');
+    const plan = '### Task 1: unrelated UI work\n';
+    await writeFile(planPath, plan);
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => securityActionJudgement()), aggregate: securityAggregate,
+      readPlanContract: async () => ({ path: '.docs/plans/feature.md', pointers: ['Task 1: unrelated UI work'] }),
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'build' });
+    expect(JSON.parse(await readFile(join(root, '.pipeline/build-review-work-order.json'), 'utf8'))).toMatchObject({
+      cases: [{ priority: 'critical', tasks: [{ title: 'Parameterize the search query' }] }],
+    });
+    await expect(readFile(planPath, 'utf8')).resolves.toBe(plan);
+  });
+
+  it('files a deferred security source with its justification rather than silently passing it', async () => {
+    const root = await projectRoot();
+    const fileIssue = vi.fn(async () => ({ issueUrl: 'https://example.test/issues/security' }));
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => securityDeferralJudgement()), aggregate: securityAggregate,
+      tracker: { findIssueByEffectMarker: async () => undefined } as unknown as EffectMarkerTrackerClient,
+      repo: 'acme/conductor', fileIssue,
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(fileIssue).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Harden the search query', body: expect.stringContaining('separately scheduled hardening change'),
+    }));
+    await expect(new RemediationCaseStore(root, feature).read()).resolves.toMatchObject({
+      ok: true, state: { cases: [expect.objectContaining({ disposition: 'defer', effect: expect.objectContaining({ status: 'applied' }) })] },
+    });
+  });
+
+  it('settles a refuted security source without another kickback charge', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, feature);
+    await seedCases(store, {
+      version: 'v1', feature,
+      cases: [{
+        id: 'security-case', domain: 'build_review', disposition: 'act', priority: 'critical', confidence: 'high',
+        rationale: 'The query must be parameterized.', resolution: 'open',
+        sources: [{ sourceId: securitySourceId, outcome: 'acted', recordedAt: '2026-09-15T00:00:00.000Z' }],
+        effect: { id: 'security-effect', kind: 'action', status: 'applied', workOrderId: 'security-order' },
+      }],
+    });
+    await publishBuildReviewWorkOrder(root, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'security-effect',
+      cases: [{ caseId: 'security-case', priority: 'critical', tasks: [{ title: 'Parameterize the search query' }] }],
+    });
+    await markBuildReviewWorkOrderAttempted(root, feature);
+    await mkdir(join(root, 'test'), { recursive: true });
+    await writeFile(join(root, 'test', 'security-refutation.test.ts'), 'the query uses parameters\n');
+    const charge = vi.fn(chargeBuildReviewEffectInLedger);
+    const refuted: RemediationCaseJudgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: securitySourceId, outcome: 'refuted', caseRef: 'security-refutation' }],
+      cases: [{
+        caseRef: 'security-refutation', existingCaseId: 'security-case', disposition: 'refute', priority: 'critical', confidence: 'high',
+        rationale: 'The reported query is already parameterized.', effect: { kind: 'none' },
+        refutation: { claim: 'Untrusted input is interpolated into a query.', assertions: [{
+          assertion: 'The query uses parameters.', verdict: 'refuted',
+          evidence: [{ path: 'test/security-refutation.test.ts', excerpt: 'query uses parameters' }],
+        }] },
+      }],
+    };
+
+    const result = await coordinateBuildReviewAdjudication({
+      ...input(root, async () => refuted), aggregate: securityAggregate, chargeEffect: charge,
+    });
+
+    expect(result).toMatchObject({ ok: true, route: 'pass' });
+    expect(charge).not.toHaveBeenCalled();
+    await expect(store.read()).resolves.toMatchObject({
+      ok: true, state: { cases: [expect.objectContaining({
+        id: 'security-case', disposition: 'refute', resolution: 'resolved', effect: { kind: 'none' },
+      })] },
+    });
+  });
+
   it('dispatches one complete current-source/history judgement and returns its closed action route', async () => {
     const root = await projectRoot();
     const judge = vi.fn(async (context: unknown) => {
@@ -310,6 +438,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       lapId: 'lap-suppression-second' as never,
       snapshotDigest: 'snapshot-suppression-second',
       results: {
+        security: { kind: 'skipped', rubric: 'security', reason: 'disabled' },
         testQuality: {
           kind: 'judged', rubric: 'testQuality', lapId: 'lap-suppression-second' as never, snapshotDigest: 'snapshot-suppression-second', contractVersion: 'v3', verdict: 'FAIL',
           findings: [
@@ -1579,7 +1708,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     if (judgedResult.kind !== 'judged') throw new Error('fixture must provide a judged test-quality result');
     const driftedAggregate = joinBuildReviewRubricOutcomes({
       ...aggregate, lapId: 'lap-drifted' as never,
-      results: { testQuality: { ...judgedResult, lapId: 'lap-drifted' as never, findings: [{
+      results: { security: aggregate.results.security, testQuality: { ...judgedResult, lapId: 'lap-drifted' as never, findings: [{
         ...rawSource, anchor: { ...rawSource.anchor, locus: { ...rawSource.anchor.locus, contentHash: 'sha256:drifted' } },
       }] } },
     });
@@ -1702,7 +1831,7 @@ describe('coordinateBuildReviewAdjudication', () => {
     if (judgedResult.kind !== 'judged') throw new Error('fixture must provide a judged test-quality result');
     const driftedAggregate = joinBuildReviewRubricOutcomes({
       ...aggregate, lapId: 'lap-drifted' as never,
-      results: { testQuality: { ...judgedResult, lapId: 'lap-drifted' as never, findings: [{
+      results: { security: aggregate.results.security, testQuality: { ...judgedResult, lapId: 'lap-drifted' as never, findings: [{
         ...rawSource, anchor: { ...rawSource.anchor, locus: { ...rawSource.anchor.locus, contentHash: 'sha256:drifted' } },
       }] } },
     });

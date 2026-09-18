@@ -65,8 +65,9 @@ import {
 } from './engine/finish-publication-production.js';
 import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-labels.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
-import { isForwardedFromFeature, startDaemonEventPersistence, startFeatureEventPersistence } from './engine/event-persister.js';
+import { forwardedFeatureOf, isForwardedFromFeature, startDaemonEventPersistence, startFeatureEventPersistence } from './engine/event-persister.js';
 import { renderedEventTypes } from './engine/event-sinks.js';
+import { resolveExecutionIdentity } from './engine/execution-identity.js';
 import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
 import { resolveOtelConfig, resolveWorkerName } from './engine/otel/otel-config.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
@@ -1156,8 +1157,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // The per-feature Conductor composes self-host authority around this
     // resolved-candidate boundary; keep it present for every daemon context.
     withCandidateSafety: createCandidateSafetyBoundary(),
-    onAttempt: (step, attempt) =>
-      eventTarget.emit({ type: 'provider_attempt', step, ...attempt }),
+    onAttempt: (step, { executionContext, ...attempt }) =>
+      eventTarget.emit({
+        type: 'provider_attempt', step, ...attempt,
+        ...(executionContext ? { executionContext } : {}),
+      }),
     warn: (_message, transition) => eventTarget.emit(transition),
     ...(runtimeLog ? { diagnosticLog: runtimeLog } : {}),
   });
@@ -2587,6 +2591,18 @@ function buildReviewLapTag(lapId: string): string {
   return lapId;
 }
 
+/** Render a configured branch as its stable parent/member subject, never as a policy step. */
+function renderedExecutionSubject(event: ConductorEvent, legacyStep: string): string {
+  return resolveExecutionIdentity({
+    scope: {
+      featureId: forwardedFeatureOf(event) ?? ('slug' in event && typeof event.slug === 'string' ? event.slug : 'daemon'),
+      runId: 'daemon-renderer',
+    },
+    legacyStep,
+    executionContext: 'executionContext' in event ? event.executionContext : undefined,
+  })?.subjectLabel ?? legacyStep;
+}
+
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
   const dot = chalk.dim('·');
   switch (event.type) {
@@ -2676,7 +2692,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot} ${event.step} self-host dispatch ${event.state}${event.state === 'queued' ? ' — waiting for root-mutation admission' : ''}`);
       break;
     case 'step_started':
-      log(`${dot} ${chalk.cyan('▶')} ${event.step}`);
+      log(`${dot} ${chalk.cyan('▶')} ${renderedExecutionSubject(event, event.step)}`);
       break;
     case 'step_completed':
       {
@@ -2690,7 +2706,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
             treeAnnotation = ` (tree ${event.treeBefore.slice(0, 7)}..${event.treeAfter.slice(0, 7)})`;
           }
         }
-        log(`${dot}   ${event.step} ${chalk.green('✓')} ${chalk.green(event.status)}${treeAnnotation}`);
+        log(`${dot}   ${renderedExecutionSubject(event, event.step)} ${chalk.green('✓')} ${chalk.green(event.status)}${treeAnnotation}`);
       }
       break;
     case 'parallel_started':
@@ -2710,12 +2726,15 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     }
     case 'step_failed':
       log(
-        `${dot} ${chalk.red('✗')} ${chalk.red(`${event.step} failed (try ${event.retryCount}): ${event.error}`)}`,
+        `${dot} ${chalk.red('✗')} ${chalk.red(`${renderedExecutionSubject(event, event.step)} failed (try ${event.retryCount}): ${event.error}`)}`,
       );
+      break;
+    case 'step_interrupted':
+      log(`${dot} ${chalk.yellow('⏸')} ${chalk.yellow(`${renderedExecutionSubject(event, event.step)} interrupted: ${event.reason}`)}`);
       break;
     case 'step_refused':
       log(
-        `${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.step} refused (${event.kind}): ${event.reason}`)}`,
+        `${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${renderedExecutionSubject(event, event.step)} refused (${event.kind}): ${event.reason}`)}`,
       );
       break;
     case 'step_status_write_refused':
@@ -2726,7 +2745,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'step_retry': {
       const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
       const deltaFragment = delta ? ' ' + delta : '';
-      log(`${dot} ${chalk.yellow('↻')} ${event.step} retry (try ${formatRetryCounter(event.attempt, event.maxAttempts, event.progressAttempt, event.progressAttemptCeiling)}: ${formatRetryReason(event.reason)})${deltaFragment}`);
+      log(`${dot} ${chalk.yellow('↻')} ${renderedExecutionSubject(event, event.step)} retry (try ${formatRetryCounter(event.attempt, event.maxAttempts, event.progressAttempt, event.progressAttemptCeiling)}: ${formatRetryReason(event.reason)})${deltaFragment}`);
       break;
     }
     case 'provider_attempt': {
@@ -2734,7 +2753,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         const { lifecycle } = event;
         const phase = lifecycle.phase === 'exhausted' ? 'halted' : lifecycle.phase;
         const reason = lifecycle.reason ? ` — ${lifecycle.reason}` : '';
-        const message = `${event.step} provider ${phase} (attempt ${lifecycle.attemptId}, recovery ${lifecycle.recoveryCount}${reason})`;
+        const message = `${renderedExecutionSubject(event, event.step)} provider ${phase} (attempt ${lifecycle.attemptId}, recovery ${lifecycle.recoveryCount}${reason})`;
         log(
           lifecycle.phase === 'exhausted'
             ? `${dot} ${chalk.red('✋')} ${chalk.red(message)}`
@@ -2763,7 +2782,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       const detail = facts.length > 0 ? chalk.dim(` — ${facts.join(', ')}`) : '';
       const glyph =
         event.outcome === 'success' ? chalk.green('✓') : chalk.yellow(`✗ ${event.outcome}`);
-      log(`${dot}   ${event.step} via ${chalk.cyan(event.provider)}${model} ${glyph}${detail}`);
+      log(`${dot}   ${renderedExecutionSubject(event, event.step)} via ${chalk.cyan(event.provider)}${model} ${glyph}${detail}`);
       break;
     }
     case 'feature_usage_total':
