@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:3
 import { describe, it, expect, vi } from 'vitest';
 import {
   resolveStepConfig,
@@ -26,12 +26,12 @@ type DispatchStartTimeoutConfig = HarnessConfig & { dispatch_start_timeout_secon
 describe('engine/resolved-config', () => {
   describe('resolveCoverageBindingConfig', () => {
     it('defaults the judge to disabled', () => {
-      expect(resolveCoverageBindingConfig(undefined)).toEqual({ judgeEnabled: false });
+      expect(resolveCoverageBindingConfig(undefined)).toEqual({ judgeEnabled: false, batchSize: 8 });
     });
 
     it('resolves an explicitly enabled judge', () => {
       expect(resolveCoverageBindingConfig({ coverage_binding: { judge: { enabled: true } } }))
-        .toEqual({ judgeEnabled: true });
+        .toEqual({ judgeEnabled: true, batchSize: 8 });
     });
   });
 

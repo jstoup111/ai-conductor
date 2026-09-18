@@ -119,8 +119,11 @@ export const DEFAULT_STEP_ESCALATE = true;
 /** Resolve the default-off coverage-binding judge configuration. */
 export function resolveCoverageBindingConfig(
   config: Pick<HarnessConfig, 'coverage_binding'> | undefined,
-): { judgeEnabled: boolean } {
-  return { judgeEnabled: config?.coverage_binding?.judge?.enabled ?? false };
+): { judgeEnabled: boolean; batchSize: number } {
+  return {
+    judgeEnabled: config?.coverage_binding?.judge?.enabled ?? false,
+    batchSize: config?.coverage_binding?.judge?.batch_size ?? 8,
+  };
 }
 
 // ────────────────────────────────────────────────────────────────────────────

@@ -142,7 +142,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   gate_code_validity: ['enabled'],
   retry_routing: ['enabled'],
   coverage_binding: ['judge'],
-  'coverage_binding.judge': ['enabled'],
+  'coverage_binding.judge': ['enabled', 'batch_size'],
   otel: ['exporter', 'endpoint', 'file', 'protocol', 'headers', 'project_name', 'worker_name', 'attributes'],
   markdown_viewer: ['preset', 'command', 'args', 'mode'],
   mermaid_renderer: ['preset', 'command', 'args', 'mode'],
@@ -2310,13 +2310,27 @@ function validateCoverageBindingBlock(raw: unknown): ConfigError | null {
       message: 'coverage_binding.judge.enabled must be a boolean',
     };
   }
+  if (
+    judge.batch_size !== undefined
+    && (typeof judge.batch_size !== 'number' || !Number.isInteger(judge.batch_size) || judge.batch_size <= 0)
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'coverage_binding.judge.batch_size must be a positive integer',
+    };
+  }
   return null;
 }
 
-function resolveCoverageBindingBlock(raw: unknown): { judge: { enabled: boolean } } {
+function resolveCoverageBindingBlock(raw: unknown): { judge: { enabled: boolean; batch_size: number } } {
   const block = isPlainObject(raw) ? raw as Record<string, unknown> : {};
   const judge = isPlainObject(block.judge) ? block.judge as Record<string, unknown> : {};
-  return { judge: { enabled: typeof judge.enabled === 'boolean' ? judge.enabled : false } };
+  return {
+    judge: {
+      enabled: typeof judge.enabled === 'boolean' ? judge.enabled : false,
+      batch_size: typeof judge.batch_size === 'number' ? judge.batch_size : 8,
+    },
+  };
 }
 
 function validateMergeableAutoresolveBlock(raw: unknown): ConfigError | null {
