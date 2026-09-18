@@ -24,6 +24,9 @@ import { recordTestSuiteRemediation } from '../../src/engine/test-suite-remediat
 import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
 
+// Assembled so the text-only marker scan never reads a fixture string as this file's own marker (#2597).
+const FIXTURE_TASK_8_MARKER = ['// Covers', ' task:8'].join(':');
+
 const CURRENT_PROOF = {
   status: 'CURRENT',
   evidence: { provenanceHeadSha: 'head123', outcome: 'PASS' },
@@ -301,11 +304,11 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
         { match: ['diff', 'base123..head123'], result: { stdout: [
           'diff --git a/test/hash.test.ts b/test/hash.test.ts',
           '--- a/test/hash.test.ts', '+++ b/test/hash.test.ts',
-          '@@ -1 +1,2 @@', `+// Covers: task:8`, `+${declaration}`,
+          '@@ -1 +1,2 @@', `+${FIXTURE_TASK_8_MARKER}`, `+${declaration}`,
         ].join('\n') } },
         { match: ['show', 'head123:plan.md'], result: { stdout: '### Task 8: Typed frozen scope\n' } },
         { match: ['show', 'base123:test/hash.test.ts'], result: { stdout: declaration } },
-        { match: ['show', 'head123:test/hash.test.ts'], result: { stdout: `// Covers: task:8\n${declaration}` } },
+        { match: ['show', 'head123:test/hash.test.ts'], result: { stdout: `${FIXTURE_TASK_8_MARKER}\n${declaration}` } },
       ]);
 
       const inputs = await assembleBuildReviewInputs(git, planPath, {
@@ -348,7 +351,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
 
     // Covers: task:1
     it('omits an added helper base region without weakening the pinned head identity', async () => {
-      const headSource = "// Covers: task:8\nit('added helper', () => { expect(true).toBe(true); });";
+      const headSource = `${FIXTURE_TASK_8_MARKER}\nit('added helper', () => { expect(true).toBe(true); });`;
       const declaration = {
         kind: 'test' as const,
         titleChain: ['added helper'],
