@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: rekick
-Resolved at: 2026-09-15T12:10:55.135Z
+Status: halted
 Slug: projects-cannot-add-portable-non-competing-build-r
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-projects-cannot-add-portable-non-competing-build-r
-Head SHA: 244738fc9b03733b5516ed2e651565ff1001c5b9
-Halted at: 2026-09-14T22:52:47.365Z
+Head SHA: 50e9e754bbae31aabfbfd024ad0008320d48087f
+Halted at: 2026-09-18T17:54:03.077Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: needs human DECIDE — As-built review remediation cannot resolve governing clause(s): AB-2: adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication D4.5; AB-3: adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication D4.6. A REMEDIABLE row cites exactly one clause: an APPROVED ADR filename stem plus its decision number, or one task id from this feature's plan.
+Validation group "prd_audit" halted in auto mode: step 'prd_audit' failed: post-dispatch verdict write handshake failed for prd_audit: .pipeline/prd-audit.md is stale (found mtime 2026-09-17T22:42:00.029Z); expected run id 82c26336-c37f-47f8-8dcd-a9ec6530416d; found run id 82c26336-c37f-47f8-8dcd-a9ec6530416d
 ```
