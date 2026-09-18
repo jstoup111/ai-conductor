@@ -213,6 +213,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   // reader of the raw nested configuration.
   'coverage_binding.judge': consumer(RESOLVED_CONFIG),
   'coverage_binding.judge.enabled': consumer(RESOLVED_CONFIG),
+  'coverage_binding.judge.batch_size': consumer(RESOLVED_CONFIG),
 
   // ── ci_watch ──────────────────────────────────────────────────────────────
   'ci_watch.enabled': consumer(DAEMON_CLI),
