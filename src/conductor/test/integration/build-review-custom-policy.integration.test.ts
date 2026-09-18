@@ -22,8 +22,24 @@ vi.mock('../../src/engine/build-review-projections.js', async (importOriginal) =
   };
 });
 
+/**
+ * The custom-policy runner owns no cancellation source of its own, so the
+ * owning candidate's authority is supplied here at the executor boundary. The
+ * real executor still runs; only its input gains the authority under test.
+ */
+const candidateAuthority = vi.hoisted(() => ({ current: undefined as undefined | (() => { abortSignal?: AbortSignal; deadlineAt?: number }) }));
+vi.mock('../../src/engine/provider-execution.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/provider-execution.js')>();
+  return {
+    ...actual,
+    executeAuxiliaryProviderCandidates: ((input) => actual.executeAuxiliaryProviderCandidates({
+      ...input, ...candidateAuthority.current?.(),
+    })) as typeof actual.executeAuxiliaryProviderCandidates,
+  };
+});
+
 const roots: string[] = [];
-afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+afterEach(async () => { candidateAuthority.current = undefined; await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 async function fixture(): Promise<string> {
   const root = await mkdtemp(join(process.env.TMPDIR!, 'custom-policy-runner-'));
@@ -210,5 +226,103 @@ describe('custom build-review policy runner', () => {
       },
     });
     expect(aggregate.customResults.portable).not.toHaveProperty('descriptor');
+  });
+});
+
+describe('custom build-review policy discovery under candidate authority', () => {
+  const installed = [{
+    semanticName: 'portable-policy', source: 'project' as const, installationOrigin: '/fixture/project', canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project', declaredDependencies: [], availability: 'available' as const,
+  }];
+
+  /**
+   * A host fake that, like both real adapters, stays in flight until its
+   * signal aborts. Without a signal it fails at once, so a seam that drops the
+   * authority is a fast assertion failure rather than a hung test.
+   */
+  function blockingCatalog(started: () => void) {
+    return vi.fn(async (input: { signal?: AbortSignal }) => {
+      started();
+      const signal = input.signal;
+      if (signal === undefined) throw new Error('discovery received no candidate signal');
+      return new Promise<never>((_resolve, reject) => {
+        const abort = () => reject(Object.assign(new Error('discovery aborted'), { name: 'AbortError' }));
+        if (signal.aborted) abort();
+        else signal.addEventListener('abort', abort, { once: true });
+      });
+    });
+  }
+
+  async function runWithAuthority(
+    catalog: (input: { signal?: AbortSignal; deadlineAt?: number }) => Promise<typeof installed>,
+    authority: () => { abortSignal?: AbortSignal; deadlineAt?: number },
+  ) {
+    const root = await fixture();
+    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: '{}' }));
+    const provider: LLMProvider = { invoke, supportsSessionResume: false, lifecycleCapability: { synchronousSpawnPermit: true } };
+    const events = new ConductorEventEmitter();
+    const failures: unknown[] = [];
+    events.on('build_review_policy_failed', (event) => { failures.push(event); });
+    const runner = new DefaultStepRunner(provider, 'custom-policy-authority', root, {
+      featureDesc: 'feature', planPath: join(root, '.docs', 'plans', 'feature.md'), gitRunner: git(),
+      config: { llm_provider: 'claude', build_review: { enabled: true, rubrics: { testQuality: { enabled: false } }, custom_rubrics: {
+        portable: { enabled: true, skill: 'portable-policy', question: 'Check policy.', source: 'project', llm_provider: 'claude' },
+      } } } as HarnessConfig,
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(),
+      events,
+      buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: {} } as never) },
+      buildReviewEffectiveResolver: failingEffectiveResolver,
+      buildReviewPolicyCatalog: catalog as never,
+      buildReviewPolicyCapture: async () => { throw new Error('capture is past the boundary under test'); },
+    });
+    candidateAuthority.current = authority;
+    const result = await runner.run('build_review', { complexity_tier: 'M' } as never);
+    return { result, failures, invoke };
+  }
+
+  it('aborts in-flight discovery and classifies it cancelled when the owning candidate is cancelled', async () => {
+    const controller = new AbortController();
+    const catalog = blockingCatalog(() => { setImmediate(() => controller.abort()); });
+
+    const { failures, invoke } = await runWithAuthority(catalog, () => ({ abortSignal: controller.signal }));
+
+    expect(catalog).toHaveBeenCalledTimes(1);
+    expect(failures).toEqual(expect.arrayContaining([expect.objectContaining({ stage: 'catalog', reason: expect.stringContaining('candidate cancelled during policy catalog discovery') })]));
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('aborts in-flight discovery and classifies it timeout when the candidate deadline elapses mid-request', async () => {
+    let deadlineAt: number | undefined;
+    const catalog = blockingCatalog(() => undefined);
+
+    const { failures, invoke } = await runWithAuthority(catalog, () => ({ deadlineAt: (deadlineAt ??= Date.now() + 150) }));
+
+    expect(catalog).toHaveBeenCalledTimes(1);
+    expect(catalog.mock.calls[0]![0]).toMatchObject({ deadlineAt });
+    expect(Date.now()).toBeGreaterThanOrEqual(deadlineAt!);
+    expect(failures).toEqual(expect.arrayContaining([expect.objectContaining({ stage: 'catalog', reason: expect.stringContaining('candidate deadline elapsed during policy catalog discovery') })]));
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('releases the deadline timer once discovery succeeds so no handle outlives the candidate', async () => {
+    const setTimer = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimer = vi.spyOn(globalThis, 'clearTimeout');
+    const signals: AbortSignal[] = [];
+    try {
+      const deadlineAt = Date.now() + 3_600_000;
+      await runWithAuthority(async (input) => { signals.push(input.signal!); return installed; }, () => ({ deadlineAt }));
+
+      const deadlineTimers = setTimer.mock.results.filter((_result, index) => {
+        const delay = setTimer.mock.calls[index]![1];
+        return typeof delay === 'number' && delay > 3_000_000;
+      }).map((result) => result.value as unknown);
+      expect(deadlineTimers.length).toBeGreaterThan(0);
+      expect(deadlineTimers).toHaveLength(signals.length);
+      expect(clearTimer.mock.calls.map((call) => call[0])).toEqual(expect.arrayContaining(deadlineTimers));
+      expect(signals.every((signal) => !signal.aborted)).toBe(true);
+    } finally {
+      setTimer.mockRestore();
+      clearTimer.mockRestore();
+    }
   });
 });

@@ -573,6 +573,10 @@ export interface StepRunnerOptions {
     readonly provider: string;
     readonly entry: ResolvedBuildReviewCatalogEntry;
     readonly preparedEnv?: NodeJS.ProcessEnv;
+    /** Owning candidate's cancellation joined with its deadline; aborts in-flight discovery. */
+    readonly signal?: AbortSignal;
+    /** Owning candidate's absolute deadline, in epoch milliseconds. */
+    readonly deadlineAt?: number;
   }) => Promise<readonly InstalledReviewSkill[]>;
   /** Candidate-local package capture seam; production retains the filesystem capture. */
   buildReviewPolicyCapture?: typeof captureInstalledReviewPolicyBundle;
@@ -614,7 +618,7 @@ export interface StepRunnerOptions {
  */
 function productionBuildReviewPolicyCatalog(projectDir: string): NonNullable<StepRunnerOptions['buildReviewPolicyCatalog']> {
   const codexTransport = createCodexAppServerTransport();
-  return async ({ provider, preparedEnv }) => {
+  return async ({ provider, preparedEnv, signal }) => {
     const env = preparedEnv ?? process.env;
     if (provider === 'claude') {
       const claudeHome = env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
@@ -624,6 +628,7 @@ function productionBuildReviewPolicyCatalog(projectDir: string): NonNullable<Ste
           env,
           projectSkillRoots: [join(projectDir, '.claude', 'skills'), join(projectDir, '.agents', 'skills')],
           userSkillRoots: [join(claudeHome, 'skills')],
+          ...(signal === undefined ? {} : { signal }),
         },
       });
     }
@@ -631,6 +636,7 @@ function productionBuildReviewPolicyCatalog(projectDir: string): NonNullable<Ste
       return listCodexInstalledReviewSkills(codexTransport, {
         cwd: projectDir,
         home: env.CODEX_HOME ?? join(homedir(), '.codex'),
+        ...(signal === undefined ? {} : { signal }),
       });
     }
     throw new Error(`Build-review custom policies are unsupported for provider ${provider}`);
@@ -2603,18 +2609,55 @@ export class DefaultStepRunner implements StepRunner {
           return { kind: 'failure' as const, result: { success: false, exitCode: 1, output: failure.detail } };
         }
         let catalog: readonly InstalledReviewSkill[] | ReviewPolicyCatalogError;
+        let releaseDiscoveryAuthority: (() => void) | undefined;
         try {
           if (context.abortSignal?.aborted) throw new ReviewPolicyCatalogError(catalogProvider, 'cancelled', 'candidate cancelled before policy catalog discovery');
           if (context.deadlineAt !== undefined && Date.now() >= context.deadlineAt) throw new ReviewPolicyCatalogError(catalogProvider, 'timeout', 'candidate deadline elapsed before policy catalog discovery');
-          catalog = await this.buildReviewPolicyCatalog!({
+          // One discovery signal: the candidate's cancellation joined with a
+          // timer for its deadline, so an in-flight request cannot outlive it.
+          const discovery = new AbortController();
+          let deadlineElapsed = false;
+          const cancelDiscovery = () => discovery.abort();
+          context.abortSignal?.addEventListener('abort', cancelDiscovery, { once: true });
+          const deadlineTimer = context.deadlineAt === undefined ? undefined : setTimeout(() => {
+            deadlineElapsed = true;
+            discovery.abort();
+          }, Math.max(0, context.deadlineAt - Date.now()));
+          releaseDiscoveryAuthority = () => {
+            if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+            context.abortSignal?.removeEventListener('abort', cancelDiscovery);
+          };
+          context.onTeardown(async () => releaseDiscoveryAuthority?.());
+          const request = this.buildReviewPolicyCatalog!({
             provider: context.candidate.providerKey,
             entry,
             ...(context.prepared === undefined ? {} : { preparedEnv: context.prepared.env }),
+            signal: discovery.signal,
+            ...(context.deadlineAt === undefined ? {} : { deadlineAt: context.deadlineAt }),
           });
+          // The owning candidate does not wait on a host that ignores the signal.
+          const aborted = new Promise<never>((_resolve, reject) => {
+            const refuse = () => reject(new Error('policy catalog discovery aborted'));
+            if (discovery.signal.aborted) refuse();
+            else discovery.signal.addEventListener('abort', refuse, { once: true });
+          });
+          request.catch(() => undefined);
+          aborted.catch(() => undefined);
+          try {
+            catalog = await Promise.race([request, aborted]);
+          } catch (error) {
+            // Whatever the host threw on abort, the owning authority names the reason.
+            if (!discovery.signal.aborted) throw error;
+            throw deadlineElapsed
+              ? new ReviewPolicyCatalogError(catalogProvider, 'timeout', 'candidate deadline elapsed during policy catalog discovery')
+              : new ReviewPolicyCatalogError(catalogProvider, 'cancelled', 'candidate cancelled during policy catalog discovery');
+          }
         } catch (error) {
           catalog = error instanceof ReviewPolicyCatalogError
             ? error
             : new ReviewPolicyCatalogError(catalogProvider, 'error', error instanceof Error ? error.message : String(error));
+        } finally {
+          releaseDiscoveryAuthority?.();
         }
         const resolved = resolveInstalledReviewPolicyCatalog({
           skill: entry.skill,
