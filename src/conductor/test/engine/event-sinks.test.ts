@@ -1,6 +1,6 @@
 // Covers: task:1, task:3, task:6, task:8, task:15, task:17
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -290,6 +290,16 @@ const deliberatelyNotPersisted = {
 } satisfies SinkDeclaration;
 void deliberatelyNotPersisted;
 
+// Existing consumers may keep constructing this occurrence without the optional
+// oversize diagnostics.
+const infrastructureFailureWithoutProjectionBytes = {
+  type: 'build_review_rubric_infrastructure_failure',
+  rubric: 'testQuality',
+  lapId: 'lap-current',
+  reason: 'provider-error',
+} satisfies ConductorEvent;
+void infrastructureFailureWithoutProjectionBytes;
+
 // @ts-expect-error -- probe-failure progress requires its closed kind and next disposition.
 const probeFailureMissingClosedMetadata = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure' } satisfies ConductorEvent;
 // @ts-expect-error -- a terminal probe-failure disposition has no next polling delay.
@@ -505,6 +515,34 @@ describe('event sink subscriptions', () => {
       const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
         .trim().split('\n').map((line) => JSON.parse(line));
       expect(records).toEqual([{ ...event, ts: expect.any(String) }]);
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('persists oversized projections on the existing infrastructure-failure occurrence without a sidecar', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-review-oversize-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const event = {
+      type: 'build_review_rubric_infrastructure_failure' as const,
+      rubric: 'testQuality',
+      lapId: 'lap-current',
+      reason: 'projection-oversized',
+      measuredBytes: 1_346_093,
+      limitBytes: 1_048_576,
+    } satisfies ConductorEvent;
+
+    try {
+      persister.start();
+      await events.emit(event);
+      persister.stop();
+
+      const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(records).toEqual([{ ...event, ts: expect.any(String) }]);
+      expect(await readdir(join(projectRoot, '.pipeline'))).toEqual(['events.jsonl']);
     } finally {
       persister.stop();
       await rm(projectRoot, { recursive: true, force: true });

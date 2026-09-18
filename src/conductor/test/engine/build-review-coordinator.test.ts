@@ -1235,10 +1235,12 @@ describe("build-review coordinator: counterfactual sensitivity is verdict-neutra
 describe("build-review coordinator: engine-held rubric isolation", () => {
   it("refuses an oversized canonical projection before cache or model dispatch", async () => {
     const dispatchModel = vi.fn(async () => ({ findings: [] }));
+    const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
     const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
       config: config(true, 1_048_576),
       projections: projectionWithCanonicalByteLength(1_346_093),
       dispatchModel,
+      emit,
     }));
 
     expect(result).toEqual({
@@ -1251,6 +1253,15 @@ describe("build-review coordinator: engine-held rubric isolation", () => {
       }],
     });
     expect(dispatchModel).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledWith({
+      type: "build_review_rubric_infrastructure_failure",
+      rubric: "testQuality",
+      lapId: "lap-current",
+      reason: "projection-oversized",
+      excerpt: "measured=1346093 bytes limit=1048576 bytes",
+      measuredBytes: 1_346_093,
+      limitBytes: 1_048_576,
+    });
   });
 
   it("admits an exactly bounded projection", async () => {

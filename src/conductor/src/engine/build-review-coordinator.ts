@@ -571,6 +571,8 @@ export async function coordinateBuildReviewRubrics(
         lapId: input.lapId,
         reason: "projection-oversized",
         excerpt: detail,
+        measuredBytes: projectionBytes,
+        limitBytes: branch.policy.max_projection_bytes,
       });
       continue;
     }
