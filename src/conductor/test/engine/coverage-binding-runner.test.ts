@@ -278,6 +278,50 @@ describe('coverage-binding runner batches', () => {
     }
   });
 
+  it('retains every batch verdict and renders refused-claim details after does-not-assert', async () => {
+    const envelope = memoryEnvelopeFilesystem();
+    const { projectDir, provider, runner } = await runBatches(20, 8, { filesystem: envelope.filesystem });
+    try {
+      (provider.invoke as ReturnType<typeof vi.fn>).mockImplementation(async (options: InvokeOptions) => {
+        const claims = promptClaims(options);
+        const secondBatch = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls.length === 2;
+        return {
+          success: true,
+          output: JSON.stringify({
+            verdicts: claims.map(({ digest }, index) =>
+              secondBatch && index === 0
+                ? { digest, verdict: 'does-not-assert', missingAssertion: 'The check omits the criterion.' }
+                : { digest, verdict: 'asserts' },
+            ),
+          }),
+          exitCode: 0,
+        };
+      });
+
+      const result = await runner.run('coverage_binding', { complexity_tier: 'M' });
+      const calls = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls;
+      const refused = promptClaims(calls[1]![0] as InvokeOptions)[0]!;
+
+      expect(calls).toHaveLength(3);
+      expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
+      expect(result.output).toContain(`Criterion: ${refused.criterion}`);
+      expect(result.output).toContain(`Task ids: ${refused.taskIds.join(', ')}`);
+      expect(result.output).toContain(`Done when checks: ${refused.doneWhen.flat().join(' | ')}`);
+      expect(result.output).toContain('Missing assertion: The check omits the criterion.');
+      expect(envelope.writes.at(-1)).toMatchObject({ status: 'refused' });
+      expect(envelope.writes.at(-1)?.entries).toHaveLength(20);
+      expect(envelope.writes.at(-1)?.entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          digest: refused.digest,
+          verdict: 'does-not-assert',
+          missingAssertion: 'The check omits the criterion.',
+        }),
+      ]));
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('resumes only the missing digests from a failed envelope', async () => {
     const envelope = memoryEnvelopeFilesystem();
     const { projectDir, provider, runner } = await runBatches(16, 8, { filesystem: envelope.filesystem });
