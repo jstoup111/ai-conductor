@@ -97,6 +97,43 @@ describe("build-review semantic cache", () => {
     ]);
   });
 
+  it("misses a pre-reference v3 entry closed without advancing the projection version", async () => {
+    const root = "/feature";
+    const path = cacheEntryPath(root, "testQuality");
+    const oldEngineEntry = {
+      ...entry(),
+      // The former projection embedded this region's bytes in its digest input.
+      projectionDigest: "sha256:digest-that-included-evidence-content",
+    };
+    const currentLookup = {
+      rubric: "testQuality",
+      contractVersion: "v3",
+      projectionVersion: "v3",
+      // The reference-only projection instead digests its pinned contentHash.
+      projectionDigest: "sha256:digest-that-includes-evidence-content-hash",
+      policyFingerprint: oldEngineEntry.policyFingerprint,
+      engineIdentity: oldEngineEntry.engineIdentity,
+      lapId: "lap-current",
+      snapshotDigest: "snapshot-current",
+    } as never;
+    const fs = memoryFilesystem({ [path]: JSON.stringify(oldEngineEntry) });
+
+    await writeBuildReviewCacheEntry(root, entry("snapshot-current"), fs);
+    const written = JSON.parse(fs.files[path]!);
+
+    expect([
+      classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "testQuality", memoryFilesystem({ [path]: JSON.stringify(oldEngineEntry) })), currentLookup),
+      classifyBuildReviewCacheLookup({ ...oldEngineEntry, projectionDigest: currentLookup.projectionDigest, engineIdentity: { ...oldEngineEntry.engineIdentity, engineStamp: "aaaaaaaaaaaa" } }, currentLookup),
+      written.projectionVersion,
+      parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v4" }),
+    ]).toEqual([
+      { kind: "miss", reason: "projection-digest-mismatch" },
+      { kind: "miss", reason: "engine-version-mismatch", cachedEngineStamp: "aaaaaaaaaaaa" },
+      "v3",
+      undefined,
+    ]);
+  });
+
   it("stores one versioned semantic judgement per feature-scoped rubric with atomic replacement", async () => {
     const fs = memoryFilesystem();
     const root = "/feature";
