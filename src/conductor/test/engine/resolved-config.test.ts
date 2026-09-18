@@ -271,6 +271,7 @@ describe('engine/resolved-config', () => {
           },
           security: {
             enabled: false,
+            max_projection_bytes: 1_048_576,
             llm_provider: ['claude', 'codex'],
             model: 'opus',
             effort: 'high',
