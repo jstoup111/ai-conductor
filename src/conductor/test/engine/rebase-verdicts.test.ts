@@ -213,7 +213,29 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
     });
   });
 
-  it('retains a later applicable PASS rather than replacing it with a replay invalidation', async () => {
+  it('reopens an applicable but unbindable coverage PASS instead of leaving it outside the applied decision', async () => {
+    invalidationOverride.result = { preserved: ['coverage_binding'], invalidated: [] };
+    await writeFile(
+      join(projectRoot, '.pipeline/coverage-binding.json'),
+      JSON.stringify({ version: 1, slug: 'feature', runId: 'run-1', status: 'disabled', entries: [] }),
+    );
+    await writeVerdict(projectRoot, 'coverage_binding', { satisfied: true, checkedAt: 1 });
+
+    const result = await applyRebaseVerdicts(projectRoot, {
+      kind: 'changed',
+      changedCodePaths: ['src/feature-change.ts'],
+      featureSurface: ['src/feature-change.ts'],
+    }, false);
+
+    expect(result.preservedGates).toBeUndefined();
+    expect(result.kickedBack).toContain('coverage_binding');
+    expect(await readVerdict(projectRoot, 'coverage_binding')).toMatchObject({
+      satisfied: false,
+      kickback: { from: 'rebase' },
+    });
+  });
+
+  it('reopens an otherwise applicable PASS when it lacks bounded original-judge authority', async () => {
     invalidationOverride.result = { preserved: ['build_review'], invalidated: [] };
     const original = { satisfied: true, checkedAt: 2, reason: 'later reviewed PASS' };
     await writeFile(join(projectRoot, '.pipeline', 'build-review.json'), JSON.stringify({
@@ -229,7 +251,10 @@ describe('engine/rebase — tree-attesting gate pre-verification (Task 8)', () =
       featureSurface: ['src/feature-change.ts'],
     }, false);
 
-    expect(result.kickedBack).not.toContain('build_review');
-    expect(await readVerdict(projectRoot, 'build_review')).toEqual(original);
+    expect(result.kickedBack).toContain('build_review');
+    expect(await readVerdict(projectRoot, 'build_review')).toMatchObject({
+      satisfied: false,
+      kickback: { from: 'rebase' },
+    });
   });
 });

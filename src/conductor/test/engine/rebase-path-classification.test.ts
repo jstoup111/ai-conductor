@@ -138,8 +138,8 @@ describe('Task 9–11 rebase path classification', () => {
       ['.docs/stories/active.md'],
     );
 
-    expect(active.invalidated).toEqual(['coverage_binding', 'prd_audit']);
-    expect(active.preserved).toEqual(['build_review', 'test_suite', 'architecture_review_as_built']);
+    expect(active.invalidated).toEqual(['coverage_binding', 'prd_audit', 'architecture_review_as_built']);
+    expect(active.preserved).toEqual(['build_review', 'test_suite']);
     expect(active.candidates).toHaveLength(6);
     expect(active.candidates.find(({ gate }) => gate === 'prd_audit')).toMatchObject({
       decision: 'invalidate',
@@ -179,8 +179,12 @@ describe('Task 9–11 rebase path classification', () => {
       ['.docs/decisions/adr-active.md'],
     );
 
-    expect(result.invalidated).toEqual(['coverage_binding']);
+    expect(result.invalidated).toEqual(['coverage_binding', 'architecture_review_as_built']);
     expect(result.candidates.find(({ gate }) => gate === 'coverage_binding')).toMatchObject({
+      decision: 'invalidate',
+      source: { activeInputs: ['.docs/decisions/adr-active.md'] },
+    });
+    expect(result.candidates.find(({ gate }) => gate === 'architecture_review_as_built')).toMatchObject({
       decision: 'invalidate',
       source: { activeInputs: ['.docs/decisions/adr-active.md'] },
     });

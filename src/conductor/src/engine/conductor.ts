@@ -2988,7 +2988,7 @@ export class Conductor {
     for (const member of membership.members) {
       if (member.outcome.kind === 'skipped') continue;
       const name = member.name as StepName;
-      const verdict = await computeAndWriteVerdict(this.projectRoot, name, ctx);
+      const verdict = await computeAndWriteVerdict(this.projectRoot, name, ctx, { retainReplayPreservation: true });
       const manualTestFailed =
         name === 'manual_test' && (await readManualTestFailRows(this.projectRoot)).length > 0;
       if (getStepStatus(state, name) !== 'done' || !verdict.satisfied || manualTestFailed) {
@@ -8229,7 +8229,7 @@ export class Conductor {
                   memberName,
                   handshake
                     ? { satisfied: false, reason: handshake.reason, checkedAt: Date.now() }
-                    : await computeAndWriteVerdict(this.projectRoot, memberName, dispatchCtx),
+                    : await computeAndWriteVerdict(this.projectRoot, memberName, dispatchCtx, { retainReplayPreservation: false }),
                 );
               }
             }
@@ -13800,6 +13800,7 @@ export class Conductor {
               this.projectRoot,
               step.name,
               await this.completionCtx(state),
+              { retainReplayPreservation: false },
             );
       if (step.name === 'finish' || (step.name === 'build' && buildRoutedForward)) {
         await writeVerdict(this.projectRoot, step.name, verdict);

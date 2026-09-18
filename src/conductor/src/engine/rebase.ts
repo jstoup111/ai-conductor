@@ -1,6 +1,6 @@
 import { execa } from 'execa';
 import { createHash } from 'node:crypto';
-import { writeFile, readFile, access, mkdir, rename } from 'node:fs/promises';
+import { writeFile, readFile, access, mkdir, rename, readdir } from 'node:fs/promises';
 import { join, isAbsolute, relative, basename, resolve, dirname } from 'node:path';
 import type { CiRepairDiagnosticReason, StepName } from '../types/index.js';
 import {
@@ -855,6 +855,16 @@ export async function resolveReviewInputs(projectRoot: string, delta: string[], 
     }
     inputs.push(`.docs/decisions/adr-${identity}.md`);
   }
+  // Decision records are declared architecture authority, not merely a
+  // same-stem feature artifact.  Governing ADRs use date-prefixed names, so
+  // the synthetic adr-<feature> path above cannot see a rebase that changes
+  // one.  Bind the resolver to the actual decision records present in this
+  // feature checkout; a later decision edit then invalidates its owning
+  // architecture review instead of silently preserving an older judgement.
+  const decisions = await readdir(join(projectRoot, '.docs', 'decisions')).catch(() => []);
+  inputs.push(...decisions
+    .filter((entry) => entry.endsWith('.md'))
+    .map((entry) => `.docs/decisions/${entry}`));
   return [...new Set(inputs.map(repoPath))];
 }
 
@@ -1934,7 +1944,6 @@ export async function applyRebaseVerdicts(
   const partition = outcome.featureSurface !== undefined
     ? replayPartition ?? classifyGateInvalidation(delta, outcome.featureSurface, ranManualTest, outcome.documentInputs)
     : undefined;
-  const applicablePreservations = new Set<StepName>();
   // A current original PASS is enough to retain a classifier-preserved gate.
   // Capturing replay identity is stricter: it grants the PASS durable bounded
   // replay authority for later readers.  A gate is never named preserved
@@ -1959,7 +1968,6 @@ export async function applyRebaseVerdicts(
       if (original && classified) {
         const identity = await capturePreservedJudgeIdentity(projectRoot, gate);
         if (identity) {
-          applicablePreservations.add(gate);
           preservedCandidates.push({
             gate,
             original: identity,
@@ -1975,9 +1983,15 @@ export async function applyRebaseVerdicts(
       }
     }
   }
+  // A classifier candidate is not an applied preservation effect.  Every
+  // candidate must either carry the bounded original-judge identity consumed
+  // by the transition or be explicitly re-opened.  In particular this keeps
+  // coverage/build/test-suite passes that lack stampable provenance out of
+  // the gap between the classifier and the applied decision.
+  const boundPreservations = new Set(preservedCandidates.map(({ gate }) => gate));
   const unprovedPreservations = partition === undefined
     ? []
-    : (partition.preserved as StepName[]).filter((gate) => !applicableOriginalPasses.has(gate));
+    : (partition.preserved as StepName[]).filter((gate) => !boundPreservations.has(gate));
   const targets: StepName[] = partition !== undefined
     // A completed BUILD is attested before this decision is applied. Replay
     // equivalence changes which reviews need another judgement, not whether

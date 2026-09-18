@@ -83,7 +83,10 @@ export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
   // prior PASS even though the runtime delta partition deliberately ignores
   // markdown paths.
   prd_audit: 'feature-runtime-or-prd-inputs',
-  architecture_review_as_built: 'feature-runtime',
+  // The as-built review consumes governing ADRs, plans, coherence and other
+  // declared decision inputs as well as feature runtime.  Keep that input
+  // surface identical to the resolver used to bind replay authority.
+  architecture_review_as_built: 'feature-runtime-or-coverage-inputs',
 };
 
 /**

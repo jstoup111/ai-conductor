@@ -133,6 +133,7 @@ export async function computeAndWriteVerdict(
   dir: string,
   step: StepName,
   ctx: CompletionContext = {},
+  options: { retainReplayPreservation?: boolean } = {},
 ): Promise<GateVerdict> {
   const result = await checkGateCompletion(dir, step, ctx);
   const prior = await readVerdict(dir, step);
@@ -144,7 +145,7 @@ export async function computeAndWriteVerdict(
     // dispatching a new judge. Keep its replay-bound authority while the
     // objective predicate remains satisfied; otherwise that bookkeeping pass
     // would erase the record that the rebase transition and finish fence use.
-    ...(result.done && prior?.satisfied && prior.preservation
+    ...(options.retainReplayPreservation && result.done && prior?.satisfied && prior.preservation
       ? { preservation: prior.preservation }
       : {}),
   };

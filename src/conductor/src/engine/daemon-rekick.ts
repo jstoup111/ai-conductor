@@ -862,8 +862,14 @@ export async function resumeRebaseFirst(opts: {
   // evidence is a recovery halt, not a reason to dispatch the old task list.
   // Existing repair work is represented by a non-done BUILD state and retains
   // the ordinary repair route below.
+  let rawState: Record<string, unknown> | undefined;
   try {
-    const rawState = JSON.parse(await readFile(join(opts.worktreePath, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<string, unknown>;
+    rawState = JSON.parse(await readFile(join(opts.worktreePath, '.pipeline', 'conduct-state.json'), 'utf8')) as Record<string, unknown>;
+  } catch {
+    // Older re-kick entries may not yet have conduct state. They do not assert
+    // a completed BUILD, so retain their established entry behavior.
+  }
+  if (rawState) {
     // A paused or unresolved rebase owns its own recovery path.  BUILD
     // evidence is relevant only after an actual completed rebase; checking it
     // while the resolver is still paused would hide the rebase refusal and
@@ -872,7 +878,19 @@ export async function resumeRebaseFirst(opts: {
       rawState.build === 'done' &&
       (outcome.kind === 'changed' || outcome.kind === 'noop' || outcome.kind === 'mergeable_skip')
     ) {
-      const buildEvidence = await preVerify('build');
+      let buildEvidence: Awaited<ReturnType<typeof preVerify>>;
+      try {
+        buildEvidence = await preVerify('build');
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        await writeHalt(
+          opts.worktreePath,
+          [],
+          `completed BUILD evidence is unavailable after rebase: ${detail}; recover .pipeline task evidence before resuming`,
+          opts.events,
+        );
+        return 'halted';
+      }
       if (!buildEvidence.done) {
         await writeHalt(
           opts.worktreePath,
@@ -883,10 +901,6 @@ export async function resumeRebaseFirst(opts: {
         return 'halted';
       }
     }
-  } catch {
-    // Older re-kick entries may not yet have conduct state. They do not assert
-    // a completed BUILD, so retain their established entry behavior. A state
-    // that explicitly says `build: done` is handled fail-closed above.
   }
   const rebaseVerdict = await applyRebaseVerdicts(
     opts.worktreePath,

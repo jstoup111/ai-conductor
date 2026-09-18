@@ -2629,6 +2629,27 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     const build = await readVerdict(dir, 'build');
     expect(build).toBeNull();
   });
+
+  it('halts when completed BUILD pre-verification throws instead of treating the error as missing legacy state', async () => {
+    await initFeatureRepo(['1', '2'], ['1', '2']);
+    await advanceBaseWithCode();
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+    await writeFile(statePath, JSON.stringify({ ...state, build: 'done' }, null, 2));
+
+    const result = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      preVerify: async () => { throw new Error('unreadable completed evidence'); },
+    });
+
+    expect(result).toBe('halted');
+    await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'completed BUILD evidence is unavailable after rebase: unreadable completed evidence',
+    );
+  });
 });
 
 import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
