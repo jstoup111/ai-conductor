@@ -134,13 +134,13 @@ As an operator changing a setting later, I want the recorded configuration itsel
 ### Acceptance Criteria
 
 #### Happy Path
-- Given onboarding has recorded a project configuration, when the operator opens it, then every setting the walkthrough did not ask about is accompanied by an explanation stating what it controls, its permitted values, its default, and the consequence of changing it.
+- Given onboarding has recorded a project configuration, when the operator opens it, then every top-level setting the walkthrough did not ask about is accompanied by an authored explanation stating what it controls, its permitted values, its default, and the consequence of changing it, and every nested setting either has its own such explanation or sits under a section explanation that links to the full configuration reference and says the ai-conductor agent can set the value on request.
 
 #### Negative Paths
-- Given the recorded configuration, when its explanations are compared with the keys the harness accepts, then no explained key is unknown to the harness and no decidable-but-unasked key lacks an explanation.
+- Given the recorded configuration, when its explanations are compared with the keys the harness accepts, then no explained key is unknown to the harness, no top-level decidable-but-unasked key lacks an authored explanation, no nested key lacks both its own explanation and a section reference line, and no explanation is generic placeholder text.
 
 ### Done When
-- [ ] A test proves the recorded configuration's explanatory text covers every unasked, operator-settable key at every nesting depth the harness accepts and references no key the harness rejects.
+- [ ] A test proves every unasked top-level key has an authored, non-placeholder explanation, every nested key the harness accepts has its own explanation or a section reference line, and no explanation references a key the harness rejects.
 
 ## Story 8: Unattended onboarding asks nothing
 
