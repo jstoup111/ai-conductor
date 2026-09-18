@@ -2182,7 +2182,7 @@ export class DefaultStepRunner implements StepRunner {
       const hasJudgedFinding = Object.values(validResults).some(
         (result) => result.kind === 'judged' && result.findings.length > 0,
       );
-      if (!hasJudgedFinding) {
+      if (!hasJudgedFinding && infrastructureFailure.reason !== 'projection-oversized') {
         const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review', {
           rubric: infrastructureFailure.rubric,
           reason: infrastructureFailure.reason,
@@ -2205,15 +2205,6 @@ export class DefaultStepRunner implements StepRunner {
       results: validResults,
     });
     const aggregatePath = join(effectivePipelineDir, 'build-review.json');
-    const publication = await new BuildReviewDispositionStore(this.projectDir).withLease(async () => {
-      await mkdir(effectivePipelineDir, { recursive: true });
-      const temporaryPath = `${aggregatePath}.${randomUUID()}.tmp`;
-      await writeFile(temporaryPath, `${JSON.stringify(aggregate, null, 2)}\n`, 'utf-8');
-      await rename(temporaryPath, aggregatePath);
-    });
-    if (!publication.ok) {
-      return { success: false, output: `build_review aggregate publication failed: ${publication.message}` };
-    }
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
       emit: (event) => this.events?.emit(event),
       minConfidence: Object.fromEntries(Object.entries(config.rubrics).map(([id, policy]) => [id, policy.min_confidence])),
@@ -2243,18 +2234,17 @@ export class DefaultStepRunner implements StepRunner {
     // faults and durable operator decisions.  Persist its shared rendering on
     // the aggregate itself so the lap evidence and shipped-record projection
     // cannot drift into independently formatted views.
-    if (effective.reducedCoverageEvidence !== undefined) {
-      const stampedAggregate = { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence };
-      try {
-        const temporaryPath = `${aggregatePath}.${randomUUID()}.tmp`;
-        await writeFile(temporaryPath, `${JSON.stringify(stampedAggregate, null, 2)}\n`, 'utf-8');
-        await rename(temporaryPath, aggregatePath);
-      } catch (error) {
-        return {
-          success: false,
-          output: `build_review reduced-coverage evidence publication failed: ${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
+    const stampedAggregate = effective.reducedCoverageEvidence === undefined
+      ? aggregate
+      : { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence };
+    const publication = await new BuildReviewDispositionStore(this.projectDir).withLease(async () => {
+      await mkdir(effectivePipelineDir, { recursive: true });
+      const temporaryPath = `${aggregatePath}.${randomUUID()}.tmp`;
+      await writeFile(temporaryPath, `${JSON.stringify(stampedAggregate, null, 2)}\n`, 'utf-8');
+      await rename(temporaryPath, aggregatePath);
+    });
+    if (!publication.ok) {
+      return { success: false, output: `build_review aggregate publication failed: ${publication.message}` };
     }
     // adr-2026-08-29 D4.6: durable suppression history is written HERE, before
     // the pass/fail fork below, because D4.4 keeps a fully suppressed lap out
@@ -2268,6 +2258,13 @@ export class DefaultStepRunner implements StepRunner {
     });
     if (!persistedSuppressions.ok) {
       return { success: false, output: `build_review suppression history persistence failed: ${persistedSuppressions.reason}` };
+    }
+    if (infrastructureFailure?.reason === 'projection-oversized') {
+      const measurements = /measured=(\d+)\s+bytes\s+limit=(\d+)\s+bytes/.exec(infrastructureFailure.detail);
+      const reason = measurements
+        ? `build_review requires human action: ${infrastructureFailure.rubric} projection-oversized (measured ${measurements[1]} bytes; limit ${measurements[2]} bytes).`
+        : `build_review requires human action: ${infrastructureFailure.rubric} projection-oversized.`;
+      return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
     }
     if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
     // A judged finding is a completed review, even when another rubric had a
