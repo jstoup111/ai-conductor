@@ -1,10 +1,11 @@
-// Covers: task:9
+// Covers: task:9, task:10
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { classifyRetryDecision } from '../../src/engine/artifacts.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
@@ -38,6 +39,7 @@ describe('build_review oversized projection step', () => {
 
   it('publishes an oversized lap once without consuming a mechanical fault and halts for a human', async () => {
     const runner = createRunner('projection-oversized: measured=1346093 bytes limit=1048576 bytes');
+    const mechanicalFaultsBefore = (await readKickbackLedger(projectRoot)).gates.build_review?.mechanicalFaults ?? 0;
     const result = await runner.run('build_review', state);
 
     expect(result).toMatchObject({
@@ -52,7 +54,7 @@ describe('build_review oversized projection step', () => {
     expect(aggregate.results.testQuality.reason).toBe('projection-oversized');
     expect(aggregate.reducedCoverageEvidence).toBe('reduced coverage recorded');
     const ledger = await readKickbackLedger(projectRoot);
-    expect(ledger.gates.build_review?.mechanicalFaults ?? 0).toBe(0);
+    expect(ledger.gates.build_review?.mechanicalFaults ?? 0).toBe(mechanicalFaultsBefore);
   });
 
   it('halts with the reason alone when oversized detail has no measured bytes', async () => {
@@ -64,10 +66,38 @@ describe('build_review oversized projection step', () => {
     expect(result.refusal?.reason).not.toMatch(/measured=|limit=/);
   });
 
-  function createRunner(detail: string): DefaultStepRunner {
+  it('keeps transient provider errors on the mechanical retry lane', async () => {
+    const runner = createRunner('provider-error: grader transport disconnected', 'provider-error');
+
+    const result = await runner.run('build_review', state);
+
+    expect(result).toMatchObject({ success: false, currentLapMechanicalFault: true });
+    const ledger = await readKickbackLedger(projectRoot);
+    expect(ledger.gates.build_review?.mechanicalFaults).toBe(1);
+  });
+
+  it('routes an oversized refusal before a second build-review dispatch', async () => {
+    const runner = createRunner('projection-oversized: measured=1346093 bytes limit=1048576 bytes');
+    const dispatchesBefore = vi.mocked(coordinateBuildReviewRubrics).mock.calls.length;
+    const result = await runner.run('build_review', state);
+
+    expect(classifyRetryDecision({
+      step: 'build_review',
+      completion: { done: false },
+      attempt: 1,
+      inputsUnchanged: false,
+      terminalRefusal: result.refusal?.kind,
+    })).toEqual({ decision: 'route', signal: 'terminal-refusal' });
+    expect(coordinateBuildReviewRubrics).toHaveBeenCalledTimes(dispatchesBefore + 1);
+  });
+
+  function createRunner(
+    detail: string,
+    reason: 'projection-oversized' | 'provider-error' = 'projection-oversized',
+  ): DefaultStepRunner {
     vi.mocked(coordinateBuildReviewRubrics).mockResolvedValue({
       kind: 'ready',
-      branches: [{ kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'projection-oversized', detail }],
+      branches: [{ kind: 'infrastructure-failure', rubric: 'testQuality', reason, detail }],
     });
     const provider: LLMProvider = { invoke: vi.fn() };
     const runner = new DefaultStepRunner(provider, 'run-1', projectRoot, {
