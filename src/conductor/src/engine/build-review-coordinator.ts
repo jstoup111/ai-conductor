@@ -36,6 +36,7 @@ import type { BuildReviewFrozenInputs } from "./build-review-inputs.js";
 import { buildReviewScopeCandidateIdentityKey } from "./build-review-scope-identity.js";
 import {
   deriveBuildReviewRubricProjections,
+  canonicalJson,
   type BuildReviewRubricProjections,
   type BuildReviewRubricProjection,
   type BuildReviewTestQualityProjectionInput,
@@ -558,6 +559,19 @@ export async function coordinateBuildReviewRubrics(
     if (projection.rubric !== branch.rubric) {
       resolved.set(branch.rubric, infrastructure(branch.rubric, "projection-rubric-mismatch"));
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "projection-rubric-mismatch" });
+      continue;
+    }
+    const projectionBytes = Buffer.byteLength(canonicalJson(projection), "utf8");
+    if (projectionBytes > branch.policy.max_projection_bytes) {
+      const detail = `measured=${projectionBytes} bytes limit=${branch.policy.max_projection_bytes} bytes`;
+      resolved.set(branch.rubric, infrastructure(branch.rubric, "projection-oversized", detail));
+      await input.emit?.({
+        type: "build_review_rubric_infrastructure_failure",
+        rubric: branch.rubric,
+        lapId: input.lapId,
+        reason: "projection-oversized",
+        excerpt: detail,
+      });
       continue;
     }
     if (branch.rubric === TEST_QUALITY_RUBRIC && preflight?.classification === "infrastructure-failure") {

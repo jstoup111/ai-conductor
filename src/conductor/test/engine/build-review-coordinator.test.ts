@@ -23,6 +23,7 @@ import {
   type BuildReviewInfrastructureFailureReason,
 } from "../../src/engine/build-review-domain.js";
 import { fingerprintBuildReviewRubricPolicy } from "../../src/engine/build-review-registry.js";
+import { canonicalJson } from "../../src/engine/build-review-projections.js";
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import type {
   ResolvedBuildReviewConfig,
@@ -33,6 +34,7 @@ import { ConductorEventEmitter } from "../../src/ui/events.js";
 
 const policy: ResolvedBuildReviewRubricPolicy = {
   enabled: true,
+  max_projection_bytes: 1_048_576,
   llm_provider: "claude",
   model: "sonnet",
   effort: "medium",
@@ -42,7 +44,7 @@ const policy: ResolvedBuildReviewRubricPolicy = {
   min_confidence: 0,
 };
 
-function config(testQualityEnabled: boolean): ResolvedBuildReviewConfig {
+function config(testQualityEnabled: boolean, maxProjectionBytes = policy.max_projection_bytes): ResolvedBuildReviewConfig {
   // The test-quality config key is introduced after the legacy resolved type.
   // The coordinator's registry, not that retired type, owns runnable membership.
   return {
@@ -50,8 +52,24 @@ function config(testQualityEnabled: boolean): ResolvedBuildReviewConfig {
     perTaskFloor: true,
     scopeContainmentEnforced: false,
     maxParallel: 1,
-    rubrics: { testQuality: { ...policy, enabled: testQualityEnabled } },
+    rubrics: { testQuality: { ...policy, enabled: testQualityEnabled, max_projection_bytes: maxProjectionBytes } },
   } as unknown as ResolvedBuildReviewConfig;
+}
+
+function projectionWithCanonicalByteLength(byteLength: number): BuildReviewCoordinationInput["projections"] {
+  const lapId = parseBuildReviewLapId("lap-current")!;
+  const projection = {
+    rubric: "testQuality",
+    contractVersion: "v3",
+    projectionVersion: "v3",
+    lapId,
+    snapshotDigest: "sha256:snapshot",
+    digest: "sha256:test-quality",
+    padding: "",
+  };
+  const paddingLength = byteLength - Buffer.byteLength(canonicalJson(projection), "utf8");
+  if (paddingLength < 0) throw new Error("requested projection size is below its fixed envelope");
+  return { testQuality: { ...projection, padding: "x".repeat(paddingLength) } } as never;
 }
 
 function inputs(): BuildReviewFrozenInputs {
@@ -738,6 +756,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
       "artifact-read-failed": true,
       "artifact-write-failed": true,
       "scope-incomplete": true,
+      "projection-oversized": true,
     };
     // The parser admits exactly the reasons the coordinator mapping can produce;
     // the three union members outside that mapping are carried by other
@@ -1214,6 +1233,71 @@ describe("build-review coordinator: counterfactual sensitivity is verdict-neutra
 });
 
 describe("build-review coordinator: engine-held rubric isolation", () => {
+  it("refuses an oversized canonical projection before cache or model dispatch", async () => {
+    const dispatchModel = vi.fn(async () => ({ findings: [] }));
+    const result = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      config: config(true, 1_048_576),
+      projections: projectionWithCanonicalByteLength(1_346_093),
+      dispatchModel,
+    }));
+
+    expect(result).toEqual({
+      kind: "ready",
+      branches: [{
+        kind: "infrastructure-failure",
+        rubric: "testQuality",
+        reason: "projection-oversized",
+        detail: "measured=1346093 bytes limit=1048576 bytes",
+      }],
+    });
+    expect(dispatchModel).not.toHaveBeenCalled();
+  });
+
+  it("admits an exactly bounded projection", async () => {
+    const dispatchModel = vi.fn(async () => ({ findings: [] }));
+    const exactProjection = projectionWithCanonicalByteLength(1_024);
+
+    await coordinateBuildReviewRubrics(coordinationInput(true, {
+      config: config(true, 1_024),
+      projections: exactProjection,
+      dispatchModel,
+    }));
+
+    expect(dispatchModel).toHaveBeenCalledTimes(1);
+  });
+
+  it("measures canonical projections in UTF-8 bytes rather than JavaScript characters", async () => {
+    const lapId = parseBuildReviewLapId("lap-current")!;
+    const projection = {
+      rubric: "testQuality",
+      contractVersion: "v3",
+      projectionVersion: "v3",
+      lapId,
+      snapshotDigest: "sha256:snapshot",
+      digest: "sha256:test-quality",
+      padding: "€".repeat(100),
+    };
+    const measured = Buffer.byteLength(canonicalJson(projection), "utf8");
+    const dispatchModel = vi.fn(async () => ({ findings: [] }));
+
+    const refused = await coordinateBuildReviewRubrics(coordinationInput(true, {
+      config: config(true, measured - 1),
+      projections: { testQuality: projection } as never,
+      dispatchModel,
+    }));
+    await coordinateBuildReviewRubrics(coordinationInput(true, {
+      config: config(true, measured),
+      projections: { testQuality: projection } as never,
+      dispatchModel,
+    }));
+
+    expect(measured).toBeGreaterThan([...canonicalJson(projection)].length);
+    expect(refused).toMatchObject({
+      branches: [{ kind: "infrastructure-failure", reason: "projection-oversized", detail: `measured=${measured} bytes limit=${measured - 1} bytes` }],
+    });
+    expect(dispatchModel).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a dispatch-time projection rubric mismatch without writing a branch artifact", async () => {
     const lapId = parseBuildReviewLapId("lap-current")!;
     const emit = vi.fn(async (_event: Parameters<NonNullable<BuildReviewCoordinationInput["emit"]>>[0]) => undefined);
