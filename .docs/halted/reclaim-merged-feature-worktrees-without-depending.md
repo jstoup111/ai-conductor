@@ -1,15 +1,13 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-09-18T17:06:32.807Z
+Status: halted
 Slug: reclaim-merged-feature-worktrees-without-depending
 Class: needs-human
 Halting step: prd_audit
 Phase: SHIP
 Branch: feat/daemon-reclaim-merged-feature-worktrees-without-depending
-Head SHA: 73f965fb7e755e3ecf4142435ec54a3419152527
-Halted at: 2026-09-18T16:42:29.937Z
+Head SHA: db4d083681f53bbb44c5a4f4c419d49bdb738865
+Halted at: 2026-09-18T17:22:19.396Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
