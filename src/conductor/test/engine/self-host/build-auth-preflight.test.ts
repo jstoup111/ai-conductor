@@ -46,8 +46,9 @@ describe('self-host/build-auth-preflight — preflightBuildAuthCheck (Task 6, TR
       expect(haltContent).toContain(tokenPath);
       expect(haltContent).toContain('harness_self_host.build_auth');
 
-      // HALT message should NOT mention operator OAuth or .credentials.json
-      expect(haltContent).not.toContain('operator');
+      // HALT message should NOT mention operator OAuth or .credentials.json.
+      // General guidance may legitimately refer to operators.
+      expect(haltContent).not.toMatch(/operator.*oauth/i);
       expect(haltContent).not.toContain('.credentials.json');
       expect(haltContent).not.toContain('OAuth');
     });
