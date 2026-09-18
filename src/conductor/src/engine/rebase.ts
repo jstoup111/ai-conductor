@@ -4,7 +4,6 @@ import { writeFile, readFile, access, mkdir, rename, readdir } from 'node:fs/pro
 import { join, isAbsolute, relative, basename, resolve, dirname } from 'node:path';
 import type { CiRepairDiagnosticReason, StepName } from '../types/index.js';
 import {
-  checkGateCompletion,
   isSkipVerdict,
   readVerdict,
   writeVerdict,
@@ -1714,7 +1713,7 @@ export async function runGatedRebaseResolution(opts: {
 /**
  * A classifier can say that a gate's inputs were untouched, but that is not
  * evidence that the gate ever passed.  Preserve only a durable, non-skip PASS
- * whose underlying completion predicate still accepts the original artifact.
+ * with a verifiable original judge identity.
  *
  */
 async function applicableOriginalPass(
@@ -1724,9 +1723,10 @@ async function applicableOriginalPass(
   const verdict = await readVerdict(projectRoot, gate);
   if (!isApplicableOriginalPass(verdict)) return undefined;
 
-  const completion = await checkGateCompletion(projectRoot, gate);
-  if (!completion.done) return undefined;
-
+  // The completion predicate compares the original code stamp with the new
+  // post-rebase HEAD, so it cannot judge this pre-rebase authority after any
+  // file delta. Exact replay proof and the bound preservation record own that
+  // later validity decision.
   return verdict!;
 }
 
@@ -2022,7 +2022,28 @@ export async function applyRebaseVerdicts(
         'build',
         ...Object.keys(GATE_SURFACE).filter((gate) => ranManualTest || gate !== 'manual_test'),
       ] as StepName[]);
-  for (const target of targets) {
+  // The classifier exposes two buckets (directly invalidated gates and
+  // preservation candidates that lacked durable authority).  Applying them
+  // bucket-by-bucket makes the observable verdict/event order depend on why
+  // a gate reopened rather than on the canonical gate order.  Preserve that
+  // deterministic order for state effects and event consumers alike.
+  const activePrdInputChanged = reviewDelta(outcome).some((path) =>
+    path.startsWith('.docs/stories/') || path.startsWith('.docs/specs/'),
+  ) ?? false;
+  const gateOrder = new Map<StepName, number>([
+    ['coverage_binding', 0],
+    // Requirement authority refreshes immediately after coverage; the other
+    // SHIP validators retain their ordinary tail order.
+    ['prd_audit', activePrdInputChanged ? 1 : 4],
+    ['build_review', 1 + Number(activePrdInputChanged)],
+    ['test_suite', 2 + Number(activePrdInputChanged)],
+    ['manual_test', 3 + Number(activePrdInputChanged)],
+    ['architecture_review_as_built', 5],
+  ]);
+  const orderedTargets = [...new Set(targets)].sort(
+    (left, right) => (gateOrder.get(left) ?? -1) - (gateOrder.get(right) ?? -1),
+  );
+  for (const target of orderedTargets) {
     // A successful tree-attesting pre-verify has already written this gate's
     // fresh satisfied verdict, so it is not kicked back.
     if (reverifiedGates.has(target)) {
