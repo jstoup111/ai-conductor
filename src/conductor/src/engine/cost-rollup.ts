@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { FeatureUsageTotals } from '../execution/provider-diagnostics.js';
 import type { TokenUsage } from '../execution/llm-provider.js';
 import type { ConductorEvent } from '../types/events.js';
+import type { ComplexityTier } from '../types/steps.js';
 import { classifyMetering } from './metering.js';
 import {
   DispatchMeteringTracker,
@@ -174,9 +175,11 @@ export function toFeatureUsageTotals(rollup: CostRollup): FeatureUsageTotals {
 /** Project cumulative ledger costs into the non-persisted OTel snapshot event. */
 export function toFeatureCostSnapshot(
   rollup: CostRollup,
+  tier?: ComplexityTier,
 ): Extract<ConductorEvent, { type: 'feature_cost_snapshot' }> {
   return {
     type: 'feature_cost_snapshot',
+    ...(tier !== undefined && { tier }),
     costUsd: rollup.costUsd,
     costComplete: rollup.unmetered.count === 0 && (rollup.costUnmetered?.count ?? 0) === 0,
     byDimension: rollup.byDimension ?? [],

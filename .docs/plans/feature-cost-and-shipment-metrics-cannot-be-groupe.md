@@ -8,6 +8,8 @@
 
 Adds an optional `tier` field to the five feature events and threads it through the single metrics projection so that nine feature-scoped instruments carry an `S|M|L` label, omitted when unresolved, in 8 tasks.
 
+> **Amended 2026-09-15 by #2528:** The approved AB-1 correction expands the scope to seven existing events and adds Task 9 below. It preserves terminal-event ownership of outcomes and makes Task 9 the sole owner of the complete/halt production-order integration proof. Task 6 remains the dispatch-end fallback proof.
+
 ## Technical Approach
 
 Per adr-014 D14 (amended 2026-09-14) and the approved component diagram:
@@ -19,6 +21,8 @@ Per adr-014 D14 (amended 2026-09-14) and the approved component diagram:
 - **Sequencing.** Task 1 (types + daemon sites) and Task 5 (recorder activity methods) are leaves; Task 2 is a verify-only replay proof on Task 1's shapes; Tasks 3–4 are the in-run emit sites; Task 6 wires the listener on Tasks 1 and 5 and owns the daemon-event→data-point boundary proof; Task 7 threads the cost gauges on Task 1; Task 8 closes containment on Tasks 5 and 7.
 - **Rebase note.** #2414 (`restore-per-member-telemetry-for-validation-groups`) edits `events.ts`, `metrics.ts`, and `metrics-listener.ts` additively at distinct symbols (parent/member step labels). Both are one-directional additive edits; keep this feature's `tier` parameters trailing and re-run the Task 6 and Task 8 attribute-set assertions after any rebase.
 - **Documentation** for the nine instruments' `tier` label and the re-tier query semantics rides the diff in `docs/reference/configuration.md` per architecture-review C4 and is not a plan task.
+
+> **Amended 2026-09-15 by #2528:** The five-event and three-handler statements above are superseded for terminal outcomes: `feature_complete` and `loop_halt` also carry raw run tier, and `closeFeature` passes it to `onRunClose`. No new subscription or channel is required. Task 9 owns the concrete AB-1 behavior repair and the outstanding AB-2 configuration documentation.
 
 ## Prerequisites
 
@@ -202,6 +206,32 @@ None — every touched module exists on main; no new dependency.
 
 **Dependencies:** Task 5, Task 7
 
+### Task 9: Preserve tier on the first terminal outcome in production event order
+**Story:** 3
+**Type:** happy-path
+
+**Steps:**
+1. Establish RED through the conductor entry point wired to the existing bus, `MetricsListener`, and in-memory exporter: exercise complete and halt paths with resolved run tier, followed by the daemon dispatch-end event in its actual order. Assert the first outcome has the terminal event's tier and the final outcome count is exactly one. Keep providers and external services mocked at their adapters.
+2. Add optional `tier?: ComplexityTier` to `feature_complete` and `loop_halt`; stamp raw `state.complexity_tier` in `completeRun` and raw `haltState.complexity_tier` in centralized `emitLoopHalt`. Omit undefined keys, including early halts; do not add policy defaults, extra state reads, or a listener cache.
+3. Narrow `closeFeature` to the terminal event variants as needed and pass the terminal event tier to `onRunClose`. Preserve existing dispatch-end duplicate suppression, fallback outcome recording, and halt metric behavior.
+4. Prove GREEN for complete/halt production order, interactive terminal-only recording, unresolved state and early halt absence, tierless legacy terminal-event replay, and dispatch-end without a predecessor. Reuse adequate existing fallback tests; do not replace real-order coverage with isolated fabricated dispatch-end events.
+5. Correct `docs/reference/configuration.md` for all nine D14 instruments' optional tier labels, unresolved omission, re-tiered cumulative series retaining their old last values, and the `max by (feature, tier)` last-value query with its cross-tier double-count caveat. Commit the behavior, scoped tests, and reference update together.
+
+**Done when:**
+- A conductor-entry regression through the real listener/exporter boundary proves complete and halt each produce one outcome bearing their terminal event's tier before dispatch-end, with no second outcome after dispatch-end; halt metrics still record.
+- Interactive complete/halt without dispatch-end record tiered outcomes; unresolved state and early halts emit no tier own-property and export no tier attribute; legacy tierless terminal records replay successfully; standalone dispatch-end remains an outcome fallback.
+- The configuration reference lists tier on all nine D14 instruments and explains the re-tier last-value query and its historical-tier double counting. Only scoped RED/GREEN checks run here; aggregate validation remains owned by `test_suite`.
+
+**Files:**
+- src/conductor/src/types/events.ts — optional terminal event tier
+- src/conductor/src/engine/conductor.ts — centralized complete/halt emitters
+- src/conductor/src/engine/otel/metrics-listener.ts — terminal outcome tier projection
+- src/conductor/test/engine/conductor.test.ts — conductor-entry terminal-order integration proof and emitter absence cases
+- src/conductor/test/engine/otel/metrics-listener.test.ts — interactive, legacy replay, and fallback permutations where sufficient existing tests are absent
+- docs/reference/configuration.md — nine-instrument labels and re-tier query semantics
+
+**Dependencies:** Task 1, Task 5, Task 6
+
 ## Task Dependency Graph
 
 ```
@@ -212,6 +242,8 @@ Task 1 ─┬─▶ Task 2
         └─▶ Task 7 ──┼─▶ Task 8
 Task 5 ─────────────┘
 ```
+
+> **Amended 2026-09-15 by #2528:** Task 9 depends on Tasks 1, 5, and 6. It extends the graph above; completed Tasks 1–8 remain intact.
 
 ## Integration Points
 
@@ -273,9 +305,45 @@ Task 5 ─────────────┘
 | Story 5 negative: Given a recorder constructed with an `otel.attributes` map containing the key `tier`, when any feature event is recorded, then the custom `tier` value is not present on the point and the conductor-owned tier (or its absence) is what the point carries | 8 | "stripped by the `RESERVED_CONDUCTOR_LABEL_KEYS` filter" | diff-local |
 | Story 5 negative: Given a feature event with `tier: 'M'`, when it is recorded, then the exported attribute set for that point is exactly today's set plus `tier` — no other new key appears | 8 | "attribute key set equals today's set plus exactly `tier`" | diff-local |
 
+> **Amended 2026-09-15 by #2528:** Architecture coverage: D1 still uses existing subscriptions on the same bus, now with seven enriched events; D14 is additionally implemented by Task 9. Story 3 production-order completion/halt, duplicate suppression, interactive terminal-only, unresolved/early halt, and legacy-terminal replay criteria map to Task 9's Done when checks (lower-layer conductor/listener behavioral proof). The original isolated dispatch-end rows remain fallback coverage under Task 6. AB-2 is owned by Task 9's reference update, not waived.
+
 ## Verification
 - [ ] All happy path criteria covered by at least one task
 - [ ] All negative path criteria covered by at least one task
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-rem-ab1-1: src/conductor/src/engine/task-cli.ts:345-363 runTaskPlanGap — stamp the run's raw complexity tier (the same persisted run-state complexity_tier the centralized emitLoopHalt reads, accepting only S|M|L) on the appended loop_halt as an own-property only when resolved, omitting the key when unresolved or the state is unreadable, with no policy default; keep the HALT marker write, haltClass plan-gap, and return code unchanged
+**Gate:** as-built
+**Rationale:** REMEDIABLE conforming drift under already-amended adr-014 D14 and Task 9 (terminal halt outcome must bear the run tier): the only other production loop_halt producer, runTaskPlanGap at src/conductor/src/engine/task-cli.ts:358-363, appends a tierless event that CloseoutEventTail (closeout-tail.ts:108-137, started at conductor.ts:8914-8921) projects unchanged, so metrics-listener.ts:114-123 records a tierless outcome and suppresses the centralized tier-bearing halt (conductor.ts:5338) and dispatch-end; D14 already decides the behavior (raw run tier, omitted when unresolved), so the fix is a code+test change, not an architecture decision. Sweep: grep of `type: 'loop_halt'` / `type: 'feature_complete'` finds exactly conductor.ts:5313, conductor.ts:5339, and task-cli.ts:359, and build-review-cli.ts/closeout-cli.ts append no terminal events, so the task-cli site is the whole class. Matched pair: the TaskPlanGapExternalEvent type (closeout-events.ts:14) derives from the loop_halt union member in types/events.ts, which already carries optional tier, so no second vocabulary changes. Preservation: Task 9's existing centralized complete/halt production-order regression (conductor.test.ts:213-248), legacy tierless replay, interactive, early-halt absence, and dispatch-end fallback tests stay and are extended, not replaced. Found-and-excluded: the feature's approved component/terminal-sequence diagram omission is a sealed DECIDE artifact that BUILD cannot amend; it is not tasked here and stays with the as-built re-run.
+**Governing clause:** adr-014-otel-observability-exporter D14
+**Done when:**
+- adr-014-otel-observability-exporter D14 is satisfied by this task.
+
+### Task rem-as-built-rem-ab1-2: src/conductor/test/engine/conductor.test.ts (Task 9 production-order block near :213-248, extend alongside existing cases) — add a RED-first regression that runs a BUILD step with a real CloseoutEventTail, bus, MetricsListener, and in-memory exporter, has the mocked build provider invoke the task-cli plan-gap path while still active across a tail poll, then lets the centralized halt and dispatch-end follow; assert exactly one conductor.run.outcomes point carrying the run tier; add a task-cli unit case (src/conductor/test/engine/task-cli.test.ts) proving the appended loop_halt has tier when state resolves it and no tier own-property when unresolved
+**Gate:** as-built
+**Rationale:** REMEDIABLE conforming drift under already-amended adr-014 D14 and Task 9 (terminal halt outcome must bear the run tier): the only other production loop_halt producer, runTaskPlanGap at src/conductor/src/engine/task-cli.ts:358-363, appends a tierless event that CloseoutEventTail (closeout-tail.ts:108-137, started at conductor.ts:8914-8921) projects unchanged, so metrics-listener.ts:114-123 records a tierless outcome and suppresses the centralized tier-bearing halt (conductor.ts:5338) and dispatch-end; D14 already decides the behavior (raw run tier, omitted when unresolved), so the fix is a code+test change, not an architecture decision. Sweep: grep of `type: 'loop_halt'` / `type: 'feature_complete'` finds exactly conductor.ts:5313, conductor.ts:5339, and task-cli.ts:359, and build-review-cli.ts/closeout-cli.ts append no terminal events, so the task-cli site is the whole class. Matched pair: the TaskPlanGapExternalEvent type (closeout-events.ts:14) derives from the loop_halt union member in types/events.ts, which already carries optional tier, so no second vocabulary changes. Preservation: Task 9's existing centralized complete/halt production-order regression (conductor.test.ts:213-248), legacy tierless replay, interactive, early-halt absence, and dispatch-end fallback tests stay and are extended, not replaced. Found-and-excluded: the feature's approved component/terminal-sequence diagram omission is a sealed DECIDE artifact that BUILD cannot amend; it is not tasked here and stays with the as-built re-run.
+**Governing clause:** adr-014-otel-observability-exporter D14
+**Done when:**
+- adr-014-otel-observability-exporter D14 is satisfied by this task.
+
+> **Amended 2026-09-17 by operator (as-built AB-2 resolution — comply with adr-2026-08-11-halt-events-ride-the-persisted-spine D2):** Tasks rem-as-built-rem-ab1-1 and rem-as-built-rem-ab1-2 required a pipeline-owned `loop_halt` appended by `runTaskPlanGap`, which contradicts D2's single conductor-owned `loop_halt` emitter. The operator chose ADR compliance over a superseding ADR. Their delivered tier stamping and tests are superseded by Tasks rem-as-built-rem-ab2-1 and rem-as-built-rem-ab2-2, which remove the external terminal producer so the centralized `emitLoopHalt` is the only plan-gap `loop_halt` source. This also resolves AB-1 (no `engine-state.json` tier read remains) and makes the approved terminal-sequence diagram accurate without a new ADR.
+
+### Task rem-as-built-rem-ab2-1: src/conductor/src/engine/task-cli.ts runTaskPlanGap — delete the appended `loop_halt` closeout event and the `engine-state.json` `complexity_tier` read, keeping the classified plan-gap HALT marker write, the `activePlanPath` read, the operator diagnostics, and return code 1 unchanged; delete `TaskPlanGapExternalEvent` from src/conductor/src/engine/closeout-events.ts and the `ExternalPipelineEvent` union; rewrite the task-cli plan-gap tests to assert the HALT marker is written, the plan is preserved, and `.pipeline/pipeline-events.jsonl` gains no `loop_halt` record, deleting the tier-stamping and tier-omission cases
+**Story:** 3
+**Gate:** as-built
+**Rationale:** DESIGN finding AB-2 (operator resolution 2026-09-17): adr-2026-08-11-halt-events-ride-the-persisted-spine D2 requires one conductor-owned `loop_halt` emit path with every emit site routed through it. `runTaskPlanGap` is the only other producer; the conductor already writes the centralized halt when the build stalls on the classified marker, so the pipeline-owned event is a duplicate terminal seam rather than missing behaviour. Removing it makes the centralized tier-bearing halt the single `conductor.run.outcomes` source for a plan-gap halt.
+**Governing clause:** adr-2026-08-11-halt-events-ride-the-persisted-spine D2
+**Done when:**
+- `grep -rn "type: 'loop_halt'" src/conductor/src` matches only conductor.ts emit sites reached through `emitLoopHalt`; task-cli.ts contains no `appendCloseoutEvent` call and closeout-events.ts contains no `TaskPlanGapExternalEvent`.
+- A task-cli unit test proves a plan-gap report writes the classified HALT marker, preserves the plan, returns 1, and appends no record to `.pipeline/pipeline-events.jsonl`.
+
+### Task rem-as-built-rem-ab2-2: src/conductor/test/engine/conductor.test.ts (Task 9 production-order block) — replace the case "keeps a plan-gap halt tiered when the build tail projects it before the centralized halt" with a regression that runs a BUILD step whose mocked provider reports a plan gap through the task-cli path while a real CloseoutEventTail, bus, MetricsListener, and in-memory exporter are active, then lets the centralized halt (tier read from the real persisted `complexity_tier` in `conduct-state.json`, not a fabricated `engine-state.json` fixture) and dispatch-end follow; assert exactly one `conductor.run.outcomes` point and that it carries the run tier
+**Story:** 3
+**Gate:** as-built
+**Rationale:** Same AB-2 resolution: once the external producer is gone, the proof that a plan-gap halt yields one tiered outcome must come from the production emitter and production state, so the regression that pinned the removed seam is replaced rather than deleted. Task 9's existing complete/halt production-order, interactive, early-halt, and legacy-replay cases stay unchanged.
+**Governing clause:** adr-2026-08-11-halt-events-ride-the-persisted-spine D2
+**Done when:**
+- The replaced regression proves exactly one tiered `conductor.run.outcomes` point for a task-cli plan-gap halt with the closeout tail polling, and the test writes no `engine-state.json` fixture.
+- The Task 9 production-order, interactive, early-halt, and legacy tierless replay cases still pass unchanged.

@@ -39,7 +39,7 @@ export class MetricsListener {
     daemon_backlog_snapshot: (listener, event) => listener.recorder.onDaemonBacklog(event as Extract<OtelEvent, { type: 'daemon_backlog_snapshot' }>),
     feature_dispatch_started: (listener, event) => {
       const dispatch = event as Extract<OtelEvent, { type: 'feature_dispatch_started' }>;
-      listener.recorder.forFeature(dispatch.slug).onFeatureDispatch(dispatch.kind);
+      listener.recorder.forFeature(dispatch.slug).onFeatureDispatch(dispatch.kind, dispatch.tier);
       listener.dispatchMetering.set(dispatch.slug, new DispatchMeteringTracker());
       listener.latestDispatchDimensions.delete(dispatch.slug);
       listener.terminal.delete(dispatch.slug);
@@ -47,8 +47,8 @@ export class MetricsListener {
     feature_dispatch_ended: (listener, event) => {
       const dispatch = event as Extract<OtelEvent, { type: 'feature_dispatch_ended' }>;
       const metric = listener.recorder.forFeature(dispatch.slug);
-      if (!listener.terminal.has(dispatch.slug)) metric.onRunClose(dispatch.outcome);
-      if (dispatch.outcome === 'halted' && dispatch.haltClass && dispatch.step) metric.onFeatureHalt(dispatch.haltClass, dispatch.step);
+      if (!listener.terminal.has(dispatch.slug)) metric.onRunClose(dispatch.outcome, dispatch.tier);
+      if (dispatch.outcome === 'halted' && dispatch.haltClass && dispatch.step) metric.onFeatureHalt(dispatch.haltClass, dispatch.step, dispatch.tier);
       listener.terminal.delete(dispatch.slug);
       listener.starts.delete(dispatch.slug);
       listener.dispatchMetering.delete(dispatch.slug);
@@ -57,8 +57,8 @@ export class MetricsListener {
     feature_shipped: (listener, event) => {
       const shipped = event as Extract<OtelEvent, { type: 'feature_shipped' }>;
       const metric = listener.recorder.forFeature(shipped.slug);
-      metric.onFeatureShipped();
-      metric.onFeatureDuration(typeof shipped.runStartedAt === 'number' ? Math.max(0, listener.now() - shipped.runStartedAt) : undefined, shipped.active.state === 'exact' ? shipped.active.activeMs : undefined);
+      metric.onFeatureShipped(shipped.tier);
+      metric.onFeatureDuration(typeof shipped.runStartedAt === 'number' ? Math.max(0, listener.now() - shipped.runStartedAt) : undefined, shipped.active.state === 'exact' ? shipped.active.activeMs : undefined, shipped.tier);
     },
     step_started: (listener, event) => {
       const step = event as Extract<OtelEvent, { type: 'step_started' }>;
@@ -83,7 +83,7 @@ export class MetricsListener {
       const identity = listener.identityFor(retry, retry.step);
       if (identity) listener.feature(retry)?.onRetry(identity.metricLabel, stepDimensionsFrom(retry));
     },
-    feature_complete: (listener, event) => listener.closeFeature(event as OtelEvent, 'complete'),
+    feature_complete: (listener, event) => listener.closeFeature(event as Extract<OtelEvent, { type: 'feature_complete' }>, 'complete'),
     build_stall: (listener, event) => listener.recorder.onStall((event as Extract<OtelEvent, { type: 'build_stall' }>).reason),
     build_progress: () => {},
     build_no_progress: () => {},
@@ -96,7 +96,7 @@ export class MetricsListener {
       const kickback = event as Extract<OtelEvent, { type: 'kickback' }>;
       listener.feature(kickback)?.onKickback(kickback.from, kickback.to);
     },
-    loop_halt: (listener, event) => listener.closeFeature(event as OtelEvent, 'halted'),
+    loop_halt: (listener, event) => listener.closeFeature(event as Extract<OtelEvent, { type: 'loop_halt' }>, 'halted'),
   };
 
   start(emitter: ConductorEventEmitter): void {
@@ -126,11 +126,14 @@ export class MetricsListener {
       ?? (('slug' in event && typeof event.slug === 'string') ? event.slug : undefined)
       ?? this.featureName;
   }
-  private closeFeature(event: OtelEvent, outcome: 'complete' | 'halted'): void {
+  private closeFeature(
+    event: Extract<OtelEvent, { type: 'feature_complete' | 'loop_halt' }>,
+    outcome: 'complete' | 'halted',
+  ): void {
     const metric = this.feature(event);
     const slug = this.featureOf(event);
     if (metric && (!slug || !this.terminal.has(slug))) {
-      metric.onRunClose(outcome);
+      metric.onRunClose(outcome, event.tier);
       if (slug) this.terminal.add(slug);
     }
   }

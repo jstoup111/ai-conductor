@@ -887,7 +887,7 @@ describe('runTaskDone', () => {
   });
 
   describe('plan gap — an unsatisfiable Done when check halts without appending work', () => {
-    it('writes a classified halt naming the task and check, preserves the plan, and emits loop_halt', async () => {
+    it('writes a classified halt naming the task and check, preserves the plan, and appends no pipeline event', async () => {
       await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
       const planPath = join(dir, 'plan.md');
       const plan = [
@@ -940,17 +940,7 @@ describe('runTaskDone', () => {
       await expect(fsPromises.readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8')).resolves.toBe(status);
       await expect(fsPromises.readFile(planPath, 'utf-8')).resolves.toBe(plan);
 
-      const events = (await fsPromises.readFile(join(dir, '.pipeline', 'pipeline-events.jsonl'), 'utf-8'))
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line));
-      expect(events).toEqual([
-        expect.objectContaining({
-          type: 'loop_halt',
-          haltClass: 'plan-gap',
-          reason: expect.stringContaining('The approved plan has no authorized way'),
-        }),
-      ]);
+      await expect(fsPromises.access(join(dir, '.pipeline', 'pipeline-events.jsonl'))).rejects.toThrow();
     });
   });
 });

@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:10, task:11
+// Covers: task:1, task:2, task:4, task:10, task:11
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
@@ -147,6 +147,22 @@ describe('engine/cost-rollup', () => {
       byDimension,
       tokensByDimension,
     });
+  });
+
+  it('projects a supplied tier and omits an absent tier from cost snapshots', () => {
+    const rollup = {
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+      costUsd: 0,
+      dispatches: 0,
+      retries: 0,
+      halts: 0,
+      unmetered: { count: 0, durationMs: 0 },
+    };
+
+    expect(toFeatureCostSnapshot(rollup, 'L')).toMatchObject({
+      type: 'feature_cost_snapshot', tier: 'L',
+    });
+    expect(Object.hasOwn(toFeatureCostSnapshot(rollup), 'tier')).toBe(false);
   });
 
   it('rolls fully-metered costs into cumulative step, model, and source buckets', async () => {

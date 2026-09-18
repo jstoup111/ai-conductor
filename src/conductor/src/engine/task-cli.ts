@@ -14,7 +14,6 @@ import {
 } from './task-progress.js';
 import { writeHaltMarker } from './halt-marker.js';
 import { parsePlanTaskDoneWhen } from './plan-task-parse.js';
-import { appendCloseoutEvent } from './closeout-events.js';
 
 export interface PlanGapInput {
   index: number;
@@ -355,11 +354,5 @@ async function runTaskPlanGap(
     return 1;
   }
 
-  appendCloseoutEvent(projectRoot, {
-    type: 'loop_halt',
-    reason: haltReason,
-    haltClass: 'plan-gap',
-    ts: new Date().toISOString(),
-  });
   return 1;
 }

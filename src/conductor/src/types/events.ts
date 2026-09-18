@@ -235,17 +235,19 @@ export type ConductorEvent =
       blocked: Record<DispatchBlockReason, boolean>;
       pollDurationMs: number;
     }
-  | { type: 'feature_dispatch_started'; slug: string; kind: DispatchKind }
+  | { type: 'feature_dispatch_started'; slug: string; kind: DispatchKind; tier?: ComplexityTier }
   | {
       type: 'feature_dispatch_ended';
       slug: string;
       outcome: FeatureDispatchOutcome;
+      tier?: ComplexityTier;
       haltClass?: import('../engine/halt-marker.js').HaltDisposition;
       step?: string;
     }
   | {
       type: 'feature_shipped';
       slug: string;
+      tier?: ComplexityTier;
       runStartedAt?: number;
       active: { state: 'exact' | 'partial' | 'unavailable'; activeMs?: number };
     }
@@ -596,6 +598,7 @@ export type ConductorEvent =
        * already recorded.
        */
       type: 'feature_usage_total';
+      tier?: ComplexityTier;
       dispatches: number;
       meteredDispatches: number;
       unmeteredDispatches: number;
@@ -622,6 +625,7 @@ export type ConductorEvent =
        * cost occurrence.
        */
       type: 'feature_cost_snapshot';
+      tier?: ComplexityTier;
       costUsd: number;
       costComplete: boolean;
       byDimension: Array<{
@@ -713,7 +717,7 @@ export type ConductorEvent =
   /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
   | CredentialParkProgressEvent
   | FinishPublicationEvent
-  | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number }
+  | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number; tier?: ComplexityTier }
   | { type: 'dashboard_refresh' }
   | {
       type: 'protected_artifact_rebaseline';
@@ -1077,6 +1081,7 @@ export type ConductorEvent =
       type: 'loop_halt';
       step?: StepName;
       reason: string;
+      tier?: ComplexityTier;
       /** Present when an external BUILD action classifies its own terminal halt. */
       haltClass?: 'plan-gap';
       /**

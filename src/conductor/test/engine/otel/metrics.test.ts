@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5, task:8, task:10, task:11
+// Covers: task:1, task:2, task:3, task:4, task:5, task:7, task:8, task:10, task:11
 /**
  * Covers: task:1, task:2, task:3, task:4, task:10
  * metrics.test.ts — unit tests for MetricsRecorder through MetricsListener.
@@ -259,6 +259,163 @@ describe('Task 5: operator attributes at the metrics identity seam', () => {
         sameMapSecond: { environment: 'staging', project: 'conductor-project', worker: 'conductor-worker' },
         noMap: { project: 'conductor-project', worker: 'conductor-worker' },
       });
+    } finally {
+      await provider.shutdown();
+    }
+  });
+});
+
+// Covers: task:8
+describe('Task 8: tier remains feature-scoped', () => {
+  it('reserves tier for feature points without adding it to identity attributes', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const recorder = new MetricsRecorder(provider.getMeter('task-8-containment'), {
+      project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+    }, { tier: 'X' });
+
+    try {
+      recorder.onFeatureShipped('M');
+      recorder.onMemorySetup({ type: 'memory_setup', before: 'missing', canonical: 'created', ts: 1 });
+      recorder.onGateVerdict('build', 'pass');
+      recorder.onKickback('build_review', 'pipeline');
+      recorder.onPipelineCloseout({ type: 'pipeline_closeout', obligation: 'simplify', startedAt: 1, endedAt: 2, ts: 2 });
+      recorder.onDaemonBacklog({
+        type: 'daemon_backlog_snapshot',
+        counts: { eligible: 1, waiting: 0, blocked: 0, gated: 0, parked: 0 },
+        oldestAgeSeconds: {}, slots: { busy: 1, free: 0 }, inFlight: [],
+        blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false }, pollDurationMs: 1,
+      });
+      recorder.onFeatureShipped();
+      recorder.onFeatureShipped('S');
+      await provider.forceFlush();
+
+      const points = (name: string) => exporter.getMetrics()
+        .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
+        .filter((metric) => metric.descriptor.name === name)
+        .flatMap((metric) => metric.dataPoints);
+      const attributes = (name: string, project: string) => points(name)
+        .find((point) => point.attributes.project === project)?.attributes;
+      const customShipped = points('conductor.feature.shipped').map((point) => point.attributes);
+      const nonFeatureNames = [
+        'conductor.memory.setup', 'conductor.gate.verdicts', 'conductor.gate.kickbacks',
+        'conductor.pipeline.closeout.duration',
+      ];
+      const customUntiered = customShipped.find((attrs) => !Object.hasOwn(attrs, 'tier'));
+      const customTiered = customShipped.find((attrs) => attrs.tier === 'S');
+
+      expect({
+        featureShipped: attributes('conductor.feature.shipped', 'test-project'),
+        nonFeaturePointsAreUntiered: nonFeatureNames.every((name) => points(name)
+          .every((point) => !Object.hasOwn(point.attributes, 'tier'))),
+        daemonPointsAreUntiered: exporter.getMetrics()
+          .flatMap((resource) => resource.scopeMetrics.flatMap((scope) => scope.metrics))
+          .filter((metric) => metric.descriptor.name.startsWith('conductor.daemon.'))
+          .every((metric) => metric.dataPoints.every((point) => !Object.hasOwn(point.attributes, 'tier'))),
+        customUntiered,
+        customTiered,
+        tierAddsExactlyOneKey: customUntiered !== undefined && customTiered !== undefined
+          && JSON.stringify(Object.keys(customTiered).sort()) === JSON.stringify([...Object.keys(customUntiered), 'tier'].sort()),
+      }).toEqual({
+        featureShipped: { tier: 'M', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        nonFeaturePointsAreUntiered: true,
+        daemonPointsAreUntiered: true,
+        customUntiered: { project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        customTiered: { tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        tierAddsExactlyOneKey: true,
+      });
+    } finally {
+      await provider.shutdown();
+    }
+  });
+});
+
+// Covers: task:5
+describe('Task 5: feature activity and outcome tier attributes', () => {
+  it('adds a supplied tier to all six feature activity and outcome points', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const recorder = new MetricsRecorder(provider.getMeter('task-5-tiered'), {
+      project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+    });
+
+    try {
+      recorder.onFeatureDispatch('fresh', 'M');
+      recorder.onFeatureHalt('mechanical', 'build', 'L');
+      recorder.onRunClose('halted', 'L');
+      recorder.onFeatureShipped('S');
+      recorder.onFeatureDuration(12, 9, 'S');
+      await provider.forceFlush();
+
+      const attributes = (name: string) => findMetric(exporter, name)?.dataPoints[0]?.attributes;
+      expect({
+        dispatches: attributes('conductor.feature.dispatches'),
+        halts: attributes('conductor.feature.halts'),
+        outcomes: attributes('conductor.run.outcomes'),
+        shipped: attributes('conductor.feature.shipped'),
+        wall: attributes('conductor.feature.duration.wall'),
+        active: attributes('conductor.feature.duration.active'),
+      }).toEqual({
+        dispatches: { kind: 'fresh', tier: 'M', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        halts: { haltClass: 'mechanical', step: 'build', tier: 'L', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        outcomes: { outcome: 'halted', tier: 'L', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        shipped: { tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        wall: { tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+        active: { tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature' },
+      });
+    } finally {
+      await provider.shutdown();
+    }
+  });
+
+  it('omits tier from all six feature activity and outcome points when not supplied', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const recorder = new MetricsRecorder(provider.getMeter('task-5-untiered'), {
+      project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+    });
+
+    try {
+      recorder.onFeatureDispatch('fresh');
+      recorder.onFeatureHalt('mechanical', 'build');
+      recorder.onRunClose('halted');
+      recorder.onFeatureShipped();
+      recorder.onFeatureDuration(12, 9);
+      await provider.forceFlush();
+
+      const attributes = (name: string) => findMetric(exporter, name)?.dataPoints[0]?.attributes;
+      for (const name of [
+        'conductor.feature.dispatches', 'conductor.feature.halts', 'conductor.run.outcomes',
+        'conductor.feature.shipped', 'conductor.feature.duration.wall', 'conductor.feature.duration.active',
+      ]) expect(attributes(name)).not.toHaveProperty('tier');
+    } finally {
+      await provider.shutdown();
+    }
+  });
+
+  it('records a tiered wall duration without an active point when active duration is absent', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
+    const provider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
+    });
+    const recorder = new MetricsRecorder(provider.getMeter('task-5-partial-duration'), {
+      project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+    });
+
+    try {
+      recorder.onFeatureDuration(12, undefined, 'S');
+      await provider.forceFlush();
+
+      expect(findMetric(exporter, 'conductor.feature.duration.wall')?.dataPoints[0]?.attributes).toEqual({
+        tier: 'S', project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+      });
+      expect(findMetric(exporter, 'conductor.feature.duration.active')).toBeUndefined();
     } finally {
       await provider.shutdown();
     }
@@ -874,6 +1031,60 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
     } finally { await provider.shutdown(); }
   });
 
+  it('projects event tier onto every feature cost point and omits it when absent', async () => {
+    const { exporter, provider, recorder } = await makeRecorder();
+    try {
+      recorder.onFeatureCostSnapshot({ ...snapshot, tier: 'M' });
+      recorder.onFeatureUsageTotal({
+        type: 'feature_usage_total', dispatches: 1, meteredDispatches: 1, unmeteredDispatches: 0,
+        costUsd: 2, inputTokens: 1, outputTokens: 1, tier: 'S',
+      });
+      recorder.onFeatureCostSnapshot({
+        ...snapshot,
+        costUsd: 4,
+        costComplete: false,
+        byDimension: [{ step: 'untiered', costUsd: 4 }],
+        tokensByDimension: [{ step: 'untiered', tokens: { input: 200 } }],
+      });
+      recorder.onFeatureUsageTotal({
+        type: 'feature_usage_total', dispatches: 1, meteredDispatches: 1, unmeteredDispatches: 0,
+        costUsd: 5, inputTokens: 1, outputTokens: 1,
+      });
+      recorder.onFeatureCostSnapshot({ ...snapshot, costUsd: Number.NaN, tier: 'M' });
+      await provider.forceFlush();
+
+      const points = (name: string) => findMetric(exporter, name)?.dataPoints.map(({ value, attributes }) => ({ value, attributes }));
+      expect({
+        featureCost: points('conductor.feature.cost'),
+        featureStepCost: points('conductor.feature.step.cost'),
+        featureStepTokens: points('conductor.feature.step.tokens'),
+      }).toEqual({
+        featureCost: expect.arrayContaining([
+          expect.objectContaining({ value: 3.5, attributes: expect.objectContaining({ cost_complete: true, tier: 'M' }) }),
+          expect.objectContaining({ value: 2, attributes: expect.objectContaining({ cost_complete: true, tier: 'S' }) }),
+          expect.objectContaining({
+            value: 4,
+            attributes: {
+              cost_complete: false,
+              project: 'test-project', worker: 'test-worker', feature: 'test-feature',
+            },
+          }),
+          expect.objectContaining({ value: 5, attributes: expect.not.objectContaining({ tier: expect.anything() }) }),
+        ]),
+        featureStepCost: expect.arrayContaining([
+          expect.objectContaining({ value: 1.5, attributes: expect.objectContaining({ tier: 'M' }) }),
+          expect.objectContaining({ value: 2, attributes: expect.objectContaining({ tier: 'M' }) }),
+          expect.objectContaining({ value: 4, attributes: expect.not.objectContaining({ tier: expect.anything() }) }),
+        ]),
+        featureStepTokens: expect.arrayContaining([
+          expect.objectContaining({ value: 150, attributes: expect.objectContaining({ tier: 'M' }) }),
+          expect.objectContaining({ value: 15, attributes: expect.objectContaining({ tier: 'M' }) }),
+          expect.objectContaining({ value: 200, attributes: expect.not.objectContaining({ tier: expect.anything() }) }),
+        ]),
+      });
+    } finally { await provider.shutdown(); }
+  });
+
   it('records incomplete totals, omits optional model, and retains an unchanged gauge value', async () => {
     const { exporter, provider, recorder } = await makeRecorder();
     try {
@@ -917,6 +1128,7 @@ describe('Task 4: cumulative feature cost and token gauges', () => {
       recorder.onFeatureCostSnapshot({
         ...snapshot,
         costUsd: Number.NaN,
+        tier: 'M',
         byDimension: [{ step: 'build', costUsd: 1.5 }],
       });
       await provider.forceFlush();
