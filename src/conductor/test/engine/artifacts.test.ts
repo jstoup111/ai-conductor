@@ -1,4 +1,4 @@
-// Covers: S1.1, S1.2, S1.3, task:1, task:2, task:3, task:6, task:10
+// Covers: S1.1, S1.2, S1.3, task:2, task:1, task:3, task:6, task:10
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, readdir, symlink } from 'fs/promises';
 import { join, dirname, relative } from 'path';
@@ -196,6 +196,21 @@ describe('engine/artifacts', () => {
     }));
 
     expect(await checkStepCompletion(dir, 'coverage_binding')).toMatchObject({ done });
+  });
+
+  it('reports a partial coverage-binding envelope as incomplete rather than completion evidence', async () => {
+    await createFile('.pipeline/coverage-binding.json', JSON.stringify({
+      version: 1,
+      slug: 'coverage-feature',
+      runId: 'coverage-run',
+      status: 'partial',
+      entries: [],
+    }));
+
+    await expect(checkStepCompletion(dir, 'coverage_binding')).resolves.toEqual({
+      done: false,
+      reason: '.pipeline/coverage-binding.json has non-completing status: partial',
+    });
   });
 
   describe('parsePrdAuditReport', () => {

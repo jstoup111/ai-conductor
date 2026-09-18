@@ -1,9 +1,12 @@
-// Covers: task:11
+// Covers: task:1, task:11
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   claimDigest,
+  COVERAGE_BINDING_COMPLETION_STATUSES,
+  COVERAGE_BINDING_ENVELOPE_STATUSES,
   coverageBindingEnvelopePath,
+  parseCoverageBindingEnvelope,
   parseJudgePayload,
   readCoverageBindingEnvelope,
   writeCoverageBindingEnvelope,
@@ -31,6 +34,26 @@ function memoryFilesystem(files: Record<string, string> = {}): CoverageBindingEn
 }
 
 describe('coverage binding envelope', () => {
+  it('round-trips every envelope status while keeping partial outside the completion set', () => {
+    const entries = [
+      { digest: 'sha256:one', criterion: 'Given one', taskIds: ['1'], doneWhen: [['One is asserted.']], verdict: 'asserts' as const },
+      { digest: 'sha256:two', criterion: 'Given two', taskIds: ['2'], doneWhen: [['Two is asserted.']], verdict: 'not-applicable' as const },
+    ];
+    const envelope = { version: 1, slug: 'feature', runId: 'run-1', entries } as const;
+
+    expect([
+      ['disabled', 'done', 'failed', 'partial', 'refused'].map((status) =>
+        parseCoverageBindingEnvelope({ ...envelope, status }),
+      ),
+      COVERAGE_BINDING_ENVELOPE_STATUSES,
+      COVERAGE_BINDING_COMPLETION_STATUSES,
+    ]).toEqual([
+      ['disabled', 'done', 'failed', 'partial', 'refused'].map((status) => ({ ...envelope, status })),
+      expect.arrayContaining(['partial']),
+      ['disabled', 'done'],
+    ]);
+  });
+
   it('accepts only the closed judge verdict payloads', () => {
     expect([
       parseJudgePayload('{"verdict":"asserts"}'),

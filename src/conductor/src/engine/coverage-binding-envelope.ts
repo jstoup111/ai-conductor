@@ -14,7 +14,7 @@ export interface CoverageBindingJudgePayload {
 }
 
 export type CoverageBindingEntryVerdict = CoverageBindingJudgeVerdict | 'not-applicable';
-export const COVERAGE_BINDING_ENVELOPE_STATUSES = ['disabled', 'done', 'failed', 'refused'] as const;
+export const COVERAGE_BINDING_ENVELOPE_STATUSES = ['disabled', 'done', 'failed', 'partial', 'refused'] as const;
 export type CoverageBindingEnvelopeStatus = (typeof COVERAGE_BINDING_ENVELOPE_STATUSES)[number];
 /** Statuses that are valid completion evidence for the coverage-binding gate. */
 export const COVERAGE_BINDING_COMPLETION_STATUSES: readonly CoverageBindingEnvelopeStatus[] =
