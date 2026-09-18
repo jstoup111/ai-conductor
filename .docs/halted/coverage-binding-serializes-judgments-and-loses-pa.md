@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-09-18T23:34:08.405Z
 Slug: coverage-binding-serializes-judgments-and-loses-pa
 Class: plan-gap
 Halting step: prd_audit
