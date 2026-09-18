@@ -691,6 +691,8 @@ export type BuildReviewRubricId = 'testQuality';
 /** Optional execution overrides for one build-review rubric branch. */
 export interface BuildReviewRubricConfig {
   enabled?: boolean;
+  /** Maximum UTF-8 bytes in this rubric's canonical projection. */
+  max_projection_bytes?: number;
   llm_provider?: ProviderSelection;
   model?: string;
   effort?: EffortLevel;
