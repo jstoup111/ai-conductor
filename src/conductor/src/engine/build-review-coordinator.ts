@@ -37,6 +37,8 @@ import { buildReviewScopeCandidateIdentityKey } from "./build-review-scope-ident
 import {
   deriveBuildReviewRubricProjections,
   isTestQualityProjection,
+  canonicalJson,
+  type BuildReviewProjectionJson,
   type BuildReviewRubricProjections,
   type BuildReviewRubricProjection,
   type BuildReviewTestQualityProjectionInput,
@@ -572,6 +574,21 @@ export async function coordinateBuildReviewRubrics(
     if (projection.rubric !== branch.rubric) {
       resolved.set(branch.rubric, infrastructure(branch.rubric, "projection-rubric-mismatch"));
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "projection-rubric-mismatch" });
+      continue;
+    }
+    const projectionBytes = Buffer.byteLength(canonicalJson(projection as unknown as BuildReviewProjectionJson), "utf8");
+    if (projectionBytes > branch.policy.max_projection_bytes) {
+      const detail = `measured=${projectionBytes} bytes limit=${branch.policy.max_projection_bytes} bytes`;
+      resolved.set(branch.rubric, infrastructure(branch.rubric, "projection-oversized", detail));
+      await input.emit?.({
+        type: "build_review_rubric_infrastructure_failure",
+        rubric: branch.rubric,
+        lapId: input.lapId,
+        reason: "projection-oversized",
+        excerpt: detail,
+        measuredBytes: projectionBytes,
+        limitBytes: branch.policy.max_projection_bytes,
+      });
       continue;
     }
     if (branch.rubric === TEST_QUALITY_RUBRIC && preflight?.classification === "infrastructure-failure") {

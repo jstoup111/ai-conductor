@@ -625,6 +625,15 @@ describe('engine/build-review verdict wiring contract', () => {
       const provider: LLMProvider = { invoke: vi.fn(), };
       const runner = new DefaultStepRunner(provider, 'mechanical-write-failure', dir, {
         pipelineDir: join(dir, '.pipeline'),
+        buildReviewEffectiveResolver: async () => ({
+          ok: true as const,
+          feature: { version: 'v1' as const, repository: dir, feature: 'mechanical-write-failure' },
+          effective: {
+            rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const,
+            acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
+            skippedRubrics: [], infrastructureFailureRubrics: ['testQuality'], uncoveredInfrastructureFailureRubrics: ['testQuality'],
+          },
+        }),
       });
       const inputs = {
         sourceSnapshot: { headSha: 'mechanical-write-failure', digest: 'sha256:mechanical-write-failure', mergeBase: 'base' },

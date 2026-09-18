@@ -134,9 +134,9 @@ export interface BuildReviewSourceSnapshot {
   /** Version of the syntax/binding analysis contract that produced testScope. */
   readonly testScopeAnalysisVersion?: string;
   /**
-   * Region bytes read from the same pinned blobs as `testScope`. Projection
-   * consumes these records directly; it must never refill them from HEAD or
-   * the worktree while deriving its identity.
+   * Region identities read from the same pinned blobs as `testScope`.
+   * Projection consumes these records directly; it must never refill them
+   * from HEAD or the worktree while deriving its identity.
    */
   readonly testScopeEvidence?: readonly BuildReviewPinnedScopeEvidence[];
   /** Machine-readable changed paths from the pinned diff, retaining rename pairs. */
@@ -159,7 +159,6 @@ export interface BuildReviewPinnedScopeEvidence {
   /** One-based source lines for the exact pinned character region. */
   readonly startLine?: number;
   readonly endLine?: number;
-  readonly content: string;
   readonly contentHash: string;
 }
 
@@ -458,9 +457,9 @@ function associationSide(kind: 'added' | 'removed'): PinnedScopeSourceSide {
 }
 
 /**
- * Extract every region the typed scope itself can cite, then capture its bytes
- * from the assembly's immutable blob reader. This is intentionally a data
- * copy, not a later source read by projection or a provider.
+ * Extract every region the typed scope itself can cite, then capture its
+ * identity and hash from the assembly's immutable blob reader. This is
+ * intentionally a data copy, not a later source read by projection or a provider.
  */
 async function pinScopeEvidence(
   files: readonly ScopedTestFile[],
@@ -555,7 +554,6 @@ async function pinScopeEvidence(
       region: Object.freeze({ ...region }),
       startLine: sourceText.slice(0, region.start).split('\n').length,
       endLine: sourceText.slice(0, Math.max(region.start, region.end - 1)).split('\n').length,
-      content,
       contentHash: `sha256:${createHash('sha256').update(content).digest('hex')}`,
     } satisfies BuildReviewPinnedScopeEvidence);
   }));

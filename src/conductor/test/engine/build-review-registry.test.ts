@@ -47,6 +47,7 @@ describe('engine/build-review-registry', () => {
   it('fingerprints resolved execution policy canonically while preserving ordered fallback semantics', () => {
     const policy: ResolvedBuildReviewRubricPolicy = {
       enabled: true,
+      max_projection_bytes: 1_048_576,
       llm_provider: ['codex', 'claude'],
       model: 'gpt-5.6-sol',
       effort: 'high',
@@ -63,6 +64,7 @@ describe('engine/build-review-registry', () => {
       model: 'gpt-5.6-sol',
       llm_provider: ['codex', 'claude'],
       enabled: false,
+      max_projection_bytes: 1_048_576,
       min_confidence: 0,
     };
 

@@ -200,6 +200,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.adjudication.enabled': consumer(RESOLVED_CONFIG),
   'build_review.rubrics': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.enabled': consumer(RESOLVED_CONFIG),
+  'build_review.rubrics.max_projection_bytes': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.llm_provider': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.model': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.effort': consumer(RESOLVED_CONFIG),

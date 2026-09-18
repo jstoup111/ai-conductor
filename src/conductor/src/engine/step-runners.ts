@@ -71,7 +71,11 @@ import {
   renderContainmentFloorReport,
   type ContainmentFloorReport,
 } from './per-task-commit-floor.js';
-import { resolveBuildReviewConfig, type ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
+import {
+  DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES,
+  resolveBuildReviewConfig,
+  type ResolvedBuildReviewRubricPolicy,
+} from './resolved-config.js';
 import {
   coordinateBuildReviewRubrics,
   type BuildReviewCoordinationEngineIdentity,
@@ -2265,7 +2269,7 @@ export class DefaultStepRunner implements StepRunner {
       const hasJudgedFinding = Object.values(validResults).some(
         (result) => result.kind === 'judged' && result.findings.length > 0,
       );
-      if (!hasJudgedFinding) {
+      if (!hasJudgedFinding && infrastructureFailure.reason !== 'projection-oversized') {
         const mechanicalFaults = await bumpMechanicalFaultsInLedger(this.projectDir, 'build_review', {
           rubric: infrastructureFailure.rubric,
           reason: infrastructureFailure.reason,
@@ -2288,19 +2292,22 @@ export class DefaultStepRunner implements StepRunner {
       results: validResults,
     });
     const aggregatePath = join(effectivePipelineDir, 'build-review.json');
+    const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
+      emit: (event) => this.events?.emit(event),
+      minConfidence: Object.fromEntries(Object.entries(config.rubrics).map(([id, policy]) => [id, policy.min_confidence])),
+    });
+    const stampedAggregate = effective.ok && effective.reducedCoverageEvidence !== undefined
+      ? { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence }
+      : aggregate;
     const publication = await new BuildReviewDispositionStore(this.projectDir).withLease(async () => {
       await mkdir(effectivePipelineDir, { recursive: true });
       const temporaryPath = `${aggregatePath}.${randomUUID()}.tmp`;
-      await writeFile(temporaryPath, `${JSON.stringify(aggregate, null, 2)}\n`, 'utf-8');
+      await writeFile(temporaryPath, `${JSON.stringify(stampedAggregate, null, 2)}\n`, 'utf-8');
       await rename(temporaryPath, aggregatePath);
     });
     if (!publication.ok) {
       return { success: false, output: `build_review aggregate publication failed: ${publication.message}` };
     }
-    const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
-      emit: (event) => this.events?.emit(event),
-      minConfidence: Object.fromEntries(Object.entries(config.rubrics).map(([id, policy]) => [id, policy.min_confidence])),
-    });
     // adr-2026-08-29 D4.6: one projection of this lap's sub-floor findings,
     // shared by the visibility event (D4.5) and the durable-history seam below.
     const suppressionEntries = effective.ok
@@ -2322,23 +2329,6 @@ export class DefaultStepRunner implements StepRunner {
     if (!effective.ok) {
       return { success: false, output: `${JSON.stringify(aggregate)}\n\nbuild_review disposition resolution failed: ${effective.reason}` };
     }
-    // The effective resolver is the only live join of current-lap mechanical
-    // faults and durable operator decisions.  Persist its shared rendering on
-    // the aggregate itself so the lap evidence and shipped-record projection
-    // cannot drift into independently formatted views.
-    if (effective.reducedCoverageEvidence !== undefined) {
-      const stampedAggregate = { ...aggregate, reducedCoverageEvidence: effective.reducedCoverageEvidence };
-      try {
-        const temporaryPath = `${aggregatePath}.${randomUUID()}.tmp`;
-        await writeFile(temporaryPath, `${JSON.stringify(stampedAggregate, null, 2)}\n`, 'utf-8');
-        await rename(temporaryPath, aggregatePath);
-      } catch (error) {
-        return {
-          success: false,
-          output: `build_review reduced-coverage evidence publication failed: ${error instanceof Error ? error.message : String(error)}`,
-        };
-      }
-    }
     // adr-2026-08-29 D4.6: durable suppression history is written HERE, before
     // the pass/fail fork below, because D4.4 keeps a fully suppressed lap out
     // of post-join judgement entirely — such a lap returns success and never
@@ -2351,6 +2341,13 @@ export class DefaultStepRunner implements StepRunner {
     });
     if (!persistedSuppressions.ok) {
       return { success: false, output: `build_review suppression history persistence failed: ${persistedSuppressions.reason}` };
+    }
+    if (infrastructureFailure?.reason === 'projection-oversized') {
+      const measurements = /measured=(\d+)\s+bytes\s+limit=(\d+)\s+bytes/.exec(infrastructureFailure.detail);
+      const reason = measurements
+        ? `build_review requires human action: ${infrastructureFailure.rubric} projection-oversized (measured ${measurements[1]} bytes; limit ${measurements[2]} bytes).`
+        : `build_review requires human action: ${infrastructureFailure.rubric} projection-oversized.`;
+      return { success: false, output: reason, refusal: { kind: 'needs-human', reason } };
     }
     if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict();
     // A judged finding is a completed review, even when another rubric had a
@@ -2387,7 +2384,10 @@ export class DefaultStepRunner implements StepRunner {
         'You are running inside the feature worktree. The closed projection below identifies the implementation diff BY REFERENCE instead of embedding it: changedFiles lists each changed file\'s path, change kind, and hunk line ranges (oldStart,oldCount -> newStart,newCount) from the graded diff. Read the working-tree files and run git yourself for any content you need — for example `git diff <mergeBase>..HEAD -- <path>` for one file\'s diff, or `git show <mergeBase>:<path>` for its pre-change form — using the mergeBase and headSha fields of the projection. Judge only the referenced changes; treat the projection as the complete list of what changed.',
         `Return only the provider payload shape below: ${payloadInstruction[branch.rubric]} The engine stamps the judged envelope identity afterward. Every finding must include a non-empty actionable summary and one or more concrete evidenceLocations in path:line or path:line:column form.`,
         ...(branch.rubric === 'testQuality'
-          ? [`Candidate-resolution authority (use only these ids, regions, and obligations):\n${JSON.stringify(buildReviewCandidateScopeResolutionContext(projection))}`]
+          ? [
+              'For each testScope.evidence record, re-read its region at the pinned ref instead of the mutable working tree: use `git show <mergeBase>:<path>` for a base-side region or `git show <headSha>:<path>` for a head-side region, select `startLine` through `endLine`, and verify the bytes against `contentHash`. A hash-mismatched or unreadable region is not judged; return its fallback candidate as `indeterminate` with a non-empty `missingEvidenceReason`.',
+              `Candidate-resolution authority (use only these ids, regions, and obligations):\n${JSON.stringify(buildReviewCandidateScopeResolutionContext(projection))}`,
+            ]
           : []),
         `Your final message MUST end with a JSON object of exactly this shape (an empty findings array means no concern; anchor values follow the schema below exactly — content-region fields (\`changedTest\`, \`locus\`) are structured \`{path, contentHash, display, occurrence?}\` objects; \`occurrence\` is the 0-based ordinal among equal-content regions in one path and is omitted for a unique or first region; every other anchor value is a plain string, all nested under \`anchor\` — never flattened to the finding's top level and never renamed):\n${contractShape}`,
         JSON.stringify(projection),
@@ -2698,6 +2698,7 @@ export class DefaultStepRunner implements StepRunner {
     const resolved = this.resolvedConfigFor('coverage_binding');
     const auxiliaryPolicy: ResolvedBuildReviewRubricPolicy = {
       enabled: true,
+      max_projection_bytes: DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES,
       llm_provider: this.config?.steps?.coverage_binding?.llm_provider ?? this.config?.llm_provider ?? 'claude',
       model: resolved.model,
       effort: resolved.effort,
