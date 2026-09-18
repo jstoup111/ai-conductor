@@ -157,6 +157,7 @@ export type ProjectConfigWriteOutcome = 'created' | 'already-exists';
 
 const TEST_SUITE_VERIFICATION_TEMPLATE_ANCHOR = '# CONFIG_INIT_TEST_SUITE_VERIFICATION';
 const TEST_SUITE_VERIFICATION_MODES = ['aggregate', 'scoped'] as const;
+const DEFAULT_TEST_SUITE_SCOPED_COMMAND = 'npm test -- {selectors}';
 const TEST_SUITE_DRIFT_BUDGET_PRESETS = {
   strict: {
     additional_inputs: 'none',
@@ -224,13 +225,11 @@ function resolveVerificationSelection(
   }
 
   const mode = (options.testSuiteMode ?? 'aggregate') as TestSuiteVerificationMode;
-  if (mode === 'scoped' && options.testSuiteScopedCommand === undefined) {
-    return 'invalid --test-suite-scoped-command: required when --test-suite-mode is scoped; it is only allowed with scoped verification';
-  }
   if (mode !== 'scoped' && options.testSuiteScopedCommand !== undefined) {
     return 'invalid --test-suite-scoped-command: only allowed when --test-suite-mode is scoped';
   }
-  if (mode === 'scoped' && !options.testSuiteScopedCommand!.includes('{selectors}')) {
+  const scopedCommand = options.testSuiteScopedCommand ?? DEFAULT_TEST_SUITE_SCOPED_COMMAND;
+  if (mode === 'scoped' && !scopedCommand.includes('{selectors}')) {
     return 'invalid --test-suite-scoped-command: must contain the "{selectors}" placeholder';
   }
 
@@ -238,7 +237,7 @@ function resolveVerificationSelection(
     command: options.testSuiteCommand ?? 'npm test',
     mode,
     preset: (options.testSuiteDriftBudget ?? 'strict') as TestSuiteDriftBudgetPreset,
-    ...(mode === 'scoped' ? { scopedCommand: options.testSuiteScopedCommand } : {}),
+    ...(mode === 'scoped' ? { scopedCommand } : {}),
   };
 }
 

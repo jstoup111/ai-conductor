@@ -347,17 +347,19 @@ describe('conduct-ts config init verification flags', () => {
     await expect(readFile(join(projectRoot, '.ai-conductor', 'config.yml'))).rejects.toThrow();
   });
 
-  it('refuses scoped verification without its scoped command before creating a config', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  it('uses the existing scoped-command default for scoped verification without the flag', async () => {
     const command = detectRegistryCommand([
       'node', 'conduct-ts', 'config', 'init', '--test-suite-mode', 'scoped',
     ]);
 
     expect(command).not.toBeNull();
-    expect(await dispatchRegistry(command!)).toBe(1);
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('--test-suite-scoped-command'));
-    expect(error).toHaveBeenCalledWith(expect.stringMatching(/required.*scoped/i));
-    await expect(readFile(join(projectRoot, '.ai-conductor', 'config.yml'))).rejects.toThrow();
+    expect(await dispatchRegistry(command!)).toBe(0);
+
+    const generatedConfig = await readFile(
+      join(projectRoot, '.ai-conductor', 'config.yml'),
+      'utf8',
+    );
+    expect(generatedConfig).toContain('  scoped_command: "npm test -- {selectors}"\n');
   });
 
   it('refuses a scoped command outside scoped verification before creating a config', async () => {
