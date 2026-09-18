@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import {
   gateVerdictStillValid,
+  rebaseOperationPublicationBlocker,
   verdictProducedByRun,
 } from '../../src/engine/gate-code-validity.js';
 import {
@@ -212,6 +213,32 @@ describe('gateVerdictStillValid', () => {
     });
 
     await expect(gateVerdictStillValid({ projectRoot: s.repo, git: s.git }, 'build_review', original)).resolves.toBe('preserve');
+  });
+
+  it('allows an applied operation to record completed BUILD without inventing a build verdict', async () => {
+    const s = await makeRepo();
+    scratches.push(s.repo);
+    const original = await commit(s, { 'src/shared.ts': 'original\n' }, 'original reviewed work');
+    const completed = await commit(s, { 'src/shared.ts': 'replayed\n' }, 'completed replay');
+    const replay = {
+      preRebaseHead: original,
+      mergeBase: original,
+      target: original,
+      completedHead: completed,
+      expectedTree: (await s.git(['rev-parse', `${completed}^{tree}`])).stdout.trim(),
+    };
+    await writeVerdict(s.repo, 'rebase', {
+      satisfied: true,
+      checkedAt: 1,
+      rebaseOperation: {
+        id: 'rebase-verified-build',
+        status: 'applied',
+        transition: { preserved: [], invalidated: [], reverified: ['build'] },
+        replay,
+      },
+    });
+
+    await expect(rebaseOperationPublicationBlocker(s.repo)).resolves.toBeNull();
   });
 
   it('refuses malformed, unapplied, superseded, unavailable, and post-replay preservation authority', async () => {

@@ -94,7 +94,12 @@ export async function rebaseOperationPublicationBlocker(projectRoot: string): Pr
     return 'rebase transition record is malformed or inconsistent; reconcile it before publication';
   }
   const { transition } = operation;
-  const named = [...transition.preserved, ...transition.invalidated, ...transition.reverified];
+  // This fence owns only preservation records: they are the cross-file
+  // authority that otherwise lets an old PASS survive the replay. Invalidated
+  // and reverified entries are lifecycle effects (not every step has a gate
+  // verdict file — notably `build` and disabled `coverage_binding`), and their
+  // normal completion predicates remain the authority at finish.
+  const named = transition.preserved;
   for (const gate of named) {
     const verdict = await persistedVerdict(projectRoot, gate);
     if (!verdict?.satisfied) {

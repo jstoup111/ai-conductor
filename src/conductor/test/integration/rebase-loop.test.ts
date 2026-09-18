@@ -359,17 +359,33 @@ describe('integration/rebase-loop', () => {
       // The build_review judgement gate's completion predicate requires a
       // fresh, valid PASS verdict at .pipeline/build-review.json (see
       // artifacts.ts BUILD_REVIEW_VERDICT), same fixture as gate-loop.test.ts.
+      // A completed review also carries the tree identity that production
+      // stamps before a later rebase can retain it.  Without this field the
+      // fixture models a legacy unstamped PASS, which the replay-preservation
+      // authority correctly refuses rather than a review eligible for this
+      // file's preservation assertions.
+      const codeStamp = await git('rev-parse', 'HEAD');
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
         join(dir, '.pipeline/build-review.json'),
-        JSON.stringify({ verdict: 'PASS', rubric: { testQuality: false } }),
+        JSON.stringify({ verdict: 'PASS', codeStamp, rubric: { testQuality: false } }),
       );
     } else if (step === 'manual_test') {
+      const codeStamp = await git('rev-parse', 'HEAD');
       await writeFile(
         join(dir, '.pipeline/manual-test-results.md'),
         '| Story | Result |\n|---|---|\n| foo | PASS |\n',
       );
+      await writeFile(
+        join(dir, '.pipeline/manual-test-failures.json'),
+        JSON.stringify({ codeStamp }),
+      );
+      await writeFile(
+        join(dir, '.pipeline/manual-test-code-stamp.json'),
+        JSON.stringify({ codeStamp, runId: 'test-run' }),
+      );
     } else if (step === 'prd_audit') {
+      const codeStamp = await git('rev-parse', 'HEAD');
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
         join(dir, '.pipeline/prd-audit.md'),
@@ -391,11 +407,20 @@ describe('integration/rebase-loop', () => {
           '| FR-1 | ALIGNED | foo.ts:1 |',
         ].join('\n'),
       );
+      await writeFile(
+        join(dir, '.pipeline/prd-audit-code-stamp.json'),
+        JSON.stringify({ codeStamp, runId: 'test-run' }),
+      );
     } else if (step === 'architecture_review_as_built') {
+      const codeStamp = await git('rev-parse', 'HEAD');
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });
       await writeFile(
         join(dir, '.pipeline/architecture-review-as-built.md'),
         '# As-Built Review\n\nVerdict: APPROVED\n\nOutcome delivered: yes\n',
+      );
+      await writeFile(
+        join(dir, '.pipeline/architecture-review-as-built-code-stamp.json'),
+        JSON.stringify({ codeStamp, runId: 'test-run' }),
       );
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
