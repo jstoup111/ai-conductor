@@ -4,6 +4,17 @@ spec_hash: 3525642bf624210ee96065a5d7fd194ce367976edbcf5e97e6f5d7bf7d10ff02
 pr: https://github.com/jstoup111/ai-conductor/pull/2568
 shipped: 2026-09-18
 engine_version: 20260918T114042Z-85a6c2193c48
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.1
+    summary: "docs/reference/steps.md:72 — rubric documentation edited although no plan task declares this file"
+    accepted: true
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC.2
+    summary: "src/conductor/test/daemon-otel-wiring.test.ts:165 — unrelated daemon OTel test gains `AI_CONDUCTOR_ENGINEER_DIR` temp-dir isolation"
+    accepted: true
 ---
 
 ## Cost
