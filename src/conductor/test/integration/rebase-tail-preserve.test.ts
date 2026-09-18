@@ -335,6 +335,37 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     });
   });
 
+  it('retains the unchanged coverage-pair digest cache without invoking its judge', async () => {
+    const config = { coverage_binding: { judge: { enabled: true } } };
+    let providerCalls = 0;
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: async () => {
+        providerCalls++;
+        return { success: true, output: '{"verdict":"asserts"}', exitCode: 0 };
+      },
+    };
+    await initRepoOnFeatureBranch({ path: 'src/feature.ts', content: 'export const foo = 1;\n' });
+    const oldRunner = new DefaultStepRunner(provider, 'coverage-before-rebase', dir, {
+      featureDesc: 'add-foo', planPath: join(dir, '.docs/plans/add-foo.md'), config: config as never,
+    });
+    await oldRunner.run('coverage_binding', { complexity_tier: 'M' });
+    // The seed proves the cache contains a judged entry; the assertion below
+    // observes only the post-rebase refresh.
+    providerCalls = 0;
+    await advanceBaseForeignRuntimeOnly();
+    await writeState(statePath, { ...FRONT_DONE_M });
+
+    const counts: Record<string, number> = {};
+    await conductorWith(coverageRefreshRunner(counts, provider, config), config).run();
+
+    expect(counts.coverage_binding).toBe(1);
+    expect(providerCalls).toBe(0);
+    expect(JSON.parse(await readFile(join(dir, '.pipeline/coverage-binding.json'), 'utf8'))).toMatchObject({
+      status: 'done', entries: [{ verdict: 'asserts' }],
+    });
+  });
+
   it('uses the existing disabled envelope without invoking a coverage provider', async () => {
     await prepareChangedCoveragePair();
     let providerCalls = 0;

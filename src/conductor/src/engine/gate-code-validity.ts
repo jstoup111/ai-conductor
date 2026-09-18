@@ -11,6 +11,7 @@
 // stamped gate verdict remains current; `conductor.ts` imports
 // `verdictProducedByRun` for its run-identity checks.
 
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { StepName } from '../types/index.js';
@@ -19,6 +20,7 @@ import { validRebaseOperationRecord, type GateVerdict, type ReplayEvidence } fro
 import {
   ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
   MANUAL_TEST_CODE_STAMP,
+  MANUAL_TEST_FAIL_EVIDENCE,
   PRD_AUDIT_CODE_STAMP,
 } from './artifacts.js';
 import type { GitRunner } from './rebase.js';
@@ -125,6 +127,60 @@ async function hasOutstandingVerificationRepair(projectRoot: string): Promise<bo
   return suite?.satisfied === false || suite?.kickback !== undefined;
 }
 
+const PRESERVED_GATE_ARTIFACTS: Partial<Record<StepName, string>> = {
+  coverage_binding: '.pipeline/coverage-binding.json',
+  build_review: '.pipeline/build-review.json',
+  test_suite: '.pipeline/test-suite-evidence.json',
+  manual_test: '.pipeline/manual-test-results.md',
+  prd_audit: '.pipeline/prd-audit.md',
+  architecture_review_as_built: '.pipeline/architecture-review-as-built.md',
+};
+
+/** Re-read the same artifact and engine-owned stamp that the rebase writer
+ * bound into a preservation record. A record is not authority by itself. */
+async function currentPreservedJudgeIdentity(
+  projectRoot: string,
+  gate: StepName,
+): Promise<{ artifactDigest: string; attemptId: string; runId: string; codeStamp: string } | null> {
+  const artifactPath = PRESERVED_GATE_ARTIFACTS[gate];
+  if (!artifactPath) return null;
+  try {
+    const artifact = await readFile(join(projectRoot, artifactPath), 'utf-8');
+    let codeStamp: unknown;
+    let runId: unknown;
+    if (gate === 'manual_test') {
+      const [stamp, identity] = await Promise.all([
+        readFile(join(projectRoot, MANUAL_TEST_FAIL_EVIDENCE), 'utf-8'),
+        readFile(join(projectRoot, MANUAL_TEST_CODE_STAMP), 'utf-8'),
+      ]);
+      codeStamp = (JSON.parse(stamp) as { codeStamp?: unknown }).codeStamp;
+      runId = (JSON.parse(identity) as { runId?: unknown }).runId;
+    } else if (gate === 'prd_audit' || gate === 'architecture_review_as_built') {
+      const sidecar = await readFile(join(projectRoot,
+        gate === 'prd_audit' ? PRD_AUDIT_CODE_STAMP : ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+      ), 'utf-8');
+      const parsed = JSON.parse(sidecar) as { codeStamp?: unknown; runId?: unknown };
+      codeStamp = parsed.codeStamp;
+      runId = parsed.runId;
+    } else if (gate === 'build_review' || gate === 'test_suite') {
+      const parsed = JSON.parse(artifact) as { codeStamp?: unknown; provenanceHeadSha?: unknown };
+      codeStamp = gate === 'build_review' ? parsed.codeStamp : parsed.provenanceHeadSha;
+      runId = await readFile(join(projectRoot, '.pipeline', 'conduct-session-id'), 'utf-8');
+    }
+    if (!nonEmptyString(codeStamp) || !nonEmptyString(runId)) return null;
+    const normalizedRunId = runId.trim();
+    if (!normalizedRunId) return null;
+    return {
+      artifactDigest: `sha256:${createHash('sha256').update(artifact).digest('hex')}`,
+      attemptId: normalizedRunId,
+      runId: normalizedRunId,
+      codeStamp,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function replayBoundAuthorityStillValid(
   ctx: GateCodeValidityContext,
   gate: string,
@@ -143,6 +199,15 @@ async function replayBoundAuthorityStillValid(
       !nonEmptyString(authority.operationId) ||
       !Array.isArray(authority.relevantInputIdentities) ||
       authority.relevantInputIdentities.length === 0) return false;
+
+    const currentIdentity = await currentPreservedJudgeIdentity(ctx.projectRoot, gate as StepName);
+    if (!currentIdentity ||
+      authority.original.artifactDigest !== currentIdentity.artifactDigest ||
+      authority.original.attemptId !== currentIdentity.attemptId ||
+      authority.original.runId !== currentIdentity.runId ||
+      authority.original.codeStamp !== currentIdentity.codeStamp) {
+      return false;
+    }
 
     const replay = authority.replay;
     if (!nonEmptyString(replay.preRebaseHead) || !nonEmptyString(replay.mergeBase) ||

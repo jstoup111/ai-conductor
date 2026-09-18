@@ -11,6 +11,7 @@
  * mirroring `rebase-autostash.test.ts`'s convention.
  */
 import { describe, expect, it, afterEach } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm, mkdir, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -64,6 +65,19 @@ async function commit(
   await git(['commit', '-q', '-m', message]);
   const r = await git(['rev-parse', 'HEAD']);
   return r.stdout.trim();
+}
+
+async function writeBuildReviewIdentity(s: Scratch, codeStamp: string, runId = 'run-1') {
+  const artifact = JSON.stringify({ codeStamp });
+  await mkdir(join(s.repo, '.pipeline'), { recursive: true });
+  await writeFile(join(s.repo, BUILD_REVIEW_VERDICT), artifact);
+  await writeFile(join(s.repo, '.pipeline', 'conduct-session-id'), runId);
+  return {
+    artifactDigest: `sha256:${createHash('sha256').update(artifact).digest('hex')}`,
+    attemptId: runId,
+    runId,
+    codeStamp,
+  };
 }
 
 /**
@@ -190,12 +204,13 @@ describe('gateVerdictStillValid', () => {
       completedHead: completed,
       expectedTree,
     };
+    const identity = await writeBuildReviewIdentity(s, original);
     await writeVerdict(s.repo, 'build_review', {
       satisfied: true,
       checkedAt: 1,
       preservation: {
         gate: 'build_review',
-        original: { artifactDigest: 'sha256:original', attemptId: 'attempt-1', runId: 'run-1', codeStamp: original },
+        original: identity,
         replay,
         relevantInputIdentities: ['.docs/plans/feature.md@sha256:plan'],
         operationId: 'rebase-1',
@@ -248,9 +263,10 @@ describe('gateVerdictStillValid', () => {
     const completed = await commit(s, { 'src/shared.ts': 'upstream plus replay\n' }, 'completed clean replay');
     const expectedTree = (await s.git(['rev-parse', `${completed}^{tree}`])).stdout.trim();
     const replay = { preRebaseHead: original, mergeBase: original, target: original, completedHead: completed, expectedTree };
+    const identity = await writeBuildReviewIdentity(s, original);
     const preservation: ReplayPreservationRecord = {
       gate: 'build_review',
-      original: { artifactDigest: 'sha256:original', attemptId: 'attempt-1', runId: 'run-1', codeStamp: original },
+      original: identity,
       replay,
       relevantInputIdentities: ['.docs/plans/feature.md@sha256:plan'],
       operationId: 'rebase-1',
@@ -274,6 +290,15 @@ describe('gateVerdictStillValid', () => {
     await expect(validity()).resolves.toBe('rerun');
 
     await writeApplied({ ...preservation, original: { ...preservation.original, attemptId: '' } });
+    await expect(validity()).resolves.toBe('rerun');
+
+    await writeApplied({ ...preservation, original: { ...preservation.original, artifactDigest: 'sha256:different' } });
+    await expect(validity()).resolves.toBe('rerun');
+
+    await writeApplied({ ...preservation, original: { ...preservation.original, attemptId: 'another-attempt' } });
+    await expect(validity()).resolves.toBe('rerun');
+
+    await writeApplied({ ...preservation, original: { ...preservation.original, runId: 'another-run' } });
     await expect(validity()).resolves.toBe('rerun');
 
     // An empty list was emitted by the earlier writer's active-input slice.
@@ -312,12 +337,13 @@ describe('gateVerdictStillValid', () => {
       completedHead: completed,
       expectedTree: (await s.git(['rev-parse', `${completed}^{tree}`])).stdout.trim(),
     };
+    const identity = await writeBuildReviewIdentity(s, original);
     await writeVerdict(s.repo, 'build_review', {
       satisfied: true,
       checkedAt: 1,
       preservation: {
         gate: 'build_review',
-        original: { artifactDigest: 'sha256:original', attemptId: 'attempt-1', runId: 'run-1', codeStamp: original },
+        original: identity,
         replay,
         relevantInputIdentities: [],
         operationId: 'rebase-1',
