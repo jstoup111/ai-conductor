@@ -617,7 +617,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   let persistedConsistencyStop = false;
   for (const proposed of escalationCases) {
     const caseId = proposed.case.existingCaseId ?? generateId();
-    const ownsBlockedConsistency = blockedConsistency !== undefined && !persistedConsistencyStop &&
+    const ownsBlockedConsistency: boolean = blockedConsistency !== undefined && !persistedConsistencyStop &&
       proposed.sources.some((source) => blockedConsistency.sourceIds.includes(source.sourceId));
     const persistedStop = await persistBuildReviewDecisionStop({
       store,
