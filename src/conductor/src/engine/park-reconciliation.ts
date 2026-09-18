@@ -189,6 +189,15 @@ function isMerged(evidence: MergeEvidence): boolean {
 }
 
 /**
+ * A shipped record is a dispatch-dedup precondition only for parked candidates
+ * and daemon-created feature branches. Other listed branches are authorized by
+ * the merge proofs alone.
+ */
+export function requiresShippedRecord(branch?: string): boolean {
+  return branch === undefined || branch.startsWith('feat/daemon-');
+}
+
+/**
  * Shipped-record stems committed on `origin/main`, or `null` when the base
  * branch itself could not be read.
  *
@@ -461,15 +470,19 @@ async function gatherMergeEvidence(
   prefetched?: { shippedStems: string[] | null; branchesBySlug: Map<string, string[]> | null },
   branch?: string,
 ): Promise<MergeEvidence | null> {
-  const shippedStems =
-    prefetched?.shippedStems ?? (await listShippedStemsOnMain(runGit, projectRoot));
-  if (shippedStems === null) return null;
+  const recordRequired = requiresShippedRecord(branch);
+  const shippedStems = recordRequired
+    ? prefetched?.shippedStems ?? (await listShippedStemsOnMain(runGit, projectRoot))
+    : [];
+  if (recordRequired && shippedStems === null) return null;
   const branchesBySlug =
     prefetched?.branchesBySlug ?? (await listBranchesBySlug(runGit, projectRoot));
   if (branchesBySlug === null) return null;
 
   const key = undatedStem(slug);
-  const shippedRecordOnMain = shippedStems.some((stem) => undatedStem(stem) === key);
+  const shippedRecordOnMain = recordRequired
+    && shippedStems !== null
+    && shippedStems.some((stem) => undatedStem(stem) === key);
   const branches = branch === undefined
     ? branchesBySlug.get(key) ?? []
     : [...branchesBySlug.values()].some((refs) => refs.includes(branch)) ? [branch] : [];
@@ -542,10 +555,15 @@ export async function reconcileParkedFeatures(
   const enumeratedCandidates = [...candidates.values()]
     .filter((candidate) => !candidate.parked && candidate.reclaimable).length;
 
-  // Read the base-branch record listing and the local ref listing ONCE for the
-  // whole pass; both are pass-invariant and the sweep runs on every idle tick.
+  // Read pass-invariant evidence once. A record listing is unnecessary when
+  // every candidate is a non-daemon listed branch, so do not consult it then.
+  const hasRecordGatedCandidate = [...candidates.values()].some((candidate) =>
+    requiresShippedRecord(candidate.branch),
+  );
   const prefetched = {
-    shippedStems: await listShippedStemsOnMain(runGit, opts.projectRoot),
+    shippedStems: hasRecordGatedCandidate
+      ? await listShippedStemsOnMain(runGit, opts.projectRoot)
+      : [],
     branchesBySlug: await listBranchesBySlug(runGit, opts.projectRoot),
   };
 
@@ -832,8 +850,7 @@ export async function reconcileMergedPark(
   // Existing parked feature branches remain record-gated. The newly enumerated, non-daemon
   // branches are independently ancestry-proven and intentionally do not need
   // a shipped record; daemon setup branches stay record-gated by contract.
-  const requiresRecord = opts.branch === undefined || opts.branch.startsWith('feat/daemon-');
-  if (requiresRecord && !evidence.shippedRecordOnMain) {
+  if (requiresShippedRecord(opts.branch) && !evidence.shippedRecordOnMain) {
     let prUrl: string | undefined;
     for (const head of evidence.branches) {
       try {

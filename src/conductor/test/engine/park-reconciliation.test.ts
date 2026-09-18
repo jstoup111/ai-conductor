@@ -7,6 +7,7 @@ import {
   proveByMergedPrHead,
   reconcileMergedPark,
   reconcileParkedFeatures,
+  requiresShippedRecord,
 } from '../../src/engine/park-reconciliation.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 import { GhCapabilityError } from '../../src/engine/tracker-client.js';
@@ -231,6 +232,16 @@ describe('engine/park-reconciliation — proveByMergedPrHead', () => {
 });
 
 describe('engine/park-reconciliation — reconcileMergedPark', () => {
+  it.each([
+    { branch: undefined, expected: true },
+    { branch: 'feat/daemon-example', expected: true },
+    { branch: 'feat/example', expected: false },
+    { branch: 'hotfix/example', expected: false },
+    { branch: 'spec/example', expected: false },
+  ])('requires a shipped record for branch %j only when dispatch depends on it', ({ branch, expected }) => {
+    expect(requiresShippedRecord(branch)).toBe(expected);
+  });
+
   it.each(['*', 'a/b', 'a,b', ''])(
     'refuses invalid single-slug input %j before invoking git',
     async (slug) => {
@@ -789,6 +800,33 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     const outcome = await reconcileMergedPark({ projectRoot: '/project', slug, branch, runGit: run });
 
     expect(outcome).toEqual({ slug, steps: [], refusal: 'ancestry-check-failed' });
+  });
+
+  it('reclaims a proven non-daemon branch without reading an unavailable shipped-record listing', async () => {
+    const slug = 'hotfix-unreadable-records';
+    const branch = `hotfix/${slug}`;
+    const { run, deleted } = makeGit({ shipped: 'unavailable', branches: [branch], merged: [branch] });
+    const requestRecordRepair = vi.fn(async () => {});
+
+    const outcome = await reconcileMergedPark({
+      projectRoot: '/project',
+      slug,
+      branch,
+      runGit: run,
+      requestRecordRepair,
+    });
+
+    expect({
+      outcome,
+      deleted,
+      repairs: requestRecordRepair.mock.calls,
+      recordReads: run.mock.calls.filter(([args]) => args[0] === 'ls-tree' || args[0] === 'rev-parse'),
+    }).toEqual({
+      outcome: { slug, steps: ['worktree-removed', 'branch-deleted'] },
+      deleted: [branch],
+      repairs: [],
+      recordReads: [],
+    });
   });
 
   it('treats an origin/main without a .docs/shipped tree as no records rather than unavailable', async () => {
@@ -2139,6 +2177,34 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       expect(events).toEqual([
         { type: 'worktree_reclaim_retained', slug: unavailableSlug, branch: unavailableBranch, reason: 'evidence-unavailable' },
       ]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reclaims a non-daemon enumerated candidate without consulting unavailable records', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'sweep-hotfix-unreadable-records';
+    const branch = `hotfix/${slug}`;
+    const { run, deleted } = makeGit({ shipped: 'unavailable', branches: [branch], merged: [branch] });
+    const events: unknown[] = [];
+    try {
+      await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        worktreeListing: async () => [{ slug, branch }],
+        onEvent: (event) => events.push(event),
+      });
+
+      expect({
+        deleted,
+        events,
+        recordReads: run.mock.calls.filter(([args]) => args[0] === 'ls-tree' || args[0] === 'rev-parse'),
+      }).toEqual({
+        deleted: [branch],
+        events: [{ type: 'worktree_reclaim_reclaimed', slug, branch, proof: 'ancestry' }],
+        recordReads: [],
+      });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
