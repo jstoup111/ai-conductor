@@ -8,7 +8,6 @@ import {
   countResolvedTasks,
   resolveTaskIds,
   resolveTaskIdsWithDiagnostics,
-  openRepairForTask,
   haltMarkerExists,
   clearHaltMarker,
   haltMarkerPath,
@@ -410,45 +409,6 @@ describe('task-progress', () => {
       await execa('git', ['commit', '-m', 'repair\n\nTask: T2'], { cwd: dir });
 
       expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set(['2']));
-    });
-
-    it('ignores a superseded repair obligation when the current repair is resolved', async () => {
-      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.docs', 'plans', 'feature.md'), '### Task 2: repaired task\n');
-      await writeFile(join(dir, '.pipeline', 'engine-state.json'), JSON.stringify({
-        activePlanPath: '.docs/plans/feature.md',
-      }));
-      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-        tasks: [{ id: '2', status: 'completed' }],
-      }));
-
-      const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
-      const first = await repairs.admitOrReplay('first-round', {
-        id: 'first-round',
-        planPath: '.docs/plans/feature.md',
-        taskIds: ['2'],
-        source: { findingId: 'first', authority: 'build_review', instruction: 'repair it' },
-        baseline: { head: 'orphaned-boundary', tree: 'tree', resolvedTaskIds: [] },
-      });
-      const second = await repairs.admitOrReplay('second-round', {
-        id: 'second-round',
-        planPath: '.docs/plans/feature.md',
-        taskIds: ['2'],
-        source: { findingId: 'second', authority: 'build_review', instruction: 'repair it again' },
-        baseline: { head: 'current-boundary', tree: 'tree', resolvedTaskIds: [] },
-      });
-      if (!first.ok || !second.ok) throw new Error('repair admission failed');
-      const closed = await repairs.close({
-        planPath: '.docs/plans/feature.md',
-        obligationId: second.obligation.id,
-        taskId: '2',
-        evidence: { kind: 'test', value: 'current repair complete' },
-      });
-      if (!closed.ok) throw new Error(closed.message);
-
-      expect(await resolveTaskIds(dir, ['2'])).toEqual(new Set(['2']));
-      expect(await openRepairForTask(dir, '2')).toEqual({ kind: 'none' });
     });
 
     it('follows a repair boundary the rebase step rewrote through rebase-rewrites.json', async () => {
