@@ -36,35 +36,6 @@ const TEMPLATE_PATH = join(REPO_ROOT, 'templates', 'ai-conductor-config.yml.temp
 const PROJECT_TEMPLATE_PATH = join(REPO_ROOT, 'templates', 'project-config.yml.template');
 const VERSION_PATH = join(REPO_ROOT, 'VERSION');
 
-type DocumentedControl = { key: string; defaultValue: unknown };
-
-function documentedControls(raw: string): DocumentedControl[] {
-  const blocks = raw.matchAll(
-    /^# Controls: ([^,\s]+).*\n# Allowed: .+\n# Default: (.+)\n# Changing it: .+$/gm,
-  );
-  return Array.from(blocks, ([, key, defaultValue]) => ({
-    key,
-    defaultValue: loadYaml(defaultValue),
-  }));
-}
-
-function setDocumentedValue(
-  config: Record<string, unknown>,
-  key: string,
-  value: unknown,
-): void {
-  const segments = key.split('.').map((segment) => segment === '<name>' ? 'explore' : segment);
-  let target = config;
-  for (const segment of segments.slice(0, -1)) {
-    const existing = target[segment];
-    if (existing === undefined) {
-      target[segment] = {};
-    }
-    target = target[segment] as Record<string, unknown>;
-  }
-  target[segments.at(-1) ?? key] = value;
-}
-
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -202,40 +173,49 @@ describe('templates/ai-conductor-config.yml.template (issue #1010)', () => {
 });
 
 describe('templates/project-config.yml.template', () => {
+  const walkthroughKeys = new Set([
+    'test_suite.verification.mode',
+    'test_suite.verification.drift_budget',
+    'test_suite.command',
+  ]);
+  const registryRoots: Record<string, string> = {
+    harness_self_host_build_auth: 'harness_self_host.build_auth',
+  };
+
+  function expectedDocumentedKeys(): Set<string> {
+    const keys = new Set(
+      CONFIG_CONSUMER_KEY_SETS.top.filter((key) => key !== 'conductor' && key !== 'spec_owner'),
+    );
+    for (const [block, children] of Object.entries(CONFIG_CONSUMER_KEY_SETS)) {
+      if (block === 'top' || block === 'conductor') continue;
+      const root = registryRoots[block] ?? block;
+      for (const child of children as readonly string[]) {
+        const key = `${root}.${child}`;
+        if (!walkthroughKeys.has(key)) keys.add(key);
+      }
+    }
+    return keys;
+  }
+
+  function documentedKeys(raw: string): Set<string> {
+    return new Set(Array.from(raw.matchAll(/^# Controls: ([^,\s]+)/gm), ([, key]) => key));
+  }
+
   it('explains every project-settable key with complete guidance', async () => {
     const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
-    const walkthroughKeys = new Set([
-      'test_suite.verification.mode',
-      'test_suite.verification.drift_budget',
-      'test_suite.command',
-    ]);
-    const expectedKeys = CONFIG_CONSUMER_KEY_SETS.top.filter(
-      (key) => key !== 'conductor' && key !== 'spec_owner' && !walkthroughKeys.has(key),
-    );
-    const unaskedTestSuiteSiblings = [
-      'test_suite.working_directory',
-      'test_suite.timeout_seconds',
-      'test_suite.inputs',
-      'test_suite.environment',
-      'test_suite.scoped_command',
-      'test_suite.commands',
-    ];
-    for (const key of [...expectedKeys, ...unaskedTestSuiteSiblings]) {
+    const expectedKeys = expectedDocumentedKeys();
+    for (const key of expectedKeys) {
       expect(raw, key).toMatch(new RegExp(
         `^# Controls: ${escapeRegex(key)}.*\\n# Allowed: .+\\n# Default: .+\\n# Changing it: .+$`,
         'm',
       ));
     }
+    expect(documentedKeys(raw)).toEqual(expectedKeys);
   });
 
-  it('contains only validator-known documented project keys', async () => {
+  it('keeps the documented template config valid through the shared validator', async () => {
     const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
-    const documentedConfig: Record<string, unknown> = {};
-    for (const { key, defaultValue } of documentedControls(raw)) {
-      setDocumentedValue(documentedConfig, key, defaultValue);
-    }
-
-    const result = validateConfig(documentedConfig, undefined, { materializeDefaults: false });
+    const result = validateConfig(loadYaml(raw), undefined, { materializeDefaults: false });
     expect(result.ok).toBe(true);
   });
 

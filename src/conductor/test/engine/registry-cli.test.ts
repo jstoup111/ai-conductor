@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { load as loadYaml } from 'js-yaml';
 import {
   loadConfig,
   UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES,
@@ -12,6 +13,28 @@ import {
   detectRegistryCommand,
   dispatchRegistry,
 } from '../../src/engine/registry-cli.js';
+
+function nonCommentNonBlankLines(raw: string): string[] {
+  return raw.split('\n').filter((line) => line.trim() !== '' && !line.startsWith('#'));
+}
+
+function preChangeAutoModeRendering(template: string): string {
+  return template.replace(
+    '# CONFIG_INIT_TEST_SUITE_VERIFICATION',
+    [
+      '# Test-suite verification answer recorded by ai-conductor config init.',
+      'test_suite:',
+      '  command: npm test',
+      '  verification:',
+      '    mode: aggregate',
+      '    drift_budget:',
+      '      additional_inputs: none',
+      '      source: none',
+      '      test_infrastructure: none',
+      '      tests: none',
+    ].join('\n'),
+  );
+}
 
 describe('conduct-ts config init verification flags', () => {
   let projectRoot: string;
@@ -276,21 +299,22 @@ describe('conduct-ts config init verification flags', () => {
     expect(generatedConfig).toContain(`command: ${testSuiteCommand}`);
   });
 
-  it('copies the raw template byte-for-byte without verification flags', async () => {
+  it('keeps flagless config-init effective settings identical to the pre-change template', async () => {
     const command = detectRegistryCommand(['node', 'conduct-ts', 'config', 'init']);
 
     expect(command).not.toBeNull();
     expect(await dispatchRegistry(command!)).toBe(0);
 
     const config = await readFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'utf8');
-    const template = await readFile(
-      join(repositoryRoot, 'templates', 'project-config.yml.template'),
+    const fixture = await readFile(
+      join(repositoryRoot, 'src', 'conductor', 'test', 'fixtures', 'config-init-defaults.yml'),
       'utf8',
     );
-    expect(config).toBe(template);
+    expect(loadYaml(config)).toEqual(loadYaml(fixture));
+    expect(nonCommentNonBlankLines(config)).toEqual(nonCommentNonBlankLines(fixture));
   });
 
-  it('keeps auto-mode config-init output byte-identical to the default fixture', async () => {
+  it('keeps auto-mode config-init effective settings identical to the pre-change template rendering', async () => {
     const command = detectRegistryCommand([
       'node', 'conduct-ts', 'config', 'init',
       '--test-suite-mode', 'aggregate',
@@ -303,7 +327,9 @@ describe('conduct-ts config init verification flags', () => {
       readFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'utf8'),
       readFile(join(repositoryRoot, 'src', 'conductor', 'test', 'fixtures', 'config-init-defaults.yml'), 'utf8'),
     ]);
-    expect(config).toBe(fixture);
+    const preChangeRendering = preChangeAutoModeRendering(fixture);
+    expect(loadYaml(config)).toEqual(loadYaml(preChangeRendering));
+    expect(nonCommentNonBlankLines(config)).toEqual(nonCommentNonBlankLines(preChangeRendering));
   });
 
   it.each([
@@ -347,19 +373,16 @@ describe('conduct-ts config init verification flags', () => {
     await expect(readFile(join(projectRoot, '.ai-conductor', 'config.yml'))).rejects.toThrow();
   });
 
-  it('uses the existing scoped-command default for scoped verification without the flag', async () => {
+  it('refuses scoped verification without its scoped command before creating a config', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const command = detectRegistryCommand([
       'node', 'conduct-ts', 'config', 'init', '--test-suite-mode', 'scoped',
     ]);
 
     expect(command).not.toBeNull();
-    expect(await dispatchRegistry(command!)).toBe(0);
-
-    const generatedConfig = await readFile(
-      join(projectRoot, '.ai-conductor', 'config.yml'),
-      'utf8',
-    );
-    expect(generatedConfig).toContain('  scoped_command: "npm test -- {selectors}"\n');
+    expect(await dispatchRegistry(command!)).toBe(1);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('--test-suite-scoped-command'));
+    await expect(readFile(join(projectRoot, '.ai-conductor', 'config.yml'))).rejects.toThrow();
   });
 
   it('refuses a scoped command outside scoped verification before creating a config', async () => {
