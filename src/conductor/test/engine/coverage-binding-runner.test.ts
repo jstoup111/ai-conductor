@@ -234,7 +234,7 @@ describe('coverage-binding runner batches', () => {
         infrastructureFailure: expect.any(CoverageBindingPayloadError),
         output: expect.stringContaining(missingDigest),
       });
-      expect(result.infrastructureFailure?.message).toContain(missingDigest);
+      expect((result.infrastructureFailure as Error | undefined)?.message).toContain(missingDigest);
       expect(result).not.toHaveProperty('refusal');
       expect(provider.invoke).toHaveBeenCalledTimes(2);
       expect(envelope.writes.at(-1)).toMatchObject({ status: 'failed' });
