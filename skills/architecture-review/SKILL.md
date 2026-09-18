@@ -571,7 +571,9 @@ table mechanically and any other header halts the feature as unparseable, wastin
 lap. `Class` is a closed set: exactly `REMEDIABLE` or `DESIGN`. A `REMEDIABLE` row's
 `Governing clause` must name either an ADR filename stem plus its decision number (`adr-x decision 3`
 or the heading shorthand `adr-x D3` — both resolve), or a task id from
-this feature's own plan; a REMEDIABLE row without a governing clause is malformed. Write the clause
+this feature's own plan; a REMEDIABLE row without a governing clause is malformed. These citations
+name whole decisions: a subsection form such as adr-x D3.2 resolves to decision 3 because its dotted
+tail collapses as the ADR parser does. Write the clause
 as **bare text** — no backticks, no bold — and cite **exactly one** clause per row: the resolver
 matches a single identifier, so `` `adr-x` + Decision 4 `` and `Task 9 and Task 10` are both
 unresolvable and HALT the bounded remediation route. Split a finding that spans two tasks into two
