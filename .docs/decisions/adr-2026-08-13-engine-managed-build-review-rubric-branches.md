@@ -113,6 +113,26 @@ results must repeat the lap ID and snapshot digest; a mismatch is an infrastruct
 > to the immutable input digest, the closed-projection principle above, and the cache identity in §7
 > are all unchanged.
 
+> **Amended 2026-09-18 by #2582:** the closed-projection principle above is about *fields*, not
+> *bytes*. It was never a rule that every byte a grader may look at must be inlined in the prompt;
+> #1595 already passes the implementation diff by reference (`changedFiles` hunk ranges with a
+> per-hunk content hash) and instructs the grader to read the referenced content with `git show`
+> and `git diff` at the projection's `mergeBase`/`headSha`. This amendment states that contract
+> explicitly and extends it to test-scope evidence.
+>
+> **D2.1 — A projection field may be a reference, provided its identity is in the digest.** A
+> field is closed when the projection carries the *identity* of what the grader may read — path,
+> side, region, and a content hash bound to the frozen snapshot — and the grader may re-read only
+> what that identity names, at the pinned refs, never the live worktree beyond `headSha` and never
+> a path the projection does not list. Cache invalidation stays mechanically complete because the
+> hash of the referenced bytes participates in the projection digest exactly as inlined bytes
+> would; a changed region changes the digest. Test-scope evidence (`BuildReviewPinnedScopeEvidence`)
+> therefore carries `source`, `region`, `startLine`, `endLine`, and `contentHash`, and no longer
+> carries the region's bytes. The rubric skill text names the re-read seam and the hash the grader
+> must verify against. Inlining bytes for a field whose identity is already in the digest is the
+> defect this amendment removes: on a 155-file diff the inlined regions alone reached ~1.3 MB and
+> every lap failed as `invalid-provider-result` (jstoup111/ai-conductor#2582).
+
 ### 3. Reuse green test evidence and preflight only Tautology's RED side
 
 The preceding `test_suite` gate is the authoritative proof that the current HEAD is green.
