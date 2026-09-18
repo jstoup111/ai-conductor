@@ -264,11 +264,11 @@ async function runBuiltinGroup(input: {
         calls.push(step);
         const outcomes = input.outcomes?.[step];
         const outcome = outcomes?.shift() ?? { success: true };
-        // Each local fake completes on its own event-loop turn. This retains
-        // concurrent admission while making the injected clock observe the
-        // member's own finish before a sibling can advance it.
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
         const ownDuration = input.durationByMember?.[step];
+        // Preserve concurrent admission while settling distinct synthetic
+        // durations in temporal order. Zero-delay callbacks can otherwise
+        // settle in an order that moves the shared test clock backwards.
+        await new Promise<void>((resolve) => setTimeout(resolve, ownDuration ?? 0));
         now = ownDuration === undefined ? now + 10 : 1_000 + ownDuration;
         if (input.throwOnAttempts?.[step]?.includes(calls.filter((member) => member === step).length)) {
           throw new Error(`controlled thrown work for ${step}`);
