@@ -848,10 +848,23 @@ describe("build-review coordinator: candidate scope resolutions", () => {
   it('stamps a uniquely resolved source reference into the existing declared-title identity', async () => {
     const projection = {
       ...candidateProjection,
-      testScope: { targets: [], candidates: [{
-        ...scopeCandidate,
-        declaration: { kind: 'test', titleChain: ['widget', 'persists state'], occurrence: 1 },
-      }] },
+      testScope: {
+        targets: [],
+        candidates: [{
+          candidateId: scopeCandidate.candidateId,
+          source: { side: 'head', fileName: scopeRegion.path },
+          declaration: { kind: 'test', span: { start: 9, end: 29 }, titleChain: ['widget', 'persists state'], occurrence: 1 },
+          markers: [{ reference: { kind: 'criterion', id: 'S5.1' } }],
+        }],
+        evidence: [{
+          id: scopeCandidate.candidateId,
+          source: { side: 'head', fileName: scopeRegion.path },
+          region: { start: 9, end: 29 },
+          startLine: scopeRegion.startLine,
+          endLine: scopeRegion.endLine,
+          contentHash: scopeRegion.contentHash,
+        }],
+      },
     };
     const resolution = { ...scopeCandidate, status: 'resolved', associationReason: 'The pinned assertion covers the obligation.' };
     const payload = {
@@ -873,7 +886,7 @@ describe("build-review coordinator: candidate scope resolutions", () => {
     expect(input.writeArtifact).toHaveBeenCalledWith(expect.objectContaining({ result }));
   });
 
-  it.each(['out-of-scope', 'indeterminate', 'foreign-hash', 'ambiguous', 'wrong-occurrence'])(
+  it.each(['out-of-scope', 'indeterminate', 'foreign-hash', 'unlisted-path', 'ambiguous', 'wrong-occurrence'])(
     'does not translate a %s source reference into finding authority', (failure) => {
       const declared = { ...scopeCandidate, declaration: { kind: 'test', titleChain: ['widget', 'persists state'], occurrence: 1 } };
       const candidates = failure === 'ambiguous' ? [declared, { ...declared, candidateId: 'sibling' }] : [declared];
@@ -884,7 +897,8 @@ describe("build-review coordinator: candidate scope resolutions", () => {
           ? { candidateId: candidate.candidateId, status: 'indeterminate', missingEvidenceReason: 'Binding uncertain.' }
           : { ...candidate, status: 'resolved', associationReason: 'Pinned assertion.' });
       const payload = { findings: [{ ...testQualityFinding('Concern'), anchor: { rubric: 'testQuality', locus: {
-        path: scopeRegion.path, contentHash: failure === 'foreign-hash' ? `sha256:${'b'.repeat(64)}` : scopeRegion.contentHash,
+        path: failure === 'unlisted-path' ? 'test/unlisted.test.ts' : scopeRegion.path,
+        contentHash: failure === 'foreign-hash' ? `sha256:${'b'.repeat(64)}` : scopeRegion.contentHash,
         display: scopeRegion.display, ...(failure === 'wrong-occurrence' ? { occurrence: 2 } : {}),
       } } }], scopeResolutions: resolutions };
       expect(validateBuildReviewDispatchedResult(stampBuildReviewDispatchedCandidate(payload, 'testQuality', projection), 'testQuality', projection)).toBeUndefined();
@@ -987,7 +1001,7 @@ describe("build-review coordinator: candidate scope resolutions", () => {
     });
   });
 
-  it("derives candidate authority only from the frozen v3 testScope candidate and pinned evidence", () => {
+  it("derives the pre-change candidate-context golden from identity-only pinned evidence", () => {
     const projection = {
       ...candidateProjection,
       testScope: {
@@ -998,7 +1012,7 @@ describe("build-review coordinator: candidate scope resolutions", () => {
         }],
         evidence: [{
           id: "source:head:test/widget.test.ts:9:29", source: { side: "head", fileName: "test/widget.test.ts" },
-          region: { start: 9, end: 29 }, startLine: 12, endLine: 12, content: "expect(saved).toBe(1)", contentHash: scopeRegion.contentHash,
+          region: { start: 9, end: 29 }, startLine: 12, endLine: 12, contentHash: scopeRegion.contentHash,
         }],
       },
     } as never;
@@ -1007,6 +1021,33 @@ describe("build-review coordinator: candidate scope resolutions", () => {
       candidateId: "source:head:test/widget.test.ts:9:29", sourceRegion: { ...scopeRegion, startLine: 12, endLine: 12 },
       obligationReferences: ["criterion:S5.1"],
     }] });
+  });
+
+  it('does not create candidate authority from a hash-less evidence record, and rejects its anchor', () => {
+    const projection = {
+      ...candidateProjection,
+      testScope: {
+        targets: [],
+        candidates: [{
+          source: { side: 'head', fileName: scopeRegion.path },
+          declaration: { span: { start: 9, end: 29 }, titleChain: ['widget persists state'] },
+          markers: [{ reference: { kind: 'criterion', id: 'S5.1' } }],
+        }],
+        evidence: [{
+          id: 'source:head:test/widget.test.ts:9:29', source: { side: 'head', fileName: scopeRegion.path },
+          region: { start: 9, end: 29 }, startLine: 12, endLine: 12,
+        }],
+      },
+    } as never;
+    const candidate = {
+      findings: [{
+        ...testQualityFinding('The hash-less candidate can pass.'),
+        anchor: { rubric: 'testQuality', locus: scopeRegion },
+      }],
+    };
+
+    expect(buildReviewCandidateScopeResolutionContext(projection)).toEqual({ candidates: [] });
+    expect(validateBuildReviewDispatchedResult(candidate, 'testQuality', projection)).toBeUndefined();
   });
 
   it('keeps merged multi-reason candidates independently settleable by their pinned identities', () => {
@@ -1018,8 +1059,8 @@ describe("build-review coordinator: candidate scope resolutions", () => {
           { source: { side: 'head', fileName: 'test/widget.test.ts' }, declaration: { span: { start: 30, end: 50 }, titleChain: ['widget removes state'] }, markers: [{ reference: { kind: 'criterion', id: 'S5.2' } }], reasons: ['affected-dependency'] },
         ],
         evidence: [
-          { id: 'source:head:test/widget.test.ts:9:29', source: { side: 'head', fileName: 'test/widget.test.ts' }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, content: 'expect(saved).toBe(1)', contentHash: scopeRegion.contentHash },
-          { id: 'source:head:test/widget.test.ts:30:50', source: { side: 'head', fileName: 'test/widget.test.ts' }, region: { start: 30, end: 50 }, startLine: 13, endLine: 13, content: 'expect(removed).toBe(1)', contentHash: `sha256:${'b'.repeat(64)}` },
+          { id: 'source:head:test/widget.test.ts:9:29', source: { side: 'head', fileName: 'test/widget.test.ts' }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, contentHash: scopeRegion.contentHash },
+          { id: 'source:head:test/widget.test.ts:30:50', source: { side: 'head', fileName: 'test/widget.test.ts' }, region: { start: 30, end: 50 }, startLine: 13, endLine: 13, contentHash: `sha256:${'b'.repeat(64)}` },
         ],
       },
     } as never;
@@ -1048,8 +1089,8 @@ describe("build-review coordinator: candidate scope resolutions", () => {
           { source: { side: 'head', fileName: secondRegion.path }, declaration: { span: { start: 9, end: 29 }, titleChain: [secondRegion.display] }, markers: [{ reference: { kind: 'criterion', id: 'S5.2' } }] },
         ],
         evidence: [
-          { id: 'source:head:test/first.test.ts:9:29', source: { side: 'head', fileName: firstRegion.path }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, content: 'expect(first).toBe(1)', contentHash: firstRegion.contentHash },
-          { id: 'source:head:test/second.test.ts:9:29', source: { side: 'head', fileName: secondRegion.path }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, content: 'expect(second).toBe(1)', contentHash: secondRegion.contentHash },
+          { id: 'source:head:test/first.test.ts:9:29', source: { side: 'head', fileName: firstRegion.path }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, contentHash: firstRegion.contentHash },
+          { id: 'source:head:test/second.test.ts:9:29', source: { side: 'head', fileName: secondRegion.path }, region: { start: 9, end: 29 }, startLine: 12, endLine: 12, contentHash: secondRegion.contentHash },
         ],
       },
     } as never;

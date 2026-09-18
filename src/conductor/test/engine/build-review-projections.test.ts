@@ -231,6 +231,18 @@ describe('build-review rubric projections', () => {
     expect(deriveBuildReviewRubricProjections(scopedSource({ provenanceStartedAt: '2026-08-16T11:00:00.000Z' })).testQuality.digest).toBe(baseline.digest);
   });
 
+  it('changes the projection digest when only a pinned evidence contentHash changes', () => {
+    const baseline = scopedSource();
+    const evidence = baseline.inputs.sourceSnapshot.testScopeEvidence![0]!;
+    const changedHash = `sha256:${'f'.repeat(64)}`;
+    const changed = withSnapshot(baseline, {
+      testScopeEvidence: [{ ...evidence, contentHash: changedHash }],
+    });
+
+    expect(changed.inputs.sourceSnapshot.testScopeEvidence![0]!.contentHash).toBe(changedHash);
+    expect(digestOf(changed)).not.toBe(digestOf(baseline));
+  });
+
   it('derives the closed test-quality projection by reference, never embedding the raw diff body', () => {
     const projections = deriveBuildReviewRubricProjections(source());
     const projection: TestQualityProjection = projections.testQuality;
