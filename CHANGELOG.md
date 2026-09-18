@@ -27,6 +27,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Validation-group members now retain independent lifecycle telemetry throughout shared execution. ([implementation PR #2514](https://github.com/jstoup111/ai-conductor/pull/2514)).
 - Skip registered projects with missing paths while polling other repositories. ([implementation PR #2566](https://github.com/jstoup111/ai-conductor/pull/2566)).
 - CI repair sessions retain failing-check context and report truthful repair outcomes. ([implementation PR #2534](https://github.com/jstoup111/ai-conductor/pull/2534)).
+- As-built remediation now accepts dotted subclauses that cite an approved ADR decision. ([implementation PR #2593](https://github.com/jstoup111/ai-conductor/pull/2593)).
 
 ## [1.3.0] - 2026-09-15
 
