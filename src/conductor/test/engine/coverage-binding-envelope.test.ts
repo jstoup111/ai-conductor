@@ -1,4 +1,4 @@
-// Covers: task:1, task:11
+// Covers: task:1, task:2, task:11
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -7,6 +7,7 @@ import {
   COVERAGE_BINDING_ENVELOPE_STATUSES,
   coverageBindingEnvelopePath,
   parseCoverageBindingEnvelope,
+  parseJudgeBatchPayload,
   parseJudgePayload,
   readCoverageBindingEnvelope,
   writeCoverageBindingEnvelope,
@@ -68,6 +69,50 @@ describe('coverage binding envelope', () => {
       { ok: false, reason: expect.stringContaining('missingAssertion') },
       { ok: false, reason: expect.stringContaining('JSON') },
     ]);
+  });
+
+  it('accepts a batch only when it returns each issued digest once with engine-safe verdict data', () => {
+    const parsed = parseJudgeBatchPayload(JSON.stringify({
+      verdicts: [
+        { digest: 'sha256:first', verdict: 'asserts' },
+        { digest: 'sha256:second', verdict: 'does-not-assert', missingAssertion: 'The Done when checks omit the required emission.' },
+      ],
+    }), ['sha256:first', 'sha256:second']);
+
+    expect(parsed).toEqual({
+      ok: true,
+      verdicts: new Map([
+        ['sha256:first', { verdict: 'asserts' }],
+        ['sha256:second', { verdict: 'does-not-assert', missingAssertion: 'The Done when checks omit the required emission.' }],
+      ]),
+    });
+  });
+
+  it.each([
+    ['missing', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts' }] }, ['sha256:first', 'sha256:second'], 'sha256:second'],
+    ['foreign', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts' }, { digest: 'sha256:foreign', verdict: 'asserts' }] }, ['sha256:first', 'sha256:second'], 'sha256:foreign'],
+    ['duplicate', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts' }, { digest: 'sha256:first', verdict: 'asserts' }] }, ['sha256:first'], 'sha256:first'],
+  ])('rejects a %s digest-set mismatch', (_kind, payload, issuedDigests, reason) => {
+    expect(parseJudgeBatchPayload(JSON.stringify(payload), issuedDigests)).toEqual({
+      ok: false,
+      reason: expect.stringContaining(reason),
+    });
+  });
+
+  it.each([
+    ['unknown verdict', { verdicts: [{ digest: 'sha256:first', verdict: 'maybe' }] }, 'verdict'],
+    ['missingAssertion on asserts', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts', missingAssertion: 'not allowed' }] }, 'asserts'],
+    ['empty missingAssertion', { verdicts: [{ digest: 'sha256:first', verdict: 'does-not-assert', missingAssertion: '' }] }, 'missingAssertion'],
+    ['non-object payload', [], 'object'],
+    ['missing verdicts array', {}, 'verdicts'],
+    ['non-array verdicts', { verdicts: {} }, 'array'],
+    ['extra top-level key', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts' }], extra: true }, 'only verdicts'],
+    ['extra entry key', { verdicts: [{ digest: 'sha256:first', verdict: 'asserts', extra: true }] }, 'asserts'],
+  ])('rejects a batch payload with %s', (_kind, payload, reason) => {
+    expect(parseJudgeBatchPayload(JSON.stringify(payload), ['sha256:first'])).toEqual({
+      ok: false,
+      reason: expect.stringContaining(reason),
+    });
   });
 
   it('hashes normalized criterion and Done when checks', () => {

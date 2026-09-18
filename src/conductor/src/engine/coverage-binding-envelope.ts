@@ -88,17 +88,11 @@ function parseEntry(value: unknown): CoverageBindingEnvelopeEntry | null {
     : null;
 }
 
-export function parseJudgePayload(payload: string): { ok: true; value: CoverageBindingJudgePayload } | { ok: false; reason: string } {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(payload);
-  } catch {
-    return { ok: false, reason: 'payload is not valid JSON' };
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+function parseJudgePayloadValue(value: unknown): { ok: true; value: CoverageBindingJudgePayload } | { ok: false; reason: string } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return { ok: false, reason: 'payload must be a JSON object' };
   }
-  const candidate = parsed as Record<string, unknown>;
+  const candidate = value as Record<string, unknown>;
   if (candidate.verdict !== 'asserts' && candidate.verdict !== 'does-not-assert') {
     return { ok: false, reason: 'payload verdict must be asserts or does-not-assert' };
   }
@@ -111,6 +105,69 @@ export function parseJudgePayload(payload: string): { ok: true; value: CoverageB
     return { ok: false, reason: 'does-not-assert payload requires a non-empty missingAssertion' };
   }
   return { ok: true, value: { verdict: 'does-not-assert', missingAssertion: candidate.missingAssertion } };
+}
+
+export function parseJudgePayload(payload: string): { ok: true; value: CoverageBindingJudgePayload } | { ok: false; reason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return { ok: false, reason: 'payload is not valid JSON' };
+  }
+  return parseJudgePayloadValue(parsed);
+}
+
+export function parseJudgeBatchPayload(
+  payload: string,
+  issuedDigests: readonly string[],
+): { ok: true; verdicts: ReadonlyMap<string, CoverageBindingJudgePayload> } | { ok: false; reason: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return { ok: false, reason: 'batch payload is not valid JSON' };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { ok: false, reason: 'batch payload must be a JSON object with a verdicts array' };
+  }
+  const batch = parsed as Record<string, unknown>;
+  if (!exactKeys(batch, ['verdicts'])) {
+    return { ok: false, reason: 'batch payload must contain only verdicts' };
+  }
+  if (!Array.isArray(batch.verdicts)) {
+    return { ok: false, reason: 'batch payload verdicts must be an array' };
+  }
+
+  const issued = new Set(issuedDigests);
+  const verdicts = new Map<string, CoverageBindingJudgePayload>();
+  for (const entry of batch.verdicts) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      return { ok: false, reason: 'batch verdict entry must be a JSON object' };
+    }
+    const candidate = entry as Record<string, unknown>;
+    if (!text(candidate.digest)) {
+      return { ok: false, reason: 'batch verdict entry requires a non-empty digest' };
+    }
+    if (!issued.has(candidate.digest)) {
+      return { ok: false, reason: `batch verdict has foreign digest ${candidate.digest}` };
+    }
+    if (verdicts.has(candidate.digest)) {
+      return { ok: false, reason: `batch verdict repeats digest ${candidate.digest}` };
+    }
+    const { digest, ...judgePayload } = candidate;
+    const parsedEntry = parseJudgePayloadValue(judgePayload);
+    if (!parsedEntry.ok) {
+      return { ok: false, reason: `batch verdict for digest ${digest}: ${parsedEntry.reason}` };
+    }
+    verdicts.set(digest, parsedEntry.value);
+  }
+
+  for (const digest of issued) {
+    if (!verdicts.has(digest)) {
+      return { ok: false, reason: `batch verdict is missing issued digest ${digest}` };
+    }
+  }
+  return { ok: true, verdicts };
 }
 
 /** Identity is intentionally limited to the text the fresh judge receives. */
