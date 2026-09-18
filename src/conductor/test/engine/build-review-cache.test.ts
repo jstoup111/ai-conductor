@@ -69,6 +69,7 @@ describe("build-review semantic cache", () => {
   });
 
   it("parses legacy projection candidates through the read seam, then misses against the current v3 identity", async () => {
+    const currentProjectionDigest = "sha256:digest-that-includes-evidence-content-hash";
     const currentLookup = {
       rubric: "testQuality",
       contractVersion: "v3",
@@ -105,12 +106,13 @@ describe("build-review semantic cache", () => {
       // The former projection embedded this region's bytes in its digest input.
       projectionDigest: "sha256:digest-that-included-evidence-content",
     };
+    const currentProjectionDigest = "sha256:digest-that-includes-evidence-content-hash";
     const currentLookup = {
       rubric: "testQuality",
       contractVersion: "v3",
       projectionVersion: "v3",
       // The reference-only projection instead digests its pinned contentHash.
-      projectionDigest: "sha256:digest-that-includes-evidence-content-hash",
+      projectionDigest: currentProjectionDigest,
       policyFingerprint: oldEngineEntry.policyFingerprint,
       engineIdentity: oldEngineEntry.engineIdentity,
       lapId: "lap-current",
@@ -123,7 +125,7 @@ describe("build-review semantic cache", () => {
 
     expect([
       classifyBuildReviewCacheLookup(await readBuildReviewCacheEntry(root, "testQuality", memoryFilesystem({ [path]: JSON.stringify(oldEngineEntry) })), currentLookup),
-      classifyBuildReviewCacheLookup({ ...oldEngineEntry, projectionDigest: currentLookup.projectionDigest, engineIdentity: { ...oldEngineEntry.engineIdentity, engineStamp: "aaaaaaaaaaaa" } }, currentLookup),
+      classifyBuildReviewCacheLookup({ ...oldEngineEntry, projectionDigest: currentProjectionDigest, engineIdentity: { ...oldEngineEntry.engineIdentity, engineStamp: "aaaaaaaaaaaa" } }, currentLookup),
       written.projectionVersion,
       parseBuildReviewCacheEntry({ ...entry(), projectionVersion: "v4" }),
     ]).toEqual([

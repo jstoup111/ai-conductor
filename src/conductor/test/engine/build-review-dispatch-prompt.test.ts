@@ -25,6 +25,7 @@ const projection: TestQualityProjection = {
   projectionVersion: 'v3',
   lapId: parseBuildReviewLapId('lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8')!,
   snapshotDigest: 'sha256:projection',
+  contentDigest: 'sha256:content',
   digest: 'sha256:projection',
   mergeBase: 'base-sha',
   headSha: 'head-sha',

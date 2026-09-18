@@ -333,13 +333,13 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(Object.keys(evidence ?? {})).toEqual(['id', 'source', 'region', 'startLine', 'endLine', 'contentHash']);
       expect(evidence?.contentHash).toBe('sha256:551d000b3463d87eba283a50b63a3cde45460465eda3c4c10f2f2d1f6ea0652f');
 
-      // @ts-expect-error Pinned evidence must not accept an inline source payload.
       const invalidEvidence: BuildReviewPinnedScopeEvidence = {
         id: 'source:head:test/hash.test.ts:0:360',
         source: { fileName: 'test/hash.test.ts', side: 'head' },
         region: { start: 0, end: 360 },
         startLine: 1,
         endLine: 1,
+        // @ts-expect-error Pinned evidence must not accept an inline source payload.
         content: declaration,
         contentHash: 'sha256:551d000b3463d87eba283a50b63a3cde45460465eda3c4c10f2f2d1f6ea0652f',
       };

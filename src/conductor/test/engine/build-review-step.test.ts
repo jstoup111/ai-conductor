@@ -120,18 +120,18 @@ describe('build_review oversized projection step', () => {
         feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
         effective: {
           rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const, acceptedFindingIds: [], unresolvedFindingIds: [],
-          suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: ['testQuality'],
-          uncoveredInfrastructureFailureRubrics: ['testQuality'],
+          suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: ['testQuality'] as const,
+          uncoveredInfrastructureFailureRubrics: ['testQuality'] as const,
         },
         reducedCoverageEvidence: 'reduced coverage recorded',
       })),
     });
-    vi.spyOn(runner as never, 'runTautologyPreflight').mockResolvedValue({
+    vi.spyOn(runner as any, 'runTautologyPreflight').mockResolvedValue({
       classification: 'approved-exception', exception: 'empty-test-set', cacheable: true, cacheProvenance: 'miss',
       changedPaths: [], changedTestSelectors: [], revertedProductionManifest: [],
       sourceIdentities: { mergeBase: 'base', headSha: 'head' },
     } as never);
-    vi.spyOn(runner as never, 'resolveBuildReviewEngineIdentity').mockResolvedValue({
+    vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue({
       engineStamp: 'dev', skillDigests: { testQuality: { kind: 'resolved', digest: 'sha256:skill' } },
     });
     return runner;

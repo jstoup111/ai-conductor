@@ -4464,7 +4464,20 @@ TIER: M`,
         gitRunner: scopedGit(), planPath,
         ...testQualityOptIn(),
         ...currentBuildReviewProof(),
-        buildReviewEffectiveResolver: vi.fn(async () => ({ ok: false, reason: 'fixture disposition failure' }) as never),
+        buildReviewEffectiveResolver: vi.fn(async () => ({
+          ok: true as const,
+          feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
+          effective: {
+            rawVerdict: 'FAIL' as const,
+            verdict: 'FAIL' as const,
+            acceptedFindingIds: [],
+            unresolvedFindingIds: [],
+            suppressedFindingIds: [],
+            skippedRubrics: [],
+            infrastructureFailureRubrics: ['testQuality'] as const,
+            uncoveredInfrastructureFailureRubrics: ['testQuality'] as const,
+          },
+        })),
       });
       vi.spyOn(runner as any, 'runTautologyPreflight').mockResolvedValue({
         classification: 'infrastructure-failure', reason: 'materialization-failed', failureExcerpt: 'boom-checkout',

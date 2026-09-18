@@ -70,7 +70,11 @@ import {
   renderContainmentFloorReport,
   type ContainmentFloorReport,
 } from './per-task-commit-floor.js';
-import { resolveBuildReviewConfig, type ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
+import {
+  DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES,
+  resolveBuildReviewConfig,
+  type ResolvedBuildReviewRubricPolicy,
+} from './resolved-config.js';
 import {
   coordinateBuildReviewRubrics,
   type BuildReviewCoordinationEngineIdentity,
@@ -2605,6 +2609,7 @@ export class DefaultStepRunner implements StepRunner {
     const resolved = this.resolvedConfigFor('coverage_binding');
     const auxiliaryPolicy: ResolvedBuildReviewRubricPolicy = {
       enabled: true,
+      max_projection_bytes: DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES,
       llm_provider: this.config?.steps?.coverage_binding?.llm_provider ?? this.config?.llm_provider ?? 'claude',
       model: resolved.model,
       effort: resolved.effort,

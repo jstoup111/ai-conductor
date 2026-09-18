@@ -246,6 +246,7 @@ describe("group-core: runAuxiliaryGroupBranch", () => {
   it("dispatches string member IDs through typed policy and outcome callbacks without lifecycle state", async () => {
     const policy: ResolvedBuildReviewRubricPolicy = {
       enabled: true,
+      max_projection_bytes: 1_048_576,
       llm_provider: "claude",
       model: "sonnet",
       effort: "medium",
@@ -283,7 +284,7 @@ describe("group-core: runAuxiliaryGroupBranch", () => {
     const first = deferred<BuildReviewRubricResult>();
     const started: string[] = [];
     const policies: Record<"testQuality", ResolvedBuildReviewRubricPolicy> = {
-      testQuality: { enabled: true, llm_provider: "claude", model: "sonnet", effort: "medium", model_fallback_ladder: ["sonnet", "opus"], max_retries: 2, escalate: false, min_confidence: 0 },
+      testQuality: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: "claude", model: "sonnet", effort: "medium", model_fallback_ladder: ["sonnet", "opus"], max_retries: 2, escalate: false, min_confidence: 0 },
     };
 
     const outcomesPromise = runAuxiliaryGroupBranches(

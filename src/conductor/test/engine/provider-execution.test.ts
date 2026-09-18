@@ -198,7 +198,7 @@ describe('executeProviderCandidates', () => {
     const skipped = vi.fn();
     const exhausted = await executeAuxiliaryProviderCandidates({
       step: 'build_review', memberId: 'scope',
-      policy: { enabled: true, llm_provider: ['codex', 'claude'], model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0 },
+      policy: { enabled: true, max_projection_bytes: 1_048_576, llm_provider: ['codex', 'claude'], model: 'gpt-5.6-sol', effort: 'high', model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0 },
       runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: skipped }), runtime('claude', { invoke: skipped })]),
       sessions: new ProviderSessionScope(vi.fn()),
       prepareCandidateSelfHost: async (candidate) => { throw new ProviderSetupUnavailableError({ provider: candidate.providerKey, capability: 'isolation', reason: 'missing setup', recoveryAction: 'update provider' }); },
@@ -251,7 +251,7 @@ describe('executeProviderCandidates', () => {
       memberId: 'scope',
       policy: {
         enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'xhigh',
-        model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra'], max_retries: 2, escalate: true, min_confidence: 0,
+        model_fallback_ladder: ['gpt-5.6-sol', 'gpt-5.6-terra'], max_projection_bytes: 1_048_576, max_retries: 2, escalate: true, min_confidence: 0,
       },
       runtimes: new ProviderRuntimeSet([
         runtime('codex', { lifecycleCapability: { synchronousSpawnPermit: true }, invoke: codexInvoke, }),
@@ -295,7 +295,7 @@ describe('executeProviderCandidates', () => {
       memberId: 'scope',
       policy: {
         enabled: true, llm_provider: ['codex', 'claude'], model: 'gpt-5.6-sol', effort: 'high',
-        model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0,
+        model_fallback_ladder: ['gpt-5.6-sol'], max_projection_bytes: 1_048_576, max_retries: 3, escalate: false, min_confidence: 0,
       },
       runtimes: new ProviderRuntimeSet([
         runtime('codex', { invoke: unresolvedInvoke }),
@@ -315,7 +315,7 @@ describe('executeProviderCandidates', () => {
       memberId: 'scope',
       policy: {
         enabled: true, llm_provider: 'codex', model: 'gpt-5.6-sol', effort: 'high',
-        model_fallback_ladder: ['gpt-5.6-sol'], max_retries: 3, escalate: false, min_confidence: 0,
+        model_fallback_ladder: ['gpt-5.6-sol'], max_projection_bytes: 1_048_576, max_retries: 3, escalate: false, min_confidence: 0,
       },
       runtimes: new ProviderRuntimeSet([runtime('codex', { invoke: ordinaryInvoke })]),
       sessions: new ProviderSessionScope(vi.fn().mockReturnValue('ordinary-session')),

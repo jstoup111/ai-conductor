@@ -37,6 +37,7 @@ import { buildReviewScopeCandidateIdentityKey } from "./build-review-scope-ident
 import {
   deriveBuildReviewRubricProjections,
   canonicalJson,
+  type BuildReviewProjectionJson,
   type BuildReviewRubricProjections,
   type BuildReviewRubricProjection,
   type BuildReviewTestQualityProjectionInput,
@@ -561,7 +562,7 @@ export async function coordinateBuildReviewRubrics(
       await input.emit?.({ type: "build_review_rubric_infrastructure_failure", rubric: branch.rubric, lapId: input.lapId, reason: "projection-rubric-mismatch" });
       continue;
     }
-    const projectionBytes = Buffer.byteLength(canonicalJson(projection), "utf8");
+    const projectionBytes = Buffer.byteLength(canonicalJson(projection as unknown as BuildReviewProjectionJson), "utf8");
     if (projectionBytes > branch.policy.max_projection_bytes) {
       const detail = `measured=${projectionBytes} bytes limit=${branch.policy.max_projection_bytes} bytes`;
       resolved.set(branch.rubric, infrastructure(branch.rubric, "projection-oversized", detail));
