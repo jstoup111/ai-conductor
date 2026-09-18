@@ -125,7 +125,11 @@ export async function resolveTaskIdsWithDiagnostics(
 
   for (const planId of planIds) {
     const canonicalId = canonicalTaskId(planId);
-    const obligations = repairState.obligations.filter((obligation) => obligation.tasks[canonicalId] !== undefined);
+    const obligations = repairState.obligations.filter(
+      (obligation) =>
+        obligation.tasks[canonicalId] !== undefined &&
+        repairState.currentByTask[canonicalId] === obligation.id,
+    );
     if (obligations.length === 0) continue;
 
     if (obligations.every((obligation) => obligation.tasks[canonicalId].status === 'resolved')) {
@@ -164,7 +168,7 @@ export async function resolveTaskIds(projectRoot: string, planIds: string[]): Pr
 
 type OpenRepairState =
   | { kind: 'none' }
-  | { kind: 'available'; obligations: RepairObligation[] }
+  | { kind: 'available'; obligations: RepairObligation[]; currentByTask: Record<string, string> }
   | { kind: 'unavailable'; reason: string };
 
 /**
@@ -197,7 +201,8 @@ async function readOpenRepairState(projectRoot: string): Promise<OpenRepairState
     return { kind: 'unavailable', reason: `repair state is unavailable: ${binding.reason}` };
   }
   const obligations = records.filter((obligation) => obligation.planIdentity === binding.identity);
-  return obligations.length === 0 ? { kind: 'none' } : { kind: 'available', obligations };
+  const currentByTask = repairs.value.currentByPlan[binding.identity] ?? {};
+  return obligations.length === 0 ? { kind: 'none' } : { kind: 'available', obligations, currentByTask };
 }
 
 export type OpenRepairLookup =
@@ -215,7 +220,11 @@ export async function openRepairForTask(projectRoot: string, id: string): Promis
   if (state.kind === 'unavailable') return { kind: 'unavailable', reason: state.reason };
   if (state.kind === 'none') return { kind: 'none' };
   const canonicalId = canonicalTaskId(id);
-  const open = state.obligations.find((obligation) => obligation.tasks[canonicalId]?.status === 'open');
+  const open = state.obligations.find(
+    (obligation) =>
+      state.currentByTask[canonicalId] === obligation.id &&
+      obligation.tasks[canonicalId]?.status === 'open',
+  );
   return open ? { kind: 'open', obligationId: open.id } : { kind: 'none' };
 }
 
