@@ -97,7 +97,10 @@ describe('build-review candidate cache runner ordering', () => {
 
     expect(coordination).toMatchObject({
       kind: 'ready',
-      branches: [{ kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'cache-write-failed', detail: 'rename denied' }],
+      branches: [
+        { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'cache-write-failed', detail: 'rename denied' },
+        { kind: 'skipped', rubric: 'security', reason: 'disabled' },
+      ],
     });
     expect(events).toEqual(['cache-write-failed']);
   });

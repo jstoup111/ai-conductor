@@ -1,3 +1,5 @@
+import { BUILD_REVIEW_FINDING_VOCABULARIES } from './build-review-domain.js';
+import type { BuildReviewRubricId } from '../types/config.js';
 import type { BuildReviewAggregate, BuildReviewRawSourceProjection } from './build-review-aggregate.js';
 import { projectBuildReviewAggregateSources } from './build-review-aggregate.js';
 import type { RemediationCaseEffect, RemediationCaseRecord, RemediationCaseSourceLink, RemediationCaseSuppressionEntry } from './remediation-case-store.js';
@@ -164,6 +166,20 @@ function customPolicyContext(
   });
 }
 
+/** Every shipped built-in rubric; a policy context outside this map is a custom policy. */
+const BUILTIN_POLICY_QUESTIONS: Readonly<Record<BuildReviewRubricId, string>> = Object.freeze({
+  testQuality: 'Are the tests for new behavior real?',
+  security: 'Does the changed code introduce a concrete security defect?',
+});
+function isBuiltinPolicyRubric(rubric: string): rubric is BuildReviewRubricId {
+  return Object.hasOwn(BUILTIN_POLICY_QUESTIONS, rubric);
+}
+/** Contexts resolved from the aggregate's custom evidence, never from a rubric name. */
+const CUSTOM_POLICY_CONTEXTS = new WeakSet<BuildReviewAdjudicationPolicyContext>();
+function isCustomPolicyContext(policy: BuildReviewAdjudicationPolicyContext): boolean {
+  return CUSTOM_POLICY_CONTEXTS.has(policy);
+}
+
 function policyContexts(
   aggregate: BuildReviewAggregate,
   sources: readonly BuildReviewAdjudicationCurrentSource[],
@@ -173,16 +189,17 @@ function policyContexts(
   for (const rubric of rubrics) {
     const custom = customPolicyContext(aggregate, rubric);
     if (custom) {
+      CUSTOM_POLICY_CONTEXTS.add(custom);
       contexts.push(custom);
       continue;
     }
-    if (rubric !== 'testQuality') return undefined;
+    if (!isBuiltinPolicyRubric(rubric)) return undefined;
     const contractVersion = sources.find((source) => source.rubric === rubric)!.contractVersion;
     contexts.push(Object.freeze({
       rubric,
-      question: 'Are the tests for new behavior real?',
-      effectivePolicyIdentity: `testQuality:${contractVersion}`,
-      criteria: Object.freeze(['test-insensitive']),
+      question: BUILTIN_POLICY_QUESTIONS[rubric],
+      effectivePolicyIdentity: `${rubric}:${contractVersion}`,
+      criteria: Object.freeze([...BUILD_REVIEW_FINDING_VOCABULARIES[rubric].concernKinds]),
     }));
   }
   return contexts;
@@ -193,7 +210,7 @@ function validateCustomScope(
   planContract: BuildReviewAdjudicationPlanContract,
   taskStatus: BuildReviewAdjudicationTaskStatus,
 ): BuildReviewAdjudicationContextStop | undefined {
-  const custom = policyContext.some((policy) => policy.rubric !== 'testQuality');
+  const custom = policyContext.some(isCustomPolicyContext);
   if (!custom) return undefined;
   if (planContract.path === null || !Array.isArray(planContract.admittedTaskContracts)) {
     return { code: 'missing-scope-evidence', subject: 'admitted-task-contracts' };
@@ -403,7 +420,7 @@ export function assembleBuildReviewAdjudicationContext(
   const taskStatus = input.taskStatus ?? ABSENT_TASK_STATUS;
   const scopeStop = validateCustomScope(policyContext, planContract, taskStatus);
   if (scopeStop) return { ok: false, stop: scopeStop };
-  const mode = policyContext.some((policy) => policy.rubric !== 'testQuality') ? 'case-v2' as const : 'case-v1' as const;
+  const mode = policyContext.some(isCustomPolicyContext) ? 'case-v2' as const : 'case-v1' as const;
   const context: BuildReviewAdjudicationContext = Object.freeze({
     version: 'v1', mode, domain: 'build_review',
     lapId: input.aggregate.lapId, snapshotDigest: input.aggregate.snapshotDigest,

@@ -431,7 +431,7 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
       ? await store.appendIfCurrent(appendInput, async (records) => {
         if (!await unchanged()) return false;
         const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records, [], minConfidence);
-        return identity.canonicalPayload.rubric === 'testQuality'
+        return isRegisteredRubric(identity.canonicalPayload.rubric) && 'concernKind' in identity.canonicalPayload
           ? effective?.unresolvedFindingIds.includes(identity.id) === true
           : !records.some((record) => record.finding.id === identity.id && record.finding.canonicalJson === identity.canonicalJson);
       })
@@ -442,7 +442,7 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
           return { ok: false as const, kind: 'invalid' as const, message: 'current review lap changed while waiting for disposition state' };
         }
         const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records, [], minConfidence);
-        const actionable = identity.canonicalPayload.rubric === 'testQuality'
+        const actionable = isRegisteredRubric(identity.canonicalPayload.rubric) && 'concernKind' in identity.canonicalPayload
           ? effective?.unresolvedFindingIds.includes(identity.id) === true
           : !listed.records.some((record) => record.finding.id === identity.id && record.finding.canonicalJson === identity.canonicalJson);
         if (!actionable) return { ok: false as const, kind: 'invalid' as const, message: 'finding is already accepted or not actionable' };

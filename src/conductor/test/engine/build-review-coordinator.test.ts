@@ -492,9 +492,10 @@ describe("build-review coordinator: security envelope", () => {
       config: config(false, true),
       inputs: frozenInputs,
       engineIdentity: { engineStamp: "8e7daae72ad7", skillDigests: { security: { kind: "resolved", digest: "sha256:security-skill" } } },
-      readCache: vi.fn(async (_branch, currentProjection, policyFingerprint) => ({
-        version: 1, rubric: "security", contractVersion: "v3", projectionVersion: "v3",
-        projectionDigest: currentProjection.digest, policyFingerprint,
+      // Candidate-partitioned (v2) entry: a hit requires the lookup's semantic identity.
+      readCache: vi.fn(async (_branch, currentProjection, policyFingerprint, semanticIdentity) => ({
+        version: 2, rubric: "security", contractVersion: "v3", projectionVersion: "v3",
+        projectionDigest: currentProjection.digest, policyFingerprint, semanticIdentity,
         engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:security-skill" },
         result: { kind: "judged", rubric: "security", contractVersion: "v3", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },
       }) as never),
@@ -519,8 +520,8 @@ describe("build-review coordinator: security envelope", () => {
     const input = coordinationInput(false, {
       config: currentConfig,
       engineIdentity,
-      readCache: vi.fn(async (_branch, projection, policyFingerprint) => ({
-        version: 1, rubric: "security", contractVersion: "v3", projectionVersion: "v3", projectionDigest: projection.digest,
+      readCache: vi.fn(async (_branch, projection, policyFingerprint, semanticIdentity) => ({
+        version: 2, rubric: "security", contractVersion: "v3", projectionVersion: "v3", projectionDigest: projection.digest, semanticIdentity,
         policyFingerprint: cachedPolicyFingerprint ?? policyFingerprint,
         engineIdentity: { engineStamp: "8e7daae72ad7", skillDigest: "sha256:security-skill" },
         result: { kind: "judged", rubric: "security", contractVersion: "v3", lapId: parseBuildReviewLapId("lap-previous")!, snapshotDigest: projection.snapshotDigest, findings: [], verdict: "PASS" },

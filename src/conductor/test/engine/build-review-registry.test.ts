@@ -64,8 +64,8 @@ describe('engine/build-review-registry', () => {
     );
   });
 
-  it.each([...BUILD_REVIEW_RUBRIC_IDS, 'security'] as const)(
-    'reserves approved built-in %s without adding it to the shipped registry',
+  it.each(BUILD_REVIEW_RUBRIC_IDS)(
+    'reserves shipped built-in %s from custom rubric declarations',
     (id) => {
       expect(validateConfig({ build_review: { custom_rubrics: {
         [id]: { skill: 'project-review', question: 'Review the change.' },
@@ -73,7 +73,6 @@ describe('engine/build-review-registry', () => {
         ok: false,
         error: { message: expect.stringMatching(/reserved built-in rubric/i) },
       });
-      expect(BUILD_REVIEW_RUBRIC_IDS).not.toContain('security');
     },
   );
 

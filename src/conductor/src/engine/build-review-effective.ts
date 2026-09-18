@@ -1,3 +1,4 @@
+import { isRegisteredRubric } from './build-review-registry.js';
 import { realpath as realpathDefault } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
 
@@ -136,7 +137,7 @@ export function deriveComposedBuildReviewEffectiveVerdict(
   reducedCoverage: readonly import('./build-review-dispositions.js').BuildReviewReducedCoverageDispositionRecord[],
   minConfidence: Partial<Record<string, number>> = {},
 ): BuildReviewEffectiveVerdict | undefined {
-  const builtinDispositions = dispositions.filter((record) => record.finding.canonicalPayload.rubric === 'testQuality');
+  const builtinDispositions = dispositions.filter((record) => isRegisteredRubric(record.finding.canonicalPayload.rubric) && 'concernKind' in record.finding.canonicalPayload);
   const builtin = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, builtinDispositions, reducedCoverage, minConfidence as Partial<Record<import('../types/config.js').BuildReviewRubricId, number>>);
   return builtin === undefined ? undefined : applyCurrentCustomEffectiveVerdict(
     aggregate, builtin, feature, reducedCoverage, dispositions, minConfidence,

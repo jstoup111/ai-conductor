@@ -202,6 +202,25 @@ describe('build-review domain', () => {
     }
   });
 
+  it('binds an enabled security built-in member to its own rubric and parser, leaving test-quality and custom members unchanged', () => {
+    const security = buildReviewEffectiveResultDescriptor({ id: 'security', kind: 'builtin', policy: customCatalogEntry.policy });
+    const testQuality = buildReviewEffectiveResultDescriptor({ id: 'testQuality', kind: 'builtin', policy: customCatalogEntry.policy });
+    const securityFinding = {
+      concernKind: 'injection', summary: 'Request input reaches a shell.', evidenceLocations: ['src/auth.ts:8'],
+      anchor: { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request-derived shell command' } },
+    };
+
+    expect(security).toEqual({ kind: 'builtin', rubric: 'security', parser: 'security-v3' });
+    expect(testQuality).toEqual({ kind: 'builtin', rubric: 'testQuality', parser: 'test-quality-v3' });
+    expect(buildReviewEffectiveResultDescriptor(customCatalogEntry)).toEqual({ kind: 'custom', rubric: 'portablePolicy', parser: 'custom-findings-v1' });
+    expect(parseBuildReviewReviewerPayload(judged([securityFinding], { rubric: 'security' }), security)).toMatchObject({
+      kind: 'judged', rubric: 'security', verdict: 'FAIL', findings: [{ concernKind: 'injection' }],
+    });
+    // A payload for one built-in never parses under another built-in's descriptor.
+    expect(parseBuildReviewReviewerPayload(judged([], { rubric: 'security' }), testQuality)).toBeUndefined();
+    expect(parseBuildReviewReviewerPayload(judged([]), security)).toBeUndefined();
+  });
+
   it('keeps test-quality specialized and custom unsupported payloads distinct from empty findings', () => {
     const customDescriptor = buildReviewEffectiveResultDescriptor(customCatalogEntry);
     const builtInDescriptor = buildReviewEffectiveResultDescriptor({

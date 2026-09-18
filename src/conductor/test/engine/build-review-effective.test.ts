@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { deriveEffectiveBuildReviewVerdictWithDispositions, joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId, type BuildReviewRubricContractVersion } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
-import { resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
+import { deriveComposedBuildReviewEffectiveVerdict, resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
 import { projectBuildReviewSuppressionEntries } from '../../src/engine/build-review-suppression-history.js';
 import type { BuildReviewCustomDeclaration } from '../../src/engine/build-review-artifacts.js';
 import { rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewReducedCoverageDispositionRecord } from '../../src/engine/build-review-dispositions.js';
@@ -167,6 +167,10 @@ describe('live build-review effective resolver', () => {
     const dispositions = [{ version: 'v1' as const, feature, finding: accepted, sourceLapId: lapId, summary: 'accepted security risk', rationale: 'known development credential', operator: 'operator', acceptedAt: '2026-09-14T00:00:00.000Z' }];
 
     expect(deriveEffectiveBuildReviewVerdictWithDispositions(raw, feature, dispositions)).toMatchObject({
+      rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [accepted.id], unresolvedFindingIds: [],
+    });
+    // The custom-aware composed reducer must route every built-in disposition, not only test-quality's.
+    expect(deriveComposedBuildReviewEffectiveVerdict(raw, feature, dispositions, [])).toMatchObject({
       rawVerdict: 'FAIL', verdict: 'PASS', acceptedFindingIds: [accepted.id], unresolvedFindingIds: [],
     });
   });
