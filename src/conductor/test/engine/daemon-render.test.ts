@@ -338,6 +338,10 @@ describe('renderDaemonEvent', () => {
       proof: 'ancestry',
     })).toHaveLength(1);
     expect(lines({
+      type: 'worktree_reclaim_reclaimed',
+      slug: 'branchless-parked-feature',
+    })).toHaveLength(1);
+    expect(lines({
       type: 'worktree_reclaim_failed',
       slug: 'merged-feature',
       branch: 'feat/daemon-merged-feature',

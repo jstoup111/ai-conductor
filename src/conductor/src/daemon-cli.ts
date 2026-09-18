@@ -2814,7 +2814,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot} ${chalk.red('✗')} scratch cleanup failed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
       break;
     case 'worktree_reclaim_reclaimed':
-      log(`${dot} ${chalk.green('✓')} worktree reclaimed ${event.slug} (${event.branch}; ${event.proof})`);
+      log(`${dot} ${chalk.green('✓')} worktree reclaimed ${event.slug}${event.branch === undefined ? '' : ` (${[event.branch, event.proof].filter(Boolean).join('; ')})`}`);
       break;
     case 'worktree_reclaim_failed':
       log(`${dot} ${chalk.red('✗')} worktree reclaim failed ${event.slug} (${[event.branch, event.refusal].filter(Boolean).join('; ')})`);

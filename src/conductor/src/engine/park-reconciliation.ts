@@ -46,7 +46,7 @@ export interface ReconcileMergedParkOutcome {
   unmergedCommits?: UnmergedCommitListing;
   deferred?: boolean;
   /** The deletion authority used by a successful reconciliation. */
-  proof?: 'ancestry' | 'merged-pr-head' | 'shipped-record';
+  proof?: 'ancestry' | 'merged-pr-head';
 }
 
 export interface UnmergedCommitSummary {
@@ -608,22 +608,25 @@ export async function reconcileParkedFeatures(
       classification,
       annotation: classification === 'orphan' ? 'orphan' : classification === 'merged' && !autoCleanup ? 'merged-ready' : undefined,
     });
-    const reclamationDisabled = opts.reclaimMergedWorktrees === false && !candidate.parked;
+    // Operator-parked candidates retain their established auto-cleanup gate.
+    // Enumerated worktrees are governed by the explicit reclaim gate instead.
+    const reclamationDisabled = candidate.parked
+      ? !autoCleanup
+      : opts.reclaimMergedWorktrees === false;
     const shouldReconcile = candidate.parked ? classification === 'merged' : candidate.branch !== undefined;
-    if (!retainedReason && shouldReconcile && autoCleanup && reclamationDisabled) {
+    if (!retainedReason && shouldReconcile && reclamationDisabled) {
       retainedReason = 'disabled';
       retainedByReason.disabled++;
-    } else if (!retainedReason && shouldReconcile && autoCleanup) {
+    } else if (!retainedReason && shouldReconcile) {
       // The helper reports its refusal reason for direct/operator invocation.
       // A daemon sweep deliberately suppresses that per-slug chatter; the
       // aggregate below reports the outcome and the operator's next steps.
       const outcome = await reconcileMergedPark({
         ...opts,
         slug,
-        // Parked features deliberately preserve the pre-enumeration helper
-        // contract. Only a never-parked registry candidate supplies its
-        // listed ref (and gets the relaxed non-daemon record rule).
-        branch: candidate.parked ? undefined : candidate.branch,
+        // The porcelain listing is authoritative even when an operator also
+        // parked this candidate: evidence and record policy key off this ref.
+        branch: candidate.branch,
         log: undefined,
         capabilityLog: opts.log,
         teardownLog: opts.log,
@@ -640,12 +643,14 @@ export async function reconcileParkedFeatures(
       if (outcome.refusal === undefined) {
         counts.reconciled++;
         try {
-          opts.onEvent?.({
-            type: 'worktree_reclaim_reclaimed',
-            slug,
-            branch: candidate.branch ?? '',
-            proof: outcome.proof!,
-          });
+          opts.onEvent?.(candidate.branch === undefined
+            ? { type: 'worktree_reclaim_reclaimed', slug }
+            : {
+                type: 'worktree_reclaim_reclaimed',
+                slug,
+                branch: candidate.branch,
+                proof: outcome.proof!,
+              });
         } catch {
           // Event persistence must not make this best-effort sweep fail.
         }
@@ -669,6 +674,12 @@ export async function reconcileParkedFeatures(
           retainedByReason[outcome.refusal]++;
         }
       }
+    }
+    // Every candidate gets a terminal retention event when it did not reach
+    // the helper. A non-merged classification has no deletion proof.
+    if (!retainedReason && !shouldReconcile) {
+      retainedReason = 'no-merge-proof';
+      retainedByReason[retainedReason]++;
     }
     if (retainedReason) {
       try {
@@ -775,9 +786,7 @@ export async function reconcileMergedPark(
   //       current tip as the commit it merged (squash/rebase merge, where (a)
   //       is structurally always false).
   // Neither proof available ⇒ refuse, exactly as before.
-  let proof: 'ancestry' | 'merged-pr-head' | 'shipped-record' = evidence.branches.length === 0
-    ? 'shipped-record'
-    : 'ancestry';
+  let proof: 'ancestry' | 'merged-pr-head' = 'ancestry';
   const unproven = evidence.branches.filter((ref) => !evidence.mergedBranches.includes(ref));
   if (unproven.length > 0) {
     const runGh = opts.runGh ?? makeProductionGh();

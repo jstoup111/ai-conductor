@@ -1325,11 +1325,11 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
         log: log.mock.calls[0]?.[0],
       }).toEqual({
         entries: ['bad_slug', 'engineer-run', 'halted', 'in-flight', 'marker-read-error', 'parked-only', 'resolve-run', 'shared'],
-        // `shared` retains the historical parked record contract; Story 2's
-        // in-flight and HALT guards, however, also protect parked candidates.
-        deleted: ['hotfix/parked-only'],
-        branchDeletes: ['hotfix/parked-only'],
-        log: expect.stringContaining('retained: foreign-lifecycle=2,halted=2,in-flight=1,invalid-slug=1,record-missing=1'),
+        // A listed ref remains authoritative even if its slug is operator
+        // parked, so `shared` takes the non-daemon record policy.
+        deleted: ['hotfix/parked-only', 'hotfix/shared'],
+        branchDeletes: ['hotfix/parked-only', 'hotfix/shared'],
+        log: expect.stringContaining('retained: foreign-lifecycle=2,halted=2,in-flight=1,invalid-slug=1'),
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -1539,17 +1539,20 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
         await writeFile(join(intakeDir, `${slug}.md`), intake);
       }
 
+      const events: unknown[] = [];
       const result = await reconcileParkedFeatures({
         projectRoot,
         runGit: run,
         getIssueState,
         autoCleanup: false,
+        onEvent: (event) => events.push(event),
       });
 
       expect({
         entries: result.entries,
         destructive: run.mock.calls.filter(([args]) =>
           args[0] === 'branch' || (args[0] === 'worktree' && args[1] === 'remove')),
+        events,
       }).toEqual({
         entries: [{
           slug,
@@ -1558,6 +1561,12 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
             classification === 'orphan' ? 'orphan' : classification === 'merged' ? 'merged-ready' : undefined,
         }],
         destructive: [],
+        events: [{
+          type: 'worktree_reclaim_retained',
+          slug,
+          branch: undefined,
+          reason: classification === 'merged' ? 'disabled' : 'no-merge-proof',
+        }],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -2010,9 +2019,31 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       expect({ deleted, events }).toEqual({
         deleted: [parkedBranch],
         events: [
-          { type: 'worktree_reclaim_reclaimed', slug: parkedSlug, branch: '', proof: 'ancestry' },
+          { type: 'worktree_reclaim_reclaimed', slug: parkedSlug },
           { type: 'worktree_reclaim_retained', slug: enumeratedSlug, branch: enumeratedBranch, reason: 'disabled' },
         ],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reclaims an enumerated worktree when auto-cleanup is off but its reclaim gate is enabled', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'auto-cleanup-off-enumerated';
+    const branch = `hotfix/${slug}`;
+    const { run, deleted } = makeGit({ branches: [branch], merged: [branch] });
+    try {
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        autoCleanup: false,
+        worktreeListing: async () => [{ slug, branch }],
+      });
+
+      expect({ deleted, reconciled: result.counts.reconciled }).toEqual({
+        deleted: [branch],
+        reconciled: 1,
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
