@@ -100,6 +100,10 @@ export async function rebaseOperationPublicationBlocker(projectRoot: string): Pr
     if (!verdict?.satisfied) {
       return `rebase transition still has an outstanding ${gate} repair or re-verification`;
     }
+    if (transition.preserved.includes(gate) &&
+      (verdict.preservation?.gate !== gate || verdict.preservation.operationId !== operation.id)) {
+      return `rebase transition preserved ${gate} without its replay-bound authority`;
+    }
   }
   return null;
 }

@@ -1743,6 +1743,15 @@ async function capturePreservedJudgeIdentity(
       const parsed = JSON.parse(sidecar) as { codeStamp?: unknown; runId?: unknown };
       codeStamp = parsed.codeStamp;
       runId = parsed.runId;
+    } else if (gate === 'build_review' || gate === 'test_suite') {
+      // These are engine-native gates.  Their artifacts carry the engine's
+      // tree stamp and the session file is the engine-owned execution/run
+      // identity; unlike a generic verdict timestamp, neither is provider
+      // self-reporting.  coverage_binding has no tree stamp yet and remains
+      // deliberately unpreservable rather than being given a plausible one.
+      const parsed = JSON.parse(artifact) as { codeStamp?: unknown; provenanceHeadSha?: unknown };
+      codeStamp = gate === 'build_review' ? parsed.codeStamp : parsed.provenanceHeadSha;
+      runId = await readFile(join(projectRoot, '.pipeline', 'conduct-session-id'), 'utf-8');
     }
 
     // The SHIP-tail sidecar is the engine's source of truth: the same run id
@@ -1750,11 +1759,11 @@ async function capturePreservedJudgeIdentity(
     // lack this authority and must be re-judged rather than assigned a
     // plausible identity from the generic gate verdict.
     if (typeof codeStamp !== 'string' || codeStamp.length === 0 ||
-        typeof runId !== 'string' || runId.length === 0) return undefined;
+        typeof runId !== 'string' || runId.trim().length === 0) return undefined;
     return {
       artifactDigest: `sha256:${createHash('sha256').update(artifact).digest('hex')}`,
-      attemptId: runId,
-      runId,
+      attemptId: runId.trim(),
+      runId: runId.trim(),
       codeStamp,
     };
   } catch {
@@ -1928,8 +1937,9 @@ export async function applyRebaseVerdicts(
   const applicablePreservations = new Set<StepName>();
   // A current original PASS is enough to retain a classifier-preserved gate.
   // Capturing replay identity is stricter: it grants the PASS durable bounded
-  // replay authority for later readers, but a missing legacy sidecar must not
-  // turn that otherwise applicable PASS into a rebase invalidation.
+  // replay authority for later readers.  A gate is never named preserved
+  // unless it has that authority: the transition descriptor and the durable
+  // preservation records are one matched pair.
   const applicableOriginalPasses = new Set<StepName>();
   const preservedCandidates: RebasePreservedCandidate[] = [];
   const fullReviewInputs = replayPartition === undefined
@@ -2006,7 +2016,7 @@ export async function applyRebaseVerdicts(
     satisfied: true,
     kickedBack,
     reverified,
-    ...([...applicableOriginalPasses].length === 0 ? {} : { preservedGates: [...applicableOriginalPasses] }),
+    ...(preservedCandidates.length === 0 ? {} : { preservedGates: preservedCandidates.map(({ gate }) => gate) }),
     ...(preservedCandidates.length === 0 ? {} : { preservedCandidates }),
     ...(preserved.length === 0 ? {} : { preserved }),
     ...(replayComparison ? { replay: {

@@ -78,6 +78,25 @@ describe('applyRebaseTransition', () => {
     expect((await applyRebaseTransition(input)).stateResult).toBe('already-applied');
   });
 
+  it('refuses to apply an operation that names a preserved gate without its bound candidate', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
+    dirs.push(dir);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ build_review: 'done' }));
+
+    const result = await applyRebaseTransition({
+      projectRoot: dir,
+      stateStore: createFilesystemConductStateStore(join(dir, '.pipeline/conduct-state.json')),
+      replay: { preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e' },
+      invalidated: [],
+      preserved: ['build_review'],
+      preservedCandidates: [],
+    });
+
+    expect(result.stateResult).toBe('refused');
+    expect((await readVerdict(dir, 'rebase'))).toBeNull();
+  });
+
   it('uses the caller-owned state path instead of assuming the pipeline default', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'rebase-transition-'));
     dirs.push(dir);
@@ -132,7 +151,10 @@ describe('applyRebaseTransition', () => {
       preservedCandidates: [preservedCandidate('prd_audit', 1)],
     });
 
-    expect(result.stateResult).toBe('applied');
+    // The original verdict was replaced while the transition was applying,
+    // so the declared preservation effect cannot be made durable.  Refusal
+    // leaves that newer ordinary judgement authoritative.
+    expect(result.stateResult).toBe('refused');
     expect(await readVerdict(dir, 'prd_audit')).toEqual({
       satisfied: true,
       checkedAt: 2,

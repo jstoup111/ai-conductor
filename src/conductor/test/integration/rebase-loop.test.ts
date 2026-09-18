@@ -174,6 +174,7 @@ describe('integration/rebase-loop', () => {
     ['.docs/specs/add-foo.md', ['coverage_binding', 'prd_audit', 'build_review', 'test_suite', 'manual_test', 'architecture_review_as_built']],
     ['.docs/plans/add-foo.md', ['coverage_binding', 'build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
     ['.docs/coherence/add-foo.md', ['coverage_binding', 'build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
+    ['.docs/decisions/adr-add-foo.md', ['coverage_binding', 'build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
     ['.docs/stories/another-feature.md', []],
   ])('rebase reviews only the active inputs changed at %s', async (path, expected) => {
     await initRepoOnFeatureBranch({ path: 'src/foo.ts', content: 'export const foo = 1;\n' });

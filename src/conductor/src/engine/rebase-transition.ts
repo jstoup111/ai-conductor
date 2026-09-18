@@ -92,6 +92,22 @@ export async function applyRebaseTransition(
   const preservationCandidates = new Map(
     options.preservedCandidates.map((candidate) => [candidate.gate, candidate]),
   );
+  // A named preservation without its immutable original authority is not an
+  // incomplete optimization; it is an inconsistent transition.  Refuse
+  // before writing `applying` so no reader can publish a bare old PASS.
+  if (options.preserved.some((gate) => !preservationCandidates.has(gate))) {
+    return {
+      operation: {
+        id: options.operationId ?? createHash('sha256').update(JSON.stringify(options.replay)).digest('hex'),
+        status: 'applying',
+        transition: { preserved: [...options.preserved], invalidated: [...options.invalidated], reverified: [...(options.reverified ?? [])] },
+        replay: options.replay,
+      },
+      invalidated: options.invalidated,
+      preserved: options.preserved,
+      stateResult: 'refused',
+    };
+  }
   const originalPreserved = new Map<StepName, RebasePreservedCandidate>();
   for (const gate of options.preserved) {
     const candidate = preservationCandidates.get(gate);
@@ -159,6 +175,14 @@ export async function applyRebaseTransition(
         operationId: operation.id,
       },
     });
+  }
+  const preservationRecordsAgree = await Promise.all(options.preserved.map(async (gate) => {
+    const verdict = await readVerdict(options.projectRoot, gate);
+    return verdict?.satisfied === true && verdict.preservation?.gate === gate &&
+      verdict.preservation.operationId === operation.id;
+  }));
+  if (preservationRecordsAgree.some((ok) => !ok)) {
+    return { operation, invalidated: options.invalidated, preserved: options.preserved, stateResult: 'refused' };
   }
   // Applied is the commit marker: every preservation effect precedes it, so a
   // restart can safely distinguish a completed operation from an interrupted

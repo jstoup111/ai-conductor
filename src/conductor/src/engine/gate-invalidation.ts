@@ -52,7 +52,11 @@ export type GateSurfaceKind =
 
 export const PRD_AUDIT_DOCUMENT_INPUT_PREFIXES = ['.docs/stories/', '.docs/specs/'] as const;
 
-export const COVERAGE_DOCUMENT_INPUT_PREFIXES = [...PRD_AUDIT_DOCUMENT_INPUT_PREFIXES, '.docs/plans/', '.docs/coherence/'] as const;
+// Keep this list aligned with `resolveReviewInputs`: a governing ADR is an
+// active input to coverage/review preservation just like the plan and its
+// stories.  The classifier is the early gate for that resolver, so omitting
+// a prefix here would turn an ADR-only rebase delta into a false noop.
+export const COVERAGE_DOCUMENT_INPUT_PREFIXES = [...PRD_AUDIT_DOCUMENT_INPUT_PREFIXES, '.docs/plans/', '.docs/coherence/', '.docs/decisions/'] as const;
 
 export function isReviewDocumentPath(path: string): boolean {
   return COVERAGE_DOCUMENT_INPUT_PREFIXES.some((prefix) => path.startsWith(prefix));

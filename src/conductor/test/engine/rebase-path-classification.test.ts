@@ -169,4 +169,20 @@ describe('Task 9–11 rebase path classification', () => {
       'architecture_review_as_built',
     ]);
   });
+
+  it('treats a governing ADR delta as an active review input', () => {
+    const result = classifyReplayGateInvalidation(
+      ['.docs/decisions/adr-active.md'],
+      [],
+      false,
+      unchangedReplay,
+      ['.docs/decisions/adr-active.md'],
+    );
+
+    expect(result.invalidated).toEqual(['coverage_binding']);
+    expect(result.candidates.find(({ gate }) => gate === 'coverage_binding')).toMatchObject({
+      decision: 'invalidate',
+      source: { activeInputs: ['.docs/decisions/adr-active.md'] },
+    });
+  });
 });
