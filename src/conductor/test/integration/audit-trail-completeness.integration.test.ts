@@ -99,6 +99,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   step_started: 'not-audited-by-design',
   step_completed: 'friction-mapped', // positive evidence (gate_pass) when no verdict already recorded
   step_failed: 'not-audited-by-design', // superseded by step_retry / gate_verdict on the same step
+  step_interrupted: 'not-audited-by-design', // catchable shutdown has no independent friction record
   // adr-2026-08-24 D3 declares the refusal audited at introduction, and its
   // sink registry entry carries `audit: true` — the declaration and the writer
   // must agree.
@@ -294,6 +295,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   step_started: { type: 'step_started', step: 'build', index: 0 },
   step_completed: { type: 'step_completed', step: 'build', status: 'done' },
   step_failed: { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 },
+  step_interrupted: { type: 'step_interrupted', step: 'build', reason: 'controlled shutdown' },
   step_refused: {
     type: 'step_refused',
     step: 'build',

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { TokenUsage } from '../execution/llm-provider.js';
 import { EFFORT_ORDER, MODEL_TIER_ORDER } from './escalation.js';
+import { resolveExecutionIdentity } from './execution-identity.js';
 
 /**
  * Thrown when events.jsonl cannot be found or read.
@@ -30,6 +31,32 @@ export interface ParsedEvent {
   [key: string]: unknown;
 }
 
+interface RenderedEventIdentity {
+  correlationKey: string;
+  subjectLabel: string;
+}
+
+/** Resolve display/correlation identity with a stable report-local scope. */
+function renderedEventIdentity(event: ParsedEvent): RenderedEventIdentity | undefined {
+  if (typeof event.step !== 'string') return undefined;
+  const featureId = typeof event.featureSlug === 'string' ? event.featureSlug : 'report';
+  const runId = typeof event.sessionId === 'string' ? event.sessionId : 'events-jsonl';
+  return resolveExecutionIdentity({
+    scope: { featureId, runId },
+    legacyStep: event.step,
+    executionContext: event.executionContext,
+  });
+}
+
+function activeIntervalDuration(event: ParsedEvent): number | undefined {
+  const activeInterval = event.activeInterval;
+  return typeof activeInterval === 'object' && activeInterval !== null
+    && 'durationMs' in activeInterval && typeof activeInterval.durationMs === 'number'
+    && Number.isFinite(activeInterval.durationMs)
+    ? activeInterval.durationMs
+    : undefined;
+}
+
 /**
  * Parse a raw events.jsonl string into events, skipping malformed lines
  * (resilient parse). Shared by `renderReport` and the engineer-store's signal
@@ -53,20 +80,30 @@ export function parseEvents(raw: string): ParsedEvent[] {
 
 /** Per-step duration in ms (start→complete). Steps with no completion omitted. */
 export function aggregateDurations(events: ParsedEvent[]): Record<string, number> {
-  const startTimes = new Map<string, number>();
-  const completeTimes = new Map<string, number>();
+  const startTimes = new Map<string, { label: string; at: number }>();
+  const completeTimes = new Map<string, { at: number; activeDurationMs?: number }>();
   for (const evt of events) {
-    if (!evt.step) continue;
+    const identity = renderedEventIdentity(evt);
+    if (!identity) continue;
     if (evt.type === 'step_started') {
-      startTimes.set(evt.step, new Date(evt.ts).getTime());
+      startTimes.set(identity.correlationKey, {
+        label: identity.subjectLabel,
+        at: new Date(evt.ts).getTime(),
+      });
     } else if (evt.type === 'step_completed') {
-      completeTimes.set(evt.step, new Date(evt.ts).getTime());
+      const durationMs = activeIntervalDuration(evt);
+      completeTimes.set(identity.correlationKey, {
+        at: new Date(evt.ts).getTime(),
+        ...(durationMs === undefined ? {} : { activeDurationMs: durationMs }),
+      });
     }
   }
   const out: Record<string, number> = {};
-  for (const [step, startMs] of startTimes.entries()) {
-    const endMs = completeTimes.get(step);
-    if (endMs !== undefined) out[step] = endMs - startMs;
+  for (const [key, start] of startTimes.entries()) {
+    const completed = completeTimes.get(key);
+    if (completed !== undefined) {
+      out[start.label] = completed.activeDurationMs ?? completed.at - start.at;
+    }
   }
   return out;
 }
@@ -103,28 +140,33 @@ export function aggregateRetryHotspots(events: ParsedEvent[]): RetryHotspot[] {
   const retryReasons = new Map<string, Map<string, number>>();
   const maxModel = new Map<string, string>();
   const maxEffort = new Map<string, string>();
+  const labels = new Map<string, string>();
   for (const evt of events) {
-    if (!evt.step || evt.type !== 'step_retry') continue;
-    retryCounts.set(evt.step, (retryCounts.get(evt.step) ?? 0) + 1);
+    if (evt.type !== 'step_retry') continue;
+    const identity = renderedEventIdentity(evt);
+    if (!identity) continue;
+    const key = identity.correlationKey;
+    labels.set(key, identity.subjectLabel);
+    retryCounts.set(key, (retryCounts.get(key) ?? 0) + 1);
     const reason = evt.reason ?? 'unknown';
-    let reasons = retryReasons.get(evt.step);
+    let reasons = retryReasons.get(key);
     if (!reasons) {
       reasons = new Map();
-      retryReasons.set(evt.step, reasons);
+      retryReasons.set(key, reasons);
     }
     reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
 
     // Track the furthest-up rung seen for this step (monotonic ladder).
     const em = typeof evt.escalatedModel === 'string' ? evt.escalatedModel : undefined;
     const ee = typeof evt.escalatedEffort === 'string' ? evt.escalatedEffort : undefined;
-    const higherModel = pickHigher(maxModel.get(evt.step), em, MODEL_TIER_ORDER);
-    if (higherModel !== undefined) maxModel.set(evt.step, higherModel);
-    const higherEffort = pickHigher(maxEffort.get(evt.step), ee, EFFORT_ORDER);
-    if (higherEffort !== undefined) maxEffort.set(evt.step, higherEffort);
+    const higherModel = pickHigher(maxModel.get(key), em, MODEL_TIER_ORDER);
+    if (higherModel !== undefined) maxModel.set(key, higherModel);
+    const higherEffort = pickHigher(maxEffort.get(key), ee, EFFORT_ORDER);
+    if (higherEffort !== undefined) maxEffort.set(key, higherEffort);
   }
   const out: RetryHotspot[] = [];
-  for (const [step, count] of retryCounts.entries()) {
-    const reasons = retryReasons.get(step) ?? new Map<string, number>();
+  for (const [key, count] of retryCounts.entries()) {
+    const reasons = retryReasons.get(key) ?? new Map<string, number>();
     let topReason = '';
     let topCount = 0;
     for (const [r, c] of reasons.entries()) {
@@ -133,9 +175,9 @@ export function aggregateRetryHotspots(events: ParsedEvent[]): RetryHotspot[] {
         topReason = r;
       }
     }
-    const hotspot: RetryHotspot = { step, count, topReason };
-    const em = maxModel.get(step);
-    const ee = maxEffort.get(step);
+    const hotspot: RetryHotspot = { step: labels.get(key) ?? 'unknown', count, topReason };
+    const em = maxModel.get(key);
+    const ee = maxEffort.get(key);
     if (em !== undefined) hotspot.escalatedModel = em;
     if (ee !== undefined) hotspot.escalatedEffort = ee;
     out.push(hotspot);
@@ -427,26 +469,33 @@ interface DurationRow {
 }
 
 function renderDurations(events: ParsedEvent[]): string {
-  // Collect start timestamps by step
-  const startTimes = new Map<string, number>();
-  const completeTimes = new Map<string, number>();
+  // Collect start timestamps by execution correlation key.
+  const startTimes = new Map<string, { label: string; at: number }>();
+  const completeTimes = new Map<string, { at: number; activeDurationMs?: number }>();
 
   for (const evt of events) {
-    if (!evt.step) continue;
+    const identity = renderedEventIdentity(evt);
+    if (!identity) continue;
     if (evt.type === 'step_started') {
-      startTimes.set(evt.step, new Date(evt.ts).getTime());
+      startTimes.set(identity.correlationKey, { label: identity.subjectLabel, at: new Date(evt.ts).getTime() });
     } else if (evt.type === 'step_completed') {
-      completeTimes.set(evt.step, new Date(evt.ts).getTime());
+      const durationMs = activeIntervalDuration(evt);
+      completeTimes.set(identity.correlationKey, {
+        at: new Date(evt.ts).getTime(),
+        ...(durationMs === undefined ? {} : { activeDurationMs: durationMs }),
+      });
     }
   }
 
   // Build rows for all started steps
   const rows: DurationRow[] = [];
-  for (const [step, startMs] of startTimes.entries()) {
-    const endMs = completeTimes.get(step);
+  for (const [key, start] of startTimes.entries()) {
+    const completed = completeTimes.get(key);
     rows.push({
-      step,
-      durationMs: endMs !== undefined ? endMs - startMs : null,
+      step: start.label,
+      durationMs: completed !== undefined
+        ? completed.activeDurationMs ?? completed.at - start.at
+        : null,
     });
   }
 
@@ -479,30 +528,34 @@ interface RetryRow {
 }
 
 function renderRetries(events: ParsedEvent[]): string {
-  // Collect retry counts and reasons per step
+  // Collect retry counts and reasons per execution correlation key.
   const retryCounts = new Map<string, number>();
   const retryReasons = new Map<string, Map<string, number>>();
   const failedSteps = new Set<string>();
   const refusedSteps = new Set<string>();
   const completedSteps = new Set<string>();
+  const labels = new Map<string, string>();
 
   for (const evt of events) {
-    if (!evt.step) continue;
+    const identity = renderedEventIdentity(evt);
+    if (!identity) continue;
+    const key = identity.correlationKey;
+    labels.set(key, identity.subjectLabel);
     if (evt.type === 'step_retry') {
-      retryCounts.set(evt.step, (retryCounts.get(evt.step) ?? 0) + 1);
+      retryCounts.set(key, (retryCounts.get(key) ?? 0) + 1);
       const reason = evt.reason ?? 'unknown';
-      let reasons = retryReasons.get(evt.step);
+      let reasons = retryReasons.get(key);
       if (!reasons) {
         reasons = new Map();
-        retryReasons.set(evt.step, reasons);
+        retryReasons.set(key, reasons);
       }
       reasons.set(reason, (reasons.get(reason) ?? 0) + 1);
     } else if (evt.type === 'step_failed') {
-      failedSteps.add(evt.step);
+      failedSteps.add(key);
     } else if (evt.type === 'step_refused') {
-      refusedSteps.add(evt.step);
+      refusedSteps.add(key);
     } else if (evt.type === 'step_completed') {
-      completedSteps.add(evt.step);
+      completedSteps.add(key);
     }
   }
 
@@ -512,7 +565,7 @@ function renderRetries(events: ParsedEvent[]): string {
   // refusals commonly carry zero retries. Seeding rows from retry counts alone
   // dropped them from the report entirely, so a refused step read as absent.
   const refusedWithoutRetries = [...refusedSteps].filter(
-    (step) => !retryCounts.has(step) && !completedSteps.has(step),
+    (key) => !retryCounts.has(key) && !completedSteps.has(key),
   );
   if (retryCounts.size === 0 && refusedWithoutRetries.length === 0) {
     lines.push('No retries recorded');
@@ -524,8 +577,8 @@ function renderRetries(events: ParsedEvent[]): string {
 
   // Sort by count descending
   const rows: RetryRow[] = [];
-  for (const [step, count] of retryCounts.entries()) {
-    const reasons = retryReasons.get(step) ?? new Map();
+  for (const [key, count] of retryCounts.entries()) {
+    const reasons = retryReasons.get(key) ?? new Map();
     let topReason = '';
     let topCount = 0;
     for (const [r, c] of reasons.entries()) {
@@ -534,17 +587,17 @@ function renderRetries(events: ParsedEvent[]): string {
         topReason = r;
       }
     }
-    const failed = failedSteps.has(step) && !completedSteps.has(step);
+    const failed = failedSteps.has(key) && !completedSteps.has(key);
     rows.push({
-      step,
+      step: labels.get(key) ?? 'unknown',
       count,
       topReason,
       failed,
-      refused: refusedSteps.has(step) && !completedSteps.has(step),
+      refused: refusedSteps.has(key) && !completedSteps.has(key),
     });
   }
-  for (const step of refusedWithoutRetries) {
-    rows.push({ step, count: 0, topReason: '', failed: false, refused: true });
+  for (const key of refusedWithoutRetries) {
+    rows.push({ step: labels.get(key) ?? 'unknown', count: 0, topReason: '', failed: false, refused: true });
   }
   rows.sort((a, b) => b.count - a.count);
 
@@ -572,10 +625,11 @@ function renderTokenSpend(events: ParsedEvent[]): string {
   const rows: TokenRow[] = [];
 
   for (const evt of events) {
-    if (evt.type === 'step_completed' && evt.step && evt.tokenUsage) {
+    const identity = renderedEventIdentity(evt);
+    if (evt.type === 'step_completed' && identity && evt.tokenUsage) {
       const usage = evt.tokenUsage;
       rows.push({
-        step: evt.step,
+        step: identity.subjectLabel,
         preferredProvider:
           typeof evt.preferredProvider === 'string'
             ? evt.preferredProvider

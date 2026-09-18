@@ -394,7 +394,7 @@ describe('S4: absolute attempt ceiling backstops slow-drip within a dispatch (ne
         activeInterval?: { startedAtMs: number; durationMs: number };
       });
     const terminalIndexes = ledger.flatMap((event, index) =>
-      event.type === 'step_completed' || event.type === 'step_failed' ? [index] : [],
+      event.type === 'step_completed' || event.type === 'step_failed' || event.type === 'step_interrupted' ? [index] : [],
     );
     const terminals = terminalIndexes.map((index) => ledger[index]!);
     const loopHaltIndex = ledger.findIndex((event) => event.type === 'loop_halt');

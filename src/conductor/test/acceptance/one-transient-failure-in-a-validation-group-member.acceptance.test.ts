@@ -159,7 +159,12 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const groupTerminals = emitted.filter((event) => event.type === 'parallel_failure');
       expect(groupTerminals).toHaveLength(1);
       expect(groupTerminals[0]).toMatchObject({ branch: 'manual_test' });
-      expect(emitted.filter((event) => event.type === 'step_failed')).toHaveLength(0);
+      // Lifecycle telemetry closes the member's own admitted scope before
+      // recording the group envelope terminal.  The group failure remains the
+      // state/gate authority; the member terminal is its truthful work result.
+      expect(emitted.filter((event) => event.type === 'step_failed')).toEqual([
+        expect.objectContaining({ step: 'manual_test' }),
+      ]);
       expect(emitted.filter((event) => event.type === 'kickback')).toHaveLength(0);
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -196,7 +201,9 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       await expect(conductor.run()).resolves.toBeUndefined();
       await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
       expect(events.map(event => event.type)).toEqual(expect.arrayContaining(['loop_halt', 'parallel_failure']));
-      expect(events.map(event => event.type)).not.toContain('step_failed');
+      expect(events.filter((event) => event.type === 'step_failed')).toEqual([
+        expect.objectContaining({ step: 'manual_test' }),
+      ]);
       expect(log).toHaveBeenCalledWith(expect.stringContaining('could not persist satisfied siblings'));
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
@@ -551,16 +558,16 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
     ['permission denial', 'manual_test', {
       prd_audit: 'done', architecture_review_as_built: 'done',
       validation__prd_audit: 'done', validation__architecture_review_as_built: 'done',
-    }],
+    }, { branch: 'conductor', error: 'validation group round exited without a join terminal' }],
     ['PLAN_GAP halt', 'prd_audit', {
       manual_test: 'done', architecture_review_as_built: 'done',
       validation__manual_test: 'done', validation__architecture_review_as_built: 'done',
-    }],
+    }, { branch: 'prd_audit', error: 'prd-audit halted: needs human DECIDE — unowned PLAN_GAP' }],
     ['manual-test no-op cap', 'manual_test', {
       prd_audit: 'done', architecture_review_as_built: 'done',
       validation__prd_audit: 'done', validation__architecture_review_as_built: 'done',
-    }],
-  ] as const)('closes a retained width-one group after a %s', async (route, entry, retained) => {
+    }, { branch: 'conductor', error: 'validation group round exited without a join terminal' }],
+  ] as const)('closes a retained width-one group after a %s', async (route, entry, retained, expectedTerminal) => {
     const dir = await mkdtemp(join(tmpdir(), 'validation-retained-terminal-'));
     const statePath = join(dir, 'conduct-state.json');
     const events = new ConductorEventEmitter();
@@ -612,8 +619,8 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       );
       expect(terminals).toHaveLength(1);
       expect(terminals[0]).toMatchObject({
-        branch: 'conductor', activeInterval: expect.any(Object),
-        error: 'validation group round exited without a join terminal',
+        ...expectedTerminal,
+        activeInterval: expect.any(Object),
       });
       expect(await computeTimingRollup(dir)).not.toMatchObject({
         state: 'partial', reason: `open-executions:parallel:${entry}`,

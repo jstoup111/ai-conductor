@@ -721,6 +721,15 @@ Production visualizers continue exporting traces with their per-run meter disabl
 The `conductor.step.duration` and `conductor.pipeline.closeout.duration` histograms use explicit
 duration buckets through 8 hours; quantiles saturate above that largest finite bucket boundary.
 
+Each started execution that reaches a terminal event contributes one
+`conductor.step.outcomes` counter point. Its `outcome` is `success`, `failure`, `interrupted`, or
+`refusal`; interruption and refusal are terminal states, not successful work or provider failures.
+For a configured validation-group member, the `step` attribute identifies the member as
+`configured:<url-encoded-parent-group>/<url-encoded-member>` rather than collapsing it into the
+group policy step. Its duration ends when that member settles, so sibling and group-join delay do
+not inflate the member's duration. The same member label is used for its duration, retry, dispatch,
+and terminal-outcome metrics.
+
 Daemon exports include backlog count and oldest state-residence age by `state`, busy and free slots,
 in-flight features, liveness, active dispatch blockers, discovery duration, and build stalls by
 `reason`. `conductor.daemon.inflight` is the only `conductor.daemon.*` instrument with a `feature`

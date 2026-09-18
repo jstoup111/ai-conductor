@@ -1,5 +1,6 @@
+// Covers: task:9, task:10
 /**
- * Covers: task:1, task:4, task:7, task:8
+ * Covers: task:1, task:4, task:7, task:8, task:9
  *
  * span-manager.test.ts — unit tests for SpanManager via OtelVisualizer.
  *
@@ -11,7 +12,7 @@
  *   T13: Step span attributes (with safe tier omission)
  *   T14: Span events for retries / gate verdicts / kickbacks
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -838,6 +839,318 @@ describe('Task 19: pipeline_closeout span event', () => {
       endedAt: 375,
       durationMs: 75,
     });
+  });
+});
+
+describe('Task 9: execution-correlated spans', () => {
+  it('keeps interleaved same-name configured executions as distinct member spans', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+
+    const executionA = {
+      executionId: 'execution-a',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'review' },
+    };
+    const executionB = {
+      executionId: 'execution-b',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'review' },
+    };
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: executionA });
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: executionB });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: executionB });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: executionA });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    expect(spanExporter.getFinishedSpans().filter((span) => span.name === 'configured:validation/review')).toHaveLength(2);
+  });
+
+  it('keeps fallback provider attribution on its owning configured member', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    const alpha = {
+      executionId: 'alpha',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'alpha' },
+    };
+    const beta = {
+      executionId: 'beta',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'beta' },
+    };
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: alpha });
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: beta });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', executionContext: alpha,
+      provider: 'claude', preferredProvider: 'codex', fallbackReason: 'codex unavailable',
+      model: 'sonnet', effort: 'high', tier: 'L', invoked: true, outcome: 'success',
+    });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', executionContext: beta,
+      provider: 'codex', preferredProvider: 'codex', model: 'gpt-5.6', effort: 'medium', tier: 'M',
+      invoked: true, outcome: 'success',
+    });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: beta });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: alpha });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const alphaSpan = spanExporter.getFinishedSpans().find((span) => span.name === 'configured:validation/alpha')!;
+    const betaSpan = spanExporter.getFinishedSpans().find((span) => span.name === 'configured:validation/beta')!;
+    expect({ alpha: alphaSpan.attributes, beta: betaSpan.attributes }).toMatchObject({
+      alpha: {
+        'conductor.execution.parent_group': 'validation',
+        'conductor.execution.member': 'alpha',
+        'conductor.provider': 'claude',
+        'conductor.model': 'sonnet',
+        'conductor.effort': 'high',
+        'conductor.complexity_tier': 'L',
+        'conductor.fallback': true,
+        'conductor.fallback.reason': 'codex unavailable',
+      },
+      beta: {
+        'conductor.execution.parent_group': 'validation',
+        'conductor.execution.member': 'beta',
+        'conductor.provider': 'codex',
+        'conductor.model': 'gpt-5.6',
+        'conductor.effort': 'medium',
+        'conductor.complexity_tier': 'M',
+      },
+    });
+  });
+
+  it('does not let a late completed execution overwrite a newer same-name span', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    const earlier = { executionId: 'earlier', subject: { kind: 'lifecycle-step' as const, step: 'build' as StepName } };
+    const later = { executionId: 'later', subject: { kind: 'lifecycle-step' as const, step: 'build' as StepName } };
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: earlier });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: earlier });
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: later });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', executionContext: earlier,
+      provider: 'claude', invoked: true, outcome: 'success', model: 'sonnet',
+    });
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', executionContext: later,
+      provider: 'codex', invoked: true, outcome: 'success', model: 'gpt-5.6',
+    });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: later });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    expect(spanExporter.getFinishedSpans().filter((span) => span.name === 'build' && span.attributes['conductor.provider'] === 'codex')).toHaveLength(1);
+  });
+
+  it('omits execution identifiers and absent provider dimensions from spans', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    const execution = {
+      executionId: 'not-an-attribute',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'no-provider' },
+    };
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: execution });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const attributes = spanExporter.getFinishedSpans().find((span) => span.name === 'configured:validation/no-provider')!.attributes;
+    expect(attributes).not.toMatchObject({
+      'conductor.execution.id': 'not-an-attribute',
+      'conductor.provider': expect.anything(),
+      'conductor.model': expect.anything(),
+      'conductor.effort': expect.anything(),
+      'conductor.complexity_tier': expect.anything(),
+      'conductor.fallback.reason': expect.anything(),
+    });
+  });
+
+  it('uses member settlement, not provider intervals, as a member boundary', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const execution = {
+      executionId: 'settled-member',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'settled' },
+    };
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
+    vi.spyOn(Date, 'now').mockReturnValue(1_500);
+    await emitter.emit({
+      type: 'provider_attempt', step: 'build', executionContext: execution,
+      provider: 'codex', invoked: true, outcome: 'success',
+      observedIntervals: [{ startedAtMs: 1_100, durationMs: 100 }],
+    });
+    await emitter.emit({ type: 'group_member_step', member: 'settled', skill: 'settled', phase: 'result', outcome: 'verdict:pass', executionContext: execution });
+    vi.spyOn(Date, 'now').mockReturnValue(2_000);
+    await emitter.emit({
+      type: 'step_completed', step: 'build', status: 'done', executionContext: execution,
+      observedIntervals: [{ startedAtMs: 1_100, durationMs: 100 }],
+    });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'configured:validation/settled')!;
+    expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(1_500);
+  });
+
+  it('keeps a serial span open through terminal delivery after provider work ends', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const execution = { executionId: 'serial-terminal', subject: { kind: 'lifecycle-step' as const, step: 'build' as StepName } };
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
+    vi.spyOn(Date, 'now').mockReturnValue(1_500);
+    await emitter.emit({ type: 'provider_attempt', step: 'build', executionContext: execution, provider: 'codex', invoked: true, outcome: 'success', observedIntervals: [{ startedAtMs: 1_100, durationMs: 100 }] });
+    vi.spyOn(Date, 'now').mockReturnValue(2_000);
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: execution, observedIntervals: [{ startedAtMs: 1_100, durationMs: 100 }] });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'build')!;
+    expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(2_000);
+  });
+});
+
+describe('Task 10: truthful refusal span closure', () => {
+  it('closes a refused execution once with an UNSET status rather than success or error', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    const execution = {
+      executionId: 'refused-member',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'review' },
+    };
+
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
+    await emitter.emit({
+      type: 'step_refused',
+      step: 'build',
+      kind: 'validation-verdict',
+      reason: 'operator judgement required',
+      executionContext: execution,
+    });
+    await emitter.emit({
+      type: 'step_refused',
+      step: 'build',
+      kind: 'validation-verdict',
+      reason: 'duplicate terminal',
+      executionContext: execution,
+    });
+    await emitter.emit({ type: 'step_completed', step: 'build', status: 'done', executionContext: execution });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const spans = spanExporter.getFinishedSpans()
+      .filter((span) => span.name === 'configured:validation/review');
+    expect(spans).toHaveLength(1);
+    expect(spans[0].status.code).toBe(0 /* UNSET: refused, not success or error */);
+    expect(spans[0].attributes).toMatchObject({
+      'conductor.step.status': 'refused',
+      'conductor.execution.parent_group': 'validation',
+      'conductor.execution.member': 'review',
+    });
+  });
+
+  it('freezes a configured member at its group result before delayed refusal', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const base = Date.now();
+    let now = base;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const execution = {
+      executionId: 'settled-before-refusal',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'review' },
+    };
+    try {
+      vis.start(emitter);
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
+      now = base + 100;
+      await emitter.emit({
+        type: 'group_member_step', member: 'review', skill: 'build', phase: 'result',
+        outcome: 'refused', executionContext: execution,
+      });
+      now = base + 10_000;
+      await emitter.emit({
+        type: 'step_refused', step: 'build', kind: 'validation-verdict',
+        reason: 'authoritative delayed refusal', executionContext: execution,
+      });
+      await emitter.emit({ type: 'feature_complete' });
+      await vis.stop();
+
+      const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'configured:validation/review')!;
+      expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(base + 100);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it('settles a built-in member from its admitted name when its skill spelling differs', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const base = Date.now();
+    let now = base;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const execution = {
+      executionId: 'built-in-prd-audit',
+      subject: { kind: 'lifecycle-step' as const, step: 'prd_audit' as const },
+    };
+    try {
+      vis.start(emitter);
+      await emitter.emit({ type: 'step_started', step: 'prd_audit', index: 0, executionContext: execution });
+      now = base + 100;
+      await emitter.emit({
+        type: 'group_member_step', member: 'prd_audit', skill: 'prd-audit', phase: 'result',
+        outcome: 'verdict:pass', executionContext: execution,
+      });
+      now = base + 10_000;
+      await emitter.emit({ type: 'step_completed', step: 'prd_audit', status: 'done', executionContext: execution });
+      await emitter.emit({ type: 'feature_complete' });
+      await vis.stop();
+
+      const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'prd_audit')!;
+      expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(base + 100);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it('closes a catchably interrupted execution as incomplete rather than ERROR', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    vis.start(emitter);
+    await emitter.emit({ type: 'step_started', step: 'build', index: 0 });
+    await emitter.emit({ type: 'step_interrupted', step: 'build', reason: 'controlled shutdown' });
+    await emitter.emit({ type: 'feature_complete' });
+    await vis.stop();
+
+    const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'build')!;
+    expect(span.status.code).toBe(0);
+    expect(span.attributes['conductor.step.status']).toBe('interrupted');
+  });
+
+  it('ends an interrupted member span at its already-observed settlement boundary', async () => {
+    const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
+    const base = Date.now();
+    let now = base;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const execution = {
+      executionId: 'interrupted-member',
+      subject: { kind: 'configured-member' as const, parentGroup: 'validation', member: 'review' },
+    };
+    try {
+      vis.start(emitter);
+      await emitter.emit({ type: 'step_started', step: 'build', index: 0, executionContext: execution });
+      now = base + 100;
+      await emitter.emit({
+        type: 'group_member_step', member: 'review', skill: 'build', phase: 'result',
+        outcome: 'interrupted', executionContext: execution,
+      });
+      now = base + 10_000;
+      await emitter.emit({
+        type: 'step_interrupted', step: 'build', reason: 'controlled shutdown', executionContext: execution,
+      });
+      await emitter.emit({ type: 'feature_complete' });
+      await vis.stop();
+
+      const span = spanExporter.getFinishedSpans().find((candidate) => candidate.name === 'configured:validation/review')!;
+      expect(span.endTime[0] * 1_000 + Math.floor(span.endTime[1] / 1_000_000)).toBe(base + 100);
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 });
 

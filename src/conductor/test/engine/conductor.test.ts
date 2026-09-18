@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3, task:4, task:5
+// Covers: task:1, task:2, task:3, task:4, task:5, task:11
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readdir, unlink, utimes, stat } from 'fs/promises';
 import { execFile as execFileCb } from 'child_process';
@@ -68,7 +68,7 @@ import {
 } from '../../src/engine/conductor.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
-import type { GroupMember } from '../../src/engine/group-core.js';
+import type { GroupBranchLifecycleObserver, GroupMember } from '../../src/engine/group-core.js';
 import { runGroupBranch } from '../../src/engine/group-core.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
@@ -119,6 +119,13 @@ import type {
   InvokeResult,
   LLMProvider,
 } from '../../src/execution/llm-provider.js';
+
+const NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER: GroupBranchLifecycleObserver = {
+  onAdmitted: () => undefined,
+  onAttempt: () => undefined,
+  onRetry: () => undefined,
+  onSettled: () => undefined,
+};
 
 function passingBuildReviewAggregate() {
   const lapId = parseBuildReviewLapId('fixture-lap')!;
@@ -1791,9 +1798,9 @@ describe('engine/conductor', () => {
         .map((line) => JSON.parse(line));
       const starts = records.filter((record) => record.type === 'step_started');
       const terminals = records.filter(
-        (record) => record.type === 'step_completed' || record.type === 'step_failed',
+        (record) => record.type === 'step_completed' || record.type === 'step_failed' || record.type === 'step_interrupted',
       );
-      const terminalIndex = records.findIndex((record) => record.type === 'step_failed');
+      const terminalIndex = records.findIndex((record) => record.type === 'step_interrupted');
       const haltIndex = records.findIndex((record) => record.type === 'loop_halt');
 
       expect({ starts: starts.length, terminals: terminals.length, terminalBeforeHalt: terminalIndex < haltIndex }).toEqual({
@@ -2449,10 +2456,39 @@ describe('engine/conductor', () => {
       outcome: { kind: 'skipped' },
     };
 
-    const outcome = await runGroupBranch(member, {}, { stepRunner }, 1);
+    const lifecycleObserver = {
+      onAdmitted: vi.fn(),
+      onAttempt: vi.fn(),
+      onRetry: vi.fn(),
+      onSettled: vi.fn(),
+    } satisfies GroupBranchLifecycleObserver;
+    const executionContext = {
+      executionId: 'validation-manual-test-1',
+      subject: { kind: 'lifecycle-step' as const, step: 'manual_test' as const },
+    };
+    const attribution = { member: 'manual_test', skill: 'manual-test', executionContext };
+
+    const outcome = await runGroupBranch(member, {}, {
+      stepRunner,
+      lifecycleObserver,
+      executionContext,
+    }, 1);
 
     expect((outcome as { observedIntervals?: readonly unknown[] }).observedIntervals?.[0])
       .toBe(observedIntervals[0]);
+    expect(lifecycleObserver.onAdmitted.mock.calls).toEqual([[attribution]]);
+    expect(lifecycleObserver.onAttempt.mock.calls).toEqual([[{
+      ...attribution,
+      attempt: 1,
+      result: { success: true, observedIntervals },
+    }]]);
+    expect(lifecycleObserver.onRetry).not.toHaveBeenCalled();
+    expect(lifecycleObserver.onSettled.mock.calls).toEqual([[{
+      ...attribution,
+      outcome,
+      attempts: [{ ...attribution, attempt: 1, result: { success: true, observedIntervals } }],
+      observedIntervals,
+    }]]);
   });
 
   it('preserves all ordered intervals after a grouped session-expired retry', async () => {
@@ -2475,7 +2511,10 @@ describe('engine/conductor', () => {
       outcome: { kind: 'skipped' },
     };
 
-    const outcome = await runGroupBranch(member, {}, { stepRunner: { run } }, 1);
+    const outcome = await runGroupBranch(member, {}, {
+      stepRunner: { run },
+      lifecycleObserver: NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER,
+    }, 1);
 
     expect({
       kind: outcome.kind,
@@ -3058,17 +3097,14 @@ describe('engine/conductor', () => {
 
     try {
       const executionEvents = conductor as unknown as {
-        openExecutions: Map<string, { kind: 'step'; step: StepName }>;
+        emitExecutionEvent(event: ConductorEvent): Promise<void>;
         closeOpenExecutions(): Promise<void>;
       };
-      await events.emit({
+      await executionEvents.emitExecutionEvent({
         type: 'step_started',
         step: 'build',
         index: 0,
       });
-      executionEvents.openExecutions = new Map([
-        ['step:build', { kind: 'step', step: 'build' }],
-      ]);
 
       await executionEvents.closeOpenExecutions();
 
@@ -3076,8 +3112,8 @@ describe('engine/conductor', () => {
         .trim()
         .split('\n')
         .map((line) => JSON.parse(line));
-      const terminal = records.find((record) => record.type === 'step_failed');
-      expect(terminal).toMatchObject({ type: 'step_failed', step: 'build' });
+      const terminal = records.find((record) => record.type === 'step_interrupted');
+      expect(terminal).toMatchObject({ type: 'step_interrupted', step: 'build' });
       expect(terminal.activeInterval).toEqual({ startedAtMs: 1_000, durationMs: 25 });
     } finally {
       persister.stop();
@@ -3114,7 +3150,7 @@ describe('engine/conductor', () => {
       expect(records).toEqual([
         expect.objectContaining({ type: 'step_started', step: 'build' }),
         expect.objectContaining({
-          type: 'step_failed',
+          type: 'step_interrupted',
           step: 'build',
           activeInterval: { startedAtMs: 1_000, durationMs: 25 },
         }),
@@ -3184,11 +3220,11 @@ describe('engine/conductor', () => {
         .split('\n')
         .map((line) => JSON.parse(line));
       const terminals = records.filter((record) =>
-        record.type === 'step_completed' || record.type === 'step_failed',
+        record.type === 'step_completed' || record.type === 'step_failed' || record.type === 'step_interrupted',
       );
       expect(terminals).toEqual([
         expect.objectContaining({
-          type: 'step_failed',
+          type: 'step_interrupted',
           step: 'prd_audit',
           activeInterval: { startedAtMs: 1_000, durationMs: 25 },
         }),
@@ -3227,11 +3263,11 @@ describe('engine/conductor', () => {
         .split('\n')
         .map((line) => JSON.parse(line));
       const terminals = records.filter((record) =>
-        record.type === 'step_completed' || record.type === 'step_failed',
+        record.type === 'step_completed' || record.type === 'step_failed' || record.type === 'step_interrupted',
       );
       expect(terminals).toEqual([
         expect.objectContaining({
-          type: 'step_failed',
+          type: 'step_interrupted',
           step: 'build',
           activeInterval: { startedAtMs: 1_000, durationMs: 25 },
         }),
@@ -3280,7 +3316,7 @@ describe('engine/conductor', () => {
         .split('\n')
         .map((line) => JSON.parse(line));
       expect(records).toContainEqual(expect.objectContaining({
-        type: 'step_failed',
+        type: 'step_interrupted',
         step: 'build',
         activeInterval: { startedAtMs: 1_000, durationMs: 25 },
       }));
@@ -10841,6 +10877,7 @@ describe('engine/conductor', () => {
         {} as ConductState,
         {
           stepRunner,
+          lifecycleObserver: NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER,
           onMemberEvent: (e) => {
             events.push(e as unknown as (typeof events)[number]);
           },
@@ -11094,7 +11131,7 @@ describe('engine/conductor', () => {
         .split('\n')
         .map((line) => JSON.parse(line));
       expect(records).toContainEqual(expect.objectContaining({
-        type: 'step_failed',
+        type: 'step_interrupted',
         step: 'prd',
         activeInterval: { startedAtMs: 1_000, durationMs: 25 },
       }));
@@ -18388,7 +18425,10 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
       const grouped = await runGroupBranch(
         { name: 'manual_test', skill: 'manual-test', outcome: { kind: 'skipped' } },
         {} as ConductState,
-        { stepRunner: runner },
+        {
+          stepRunner: runner,
+          lifecycleObserver: NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER,
+        },
         1,
       );
       const auxiliary = await executeOneShot('build_review', { prompt: 'review', cwd: projectRoot });
