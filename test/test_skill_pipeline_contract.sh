@@ -96,10 +96,13 @@ code_review_routing_and_quality_scope_contract_holds() {
   pattern_basis_line="$(grep -F 'semantic traits that creates a' "$skill_file")"
   calibration_line="$(grep -F 'Find real issues that would cause' "$skill_file")"
 
-  grep -qF 'batches with: concurrency, state mutation, security boundaries,' <<<"$routing_section" \
+  grep -qF 'security boundaries, auth, or money' <<<"$routing_section" \
     && grep -qF 'stack-specific checks (N+1, performance)' <<<"$stage_two_section" \
+    && ! grep -qiE 'security' <<<"$stage_two_section" \
     && grep -qF 'correctness or meaningful maintenance risk' <<<"$pattern_basis_line" \
-    && grep -qF 'bugs or maintenance problems' <<<"$calibration_line"
+    && ! grep -qiE 'security' <<<"$pattern_basis_line" \
+    && grep -qF 'bugs or maintenance problems' <<<"$calibration_line" \
+    && ! grep -qiE 'security' <<<"$calibration_line"
 }
 
 ordinary_done_when_close_contract_holds() {

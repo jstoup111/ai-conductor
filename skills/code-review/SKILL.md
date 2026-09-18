@@ -59,7 +59,7 @@ Use `agents/evaluator.md` with the selected host's subagent facility. The evalua
 
 **Claude model selection by batch content:**
 - **Claude Code Sonnet** (`model="sonnet"`) — default for all batches
-- **Claude Code Fable** (`model="fable"`) — batches involving concurrency, state mutation, security, auth, or money; if Fable is unavailable, use the existing Claude availability ladder
+- **Claude Code Fable** (`model="fable"`) — batches involving concurrency, state mutation, security boundaries, auth, or money; if Fable is unavailable, use the existing Claude availability ladder
 
 Provide the evaluator with:
 - The diff
