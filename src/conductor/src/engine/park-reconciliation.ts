@@ -268,7 +268,7 @@ export interface RegisteredWorktree {
   slug: string;
   branch: string;
   /** Nested paths are reported for retention, but never passed to the helper. */
-  reclaimable: boolean;
+  reclaimable?: boolean;
 }
 
 export async function listRegisteredWorktrees(
