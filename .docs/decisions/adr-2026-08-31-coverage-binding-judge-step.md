@@ -172,6 +172,45 @@ sidecar log.
 > (`adr-2026-08-22-one-owner-per-review-question`; D6 above). `prd_audit`'s `PLAN_GAP` halt is
 > unchanged.
 
+> **Amended 2026-09-18 by #2493:** D5's "one fresh session per claim" is replaced by "one fresh
+> session per bounded batch of claims"; verdict identity, the closed vocabulary, the digest cache,
+> and the infrastructure-failure lane are unchanged. The envelope is additionally checkpointed after
+> every batch so an interrupted run resumes from judged digests instead of re-purchasing them.
+>
+> **D12 — The judge is dispatched per bounded batch, not per claim.** The engine partitions the
+> spec's claims into cached (digest already carries `asserts` or `does-not-assert` in the previous
+> envelope, whatever that envelope's status), `not-applicable` (D8), and pending; pending claims are
+> chunked in claim order into batches of at most `coverage_binding.judge.batch_size`. Each batch is
+> one fresh session under D5's dispatch shape (fresh id, no resume, model fallback ladder,
+> `executeAuxiliaryProviderCandidates`). The prompt carries, per claim, the engine-stamped digest,
+> the criterion, the cited task ids, and the `Done when` checks — nothing else. Batches run
+> sequentially; no concurrent fan-out is introduced.
+>
+> **D13 — A batch verdict is valid only when its digest set equals the batch's digest set.** The
+> provider returns `{ verdicts: [{ digest, verdict, missingAssertion? }] }`. The engine accepts the
+> payload only when every returned digest is one it issued in that batch, each appears exactly
+> once, none is missing, and each verdict parses under D5's closed vocabulary. A missing,
+> duplicate, foreign, or malformed entry rejects the whole batch as the existing typed
+> infrastructure failure (`CoverageBindingPayloadError`, ordinary retry ladder); no entry of a
+> rejected batch is recorded as a verdict, and no verdict from an earlier accepted batch is
+> discarded.
+>
+> **D14 — The envelope is checkpointed atomically after every batch.** A new envelope status
+> `partial` is written (through the existing sibling-temp-file-and-rename writer) after the cache
+> and `not-applicable` pass and again after each accepted batch, carrying every entry judged so
+> far. `partial` is not a completion status: `COVERAGE_BINDING_COMPLETION_STATUSES` stays
+> `disabled | done`, so an interrupted run never satisfies the gate. On the next run the cache
+> pass reads the `partial` envelope like any other and re-dispatches only digests it does not
+> carry — resume is derived from digest cache hits, never from a trusted status stamp
+> (`adr-2026-09-11-finish-mergeability-respects-active-review-inputs` D7). `failed`, `refused`,
+> `done`, and `disabled` keep their meaning and remain the only terminal statuses.
+>
+> **D15 — `coverage_binding.judge.batch_size` is a registered config key.** Positive integer,
+> default 8, validated fail-closed beside `coverage_binding.judge.enabled` and registered in the
+> config-key consumer registry per
+> `adr-2026-08-26-config-key-consumer-registry-and-dead-surface-removal` D4. A value of 1 reproduces the pre-amendment one-claim-per-session shape. No new event type
+> joins the spine: `coverage_binding_judged` is still emitted once per claim (D9).
+
 ## Consequences
 
 ### Positive
