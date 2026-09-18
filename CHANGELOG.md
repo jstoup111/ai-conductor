@@ -26,6 +26,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - prd_audit widening offers no longer halt as context-overflow when the clipped report snapshot contains multibyte characters. ([implementation PR #2583](https://github.com/jstoup111/ai-conductor/pull/2583)).
 - Validation-group members now retain independent lifecycle telemetry throughout shared execution. ([implementation PR #2514](https://github.com/jstoup111/ai-conductor/pull/2514)).
 - Skip registered projects with missing paths while polling other repositories. ([implementation PR #2566](https://github.com/jstoup111/ai-conductor/pull/2566)).
+- CI repair sessions retain failing-check context and report truthful repair outcomes. ([implementation PR #2534](https://github.com/jstoup111/ai-conductor/pull/2534)).
 
 ## [1.3.0] - 2026-09-15
 
