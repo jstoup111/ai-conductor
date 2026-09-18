@@ -346,6 +346,7 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(invalidEvidence).toBeDefined();
     });
 
+    // Covers: task:1
     it('omits an added helper base region without weakening the pinned head identity', async () => {
       const headSource = "// Covers: task:8\nit('added helper', () => { expect(true).toBe(true); });";
       const declaration = {
