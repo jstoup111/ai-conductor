@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -11,6 +11,8 @@ import {
 } from '../../src/engine/park-reconciliation.js';
 import { isOperatorParked, writeOperatorPark } from '../../src/engine/park-marker.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
+import type { GhRunner } from '../../src/engine/pr-labels.js';
+import { GhCapabilityError } from '../../src/engine/tracker-client.js';
 
 const execFile = promisify(execFileCb);
 
@@ -160,5 +162,189 @@ describe('engine/park-reconciliation — merge evidence against real git', () =>
       logs: ['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=0 refused=0 skipped=1; next: 1 skipped retry when merge/issue evidence is available'],
     });
     expect(await isOperatorParked(notARepo, slug)).toBe(true);
+  });
+});
+
+interface GitWorld {
+  shipped?: readonly string[];
+  branches?: readonly string[];
+  merged?: readonly string[];
+  mergedPrHeads?: readonly string[];
+  tips?: Readonly<Record<string, string>>;
+  unmergedLog?: readonly string[];
+}
+
+function gitFailure(code: number, message: string): Error {
+  return Object.assign(new Error(message), { code });
+}
+
+function makeGit(world: GitWorld): { run: ReturnType<typeof vi.fn<GitRunner>>; deleted: string[] } {
+  const branches = world.branches ?? [];
+  const deleted: string[] = [];
+  const run = vi.fn<GitRunner>(async (args) => {
+    switch (args[0]) {
+      case 'ls-tree':
+        return { stdout: `${(world.shipped ?? []).map((stem) => `${stem}.md`).join('\n')}\n` };
+      case 'for-each-ref':
+        return { stdout: `${branches.join('\n')}\n` };
+      case 'merge-base': {
+        const ref = args[2];
+        if (args[3] !== undefined && world.mergedPrHeads?.includes(ref)) return { stdout: '' };
+        if (world.merged?.includes(ref)) return { stdout: '' };
+        throw gitFailure(1, 'not an ancestor');
+      }
+      case 'rev-parse':
+        if (args[1] === '--verify') return { stdout: 'base\n' };
+        if (world.tips?.[args[1]] === undefined) throw gitFailure(128, `missing ${args[1]}`);
+        return { stdout: `${world.tips[args[1]]}\n` };
+      case 'cat-file':
+        return { stdout: '' };
+      case 'log':
+        return { stdout: `${(world.unmergedLog ?? []).join('\n')}\n` };
+      case 'worktree':
+        return { stdout: '' };
+      case 'branch':
+        deleted.push(args[2]);
+        return { stdout: '' };
+      default:
+        throw new Error(`unexpected git invocation: ${args.join(' ')}`);
+    }
+  });
+  return { run, deleted };
+}
+
+describe('engine/park-reconciliation — listed branch merge evidence', () => {
+  let projectRoot: string;
+
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'park-listed-branch-'));
+  });
+
+  afterEach(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  async function parkedWorktree(slug: string): Promise<string> {
+    const path = join(projectRoot, '.worktrees', slug);
+    await mkdir(path, { recursive: true });
+    await writeOperatorPark(projectRoot, slug);
+    return path;
+  }
+
+  it('proves hotfix/x by ancestry without querying gh when it is the listed branch for hotfix-x', async () => {
+    const slug = 'hotfix-x';
+    const branch = 'hotfix/x';
+    await parkedWorktree(slug);
+    const { run, deleted } = makeGit({ shipped: [slug], branches: [branch], merged: [branch] });
+    const runGh = vi.fn<GhRunner>();
+
+    const outcome = await reconcileMergedPark({ projectRoot, slug, branch, runGit: run, runGh });
+
+    expect({ outcome, deleted, ghCalls: runGh.mock.calls }).toEqual({
+      outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+      deleted: [branch],
+      ghCalls: [],
+    });
+  });
+
+  it('proves a listed feat/daemon branch by its merged PR head identity', async () => {
+    const slug = 'head-identity';
+    const branch = `feat/daemon-${slug}`;
+    const tip = '1111111111111111111111111111111111111111';
+    await parkedWorktree(slug);
+    const { run, deleted } = makeGit({ shipped: [slug], branches: [branch], tips: { [branch]: tip } });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: `[{'headRefOid':'${tip}'}]`.replaceAll("'", '"') });
+
+    const outcome = await reconcileMergedPark({ projectRoot, slug, branch, runGit: run, runGh });
+
+    expect({ outcome, deleted, ghCalls: runGh.mock.calls }).toEqual({
+      outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+      deleted: [branch],
+      ghCalls: [[
+        ['pr', 'list', '--head', branch, '--state', 'merged', '--json', 'headRefOid', '--limit', '1'],
+        { cwd: projectRoot },
+      ]],
+    });
+  });
+
+  it('deletes only the listed branch when another local branch has the slug final segment', async () => {
+    const slug = 'shared-segment';
+    const branch = `feat/daemon-${slug}`;
+    const otherBranch = `spec/${slug}`;
+    await parkedWorktree(slug);
+    const { run, deleted } = makeGit({
+      shipped: [slug],
+      branches: [branch, otherBranch],
+      merged: [branch, otherBranch],
+    });
+
+    const outcome = await reconcileMergedPark({ projectRoot, slug, branch, runGit: run });
+
+    expect({ outcome, deleted }).toEqual({
+      outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+      deleted: [branch],
+    });
+  });
+
+  it.each([
+    {
+      name: 'no merged PR proves the listed branch',
+      slug: 'no-merge-proof',
+      branch: 'hotfix/no-merge-proof',
+      world: { branches: ['hotfix/no-merge-proof'] },
+      gh: async () => ({ stdout: '[]' }),
+      expected: { refusal: 'no-merge-proof' },
+    },
+    {
+      name: 'the listed branch has commits beyond its merged PR head',
+      slug: 'unmerged-commits',
+      branch: 'hotfix/unmerged-commits',
+      world: {
+        shipped: ['unmerged-commits'],
+        branches: ['hotfix/unmerged-commits'],
+        tips: { 'hotfix/unmerged-commits': '2222222222222222222222222222222222222222' },
+        mergedPrHeads: ['1111111111111111111111111111111111111111'],
+        unmergedLog: ['aaaaaaa retained commit'],
+      },
+      gh: async () => ({ stdout: '[{"headRefOid":"1111111111111111111111111111111111111111"}]' }),
+      expected: {
+        refusal: 'unmerged-commits',
+        unmergedCommits: { commits: [{ sha: 'aaaaaaa', subject: 'retained commit' }], overflow: 0 },
+      },
+    },
+    {
+      name: 'the listed branch is absent and no record landed',
+      slug: 'branch-missing',
+      branch: 'hotfix/branch-missing',
+      world: { branches: [] },
+      gh: async () => ({ stdout: '[]' }),
+      expected: { refusal: 'branch-missing' },
+    },
+    {
+      name: 'gh capability is unavailable for the listed branch',
+      slug: 'gh-unavailable',
+      branch: 'hotfix/gh-unavailable',
+      world: { branches: ['hotfix/gh-unavailable'] },
+      gh: async () => { throw new GhCapabilityError('gh', 'not configured'); },
+      expected: { refusal: 'no-merge-proof' },
+    },
+  ] as const)('leaves paths and branches untouched when $name', async ({ slug, branch, world, gh, expected }) => {
+    const worktree = await parkedWorktree(slug);
+    const { run, deleted } = makeGit(world);
+    const runGh = vi.fn<GhRunner>(gh);
+
+    const outcome = await reconcileMergedPark({ projectRoot, slug, branch, runGit: run, runGh });
+
+    expect({
+      outcome,
+      deleted,
+      worktreeStillExists: await access(worktree).then(() => true, () => false),
+      parked: await isOperatorParked(projectRoot, slug),
+    }).toEqual({
+      outcome: { slug, steps: [], ...expected },
+      deleted: [],
+      worktreeStillExists: true,
+      parked: true,
+    });
   });
 });

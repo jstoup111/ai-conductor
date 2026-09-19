@@ -10,18 +10,30 @@ import { createGithubTrackerClient, type GhRunner } from '../../src/engine/track
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 
 const source = readFileSync(resolve(process.cwd(), 'src/daemon-cli.ts'), 'utf8');
+const reconciliationSource = readFileSync(resolve(process.cwd(), 'src/engine/park-reconciliation.ts'), 'utf8');
+
+function objectAt(sourceText: string, start: number): string {
+  const open = sourceText.indexOf('{', start);
+  let depth = 0;
+  for (let index = open; index < sourceText.length; index++) {
+    if (sourceText[index] === '{') depth++;
+    if (sourceText[index] === '}' && --depth === 0) return sourceText.slice(open, index + 1);
+  }
+  throw new Error('unterminated object literal');
+}
 
 describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
   it('snapshots cleanup config once and binds a per-run cache into the daemon sweep', () => {
     expect(source).toMatch(/const reconcileParkedAutoCleanup = config\?\.reconcile_parked_auto_cleanup \?\? true;/);
     expect(source).toMatch(/const parkedSweepCache = new Map<string, ParkClassification>\(\);/);
-    expect(source).toMatch(/reconcileParkedFeatures: async \(\{ disposeHaltWatcher \}\) => \{[\s\S]*cache: parkedSweepCache,[\s\S]*autoCleanup: reconcileParkedAutoCleanup,/);
+    expect(source).toMatch(/reconcileParkedFeatures: async \(\{ disposeHaltWatcher, isFeatureInFlight \}\) => \{[\s\S]*cache: parkedSweepCache,[\s\S]*autoCleanup: reconcileParkedAutoCleanup,/);
+    expect(source).toMatch(/const reclaimMergedWorktrees = config\?\.reclaim_merged_worktrees \?\? true;/);
     expect(source).toContain('log: (message) => log(message, true),');
   });
 
   it('supplies BOTH adr-2026-07-27 hand-off callbacks from the production sweep binding (rem-adr-002, rem-adr-005)', () => {
     const sweepBinding = source.match(
-      /reconcileParkedFeatures: async \(\{ disposeHaltWatcher \}\) => \{([\s\S]*?)\n {6}\},/,
+      /reconcileParkedFeatures: async \(\{ disposeHaltWatcher, isFeatureInFlight \}\) => \{([\s\S]*?)\n {6}\},/,
     );
     expect(sweepBinding?.[1]).toBeDefined();
     // The ST-916 repair adapter is constructed from the real production factory,
@@ -34,9 +46,12 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
 
   it('binds the receiver-dependent tracker issue-state lookup for the idle sweep', () => {
     const sweepBinding = source.match(
-      /reconcileParkedFeatures: async \(\{ disposeHaltWatcher \}\) => \{([\s\S]*?)\n {6}\},/,
+      /reconcileParkedFeatures: async \(\{ disposeHaltWatcher, isFeatureInFlight \}\) => \{([\s\S]*?)\n {6}\},/,
     );
-    expect(sweepBinding?.[1]).toContain('getIssueState: tracker.getIssueState.bind(tracker),');
+      expect(sweepBinding?.[1]).toContain('getIssueState: tracker.getIssueState.bind(tracker),');
+    expect(sweepBinding?.[1]).toContain('reclaimMergedWorktrees,');
+    expect(sweepBinding?.[1]).toContain('isFeatureInFlight,');
+    expect(sweepBinding?.[1]).toContain('onEvent: (event) => { void events.emit(event); },');
   });
 
   it('classifies a CLOSED non-ancestor park as orphan through the bound real tracker seam', async () => {
@@ -63,6 +78,7 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
         autoCleanup: false,
         // getIssueState calls this.viewIssue; this mirrors the idle callback binding.
         getIssueState: tracker.getIssueState.bind(tracker),
+        worktreeListing: async () => [],
       });
 
       expect(result.entries).toEqual([{ slug: 'orphan-park', classification: 'orphan', annotation: 'orphan' }]);
@@ -76,6 +92,29 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
     expect(dashboardCall?.[1]).toBeDefined();
     expect(dashboardCall?.[1]).toContain('autoCleanup: false');
     expect(source).toContain("classification === 'merged'\n                ? 'merged-ready'");
+  });
+
+  it('keeps every daemon-cli reconciliation caller observational or event-spine wired (rem-ab2-1)', () => {
+    const interfaceIndex = reconciliationSource.indexOf('export interface ReconcileParkedFeaturesOptions {');
+    const optionBlock = interfaceIndex < 0 ? undefined : objectAt(reconciliationSource, interfaceIndex);
+    expect(optionBlock).toBeDefined();
+    const optionNamedBy = (comment: RegExp) => optionBlock?.match(new RegExp(`${comment.source}[\\s\\S]*?\\*\\/\\s*(\\w+)\\??:`, comment.flags))?.[1];
+    const autoCleanup = optionBlock?.match(/\n\s*(\w+)\??: boolean;\n\s*cache\??:/)?.[1];
+    const reclaimMergedWorktrees = optionNamedBy(/Resolved reclamation policy/);
+    const onEvent = optionNamedBy(/event-spine sink/);
+    expect([autoCleanup, reclaimMergedWorktrees, onEvent]).not.toContain(undefined);
+
+    const calls: string[] = [];
+    for (let index = source.indexOf('reconcileParkedFeatures({'); index >= 0; index = source.indexOf('reconcileParkedFeatures({', index + 1)) {
+      calls.push(objectAt(source, index));
+    }
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      const cleanupDisabled = new RegExp(`\\b${autoCleanup}:\\s*false`).test(call)
+        && new RegExp(`\\b${reclaimMergedWorktrees}:\\s*false`).test(call);
+      const eventWired = new RegExp(`\\b${onEvent}:`).test(call);
+      expect(cleanupDisabled || eventWired).toBe(true);
+    }
   });
 });
 
